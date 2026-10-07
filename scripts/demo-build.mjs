@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assertDemoTarget } from './demo-deploy.mjs'
+import { writeDeploymentReceipt } from './deployment-receipt.mjs'
 import {
   deploymentName,
   ignoredTheTarget,
@@ -53,8 +54,10 @@ function main(env) {
     // Same claim → origin setup → build → push ordering as normal previews.
     command(['set', 'SITE_URL', previewSiteUrl(env)])
     command(['set', 'APP_MODE', 'demo'])
+    command(['set', 'QIVO_ENVIRONMENT', 'preview'])
     // Admission is enabled explicitly after verification, including previews.
   } else if (
+    command(['get', 'QIVO_ENVIRONMENT']) !== 'demo' ||
     command(['get', 'APP_MODE']) !== 'demo' ||
     command(['get', 'SITE_URL']) !== 'https://demo.qivo.io'
   ) {
@@ -64,6 +67,7 @@ function main(env) {
   }
   execFileSync('npm', ['run', 'build'], { stdio: 'inherit' })
   finishDemoBuild()
+  writeDeploymentReceipt(env)
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main(process.env)

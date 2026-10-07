@@ -7,6 +7,7 @@ import { ConvexError } from 'convex/values'
 import { components } from '../_generated/api'
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { deploymentEnvironment } from './deployment'
 
 declare class TextEncoder {
   encode(input: string): Uint8Array
@@ -26,6 +27,9 @@ export const isDemoDeployment = (): boolean => process.env.APP_MODE === 'demo'
 
 export function requireDemoDeployment(): void {
   if (!isDemoDeployment()) throw demoRefusal('Demo access is unavailable.', 'demo_unavailable')
+  if (deploymentEnvironment() === 'production') {
+    throw demoRefusal('Demo access is unavailable on the main deployment.', 'demo_unavailable')
+  }
   // A misdirected deployment must never turn the actual product into a demo.
   // SITE_URL is controlled by the deployment, never by request headers.
   const origin = process.env.SITE_URL

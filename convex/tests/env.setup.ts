@@ -8,9 +8,8 @@
  * in through its glob, so that refusal reaches every convex suite — not only
  * the ones that touch auth.
  *
- * SITE_URL must NOT end in `qivo.io`: lib/deployment's refuseProduction (the
- * fixture seeds, machine/testing) reads that suffix as the production marker
- * and refuses to run.
+ * Fixture helpers require an explicit development environment. Individual
+ * tests override it when exercising hosted environments and refusal paths.
  *
  * Named *.setup.ts because two dots in the basename is the Convex CLI's skip
  * rule — the same one that keeps the *.test.ts files out of the deploy (see
@@ -28,3 +27,4 @@ const g = globalThis as unknown as { process?: { env: Record<string, string | un
 g.process ??= { env: {} }
 g.process.env.SITE_URL ??= 'http://localhost:5199'
 g.process.env.CONVEX_SITE_URL ??= 'https://some.convex.site'
+g.process.env.QIVO_ENVIRONMENT ??= 'development'

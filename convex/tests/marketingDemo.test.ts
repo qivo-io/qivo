@@ -1,4 +1,4 @@
-/* Production-capable fixture boundaries: only the receipt-owned demo may be
+/* Isolated fixture boundaries: only the receipt-owned demo may be
  * rebuilt, and repeat seeding must preserve both manual work and real login
  * identities. The local Better Auth component is the deployed schema. These
  * tests exercise its actual adapter without paying for scrypt hashing. */
@@ -36,7 +36,7 @@ declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
 }
 
-const SITE = 'https://qivo.io'
+const SITE = 'https://preview.qivo.io'
 const ANCHOR = '2026-09-07'
 const NEXT_ANCHOR = '2026-11-02'
 const TARGET = { expected_site_url: SITE }
@@ -151,7 +151,10 @@ async function assertUnprovisioned(t: T) {
   }
 }
 
-beforeEach(() => vi.stubEnv('SITE_URL', SITE))
+beforeEach(() => {
+  vi.stubEnv('SITE_URL', SITE)
+  vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+})
 afterEach(() => vi.unstubAllEnvs())
 
 describe('marketing demo provisioning', () => {
@@ -300,38 +303,29 @@ describe('marketing demo provisioning', () => {
     })
   })
 
-  it('refuses a SITE_URL mismatch and a non-Qivo remote origin', async () => {
+  it('requires an exact site match and refuses production regardless of its hostname', async () => {
     const t = newAuthT()
     await expectRefusal(
       t.mutation(provisionRef, {
-        expected_site_url: 'https://www.qivo.io',
+        ...TARGET,
+        expected_site_url: 'https://other.example',
         password_hashes: HASHES,
         credential_set_id: CREDENTIAL_SET,
       }),
       'rule',
       /SITE_URL does not match/,
     )
-    vi.stubEnv('SITE_URL', 'https://unrelated.example')
-    await expectRefusal(
-      t.mutation(provisionRef, {
-        expected_site_url: 'https://unrelated.example',
-        password_hashes: HASHES,
-        credential_set_id: CREDENTIAL_SET,
-      }),
-      'rule',
-      /target must be qivo.io/,
-    )
-    // a Vercel preview origin is the one remote exception (internal/previewSeed);
-    // the public demo host is not
-    vi.stubEnv('SITE_URL', 'https://qivo-git-demo-team.vercel.app')
-    expect(
-      await t.query(inspectRef, { expected_site_url: 'https://qivo-git-demo-team.vercel.app' }),
-    ).toMatchObject({ state: 'absent' })
-    vi.stubEnv('SITE_URL', 'https://demo.qivo.io')
-    await expectRefusal(
-      t.query(inspectRef, { expected_site_url: 'https://demo.qivo.io' }),
-      'rule',
-      /target must be qivo.io/,
+    vi.stubEnv('QIVO_ENVIRONMENT', 'production')
+    await expect(provision(t)).rejects.toThrow(/production/)
+    vi.stubEnv('QIVO_ENVIRONMENT', '')
+    await expect(provision(t)).rejects.toThrow(/QIVO_ENVIRONMENT/)
+    vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+    vi.stubEnv('APP_MODE', 'demo')
+    await expect(provision(t)).rejects.toThrow(/public demo/)
+    vi.stubEnv('APP_MODE', '')
+    vi.stubEnv('SITE_URL', 'https://qivo.io')
+    await expect(t.query(inspectRef, { expected_site_url: 'https://qivo.io' })).rejects.toThrow(
+      /production/,
     )
     expect(await t.run(async (ctx) => ctx.db.query('organizations').collect())).toEqual([])
   })

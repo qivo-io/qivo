@@ -1,0 +1,30 @@
+title = "Qivo secret scanning"
+
+[extend]
+useDefault = true
+
+# These are public, hermetic test fixtures. Match both the path and fixture
+# value so new secrets in the same file still fail the scan.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^convex/tests/polar\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''whsec_cWl2by1wb2xhci1oZXJtZXRpYy1zaWduaW5nLWtleS0zMg==''']
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^convex/tests/(marketingDemo|previewSeed)\.test\.ts$''']
+regexes = ['''^[cd]1234567-89ab-4cde-8fab-0123456789ab$''']
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^convex/internal/marketingDemoData\.ts$''']
+regexes = ['''^launch-webinar-discussion-[12]$''']
+
+[[rules]]
+id = "private-key"
+[[rules.allowlists]]
+condition = "AND"
+paths = ['''^tests/webhookTransport\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCLouCXum63glHb''']

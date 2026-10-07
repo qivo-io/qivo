@@ -1,0 +1,32 @@
+name: Deploy staging
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      app_revision:
+        description: Exact current main commit, used when the approved website revision changes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+jobs:
+  staging:
+    if: >-
+      github.repository == 'qivo-io/qivo' &&
+      ((github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      app_revision: ${{ github.event.workflow_run.head_sha || inputs.app_revision }}

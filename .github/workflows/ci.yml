@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: ['**']
 
 # One in-flight run per ref; a new push supersedes the previous run.
 concurrency:
@@ -65,4 +65,4 @@ jobs:
 
       # Includes the Convex function-surface manifest and wrapper checks.
       - name: Test
-        run: npm test
+        run: npm test -- --maxWorkers=2

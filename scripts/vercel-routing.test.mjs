@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
 const WEBSITE = 'https://site-origin.qivo.io'
 const WEBSITE_HOSTS = ['qivo.io', 'www.qivo.io']
+const STAGING_HOST = 'preview.qivo.io'
 
 /** Files in a normal app deployment, plus the demo visitor function. */
 const FILES = new Set([
@@ -123,7 +124,23 @@ describe('production website hosts', () => {
   })
 })
 
-describe('self-hosted, demo and preview hosts', () => {
+describe('persistent staging website', () => {
+  it('uses the authenticated proxy only on the exact staging hostname', () => {
+    for (const path of WEBSITE_PATHS) {
+      const result = route(config, STAGING_HOST, path)
+      expect(result.file).toBe(`/api/website?__qivo_path=${path.slice(1)}`)
+      expect(result.headers['x-robots-tag']).toBe('noindex, nofollow')
+      expect(result.headers['x-vercel-enable-rewrite-caching']).toBe('0')
+    }
+    for (const [path, file] of Object.entries(APP_PATHS))
+      expect(route(config, STAGING_HOST, path).file).toBe(file)
+    for (const path of FILES) expect(route(config, STAGING_HOST, path).file).toBe(path)
+    for (const host of ['evilpreview.qivo.io', 'preview.qivo.io.evil.test'])
+      expect(route(config, host, '/docs/')).toEqual({ status: 404, headers: {} })
+  })
+})
+
+describe('self-hosted, demo and branch preview hosts', () => {
   it.each(OTHER_HOSTS)('redirects the root of %s to the app and never proxies', (host) => {
     expect(route(config, host, '/')).toEqual({ status: 307, location: '/app' })
     for (const path of WEBSITE_PATHS.slice(1)) {
@@ -143,17 +160,20 @@ describe('self-hosted, demo and preview hosts', () => {
 })
 
 describe('security headers', () => {
-  it.each([...WEBSITE_HOSTS, ...OTHER_HOSTS])('protect app and operator pages on %s', (host) => {
-    for (const path of [...Object.keys(APP_PATHS), '/app.html', '/admin.html']) {
-      const { headers } = route(config, host, path)
-      expect(headers['x-frame-options'], path).toBe('DENY')
-      expect(headers['content-security-policy'], path).toBe("frame-ancestors 'none'")
-      expect(headers['cache-control'], path).toBe('no-store')
-    }
-    expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
-      'public, max-age=31536000, immutable',
-    )
-  })
+  it.each([...WEBSITE_HOSTS, STAGING_HOST, ...OTHER_HOSTS])(
+    'protect app and operator pages on %s',
+    (host) => {
+      for (const path of [...Object.keys(APP_PATHS), '/app.html', '/admin.html']) {
+        const { headers } = route(config, host, path)
+        expect(headers['x-frame-options'], path).toBe('DENY')
+        expect(headers['content-security-policy'], path).toBe("frame-ancestors 'none'")
+        expect(headers['cache-control'], path).toBe('no-store')
+      }
+      expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
+        'public, max-age=31536000, immutable',
+      )
+    },
+  )
 })
 
 describe('route fixtures detect unsafe edits', () => {

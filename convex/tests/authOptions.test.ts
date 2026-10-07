@@ -1,5 +1,5 @@
 import type { GenericCtx } from '@convex-dev/better-auth'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { DataModel } from '../_generated/dataModel'
 import { appOrigins, createAuthOptions } from '../auth'
@@ -15,6 +15,12 @@ function mailerCtx() {
   const ctx = { runMutation: vi.fn(), scheduler: { runAfter } } as unknown as GenericCtx<DataModel>
   return { ctx, runAfter }
 }
+
+beforeEach(() => {
+  vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-mail-key')
+  vi.stubEnv('AGENTMAIL_INBOX', 'sender@example.test')
+})
+afterEach(() => vi.unstubAllEnvs())
 
 describe('email verification is mailed on every path that needs it', () => {
   it('mails on registration (both OAuth and password) and re-mails on an unverified sign-in', () => {
@@ -125,6 +131,18 @@ describe('SITE_URL is required, not assumed', () => {
       if (previous === undefined) delete process.env.ADDITIONAL_APP_ORIGINS
       else process.env.ADDITIONAL_APP_ORIGINS = previous
     }
+  })
+
+  it('requires an explicit environment and HTTPS for all hosted app origins', () => {
+    vi.stubEnv('QIVO_ENVIRONMENT', '')
+    expect(() => createAuthOptions(noCtx)).toThrow(/QIVO_ENVIRONMENT/)
+    expect(() => createAuthOptions(noCtx, { schemaOnly: true })).not.toThrow()
+    vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+    vi.stubEnv('SITE_URL', 'https://preview.example.test')
+    vi.stubEnv('ADDITIONAL_APP_ORIGINS', 'http://other.example.test')
+    expect(() => createAuthOptions(noCtx)).toThrow(/HTTPS for every app origin/)
+    vi.stubEnv('ADDITIONAL_APP_ORIGINS', 'https://other.example.test')
+    expect(createAuthOptions(noCtx).emailAndPassword.requireEmailVerification).toBe(true)
   })
 
   it('an unset SITE_URL is refused by name instead of passed on as undefined', () => {

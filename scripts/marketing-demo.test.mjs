@@ -14,18 +14,24 @@ import { dirname, join } from 'node:path'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  credentialsPath,
-  loadCredentials,
+  loadCredentials as loadPrivateCredentials,
   mondayAnchor,
   parseArgs,
+  credentialsPath as privateCredentialsPath,
   resolveTarget,
-  runMarketingDemo,
+  runMarketingDemo as runCli,
 } from './marketing-demo.mjs'
 
 const folders = []
+const credentialRoots = new Map()
 const NOW = new Date('2026-09-05T23:59:59Z')
-const DEV_ENV = { CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-private-key' }
-const PROD_ENV = {
+const DEV_ENV = {
+  QIVO_ENVIRONMENT: 'development',
+  CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-private-key',
+}
+const STAGING_ENV = {
+  QIVO_ENVIRONMENT: 'staging',
+  SITE_URL: 'https://preview.qivo.io',
   CONVEX_DEPLOY_KEY: 'prod:happy-wolf-34|other-private-key',
   VITE_CONVEX_URL: 'https://tidy-otter-12.convex.cloud',
 }
@@ -34,8 +40,26 @@ const PERSON_KEYS = ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben', '
 
 function folder() {
   const path = mkdtempSync(join(tmpdir(), 'qivo-marketing-demo-'))
-  folders.push(path)
+  const privateRoot = mkdtempSync(join(tmpdir(), 'qivo-fixture-credentials-'))
+  folders.push(path, privateRoot)
+  credentialRoots.set(path, privateRoot)
   return path
+}
+
+function loadCredentials(cwd, target, options) {
+  return loadPrivateCredentials(credentialRoots.get(cwd), target, options)
+}
+function credentialsPath(cwd, target) {
+  return privateCredentialsPath(credentialRoots.get(cwd), target)
+}
+function runMarketingDemo(args, dependencies) {
+  return runCli(args, {
+    ...dependencies,
+    env: {
+      QIVO_FIXTURE_CREDENTIALS_DIR: credentialRoots.get(dependencies.cwd),
+      ...dependencies.env,
+    },
+  })
 }
 
 function writeAvatars(cwd) {
@@ -59,7 +83,7 @@ describe('date and command safety', () => {
     for (const date of ['2026-02-30', '2026-09-05', '2026-09-07T00:00:00Z', '09/07/2026']) {
       expect(() => mondayAnchor(date)).toThrow(/anchor/)
     }
-    expect(() => parseArgs(['seed', '--dev', '--prod'], NOW)).toThrow(/either/)
+    expect(() => parseArgs(['seed', '--dev', '--staging'], NOW)).toThrow(/either/)
     expect(() => parseArgs(['seed', 'reset', '--dev'], NOW)).toThrow(/exactly one/)
     expect(() => parseArgs(['seed'], NOW)).toThrow(/Explicitly/)
     expect(() => parseArgs(['seed', '--dev', '--password', 'do-not-log'], NOW)).toThrow(
@@ -69,14 +93,14 @@ describe('date and command safety', () => {
 
   it('requires the exact organization token before destructive operations', () => {
     for (const command of ['reset', 'wipe']) {
-      expect(() => parseArgs([command, '--prod'], NOW)).toThrow(/confirm northstar-labs/)
-      expect(() => parseArgs([command, '--prod', '--confirm', 'another-org'], NOW)).toThrow(
+      expect(() => parseArgs([command, '--staging'], NOW)).toThrow(/confirm northstar-labs/)
+      expect(() => parseArgs([command, '--staging', '--confirm', 'another-org'], NOW)).toThrow(
         /confirm northstar-labs/,
       )
-      expect(parseArgs([command, '--prod', '--confirm', 'northstar-labs'], NOW).command).toBe(
+      expect(parseArgs([command, '--staging', '--confirm', 'northstar-labs'], NOW).command).toBe(
         command,
       )
-      expect(parseArgs([command, '--prod', '--dry-run'], NOW).dryRun).toBe(true)
+      expect(parseArgs([command, '--staging', '--dry-run'], NOW).dryRun).toBe(true)
     }
   })
 })
@@ -85,59 +109,46 @@ describe('target selection never redirects a deploy key', () => {
   it('refuses environment/flag and explicit URL/key mismatches before client creation', async () => {
     const factory = vi.fn()
     await expect(
-      runMarketingDemo(['seed', '--prod'], { cwd: folder(), env: DEV_ENV, clientFactory: factory }),
+      runMarketingDemo(['seed', '--staging'], {
+        cwd: folder(),
+        env: DEV_ENV,
+        clientFactory: factory,
+      }),
     ).rejects.toThrow(/does not match/)
     expect(factory).not.toHaveBeenCalled()
     expect(() =>
       resolveTarget({ target: 'dev', url: 'https://happy-wolf-34.convex.cloud' }, DEV_ENV),
     ).toThrow(/does not match/)
-    expect(() => resolveTarget({ target: 'dev' }, PROD_ENV)).toThrow(/does not match/)
+    expect(() => resolveTarget({ target: 'dev' }, STAGING_ENV)).toThrow(/does not match/)
   })
 
-  it('uses the key target over a stale development Vite URL', () => {
-    const target = resolveTarget({ target: 'prod' }, PROD_ENV)
+  it('uses only the explicitly selected isolated staging key and origin', () => {
+    const target = resolveTarget({ target: 'staging' }, STAGING_ENV)
     expect(target.url).toBe('https://happy-wolf-34.convex.cloud')
-    expect(target.siteUrl).toBe('https://qivo.io')
-  })
-
-  it('selects the dedicated production key only for explicit --prod when both keys exist', () => {
-    const env = {
-      ...DEV_ENV,
-      CONVEX_DEPLOY_KEY_PRODUCTION: PROD_ENV.CONVEX_DEPLOY_KEY,
-      VITE_CONVEX_URL: PROD_ENV.VITE_CONVEX_URL,
-    }
-    expect(resolveTarget({ target: 'prod' }, env)).toMatchObject({
-      target: 'prod',
-      deployment: 'happy-wolf-34',
-      url: 'https://happy-wolf-34.convex.cloud',
-      siteUrl: 'https://qivo.io',
-      key: PROD_ENV.CONVEX_DEPLOY_KEY,
-    })
-    for (const options of [{ target: 'dev' }, {}]) {
-      expect(resolveTarget(options, env)).toEqual(DEV_TARGET)
-    }
-    expect(
-      resolveTarget({}, { CONVEX_DEPLOY_KEY_PRODUCTION: PROD_ENV.CONVEX_DEPLOY_KEY }, false),
-    ).toMatchObject({ target: 'dev', key: undefined, siteUrl: 'http://localhost:5199' })
-  })
-
-  it('refuses an invalid production alias without falling back or creating a client', async () => {
-    const factory = vi.fn()
-    for (const key of [DEV_ENV.CONVEX_DEPLOY_KEY, 'preview:team:project|secret', 'invalid', '']) {
-      for (const fallback of [DEV_ENV, PROD_ENV]) {
-        await expect(
-          runMarketingDemo(['seed', '--prod'], {
-            cwd: folder(),
-            env: { ...fallback, CONVEX_DEPLOY_KEY_PRODUCTION: key },
-            clientFactory: factory,
-          }),
-        ).rejects.toThrow(/does not match|deployment-scoped/)
-      }
-    }
-    expect(factory).not.toHaveBeenCalled()
-    expect(
-      resolveTarget({ target: 'dev' }, { ...DEV_ENV, CONVEX_DEPLOY_KEY_PRODUCTION: 'invalid' }),
-    ).toEqual(DEV_TARGET)
+    expect(target.siteUrl).toBe('https://preview.qivo.io')
+    expect(() =>
+      resolveTarget({ target: 'staging' }, { ...STAGING_ENV, QIVO_ENVIRONMENT: 'production' }),
+    ).toThrow(/does not match/)
+    expect(() =>
+      resolveTarget({ target: 'staging' }, { ...STAGING_ENV, QIVO_ENVIRONMENT: undefined }),
+    ).toThrow(/does not match/)
+    expect(() => resolveTarget({ target: 'prod' }, STAGING_ENV)).toThrow(/disabled/)
+    expect(() => parseArgs(['seed', '--prod'], NOW)).toThrow(/Unknown argument/)
+    expect(() =>
+      resolveTarget({ target: 'staging' }, { ...STAGING_ENV, SITE_URL: 'https://qivo.io' }),
+    ).toThrow(/nonproduction/)
+    expect(() =>
+      resolveTarget({ target: 'staging' }, { ...STAGING_ENV, APP_MODE: 'demo' }),
+    ).toThrow(/does not match/)
+    expect(() =>
+      resolveTarget(
+        { target: 'staging' },
+        {
+          QIVO_ENVIRONMENT: 'staging',
+          CONVEX_DEPLOY_KEY_PRODUCTION: STAGING_ENV.CONVEX_DEPLOY_KEY,
+        },
+      ),
+    ).toThrow(/Set the isolated/)
   })
 
   it('rejects non-deployment keys and URLs that could leak admin credentials', () => {
@@ -147,9 +158,9 @@ describe('target selection never redirects a deploy key', () => {
       'dev:tidy-otter-12',
       'dev:tidy-otter-12|',
     ]) {
-      expect(() => resolveTarget({ target: 'dev' }, { CONVEX_DEPLOY_KEY: key })).toThrow(
-        /deployment-scoped/,
-      )
+      expect(() =>
+        resolveTarget({ target: 'dev' }, { ...DEV_ENV, CONVEX_DEPLOY_KEY: key }),
+      ).toThrow(/deployment-scoped/)
     }
     for (const url of [
       'https://example.com',
@@ -161,18 +172,18 @@ describe('target selection never redirects a deploy key', () => {
       expect(() => resolveTarget({ target: 'dev', url }, DEV_ENV)).toThrow(/canonical HTTPS/)
     }
     expect(() => resolveTarget({ target: 'dev', siteUrl: 'https://qivo.io' }, DEV_ENV)).toThrow(
-      /localhost/,
+      /nonproduction/,
     )
     expect(() =>
-      resolveTarget({ target: 'prod', siteUrl: 'https://other.qivo.io' }, PROD_ENV),
-    ).toThrow(/exact site/)
+      resolveTarget({ target: 'staging', siteUrl: 'http://preview.qivo.io' }, STAGING_ENV),
+    ).toThrow(/HTTPS/)
   })
 
   it('allows a fully offline plan without a deploy key and writes nothing', async () => {
     const cwd = folder()
     const factory = vi.fn()
     const log = vi.fn()
-    for (const args of [[], ['seed', '--prod', '--dry-run'], ['reset', '--dev', '--dry-run']]) {
+    for (const args of [[], ['seed', '--dev', '--dry-run'], ['reset', '--dev', '--dry-run']]) {
       await expect(
         runMarketingDemo(args, { cwd, env: {}, now: NOW, clientFactory: factory, log }),
       ).resolves.toMatchObject({ kind: 'plan', anchor: '2026-08-31' })
@@ -229,7 +240,7 @@ describe('private, persistent credentials', () => {
   it('refuses symlinked directories and files', () => {
     const cwd = folder()
     const destination = folder()
-    symlinkSync(destination, join(cwd, '.local'))
+    symlinkSync(destination, dirname(credentialsPath(cwd, DEV_TARGET)))
     expect(() => loadCredentials(cwd, DEV_TARGET, { create: true })).toThrow(/symlinks/)
     const safe = folder()
     const credentials = loadCredentials(safe, DEV_TARGET, { create: true })

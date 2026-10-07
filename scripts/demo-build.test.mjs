@@ -7,6 +7,7 @@ import { assertDemoTarget } from './demo-deploy.mjs'
 
 describe('dedicated demo deployment target', () => {
   const production = {
+    QIVO_ENVIRONMENT: 'demo',
     VITE_APP_MODE: 'demo',
     DEMO_CONVEX_DEPLOYMENT: 'demo-fixture-123',
     CONVEX_DEPLOY_KEY: 'prod:demo-fixture-123|test-secret',
@@ -30,6 +31,7 @@ describe('dedicated demo deployment target', () => {
 
   it('binds preview credentials to the configured demo team and project', () => {
     const preview = {
+      QIVO_ENVIRONMENT: 'preview',
       VITE_APP_MODE: 'demo',
       DEMO_CONVEX_PROJECT: 'team:demo',
       CONVEX_DEPLOY_KEY: 'preview:team:demo|test-secret',

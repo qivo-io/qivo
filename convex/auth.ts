@@ -18,6 +18,8 @@ import {
   registerDemoUser,
   requireDemoDeployment,
 } from './lib/demo'
+import { deploymentEnvironment } from './lib/deployment'
+import { requireAuthMailDelivery } from './lib/mailConfig'
 import { oauthAdapter } from './lib/oauthAdapter'
 import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
 
@@ -49,9 +51,8 @@ const requireSiteUrl = () => {
  * placeholder ever to leak into a real redirect it could not resolve. */
 const SCHEMA_ONLY_ORIGIN = 'http://schema-only.invalid'
 
-/* SITE_URL remains the one canonical app origin: crossDomain uses it for
- * redirects and the production/refuse-production checks use it as their
- * marker. A developer may expose the same Vite process through another exact
+/* SITE_URL remains the canonical app origin for redirects. A developer may
+ * expose the same Vite process through another exact
  * origin (for example a Tailnet IP), so ADDITIONAL_APP_ORIGINS extends only
  * the trust/CORS set. It is deliberately a comma-separated list of complete
  * origins, never a wildcard or host suffix. */
@@ -61,10 +62,10 @@ const exactOrigin = (value: string, envName: string): string => {
   try {
     url = new URL(trimmed)
   } catch {
-    throw new Error(`${envName} contains an invalid origin: ${value}`)
+    throw new Error(`${envName} contains an invalid origin`)
   }
   if (!/^https?:\/\//.test(trimmed) || url.origin !== trimmed) {
-    throw new Error(`${envName} entries must be exact http(s) origins: ${value}`)
+    throw new Error(`${envName} entries must be exact http(s) origins`)
   }
   return url.origin
 }
@@ -76,7 +77,14 @@ export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
     .split(',')
     .filter((value) => value.trim() !== '')
     .map((value) => exactOrigin(value, 'ADDITIONAL_APP_ORIGINS'))
-  return [...new Set([primary, ...additional])]
+  const origins = [...new Set([primary, ...additional])]
+  if (
+    deploymentEnvironment() !== 'development' &&
+    origins.some((origin) => !origin.startsWith('https://'))
+  ) {
+    throw new Error('Hosted authentication requires HTTPS for every app origin')
+  }
+  return origins
 }
 
 const authFunctions = {
@@ -101,7 +109,13 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
  * ctx must only be dereferenced inside callbacks and the lazy adapter. */
 export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnly?: boolean }) => {
   const siteUrl = opts?.schemaOnly ? SCHEMA_ONLY_ORIGIN : requireSiteUrl()
+  const environment = opts?.schemaOnly ? undefined : deploymentEnvironment()
+  if (environment && environment !== 'development' && !siteUrl.startsWith('https://')) {
+    throw new Error('Hosted authentication requires an HTTPS SITE_URL')
+  }
   const demo = !opts?.schemaOnly && isDemoDeployment()
+  if (environment === 'demo' && !demo)
+    throw new Error('The demo environment requires APP_MODE=demo')
   if (demo) requireDemoDeployment()
   return {
     baseURL: process.env.CONVEX_SITE_URL,
@@ -158,6 +172,7 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
       enabled: !demo,
       requireEmailVerification: true,
       sendResetPassword: async ({ user, url }) => {
+        requireAuthMailDelivery()
         // The operator recovery-link flow replaces this callback wholesale —
         // see createCaptureAuth below; the browser's "Forgot password?" mails.
         await requireRunMutationCtx(ctx).scheduler.runAfter(0, internal.mail.send, {
@@ -178,6 +193,7 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
       sendOnSignUp: !demo,
       sendOnSignIn: !demo,
       sendVerificationEmail: async ({ user, url }) => {
+        requireAuthMailDelivery()
         await requireRunMutationCtx(ctx).scheduler.runAfter(0, internal.mail.send, {
           to: user.email,
           intent: 'verify',

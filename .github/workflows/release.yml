@@ -1,0 +1,21 @@
+name: Production release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+jobs:
+  production:
+    if: >-
+      github.repository == 'qivo-io/qivo' &&
+      !github.event.release.prerelease && !github.event.release.draft &&
+      github.event.sender.type == 'User'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      app_revision: ${{ github.sha }}

@@ -37,6 +37,8 @@ export default defineConfig({
         test: {
           name: 'convex',
           environment: 'edge-runtime',
+          // Full fixture transactions need time to finish on shared CI workers.
+          testTimeout: 20_000,
           include: ['convex/**/*.test.ts'],
         },
       },

@@ -601,8 +601,8 @@ export const auditLog = platformQuery({
  * Two writes, both required: the platform_admins row our wrappers gate on,
  * AND role 'admin' on the Better Auth user — adminMiddleware gates ban/unban
  * on the CALLER's BA role, so an operator without it opens the console but
- * fails every rescue with UNAUTHORIZED. Idempotent like
- * ensurePlatformAdmin; audited as 'cli' like deleteOrphanLogin. */
+ * fails every rescue with UNAUTHORIZED. Repeated enrollment preserves the
+ * account and is audited as 'cli' like deleteOrphanLogin. */
 export const addOperator = internalMutation({
   args: { email: v.string(), note: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ auth_user_id: string }> => {

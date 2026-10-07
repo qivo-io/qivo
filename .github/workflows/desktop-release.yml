@@ -1,4 +1,4 @@
-name: Desktop release
+name: Desktop release candidate
 
 on:
   push:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 # Build jobs only need to read the repository. The release job below is the
-# only job allowed to create or update a GitHub Release.
+# only job allowed to prepare a draft GitHub Release. Publication is manual.
 permissions:
   contents: read
 
@@ -111,10 +111,28 @@ jobs:
           npm ci
           npm run desktop:install
 
-      # Signing is intentionally opt-in. Configure electron-builder's CSC_LINK
-      # and CSC_KEY_PASSWORD secrets before distributing Windows installers.
-      - name: Build Windows installer
-        run: npm run desktop:package
+      # Release candidates must already be suitable for public distribution.
+      - name: Require Windows signing credentials
+        shell: pwsh
+        run: |
+          if (-not $env:CSC_LINK -or -not $env:CSC_KEY_PASSWORD) {
+            throw 'Configure Windows signing credentials before building a release candidate.'
+          }
+
+      - name: Build signed Windows installer
+        run: npm run desktop:package -- --config.forceCodeSigning=true
+
+      - name: Verify Windows installer signatures
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem desktop/release/*.exe)
+          if ($installers.Count -eq 0) { throw 'No Windows installers were built.' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature $installer.FullName
+            if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) {
+              throw "Invalid signature on $($installer.Name)."
+            }
+          }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -175,7 +193,7 @@ jobs:
             desktop/release/latest-linux.yml
 
   release:
-    name: Publish GitHub Release
+    name: Prepare draft GitHub Release
     needs: [prepare, windows, linux]
     runs-on: ubuntu-24.04
     permissions:
@@ -195,16 +213,20 @@ jobs:
       - name: Add checksums
         run: sha256sum release/* > release/SHA256SUMS
 
-      - name: Create GitHub Release
+      - name: Prepare draft release for manual publication
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          release_args=(--title "Qivo ${VERSION}" --generate-notes --verify-tag)
+          release_args=(--draft --title "Qivo ${VERSION}" --generate-notes --verify-tag)
           if [[ "$PRERELEASE" == "true" ]]; then
             release_args+=(--prerelease)
           fi
           if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$TAG" --repo "$REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo 'Refusing to replace files on a published release.' >&2
+              exit 1
+            fi
             gh release upload "$TAG" --repo "$REPOSITORY" --clobber release/*
           else
             gh release create "$TAG" --repo "$REPOSITORY" "${release_args[@]}" release/*

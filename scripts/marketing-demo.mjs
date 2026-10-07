@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-/* The production-capable Northstar demo owns a dedicated server marker. It
- * never calls the development seed or resets the deployment. Passwords stay
- * in a private local file; only Better Auth hashes reach the admin mutation. */
+/* Explicit Northstar fixtures for isolated development and staging backends.
+ * Passwords stay outside the checkout. Only password hashes reach Convex. */
 import { randomBytes, randomUUID } from 'node:crypto'
 import {
   closeSync,
@@ -13,9 +12,10 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { hashPassword } from 'better-auth/crypto'
 import { ConvexHttpClient } from 'convex/browser'
@@ -89,7 +89,7 @@ export function parseArgs(args, now = new Date()) {
     }
     if (
       ![
-        '--prod',
+        '--staging',
         '--dev',
         '--dry-run',
         '--anchor',
@@ -107,8 +107,8 @@ export function parseArgs(args, now = new Date()) {
     seen.add(arg)
     if (arg === '--help') options.help = true
     else if (arg === '--dry-run') options.dryRun = true
-    else if (arg === '--prod' || arg === '--dev') {
-      if (options.target) throw new DemoCliError('Choose either --prod or --dev, never both.')
+    else if (arg === '--staging' || arg === '--dev') {
+      if (options.target) throw new DemoCliError('Choose either --staging or --dev, never both.')
       options.target = arg.slice(2)
     } else {
       const value = args[++index]
@@ -126,7 +126,7 @@ export function parseArgs(args, now = new Date()) {
   options.anchor = mondayAnchor(options.anchor, now)
   if (!options.help && options.command !== 'plan' && !options.target) {
     throw new DemoCliError(
-      'Explicitly select --dev or --prod before seeding, resetting, or wiping.',
+      'Explicitly select --dev or --staging before seeding, resetting, or wiping.',
     )
   }
   if (
@@ -143,39 +143,50 @@ export function parseArgs(args, now = new Date()) {
 }
 
 export function resolveTarget(options, env, requireKey = true) {
-  // Only an explicit --prod may select the dedicated production key. When
-  // provided, that key must validate; a bad value never falls back to another.
-  const keyName =
-    options.target === 'prod' && env.CONVEX_DEPLOY_KEY_PRODUCTION !== undefined
-      ? 'CONVEX_DEPLOY_KEY_PRODUCTION'
-      : 'CONVEX_DEPLOY_KEY'
-  const key = env[keyName]
+  const target = options.target ?? 'dev'
+  if (!['dev', 'staging'].includes(target))
+    throw new DemoCliError('Production fixture commands are disabled.')
+  const environment = target === 'dev' ? 'development' : 'staging'
+  if (requireKey && (env.QIVO_ENVIRONMENT !== environment || env.APP_MODE === 'demo')) {
+    throw new DemoCliError('QIVO_ENVIRONMENT does not match the selected isolated fixture target.')
+  }
+  const key = env.CONVEX_DEPLOY_KEY
   if (!key && requireKey) {
     throw new DemoCliError(
-      `Set a deployment-scoped ${options.target === 'prod' ? 'CONVEX_DEPLOY_KEY_PRODUCTION (or CONVEX_DEPLOY_KEY)' : 'CONVEX_DEPLOY_KEY'} in the environment. Never pass it as a command argument.`,
+      'Set the isolated deployment-scoped CONVEX_DEPLOY_KEY in the environment. Never pass it as a command argument.',
     )
   }
   const match = key?.match(/^(prod|dev):([a-z][a-z0-9-]*-[0-9]+)\|[^|\s]+$/)
   if (key !== undefined && !match)
     throw new DemoCliError(
-      `${keyName} must be a deployment-scoped dev or prod key; project and preview keys are refused.`,
+      'CONVEX_DEPLOY_KEY must be a deployment-scoped dev or prod key; project and preview keys are refused.',
     )
-  if (match && options.target && match[1] !== options.target) {
+  if (match && match[1] !== (target === 'dev' ? 'dev' : 'prod')) {
     throw new DemoCliError(
-      'The deploy key does not match --dev/--prod. Refusing to contact a different deployment.',
+      'The deploy key does not match --dev/--staging. Refusing to contact a different deployment.',
     )
   }
-  const target = options.target ?? match?.[1] ?? 'dev'
   const siteUrl =
-    options.siteUrl ?? (target === 'prod' ? 'https://qivo.io' : 'http://localhost:5199')
-  if (target === 'prod' && siteUrl !== 'https://qivo.io') {
-    throw new DemoCliError('Production demo writes require the exact site https://qivo.io.')
+    options.siteUrl ?? env.SITE_URL ?? (target === 'dev' ? 'http://localhost:5199' : undefined)
+  let site
+  try {
+    site = new URL(siteUrl)
+  } catch {
+    throw new DemoCliError('Set the exact isolated SITE_URL for fixture commands.')
+  }
+  if (
+    site.origin !== siteUrl ||
+    ['qivo.io', 'www.qivo.io', 'demo.qivo.io'].includes(site.hostname)
+  ) {
+    throw new DemoCliError('Fixture commands require an exact nonproduction site origin.')
+  }
+  if (target === 'staging' && site.protocol !== 'https:') {
+    throw new DemoCliError('Staging fixture commands require HTTPS.')
   }
   if (target === 'dev' && !/^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(siteUrl)) {
     throw new DemoCliError('Development demo writes require a localhost site URL.')
   }
-  // A production key outranks the development URL in .env.local. An explicit
-  // --url, however, must match the key, so it can never redirect admin auth.
+  // An explicit URL must match the key and cannot redirect admin auth.
   const urlValue = options.url ?? (match ? `https://${match[2]}.convex.cloud` : env.VITE_CONVEX_URL)
   let url
   if (urlValue) {
@@ -232,11 +243,27 @@ function privateDirectory(path, create, requirePrivate) {
   return true
 }
 
-export function credentialsPath(cwd, target) {
+export function credentialsPath(directory, target) {
   if (!/^[a-z][a-z0-9-]*-[0-9]+$/.test(target.deployment ?? '')) {
     throw new DemoCliError('Cannot bind credentials to an unknown deployment.')
   }
-  return join(cwd, '.local', 'marketing-demo', target.deployment, 'credentials.json')
+  return join(directory, target.deployment, 'credentials.json')
+}
+
+/** A caller must choose an existing private directory outside the application checkout. */
+export function fixtureDirectory(cwd, env) {
+  const directory = env.QIVO_FIXTURE_CREDENTIALS_DIR
+  if (!directory || !isAbsolute(directory) || !privateDirectory(directory, false, true)) {
+    throw new DemoCliError(
+      'Set QIVO_FIXTURE_CREDENTIALS_DIR to an existing private absolute directory outside this checkout.',
+    )
+  }
+  const canonical = realpathSync(directory)
+  const within = relative(realpathSync(cwd), canonical)
+  if (within === '' || (!within.startsWith('..') && !isAbsolute(within))) {
+    throw new DemoCliError('Fixture credentials must be stored outside the application checkout.')
+  }
+  return canonical
 }
 
 function verifyCredentials(value, target) {
@@ -271,11 +298,11 @@ function verifyCredentials(value, target) {
 
 /** Returns null when absent unless creation was explicitly requested. This
  * never repairs or overwrites a suspicious existing file. */
-export function loadCredentials(cwd, target, { create = false } = {}) {
-  const path = credentialsPath(cwd, target)
-  const dirs = [join(cwd, '.local'), join(cwd, '.local', 'marketing-demo'), dirname(path)]
-  for (const [index, dir] of dirs.entries()) {
-    if (!privateDirectory(dir, create, index > 0)) return null
+export function loadCredentials(directory, target, { create = false } = {}) {
+  const path = credentialsPath(directory, target)
+  const dirs = [directory, dirname(path)]
+  for (const dir of dirs) {
+    if (!privateDirectory(dir, create, true)) return null
   }
   let fd
   try {
@@ -453,7 +480,7 @@ export async function runMarketingDemo(args, dependencies = {}) {
   if (options.help) {
     log(`Usage: node scripts/marketing-demo.mjs [plan|seed|reset|wipe] [options]
 
-  --prod                 Explicitly target qivo.io with a production deploy key
+  --staging              Explicitly target the isolated staging backend
   --dev                  Explicitly target the localhost development app
   --anchor YYYY-MM-DD     Monday around which demo dates are arranged (default: current UTC Monday)
   --confirm northstar-labs Required for reset and wipe
@@ -462,13 +489,12 @@ export async function runMarketingDemo(args, dependencies = {}) {
   --site-url URL         Expected SITE_URL (dev defaults to http://localhost:5199)
   --help                 Show this help
 
-For --prod, load CONVEX_DEPLOY_KEY_PRODUCTION from ignored .env.production.local:
-  node --env-file=.env.production.local scripts/marketing-demo.mjs seed --prod
---prod falls back to CONVEX_DEPLOY_KEY only when the production variable is absent.
---dev uses only CONVEX_DEPLOY_KEY from the environment or ignored .env.local.
-The production variable is ignored without --prod. No secret command-line flags
-are supported. plan is the default and is fully offline.
-Credentials: .local/marketing-demo/<deployment>/credentials.json (0600).
+Set QIVO_ENVIRONMENT to development or staging, matching the selected target.
+Load only that isolated backend's CONVEX_DEPLOY_KEY. Staging also requires its
+exact SITE_URL. Production fixture commands are disabled.
+Set QIVO_FIXTURE_CREDENTIALS_DIR to a private directory outside this checkout.
+Credentials are stored under <directory>/<deployment>/credentials.json (0600).
+No secret command-line flags are supported. plan is fully offline.
 Wipe preserves logins and portraits; it removes all demo organization work.
 Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
     return { kind: 'help' }
@@ -479,6 +505,7 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
     printPlan(options, target, log)
     return { kind: 'plan', command: options.command, anchor: options.anchor }
   }
+  const credentialsDirectory = fixtureDirectory(cwd, env)
   const client = clientFactory(target.url)
   client.setAdminAuth(target.key)
   const guard = { expected_site_url: target.siteUrl }
@@ -500,7 +527,9 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
         ? AVATARS.map((key) => ({ key }))
         : state.people.filter((person) => !person.avatar_storage_id)
     const avatars = readAvatars(cwd, missingPeople)
-    credentials = loadCredentials(cwd, target, { create: state.state === 'absent' })
+    credentials = loadCredentials(credentialsDirectory, target, {
+      create: state.state === 'absent',
+    })
     if (state.state !== 'absent') assertCredentialSet(credentials, state)
     if (state.state === 'absent') {
       const password_hashes = Object.fromEntries(

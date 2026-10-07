@@ -6,14 +6,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inspectBrowserDemo, loadBrowserDemo, signInBrowser } from './browser-demo.mjs'
 import { loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
-const env = { CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-key' }
+const env = { QIVO_ENVIRONMENT: 'development', CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-key' }
 const folders = []
 function fixture() {
   const cwd = mkdtempSync(join(tmpdir(), 'qivo-browser-demo-'))
-  folders.push(cwd)
+  const directory = mkdtempSync(join(tmpdir(), 'qivo-browser-credentials-'))
+  folders.push(cwd, directory)
   const target = resolveTarget({ target: 'dev' }, env)
-  loadCredentials(cwd, target, { create: true })
-  return { cwd, env }
+  loadCredentials(directory, target, { create: true })
+  return { cwd, env: { ...env, QIVO_FIXTURE_CREDENTIALS_DIR: directory } }
 }
 afterEach(() => {
   vi.restoreAllMocks()
@@ -53,11 +54,12 @@ describe('Northstar browser fixture', () => {
   })
 
   it('requires existing credentials instead of generating another password set', () => {
-    const { cwd } = fixture()
+    const options = fixture()
+    const { cwd } = options
     expect(() =>
       loadBrowserDemo('http://localhost:5199', {
         cwd,
-        env: { CONVEX_DEPLOY_KEY: 'dev:other-otter-13|test-key' },
+        env: { ...options.env, CONVEX_DEPLOY_KEY: 'dev:other-otter-13|test-key' },
       }),
     ).toThrow(/credentials are missing/)
   })

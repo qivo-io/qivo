@@ -19,14 +19,12 @@
  * its own catch that records only the error's NAME. Logs carry no key, no
  * inbox, no URL, no recipient.
  *
- * URL LOGGING IS FALLBACK-ONLY. Without a key, sign-up dead-ends unless the
- * verification link is retrievable from `npx convex logs` — so the no-key
- * path logs it as a dev fallback. With a key set, reset/verify URLs
- * are live credentials and must NOT reach the deployment log: the send path
- * logs intent + attempt outcomes only. */
+ * Missing configuration fails without logging credentials. Local developers
+ * may explicitly opt into auth-link logging on a loopback development origin. */
 
 import { v } from 'convex/values'
 import { internalAction } from './_generated/server'
+import { localAuthEmailLogging, requireAuthMailDelivery } from './lib/mailConfig'
 
 /* Web-platform globals the Convex isolate provides; convex/tsconfig's lib is
  * ESNext only, which does not declare them (same move as model/orgs). */
@@ -274,22 +272,20 @@ export const send = internalAction({
   },
   handler: async (_ctx, { to, intent, url }) => {
     if (process.env.APP_MODE === 'demo') return
+    requireAuthMailDelivery()
     const key = process.env.AGENTMAIL_API_KEY
     if (key === undefined || key === '') {
-      /* Dev fallback — the ONLY branch where the URL may reach the logs:
-       * without a mailer, sign-up dead-ends unless this line is retrievable
-       * from `npx convex logs`. */
-      console.log(`[mail] intent=${intent} to=${to} url=${url}`)
+      if (!localAuthEmailLogging()) throw new Error('Local auth-link logging is disabled')
+      console.log(`[mail] local-development intent=${intent} url=${url}`)
       return
     }
     const inbox = process.env.AGENTMAIL_INBOX
     if (inbox === undefined || inbox === '') {
-      // the NAME, never a value — and never the URL: with a key set, the URL
-      // is a live credential and stays out of the deployment log
-      console.error('[mail] missing AGENTMAIL_INBOX — cannot send', { intent })
-      return
+      throw new Error('Authentication email is unavailable. Configure AGENTMAIL_INBOX.')
     }
     const letter = intent === 'verify' ? verifyLetter(to, url) : resetLetter(to, url)
-    await postLetter(letter, intent, { key, inbox, idempotencyKey: await sha256Hex(url) })
+    if (!(await postLetter(letter, intent, { key, inbox, idempotencyKey: await sha256Hex(url) }))) {
+      throw new Error('Authentication email delivery failed')
+    }
   },
 })

@@ -37,16 +37,6 @@ test('the committed Vercel command routes demo builds without the shared seed', 
 test.each([undefined, '', 'app'])(
   'the committed Vercel command preserves normal builds with mode %s',
   (mode) => {
-    expect(commandsFor(mode)).toEqual([
-      [
-        'npx',
-        'convex',
-        'deploy',
-        '--cmd',
-        'node scripts/vercel-build.mjs',
-        '--preview-run',
-        'internal/previewSeed:seed',
-      ],
-    ])
+    expect(commandsFor(mode)).toEqual([['node', 'scripts/app-deploy.mjs']])
   },
 )
