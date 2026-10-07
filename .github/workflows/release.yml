@@ -16,6 +16,7 @@ jobs:
       !github.event.release.prerelease && !github.event.release.draft &&
       github.event.sender.type == 'User'
     uses: ./.github/workflows/deploy.yml
+    secrets: inherit
     with:
       environment: production
       app_revision: ${{ github.sha }}
