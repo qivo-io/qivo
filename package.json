@@ -64,7 +64,7 @@
     "radix-ui": "^1.6.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "standardwebhooks": "^1.1.1",
     "tailwind-merge": "^3.7.0",
     "tailwindcss": "^4.3.3",
