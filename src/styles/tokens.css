@@ -1,0 +1,1012 @@
+/* Theme palettes live here. Components use semantic variables rather than
+   repeat color values. Bare :root holds the shared scales and the palette of
+   every page without data-appearance (the operator UI, and the sign-in
+   screens before a theme is known), with two neutral fills: --bg is the page
+   ground; --surface-1 is every solid UI surface, including controls and
+   floating panels. The planner's Dark, Light and Blue blocks below override
+   it. Personal appearance is applied on <html> so portals inherit the same
+   tokens. */
+:root {
+  --sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  /* 273.6px navigation panel plus 12px outer spacing on each side. */
+  --sidebar-w: 297.6px;
+  --workspace-content-max: 1200px;
+  --workspace-max: calc(var(--sidebar-w) + var(--workspace-content-max));
+  /* Phone page content starts with the same space as project-card gaps. */
+  --mobile-content-inset: 16px;
+  color-scheme: dark;
+  --bg: #0b0b0c; /* bottom fill, visible between panels */
+  --surface-1: #0f1012; /* shared dark fill for panels and controls */
+  --chrome: var(--surface-1);
+  --surface-2: var(--surface-1);
+  --surface-3: var(--surface-1);
+  --hover: var(--surface-1);
+  /* The one fill this palette adds beyond its two neutrals: the lit chip of a
+     control that is on or current (deviation #232). --surface-3 here is the
+     panel itself, so a chip painted with it would vanish. */
+  --lit: #1e2125;
+  --workspace-panel: var(--surface-1);
+  --workspace-panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  --workspace-panel-blur: none;
+  --border: #30343a; /* quiet separators: content carries the hierarchy */
+  --border-strong: #53585d; /* mix(bg, fg, .25) */
+  --text-1: #f5f5f5; /* primary information: names, titles and values */
+  --text-2: #b5bac1; /* readable neutral supporting text */
+  --text-3: var(--text-2); /* legacy tertiary slots share the supporting tone */
+  --primary: #3b82f6;
+  --primary-foreground: #fff;
+  --accent: var(--hover);
+  --accent-foreground: var(--text-1);
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --danger: #ea4a5a; /* git deleted */
+  --danger-soft: rgba(234, 74, 90, 0.13);
+  --success: #34d058; /* git added */
+  --warn: #d29922;
+  --qivo-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --qivo-shadow-hover: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --qivo-shadow-pop: 0 16px 44px rgba(0, 0, 0, 0.55);
+  --scrim: rgba(13, 15, 17, 0.6);
+  --image-control-bg: var(--surface-1);
+  --checkbox-bg: var(--surface-1);
+  --workspace-image-veil: transparent;
+  --board-parent-text: #dfebff;
+  --board-hierarchy-line: #647d9f;
+
+  /* shadcn's semantic surface vocabulary. Qivo's former blue --accent is
+     --primary now; shadcn correctly reserves accent for the quiet hover
+     surface, so generated components do not repaint menus blue. */
+  /* Solid UI ground. Full-page containers use --bg directly. */
+  --background: var(--surface-1);
+  --foreground: var(--text-1);
+  --card: var(--surface-1);
+  --card-foreground: var(--text-1);
+  --popover: var(--surface-1);
+  --popover-foreground: var(--text-1);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text-1);
+  --muted: var(--surface-1);
+  --muted-foreground: var(--text-2);
+  --destructive: var(--danger);
+  --border-ui: var(--border);
+  --input: var(--border);
+  --ring: var(--primary);
+
+  /* ---- Semantic colour ---------------------------------------------------
+     Every colour the app uses to MEAN something, in one place. These lived as
+     hex literals in planner.ts, delay.ts, Kanban.tsx, Resources.tsx and
+     wsIcon.tsx until they had drifted into three blues, three greys, two
+     purples and three warm hues — near-misses nobody chose and nobody can
+     see: #A78BFA "in review" beside #a371f7 "parent", #7E838E "backlog"
+     beside #8A8F98 "low priority", #3b82f6 accent beside #4C9AFF "in
+     progress" beside #79b8ff "under 75% loaded".
+
+     Two rules hold the set together, and every value below is derived from
+     one of six bases (--text-3, --text-2, --primary, --success, --warn,
+     --danger) plus a single new violet.
+
+     · BLUE IS INTERACTION. --primary is selection, focus, drop targets and the
+       roadmap bar you drag. Nothing at rest is painted accent to report that
+       it is healthy — that was the load strip's <75% blue, now silent.
+
+     · COLOUR MARKS THE EXCEPTION. There is deliberately no --pressure-ok: a
+       task that will land on time is the default, and the default says
+       nothing. Painting 18 of 27 cards green to report "fine" spent the whole
+       channel on the one state nobody needs to find, and left the four late
+       ones competing with eighteen decorations of equal weight.
+
+     Where a fill or an edge needs the same hue at lower alpha, derive it with
+     color-mix() at the call site rather than suffixing hex digits — that
+     string trick ("#ea4a5a" + "26") is why these could not be tokens before.  */
+
+  /* Workflow status — the ramp. Shape carries the state (the StatusDot draws
+     a dashed ring, an empty ring, a pie, a checked disc); colour is the
+     second channel and stays quiet until the work is done. */
+  --status-backlog: var(--text-3);
+  --status-todo: var(--text-2);
+  --status-progress: var(--primary);
+  --status-review: #a78bfa;
+  --status-done: var(--success);
+
+  /* Priority — rank is carried TWICE by shape: the glyph fills one, two or
+     three bars, and the bars step up in lightness with it. Only `urgent`
+     spends a hue, because only `urgent` is an exception. This is what retired
+     the orange (#F2994A) and the yellow (#E3C55A) that used to sit between
+     --warn and --danger without meaning either. */
+  --prio-urgent: var(--danger);
+  --prio-high: var(--text-1);
+  --prio-medium: var(--text-2);
+  --prio-low: var(--text-3);
+
+  /* Pressure — shared by an issue's projected delay and by a person's weekly
+     load, because they are the same question asked of a task and of a person.
+     Two values, both exceptions; "on track" and "comfortably loaded" render
+     as nothing at all. */
+  --pressure-warn: var(--warn); /* slipping · nearly booked */
+  --pressure-over: var(--danger); /* deadline lost · overbooked */
+
+  /* Roadmap bars — the four states a task bar is painted in, as a tint of
+     the hue (--roadmap-bar-fill) inside a stronger rim of it
+     (--roadmap-bar-rim, unless a palette names a state's rim outright with
+     --roadmap-bar-<state>-rim, as Light does), deviation #301. One bright
+     palette for every theme, chosen apart from the semantic bases above: a
+     thinner or darker tint turned green teal, yellow olive, red rose and
+     sank blue into the Canvas panel. */
+  --roadmap-bar-planned: #528dff;
+  --roadmap-bar-done: #55e978;
+  --roadmap-bar-behind: #ffcd41;
+  --roadmap-bar-late: #ff6362;
+  --roadmap-bar-fill: 52%;
+  /* Yellow only reads as yellow when it is light: a thinner tint over a dark
+     ground turns it olive, so slipping bars lay on more. */
+  --roadmap-bar-behind-fill: 66%;
+  --roadmap-bar-rim: 85%;
+  /* The board's Slipping and Delayed banners are a neutral band naming the
+     state, ending in a block of the roadmap's yellow or red that carries a
+     white clock (deviation #312). Both blocks are Light's solid roadmap rims
+     in every theme: white reads better on the deeper amber than on the
+     bright yellow, and the solid red holds its strength on the dark
+     grounds. */
+  --delay-banner: color-mix(in oklab, var(--text-1) 8%, transparent);
+  --delay-banner-behind-block: #d49a00;
+  --delay-banner-late-block: #e04448;
+
+  /* Milestone — a date marker, not a status. Shares the violet with "in
+     review" and meets it nowhere: one is a diamond on the roadmap's header
+     rail, the other a dot on a card. */
+  --milestone: #a78bfa;
+
+  /* ---- Type scale --------------------------------------------------------
+     Eight steps, every one an integer. This replaces nineteen sizes, six of
+     them half-points: an 11.5 sitting between an 11 and a 12 is not a
+     decision, it is the residue of one — somebody nudged a value and split
+     the difference, 223 times. */
+  --fs-2xs: 11px; /* compact counts and badges */
+  --fs-xs: 12px; /* card metadata and chips */
+  --fs-sm: 13px; /* secondary controls, the filter row */
+  --fs-base: 14px; /* body, card titles, nav rows */
+  --fs-md: 15px; /* section headings */
+  --fs-lg: 17px; /* emphasized compact text */
+  --fs-xl: 20px; /* screen and dialog headings */
+  --fs-2xl: 24px; /* tile numbers */
+
+  /* ---- Radius ------------------------------------------------------------
+     A strict hierarchy — control < card < panel < dialog — in place of the
+     fourteen values that had accumulated. A card was 9, a popover 10 and a
+     panel 12: three differences nobody chose and nobody can perceive. */
+  --r-2xs: 2px; /* priority bars, the milestone diamond */
+  --r-sm: 6px; /* chips, inline code, progress tracks, dense controls */
+  --r-md: 8px; /* buttons, inputs, cards */
+  --r-lg: 12px; /* panels, popovers, board columns */
+  --r-xl: 16px; /* dialogs, empty-state tiles */
+  --r-pill: 999px;
+
+  /* ---- Alignment controls (docs/alignment-design.md) ----------------------
+     Ordinary controls share one 32px target across pages and dialogs.
+     Keep the existing aliases for callers; portrait triggers deliberately
+     grow to 46px, while plotted data and decorative badges keep their scale. */
+  --ctl-xs: 32px;
+  --ctl-sm: 32px;
+  --ctl-md: 32px;
+  --ctl-lg: 32px;
+
+  /* ---- Space (4pt) ------------------------------------------------------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* ---- Motion ------------------------------------------------------------
+     Named, so that a transition can no longer be spelled `.13s` — which is
+     `transition: all`, and animates the focus ring in along with everything
+     else it was never meant to touch. */
+  --dur-fast: 120ms;
+  --dur-mid: 200ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Dark is Blue's structure in neutral graphite: four fills about 1.08 apart
+   (ground < panel and sheet < control < floating), and lines and states as
+   white ink at a fixed alpha, so hover, tracks, the lit chip and hairlines
+   lift the same step on every fill. Over the photograph all but the lit
+   chip do too; it turns opaque there (below). Primary, the semantic inks,
+   the roadmap palette and the shadows stay the bare :root values. */
+:root[data-appearance="dark"] {
+  --bg: #09090b;
+  /* Panels, sheets (dialogs, the task window, the Inbox detail) and every
+     --chrome consumer share the panel fill, so fields inside a sheet still
+     step up to the control fill. */
+  --workspace-panel: #131417;
+  --background: #131417;
+  --chrome: #131417;
+  /* Controls, rows and chips; --card, --muted and --roadmap-group follow. */
+  --surface-1: #1a1c1f;
+  /* Floating surfaces: menus, popovers, the palette, AnchoredPop, tooltips,
+     toasts, the plan card, the editor's menus and the image buttons. */
+  --surface-2: #212327;
+  --popover: var(--surface-2);
+  --image-control-bg: var(--surface-2);
+  /* hover < surface-3 < lit; --accent follows --hover. */
+  --hover: rgba(255, 255, 255, 0.07);
+  --surface-3: rgba(255, 255, 255, 0.1);
+  --lit: rgba(255, 255, 255, 0.12);
+  --checkbox-bg: color-mix(in oklab, var(--input) 31%, transparent);
+  /* The hairline (--border-ui, --input and the board rules follow) and a 3:1
+     outline for fields, radios, month rules and the scroll thumb. */
+  --border: rgba(228, 234, 242, 0.2);
+  --border-strong: #737980;
+  --text-2: #c4c9cf;
+  --board-parent-text: var(--text-1);
+  --board-hierarchy-line: var(--border-strong);
+
+  /* Component hooks (listed with Light's below). The checked theme card is
+     the hover ink over the opaque control fill, a quiet lift; the primary
+     rim and check already mark the choice. */
+  --float-border: var(--border);
+  --switch-off: rgba(230, 236, 244, 0.24);
+  --theme-choice-checked: linear-gradient(var(--hover), var(--hover)), var(--surface-1);
+}
+
+/* Light is a complete palette, including semantic states and floating surfaces.
+   Its darker accent and risk colours keep small labels readable on the pale
+   surfaces, while primary/destructive buttons retain their white lettering.
+   Defining the overrides on the document also covers Radix portals, the TipTap
+   mention/link menus, native form controls and the browser's colour scheme.
+   Panels, controls and floating surfaces are white, sheets #f7f9fc and the
+   ground #eef2f6; lines and states are text-1 ink at a fixed alpha, so each
+   step reads the same on white, on the ground and over the photograph. */
+:root[data-appearance="light"] {
+  color-scheme: light;
+  --bg: #eef2f6;
+  --chrome: var(--bg);
+  /* Sheets: dialogs, the task window and the phone task page. */
+  --background: #f7f9fc;
+  --workspace-panel-shadow: 0 1px 2px rgba(25, 39, 56, 0.06), 0 2px 8px rgba(25, 39, 56, 0.05);
+  --surface-1: #ffffff;
+  /* The opaque recess: code blocks, the armed confirm button, secondary
+     buttons. The armed button reads only through it, so it stays solid. */
+  --surface-2: #eef2f7;
+  /* hover < surface-3 < lit. The lit chip takes a bluer slate ink so
+     "current" reads cool rather than pressed, and apart from primary-soft
+     selection; --accent follows --hover. */
+  --hover: rgba(25, 39, 56, 0.09);
+  --surface-3: rgba(25, 39, 56, 0.12);
+  --lit: rgba(29, 60, 120, 0.16);
+  --border: rgba(25, 39, 56, 0.24);
+  --border-strong: #8593a5;
+  --text-1: #192738;
+  --text-2: #4a596c;
+  --primary: #1d4ed8;
+  --accent-soft: rgba(29, 78, 216, 0.14);
+  --danger: #b42335;
+  --danger-soft: rgba(180, 35, 53, 0.09);
+  --success: #167342;
+  --warn: #855500;
+  --status-review: #7341b7;
+  --milestone: #7341b7;
+  --qivo-shadow-card: 0 1px 2px rgba(25, 39, 56, 0.08);
+  --qivo-shadow-hover: 0 6px 18px rgba(25, 39, 56, 0.12);
+  --qivo-shadow-pop: 0 1px 3px rgba(25, 39, 56, 0.1), 0 12px 32px rgba(25, 39, 56, 0.16);
+  --scrim: rgba(25, 39, 56, 0.35);
+  --image-control-bg: rgba(255, 255, 255, 0.94);
+  --board-parent-text: var(--text-1);
+  --board-hierarchy-line: var(--border-strong);
+  /* Roadmap group bands a step darker than the white rows. Opaque, so pinned
+     headings still cover scrolling rows. */
+  --roadmap-group: #eef2f7;
+
+  /* Component hooks. Shared consumers read their token with a fallback, so
+     a palette that sets none keeps the default look:
+     --float-border             menu, popover, select and AnchoredPop rims;
+                                Light's toast, plan card and editor menus;
+                                the Dark and Blue tooltip ring
+     --float-material           Blue's floating surfaces (appearance.css); the
+                                Dark and Blue tooltip fill, else --popover
+     --tooltip-shadow           the Dark and Blue tooltip ring and shadow,
+                                else an outer --float-border ring and the
+                                pop shadow
+     --switch-off               off track of the settings and auto-fit switches
+     --theme-choice-checked     the chosen theme card
+     --status-fill-<status>     Overview status bar segments (dots keep inks)
+     --roadmap-bar-<state>-rim  roadmap bar and week-chip rims
+     --heat-*-fill              Team utilization near, over and empty weeks */
+  --float-border: rgba(25, 39, 56, 0.28);
+  --switch-off: rgba(25, 39, 56, 0.3);
+  --theme-choice-checked: color-mix(in srgb, var(--primary) 10%, var(--surface-1));
+  --status-fill-backlog: #b6c1ce;
+  --status-fill-todo: #b6c1ce;
+  --status-fill-progress: #3b82f6;
+  --status-fill-review: #8b5cf6;
+  --status-fill-done: #22a355;
+  --roadmap-bar-planned-rim: #3b74f0;
+  --roadmap-bar-done-rim: #27a84e;
+  --roadmap-bar-behind-rim: #d49a00;
+  --roadmap-bar-late-rim: #e04448;
+  --heat-near-fill: color-mix(in oklab, var(--roadmap-bar-behind) 50%, transparent);
+  --heat-over-fill: color-mix(in oklab, var(--roadmap-bar-late) 28%, transparent);
+  --heat-empty-fill: rgba(25, 39, 56, 0.03);
+}
+
+/* Blue is the default theme: Dark's four-step ladder in navy, under a
+   translucent blue material that shows the Canvas image through its panels.
+   Over the photo, which takes a 16% veil, panels and sheets take the 81%
+   material with blur, and floating surfaces the floating step at 88%; with
+   No image, or before one loads, the ladder turns solid (below). Lines and
+   states are one blue-white ink at a fixed alpha, as in Dark, but the lit
+   chip stays an opaque #304553, so "current" never takes the photo's
+   colour. Operator Canvas previews, which always show a photo, share this
+   block. */
+:root[data-appearance="blue"],
+[data-canvas-preview] {
+  --bg: #101a24;
+  /* The panel fill, pinned so wells and outline Buttons keep it when --bg
+     drops below it with No image. */
+  --chrome: #101a24;
+  --background: #101a24;
+  --image-control-bg: rgba(15, 16, 18, 0.86);
+  --checkbox-bg: color-mix(in oklab, var(--input) 31%, transparent);
+  --workspace-image-veil: rgba(5, 17, 34, 0.16);
+  /* Controls, rows and chips, then the recess (secondary buttons, the
+     checked theme card). */
+  --surface-1: #142330;
+  --surface-2: #203340;
+  /* The floating step: --float-material is what menus, popovers, tooltips,
+     the palette and the other floating surfaces paint (appearance.css);
+     --popover is its opaque form, which --float-material takes with No image
+     (below). */
+  --popover: #1a2a38;
+  --float-material: rgba(26, 42, 56, 0.88);
+  /* hover < surface-3 < lit; --accent follows --hover. */
+  --hover: rgba(224, 238, 248, 0.08);
+  --surface-3: rgba(224, 238, 248, 0.11);
+  --lit: #304553;
+  --text-1: #fff;
+  --text-2: #c8d3dc;
+  /* The hairline (menus use it as their rim) and a 3:1 outline for fields,
+     the card hover rim and month rules. */
+  --border: rgba(224, 238, 248, 0.21);
+  --border-strong: #6c8091;
+  --workspace-panel: rgba(16, 26, 36, 0.81);
+  --workspace-panel-shadow: 0 2px 10px rgba(6, 18, 28, 0.12);
+  --workspace-panel-blur: blur(10px);
+  --board-parent-text: #fff;
+
+  /* Component hooks (listed with Light's above). The tooltip ring sits
+     inside the translucent chip, where an outer one left a pale fringe on
+     the sky, under a compact shadow that does not darken the header it
+     labels. Navy swallows the default near tint, so Team utilization near
+     weeks are an opaque amber at the roadmap yellow's hue and over weeks 34%
+     of the roadmap red: over always outweighs near. */
+  --float-border: var(--border);
+  --switch-off: rgba(224, 238, 248, 0.24);
+  --tooltip-shadow: inset 0 0 0 1px var(--float-border), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --heat-near-fill: #44391e;
+  --heat-over-fill: color-mix(in oklab, var(--roadmap-bar-late) 34%, transparent);
+}
+/* Blue with No image, or before the photo loads: the ground steps under the
+   panel, panels and floating surfaces turn opaque and nothing blurs. On html
+   only, since Canvas previews always show a photo. */
+:root[data-appearance="blue"]:not([data-background-state="ready"]) {
+  --bg: #09101a;
+  --workspace-panel: #101a24;
+  --workspace-panel-blur: none;
+  --float-material: var(--popover);
+}
+
+/* While a Canvas image is painted, Dark and Light panels take Blue's
+   translucent material in their own palette so the photograph reads through.
+   With No image, or before one loads, they keep solid surfaces and no blur.
+   Controls, sheets and floating surfaces stay opaque either way, and so do
+   Light's board cards. */
+/* Dark tints with a near-neutral graphite biased just cool enough to cancel
+   part of the photo's warm cast. Its lit chip turns an opaque graphite: the
+   white ink took the photo's colour and varied in strength with it. */
+:root[data-background-state="ready"][data-appearance="dark"] {
+  --workspace-panel: color-mix(in srgb, #0e1015 83%, transparent);
+  --workspace-panel-blur: blur(10px);
+  --lit: #3a3c40;
+}
+/* Light frosts at 90%, which halves the photo's spread under the ink states
+   while it still reads through. Group bands sit a step under the frosted rows. */
+:root[data-background-state="ready"][data-appearance="light"] {
+  --workspace-panel: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  --workspace-panel-blur: blur(10px);
+  --roadmap-group: #e4e8ed;
+}
+
+/* Theme-picker illustrations show each palette regardless of the active
+   appearance, drawn flat so a thumbnail never fetches a photograph. Each
+   draws its alpha hairline as it flattens on the thumbnail's panel. Blue
+   keeps its ground on the panel step, so its card reads navy beside Dark's. */
+[data-theme-preview] {
+  --preview-accent: #689ef3;
+}
+[data-theme-preview="blue"] {
+  --preview-background: #101a24;
+  --preview-panel: #142330;
+  --preview-border: #3f4e5a;
+  --preview-text: #fff;
+  --preview-muted: #c8d3dc;
+}
+[data-theme-preview="dark"] {
+  --preview-background: #09090b;
+  --preview-panel: #131417;
+  --preview-border: #3d3f43;
+  --preview-text: #f5f5f5;
+  --preview-muted: #c4c9cf;
+}
+[data-theme-preview="light"] {
+  --preview-background: #eef2f6;
+  --preview-panel: #fff;
+  --preview-border: #c8cbcf;
+  --preview-text: #192738;
+  --preview-muted: #4a596c;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text-1);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+#root {
+  height: 100vh;
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+/* solid accent selection — the token-soft version was barely visible */
+::selection {
+  background: var(--primary);
+  color: #fff;
+}
+/* Focus cues follow intentional keyboard navigation (focusVisibility.ts), not
+   incidental Shift/Escape or refocus after a pointer-dismissed dialog. Suppress
+   the UA outline too, without removing DOM focus or selected-state shadows.
+   An outline follows the control's own radius. */
+:focus-visible:where(html[data-focus-modality="pointer"] *) {
+  outline: none;
+}
+:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+/* The one active-field rule (deviation #253). A text box, native select,
+   select trigger or the picker buttons that stand in for a select (date,
+   project access) lights the same way everywhere while it is active: its own
+   1px border turns --primary — exactly what the description box (.descfield
+   below) does — with no outline and no ring on top. Active is:
+   · a text box or native select holding focus (a click focuses these
+     visibly, and the light goes when you click out of them — NativeSelect
+     also lets go of focus after a pointer pick, see native-select.tsx);
+   · a select-look button while its menu is open — focus has moved into the
+     menu, so the open state carries the light — or on KEYBOARD focus only.
+     After a pointer pick the menu closes and focus returns to the button
+     silently, and it must not stay lit, the way a date box goes quiet once
+     its calendar closes. Gate :focus-visible on the shared input modality,
+     since browsers also grant it for incidental keys and scripted refocus.
+   Unlayered on purpose: it must win over the primitives' utility classes and
+   the :focus-visible outline above, so a field opts out only with !important
+   or its own inline style, and none should. Search fields are the stated
+   exception (deviation #225: a quiet hairline, never the accent), as is a
+   field reporting an invalid value, which keeps its danger colour. */
+:is(
+  :is(
+    [data-slot="input"]:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
+    [data-slot="textarea"],
+    [data-slot="native-select"]
+  ):focus,
+  :is([data-slot="select-trigger"], [data-field-trigger]):is(
+    :focus-visible:where(html:not([data-focus-modality="pointer"]) *),
+    [data-state="open"],
+    [aria-expanded="true"]
+  )
+):not(:disabled, [aria-invalid="true"], [data-filter-search] *) {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: none;
+}
+::-webkit-scrollbar {
+  width: 20px;
+  height: 20px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 12px;
+  border: 6px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* reveal-on-hover affordances (row "+" buttons etc.) */
+.hoverrow .hoveradd {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.hoverrow:hover .hoveradd,
+.hoveradd:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+  opacity: 1;
+}
+
+/* An avatar that is also the button for changing the picture. The veil is a
+   sibling of the Avatar rather than a child of it: the Avatar portrait is
+   overflow:hidden, so anything drawn inside it is clipped. It lights on hover,
+   on keyboard focus, and — via aria-expanded — for as long as the menu it
+   opened is up, so the row you are editing never goes quiet mid-decision. */
+.avatarpick {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  line-height: 0;
+  cursor: pointer;
+}
+.avatarpick .avatarveil {
+  position: absolute;
+  inset: 0;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.avatarpick:hover .avatarveil,
+.avatarpick:focus-visible:where(html:not([data-focus-modality="pointer"]) *) .avatarveil,
+.avatarpick[aria-expanded="true"] .avatarveil {
+  opacity: 1;
+}
+.avatarpick:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.avatarpick:disabled .avatarveil {
+  opacity: 0;
+}
+
+/* rendered markdown (issue descriptions) */
+.md {
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  color: var(--text-1);
+  word-break: break-word;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md p {
+  margin: 0 0 var(--sp-2);
+}
+.md h1,
+.md h2,
+.md h3 {
+  color: var(--text-1);
+  font-weight: 600;
+  margin: 14px 0 6px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.md h1 {
+  font-size: var(--fs-lg);
+}
+.md h2 {
+  font-size: var(--fs-md);
+}
+.md h3 {
+  font-size: var(--fs-base);
+}
+.md ul,
+.md ol {
+  margin: 0 0 var(--sp-2);
+  padding-left: 22px;
+}
+.md ul {
+  list-style-type: disc;
+}
+.md ol {
+  list-style-type: decimal;
+}
+.md li {
+  margin: 2px 0;
+}
+.md blockquote {
+  margin: 0 0 var(--sp-2);
+  padding: 1px 0 1px 11px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-1);
+}
+.md code {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+  color: var(--text-1);
+}
+.md pre {
+  margin: 0 0 var(--sp-2);
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+}
+.md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--fs-sm);
+  display: block;
+}
+.md a {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.md a:hover {
+  text-decoration-thickness: 2px;
+}
+.md s {
+  opacity: 0.75;
+}
+
+/* @member mentions (rendered markdown + editor nodes share the class) */
+.mention {
+  display: inline;
+  padding: 1px 4px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--text-1);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* @-mention member picker under the caret (suggestion managed mount appends
+   it to document.body, so like .mdmenu it must stack above the modal) */
+.mentionpop {
+  z-index: 120;
+  min-width: 260px;
+  max-width: 300px;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--qivo-shadow-pop);
+}
+.mentionpop-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  padding: 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  text-align: left;
+  font-family: var(--sans);
+}
+.mentionpop-row.active {
+  background: var(--surface-3);
+}
+.mentionpop-av {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+/* the picture is painted OVER the initials, which stay as the fallback layer
+   (a Gravatar-less address answers with a transparent image) */
+.mentionpop-av img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 5px;
+}
+.mentionpop-name {
+  flex: 1;
+  color: var(--text-1);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mentionpop-email {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.mentionpop-empty {
+  padding: 8px 10px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* inline images: hovering reveals copy/download in the top-right corner */
+.mdimgwrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: 2px 0;
+  vertical-align: top;
+}
+.mdimg {
+  display: block;
+  max-width: 100%;
+  max-height: 340px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+}
+.mdimgbtns {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: var(--sp-1);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.mdimgwrap:hover .mdimgbtns,
+.mdimgbtns:focus-within {
+  opacity: 1;
+}
+.mdimgbtn {
+  display: inline-grid;
+  place-items: center;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--image-control-bg);
+  color: var(--text-2);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+/* The hover ink lies over the rest fill: it floats on a user image, where a
+   translucent --hover alone would show the picture through the button. */
+.mdimgbtn:hover {
+  background: linear-gradient(var(--hover), var(--hover)), var(--image-control-bg);
+  color: var(--text-1);
+}
+.mdimgph {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  margin: 2px 0;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* The editor's three stacked parts: the permanent formatting row (deviation
+   #71 — it replaced the selection bubble), the text, and the Save / Discard
+   bar. All three are plain flex items of .mdwrap — nothing sticks, bleeds or
+   paints a ground. In a capped field (.descfield-capped) the TEXT is the
+   scroll box: it scrolls between the two rows and clips at their edges, so a
+   line never passes behind a button and the rows carry no background at all,
+   in Canvas as in the solid themes. The row wraps, never nowrap: it is as
+   wide as the field, and an unwrapped overflow would buy a horizontal
+   scrollbar rather than a clean clip. Not chrome: no border and no rule under
+   it, since #65 took the rules out of this window, the .descfield outline is
+   already the box, and 8px of space is the parting. */
+.mdwrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.mdtoolbar {
+  flex-shrink: 0;
+  cursor: default;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 8px;
+}
+/* The scrolling text of a capped field reaches across the field's side
+   padding (--mdpad-x) and pads itself back: a selected image's outline keeps
+   the room it always had, and the scrollbar stands at the field's edge. */
+.descfield-capped {
+  display: flex;
+  flex-direction: column;
+}
+.descfield-capped > .mdwrap {
+  flex: 1;
+}
+.descfield-capped .mdscroll {
+  flex: 1;
+  min-height: 0;
+  margin: 0 calc(var(--mdpad-x) * -1);
+  padding: 0 var(--mdpad-x);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mdactions {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.mdgroup {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+/* link popover: portaled to <body> and placed in viewport coordinates by its
+   opener, because .descfield's overflow-y:auto forces overflow-x:auto too and
+   clips on both axes, and the task window's card transform would capture a
+   fixed child left inside it. z 120 alongside .mentionpop, the other editor
+   popup that mounts on body. */
+.mdmenu {
+  position: fixed;
+  z-index: 120;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--qivo-shadow-pop);
+}
+.mdmenu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  padding: 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  text-align: left;
+  font-family: var(--sans);
+}
+.mdmenu button:hover {
+  background: var(--surface-3);
+}
+
+/* WYSIWYG description editor (TipTap): shares the .md typography above */
+.md.ProseMirror {
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  caret-color: var(--text-1);
+  min-height: 28px;
+  cursor: text;
+}
+.md.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--text-3);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.md.ProseMirror .ProseMirror-selectednode .mdimg,
+.mdimgwrap.ProseMirror-selectednode .mdimg {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+.ProseMirror-gapcursor:after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid var(--text-1);
+  animation: pmblink 1.1s steps(2, start) infinite;
+}
+.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}
+@keyframes pmblink {
+  to {
+    visibility: hidden;
+  }
+}
+/* Description field: solid twin of the attachments drop zone, so the
+   always-editable description reads as an input. --mdpad-x is the side
+   padding a capped field's scrolling text reaches across (.mdscroll).
+   .mdeditfield is the SAME field with a taller floor — the create dialog,
+   where a description is written from nothing rather than merely held. Create
+   dialogs and task windows share --background, so there is one
+   set of colours here and not two; the class survives as its own name only
+   because it is what the drives select the create dialog's editor by.
+   `overflow: clip`, not `hidden` (the #74 rule): hidden would make the field
+   a scroll container, and in a capped field that job is the text's own. */
+.descfield,
+.mdeditfield {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  cursor: text;
+  transition: border-color var(--dur-fast) var(--ease-out);
+  overflow: clip;
+  --mdpad-x: 12px;
+}
+.descfield:focus-within,
+.mdeditfield:focus-within {
+  border-color: var(--primary);
+}
+.descfield .ProseMirror {
+  min-height: 72px;
+}
+.mdeditfield .ProseMirror {
+  min-height: 140px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    /* the accessibility kill-switch: it must beat every more specific
+       animation/transition declaration, which is exactly what !important
+       is for */
+    /* biome-ignore lint/complexity/noImportantStyles: reduced-motion must override all */
+    animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced-motion must override all */
+    transition: none !important;
+  }
+}

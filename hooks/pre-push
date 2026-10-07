@@ -1,0 +1,36 @@
+#!/bin/sh
+# Match verify:local and CI against the working tree, including uncommitted edits.
+# Enable with `git config core.hooksPath hooks`. This private repo cannot require
+# CI checks, so keep this gate enabled for main; --no-verify is for scratch work.
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Show errors locally; CI also emits advisory warnings as annotations.
+run() {
+  printf '  %-24s' "$1"
+  shift
+  if "$@" >/tmp/qivo-pre-push.$$ 2>&1; then
+    printf 'ok\n'
+  else
+    printf 'FAILED\n\n'
+    cat /tmp/qivo-pre-push.$$
+    rm -f /tmp/qivo-pre-push.$$
+    printf '\npush aborted. Fix the above, or `git push --no-verify` to override.\n'
+    exit 1
+  fi
+  rm -f /tmp/qivo-pre-push.$$
+}
+
+printf 'quality gate\n'
+run 'biome ci'          npx biome ci . --diagnostic-level=error
+run 'lint'              npm run --silent lint
+run 'UI conventions'    npm run --silent check:ui
+run 'typecheck'         npm run --silent typecheck
+run 'typecheck:strict'  npm run --silent typecheck:strict
+run 'typecheck:convex'  npm run --silent typecheck:convex
+run 'typecheck:desktop' npm run --silent typecheck:desktop
+run 'build'             npm run --silent build
+# Match verify:local's worker cap so fixture-heavy tests have CPU headroom.
+run 'test'              npm test --silent -- --maxWorkers=2
+printf 'all green\n'

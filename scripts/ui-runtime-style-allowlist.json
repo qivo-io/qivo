@@ -1,0 +1,94 @@
+{
+  "src/components/descEditor.tsx": {
+    "count": 1,
+    "reason": "selection-anchored link-popover coordinates clamped to the viewport"
+  },
+  "src/components/qivo/index.tsx": {
+    "count": 20,
+    "reason": "Qivo icon/avatar/calendar geometry and data colors, configurable control sizes and forwarded caller styles; popup anchor coordinates, menu widths and measured landscape height"
+  },
+  "src/components/settingsPage.tsx": {
+    "count": 1,
+    "reason": "a settings field's caller-chosen control width"
+  },
+  "src/components/viewFilters.tsx": {
+    "count": 1,
+    "reason": "runtime filter-menu width"
+  },
+  "src/panels/ArchivePage.tsx": {
+    "count": 1,
+    "reason": "data-derived status tone; select geometry uses shared control classes"
+  },
+  "src/panels/Inbox.tsx": {
+    "count": 1,
+    "reason": "measured split-pane width; message titles and context use text classes"
+  },
+  "src/panels/IssueDetail.tsx": {
+    "count": 16,
+    "reason": "task-window animation, editor sizing, anchors, and picker label colors; selected task labels use scoped CSS, edited-comment hover styling uses the shared tooltip and utility classes, and the Remaining box is the shared Input"
+  },
+  "src/panels/Modals.tsx": {
+    "count": 3,
+    "reason": "dialog width, picker geometry, and task/delete state colors; field layout uses classes"
+  },
+  "src/panels/settings/AccountSettings.tsx": {
+    "count": 2,
+    "reason": "MCP token control state and permission-derived opacity"
+  },
+  "src/panels/settings/LabelsSettings.tsx": {
+    "count": 3,
+    "reason": "persisted label colors and armed-delete emphasis"
+  },
+  "src/panels/settings/ProjectSettings.tsx": {
+    "count": 1,
+    "reason": "permission-derived field opacity"
+  },
+  "src/panels/settings/TeamSettings.tsx": {
+    "count": 3,
+    "reason": "team member colors and protected/deleting row emphasis"
+  },
+  "src/panels/settings/UserControls.tsx": {
+    "count": 5,
+    "reason": "measured name width and face, capacity field width and permission-derived opacity"
+  },
+  "src/panels/settings/UsersSettings.tsx": {
+    "count": 6,
+    "reason": "key action state, user role state, and protected/deleting roster row emphasis"
+  },
+  "src/panels/settings/controls.tsx": {
+    "count": 3,
+    "reason": "shared two-click confirmation colors and toggle state geometry"
+  },
+  "src/views/Kanban.tsx": {
+    "count": 16,
+    "reason": "column templates, drag drop-target colors, sticky headers, lane frames and scroll geometry"
+  },
+  "src/views/LandscapeRoadmap.tsx": {
+    "count": 1,
+    "reason": "viewport-measured landscape frame dimensions, CSS geometry variables and portrait rotation transform"
+  },
+  "src/views/Overview.tsx": {
+    "count": 1,
+    "reason": "status-distribution segment percentages calculated from task counts and colors supplied by status metadata"
+  },
+  "src/views/Resources.tsx": {
+    "count": 2,
+    "reason": "shared timeline/panel geometry and data-derived heat intensity; weekly grid presentation is scoped in Resources.css"
+  },
+  "src/views/Roadmap.tsx": {
+    "count": 21,
+    "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, and persisted colors"
+  },
+  "src/views/roadmap/PlanCard.tsx": {
+    "count": 4,
+    "reason": "auto-fit control state and visible/hidden-project workload presentation"
+  },
+  "src/views/roadmap/TimelineMarks.tsx": {
+    "count": 4,
+    "reason": "task bar geometry and colors, edge chips, and draggable milestone positions"
+  },
+  "src/views/roadmap/TimelineRow.tsx": {
+    "count": 10,
+    "reason": "fixed row geometry and intrinsic offscreen height, sticky offsets, drag/date coordinates, and task state colors"
+  }
+}

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One in-flight run per ref; a new push supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Keep the published check name stable.
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Hermetic: no deployment secrets, live contract reset or browser drives.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Install desktop runtime dependencies
+        run: npm run desktop:install
+
+      # Biome reports advisory warnings without failing the gate.
+      - name: Lint and format (biome)
+        run: npx biome ci .
+
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: UI component and styling conventions
+        run: npm run check:ui
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Typecheck frontend core (strict)
+        run: npm run typecheck:strict
+
+      # The root project does not cover the entire backend or the desktop shell.
+      - name: Typecheck backend (convex, strict)
+        run: npm run typecheck:convex
+
+      - name: Typecheck desktop (strict)
+        run: npm run typecheck:desktop
+
+      - name: Build
+        run: npm run build
+
+      # Includes the Convex function-surface manifest and wrapper checks.
+      - name: Test
+        run: npm test

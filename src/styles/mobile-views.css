@@ -1,0 +1,437 @@
+/* Phone views preserve the shared type, status colors and Canvas material.
+   The timeline stays available as an explicit, scrollable planning layer. */
+.overview-milestone {
+  /* Rows grow with wrapped names and the timing line, beyond control height. */
+  height: auto;
+}
+
+@media (max-width: 760px) {
+  .overview-view > div {
+    padding: var(--mobile-content-inset) 16px 24px;
+    gap: 16px;
+  }
+
+  .overview-view [data-ov-strip] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 16px;
+  }
+
+  .overview-view [data-ov-strip] > div {
+    min-width: 0;
+  }
+
+  .overview-view [data-ov-lead] {
+    grid-column: 1 / -1;
+  }
+
+  html[data-appearance] .overview-view :is([data-ov-summary], [data-ov-strip], .overview-section) {
+    padding: 16px;
+  }
+
+  .overview-view .overview-section-heading {
+    flex-wrap: wrap;
+  }
+
+  .overview-view :is([data-ovrow], [data-atrisk]) {
+    min-height: 64px;
+    padding: 12px 8px;
+  }
+
+  .mobile-health-sort,
+  .mobile-roadmap-task-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  :is(.mobile-health-sort, .mobile-roadmap-task-filter) label {
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+    flex-shrink: 0;
+  }
+
+  :is(.mobile-health-sort, .mobile-roadmap-task-filter) select {
+    flex: 1;
+    width: 0;
+    min-width: 0;
+    height: var(--ctl-md);
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    color: var(--text-1);
+    font: inherit;
+    font-size: 16px;
+  }
+
+  .mobile-health-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    color: var(--text-1);
+    text-align: left;
+    white-space: normal;
+    font-size: var(--fs-base);
+  }
+
+  .mobile-health-card:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .mobile-health-heading,
+  .mobile-health-progress,
+  .mobile-health-lead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mobile-health-heading strong {
+    flex: 1;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-health-heading svg {
+    flex-shrink: 0;
+    color: var(--text-3);
+  }
+
+  .mobile-health-progress > span:first-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobile-health-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+
+  .mobile-health-lead {
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+
+  .overview-milestone {
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 12px;
+  }
+
+  .overview-milestone > span:first-child {
+    margin-top: 6px;
+  }
+
+  .overview-milestone-text > span {
+    overflow-wrap: anywhere;
+  }
+
+  .overview-milestone-date {
+    grid-column: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+  }
+}
+
+/* Roadmap keeps its phone navigation after turning the device sideways. */
+.mobile-roadmap-agenda {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--mobile-content-inset) 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mobile-roadmap-open-timeline > button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.mobile-roadmap-open-timeline > button > svg:last-child {
+  margin-left: auto;
+}
+
+:is(.mobile-roadmap-open-timeline, .mobile-roadmap-tools, .mobile-roadmap-timeline-heading) p,
+.mobile-roadmap-note {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.mobile-roadmap-sections {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  padding: 3px;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--workspace-panel, var(--surface-1));
+}
+
+.mobile-roadmap-sections > button {
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-roadmap-sections,
+.mobile-roadmap-agenda > .mobile-roadmap-tools,
+.mobile-roadmap-timeline-tools,
+.mobile-roadmap-timeline-heading {
+  box-shadow: var(--workspace-panel-shadow);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+
+.mobile-roadmap-tools > summary,
+.mobile-roadmap-past > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.mobile-roadmap-agenda > .mobile-roadmap-tools,
+.mobile-roadmap-timeline-tools {
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--workspace-panel, var(--surface-1));
+}
+
+.mobile-roadmap-agenda > .mobile-roadmap-tools[open] {
+  padding-bottom: 12px;
+}
+
+.mobile-roadmap-timeline-tools {
+  margin: 0 16px 8px;
+}
+
+.mobile-roadmap-tools > summary::after,
+.mobile-roadmap-past > summary::after {
+  content: "+";
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.mobile-roadmap-tools[open] > summary::after,
+.mobile-roadmap-past[open] > summary::after {
+  content: "−";
+}
+
+.mobile-roadmap-tool-actions,
+.mobile-roadmap-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.mobile-roadmap-filter-controls > * {
+  max-width: 100%;
+}
+
+.mobile-roadmap-section {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--workspace-panel, var(--surface-1));
+  box-shadow: var(--workspace-panel-shadow);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+
+.mobile-roadmap-section h2 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.mobile-roadmap-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.mobile-roadmap-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 0;
+  width: 100%;
+  min-height: 72px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  text-align: left;
+  white-space: normal;
+  color: var(--text-1);
+}
+
+.mobile-roadmap-row:last-child {
+  border-bottom: 0;
+}
+
+.mobile-roadmap-row > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.mobile-roadmap-row-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.mobile-roadmap-row-body strong {
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.mobile-roadmap-task-filter {
+  margin-top: 8px;
+}
+
+.mobile-roadmap-task-filter > span {
+  font-size: var(--fs-xs);
+  font-family: var(--mono);
+  color: var(--text-3);
+}
+
+@media (max-width: 760px) {
+  [data-plan-card] {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    max-height: min(460px, 60dvh);
+  }
+}
+
+/* An explicit landscape screen, independent of the ordinary phone breakpoint.
+   Its dimensions swap in portrait; physical landscape removes the transform. */
+.mobile-roadmap-landscape {
+  --ctl-xs: 44px;
+  --ctl-sm: 44px;
+  --ctl-md: 44px;
+  --ctl-lg: 44px;
+  --landscape-inset-top: env(safe-area-inset-top);
+  --landscape-inset-right: env(safe-area-inset-right);
+  --landscape-inset-bottom: env(safe-area-inset-bottom);
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 40;
+  transform-origin: top left;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  background: var(--bg);
+  color: var(--text-1);
+}
+.mobile-roadmap-landscape[data-roadmap-landscape="rotated"] {
+  --landscape-inset-top: env(safe-area-inset-right);
+  --landscape-inset-right: env(safe-area-inset-bottom);
+  --landscape-inset-bottom: env(safe-area-inset-left);
+  padding: env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)
+    env(safe-area-inset-top);
+}
+.mobile-roadmap-landscape > .appearance-background {
+  position: absolute;
+  z-index: -1;
+}
+.mobile-roadmap-landscape-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 56px;
+  padding: 6px 200px 6px 12px;
+}
+.mobile-roadmap-landscape-heading h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.mobile-roadmap-landscape-heading > span {
+  display: none;
+}
+.mobile-roadmap-landscape > .roadmap-view {
+  min-height: 0;
+  min-width: 0;
+}
+.mobile-roadmap-landscape .mobile-roadmap-timeline-tools {
+  position: absolute;
+  top: calc(6px + var(--landscape-inset-top));
+  right: calc(12px + var(--landscape-inset-right));
+  z-index: 20;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.mobile-roadmap-landscape .mobile-roadmap-timeline-tools[open] {
+  width: min(700px, calc(100% - 24px));
+  max-height: calc(var(--landscape-height) - 24px);
+  overflow: auto;
+  box-shadow: var(--qivo-shadow-pop);
+}
+.mobile-roadmap-landscape [data-roadmap-verbs] {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.mobile-roadmap-landscape :is(input, textarea, select) {
+  font-size: 16px;
+}
+.mobile-roadmap-landscape-portals {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 110;
+}
+.mobile-roadmap-landscape-portals > * {
+  pointer-events: auto;
+}
+.mobile-roadmap-landscape [data-floating-surface] {
+  max-height: calc(var(--landscape-height) - 20px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mobile-roadmap-landscape [data-plan-card] {
+  right: calc(12px + var(--landscape-inset-right));
+  bottom: calc(12px + var(--landscape-inset-bottom));
+  max-width: calc(var(--landscape-width) - 24px);
+  max-height: calc(var(--landscape-height) - 76px);
+}

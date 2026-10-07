@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./tokens.css";
+@import "./issue-window.css";
+@import "./appearance.css";
+@import "./theme-selector.css";
+@import "./inbox.css";
+@import "./workspace.css";
+
+@custom-variant dark (&:is(.dark *));
+/* Match the handwritten focus rules in tokens.css, including Radix portals. */
+@custom-variant focus-visible (&:focus-visible:where(html:not([data-focus-modality="pointer"]) *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border-ui);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-hover: var(--hover);
+  --color-lit: var(--lit);
+  --color-border-strong: var(--border-strong);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-scrim: var(--scrim);
+  --color-success: var(--success);
+  --color-warning: var(--warn);
+  --color-primary-soft: var(--accent-soft);
+
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+
+  --text-2xs: var(--fs-2xs);
+  --text-2xs--line-height: 1.45;
+  --text-xs: var(--fs-xs);
+  --text-xs--line-height: 1.45;
+  --text-sm: var(--fs-sm);
+  --text-sm--line-height: 1.45;
+  --text-base: var(--fs-base);
+  --text-base--line-height: 1.45;
+  --text-md: var(--fs-md);
+  --text-md--line-height: 1.45;
+  --text-lg: var(--fs-lg);
+  --text-lg--line-height: 1.45;
+  --text-xl: var(--fs-xl);
+  --text-xl--line-height: 1.45;
+  --text-2xl: var(--fs-2xl);
+  --text-2xl--line-height: 1.45;
+
+  --radius-2xs: var(--r-2xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-pill: var(--r-pill);
+
+  --spacing-control-xs: var(--ctl-xs);
+  --spacing-control-sm: var(--ctl-sm);
+  --spacing-control: var(--ctl-md);
+  --spacing-control-lg: var(--ctl-lg);
+  --spacing-sidebar: var(--sidebar-w);
+
+  --shadow-card: var(--qivo-shadow-card);
+  --shadow-hover: var(--qivo-shadow-hover);
+  --shadow-pop: var(--qivo-shadow-pop);
+}

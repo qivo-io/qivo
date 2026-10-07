@@ -1,0 +1,339 @@
+/* Issue-specific layout within the shared Alignment design.
+   Common control geometry lives in tokens.css and components/ui. */
+[data-issue-design="alignment"] {
+  position: relative;
+  container: task-window / inline-size;
+}
+
+/* An overlay on the existing header: appearing and disappearing never
+   changes the breadcrumb, title or body geometry. Only the tab has a border. */
+.task-paused-tab {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-top: 0;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  background: color-mix(in srgb, var(--warn) 15%, var(--background));
+  color: var(--warn);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Keep long breadcrumbs to the left of the tab in the single-row header.
+   Apply in both states so pausing never changes the header's geometry. */
+@container task-window (min-width: 601px) {
+  [data-issue-design="alignment"]:not([data-mobile-task]) [data-task-crumb] {
+    max-width: calc(50% - 60px);
+    flex-wrap: nowrap;
+  }
+}
+
+/* Narrow panes put the breadcrumb on its own row. The shallow tab stays in
+   the existing air above its text; phone chrome also needs that clearance. */
+@container task-window (max-width: 600px) {
+  .task-paused-tab {
+    height: 14px;
+    padding-inline: 10px;
+    gap: 4px;
+    font-size: var(--fs-2xs);
+  }
+}
+
+@media (max-width: 760px) {
+  [data-mobile-task] .task-paused-tab {
+    height: 16px;
+    padding-inline: 10px;
+    gap: 4px;
+    font-size: var(--fs-2xs);
+  }
+}
+
+.task-field {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  container: task-field / inline-size;
+}
+
+.task-field-label {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+}
+
+.task-field-person .task-field-label {
+  min-height: 46px;
+}
+
+.task-field-value {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  container-type: inline-size;
+}
+
+.task-properties {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+
+.task-properties [data-fieldselect],
+.task-reporter {
+  width: 200px;
+  max-width: 100%;
+}
+
+/* Use the existing gap beside the desktop selector without changing its
+   size or the row's geometry when the shortcut appears or disappears. */
+.task-status-control {
+  position: relative;
+  width: 200px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.task-status-control [data-task-resume] {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 8px);
+  transform: translateY(-50%);
+}
+
+/* Narrow fields keep the full-width selector and its Resume menu item. */
+@container task-field (max-width: 335px) {
+  [data-task-resume] {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  [data-task-resume] {
+    width: 44px;
+    height: 44px;
+  }
+
+  @container task-field (max-width: 347px) {
+    [data-task-resume] {
+      display: none;
+    }
+  }
+}
+
+@media (max-width: 760px) {
+  [data-mobile-task] .task-status-control {
+    width: 100%;
+  }
+
+  [data-mobile-task] [data-task-resume] {
+    display: none;
+  }
+}
+
+.task-field-person [data-fieldselect] {
+  /* Missing/historical people keep the same row and label alignment. */
+  min-height: 46px;
+}
+
+.task-reporter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  font-size: var(--fs-base);
+}
+
+.task-section {
+  margin-bottom: 24px;
+}
+
+.task-section:last-child {
+  margin-bottom: 0;
+}
+
+.task-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+
+.task-section-head > [data-slot="button"] {
+  margin-left: auto;
+}
+
+.task-section-head-inline > [data-slot="button"] {
+  margin-left: 0;
+}
+
+.task-labels {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  font-size: var(--fs-base);
+  color: var(--text-1);
+}
+
+.task-label-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .task-heading-action,
+  .task-label-remove,
+  .task-related-remove {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+.task-plan-dates {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.task-plan-date {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.task-plan-caption {
+  display: none;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.task-plan-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+@container (max-width: 270px) {
+  .task-plan-dates {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-plan-caption {
+    display: block;
+  }
+
+  .task-plan-arrow {
+    display: none;
+  }
+}
+
+/* 96px label + 270px value: follow the first date past its visible caption. */
+@container task-field (max-width: 366px) {
+  .task-field-label:has(+ .task-field-value .task-plan-dates) {
+    margin-top: calc(var(--fs-xs) * 1.45 + 4px);
+  }
+}
+
+[data-issue-design="alignment"] [data-task-topbar],
+[data-issue-design="alignment"] [data-task-chrome],
+[data-issue-design="alignment"] [data-focus-chrome] {
+  gap: 8px;
+}
+
+[data-issue-design="alignment"] [data-task-chrome],
+[data-issue-design="alignment"] [data-focus-chrome] {
+  margin-left: auto;
+}
+
+[data-issue-design="alignment"] [data-issue-header] {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+[data-issue-design="alignment"] [data-issue-header] > svg {
+  margin-top: 5px;
+}
+
+[data-issue-design="alignment"] [data-issue-header] > div {
+  align-items: flex-start;
+}
+
+[data-issue-design="alignment"] [data-slot="toggle-group"] {
+  flex-shrink: 0;
+}
+
+[data-issue-design="alignment"] [data-slot="toggle-group-item"] {
+  padding-inline: 10px;
+}
+
+/* Stacked mode retains section order in one scroll region below the header. */
+[data-issue-layout="stacked"] .task-body {
+  overflow-y: auto;
+}
+
+[data-issue-layout="stacked"] [data-discussion-card],
+[data-issue-layout="stacked"] [data-details-card],
+[data-issue-layout="stacked"] [data-spine-scroll],
+[data-issue-layout="stacked"] .task-details-scroll {
+  flex: none;
+  overflow: visible;
+}
+
+@container task-window (max-width: 600px) {
+  [data-issue-design="alignment"] [data-task-topbar] {
+    flex-wrap: wrap;
+  }
+
+  [data-issue-design="alignment"] [data-task-crumb] {
+    flex-basis: 100%;
+  }
+
+  .task-activity-head {
+    flex-wrap: wrap;
+  }
+}

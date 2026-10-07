@@ -1,3 +1,22 @@
+node_modules/
+dist/
+.env.local
+*.local
+.DS_Store
+scripts/shots/
+# Private, deployment-bound marketing demo credentials (never shared artifacts).
+.local/
+# live-credential stash written by tests/contract/global.setup.mts
+tests/contract/.credentials.json
+# Claude Code agent config — machine-local. The verification procedure
+# that used to live here is versioned at docs/verification.md.
+.claude/
+
+desktop/release/
+
+# Secrets are never committed to the public repository.
 .env
 .env.*
 !.env.example
+.vercel/
+desktop/dist/

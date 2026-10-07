@@ -1,0 +1,40 @@
+name: Refresh website docs
+
+# Rebuilds the qivo.io website, which renders docs/guide from the latest
+# commit on main. The deploy hook URL can only start a build of that website
+# project; it is not a Vercel API token. Without the secret (forks and
+# self-hosted copies) the job does nothing.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/guide/**'
+      - 'public/llms.txt'
+      - 'public/skill.md'
+      - 'public/auth.md'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: docs-refresh
+  cancel-in-progress: true
+
+jobs:
+  deploy-hook:
+    if: github.repository == 'qivo-io/qivo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger website build
+        env:
+          HOOK: ${{ secrets.WEBSITE_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "WEBSITE_DEPLOY_HOOK_URL is not configured; skipping."
+            exit 0
+          fi
+          # Pass the URL on stdin so it never appears in a process argument list.
+          printf 'url = "%s"\n' "$HOOK" |
+            curl --fail --silent --show-error --max-time 30 -X POST -o /dev/null --config -
+          echo "Website build requested."

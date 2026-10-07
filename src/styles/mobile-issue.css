@@ -1,0 +1,293 @@
+/* Desktop keeps its single scrolling discussion. On a phone the feed scrolls
+   above the same mounted composer, and changing sections never drops a draft. */
+[data-spine-feed] {
+  display: contents;
+}
+
+@media (max-width: 760px) {
+  [data-mobile-task-frame] {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    width: 100%;
+    height: 100dvh;
+    padding: env(safe-area-inset-top) 0 0;
+    overflow: hidden;
+    background: var(--background);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* The task window supplies the Canvas material. An opaque outer frame
+     would hide the photograph before the window can sample it. */
+  html[data-appearance="blue"] [data-mobile-task-frame] {
+    background: transparent;
+  }
+
+  [data-mobile-task] {
+    --ctl-xs: 44px;
+    --ctl-sm: 44px;
+    --ctl-md: 44px;
+    --ctl-lg: 44px;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  [data-mobile-task] [data-task-topbar] {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 4px 16px 0;
+  }
+
+  [data-mobile-task] .task-mobile-back {
+    order: 0;
+    min-height: 44px;
+    margin-left: -8px;
+    padding-inline: 8px;
+    font-size: var(--fs-sm);
+  }
+
+  [data-mobile-task] [data-task-chrome] {
+    order: 1;
+    gap: 4px;
+  }
+
+  [data-mobile-task] [data-task-crumb] {
+    order: 2;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  [data-mobile-task] [data-task-crumb] > a,
+  [data-mobile-task] [data-task-crumb] > button,
+  [data-mobile-task] [data-task-crumb] > span {
+    max-width: 100%;
+  }
+
+  [data-mobile-task] [data-task-close],
+  [data-mobile-task] [data-task-popout],
+  [data-mobile-task] [data-desc-popout],
+  [data-mobile-task] [data-act-popout] {
+    display: none;
+  }
+
+  [data-mobile-task] [data-issue-header] {
+    max-height: 24dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  [data-mobile-task] [data-issue-header] h1 {
+    font-size: 22px;
+    line-height: 1.3;
+  }
+
+  [data-mobile-task] .task-mobile-controls {
+    flex-shrink: 0;
+    padding: 0 16px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  [data-mobile-task] .task-mobile-quick {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  [data-mobile-task] .task-mobile-quick > div {
+    min-width: 0;
+  }
+
+  [data-mobile-task] .task-mobile-quick > div:only-child {
+    grid-column: 1 / -1;
+  }
+
+  [data-mobile-task] .task-mobile-field-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+
+  [data-mobile-task] .task-mobile-quick [data-fieldselect] {
+    width: 100%;
+    min-height: 46px;
+  }
+
+  [data-mobile-task] [data-mobile-task-sections] > [data-slot="toggle-group"] {
+    width: 100%;
+  }
+
+  [data-mobile-task] [data-mobile-task-sections] [data-slot="toggle-group-item"] {
+    flex: 1;
+    min-height: 40px;
+  }
+
+  [data-mobile-task] .task-body {
+    flex-direction: column;
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  [data-mobile-task] [data-task-description] {
+    padding: 16px 16px 0;
+  }
+
+  [data-mobile-task] [data-details-card],
+  [data-mobile-task] .task-details-scroll {
+    flex: none;
+    overflow: visible;
+  }
+
+  [data-mobile-task] .task-details-scroll {
+    padding-inline: 16px;
+  }
+
+  [data-mobile-task] .task-activity-head {
+    padding: var(--mobile-content-inset) 16px 8px;
+  }
+
+  [data-mobile-task] [data-spine-scroll] {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  [data-mobile-task] [data-spine-feed] {
+    display: block;
+    flex: 1;
+    min-height: 0;
+    padding: 8px 16px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  [data-mobile-task] [data-composer] {
+    flex: 0 1 auto;
+    min-height: 0;
+    margin-top: 0;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: var(--background);
+  }
+
+  [data-mobile-task] [data-composer] > span {
+    display: none;
+  }
+
+  /* The shared .descfield-capped layout already stacks the row, the
+     scrolling text and the bar; the phone only caps the field to its own
+     height and lets the row scroll sideways instead of wrapping. */
+  [data-mobile-task] [data-composer] .descfield {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: min(48dvh, 260px);
+  }
+
+  [data-mobile-task] [data-composer] > div {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  [data-mobile-task] [data-mdtoolbar] {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  [data-mobile-task] .mdgroup {
+    flex-shrink: 0;
+  }
+
+  [data-mobile-task-compact] [data-task-crumb],
+  [data-mobile-task-compact] .task-mobile-quick {
+    display: none;
+  }
+
+  [data-mobile-task-compact] [data-issue-header] {
+    max-height: 60px;
+  }
+
+  [data-mobile-task-compact] [data-issue-header] h1 {
+    font-size: 18px;
+  }
+
+  [data-mobile-task-compact] .task-mobile-controls {
+    padding-bottom: 8px;
+  }
+
+  [data-mobile-task-compact] [data-spine-feed] {
+    padding-block: 4px;
+  }
+
+  [data-mobile-task-compact] [data-composer] {
+    padding-block: 8px;
+  }
+
+  [data-mobile-task] input,
+  [data-mobile-task] textarea,
+  [data-mobile-task] .ProseMirror {
+    font-size: 16px;
+  }
+
+  [data-mobile-task-compact] [data-composer] .ProseMirror {
+    min-height: 44px;
+  }
+
+  [data-mobile-task] .task-field {
+    grid-template-columns: 84px minmax(0, 1fr);
+  }
+
+  [data-mobile-task] .task-field-label {
+    min-height: 44px;
+  }
+
+  [data-mobile-task] .task-field-value {
+    min-height: 44px;
+  }
+
+  [data-mobile-task] .task-properties [data-fieldselect],
+  [data-mobile-task] .task-reporter {
+    width: 100%;
+  }
+
+  [data-mobile-task][data-mobile-tab="activity"] [data-task-description],
+  [data-mobile-task][data-mobile-tab="activity"] [data-details-card] {
+    display: none;
+  }
+
+  [data-mobile-task][data-mobile-tab="details"] .task-mobile-quick,
+  [data-mobile-task][data-mobile-tab="details"] .task-activity-head,
+  [data-mobile-task][data-mobile-tab="details"] [data-spine-scroll] {
+    display: none;
+  }
+
+  [data-mobile-task][data-mobile-tab="details"] .task-body {
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  [data-mobile-task][data-mobile-tab="details"] [data-discussion-card] {
+    display: contents;
+  }
+
+  [data-focus-window] {
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+
+  [data-focus-window] > [data-issue-design] {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+}

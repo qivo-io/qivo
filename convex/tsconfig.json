@@ -1,0 +1,25 @@
+{
+  /* Convex functions run in an isolate, not the browser bundle, so this tree
+     typechecks separately from the root tsconfig — strictly, _generated included. */
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "isolatedModules": true,
+    "strict": true,
+    /* Free on top of strict, measured at zero errors. noUnusedLocals is
+       the one that is not (3). */
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "noImplicitReturns": true,
+    "noUnusedParameters": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["./**/*"]
+}

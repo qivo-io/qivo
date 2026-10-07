@@ -22,5 +22,32 @@ logs or agent responses. Git worktrees do not copy ignored `.env` files.
 Request narrow private-directory access if the execution sandbox cannot read
 it; do not bypass the sandbox. Production actions still require approval.
 
-This repository currently has no application package manifest. Do not invent
-build commands or import the legacy application unless explicitly requested.
+## Product and verification
+
+This is the public Qivo application repository. Private design specifications,
+operational notes and source migration records are in qivo-internal. Use only
+`AGENTS.md` for agent instructions. Read `README.md` and `package.json`.
+
+Use Node >=22.12, `npm ci`, `npm run desktop:install`, then
+`npm run verify:local`. Run builds/tests sequentially with at most two workers.
+Do not run `test:contract`, seeds, resets, live smoke drives or production
+commands without explicit scope: those can modify hosted data. Real user data
+must be preserved; never assume any deployment is disposable.
+
+Source changes and public documentation should move together. Public docs are
+in `docs/guide/`, `docs/rest-api.md` and `docs/mcp.md`. Keep machine terminology
+as task/tasks. Guide slugs, headings and agent-guide links are public URLs;
+`node scripts/docs-contract.mjs` checks them and follows the rules in
+`docs/documentation.md`.
+
+This repository is the application only. The qivo.io marketing, pricing and
+rendered docs website is built in qivo-internal from this repository's
+`docs/guide/` and must not be added back here. `vercel.json` proxies unknown
+paths to that website only for the exact hosts `qivo.io` and `www.qivo.io`;
+every other host redirects `/` to `/app`. Keep app routes and files ahead of
+the proxy and run `npx vitest run scripts/vercel-routing.test.mjs` after any
+routing change. Changes to application access control must fail closed.
+Do not create or modify GitHub issues; Qivo work items are tasks.
+
+Updating the connected `main` deploys both Vercel projects and corresponding
+Convex backends. A main merge is a production release, not merely a Git write.

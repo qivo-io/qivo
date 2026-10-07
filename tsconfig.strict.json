@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true
+  },
+  "include": [
+    "src/lib/appUpdates.ts",
+    "src/lib/appearance.ts",
+    "src/lib/backgroundPreview.ts",
+    "src/lib/canvasWeek.ts",
+    "src/lib/dates.ts",
+    "src/lib/delay.ts",
+    "src/lib/imageMetadata.ts",
+    "src/lib/images.ts",
+    "src/lib/gravatar.ts",
+    "src/lib/initials.ts",
+    "src/lib/issueGroups.ts",
+    "src/lib/localDay.ts",
+    "src/lib/md.ts",
+    "src/lib/mdSerialize.ts",
+    "src/lib/paletteSearch.ts",
+    "src/lib/remaining.ts",
+    "src/lib/roadmapEdges.ts",
+    "src/lib/roadmapVisibility.ts",
+    "src/lib/schedule.ts",
+    "src/lib/search.ts",
+    "src/lib/weekDrafts.ts",
+    "src/lib/workload.ts",
+    "src/store/entityLookup.ts",
+    "src/store/preferences.ts",
+    "src/store/updates.ts"
+  ]
+}

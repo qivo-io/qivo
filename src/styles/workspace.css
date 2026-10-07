@@ -1,0 +1,166 @@
+/* Header, wrapping tools, then two aligned panels. The toolbar host lets a
+   view keep its own controls without estimating their height in JavaScript. */
+.workspace-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: 100%;
+  max-width: calc(var(--sidebar-w) + var(--workspace-content-max));
+  height: 100dvh;
+  margin-inline: auto;
+  overflow: hidden;
+}
+.workspace-header {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.workspace-toolbar {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 24px;
+}
+.workspace-shell > aside {
+  grid-column: 1;
+  grid-row: 3;
+  min-height: 0;
+}
+.workspace-shell > main {
+  grid-column: 2;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+}
+/* A full-view empty card keeps the navigation beside its actual frame.
+   Match only the direct view body or Roadmap's empty frame: an empty note
+   inside a populated timeline or resource panel must not resize the shell. */
+.planner-shell:has(
+  > main > [data-workspace-view] > .qivo-empty-state,
+  > main > [data-workspace-view] > .roadmap-view > .qivo-empty-state
+) {
+  --workspace-content-max: 640px;
+}
+.planner-shell
+  :is([data-workspace-view], [data-workspace-view] > .roadmap-view)
+  > .qivo-empty-state {
+  flex: 0 1 auto;
+  align-self: flex-start;
+  width: calc(100% - 40px);
+  max-width: 600px;
+  margin: 0 20px 24px;
+}
+.workspace-shell > .planner-sidebar,
+html[data-appearance] .workspace-shell > .planner-sidebar {
+  height: 100%;
+  min-height: 0;
+  padding: 0 12px 12px;
+}
+.planner-view-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+}
+.workspace-header-context,
+.workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.workspace-header-center {
+  justify-self: center;
+}
+.workspace-header-actions {
+  justify-content: flex-end;
+}
+.workspace-page-pill {
+  width: fit-content;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--background);
+}
+.workspace-page-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  /* no lit chip (deviation #309): with nothing to switch to, the one entry
+     is a heading, not the current choice among several */
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+@media (min-width: 761px) {
+  /* Match Roadmap's 24px space below Team. Keep this outside the scrolling
+     content so tall panels and Board's pinned feet stop above the window. */
+  .workspace-shell {
+    --workspace-bottom-gap: 24px;
+  }
+  .planner-shell
+    :is(
+      [data-workspace-view="kanban"],
+      [data-workspace-view="overview"],
+      [data-workspace-view="sync"],
+      .inbox-layout
+    ) {
+    margin-bottom: var(--workspace-bottom-gap);
+  }
+  .workspace-shell .inbox-layout {
+    padding-bottom: 0;
+  }
+  .workspace-shell :is(.settings-main, .archive-main) {
+    padding-bottom: var(--workspace-bottom-gap);
+  }
+}
+@media (max-width: 760px) {
+  .workspace-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    max-width: var(--workspace-content-max);
+  }
+  .workspace-shell > .planner-mobile-navigation {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .workspace-header {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .workspace-toolbar {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  .workspace-shell > main {
+    grid-column: 1;
+    grid-row: 4;
+  }
+  .planner-view-row {
+    padding-inline: 12px;
+  }
+  .workspace-header-context {
+    display: flex;
+  }
+  .workspace-header-center [data-view-switch] {
+    justify-self: center;
+  }
+  .workspace-header-actions:not(:empty) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .workspace-header-actions:empty {
+    display: none;
+  }
+  .workspace-header-center {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}

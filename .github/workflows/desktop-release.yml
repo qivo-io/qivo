@@ -1,0 +1,211 @@
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Build jobs only need to read the repository. The release job below is the
+# only job allowed to create or update a GitHub Release.
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      feed: ${{ steps.version.outputs.feed }}
+    steps:
+      - name: Derive package version from tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const tag = process.env.TAG
+          const validTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$/.test(tag)
+          if (!validTag) {
+            throw new Error(`Release tag ${tag} must use vMAJOR.MINOR.PATCH, with an optional semver prerelease suffix.`)
+          }
+          const version = tag.slice(1)
+          const prerelease = version.includes('-')
+          const base = `https://github.com/${process.env.REPOSITORY}/releases`
+          const feed = prerelease
+            ? `${base}/download/${tag}/`
+            : `${base}/latest/download/`
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `version=${version}\nprerelease=${prerelease}\nfeed=${feed}\n`,
+          )
+          console.log(`Building Qivo ${version} from ${tag}`)
+          NODE
+
+  quality:
+    name: Quality gate
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Install desktop runtime dependencies
+        run: npm run desktop:install
+
+      - name: Verify web app
+        run: npm run verify:local
+
+      - name: Verify desktop process
+        run: npm run desktop:compile
+
+  windows:
+    name: Windows x64
+    needs: [prepare, quality]
+    runs-on: windows-latest
+    env:
+      QIVO_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      QIVO_DESKTOP_UPDATE_URL: ${{ needs.prepare.outputs.feed }}
+      CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Set package versions from release tag
+        shell: bash
+        run: |
+          npm version --no-git-tag-version --ignore-scripts --allow-same-version "$QIVO_RELEASE_VERSION"
+          npm --prefix desktop version --no-git-tag-version --ignore-scripts --allow-same-version "$QIVO_RELEASE_VERSION"
+
+      - name: Install web and desktop dependencies
+        run: |
+          npm ci
+          npm run desktop:install
+
+      # Signing is intentionally opt-in. Configure electron-builder's CSC_LINK
+      # and CSC_KEY_PASSWORD secrets before distributing Windows installers.
+      - name: Build Windows installer
+        run: npm run desktop:package
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qivo-desktop-windows-${{ needs.prepare.outputs.version }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.blockmap
+            desktop/release/latest.yml
+
+  linux:
+    name: Linux x64
+    needs: [prepare, quality]
+    runs-on: ubuntu-24.04
+    env:
+      QIVO_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      QIVO_DESKTOP_UPDATE_URL: ${{ needs.prepare.outputs.feed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Set package versions from release tag
+        run: |
+          npm version --no-git-tag-version --ignore-scripts --allow-same-version "$QIVO_RELEASE_VERSION"
+          npm --prefix desktop version --no-git-tag-version --ignore-scripts --allow-same-version "$QIVO_RELEASE_VERSION"
+
+      - name: Install RPM packaging tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y rpm
+
+      - name: Install web and desktop dependencies
+        run: |
+          npm ci
+          npm run desktop:install
+
+      - name: Build Linux packages
+        run: npm run desktop:package:linux
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qivo-desktop-linux-${{ needs.prepare.outputs.version }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.deb
+            desktop/release/*.rpm
+            desktop/release/*.AppImage
+            desktop/release/*.blockmap
+            desktop/release/latest-linux.yml
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: qivo-desktop-*
+          path: release
+          merge-multiple: true
+
+      - name: Add checksums
+        run: sha256sum release/* > release/SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          release_args=(--title "Qivo ${VERSION}" --generate-notes --verify-tag)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            release_args+=(--prerelease)
+          fi
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPOSITORY" --clobber release/*
+          else
+            gh release create "$TAG" --repo "$REPOSITORY" "${release_args[@]}" release/*
+          fi

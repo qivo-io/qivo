@@ -1,0 +1,209 @@
+.resource-strip {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  box-shadow: var(--qivo-shadow-card);
+  color: var(--text-1);
+  font-size: var(--fs-base);
+}
+.resource-strip .rs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 48px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+}
+.resource-strip[data-strip-mode="min"] .rs-header {
+  border-bottom: 0;
+}
+.resource-strip .rs-heading,
+.resource-strip .rs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.resource-strip .rs-heading h3 {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.resource-strip .rs-actions {
+  flex-shrink: 0;
+}
+.resource-strip .rs-body {
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  min-height: 0;
+  flex: 1;
+  scrollbar-gutter: stable;
+}
+.resource-strip .rs-person {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 40px;
+  padding: 6px 12px;
+  gap: 8px;
+  text-align: left;
+  border-radius: 0;
+  white-space: normal;
+}
+.resource-strip .rs-person[data-resource-user-active],
+.resource-strip .rs-person[aria-pressed="true"] {
+  background: var(--accent-soft);
+}
+.resource-strip .rs-person[aria-pressed="true"] {
+  box-shadow: inset 2px 0 var(--primary);
+}
+/* Name and capacity on one line: the name yields to the ellipsis first and
+   the capacity keeps its whole figure against the cell's right inset. */
+.resource-strip .rs-person-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.resource-strip .rs-person-name {
+  display: block;
+  min-width: 0;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.resource-strip .rs-person-capacity {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-weight: 400;
+  text-align: right;
+  white-space: nowrap;
+}
+.resource-strip .rs-week-grid {
+  width: calc(var(--res-label) + var(--res-gutter) * 2 + var(--res-weeks));
+  min-width: 100%;
+}
+.resource-strip .rs-grid-row {
+  display: flex;
+  min-width: 0;
+}
+.resource-strip .rs-label {
+  width: var(--res-label);
+  flex-shrink: 0;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--roadmap-rail, var(--surface-1));
+  border-right: 1px solid var(--border);
+}
+.resource-strip .rs-gutter {
+  width: var(--res-gutter);
+  flex-shrink: 0;
+  background: color-mix(in oklab, var(--text-3) 3%, transparent);
+  box-shadow: inset 1px 0 var(--border-strong);
+}
+.resource-strip .rs-gutter:has(+ .rs-weeks) {
+  box-shadow: inset -1px 0 var(--border-strong);
+  clip-path: inset(0 0 0 var(--roadmap-scroll-left, 0px));
+}
+.resource-strip .rs-weeks {
+  width: var(--res-weeks);
+  display: flex;
+  flex-shrink: 0;
+  /* The panel supplies the material once; loads stop at the pinned labels. */
+  clip-path: inset(0 0 0 var(--roadmap-rail-clip, 0px));
+}
+.resource-strip .rs-week-row {
+  border-bottom: 1px solid var(--border);
+}
+.resource-strip .rs-week-cell {
+  width: var(--res-week);
+  height: 40px;
+  padding: 4px 3px;
+  flex-shrink: 0;
+  border-radius: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  scroll-margin-left: calc(var(--res-label) + var(--res-gutter));
+  scroll-margin-right: var(--res-gutter);
+}
+.resource-strip .rs-heat-value {
+  color: var(--text-1);
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--primary) var(--res-heat), transparent);
+}
+.resource-strip .rs-heat-value strong {
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+/* An empty week and the two pressure tones read theme hooks (tokens.css);
+   a palette that sets none keeps these tints. */
+.resource-strip .rs-heat-value[data-load-hours="0"] {
+  background: var(
+    --heat-empty-fill,
+    color-mix(in oklab, var(--primary) var(--res-heat), transparent)
+  );
+}
+.resource-strip .rs-week-cell[data-tone="over"] .rs-heat-value {
+  background: var(--heat-over-fill, color-mix(in oklab, var(--pressure-over) 18%, transparent));
+}
+.resource-strip .rs-week-cell[data-tone="near"] .rs-heat-value {
+  background: var(--heat-near-fill, color-mix(in oklab, var(--pressure-warn) 14%, transparent));
+}
+
+/* A week holding a paused task: the same mark at any size of pause, so the
+   number stays the running load and the border says work is waiting. */
+.resource-strip .rs-heat-value[data-load-paused] {
+  border: 1px dashed color-mix(in oklab, var(--text-1) 60%, transparent);
+}
+
+.resource-strip .rs-heat-value strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.resource-strip .rs-empty {
+  height: 38px;
+  margin: 0;
+  padding: 9px 12px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.resource-strip[data-strip-density="compact"] .rs-week-cell {
+  padding-left: 2px;
+  padding-right: 2px;
+}
+/* At the shared 24px timeline floor, preserve units and the time axis. Long
+   values visibly elide; accessible names retain full values. */
+.resource-strip[data-strip-density="tight"] .rs-week-cell {
+  padding-left: 1px;
+  padding-right: 1px;
+}
+.resource-strip[data-strip-density="tight"] .rs-heat-value strong {
+  font-size: 10px;
+  letter-spacing: -0.2px;
+}

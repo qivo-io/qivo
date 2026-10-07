@@ -1,0 +1,125 @@
+/* Native radios cover the entire preview card, retaining browser keyboard
+   behavior and the same input hooks as the compact theme selector. */
+.theme-selector {
+  container-type: inline-size;
+  min-width: 0;
+}
+.theme-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+/* On the narrowest phones three cards leave no room for the theme icon
+   beside the name and the check mark. */
+@container (max-width: 300px) {
+  .theme-choice-label > svg:first-child {
+    display: none;
+  }
+}
+.theme-choice {
+  position: relative;
+  display: block;
+  min-width: 0;
+  cursor: pointer;
+}
+.theme-choice-input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.theme-choice-body {
+  display: block;
+  padding: 5px 5px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+.theme-choice-input:not([aria-disabled="true"]):not(:checked):hover + .theme-choice-body {
+  border-color: var(--border-strong);
+}
+/* A palette may name its own checked fill (--theme-choice-checked). */
+.theme-choice-input:checked + .theme-choice-body {
+  border-color: var(--primary);
+  background: var(--theme-choice-checked, var(--surface-2));
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.theme-choice-input:focus-visible:where(html:not([data-focus-modality="pointer"]) *)
+  + .theme-choice-body {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+.theme-choice:has(.theme-choice-input[aria-disabled="true"]) {
+  cursor: wait;
+}
+.theme-choice-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 5px;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.theme-choice-mark {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}
+.theme-choice-mark svg {
+  visibility: hidden;
+}
+.theme-choice-input:checked + .theme-choice-body .theme-choice-mark {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.theme-choice-input:checked + .theme-choice-body .theme-choice-mark svg {
+  visibility: visible;
+}
+.theme-choice-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--preview-border);
+  border-radius: 5px;
+  background: var(--preview-background);
+}
+.theme-preview-panel {
+  fill: var(--preview-panel);
+  stroke: var(--preview-border);
+}
+.theme-preview-heading {
+  fill: var(--preview-text);
+  opacity: 0.8;
+}
+.theme-preview-title {
+  fill: var(--preview-text);
+  opacity: 0.6;
+}
+.theme-preview-navigation {
+  stroke: var(--preview-muted);
+  stroke-width: 2px;
+  opacity: 0.4;
+}
+.theme-preview-avatar {
+  fill: var(--preview-muted);
+  opacity: 0.6;
+}
+.theme-preview-action {
+  fill: var(--preview-accent);
+}
+.theme-preview-task {
+  fill: transparent;
+  stroke: var(--preview-border);
+}

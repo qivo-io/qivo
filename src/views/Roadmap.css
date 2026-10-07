@@ -1,0 +1,116 @@
+.roadmap-view [data-roadmap-task-top] {
+  /* Titles remain available to Tab and Find; full controls hydrate once near
+     the viewport. Intrinsic height preserves offscreen row geometry. */
+  content-visibility: auto;
+}
+
+.roadmap-view [data-roadmap-task-top]:focus-within {
+  /* Focus rings may extend beyond the row's paint containment. */
+  content-visibility: visible;
+}
+
+.roadmap-resource-week {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: var(--accent-soft);
+}
+
+.roadmap-view [data-roadmap-planning] {
+  --roadmap-row: var(--accent-soft);
+  --roadmap-planning-edge: color-mix(in oklab, var(--primary) 65%, var(--border));
+  border-bottom-color: var(--roadmap-planning-edge);
+  box-shadow: inset 0 1px var(--roadmap-planning-edge);
+}
+/* The row supplies the tint once. Keep the leading marker on the sticky
+   name cell so it remains visible while the timeline scrolls horizontally. */
+.roadmap-view [data-roadmap-planning] > :first-child {
+  box-shadow: inset 3px 0 var(--primary);
+}
+
+/* The edge columns are separate from the equal-width weeks. Inset rules do
+   not spend any of the width used by bars, milestones or dependency paths. */
+.roadmap-edge-column {
+  flex-shrink: 0;
+  background: color-mix(in oklab, var(--text-3) 3%, transparent);
+}
+.roadmap-edge-before {
+  box-shadow: inset -1px 0 var(--border-strong);
+}
+.roadmap-edge-after {
+  box-shadow: inset 1px 0 var(--border-strong);
+}
+.roadmap-row-edge {
+  position: relative;
+}
+.roadmap-row-edge.roadmap-edge-before {
+  clip-path: inset(0 0 0 var(--roadmap-scroll-left, 0px));
+}
+.roadmap-week-edge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.roadmap-week-edge:hover {
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+.roadmap-week-edge:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+  outline: 2px solid var(--primary);
+  outline-offset: -3px;
+}
+.roadmap-week-count {
+  position: absolute;
+  top: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 22px;
+  border: 1px solid color-mix(in oklab, var(--roadmap-edge-color) 53%, var(--border));
+  border-radius: var(--r-sm);
+}
+.roadmap-week-count > svg {
+  flex-shrink: 0;
+  color: var(--roadmap-edge-color);
+}
+/* A filled chip wears its bar's surface and rim (Roadmap.tsx passes
+   --roadmap-edge-surface and --roadmap-edge-rim), a paused task's hatch too. */
+.roadmap-week-edge[data-edge-filled="true"] .roadmap-week-count {
+  top: 8px;
+  height: 20px;
+  color: var(--text-1);
+  background: var(--roadmap-edge-surface);
+  border-color: var(
+    --roadmap-edge-rim,
+    color-mix(in oklab, var(--roadmap-edge-color) var(--roadmap-bar-rim), transparent)
+  );
+}
+.roadmap-week-edge[data-edge-filled="true"] .roadmap-week-count > svg {
+  color: inherit;
+}
+/* A connected chip joins its bar. A ringed bar rings the chip too
+   (Roadmap.tsx passes --roadmap-edge-ring; 4px is BAR_RING there), open on
+   the shared side so bar and chip read as one outlined shape. */
+.roadmap-week-edge[data-edge-kind="continuation"][data-edge-side="before"] .roadmap-week-count {
+  right: 0;
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: 0 0 0 4px var(--roadmap-edge-ring, transparent);
+  clip-path: inset(-4px 0 -4px -4px);
+}
+.roadmap-week-edge[data-edge-kind="continuation"][data-edge-side="after"] .roadmap-week-count {
+  left: 0;
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  box-shadow: 0 0 0 4px var(--roadmap-edge-ring, transparent);
+  clip-path: inset(-4px -4px -4px 0);
+}

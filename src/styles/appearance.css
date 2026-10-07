@@ -1,0 +1,520 @@
+/* Put prefixed backdrop-filter before the standard property: production CSS
+   optimization can otherwise leave only the spelling Chromium ignores.
+   Every planner theme uses the same panel structure over the Canvas image.
+   Only the material changes: tokens.css supplies each palette's panels,
+   translucent while a Canvas image is painted and solid with No image or
+   before one loads.
+   Scope these rules to the authenticated planner, leaving the operator UI alone. */
+html[data-appearance] {
+  --board-body-frame: 1px solid var(--border);
+  --board-column-rule: var(--border);
+  --board-heading-radius: 12px 12px 0 0;
+  --board-pin-mask: transparent;
+  --roadmap-row: transparent;
+  --roadmap-group: var(--surface-1);
+  --roadmap-rail: transparent;
+}
+/* Opaque project/sub-project headings hide vertically scrolling tasks.
+   Ordinary task and Team labels share only the outer panel material. */
+html[data-appearance] :is([data-track], [data-subtrack]) {
+  --roadmap-rail: var(--roadmap-group);
+}
+
+#root {
+  isolation: isolate;
+}
+.appearance-background {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background: var(--bg);
+}
+.appearance-background::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--workspace-image-veil);
+}
+html:not([data-appearance="blue"]) .appearance-background::after {
+  display: none;
+}
+.appearance-background img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+.planner-sidebar {
+  --sidebar-section-gap: 24px;
+}
+.planner-navigation {
+  display: contents;
+}
+.planner-mobile-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  background: var(--chrome);
+}
+.planner-navigation-drawer {
+  top: 0;
+  left: 0;
+  transform: none;
+  translate: none;
+  height: 100dvh;
+  width: min(320px, 90vw);
+  max-width: none;
+  border-radius: 0;
+  padding: 0;
+  display: block;
+}
+.planner-navigation-drawer .planner-sidebar {
+  width: 100%;
+  height: 100%;
+}
+
+html[data-appearance]
+  :where(
+    .planner-navigation,
+    [data-view-switch] > *,
+    [data-filter-well],
+    .board-status-panel,
+    .board-empty-note,
+    .qivo-empty-state,
+    [data-ov-summary],
+    [data-ov-strip],
+    .overview-section,
+    .settings-navigation,
+    .archive-navigation,
+    .archive-content-frame,
+    .settings-content-frame,
+    [data-roadmap-panel],
+    [data-split-strip],
+    [data-inbox-list],
+    .planner-mobile-navigation
+  ) {
+  background: var(--workspace-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--workspace-panel-shadow);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+
+html[data-appearance] .planner-sidebar {
+  padding: 12px;
+  gap: 12px;
+  background: transparent;
+}
+
+/* Tailwind's bare border uses currentColor. Menu outlines must use the theme's
+   float rim (--float-border, which falls back to the subdued --border of
+   their triggers) instead of white/black text ink. The search palette,
+   dialogs and task windows keep their --border rim: the scrim already
+   separates them from the page. */
+html[data-appearance]
+:is(
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-anchoredpop-backdrop] + [data-floating-surface]
+) {
+  border-color: var(--float-border, var(--border));
+}
+
+/* Blue sheets (dialogs, alert dialogs, the task window, the Description and
+   Activity focus windows, and the workspace loading and address-moved
+   cards) use the same material as workspace panels, sampling the content
+   beneath them even when another window is already open. */
+html[data-appearance="blue"]
+:is([data-floating-surface], [data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  background: var(--workspace-panel);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+/* Blue's menus, popovers, selects, tooltips, AnchoredPop, toasts, the app
+   update notice, the roadmap plan card, the editor's link and mention menus
+   and the search palette sit a step above the panel on --float-material:
+   translucent with the panel blur over the photo, opaque with No image.
+   Its :is() holds (0,2,0) arguments, so this is (0,3,1) and beats the
+   sheet rule above. */
+html[data-appearance="blue"]
+:is(
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="tooltip-content"],
+  [data-anchoredpop-backdrop] + [data-floating-surface],
+  .planner-toast-host > [data-floating-surface],
+  [data-app-update],
+  [data-plan-card],
+  .mdmenu,
+  .mentionpop,
+  [data-slot="dialog-content"]:has(> [data-slot="command"])
+) {
+  background: var(--float-material);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+
+/* These children inherit their parent's material; another coat would make
+   the palette and mobile navigation appear more opaque, and a Command's
+   bg-popover would be an opaque block inside a translucent picker: a
+   desktop Popover, or the landscape roadmap's AnchoredPop, whose Popover
+   wraps it in a role="dialog" div. */
+html[data-appearance="blue"]
+  :is(
+    [data-slot="dialog-content"],
+    [data-slot="popover-content"],
+    [data-floating-surface] > [role="dialog"]
+  )
+  > [data-slot="command"],
+html[data-appearance="blue"]
+  .planner-navigation-drawer
+  :is(.planner-navigation, .settings-navigation) {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Dark and Blue tooltips float like a menu: the floating fill
+   (--float-material, else --popover) inside the float rim, instead of an
+   inverted near-white bubble. Blue's also takes the float rule's blur and
+   draws its rim inset (--tooltip-shadow). Light keeps its navy tooltip. */
+html:is([data-appearance="dark"], [data-appearance="blue"]) [data-slot="tooltip-content"] {
+  background: var(--float-material, var(--popover));
+  color: var(--text-1);
+  box-shadow: var(
+    --tooltip-shadow,
+    0 0 0 1px var(--float-border, var(--border)),
+    var(--qivo-shadow-pop)
+  );
+}
+html[data-appearance] .planner-brand {
+  padding: 0 20px;
+}
+html[data-appearance] .planner-brand > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 0;
+}
+html[data-appearance] .planner-navigation {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+html[data-appearance] .planner-navigation > :not(.planner-project-list) {
+  flex-shrink: 0;
+}
+html[data-appearance] :is(.planner-topbar, .roadmap-view, [data-roadmap-toolbar], .settings-shell) {
+  background: transparent;
+}
+/* The view switcher and the filter well are the same kind of panel; the
+   switcher spaces its three tabs a little wider. The current tab, a page
+   heading and a lit filter are one chip in every theme (deviation #232): the
+   well names one height, which every tab reads through Seg's `--seg-height`
+   and the heading reads below. */
+html[data-appearance] :is([data-view-switch] > *, [data-filter-well]) {
+  padding: 5px 8px;
+}
+html[data-appearance] [data-view-switch] > * {
+  gap: 10px;
+}
+html[data-appearance] [data-view-switch] {
+  --seg-height: 32px;
+}
+html[data-appearance] [data-view-switch] .workspace-page-current {
+  height: var(--seg-height);
+}
+/* A control standing directly on the photograph paints the panel material
+   once. A well's children never do — the well already has it, and a second
+   coat would darken the panel twice. */
+html[data-appearance]
+  :is([data-filter-row], [data-roadmap-toolbar], .inbox-options-row, .inbox-bulk-actions)
+  :where(button, input, [data-filter-search]):not(
+    :where([data-filter-search] *, [data-filter-x], [data-filter-well] *)
+  ) {
+  background-color: var(--workspace-panel);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+/* The Inbox already sits on the workspace panel material. Let its toolbar
+   and search share that one layer, and let a lit control paint its chip
+   (`data-on`). Keep mobile tabs and the notification permission prompt
+   outside this control scope. */
+html[data-appearance]
+:is(.inbox-options-row button:not([data-on]), .inbox-bulk-actions button, .inbox-search-row) {
+  background-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-appearance] [data-filter-search] input:focus-visible {
+  outline: none;
+}
+html[data-appearance] .board-status-band {
+  background: transparent;
+}
+/* One fixed underlay paints the visible panel shapes above the workspace
+   background at -2 and beneath all board content, regardless of portal order. */
+html[data-appearance] :is(.board-lane, [data-board-group]) {
+  background: transparent;
+  box-shadow: none;
+}
+html[data-appearance] .board-panel-material {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  /* Keep it hidden until the layout hook supplies the visible panel paths. */
+  clip-path: inset(0 0 100% 0);
+}
+html[data-appearance] .board-panel-material::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--workspace-panel);
+}
+html[data-appearance] .board-panel-photo {
+  position: absolute;
+  inset: 0;
+  /* Composite transparent images against the same base before blurring. */
+  background: var(--bg);
+  filter: var(--workspace-panel-blur);
+}
+html[data-appearance] .board-panel-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+html[data-appearance] .board-panel-photo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--workspace-image-veil);
+}
+html[data-appearance] :is(.board-panel-heading, .board-lane-body, [data-lane-foot]) {
+  background: transparent;
+}
+html[data-appearance] .board-status-panel[data-board-fused="true"] {
+  border-radius: 12px 12px 0 0;
+}
+html[data-appearance] .board-card {
+  background: transparent;
+  border-radius: var(--r-md);
+  /* The enclosing lane supplies the tint and blur once for all its cards. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-appearance] .board-card:hover {
+  border-color: var(--border-strong);
+}
+/* Light cards are opaque white objects on the lane. A hovered card answers
+   with a contact shadow and a slightly deeper rim, and the rows inside it
+   hover at a faint ink (a visible one on a parent card with child rows),
+   rather than the full row fill in a --border-strong frame, which read as
+   selected. The scoped --hover also reaches buttons inside the card. */
+html[data-appearance="light"] .board-card {
+  --hover: rgba(25, 39, 56, 0.04);
+  background: var(--surface-1);
+}
+html[data-appearance="light"] .board-card:has(> :nth-child(2)) {
+  --hover: rgba(25, 39, 56, 0.07);
+}
+html[data-appearance="light"] .board-card:hover {
+  border-color: rgba(25, 39, 56, 0.32);
+  box-shadow:
+    0 1px 2px rgba(25, 39, 56, 0.1),
+    0 2px 6px rgba(25, 39, 56, 0.06);
+}
+html[data-appearance] :is([data-ov-summary], [data-ov-strip], .overview-section) {
+  padding: 20px;
+  max-width: none;
+}
+html[data-appearance] .overview-section :is([data-ov-table], [data-ovrow], [data-atrisk]) {
+  background: transparent;
+  box-shadow: none;
+}
+@media (max-width: 760px) {
+  .planner-shell [data-view-switch] > [data-slot="toggle-group"] {
+    flex-wrap: nowrap;
+  }
+  [data-view-switch] button {
+    padding-inline: 6px;
+    gap: 4px;
+  }
+  html[data-appearance] [data-view-switch] > * {
+    gap: 4px;
+    padding-inline: 4px;
+  }
+  html[data-appearance] .planner-mobile-navigation {
+    margin: 8px 12px 0;
+  }
+}
+
+/* Match the Board's parent/child connectors beside the project names.
+   Branches meet the first text line even when a sub-project name wraps: the
+   name's line box is a fixed 20px under 6px of padding, so a one-line row is
+   exactly the 32px control height, a wrapped one grows by whole lines, and
+   the 16px tick stays on the first line's centre. */
+.planner-subproject::before,
+.planner-subproject::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  background: var(--board-hierarchy-line);
+  pointer-events: none;
+}
+.planner-subproject::before {
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+.planner-subproject:last-child::before {
+  bottom: auto;
+  height: 16px;
+}
+.planner-subproject::after {
+  top: 16px;
+  width: 8px;
+  height: 1px;
+}
+html[data-appearance] .planner-subproject > button {
+  white-space: normal;
+  line-height: 20px;
+  padding-block: 6px;
+}
+
+/* ---- Ink-state component rules -----------------------------------------
+   Every planner palette paints lines and hover as translucent ink over
+   opaque control fills: components that swap an opaque fill for the bare
+   ink, or paint a hard-coded fill, are corrected here for every theme. The
+   per-theme touches follow (Light's floating surfaces, lettering on lit
+   chips, checkbox rims, inline fields and Overview milestones). */
+
+/* Controls on the opaque control fill that hover with the hover:bg-hover
+   utility: default and provider Buttons, and the other controls marked
+   data-control-fill. The utility swaps the rest fill for the bare ink,
+   which over the photo or the ground turns the control see-through; the ink
+   lies over the rest fill instead. Outline Buttons composite over their own
+   --background. Left alone: lit (data-on) and disabled controls, the next
+   Overview milestone (its primary-soft fill), the filter row, roadmap
+   toolbar and Inbox rows, whose fill the rules above pin to the panel
+   material or clear, the Projects directory over the photo and the palette's
+   esc key (both below). Behind (hover: hover) like Tailwind's hover, so a tap
+   leaves no sticky fill. */
+@media (hover: hover) {
+  html[data-appearance]
+    :is(
+      [data-slot="button"]:is([data-variant="default"], [data-variant="provider"]),
+      [data-control-fill]
+    ):hover:not(
+      [data-on],
+      [data-next],
+      :disabled,
+      :where([data-filter-row], [data-roadmap-toolbar], .inbox-options-row, .inbox-bulk-actions) *,
+      :where([data-background-state="ready"] .mobile-project-directory > div > *)
+    ) {
+    background-color: var(--surface-1);
+    background-image: linear-gradient(var(--hover), var(--hover));
+  }
+  html[data-appearance]
+    [data-slot="button"][data-variant="outline"]:hover:not(
+      [data-on],
+      [data-palette-close],
+      :disabled,
+      :where([data-filter-row], [data-roadmap-toolbar], .inbox-options-row, .inbox-bulk-actions) *
+    ) {
+    background-color: var(--background);
+    background-image: linear-gradient(var(--hover), var(--hover));
+  }
+}
+/* The phone Filters button stands on the photo: lit, it lays --lit over its
+   opaque rest fill. */
+html[data-appearance] .mobile-task-tools [data-on] {
+  background-color: var(--surface-1);
+  background-image: linear-gradient(var(--lit), var(--lit));
+}
+
+/* The palette's esc key rests on its rim alone: its --background would be a
+   hole in the palette's floating fill, darker in Dark and Blue and greyer in
+   Light. Hovered, it keeps the bare hover ink over the palette. The search
+   rule under the palette and picker inputs is the theme border, not
+   currentColor text ink. */
+html[data-appearance] [data-palette-close]:not(:hover) {
+  background-color: transparent;
+}
+html[data-appearance] [data-slot="command-input-wrapper"] {
+  border-color: var(--border);
+}
+
+/* The Archive search box is clear, like the project select beside it. */
+html[data-appearance] [data-archive-search-box] {
+  background: transparent;
+}
+/* Projects directory controls standing on the photograph paint the panel
+   material once, in every state, and hover by laying the ink over it. */
+html[data-appearance][data-background-state="ready"]
+:is(.mobile-project-directory > input, .mobile-project-directory > div > button) {
+  background-color: var(--workspace-panel);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+@media (hover: hover) {
+  html[data-appearance][data-background-state="ready"]
+    .mobile-project-directory
+    > div
+    > button:hover {
+    background-image: linear-gradient(var(--hover), var(--hover));
+  }
+}
+
+/* Light: the toast, the roadmap plan card and the editor's mention and link
+   menus take the white popover and the float rim like every other menu,
+   instead of the grey recess fill. */
+html[data-appearance="light"]
+:is(.planner-toast-host > [data-floating-surface], [data-plan-card], .mentionpop, .mdmenu) {
+  background: var(--popover);
+  border-color: var(--float-border);
+}
+/* Light: lit and current chips letter in deep primary, so "current" carries
+   the accent while the chip keeps the slate --lit fill; a lit filter chip's
+   clear x follows its chip. */
+html[data-appearance="light"]
+:is(
+  [data-on],
+  [data-slot="toggle"][data-state="on"],
+  [data-slot="toggle-group-item"][data-state="on"]
+),
+html[data-appearance="light"] [data-on] ~ [data-filter-x] {
+  color: #1e40af;
+}
+/* Light: unchecked checkboxes get a 3:1 rim; focus and invalid keep theirs. */
+html[data-appearance="light"]
+[data-slot="checkbox"]:not([data-state="checked"], :focus-visible, [aria-invalid="true"]) {
+  border-color: var(--border-strong);
+}
+/* Light: inline rename fields drop the input's shadow ghost box. */
+html[data-appearance="light"]
+:is(
+  [data-org-labels] input[data-slot="input"],
+  input[data-slot="input"]:is([data-user-name], [data-user-email])
+) {
+  box-shadow: none;
+}
+/* Light over the photo: Overview milestone rows are clear like the at-risk
+   rows; the next milestone keeps its primary-soft fill. */
+html[data-appearance="light"][data-background-state="ready"]
+  .overview-section
+  .overview-milestone:not([data-next], :hover) {
+  background-color: transparent;
+}

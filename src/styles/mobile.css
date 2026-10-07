@@ -1,0 +1,355 @@
+/* Daily essentials uses the same Alignment geometry and Canvas materials.
+   Phones trade simultaneous panels for readable pages and larger targets. */
+.mobile-bottom-navigation {
+  display: none;
+}
+.mobile-project-directory {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mobile-content-inset);
+  padding: 0 16px 24px;
+  overflow-y: auto;
+}
+.mobile-project-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--workspace-panel, var(--surface-1));
+  box-shadow: var(--workspace-panel-shadow);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+.mobile-project-row {
+  display: flex;
+  padding: 8px;
+}
+.mobile-project-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.mobile-project-open:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.mobile-project-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+.mobile-subprojects {
+  padding: 0 8px 8px;
+  border-top: 1px solid var(--border);
+}
+.mobile-subprojects summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 8px;
+  cursor: pointer;
+  color: var(--text-2);
+  list-style: none;
+}
+.mobile-subprojects summary::-webkit-details-marker {
+  display: none;
+}
+.mobile-subprojects[open] summary svg {
+  transform: rotate(180deg);
+}
+.mobile-subproject-row {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+}
+
+@media (max-width: 760px) {
+  .planner-toast-host {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 32px);
+  }
+  :root {
+    --ctl-xs: 44px;
+    --ctl-sm: 44px;
+    --ctl-md: 44px;
+    --ctl-lg: 44px;
+  }
+  /* A 16px input avoids focus zoom in iOS while preserving desktop text scale. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select,
+  .ProseMirror {
+    font-size: 16px;
+  }
+  [data-slot="button"] {
+    touch-action: manipulation;
+  }
+  .planner-shell.workspace-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    width: 100%;
+    max-width: 100%;
+  }
+  .planner-shell > .workspace-header {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .planner-shell > .workspace-toolbar {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+  }
+  .planner-shell > main {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  .mobile-workspace-header {
+    padding: max(8px, env(safe-area-inset-top)) 16px 8px;
+    background: var(--workspace-panel, var(--chrome));
+    backdrop-filter: var(--workspace-panel-blur);
+  }
+  .mobile-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mobile-title-row p {
+    margin: 0 0 2px;
+  }
+  .mobile-page-title {
+    margin: 0;
+    font-size: var(--fs-xl);
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .mobile-view-switch {
+    display: flex;
+    justify-content: center;
+    margin-top: 12px;
+  }
+  .mobile-view-switch > * {
+    width: 100%;
+  }
+  .mobile-view-switch [data-slot="toggle-group-item"] {
+    flex: 1;
+    min-height: 40px;
+  }
+  .mobile-context-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  /* one equal column per tab: three, or four with Team sync */
+  .mobile-bottom-navigation {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-column: 1;
+    grid-row: 4;
+    padding: 4px 8px max(4px, env(safe-area-inset-bottom));
+    background: var(--workspace-panel, var(--chrome));
+    border-top: 1px solid var(--border);
+    backdrop-filter: var(--workspace-panel-blur);
+    z-index: 15;
+  }
+  .mobile-nav-item {
+    flex-direction: column;
+    gap: 4px;
+    height: 58px;
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+  }
+  /* the shared lit chip (deviation #232); the rule lives here because the
+     item's colour is set above, outside the utility layer */
+  .mobile-nav-item[aria-current="page"] {
+    color: var(--text-1);
+    font-weight: 600;
+    background: var(--lit);
+    box-shadow: var(--qivo-shadow-card);
+  }
+  .mobile-unread-badge {
+    position: absolute;
+    top: -5px;
+    left: 13px;
+    min-width: 16px;
+    padding: 1px 4px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-size: 10px;
+    line-height: 14px;
+  }
+  .mobile-task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    min-height: 0;
+    padding: var(--mobile-content-inset) 16px 24px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .mobile-project-directory {
+    padding-top: var(--mobile-content-inset);
+  }
+  .mobile-task-list > *,
+  .mobile-project-directory > * {
+    flex-shrink: 0;
+  }
+  .mobile-task-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mobile-task-tools select {
+    background: var(--surface-1);
+  }
+  .mobile-task-section {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--workspace-panel, var(--surface-1));
+    box-shadow: var(--workspace-panel-shadow);
+    backdrop-filter: var(--workspace-panel-blur);
+  }
+  .mobile-task-section h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 12px;
+    font-size: var(--fs-md);
+    font-weight: 600;
+  }
+  .mobile-task-section h2 > span:last-child {
+    margin-left: auto;
+  }
+  .mobile-task-group {
+    overflow: hidden;
+    border-top: 1px solid var(--border);
+  }
+  .mobile-task-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 12px;
+    width: 100%;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text-1);
+  }
+  .mobile-task-row + .mobile-task-row {
+    border-top: 1px solid var(--border);
+  }
+  .mobile-task-row:hover {
+    background: var(--hover);
+  }
+  .mobile-task-row:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+    outline: 2px solid var(--primary);
+    outline-offset: -3px;
+  }
+  .mobile-task-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    overflow-wrap: anywhere;
+    font-size: 16px;
+    line-height: 1.4;
+    font-weight: 500;
+  }
+  .mobile-task-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+  }
+  .mobile-task-meta > span {
+    overflow-wrap: anywhere;
+  }
+  .mobile-task-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 32px 16px;
+    text-align: center;
+  }
+  .mobile-task-empty h2 {
+    font-size: var(--fs-md);
+    font-weight: 600;
+  }
+  .mobile-task-empty p {
+    color: var(--text-2);
+  }
+  [data-slot="dialog-content"].mobile-filter-page {
+    /* Production CSS can fold translate:none into transform, while Tailwind's
+       variable-based translate remains separate. Reset its axes as well. */
+    --tw-translate-x: 0;
+    --tw-translate-y: 0;
+    inset: 0;
+    transform: none;
+    translate: none;
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    border-radius: 0;
+    padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 24px;
+    overflow-y: auto;
+  }
+  .mobile-filter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .mobile-filter-controls > :first-child {
+    flex-basis: 100%;
+    max-width: 100%;
+  }
+  [data-slot="dialog-content"][data-modal-shell] {
+    --tw-translate-x: 0;
+    --tw-translate-y: 0;
+    top: 0;
+    left: 0;
+    transform: none;
+    translate: none;
+    width: 100%;
+    max-width: 100%;
+    max-height: 100dvh;
+    height: 100dvh;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  [data-modal-shell] > :first-child {
+    flex-wrap: wrap;
+    padding-inline: 16px;
+  }
+  [data-modal-shell] > :nth-child(2) {
+    min-height: 0;
+    padding-inline: 16px;
+  }
+  [data-modal-shell] > :last-child {
+    padding-inline: 16px;
+  }
+  [data-slot="dialog-content"] {
+    max-width: calc(100vw - 24px);
+  }
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"] {
+    max-width: calc(100vw - 24px);
+  }
+}

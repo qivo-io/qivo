@@ -1,0 +1,39 @@
+.overview-section-foot {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .overview-view {
+    scroll-padding-bottom: 1px;
+  }
+  /* One frame follows the sticky foot. Keep the native borders for layout
+     only, so translucent strokes never overlap at the bottom or sides. */
+  html[data-appearance] .overview-view .overview-section {
+    position: relative;
+    padding: 0;
+    border-color: transparent;
+  }
+  .overview-section::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    bottom: calc(var(--overview-panel-clip, 0px) - 1px);
+    border: 1px solid var(--border);
+    border-radius: inherit;
+    pointer-events: none;
+  }
+  .overview-section-body {
+    padding: 20px 20px 0;
+  }
+  .overview-section-foot {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    height: 21px;
+    margin: 0 -1px -1px;
+    border: 1px solid transparent;
+    border-top: 0;
+    border-radius: 0 0 12px 12px;
+    pointer-events: none;
+  }
+}

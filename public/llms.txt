@@ -1,0 +1,40 @@
+# Qivo
+
+> Qivo is a product-development planner for people and AI agents. Teams organize work into projects, sub-projects and tasks, then plan against remaining work, dependencies and each person's available capacity.
+
+The website is https://qivo.io; the signed-in planner is at https://qivo.io/app. Qivo calls work items tasks. REST uses `/v1/tasks` and `/v1/tasks/{ref}`. MCP provides `list_tasks`, `get_task`, `create_task`, `update_task` and `delete_task`. Shared task links use `/app/<org-slug>/tasks/qn-<number>`.
+
+Task numbers are permanent within an organization. Credentials identify one user in one organization and do not grant access to every project.
+
+When a person connects their assistant, OAuth is the preferred way to connect to `https://api.qivo.io/mcp`: add the remote MCP server in the assistant and complete Qivo's browser sign-in and approval. Personal tokens are a fallback for clients without compatible OAuth support; agent keys serve automation with its own identity and REST access.
+
+Task changes can arrive without polling through REST webhooks or the draft MCP Events extension. A receiving integration must host a public HTTPS callback. REST subscriptions default to no expiry; MCP subscriptions default to seven days. Both accept `ttlMs: null` for no expiry. Continued delivery failures across seven days disable subscriptions. Read the [task event workflow](https://qivo.io/skill.md#receive-task-events) for registration, status checks and recovery. An ordinary MCP tool connection does not automatically receive events.
+
+Use the operating guide to choose between MCP, REST and the browser. Authentication instructions describe connection setup, access and revocation. The product guides below are public HTML pages; MCP clients discover current tool arguments through `tools/list` after connecting.
+
+## Start here
+
+- [Qivo operating skill](https://qivo.io/skill.md): Find, create, assign and update tasks; choose an interface and verify the result.
+- [Authentication and connection](https://qivo.io/auth.md): Connect a person's assistant using OAuth (preferred), use a personal token as a compatibility fallback, or use an administrator-created agent key for automation and REST.
+- [Qivo in one minute](https://qivo.io/docs/qivo-in-one-minute/): Understand the product and its main views.
+- [How work is organized](https://qivo.io/docs/how-work-is-organized/): Organizations, teams, projects, sub-projects, tasks and groups.
+
+## Find and work on tasks
+
+- [Finding your way around](https://qivo.io/docs/finding-your-way-around/): Navigate the planner, search and open shared task links.
+- [The task window](https://qivo.io/docs/the-task-window/): Descriptions, status, assignees, remaining hours, planning, subtasks and relationships.
+- [Working together](https://qivo.io/docs/working-together/): Comments, mentions, subscriptions and the inbox.
+- [Access model](https://qivo.io/docs/who-sees-what-the-access-model/): Organization roles, project access, viewers and guests.
+
+## Plan and track work
+
+- [The Board](https://qivo.io/docs/the-board/): Task status, filtering and project layouts.
+- [The Roadmap](https://qivo.io/docs/the-roadmap/): Schedule work, inspect dependencies and manage milestones.
+- [Planning against real capacity](https://qivo.io/docs/planning-against-real-capacity/): Plan people's work across projects; agents have no weekly capacity limit.
+- [Projected delay](https://qivo.io/docs/will-it-be-ready-in-time-the-delay-status/): Interpret whether work is expected to finish within its planned window.
+
+## Optional
+
+- [Automation and AI](https://qivo.io/docs/automation-ai-the-rest-api-and-the-mcp-server/): Overview of the REST and MCP interfaces and attributed writes.
+- [Organization and team settings](https://qivo.io/docs/organization-and-team-settings/): Manage people, agents and teams; export organization data, including `data/tasks.json` and related task records.
+- [Pricing](https://qivo.io/pricing/): Published pricing and included usage.

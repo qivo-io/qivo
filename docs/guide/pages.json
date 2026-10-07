@@ -1,0 +1,117 @@
+{
+  "overview": {
+    "title": "Documentation",
+    "description": "Learn to manage tasks, plan work, check capacity, share projects and connect AI assistants in Qivo.",
+    "file": "overview.md"
+  },
+  "pages": [
+    {
+      "file": "qivo-in-one-minute.md",
+      "slug": "qivo-in-one-minute",
+      "title": "Qivo in one minute",
+      "order": 1,
+      "description": "Your organization contains projects, each with sub-projects where tasks live. Select a project in the sidebar, All projects for everything you can access, or…"
+    },
+    {
+      "file": "how-work-is-organized.md",
+      "slug": "how-work-is-organized",
+      "title": "How work is organized",
+      "order": 2,
+      "description": "Organization → Project → Sub-project → Task."
+    },
+    {
+      "file": "finding-your-way-around.md",
+      "slug": "finding-your-way-around",
+      "title": "Finding your way around",
+      "order": 3,
+      "description": "The sidebar shows your organization, Search, My view, All projects, Team sync, the Projects tree and Settings. The organization name is not a switcher. If…"
+    },
+    {
+      "file": "the-overview-project-health-at-a-glance.md",
+      "slug": "the-overview-project-health-at-a-glance",
+      "title": "The Overview. Project health at a glance",
+      "order": 4,
+      "description": "Overview summarizes the selected project, sub-project, All projects or My view. Its opening sentence reports overdue tasks, projected missed deadlines,…"
+    },
+    {
+      "file": "the-board.md",
+      "slug": "the-board",
+      "title": "The Board",
+      "order": 5,
+      "description": "Board has five status columns with pinned headers and live counts. Each column's + creates a task in that status, except in All projects and My view. Tasks…"
+    },
+    {
+      "file": "the-roadmap.md",
+      "slug": "the-roadmap",
+      "title": "The Roadmap",
+      "order": 6,
+      "description": "The Roadmap shows scheduled tasks as bars on a weekly timeline. In a project, tasks sit under their sub-projects. All projects and My view group them by…"
+    },
+    {
+      "file": "will-it-be-ready-in-time-the-delay-status.md",
+      "slug": "will-it-be-ready-in-time-the-delay-status",
+      "title": "Will it be ready in time? The delay status",
+      "order": 7,
+      "description": "Qivo estimates an unfinished task's finish week from its plan, remaining hours and owner's workload. Delay tracking highlights two warnings:"
+    },
+    {
+      "file": "planning-against-real-capacity.md",
+      "slug": "planning-against-real-capacity",
+      "title": "Planning against real capacity",
+      "order": 8,
+      "description": "Plan on roadmap opens the timeline and highlights the task. Unscheduled tasks receive a starter bar. A Backlog task must first move to another status; trying…"
+    },
+    {
+      "file": "the-task-window.md",
+      "slug": "the-task-window",
+      "title": "The task window",
+      "order": 9,
+      "description": "Open a task to read its discussion and details. The breadcrumb links to its project and sub-project Boards. Click the title to edit it. The header also…",
+      "aliases": {
+        "archiving": ["archiving-done-work-leaves-the-room-on-its-own"]
+      }
+    },
+    {
+      "file": "organization-and-team-settings.md",
+      "slug": "organization-and-team-settings",
+      "title": "Organization and team settings",
+      "order": 10,
+      "description": "Open Settings → Organization → General to change the organization's name, address, attachment limit, calendar and default planning hours."
+    },
+    {
+      "file": "working-together.md",
+      "slug": "working-together",
+      "title": "Working together",
+      "order": 11,
+      "description": "Each person has a name and email address. An admin adds them in Settings → Organization → Users. Their seat shows invited until they sign in with that email…"
+    },
+    {
+      "file": "who-sees-what-the-access-model.md",
+      "slug": "who-sees-what-the-access-model",
+      "title": "Who sees what. The access model",
+      "order": 12,
+      "description": "Projects can be shared with teams and individual people. Access also applies to their tasks and sub-projects."
+    },
+    {
+      "file": "automation-ai-the-rest-api-and-the-mcp-server.md",
+      "slug": "automation-ai-the-rest-api-and-the-mcp-server",
+      "title": "Automation & AI. The REST API and the MCP server",
+      "order": 13,
+      "description": "Connect an assistant through MCP or use REST for scripts. Both act as a Qivo user with that user's project permissions. External connections require a…"
+    },
+    {
+      "file": "administration-guard-rails-and-the-demo.md",
+      "slug": "administration-guard-rails-and-the-demo",
+      "title": "Administration, guard rails and the demo",
+      "order": 14,
+      "description": "Organization admins manage users, project access and billing in Settings. Qivo Admin is a separate area for platform operators."
+    },
+    {
+      "file": "what-sets-qivo-apart-the-marketing-summary.md",
+      "slug": "what-sets-qivo-apart-the-marketing-summary",
+      "title": "What sets Qivo apart. The marketing summary",
+      "order": 15,
+      "description": "Qivo combines task tracking with weekly planning for people and AI agents. Its main features are:"
+    }
+  ]
+}

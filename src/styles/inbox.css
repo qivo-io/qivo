@@ -1,0 +1,232 @@
+/* The list fits its queue until it reaches the pane's height. Its scrolling
+   rows stay inside a separate rounded frame beneath the fixed controls. */
+.inbox-layout {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 20px 12px;
+  overflow: hidden;
+}
+.inbox-message-list {
+  display: flex;
+  flex: 0 0 380px;
+  flex-direction: column;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--chrome);
+}
+.inbox-list-scroll {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: 0 12px 12px;
+}
+.inbox-list-scroll > * {
+  flex-shrink: 0;
+}
+.inbox-message-actions,
+.inbox-message-preview {
+  display: none;
+}
+.inbox-detail-frame {
+  display: flex;
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+.inbox-detail-frame--note {
+  align-self: flex-start;
+  background: var(--surface-1);
+}
+.inbox-note {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-height: 220px;
+  padding: 24px;
+}
+html[data-appearance] .inbox-detail-frame {
+  background: var(--workspace-panel);
+  box-shadow: var(--workspace-panel-shadow);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+/* The desktop frame owns the material; its task must not cover it with an
+   opaque fill. Mobile tasks retain their own full-screen window material. */
+html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
+  background: transparent;
+}
+
+@media (max-width: 1100px) {
+  .inbox-layout {
+    flex-direction: column;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .inbox-message-list {
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: min(360px, max(200px, 42dvh));
+  }
+  .inbox-detail-frame {
+    flex: 0 0 auto;
+    width: 100%;
+    height: 100%;
+  }
+  .inbox-detail-frame--note {
+    height: auto;
+  }
+}
+@media (max-width: 760px) {
+  .inbox-layout {
+    padding: var(--mobile-content-inset) 12px 12px;
+    overflow: hidden;
+    animation: none;
+    transform: none;
+  }
+  .inbox-message-list {
+    flex: 1;
+    align-self: stretch;
+    max-height: none;
+    min-height: 0;
+  }
+  .inbox-message-list > div:first-child {
+    padding: 12px 12px 0;
+  }
+  .inbox-list-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .inbox-list-controls .inbox-notification-row {
+    display: none;
+  }
+  .inbox-list-controls .inbox-mobile-filters {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    margin-bottom: 0;
+  }
+  .inbox-list-controls .inbox-options-row {
+    grid-column: 2;
+    grid-row: 1;
+    margin-bottom: 0;
+  }
+  .inbox-options-row > button {
+    min-width: 44px;
+    min-height: 44px;
+    padding-inline: 8px;
+  }
+  .inbox-list-controls > .inbox-bulk-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+  .inbox-bulk-actions button {
+    width: 44px;
+    height: 44px;
+  }
+  .inbox-list-scroll {
+    flex: 1;
+    padding-inline: 8px;
+  }
+  .inbox-mobile-filters > [data-slot="toggle-group"] {
+    width: 100%;
+  }
+  .inbox-mobile-filters [data-slot="toggle-group-item"] {
+    flex: 1;
+    min-height: 40px;
+  }
+  .inbox-message-list [data-message] {
+    gap: 0;
+    padding: 12px 4px 12px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .inbox-message-list [data-message]:last-child {
+    border-bottom: 0;
+  }
+  .inbox-message-open {
+    min-height: 44px;
+  }
+  .inbox-message-list [data-msg-title] {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-size: 16px;
+    line-height: 1.4;
+  }
+  .inbox-message-list [data-msg-line2] {
+    margin-top: 6px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .inbox-message-preview {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+  .inbox-message-actions {
+    display: inline-flex;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    align-self: flex-start;
+  }
+  .inbox-layout:not([data-inbox-mobile-detail]) > .inbox-detail-frame {
+    display: none;
+  }
+  .inbox-layout[data-inbox-mobile-detail] > .inbox-message-list {
+    display: none;
+  }
+  .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame--note {
+    flex-direction: column;
+    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    background: var(--background);
+  }
+  /* The full-screen task supplies its own window material. Keep its Inbox
+     wrapper clear so it can sample the same photograph as other task windows. */
+  html[data-appearance="blue"] .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame {
+    background: transparent;
+  }
+  html[data-appearance="blue"] .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame--note {
+    background: var(--workspace-panel);
+    -webkit-backdrop-filter: var(--workspace-panel-blur);
+    backdrop-filter: var(--workspace-panel-blur);
+  }
+  .inbox-mobile-back {
+    align-self: flex-start;
+    min-height: 44px;
+    margin-top: 8px;
+  }
+}
