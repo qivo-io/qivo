@@ -28,6 +28,12 @@ This is the public Qivo application repository. Private design specifications,
 operational notes and source migration records are in qivo-internal. Use only
 `AGENTS.md` for agent instructions. Read `README.md` and `package.json`.
 
+When reviewing authentication dependency updates, check whether a published
+Convex Better Auth adapter supports a patched Better Auth 1.7 or later release.
+Resume the coordinated upgrade using [the upgrade checklist](docs/better-auth-upgrade.md)
+when supported. Keep the advisory visible until resolved; do not bypass peer
+dependencies or upgrade the OAuth provider alone.
+
 Use Node >=22.12, `npm ci`, `npm run desktop:install`, then
 `npm run verify:local`. Run builds/tests sequentially with at most two workers.
 Do not run `test:contract`, seeds, resets, live smoke drives or production

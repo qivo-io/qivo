@@ -267,7 +267,7 @@ The fix is in the 1.7 release line, but the current Convex adapter declares
 `better-auth >=1.6.11 <1.7.0`. Upgrade the adapter and provider together when
 compatible. Do not add another audience without revisiting these checks and
 the provider upgrade.
-The [pending security upgrade checklist](better-auth-0.12.5-api-notes.md#pending-security-upgrade)
+The [pending security upgrade checklist](better-auth-upgrade.md)
 records the release conditions, package/schema steps, required regression
 checks, safeguards to retain and rollback criteria for that upgrade.
 
