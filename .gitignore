@@ -8,8 +8,7 @@ scripts/shots/
 .local/
 # live-credential stash written by tests/contract/global.setup.mts
 tests/contract/.credentials.json
-# Claude Code agent config — machine-local. The verification procedure
-# that used to live here is versioned at docs/verification.md.
+# Machine-local agent configuration. Verification instructions are in AGENTS.md.
 .claude/
 
 desktop/release/

@@ -10,12 +10,16 @@ export function assertDemoTarget(env) {
     throw new Error('A valid dedicated demo deploy key is required.')
   const prefix = parts[0]
   if (isPreviewDeployKey(key)) {
+    if (env.QIVO_ENVIRONMENT !== 'preview')
+      throw new Error('Demo previews require QIVO_ENVIRONMENT=preview.')
     const expected = env.DEMO_CONVEX_PROJECT
     if (!expected || prefix !== `preview:${expected}`)
       throw new Error(
         'The preview key must belong to the configured DEMO_CONVEX_PROJECT (team:project).',
       )
   } else {
+    if (env.QIVO_ENVIRONMENT !== 'demo')
+      throw new Error('The public demo requires QIVO_ENVIRONMENT=demo.')
     if (
       !env.DEMO_CONVEX_DEPLOYMENT ||
       prefix !== `prod:${env.DEMO_CONVEX_DEPLOYMENT}` ||

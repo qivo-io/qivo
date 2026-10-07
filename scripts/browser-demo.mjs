@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
-import { loadCredentials, resolveTarget } from './marketing-demo.mjs'
+import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -33,7 +33,7 @@ export function loadBrowserDemo(baseURL, { cwd = ROOT, env } = {}) {
       'The local app Convex URL does not match the development credential deployment.',
     )
   }
-  const credentials = loadCredentials(cwd, target)
+  const credentials = loadCredentials(fixtureDirectory(cwd, env), target)
   if (!credentials) {
     throw new Error(
       'Northstar development credentials are missing. Run npm run demo -- seed --dev first.',

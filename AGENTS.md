@@ -43,11 +43,29 @@ as task/tasks. Guide slugs, headings and agent-guide links are public URLs;
 This repository is the application only. The qivo.io marketing, pricing and
 rendered docs website is built in qivo-internal from this repository's
 `docs/guide/` and must not be added back here. `vercel.json` proxies unknown
-paths to that website only for the exact hosts `qivo.io` and `www.qivo.io`;
-every other host redirects `/` to `/app`. Keep app routes and files ahead of
+paths to the production website only for the exact hosts `qivo.io` and
+`www.qivo.io`. The exact staging host `preview.qivo.io` uses its protected
+website proxy. Other hosts redirect `/` to `/app`. Keep app routes and files ahead of
 the proxy and run `npx vitest run scripts/vercel-routing.test.mjs` after any
 routing change. Changes to application access control must fail closed.
 Do not create or modify GitHub issues; Qivo work items are tasks.
 
-Updating the connected `main` deploys both Vercel projects and corresponding
-Convex backends. A main merge is a production release, not merely a Git write.
+## Deployment and version control
+
+Work on implementation branches, commit verified changes and push those
+branches. Do not merge, open a pull request or publish a release unless asked.
+Apply the same strategy to the private companion repository and preserve
+unrelated work there.
+
+Production Vercel projects accept REST API deployment requests only. Git pushes
+and deploy hooks cannot start production builds. Once the new workflows are
+merged, successful main CI updates the separate persistent staging environment.
+Publishing a stable GitHub Release authorizes production deployment of the exact
+commit that passed CI and staging. Draft releases and prereleases do not deploy
+production. See `docs/deployment.md` for configuration and release requirements.
+
+Never manually deploy production to test this workflow. Preserve existing
+customer data and backend identities. Staging has its own backend and private
+credentials. Deployments never seed or reset data. Use `QIVO_ENVIRONMENT` to
+identify the target explicitly, and keep fixture credentials outside this
+checkout in the private directory chosen by `QIVO_FIXTURE_CREDENTIALS_DIR`.

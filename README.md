@@ -46,6 +46,11 @@ production backend as a test environment. Never commit `.env` or real credential
 Authorized maintainers follow [AGENTS.md](AGENTS.md), which points to private
 setup instructions and the shared command-level credential helper.
 
+Set backend `QIVO_ENVIRONMENT=development` explicitly. Fixture provisioning
+requires private generated credentials and an absolute
+`QIVO_FIXTURE_CREDENTIALS_DIR` outside the public checkout. Deployments never
+provision shared accounts or reset data automatically.
+
 After configuring your development backend, `npm run dev` runs Convex and Vite
 on port 5199. `/` redirects to the planner at `/app`, and the operator console
 is `/admin`. Configure the backend `SITE_URL` to the exact development origin.
@@ -66,21 +71,29 @@ non-production deployment.
 
 ## Deployment
 
-Vercel builds use `vercel.json` and deploy the matching Convex backend. Main and
-demo keep separate Vercel projects, backend deployments and credential scopes.
-On the hosts `qivo.io` and `www.qivo.io` only, paths that are not app routes or
-files in the app build are proxied to the website origin
-`https://site-origin.qivo.io`. Every other host, including the demo and
-self-hosted deployments, redirects `/` to `/app` and never contacts the website.
-`scripts/vercel-routing.test.mjs` checks these routes. A push to `main` that
-changes the guides asks the website to rebuild through the optional
-`WEBSITE_DEPLOY_HOOK_URL` Actions secret; without it the workflow does nothing.
-A merge to the connected production branch is a production release; credentials
-alone do not grant permission to deploy. Never expose server secrets as `VITE_*`.
+Successful main CI deploys the app and website to persistent staging at
+`https://preview.qivo.io`. Staging has separate Vercel projects, a separate
+Convex backend, private credentials and access protection. Feature branches
+retain isolated previews. Ordinary deployments preserve test data.
+
+Manually publishing a stable GitHub Release authorizes production deployment.
+The workflow verifies successful CI and staging for the exact app commit and
+approved private website commit before deploying the app, website and demo.
+Draft releases, prereleases and ordinary tag pushes do not deploy production.
+Vercel production projects reject Git and deploy-hook deployment requests.
+These workflows take effect after the implementation branches are merged.
+
+On `qivo.io` and `www.qivo.io`, non-app paths use `https://site-origin.qivo.io`.
+On `preview.qivo.io`, a server-side proxy serves the protected staging website.
+Other hosts redirect `/` to `/app`. App routes and assets take precedence.
+The website renders this repository's guides at the exact deployed app commit.
+See [deployment and release operations](docs/deployment.md) for setup,
+validation, failure handling and rollback. Never expose server secrets as `VITE_*`.
 
 Desktop packaging and tag-derived release versions are described in
-[desktop/README.md](desktop/README.md). Native installers are not built or
-published by this repository migration.
+[desktop/README.md](desktop/README.md). Tags build desktop release candidates
+into a draft GitHub Release. Windows installers require a valid signature.
+Publication remains a manual action.
 
 ## Repository boundary and license
 

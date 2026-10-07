@@ -95,12 +95,16 @@ repository. Local packages use the version in the root `package.json`. Tagged
 releases use the tag as their version: push `v1.4.0` and the GitHub Actions
 workflow in `.github/workflows/desktop-release.yml` validates the tag, applies
 `1.4.0` to both package manifests in its temporary checkout, builds Windows
-and Linux artifacts, adds SHA-256 checksums, and publishes a GitHub Release.
-No package-version commit is created. Configure the `WINDOWS_CSC_LINK` and
+and Linux artifacts, adds SHA-256 checksums, and prepares a draft GitHub Release for manual publication.
+No package-version commit is created. The workflow requires a valid Windows
+installer signature and never overwrites an already published release. Configure the `WINDOWS_CSC_LINK` and
 `WINDOWS_CSC_KEY_PASSWORD` repository secrets before shipping a signed Windows
 installer. Linux package signing can be added to the release job when a package
-signing key is available. A prerelease tag is published as a prerelease for
-testing and uses its tag-specific update feed. Stable releases use the
+signing key is available. A prerelease tag prepares a draft prerelease for
+testing and uses its tag-specific update feed. Publishing a stable release
+also authorizes the hosted production deployment described in
+[deployment and releases](../docs/deployment.md). Review staging and wait for
+the installer build to finish before publishing the draft. Stable releases use the
 `latest/download` feed, which intentionally follows the latest non-prerelease
 release. The hosted Linux job uses Ubuntu 24.04 to keep the glibc baseline
 portable; the resulting Debian package is suitable for Ubuntu 26.04.

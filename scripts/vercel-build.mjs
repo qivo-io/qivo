@@ -1,35 +1,9 @@
 #!/usr/bin/env node
-/* The Vercel build, one level in from vercel.json's buildCommand:
- *
- *   npx convex deploy --cmd 'node scripts/vercel-build.mjs' --preview-run '…'
- *
- * Both production and previews run `npm run build`, including its check that
- * the three public agent guides are present in the deployment output root.
- * On a PREVIEW it first
- * gives the freshly claimed Convex preview deployment the one value nothing
- * else can know: the Vercel origin the browser will actually load.
- *
- * Why here, and not in the Convex dashboard's preview defaults. A default is
- * a constant, and the app origin is not — it is minted by Vercel per branch.
- * `convex deploy` runs its `--cmd` in the single window where that can be
- * fixed: the preview deployment has been claimed (so it can be addressed by
- * name) but the functions have not been pushed and `--preview-run` has not
- * seeded yet, so nothing has read SITE_URL. The order inside convex 1.45.0's
- * deployToNewPreviewDeployment is claim → --cmd → push → --preview-run.
- *
- * SITE_URL is load-bearing on four paths, which is why a placeholder like
- * https://preview.invalid satisfies the seed guard and still leaves the
- * deployment unusable: Better Auth's trustedOrigins and the crossDomain
- * plugin's return leg (convex/auth.ts), the CORS origin echo on the file
- * gateway (convex/http.ts), the password-reset redirect (convex/adminAuth.ts),
- * and the refuse-production marker (convex/lib/deployment.ts).
- *
- * The client half needs nothing from us: `convex deploy --cmd` already runs
- * the build with VITE_CONVEX_URL and VITE_CONVEX_SITE_URL set to the target
- * deployment's canonical URLs, and Vite's loadEnv lets process.env outrank
- * any .env file, so the preview bundle points at the preview backend.
- */
+/* Configure each branch backend before pushing functions. Stable staging and
+ * production already have their own explicit origins and environment identity.
+ * No deployment path seeds users or resets workspace data. */
 import { execFileSync } from 'node:child_process'
+import { writeDeploymentReceipt } from './deployment-receipt.mjs'
 
 /* The CLI takes its preview branch iff the deploy key is a preview key —
  * VERCEL_ENV is not what decides it — so this mirrors convex's own test
@@ -115,8 +89,32 @@ function setPreviewSiteUrl(env) {
 }
 
 function main(env) {
-  if (isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)) setPreviewSiteUrl(env)
+  if (isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)) {
+    if (env.QIVO_ENVIRONMENT !== 'preview')
+      throw new Error('Preview environment identity required.')
+    setPreviewSiteUrl(env)
+    execFileSync(
+      'npx',
+      ['convex', 'env', 'set', 'QIVO_ENVIRONMENT', 'preview', '--deployment', deploymentName(env)],
+      { stdio: 'inherit' },
+    )
+  } else {
+    if (deploymentName(env) !== env.QIVO_CONVEX_DEPLOYMENT)
+      throw new Error('The injected Convex URL does not match the configured backend.')
+    for (const [name, expected] of [
+      ['QIVO_ENVIRONMENT', env.QIVO_ENVIRONMENT],
+      ['SITE_URL', env.QIVO_APP_ORIGIN],
+    ]) {
+      const actual = execFileSync('npx', ['convex', 'env', 'get', name], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim()
+      if (!expected || actual !== expected)
+        throw new Error(`Backend ${name} does not match the build.`)
+    }
+  }
   execFileSync('npm', ['run', 'build'], { stdio: 'inherit' })
+  writeDeploymentReceipt(env)
 }
 
 // import for the tests, run only as the build command

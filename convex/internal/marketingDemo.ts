@@ -1,18 +1,16 @@
-/* Private, deployment-key-only marketing fixture. Unlike the development
- * fixtures (internal/operator, internal/guestOrg), this intentionally
- * supports qivo.io, uses private random credentials, and can only rebuild the
+/* Private, deployment-key-only nonproduction fixture. It uses random
+ * credentials and can only rebuild the
  * organization recorded in its own ownership receipt. Passwords are hashed by
  * the local CLI with Better Auth's own hashPassword; neither plaintext
- * passwords nor a public reset function reach deployment. Vercel previews are
- * the one exception: internal/previewSeed provisions this same organization
- * with the fixed fixture password, under its own credential set. */
+ * passwords nor a public reset function reach deployment. Normal deployment
+ * never runs this fixture. Seed, reset and wipe are explicit operator commands. */
 import { v } from 'convex/values'
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { byId } from '../lib/db'
-import { isPreviewOrigin } from '../lib/deployment'
+import { refuseProduction } from '../lib/deployment'
 import { badRequest, conflict, require, rule } from '../lib/functions'
 import { deleteProjectDeep } from '../model/cascade'
 import { SAMPLE_AVATARS, type SampleAvatar, writeNorthstarWork } from '../model/demoSeed'
@@ -30,19 +28,11 @@ const id = (key: string) => marketingId(KEY, key)
 const email = (key: string) => `${key}@demo.qivo.io`
 
 function site(expected: string): string {
+  refuseProduction('marketing demo')
   const actual = process.env.SITE_URL
   require(Boolean(actual), rule('marketing demo: SITE_URL is unset'))
   require(actual === expected, rule(
     'marketing demo: deployment SITE_URL does not match the requested target',
-  ))
-  const url = new URL(expected)
-  require(expected === 'https://qivo.io' ||
-    expected === 'https://www.qivo.io' ||
-    isPreviewOrigin(expected) ||
-    (expected.startsWith('http://') &&
-      ['localhost', '127.0.0.1'].includes(url.hostname) &&
-      url.origin === expected), rule(
-    'marketing demo: target must be qivo.io, a Vercel preview origin or an explicit localhost development origin',
   ))
   return expected
 }
@@ -350,7 +340,7 @@ async function clearWork(ctx: MutationCtx, org: Doc<'organizations'>, profiles: 
  * deliberately no single-call reset: clearing and rebuilding together used
  * nearly all of Convex's 1 s mutation limit and could time out. Callers
  * reset by running 'wipe' and then 'seed' (scripts/marketing-demo.mjs,
- * internal/previewSeed). The demo is empty between the two calls, a failed
+ * the explicit fixture CLI). The demo is empty between the two calls, a failed
  * seed leaves it as the wipe left it, and repeating the reset is safe (a seed
  * alone refuses work added after a wipe). Refusals still say "reset" because
  * that is the CLI command an operator runs. */

@@ -4,8 +4,8 @@ The public guide lives in `docs/guide/`. Each topic has one Markdown source
 file. The qivo.io website publishes these files at `/docs/` from an exact
 commit of this repository; this repository does not contain the website
 renderer. Keep user-facing content
-there. Technical implementation details belong in [design-spec.md](design-spec.md),
-[rest-api.md](rest-api.md) and [mcp.md](mcp.md).
+there. Public API details belong in [rest-api.md](rest-api.md) and [mcp.md](mcp.md).
+Internal design and operational notes live in the private qivo-internal repository.
 
 ## Create a page
 
@@ -83,6 +83,8 @@ and the `https://qivo.io/docs/` links in the agent guides in `public/`. Page
 files are flat lowercase `.md` names in `docs/guide/`, because the website
 fetches only the listed files and the images they reference.
 
-After a change to `docs/guide/` or the agent guides reaches `main`, CI asks the
-website to rebuild from the latest `main` commit. A guide the website cannot render fails
-its build, and qivo.io keeps serving the previous version.
+After a change reaches `main` and CI passes, the staging deployment builds the
+website from that exact application commit. Production documentation changes
+only with a published application release. The release uses the same public
+application and private website commits that passed staging verification.
+Hosted website builds require both commit IDs and never fall back to `main`.

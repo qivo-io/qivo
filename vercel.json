@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "if [ \"$VITE_APP_MODE\" = \"demo\" ]; then node scripts/demo-deploy.mjs; else npx convex deploy --cmd 'node scripts/vercel-build.mjs' --preview-run 'internal/previewSeed:seed'; fi",
+  "buildCommand": "if [ \"$VITE_APP_MODE\" = \"demo\" ]; then node scripts/demo-deploy.mjs; else node scripts/app-deploy.mjs; fi",
   "outputDirectory": "dist",
   "redirects": [
     {
@@ -9,7 +9,7 @@
         {
           "type": "host",
           "value": {
-            "inc": ["qivo.io", "www.qivo.io"]
+            "inc": ["qivo.io", "www.qivo.io", "preview.qivo.io"]
           }
         }
       ],
@@ -45,6 +45,18 @@
         }
       ],
       "destination": "https://site-origin.qivo.io/:path"
+    },
+    {
+      "source": "/:path(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": {
+            "inc": ["preview.qivo.io"]
+          }
+        }
+      ],
+      "destination": "/api/website?__qivo_path=:path"
     }
   ],
   "headers": [
@@ -54,7 +66,7 @@
         {
           "type": "host",
           "value": {
-            "inc": ["qivo.io", "www.qivo.io"]
+            "inc": ["qivo.io", "www.qivo.io", "preview.qivo.io"]
           }
         }
       ],
@@ -70,7 +82,26 @@
       "has": [
         {
           "type": "host",
-          "value": { "inc": ["demo.qivo.io"] }
+          "value": {
+            "inc": ["preview.qivo.io"]
+          }
+        }
+      ],
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": {
+            "inc": ["demo.qivo.io"]
+          }
         }
       ],
       "headers": [
