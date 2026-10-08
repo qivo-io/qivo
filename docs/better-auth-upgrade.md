@@ -67,10 +67,15 @@ overrides to bypass the compatibility blocker.
    Preserve atomic refresh claims, replay rejection and grant ownership.
 3. Regenerate and review `convex/betterAuth/schema.generated.ts` and affected
    generated types through the supported Convex adapter workflow. Preserve
-   the custom consent index in `convex/betterAuth/schema.ts`. Plan account
-   issuer backfills, OAuth resource fields and links, and changed client
-   fields. Review existing Microsoft account identity handling even while
-   staging social login remains disabled.
+   the custom consent index in `convex/betterAuth/schema.ts`. Review OAuth
+   resource fields and links, and changed client fields. Account issuer
+   migration depends on the selected release and existing schema. Direct
+   upgrades from `1.6.31` to `1.7.3` or later need no issuer backfill. If the
+   database adopted the `1.7.0` through `1.7.2` issuer schema, plan cleanup
+   through the supported Convex workflow. See the
+   [1.7.3 release notes](https://github.com/better-auth/better-auth/releases/tag/v1.7.3).
+   Review existing Microsoft account identity handling even while staging
+   social login remains disabled.
 4. Rehearse a data-preserving migration using synthetic records in the old
    schema on an explicitly authorized isolated backend. Preserve user IDs,
    credential hashes, profile links and grant bindings. Retain
