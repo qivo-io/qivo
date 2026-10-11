@@ -78,12 +78,9 @@ export function AdminGate() {
   const shell = (inner: React.ReactNode) => (
     <div className="grid min-h-screen place-items-center bg-[var(--bg)] px-5 py-6">
       <Card className="animate-in fade-in slide-in-from-bottom-1 w-full max-w-[400px] gap-0 rounded-lg bg-surface-1 p-6 shadow-pop">
-        <header className="mb-7 flex items-center gap-3">
-          <img src="/favicon.svg" alt="" className="size-9 shrink-0" />
-          <div>
-            <div className="text-lg font-semibold text-text-1">qivo Admin</div>
-            <div className="text-sm text-text-2">Platform operations</div>
-          </div>
+        <header className="mb-7">
+          <div className="text-lg font-semibold text-text-1">qivo Admin</div>
+          <div className="text-sm text-text-2">Platform operations</div>
         </header>
         {inner}
       </Card>

@@ -93,12 +93,9 @@ export function AdminApp() {
 
 function AdminBrand({ compact = false }: { compact?: boolean }) {
   return (
-    <div className={compact ? 'flex items-center gap-2' : 'border-b border-border px-6 py-6'}>
-      <img src="/favicon.svg" alt="" className="size-8 shrink-0" />
-      <div className="min-w-0">
-        <div className="text-base font-semibold tracking-tight">qivo Admin</div>
-        {!compact && <div className="mt-1 text-xs text-text-2">Platform operations</div>}
-      </div>
+    <div className={compact ? 'min-w-0' : 'min-w-0 border-b border-border px-6 py-6'}>
+      <div className="text-base font-semibold tracking-tight">qivo Admin</div>
+      {!compact && <div className="mt-1 text-xs text-text-2">Platform operations</div>}
     </div>
   )
 }
