@@ -79,7 +79,9 @@ export function AdminGate() {
     <div className="grid min-h-screen place-items-center bg-[var(--bg)] px-5 py-6">
       <Card className="animate-in fade-in slide-in-from-bottom-1 w-full max-w-[400px] gap-0 rounded-lg bg-surface-1 p-6 shadow-pop">
         <header className="mb-7">
-          <div className="text-lg font-semibold text-text-1">qivo Admin</div>
+          <div className="text-lg font-semibold text-text-1">
+            <span className="wordmark">qivo</span> Admin
+          </div>
           <div className="text-sm text-text-2">Platform operations</div>
         </header>
         {inner}
