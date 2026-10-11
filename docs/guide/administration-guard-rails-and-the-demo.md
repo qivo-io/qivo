@@ -193,3 +193,10 @@ repeats yearly until replaced; Week 53 applies in years that contain it.
 Images show their original and preview dimensions and file sizes, credits and
 available license links. Use **Preview in board** to inspect a selection.
 There is no automatic provider import or scheduled refill.
+
+## Contact support
+
+For help with Qivo, email [support@qivo.io](mailto:support@qivo.io).
+Account verification, password resets and billing reminders are sent from
+no-reply@qivo.io. Replies go to the support inbox. Qivo does not currently
+accept task updates by email.
