@@ -93,14 +93,11 @@ export function AdminApp() {
 
 function AdminBrand({ compact = false }: { compact?: boolean }) {
   return (
-    <div className={compact ? 'flex items-center gap-2' : 'border-b border-border px-6 py-6'}>
-      <div className="grid size-8 place-items-center rounded-lg bg-primary text-sm font-bold text-primary-foreground shadow-card">
-        Q
+    <div className={compact ? 'min-w-0' : 'min-w-0 border-b border-border px-6 py-6'}>
+      <div className="text-base font-semibold tracking-tight">
+        <span className="wordmark">qivo</span> Admin
       </div>
-      <div className="min-w-0">
-        <div className="text-base font-semibold tracking-tight">qivo Admin</div>
-        {!compact && <div className="mt-1 text-xs text-text-2">Platform operations</div>}
-      </div>
+      {!compact && <div className="mt-1 text-xs text-text-2">Platform operations</div>}
     </div>
   )
 }

@@ -73,12 +73,7 @@ function AuthShell({ children, wide = false }: { children: React.ReactNode; wide
         data-floating-surface
         className={`animate-in fade-in slide-in-from-bottom-1 w-full ${wide ? 'max-w-[480px]' : 'max-w-[340px]'} p-5 [border-radius:var(--r-lg)] [background:var(--surface-1)] [border:1px_solid_var(--border)] [box-shadow:var(--qivo-shadow-pop)]`}
       >
-        <div className="[display:flex] [align-items:center] [gap:8px] [margin-bottom:24px]">
-          <div className="[width:26px] [height:26px] [border-radius:var(--r-sm)] [background:var(--primary)] [display:grid] [place-items:center] [color:#fff] [font-weight:700] [font-size:var(--fs-base)]">
-            Q
-          </div>
-          <div className="[font-size:var(--fs-xl)] [font-weight:600]">qivo</div>
-        </div>
+        <div className="wordmark [font-size:var(--fs-xl)] [margin-bottom:24px]">qivo</div>
         {children}
       </div>
     </div>

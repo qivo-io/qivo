@@ -22,9 +22,10 @@ module.exports = {
     output: 'desktop/release',
   },
   files: ['dist/**/*', 'package.json'],
-  // Keep one icon source for the Linux desktop entry and all package formats.
-  // Electron-builder reads the PNG at build time; it does not need to be part
-  // of the application archive.
+  // Keep one icon source for the Linux desktop entry, all package formats and
+  // the Windows executable and installer. Electron-builder reads the PNG at
+  // build time and converts it for Windows; it does not need to be part of
+  // the application archive.
   linux: {
     target: [
       { target: 'deb', arch: ['x64'] },
@@ -49,6 +50,7 @@ module.exports = {
   protocols: [{ name: 'Qivo', schemes: ['qivo'] }],
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
+    icon: 'desktop/assets/qivo.png',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: electron-builder expands these placeholders.
     artifactName: 'Qivo-Setup-${version}.${ext}',
   },

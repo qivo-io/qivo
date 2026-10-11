@@ -9,6 +9,8 @@
 :root {
   --sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  /* The "qivo" wordmark only. app.html and admin.html load Outfit 700. */
+  --wordmark: "Outfit", var(--sans);
   /* 273.6px navigation panel plus 12px outer spacing on each side. */
   --sidebar-w: 297.6px;
   --workspace-content-max: 1200px;
@@ -466,6 +468,12 @@ body {
 }
 #root {
   height: 100vh;
+}
+/* The "qivo" wordmark wherever text names the product. Each use sets its size. */
+.wordmark {
+  font-family: var(--wordmark);
+  font-weight: 700;
+  letter-spacing: -0.03em;
 }
 button {
   font-family: inherit;
