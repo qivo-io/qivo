@@ -1,6 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#3b82f6"/>
-  <circle cx="15.4" cy="15.4" r="6.2" fill="none" stroke="#fff" stroke-width="3.2"/>
-  <path d="M17.4 17.4l4.8 4.8" fill="none" stroke="#fff" stroke-width="3.2"
-        stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Qivo mark: a white ring with a blue dot on its line at 4:30. The dot's
+       stroke in the tile colour cuts an 18 unit gap around it. -->
+  <rect width="512" height="512" rx="112" fill="#0f1012"/>
+  <circle cx="256" cy="256" r="112" fill="none" stroke="#fff" stroke-width="44"/>
+  <circle cx="335.2" cy="335.2" r="46" fill="#3b82f6" stroke="#0f1012" stroke-width="36"
+          paint-order="stroke"/>
 </svg>
