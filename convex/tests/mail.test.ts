@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
+import { sendBillingReminder } from '../mail'
 import { newT } from './helpers.setup'
 
 const letter = {
@@ -11,8 +12,11 @@ const letter = {
 beforeEach(() => {
   vi.stubEnv('AGENTMAIL_API_KEY', '')
   vi.stubEnv('AGENTMAIL_INBOX', '')
+  vi.stubEnv('AGENTMAIL_BASE_URL', undefined)
+  vi.stubEnv('APP_MODE', '')
   vi.stubEnv('QIVO_ALLOW_LOCAL_AUTH_EMAIL_LOG', '')
   vi.spyOn(console, 'log').mockImplementation(() => {})
+  vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -53,19 +57,96 @@ describe('authentication mail configuration', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
-  it('sends through the configured provider without logging recipient or token', async () => {
-    vi.stubEnv('QIVO_ENVIRONMENT', 'production')
+  it.each(['verify', 'reset'] as const)(
+    'sends %s through the shared inbox without logging secrets',
+    async (intent) => {
+      vi.stubEnv('QIVO_ENVIRONMENT', 'production')
+      vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
+      vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+      const fetch = vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({ message_id: 'test-message' }) })
+      vi.stubGlobal('fetch', fetch)
+      await newT().action(internal.mail.send, { ...letter, intent })
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(fetch.mock.calls[0][0]).toBe(
+        'https://api.agentmail.to/v0/inboxes/no-reply%40qivo.io/messages/send',
+      )
+      expect(fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer test-only-provider-key')
+      expect(fetch.mock.calls[0][1].headers['Idempotency-Key']).toMatch(/^[a-f0-9]{64}$/)
+      expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({
+        to: [letter.to],
+        reply_to: ['support@qivo.io'],
+        subject:
+          intent === 'verify' ? 'Confirm your email address on Qivo' : 'Reset your Qivo password',
+      })
+      expect(JSON.parse(fetch.mock.calls[0][1].body).text).toContain(letter.url)
+      const logs = JSON.stringify(vi.mocked(console.log).mock.calls)
+      expect(logs).not.toContain(letter.url)
+      expect(logs).not.toContain(letter.to)
+      expect(logs).not.toContain('test-only-provider-key')
+    },
+  )
+})
+
+describe('shared transactional transport', () => {
+  const billing = {
+    to: letter.to,
+    url: 'https://app.example.test/app/test/settings/org-billing',
+    until: '2099-01-01T00:00:00.000Z',
+    notice_key: 'test-only-billing-notice',
+  }
+
+  it('uses the same inbox and support reply address for billing, preserving the API host override', async () => {
     vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
-    vi.stubEnv('AGENTMAIL_INBOX', 'sender@example.test')
+    vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+    vi.stubEnv('AGENTMAIL_BASE_URL', 'https://mail.example.test/')
     const fetch = vi
       .fn()
-      .mockResolvedValue({ ok: true, json: async () => ({ message_id: 'test-message' }) })
+      .mockResolvedValue({ ok: true, json: async () => ({ message_id: 'billing' }) })
+    vi.stubGlobal('fetch', fetch)
+    expect(await sendBillingReminder(billing)).toBe(true)
+    expect(fetch.mock.calls[0][0]).toBe(
+      'https://mail.example.test/v0/inboxes/no-reply%40qivo.io/messages/send',
+    )
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({
+      to: [letter.to],
+      reply_to: ['support@qivo.io'],
+      text: expect.stringContaining(billing.url),
+    })
+  })
+
+  it('never sends demo mail even with a complete provider configuration', async () => {
+    vi.stubEnv('APP_MODE', 'demo')
+    vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
+    vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+    const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
     await newT().action(internal.mail.send, letter)
+    expect(await sendBillingReminder(billing)).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('does not send billing reminders without configuration', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    expect(await sendBillingReminder(billing)).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('fails on provider rejection without retrying or disclosing the response body', async () => {
+    vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
+    vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+    const fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ message: letter.url }),
+    })
+    vi.stubGlobal('fetch', fetch)
+    await expect(newT().action(internal.mail.send, letter)).rejects.toThrow(
+      'Authentication email delivery failed',
+    )
     expect(fetch).toHaveBeenCalledOnce()
-    expect(JSON.parse(fetch.mock.calls[0][1].body).text).toContain(letter.url)
-    const logs = JSON.stringify(vi.mocked(console.log).mock.calls)
-    expect(logs).not.toContain(letter.url)
-    expect(logs).not.toContain(letter.to)
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(letter.url)
   })
 })

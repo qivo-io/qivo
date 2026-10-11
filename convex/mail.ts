@@ -1,26 +1,10 @@
-/* Qivo's outbound mail — the AgentMail transport for Better Auth's two
- * letters, and nothing else.
+/* Qivo transactional mail uses the shared AgentMail account for verification,
+ * password resets and billing reminders. The configured inbox supplies From;
+ * customer replies go to support. No inbound mail is processed here.
  *
- * Scheduled by createAuth's sendVerificationEmail / sendResetPassword
- * (auth.ts): intents are `verify` and `reset` ONLY. The former
- * `invitation` / `request_to_join` intents are CUT with their feature,
- * and with them everything org-shaped send-mail carried —
- * recipient lookup, runAs authorization, NO_SUCH, the daily budget, the
- * fan-out cap, the shared handler deadline, the {sent:false} envelope. What
- * remains is the provider call itself, ported nearly verbatim: nothing awaits
- * this internalAction (scheduler.runAfter(0)), and a Convex action gets
- * minutes, so the worst case — three attempts at 10 s plus backoffs — needs
- * no deadline.
- *
- * SECRETS. AGENTMAIL_API_KEY / AGENTMAIL_INBOX / AGENTMAIL_BASE_URL are
- * Convex deployment env vars, never VITE_-prefixed (nothing under src/ can
- * reach them), never logged, never echoed. A failed fetch stringifies WITH
- * THE URL, and the URL carries the inbox address — so the provider call has
- * its own catch that records only the error's NAME. Logs carry no key, no
- * inbox, no URL, no recipient.
- *
- * Missing configuration fails without logging credentials. Local developers
- * may explicitly opt into auth-link logging on a loopback development origin. */
+ * AGENTMAIL_API_KEY, AGENTMAIL_INBOX and AGENTMAIL_BASE_URL belong only in the
+ * selected Convex deployment. Never log keys, inboxes, recipients or auth URLs.
+ * Local auth-link logging requires an explicit loopback development opt-in. */
 
 import { v } from 'convex/values'
 import { internalAction } from './_generated/server'
@@ -50,14 +34,8 @@ declare function fetch(
   init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
 ): Promise<SendResponse>
 
-/* The host is `api.agentmail.to`, NOT the EU host. A key is issued against a
- * region and the host follows the KEY, not the operator's address — the real
- * key answered 403 {"message":"Forbidden"} against .eu and 200 against .to
- * (verified 2026-08-12 by listing inboxes on both). Do not "fix" a 403 by
- * flipping this to EU; check the key's region instead. The env override stays
- * so a reissued key in another region is a secret to flip, not a redeploy.
- * The `/v0` path prefix is what the OpenAPI document and generated client
- * carry (the Quickstart's curl omits it and both forms route). */
+// Use the API host for the shared account's region. The deleted account's
+// region is not evidence for a replacement key. Keep the deployment override.
 const MAIL_BASE_DEFAULT = 'https://api.agentmail.to'
 
 const SEND_TIMEOUT_MS = 10_000
@@ -90,8 +68,7 @@ ${paragraphs.map((p) => `  <p style="margin:0 0 1em">${p}</p>`).join('\n')}
 
 type Letter = { to: string; subject: string; text: string; html: string }
 
-/* No reply_to on either: there is no human behind a verification or reset
- * mail to reach. The From IS the inbox — AgentMail has no `from` field. */
+// AgentMail takes From from AGENTMAIL_INBOX, not from the message body.
 
 const verifyLetter = (to: string, url: string): Letter => ({
   to,
@@ -180,6 +157,7 @@ async function postLetter(
   const url = `${base}/v0/inboxes/${encodeURIComponent(cfg.inbox)}/messages/send`
   const body = JSON.stringify({
     to: [to],
+    reply_to: ['support@qivo.io'],
     subject: letter.subject,
     text: letter.text,
     html: letter.html,
