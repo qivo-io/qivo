@@ -71,17 +71,20 @@ non-production deployment.
 
 ## Deployment
 
-Successful main CI deploys the app and website to persistent staging at
-`https://preview.qivo.io`. Staging has separate Vercel projects, a separate
-Convex backend, private credentials and access protection. Feature branches
-retain isolated previews. Ordinary deployments preserve test data.
+Successful main CI deploys the app, website and docs to persistent staging at
+`https://preview.qivo.io`. Staging builds the current main of both this
+repository and the private website repository, uses separate Vercel projects,
+a separate Convex backend and private credentials, and is access-protected.
+Feature branches retain isolated previews. Ordinary deployments preserve test
+data.
 
-Manually publishing a stable GitHub Release authorizes production deployment.
-The workflow verifies successful CI and staging for the exact app commit and
-approved private website commit before deploying the app, website and demo.
-Draft releases, prereleases and ordinary tag pushes do not deploy production.
-Vercel production projects reject Git and deploy-hook deployment requests.
-These workflows take effect after the implementation branches are merged.
+Production follows a published GitHub Release. **Prepare release** (a manual
+GitHub Actions workflow) drafts a release for exactly the commit staging
+serves, and publishing that draft deploys the app, website and demo. The
+deployment verifies CI, secret scanning and a successful staging deployment of
+the same app and website commits, and refuses any release older than the
+newest version tag. Draft releases and prereleases do not deploy production. Vercel
+production projects reject Git and deploy-hook deployment requests.
 
 On `qivo.io` and `www.qivo.io`, non-app paths use `https://site-origin.qivo.io`.
 On `preview.qivo.io`, a server-side proxy serves the protected staging website.
@@ -90,10 +93,10 @@ The website renders this repository's guides at the exact deployed app commit.
 See [deployment and release operations](docs/deployment.md) for setup,
 validation, failure handling and rollback. Never expose server secrets as `VITE_*`.
 
-Desktop packaging and tag-derived release versions are described in
-[desktop/README.md](desktop/README.md). Tags build desktop release candidates
-into a draft GitHub Release. Windows installers require a valid signature.
-Publication remains a manual action.
+Desktop packaging is described in [desktop/README.md](desktop/README.md).
+Desktop installers are not published yet. The manual **Desktop test build**
+workflow builds unsigned Windows and Linux test installers as workflow
+artifacts.
 
 ## Repository boundary and license
 

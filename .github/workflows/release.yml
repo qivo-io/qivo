@@ -15,6 +15,9 @@ jobs:
       github.repository == 'qivo-io/qivo' &&
       !github.event.release.prerelease && !github.event.release.draft &&
       github.event.sender.type == 'User'
+    # The job definition comes from the admin-created release tag. Do not point this
+    # at a branch name. A tag with the same name would take precedence, and only v*
+    # tags are restricted to administrators.
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:

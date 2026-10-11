@@ -1,0 +1,99 @@
+name: Desktop test build
+
+# Builds unsigned Windows and Linux desktop installers for testing. Run it by hand.
+# It never creates or changes a GitHub Release and builds no update feed into the
+# installers, so test installs never update themselves. It holds no signing
+# credentials, because it can build any ref, including code that is not reviewed.
+# Desktop installers are not published yet.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: desktop-test-build-${{ inputs.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install web and desktop dependencies
+        run: |
+          npm ci
+          npm run desktop:install
+
+      # Windows SmartScreen warns about unsigned installers. Signing belongs in the
+      # release process, which does not exist yet for desktop.
+      - name: Build unsigned Windows installer
+        run: npm run desktop:package
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: qivo-desktop-windows-unsigned
+          if-no-files-found: error
+          retention-days: 14
+          path: desktop/release/*.exe
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install RPM packaging tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y rpm
+
+      - name: Install web and desktop dependencies
+        run: |
+          npm ci
+          npm run desktop:install
+
+      - name: Build Linux packages
+        run: npm run desktop:package:linux
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: qivo-desktop-linux
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/release/*.deb
+            desktop/release/*.rpm
+            desktop/release/*.AppImage

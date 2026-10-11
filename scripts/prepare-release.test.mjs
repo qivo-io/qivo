@@ -1,0 +1,287 @@
+import { describe, expect, it } from 'vitest'
+import { nextVersion, prepareRelease, releaseHeader } from './prepare-release.mjs'
+
+const MAIN = 'a'.repeat(40)
+const SITE = 'b'.repeat(40)
+const OLD_SITE = 'c'.repeat(40)
+const BOT = { login: 'github-actions[bot]' }
+
+/** A GitHub API double that records writes. `change` replaces one kind of response. */
+function github(change = {}) {
+  const writes = []
+  const api = async (path, method = 'GET', body, options = {}) => {
+    if (method !== 'GET') {
+      writes.push({ path, method, body })
+      if (path.endsWith('/generate-notes')) return { body: '## Changes\n- One fix' }
+      if (path.endsWith('/releases'))
+        return { html_url: 'https://github.com/qivo-io/qivo/releases/tag/draft' }
+      return null
+    }
+    if (path.endsWith('/commits/main')) return { sha: MAIN }
+    if (path.includes('/git/matching-refs/tags/'))
+      return (change.tags || ['v0.1.9']).map((tag) => ({ ref: `refs/tags/${tag}` }))
+    if (path.includes('/git/ref/tags/')) {
+      expect(options.allowMissing).toBe(true)
+      return change.tag || null
+    }
+    if (path.includes('/releases?'))
+      return change.releases || [{ id: 1, tag_name: 'v0.1.9', draft: false, prerelease: false }]
+    if (path.includes('environment=staging'))
+      return (
+        change.staging || [
+          {
+            id: 20,
+            sha: MAIN,
+            environment: 'staging',
+            creator: BOT,
+            created_at: '2026-10-12T10:59:00Z',
+            payload: {
+              kind: 'qivo-staging-v1',
+              app_revision: MAIN,
+              site_revision: SITE,
+              ci_run_id: 1,
+              workflow_run_id: '100',
+              workflow_run_attempt: 1,
+            },
+          },
+        ]
+      )
+    if (path.includes('/statuses'))
+      return [{ id: 1, state: 'success', creator: BOT, created_at: '2026-10-12T11:00:00Z' }]
+    if (path.includes('/actions/workflows/staging.yml/runs'))
+      return {
+        workflow_runs: change.stagingRuns || [
+          {
+            id: 100,
+            run_attempt: 1,
+            status: 'completed',
+            conclusion: 'success',
+            run_started_at: '2026-10-12T10:57:00Z',
+          },
+          {
+            id: 90,
+            run_attempt: 1,
+            status: 'completed',
+            conclusion: 'failure',
+            run_started_at: '2026-10-12T09:00:00Z',
+          },
+        ],
+      }
+    if (path.includes('/actions/runs/100'))
+      return {
+        run_attempt: 1,
+        conclusion: 'success',
+        path: '.github/workflows/staging.yml',
+        head_sha: MAIN,
+        head_branch: 'main',
+        event: 'workflow_run',
+        repository: { full_name: 'qivo-io/qivo' },
+        run_started_at: '2026-10-12T10:57:00Z',
+        updated_at: '2026-10-12T11:01:00Z',
+      }
+    throw new Error(`Unexpected test request ${path}`)
+  }
+  return { api, writes }
+}
+
+const quiet = () => {}
+/** What qivo.io/site-version.json reports. */
+const live =
+  (commit = OLD_SITE) =>
+  async (url) => {
+    expect(url).toBe('https://qivo.io/site-version.json')
+    return Response.json({ website: { commit } })
+  }
+
+describe('version choice', () => {
+  it('defaults to the next patch and accepts a newer explicit version', () => {
+    expect(nextVersion('', 'v0.1.9')).toBe('v0.1.10')
+    expect(nextVersion(undefined, undefined)).toBe('v0.1.0')
+    expect(nextVersion(' v0.2.0 ', 'v0.1.9')).toBe('v0.2.0')
+  })
+  it('refuses unstable, malformed and older versions', () => {
+    for (const requested of ['v0.2.0-rc.1', '0.2.0', 'v0.1.9', 'v0.1.8', 'latest'])
+      expect(() => nextVersion(requested, 'v0.1.9')).toThrow()
+  })
+})
+
+describe('preparing a draft', () => {
+  it('creates a draft for the staged main commit with the website change link', async () => {
+    const { api, writes } = github()
+    const plan = await prepareRelease({ github: api, log: quiet, fetchImpl: live() })
+    expect(plan).toMatchObject({ version: 'v0.1.10', appSha: MAIN, siteSha: SITE })
+    expect(writes.map((write) => write.path)).toEqual([
+      '/repos/qivo-io/qivo/releases/generate-notes',
+      '/repos/qivo-io/qivo/releases',
+    ])
+    expect(writes[0].body).toEqual({
+      tag_name: 'v0.1.10',
+      target_commitish: MAIN,
+      previous_tag_name: 'v0.1.9',
+    })
+    const draft = writes[1].body
+    expect(draft).toMatchObject({
+      tag_name: 'v0.1.10',
+      target_commitish: MAIN,
+      draft: true,
+      prerelease: false,
+    })
+    expect(draft.body).toContain(`qivo-internal/compare/${OLD_SITE}...${SITE}`)
+    expect(draft.body).toContain('## Changes\n- One fix')
+  })
+  it('writes nothing in a dry run', async () => {
+    const { api, writes } = github()
+    await expect(
+      prepareRelease({ github: api, dryRun: true, log: quiet, fetchImpl: live() }),
+    ).resolves.toMatchObject({
+      version: 'v0.1.10',
+    })
+    expect(writes).toEqual([])
+  })
+  it('refuses while preview does not serve main yet', async () => {
+    const { api, writes } = github({ staging: [] })
+    await expect(prepareRelease({ github: api, log: quiet, fetchImpl: live() })).rejects.toThrow(
+      /does not serve main/,
+    )
+    expect(writes).toEqual([])
+  })
+  it('refuses an existing tag, a published release or a person’s draft of the same version', async () => {
+    for (const change of [
+      { tag: { ref: 'refs/tags/v0.1.10' } },
+      {
+        releases: [
+          { id: 1, tag_name: 'v0.1.9', draft: false, prerelease: false },
+          { id: 2, tag_name: 'v0.1.10', draft: false, prerelease: true },
+        ],
+      },
+      {
+        releases: [
+          { id: 1, tag_name: 'v0.1.9', draft: false, prerelease: false },
+          { id: 2, tag_name: 'v0.1.10', draft: true, author: { login: 'lincarl' } },
+        ],
+      },
+    ]) {
+      const { api, writes } = github(change)
+      await expect(prepareRelease({ github: api, log: quiet, fetchImpl: live() })).rejects.toThrow()
+      expect(writes).toEqual([])
+    }
+  })
+  it('deletes every older draft this workflow made, whatever its version', async () => {
+    const logged = []
+    const { api, writes } = github({
+      releases: [
+        { id: 1, tag_name: 'v0.1.9', draft: false, prerelease: false },
+        { id: 2, tag_name: 'v0.1.10', draft: true, author: BOT },
+        // A stale higher version would otherwise deploy its older commit if published.
+        { id: 3, tag_name: 'v0.2.0', draft: true, author: BOT },
+        { id: 4, tag_name: 'v0.3.0', draft: true, author: { login: 'lincarl' } },
+      ],
+    })
+    await prepareRelease({ github: api, log: (line) => logged.push(line), fetchImpl: live() })
+    expect(writes.map((write) => `${write.method} ${write.path}`)).toEqual([
+      'DELETE /repos/qivo-io/qivo/releases/2',
+      'DELETE /repos/qivo-io/qivo/releases/3',
+      'POST /repos/qivo-io/qivo/releases/generate-notes',
+      'POST /repos/qivo-io/qivo/releases',
+    ])
+    expect(logged.some((line) => line.includes('draft v0.3.0 made by a person'))).toBe(true)
+  })
+  it('refuses while a newer staging run of main is running or did not pass', async () => {
+    const later = '2026-10-12T11:30:00Z'
+    for (const stagingRuns of [
+      [{ id: 101, run_attempt: 1, status: 'in_progress', conclusion: null, run_started_at: later }],
+      [
+        {
+          id: 101,
+          run_attempt: 1,
+          status: 'completed',
+          conclusion: 'failure',
+          run_started_at: later,
+        },
+      ],
+      // Re-runs of the recorded run, or of an older one, that failed after replacing the website.
+      [
+        {
+          id: 100,
+          run_attempt: 2,
+          status: 'completed',
+          conclusion: 'failure',
+          run_started_at: later,
+        },
+      ],
+      [
+        {
+          id: 90,
+          run_attempt: 2,
+          status: 'completed',
+          conclusion: 'failure',
+          run_started_at: later,
+        },
+      ],
+    ]) {
+      const { api, writes } = github({ stagingRuns })
+      await expect(prepareRelease({ github: api, log: quiet, fetchImpl: live() })).rejects.toThrow(
+        /newer Deploy staging run/,
+      )
+      expect(writes).toEqual([])
+    }
+    // Skipped runs deployed nothing.
+    const { api } = github({
+      stagingRuns: [
+        {
+          id: 101,
+          run_attempt: 1,
+          status: 'completed',
+          conclusion: 'skipped',
+          run_started_at: '2026-10-12T11:30:00Z',
+        },
+      ],
+    })
+    await expect(
+      prepareRelease({ github: api, log: quiet, fetchImpl: live() }),
+    ).resolves.toMatchObject({
+      version: 'v0.1.10',
+    })
+  })
+  it('numbers from version tags, so a deleted release cannot be reused', async () => {
+    const { api } = github({ tags: ['v0.1.9', 'v0.2.0'] })
+    await expect(
+      prepareRelease({ github: api, dryRun: true, log: quiet, fetchImpl: live() }),
+    ).resolves.toMatchObject({
+      version: 'v0.2.1',
+      previousTag: 'v0.2.0',
+    })
+  })
+  it('links website changes from what qivo.io serves, or says when that is unknown', async () => {
+    let { api, writes } = github()
+    await prepareRelease({ github: api, log: quiet, fetchImpl: live(SITE) })
+    expect(writes[1].body.body).toContain('Unchanged')
+    ;({ api, writes } = github())
+    await prepareRelease({
+      github: api,
+      log: quiet,
+      fetchImpl: async () => new Response('unavailable', { status: 503 }),
+    })
+    expect(writes[1].body.body).toContain('Not recorded')
+  })
+})
+
+describe('draft text', () => {
+  it('says when the website is unchanged and when nothing was released before', () => {
+    const base = {
+      appSha: MAIN,
+      siteSha: SITE,
+      stagedAt: Date.UTC(2026, 9, 12, 11),
+      stagingRunId: 100,
+    }
+    expect(releaseHeader({ ...base, previousTag: 'v0.1.9', productionSite: SITE })).toContain(
+      '| Website | [`bbbbbbb`]',
+    )
+    expect(releaseHeader({ ...base, previousTag: 'v0.1.9', productionSite: SITE })).toContain(
+      'Unchanged',
+    )
+    const first = releaseHeader({ ...base, previousTag: undefined, productionSite: null })
+    expect(first).toContain('First release')
+    expect(first).toContain('2026-10-12 11:00 UTC')
+  })
+})

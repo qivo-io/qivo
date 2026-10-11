@@ -41,7 +41,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           QIVO_ENVIRONMENT: ${{ inputs.environment }}
           QIVO_COMMIT: ${{ inputs.app_revision }}
-          QIVO_SITE_REVISION: ${{ vars.QIVO_SITE_REVISION }}
           QIVO_APP_ORIGIN: ${{ vars.QIVO_APP_ORIGIN }}
           VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
           VERCEL_APP_PROJECT_ID: ${{ vars.VERCEL_APP_PROJECT_ID }}

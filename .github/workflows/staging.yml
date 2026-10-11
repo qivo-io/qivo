@@ -5,12 +5,9 @@ on:
     workflows: [CI]
     branches: [main]
     types: [completed]
+  # Run by hand from main to restage after a private website merge. It deploys
+  # the current public main with the current private main.
   workflow_dispatch:
-    inputs:
-      app_revision:
-        description: Exact current main commit, used when the approved website revision changes
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -30,4 +27,4 @@ jobs:
     secrets: inherit
     with:
       environment: staging
-      app_revision: ${{ github.event.workflow_run.head_sha || inputs.app_revision }}
+      app_revision: ${{ github.event.workflow_run.head_sha || github.sha }}

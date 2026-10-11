@@ -83,28 +83,26 @@ AppImage updates replace the downloaded image in place. If a hardened Ubuntu
 installation blocks AppImage execution, use the `.deb` or run the AppImage
 with `--appimage-extract-and-run` for diagnostics.
 
-The Linux package command is intentionally build-only. A release workflow can
-upload its artifacts and generated update metadata to GitHub Releases (or
-another HTTPS generic feed) after signing and testing them. GitHub's public
-release provider works for public downloads; users cannot anonymously fetch
-update assets from a private source repository, so a public release repository
-or HTTPS download host is needed for automatic updates in that case.
+The Linux package command is intentionally build-only.
 
-The release is intentionally generic rather than tied to the private source
-repository. Local packages use the version in the root `package.json`. Tagged
-releases use the tag as their version: push `v1.4.0` and the GitHub Actions
-workflow in `.github/workflows/desktop-release.yml` validates the tag, applies
-`1.4.0` to both package manifests in its temporary checkout, builds Windows
-and Linux artifacts, adds SHA-256 checksums, and prepares a draft GitHub Release for manual publication.
-No package-version commit is created. The workflow requires a valid Windows
-installer signature and never overwrites an already published release. Configure the `WINDOWS_CSC_LINK` and
-`WINDOWS_CSC_KEY_PASSWORD` repository secrets before shipping a signed Windows
-installer. Linux package signing can be added to the release job when a package
-signing key is available. A prerelease tag prepares a draft prerelease for
-testing and uses its tag-specific update feed. Publishing a stable release
-also authorizes the hosted production deployment described in
-[deployment and releases](../docs/deployment.md). Review staging and wait for
-the installer build to finish before publishing the draft. Stable releases use the
-`latest/download` feed, which intentionally follows the latest non-prerelease
-release. The hosted Linux job uses Ubuntu 24.04 to keep the glibc baseline
-portable; the resulting Debian package is suitable for Ubuntu 26.04.
+## Test builds and release plan
+
+Desktop installers are not published yet. Run **Desktop test build** in GitHub
+Actions with a branch, tag or commit to get Windows and Linux installers as
+workflow artifacts, kept for 14 days. The workflow never creates or changes a
+GitHub Release and sets no update feed, so test installs never update
+themselves. The installers are unsigned, so Windows SmartScreen warns about
+them. The workflow can build any ref, including code that is not reviewed, so
+it must never receive signing credentials. The Linux job uses Ubuntu 24.04 to
+keep the glibc baseline portable; the resulting Debian package is suitable for
+Ubuntu 26.04.
+
+The shell loads the hosted web app, so web releases reach desktop users within
+about a minute without a new installer. When desktop publishing starts, the
+installers belong on the same GitHub Release as the web version, attached to
+the draft before it is published, because the stable update feed
+(`releases/latest/download/`) always reads the newest stable release. A new
+shell build is only needed when the shell itself changes; rebuilding it for
+every web release would make every user download and reinstall an unchanged
+app. Decide the feed, signing and shell versioning before the first public
+installer, because installed shells keep the feed URL they were built with.
