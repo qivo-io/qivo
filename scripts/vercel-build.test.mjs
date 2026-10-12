@@ -63,13 +63,6 @@ describe('previewSiteUrl — the exact origin the browser will load', () => {
     expect(url).not.toContain('*')
     expect(new URL(url).hostname).toBe('qivo-git-b-techqi.vercel.app')
   })
-
-  it('is never a production origin, so the seed guard still bites on qivo.io', () => {
-    const url = previewSiteUrl({
-      VERCEL_BRANCH_URL: 'qivo-git-b-techqi.vercel.app',
-    })
-    expect(new URL(url).hostname.endsWith('qivo.io')).toBe(false)
-  })
 })
 
 describe('deploymentName — the exact target, read off what convex handed the build', () => {

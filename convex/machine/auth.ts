@@ -172,7 +172,7 @@ export const touchCredential = internalMutation({
  * {"error": <sentence>} with CORS + Content-Type: application/json; MCP 401s
  * additionally carry `WWW-Authenticate: Bearer`. */
 
-/* REST (rest-api/index.ts:146-155). */
+/* REST. */
 export const REST_AUTH_401: Record<AuthFail, string> = {
   missing: 'missing agent key (Authorization: Bearer qva_…)',
   unknown: 'unknown agent key',
@@ -181,8 +181,8 @@ export const REST_AUTH_401: Record<AuthFail, string> = {
   wrong_kind: 'unknown agent key', // deliberately identical to unknown
 }
 
-/* MCP (mcp/index.ts:139-146): missing is its own sentence; every other
- * failure collapses per LEG — the credential's state is not disclosed. */
+/* MCP: missing is its own sentence; every other failure collapses per
+ * LEG — the credential's state is not disclosed. */
 export const MCP_AUTH_401 = {
   missing: 'missing credential (Authorization: Bearer qvt_… or qva_…)',
   agent: 'unknown, revoked or deactivated agent key',

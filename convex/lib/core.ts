@@ -162,10 +162,10 @@ export async function findProject(
 
 /* --------------------------------------------------------------- catalogue
  * The org's whole project set, read in ONE indexed by_org scan per request
- * (never N point reads) — the naming service (rest-api/index.ts:162-189):
- * REST resolves refs against it so it can name projects the caller cannot
- * see; MCP reuses it for list scopes. Nothing here grants anything — every
- * disclosed id runs past accessFlags. */
+ * (never N point reads), is the naming service. REST resolves refs against
+ * it so it can name projects the caller cannot see; MCP reuses it for list
+ * scopes. Nothing here grants anything — every disclosed id runs past
+ * accessFlags. */
 
 export type Catalogue = {
   projects: Doc<'projects'>[]
