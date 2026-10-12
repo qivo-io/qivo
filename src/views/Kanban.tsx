@@ -24,15 +24,15 @@ const Z_LANE_FOOT = 8
 /* The status columns sit above the body scrollport. */
 const COL_HEAD_H = 48
 
-/* Board geometry shares the app's 20px canvas inset and 24px section gap.
-   The filter row supplies 24px above the first panel; status columns sit 8px
-   above headed lanes. These constants also drive sticky offsets and lane
-   snapping, so visible spacing and scroll geometry stay in agreement. */
+/* Board geometry shares the app's 20px canvas inset. Panels sit one
+   --panel-gap apart. The filter row supplies it above the first panel, and
+   it separates the status columns from headed lanes and each lane or
+   side-by-side board from the next. The canvas constants also drive sticky
+   offsets and the last lane's snap room, so visible spacing and scroll
+   geometry stay in agreement. */
 const CANVAS_PAD_X = 20
 const CANVAS_PAD_T = 0
 const CANVAS_PAD_B = 24
-const CARD_GAP = 24
-const STATUS_GAP = 8
 
 const PANEL_R = 12
 const FRAME = '1px solid var(--border)'
@@ -681,10 +681,7 @@ function Kanban({
           {/* every sub-board hides itself when filtered empty, so a zero-match
             filter leaves nothing — say so instead of a blank pane */}
           {noMatches && <NoMatchNote onClear={actions.clearFilters} />}
-          <div
-            style={{ gap: CARD_GAP }}
-            className="[position:relative] [display:flex] [align-items:flex-start]"
-          >
+          <div className="[position:relative] [display:flex] [align-items:flex-start] [gap:var(--panel-gap)]">
             {info.groups.map((g) => {
               const proj = g.proj
               const gset = new Set(g.subIds)
@@ -880,7 +877,7 @@ function Kanban({
         <div
           style={{
             minWidth: statuses.length * minColumnWidth + CANVAS_PAD_X * 2,
-            padding: `${CANVAS_PAD_T}px ${CANVAS_PAD_X}px ${fused ? 0 : STATUS_GAP}px`,
+            padding: `${CANVAS_PAD_T}px ${CANVAS_PAD_X}px ${fused ? '0px' : 'var(--panel-gap)'}`,
           }}
           className="board-status-band [background:var(--bg)]"
         >
@@ -928,7 +925,6 @@ function Kanban({
           <div
             style={{
               padding: `0 ${CANVAS_PAD_X}px ${CANVAS_PAD_B}px`,
-              gap: CARD_GAP,
               // The last headed lane needs room to reach the snap line even
               // when its cards are shorter than the pane. Grow its grid row,
               // leaving the panel at its natural height with blank canvas below.
@@ -937,7 +933,7 @@ function Kanban({
                 ? `${lanes.length > 1 ? `repeat(${lanes.length - 1}, auto) ` : ''}minmax(max(0px, calc(100cqh - ${CANVAS_PAD_B}px)), auto)`
                 : undefined,
             }}
-            className="[display:grid] [align-items:start]"
+            className="[display:grid] [align-items:start] [gap:var(--panel-gap)]"
           >
             {lanes.map((lane) => (
               /* The box's corners live on this wrapper, not on either of the two

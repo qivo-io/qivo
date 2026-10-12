@@ -4,7 +4,7 @@
   display: flex;
   flex: 1;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--panel-gap);
   min-width: 0;
   min-height: 0;
   padding: 0 20px 12px;
