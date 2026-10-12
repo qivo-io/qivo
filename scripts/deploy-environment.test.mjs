@@ -454,11 +454,13 @@ describe('deployment identity', () => {
     }
     const html = '<html><link rel="canonical" href="https://qivo.io/" /></html>'
     // Vercel's building page, then the previous deployment, then the new one.
+    let manifestReads = 0
     const site = (appManifests, demoManifest = { commit: SHA, environment: 'demo' }) => {
       const served = [...appManifests]
       return async (url) => {
         if (url === 'https://demo.qivo.io/version.json') return Response.json(demoManifest)
         if (!url.endsWith('/version.json')) return new Response(html)
+        manifestReads++
         const next = served.length > 1 ? served.shift() : served[0]
         return typeof next === 'string' ? new Response(next) : Response.json(next)
       }
@@ -466,13 +468,18 @@ describe('deployment identity', () => {
     const building = '<!DOCTYPE html><title>Deployment is building</title>'
     const previous = { commit: OTHER, environment: 'production' }
     const current = { commit: SHA, environment: 'production' }
-    let pauses = 0
-    const pause = async () => pauses++
+    let pauses = []
+    const pause = async (ms) => pauses.push(ms)
     await verifyPublicBuild(config, site([building, previous, current]), pause)
-    expect(pauses).toBe(2)
+    expect(pauses).toEqual([10_000, 10_000])
+    // About two minutes in total before a deployment that never serves its manifest fails.
+    pauses = []
+    manifestReads = 0
     await expect(verifyPublicBuild(config, site([building]), pause)).rejects.toThrow(
       'The public app manifest is not a manifest.',
     )
+    expect(manifestReads).toBe(12)
+    expect(pauses).toEqual(Array(11).fill(10_000))
     await expect(verifyPublicBuild(config, site([previous]), pause)).rejects.toThrow(
       'The public app manifest does not match the approved deployment.',
     )
