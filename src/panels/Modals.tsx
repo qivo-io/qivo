@@ -607,10 +607,12 @@ function MoveIssueModal({
   issueId,
   onClose,
   onMove,
+  focusAfterClose,
 }: {
   issueId: string
   onClose: () => void
   onMove: (target: string) => void
+  focusAfterClose?: () => HTMLElement | null
 }) {
   const it = P.issueById[issueId]
   // Offer same-organization destinations with write access. The server checks
@@ -649,6 +651,7 @@ function MoveIssueModal({
       title="Move task"
       badge={it.key}
       onClose={onClose}
+      focusAfterClose={focusAfterClose}
       onSubmit={submit}
       canSubmit={canMove}
       submitLabel="Move"
@@ -693,10 +696,12 @@ function ArchiveIssueModal({
   issueId,
   onClose,
   onArchive,
+  focusAfterClose,
 }: {
   issueId: string
   onClose: () => void
   onArchive: (reason: string) => void
+  focusAfterClose?: () => HTMLElement | null
 }) {
   const it = P.issueById[issueId]
   const [reason, setReason] = useStateM('')
@@ -736,6 +741,7 @@ function ArchiveIssueModal({
       title="Archive task"
       badge={it.key}
       onClose={onClose}
+      focusAfterClose={focusAfterClose}
       onSubmit={() => {
         if (canSubmit) onArchive(reason.trim())
       }}

@@ -49,7 +49,6 @@ import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
 import { useUpdateBlocker } from '../lib/updateSafety'
-import { useHideOthers } from '../lib/useHideOthers'
 import { useMobile } from '../lib/useMobile'
 import '../styles/mobile-issue.css'
 import {
@@ -997,7 +996,7 @@ function IssueDetail({
       window.removeEventListener('resize', update)
     }
   }, [mobile])
-  const mobileFrameRef = useRefID<HTMLDivElement>(null)
+  const frameRef = useRefID<HTMLDivElement>(null)
   const [editTitle, setEditTitle] = useStateID(false)
   const [titleDraft, setTitleDraft] = useStateID('')
   const [labelAnchor, setLabelAnchor] = useStateID<{ x: number; y: number } | null>(null)
@@ -1223,40 +1222,24 @@ function IssueDetail({
     P.updateIssue(it.id, patch)
   }
   const open = !!it
-  const dialogRef = useRefID<HTMLDivElement>(null)
-  // Phones move focus into the window and wall off the page (below). The
-  // desktop window leaves focus where it was, so it hides the page only while
-  // focus is inside, as aria-modal did. Both keep the layers the loop keeps.
-  useHideOthers(dialogRef, open && modalActive && (!embedded || mobile), {
-    keep: '[data-focus-window], [data-modal-shell]',
-    whileFocusInside: !mobile,
-  })
+  // Move and Archive open from the Task actions menu, which is gone when they
+  // close, so they return focus to the button that opened that menu.
+  const taskActionsButton = () =>
+    frameRef.current?.querySelector<HTMLElement>('[aria-label="Task actions"]') ?? null
+  // An open window is modal, except as the desktop Inbox's embedded pane: it
+  // takes focus, keeps Tab inside, makes the page behind inert, which also
+  // hides it from assistive technology, and returns focus when it closes.
+  // Keyed on being modal, not on the breakpoint, so a resize across it keeps
+  // the setup (and the focus) of a window that stays modal.
+  const modal = open && modalActive && (!embedded || mobile)
   useEffectID(() => {
-    if (!mobile || !open || !modalActive) return
-    const frame = mobileFrameRef.current
+    if (!modal) return
+    const frame = frameRef.current
     if (!frame) return
-    const previousFocus =
+    const dialog = frame.querySelector<HTMLElement>('[role="dialog"]')
+    let previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
-    // The Inbox task lives inside main. Isolate sibling branches on the way
-    // to body, rather than making its own ancestor inert. Menus and dialogs
-    // created later in portals remain available above the task, and so do
-    // the announcer, the toasts and the update notice ([data-top-layer]).
     const outside = new Map<HTMLElement, boolean>()
-    let branch: HTMLElement = frame
-    while (branch.parentElement) {
-      for (const sibling of branch.parentElement.children) {
-        if (
-          sibling !== branch &&
-          sibling instanceof HTMLElement &&
-          !sibling.matches('[data-focus-window], [data-modal-shell], [data-top-layer]')
-        ) {
-          outside.set(sibling, sibling.inert)
-          sibling.inert = true
-        }
-      }
-      if (branch.parentElement === document.body) break
-      branch = branch.parentElement
-    }
     const focusable = () =>
       Array.from(
         frame.querySelectorAll<HTMLElement>(
@@ -1269,36 +1252,97 @@ function IssueDetail({
           !el.closest('[inert]') &&
           el.getClientRects().length > 0,
       )
-    const initialFocus = requestAnimationFrame(() => {
-      if (!document.querySelector('[data-focus-window]')) {
-        frame.querySelector<HTMLElement>('[data-mobile-task-back]')?.focus({ preventScroll: true })
+    let initialFocus = 0
+    const release = () => dialog?.removeAttribute('tabindex')
+    // A layer that closed as this window opened (Search, the new task
+    // dialog) returns focus in a setTimeout(0) it queued before this one.
+    // Let it land first: its target is where focus returns when the window
+    // closes, or, inside the window, where focus stays.
+    const settle = setTimeout(() => {
+      const landed = document.activeElement
+      if (landed instanceof HTMLElement && landed !== document.body && !frame.contains(landed))
+        previousFocus = landed
+      // The Inbox task lives inside main. Isolate sibling branches on the way
+      // to body, rather than making its own ancestor inert. Menus and dialogs
+      // created later in portals remain available above the task, and so do
+      // the announcer, the toasts and the update notice ([data-top-layer]).
+      let branch: HTMLElement = frame
+      while (branch.parentElement) {
+        for (const sibling of branch.parentElement.children) {
+          if (
+            sibling !== branch &&
+            sibling instanceof HTMLElement &&
+            !sibling.matches('[data-focus-window], [data-modal-shell], [data-top-layer]')
+          ) {
+            outside.set(sibling, sibling.inert)
+            sibling.inert = true
+          }
+        }
+        if (branch.parentElement === document.body) break
+        branch = branch.parentElement
       }
-    })
+      // A phone focuses Back. A desktop focuses the window itself, drawn
+      // without a ring, which reads as "Task, dialog" and opens no tooltip,
+      // so Escape still closes it at once. It is focusable only until it
+      // loses focus or takes a press, so a press on text or a scrollbar
+      // leaves focus where the browser puts it without a focusable window:
+      // in a field, or on the page, which then scrolls the column under the
+      // press. Neither steals focus from a field inside or a focus window.
+      initialFocus = requestAnimationFrame(() => {
+        if (frame.contains(document.activeElement)) return
+        if (document.querySelector('[data-focus-window]')) return
+        if (mobile) {
+          frame
+            .querySelector<HTMLElement>('[data-mobile-task-back]')
+            ?.focus({ preventScroll: true })
+        } else if (dialog) {
+          dialog.tabIndex = -1
+          dialog.addEventListener('blur', release, { once: true })
+          dialog.addEventListener('pointerdown', release, { once: true, capture: true })
+          dialog.focus({ preventScroll: true })
+        }
+      })
+    }, 0)
     const trap = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !(event.target instanceof Node) || !frame.contains(event.target))
+      if (
+        event.key !== 'Tab' ||
+        event.defaultPrevented ||
+        !(event.target instanceof Node) ||
+        !frame.contains(event.target)
+      )
         return
       const controls = focusable()
       const first = controls[0]
       const last = controls[controls.length - 1]
       if (!first) return
-      if (event.shiftKey && document.activeElement === first) {
+      // Wrap at either end, also from a focused element before the first
+      // control (the desktop window itself) or after the last one.
+      const from = document.activeElement
+      const follows = (a: Node, b: Node) =>
+        !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+      if (event.shiftKey && from && (from === first || follows(from, first))) {
         event.preventDefault()
         last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && from && (from === last || follows(last, from))) {
         event.preventDefault()
         first.focus()
       }
     }
     frame.addEventListener('keydown', trap)
     return () => {
+      clearTimeout(settle)
       cancelAnimationFrame(initialFocus)
       frame.removeEventListener('keydown', trap)
+      dialog?.removeEventListener('blur', release)
+      dialog?.removeEventListener('pointerdown', release, true)
+      release()
       for (const [element, wasInert] of outside) element.inert = wasInert
       if (previousFocus?.isConnected && !previousFocus.closest('[inert]')) {
         restoreFocus(previousFocus)
       }
     }
-  }, [mobile, open, modalActive])
+    // `mobile` only picks the first focus target when the window opens
+  }, [modal])
   const reduceMotion =
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
@@ -1948,7 +1992,7 @@ function IssueDetail({
           it was handed, so the card loses the border, radius and shadow that
           only ever said "this is standing off the page". */}
       <div
-        ref={mobileFrameRef}
+        ref={frameRef}
         data-mobile-task-frame={mobile && (embedded || open) ? '' : undefined}
         // the probe an embedded pane reads to yield Escape to a pop-out of
         // itself — only while one is actually up: outside the inbox a closed
@@ -1999,12 +2043,11 @@ function IssueDetail({
       >
         {/* the dialog IS the window: one card, the shared chrome on top and the
           discussion + details columns below */}
-        {/* Open as a dialog, the page behind is hidden from assistive
-            technology (useHideOthers) rather than marked off with aria-modal,
-            which would also silence the announcer for toasts. */}
+        {/* Open as a dialog, the page behind is inert (see the focus effect)
+            rather than marked off with aria-modal, which would also silence
+            the announcer for toasts. */}
         {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: role is dialog or region, and both take aria-label — Biome cannot evaluate the ternary */}
         <div
-          ref={dialogRef}
           role={embedded && !mobile ? 'region' : 'dialog'}
           data-floating-surface={embedded && !mobile ? undefined : ''}
           aria-hidden={!open ? true : undefined}
@@ -2016,7 +2059,7 @@ function IssueDetail({
           data-mobile-task={mobile ? '' : undefined}
           data-mobile-task-compact={mobile && mobileViewport.height < 600 ? '' : undefined}
           data-mobile-tab={mobile ? mobileTab : undefined}
-          className={`flex flex-col overflow-hidden bg-background ${
+          className={`flex flex-col overflow-hidden bg-background !outline-none ${
             embedded
               ? 'min-h-0 min-w-0 flex-1 rounded-none border-0 shadow-none'
               : 'w-[1110px] h-[92vh] max-w-[94vw] rounded-xl border border-border shadow-pop'
@@ -2952,6 +2995,7 @@ function IssueDetail({
         <MoveIssueModal
           issueId={it.id}
           onClose={() => setMoveOpen(false)}
+          focusAfterClose={taskActionsButton}
           onMove={(pid) => {
             // the key is org-scoped and immutable (0050): the modal stays
             // anchored to the same issue, nothing to re-open or re-anchor
@@ -2976,6 +3020,7 @@ function IssueDetail({
         <ArchiveIssueModal
           issueId={it.id}
           onClose={() => setArchiveOpen(false)}
+          focusAfterClose={taskActionsButton}
           onArchive={(reason) => {
             const id = it.id
             const shown = it.key
