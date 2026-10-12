@@ -234,7 +234,7 @@ describe('bulk notification actions through the client store', () => {
     expect(completed).toBe(true)
     expect(P.unreadMessages).toBe(1)
     expect(P.messages.filter((message) => message.read)).toHaveLength(4)
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted")
+    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
   })
 
   it('does not continue a batch or restore notifications after the demo store is disposed', async () => {
@@ -372,7 +372,7 @@ describe('bulk notification actions through the client store', () => {
     expect(P.messages).toEqual(before)
     expect(P.readMessageCount).toBe(2)
     expect(P.unreadMessages).toBe(1)
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted")
+    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
   })
 
   it('restores the cleanup count after a refusal when all read messages are outside the cap', async () => {
@@ -391,7 +391,7 @@ describe('bulk notification actions through the client store', () => {
 
     expect(P.messages).toEqual(before)
     expect(P.readMessageCount).toBe(600)
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted")
+    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
   })
 
   it('waits for another seat after a refusal and reconciles partial success from the latest snapshot', async () => {

@@ -226,7 +226,7 @@ function McpAccessSection() {
     const res = await P.createMcpToken(name.trim())
     setBusy(false)
     if (!res) {
-      window.showToast?.("Couldn't create the MCP token")
+      window.showToast?.("Couldn't create the MCP token", 'error')
       return
     }
     setFresh({ name: name.trim(), secret: res.secret })
@@ -377,13 +377,11 @@ function McpAccessSection() {
                       const ok = t.revokedAt
                         ? await P.deleteMcpToken(t.id)
                         : await P.revokeMcpToken(t.id)
-                      window.showToast?.(
-                        ok
-                          ? t.revokedAt
-                            ? 'MCP token deleted'
-                            : `“${t.name}” revoked`
-                          : "That didn't go through",
-                      )
+                      if (ok)
+                        window.showToast?.(
+                          t.revokedAt ? 'MCP token deleted' : `“${t.name}” revoked`,
+                        )
+                      else window.showToast?.("That didn't go through", 'error')
                       reload()
                     }}
                   >

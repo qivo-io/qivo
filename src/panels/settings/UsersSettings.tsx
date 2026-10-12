@@ -42,7 +42,7 @@ function AgentKeyPanel({
     const res = await P.createAgentKey(agent.id, name.trim() || 'Key')
     setBusy(false)
     if (!res) {
-      window.showToast?.("Couldn't create that key")
+      window.showToast?.("Couldn't create that key", 'error')
       return
     }
     setFresh({ secret: res.secret })
@@ -149,13 +149,8 @@ function AgentKeyPanel({
                   const ok = k.revokedAt
                     ? await P.deleteAgentKey(k.id)
                     : await P.revokeAgentKey(k.id)
-                  window.showToast?.(
-                    ok
-                      ? k.revokedAt
-                        ? 'Key deleted'
-                        : `“${k.name}” revoked`
-                      : "That didn't go through",
-                  )
+                  if (ok) window.showToast?.(k.revokedAt ? 'Key deleted' : `“${k.name}” revoked`)
+                  else window.showToast?.("That didn't go through", 'error')
                   reload()
                 }}
               >
@@ -252,7 +247,10 @@ export function OrgUsersPage({
     const res = await P.createAgentKey(added, 'Default key')
     reloadKeys()
     if (!res) {
-      window.showToast?.(`${name} added, but its key could not be created — mint one below`)
+      window.showToast?.(
+        `${name} added, but its key could not be created — mint one below`,
+        'error',
+      )
       setOpenKeys(added)
       return
     }

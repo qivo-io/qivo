@@ -73,6 +73,7 @@ import { groupProgress, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
+import type { ToastTone } from '../lib/toasts'
 import { beginUpdateBlock } from '../lib/updateSafety'
 import {
   committedByWeek,
@@ -485,18 +486,22 @@ function markLoadedMessagesRead(ids: string[], at: string) {
 const updates = createPlannerUpdates()
 const emit = updates.emit
 
+export type { ToastTone }
+
 /* The two window hooks the app hangs globally: App mounts showToast for the
    non-React layers (this store, imgActions), and the store re-exposes itself
-   as window.PLANNER for the verify drives (scripts/verify-*.mjs). */
+   as window.PLANNER for the verify drives (scripts/verify-*.mjs). A showToast
+   call without a tone shows a success. */
 declare global {
   interface Window {
-    showToast?: ((msg: string) => void) | null
+    showToast?: ((msg: string, tone?: ToastTone) => void) | null
     PLANNER?: unknown
   }
 }
 
-function toast(msg: string) {
-  window.showToast?.(msg)
+/* Store toasts are refusals and failures unless the caller names a tone. */
+function toast(msg: string, tone: ToastTone = 'error') {
+  window.showToast?.(msg, tone)
 }
 
 /* --- the write path ---------------------------------------------------------
@@ -560,7 +565,7 @@ function clearRoadmapHistory(visit: RoadmapVisit) {
 function expireRoadmapHistory() {
   if (roadmapVisit && !roadmapVisit.disabled && Date.now() >= roadmapVisit.expiresAt) {
     clearRoadmapHistory(roadmapVisit)
-    toast('Roadmap undo history expired. Leave Roadmap and return to start a new history.')
+    toast('Roadmap undo history expired. Leave Roadmap and return to start a new history.', 'info')
   }
 }
 
@@ -1569,7 +1574,7 @@ function widenAncestors(uuid: string) {
   }
   if (widened.length) {
     const key = uuidToKey.get(uuid)
-    toast(`Widened ${widened.join(', ')} to keep covering ${key || 'its subtask'}`)
+    toast(`Widened ${widened.join(', ')} to keep covering ${key || 'its subtask'}`, 'info')
   }
 }
 
@@ -1785,7 +1790,7 @@ export const PLANNER = {
       write(api.roadmap.undo, { session_id: visit.id, all })
         .then((result) => {
           if (roadmapVisit === visit && !visit.disabled) visit.count = result.count
-          toast(all ? 'Roadmap changes reverted' : 'Roadmap change undone')
+          toast(all ? 'Roadmap changes reverted' : 'Roadmap change undone', 'success')
         })
         .catch((error) => {
           // A conflicting history remains unavailable until a fresh visit. The
@@ -2578,7 +2583,7 @@ export const PLANNER = {
         const cov = coverEnvelope(s, e, childEnvelope(uuid))
         if (cov.start !== s || cov.end !== e) {
           patch = { ...patch, start: cov.start, end: cov.end }
-          if (!opts?.fromWiden) toast(`${id} spans its subtasks — dates adjusted`)
+          if (!opts?.fromWiden) toast(`${id} spans its subtasks — dates adjusted`, 'info')
         }
       }
     }

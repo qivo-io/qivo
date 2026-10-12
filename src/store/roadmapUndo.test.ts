@@ -159,6 +159,11 @@ describe('roadmap undo through the client store', () => {
     P.undoRoadmap(true)
     expect(requests).toHaveLength(sent)
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: true })
+    // An expired history is a notice, not a failure.
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      'Roadmap undo history expired. Leave Roadmap and return to start a new history.',
+      'info',
+    )
     P.updateIssue(task().id, { remaining: 16 })
     expect(latest().name).toBe('issues:update')
     latest().resolve(null)
@@ -198,6 +203,7 @@ describe('roadmap undo through the client store', () => {
     })
     latest().resolve({ count: 0 })
     await settled()
+    expect(showToast).toHaveBeenCalledExactlyOnceWith('Roadmap change undone', 'success')
   })
 
   it('retains history while inspecting a task and after a refused task edit, then disables it after a saved edit', async () => {
@@ -216,7 +222,7 @@ describe('roadmap undo through the client store', () => {
     latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
     expect(task().remaining).toBe(12)
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted")
+    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
     expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
 
     P.updateIssue(task().id, { remaining: 24 })
@@ -288,10 +294,14 @@ describe('roadmap undo through the client store', () => {
     expect(latest().name).toBe('roadmap:change')
     expect(P.issueById[child.id]).toMatchObject(proposed)
     expect(P.issueById[parentKey]).toMatchObject(proposed)
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      `Widened ${parentKey} to keep covering ${child.id}`,
+      'info',
+    )
     latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
 
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted")
+    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
     expect(P.issueById[child.id]).toMatchObject(original)
     expect(P.issueById[parentKey]).toMatchObject(original)
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })

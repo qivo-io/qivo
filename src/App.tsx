@@ -41,6 +41,7 @@ import {
   scopeForIssue,
   syncPlaceOf,
 } from './lib/router'
+import { type ToastTone, toastLook } from './lib/toasts'
 import {
   loadArchive,
   loadInbox,
@@ -656,23 +657,27 @@ function TopBar({
 }
 
 /* ---------- toasts ---------- */
-function ToastHost({ toasts, dismiss }) {
+type Toast = { id: number; text: string; tone?: ToastTone }
+
+function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   if (!toasts.length) return null
   return createPortal(
     <div className="planner-toast-host [position:fixed] [bottom:20px] [left:50%] [transform:translateX(-50%)] [z-index:130] [display:flex] [flex-direction:column] [gap:8px] [align-items:center]">
       {toasts.map((t) => (
         <div
           key={t.id}
+          role={toastLook(t.tone).role}
           data-floating-surface
           className="animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
         >
-          <Icon name="check" size={16} color="var(--success)" />
+          <Icon name={toastLook(t.tone).icon} size={16} color={toastLook(t.tone).color} />
           {t.text}
           <Button
             type="button"
             variant="ghost"
             size="icon"
             className="w-control-xs h-control-xs"
+            aria-label="Dismiss"
             onClick={() => dismiss(t.id)}
           >
             <Icon name="close" size={16} />
@@ -830,7 +835,7 @@ function App() {
   const replaceNextHistory = useRef(false)
   const [archiveProject, setArchiveProject] = useState(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [toasts, setToasts] = useState([])
+  const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
 
   // date rendering follows the organization's format setting; set during
@@ -839,16 +844,16 @@ function App() {
 
   // toasts
   useEffect(() => {
-    window.showToast = (text) => {
+    window.showToast = (text, tone) => {
       const id = ++toastSeq
-      setToasts((t) => [...t.slice(-2), { id, text }])
+      setToasts((t) => [...t.slice(-2), { id, text, tone }])
       setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
     }
     return () => {
       window.showToast = null
     }
   }, [])
-  const dismissToast = (id) => setToasts((t) => t.filter((x) => x.id !== id))
+  const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id))
 
   // ui persistence
   useEffect(() => {
@@ -1034,7 +1039,7 @@ function App() {
     // The rule follows the TARGET, not just the scope — a sentinel scope gives
     // every project a lane and a track, and their + buttons name them.
     if (proj && proj.type === 'meta' && proj.children.length === 0) {
-      window.showToast?.('Create a sub-project first — tasks live in sub-projects')
+      window.showToast?.('Create a sub-project first — tasks live in sub-projects', 'info')
       setModal({ kind: 'subproject', init: { parent: proj.id } })
       return
     }
@@ -1043,7 +1048,7 @@ function App() {
     // TopBar button already disables here; the palette's doesn't, so say why
     // rather than opening a dialog that could never be submitted.
     if (!target && !(P.scopeInfo(scope) || { subIds: [] }).subIds.length) {
-      window.showToast?.('Create a sub-project first — tasks live in sub-projects')
+      window.showToast?.('Create a sub-project first — tasks live in sub-projects', 'error')
       return
     }
     setModal({ kind: 'issue', init: { ...init, project: target } })
@@ -1086,7 +1091,7 @@ function App() {
     const it = P.issueById[id]
     if (!it) return
     if (it.status === 'backlog') {
-      window.showToast?.('Move this task out of Backlog before planning it on the roadmap')
+      window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
       return
     }
     const meta = P.metaOf(it.project)
@@ -1297,7 +1302,7 @@ function App() {
       () => setOpenIssue((cur) => (cur === key ? null : cur)),
     )
     if (!key) {
-      window.showToast?.('That sub-project is gone — task not created')
+      window.showToast?.('That sub-project is gone — task not created', 'error')
       return false
     }
     // Replace the phone create layer with the task's URL. Retiring its marker

@@ -41,6 +41,7 @@ import {
   UnreadDivider,
   useBottomSnap,
 } from '../components/qivo'
+import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { restoreFocus } from '../lib/focusVisibility'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
@@ -1415,27 +1416,22 @@ function IssueDetail({
   // issue numbers are org-scoped and immutable (0050), so this link is
   // permanent — it survives moves and project renames; lowercase in URLs.
   // Failure must not toast success: a false "copied" pastes stale content.
+  // Copy task ID shares this failure toast, since the open task's address
+  // also contains its key.
+  const copyFailed = () =>
+    window.showToast?.("Couldn't copy — copy the address bar instead", 'error')
   const copyLink = () => {
     // issueLink names the task's OWN organization in the path — its number
     // alone would be ambiguous for the recipient, since numbers are per-org
     const url = location.origin + issueLink(it.id)
-    const done = () => window.showToast?.(`Copied a link to ${it.key}`)
-    const fail = () => window.showToast?.("Couldn't copy — copy the address bar instead")
-    try {
-      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done, fail)
-      else fail()
-    } catch {
-      fail()
-    }
+    void copyText(url).then((ok) =>
+      ok ? window.showToast?.(`Copied a link to ${it.key}`) : copyFailed(),
+    )
   }
   const copyId = () => {
-    const done = () => window.showToast?.(`Copied ${it.key} to clipboard`)
-    try {
-      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(it.key).then(done, done)
-      else done()
-    } catch {
-      done()
-    }
+    void copyText(it.key).then((ok) =>
+      ok ? window.showToast?.(`Copied ${it.key} to clipboard`) : copyFailed(),
+    )
   }
 
   // ancestor chain (parent -> ... -> root)
@@ -2559,7 +2555,7 @@ function IssueDetail({
                           const dueWeek = it.due ? P.isoToWeek(it.due) : null
                           const scheduled = it.start != null && it.end != null
                           const rejectPastDue = () => {
-                            window.showToast?.("The end date can't be after the due date")
+                            window.showToast?.("The end date can't be after the due date", 'error')
                           }
                           // clearing either picker unschedules the issue (both weeks
                           // drop together — the pair invariant above)
@@ -2950,7 +2946,7 @@ function IssueDetail({
             setMoveOpen(false)
             if (!key) {
               // the target vanished between render and click (concurrent delete)
-              window.showToast?.("Couldn't move: the sub-project no longer exists")
+              window.showToast?.("Couldn't move: the sub-project no longer exists", 'error')
               return
             }
             const t = P.project(pid)

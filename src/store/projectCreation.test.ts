@@ -100,7 +100,7 @@ describe('project creation through the client store', () => {
     )
     await vi.waitFor(() => expect(onRefused).toHaveBeenCalledOnce())
     expect(onSaved).not.toHaveBeenCalled()
-    expect(showToast).toHaveBeenCalledExactlyOnceWith(message)
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(message, 'error')
     expect(P.project(id)).toBeUndefined()
   })
 
