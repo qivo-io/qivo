@@ -21,10 +21,17 @@ describe('duplicateNameTags', () => {
   })
 
   it('compares case the same way in every browser locale', () => {
+    // a Turkish locale lowers "I" to a dotless "ı"
+    const turkish = vi.spyOn(String.prototype, 'toLocaleLowerCase').mockImplementation(function (
+      this: string,
+    ) {
+      return this.replace(/I/g, 'ı').toLowerCase()
+    })
     const tags = duplicateNameTags([
       project({ id: 'a', name: 'Istanbul', num: 1 }),
       project({ id: 'b', name: 'istanbul', num: 2 }),
     ])
+    turkish.mockRestore()
     expect(Object.fromEntries(tags)).toEqual({ a: '#1', b: '#2' })
   })
 
