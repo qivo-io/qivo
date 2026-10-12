@@ -1191,7 +1191,7 @@ try {
   await searchInput.fill(enterTarget.key)
   await palette.locator(`[cmdk-item][data-value="${enterTarget.value}"]`).click()
   await palette.waitFor({ state: 'detached', timeout: 5000 })
-  const phoneTask = pageA.locator('[data-mobile-task-frame] [role="dialog"][aria-modal="true"]')
+  const phoneTask = pageA.locator('[data-mobile-task-frame] [role="dialog"][aria-label="Task"]')
   await phoneTask.waitFor({ state: 'visible', timeout: 10000 })
   // Probed as Blue over a painted image: with No image its window is solid.
   const phoneWindowMaterial = await phoneTask.evaluate((element) => {

@@ -122,7 +122,7 @@ export function AppUpdates() {
   // Radix dialogs hide the app root from assistive technology. Keep this
   // live region mounted outside that root before a draft dialog can open.
   return createPortal(
-    <div aria-live="polite" aria-atomic="true">
+    <div aria-live="polite" aria-atomic="true" data-top-layer>
       {state?.available && !noticeHidden && (
         <div
           data-app-update
