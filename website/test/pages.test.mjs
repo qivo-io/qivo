@@ -8,8 +8,9 @@ import { loadDocs } from '../site/docs.mjs'
 import { build } from '../site/pages.mjs'
 
 /* Published documentation URLs and heading anchors that links elsewhere may
-   use. Pages and anchors may be added. Removing or renaming one needs an alias
-   in docs/guide/pages.json, or a deliberate edit here. */
+   use. Pages and anchors may be added. Page URLs must not be removed or
+   renamed. A renamed heading keeps its old anchor through the page's
+   `aliases` in docs/guide/pages.json. */
 const compatibility = JSON.parse(
   readFileSync(new URL('./fixtures/docs-compatibility.json', import.meta.url), 'utf8'),
 )

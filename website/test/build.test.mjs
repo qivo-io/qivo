@@ -179,9 +179,33 @@ describe('website build', () => {
       '<style>@font-face{src:url(https://fonts.example/x.woff2)}</style>',
       /third-party/,
     ],
+    [
+      'index.html',
+      '<link rel="stylesheet" href="https://cdn.example/x.css">',
+      /third-party resource/,
+    ],
+    [
+      'index.html',
+      '<link rel="preload" as="font" href="//fonts.example/x.woff2">',
+      /third-party resource/,
+    ],
+    ['docs/index.html', '<img src="https://images.example/x.png" alt="">', /third-party resource/],
+    ['marketing/home.js', "import x from 'https://cdn.example/x.js'", /third-party module/],
+    ['marketing/home.js', "await import('//cdn.example/x.js')", /third-party module/],
   ])('rejects output %s with unsafe content', (file, body, message) => {
     const files = buildSite({ outDir: appOutput(), env: {} })
+    // The real pages pass, including absolute canonical links and outbound <a> links.
     expect(() => verifyOutput(files)).not.toThrow()
+    expect(() =>
+      verifyOutput(
+        new Map([
+          [
+            'a.html',
+            '<link rel="canonical" href="https://qivo.io/"><a href="https://demo.qivo.io">Demo</a>',
+          ],
+        ]),
+      ),
+    ).not.toThrow()
     expect(() => verifyOutput(new Map([...files, [file, body]]))).toThrow(message)
   })
 

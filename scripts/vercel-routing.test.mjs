@@ -40,7 +40,8 @@ const WEBSITE_FILES = [
   '/.well-known/microsoft-identity-association.json',
 ]
 const DEPLOYMENT = new Set([...APP_FILES, ...WEBSITE_FILES])
-const DEMO_DEPLOYMENT = new Set(APP_FILES)
+/** The demo build adds only a root page that sends visitors to /app. */
+const DEMO_DEPLOYMENT = new Set([...APP_FILES, '/index.html'])
 
 function compile(source) {
   let pattern = ''
@@ -166,6 +167,10 @@ describe('public demo', () => {
       status: 307,
       location: '/app',
     })
+    // Demo branch previews have other hosts and get the demo build's forwarding page.
+    expect(route(config, 'qivo-demo-git-x-techqi.vercel.app', '/', DEMO_DEPLOYMENT).file).toBe(
+      '/index.html',
+    )
     for (const path of ['/docs/', '/pricing/', '/sitemap.xml'])
       expect(route(config, DEMO_HOST, path, DEMO_DEPLOYMENT).status, path).toBe(404)
     for (const [path, served] of Object.entries(APP_PATHS))

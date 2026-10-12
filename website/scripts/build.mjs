@@ -6,8 +6,9 @@
  * 2. injects the shared stylesheet and font preloads into the homepage;
  * 3. copies only the named website assets below;
  * 4. asks search engines to skip everything outside production;
- * 5. refuses to replace an application file, to write under /assets/, or to
- *    publish third-party scripts or styles, or text that looks like a credential.
+ * 5. refuses to replace an application file, to write under /assets/, to
+ *    publish a page that loads anything from another origin, or to publish
+ *    text that looks like a credential.
  *
  * The demo build skips it, because demo.qivo.io serves only the application.
  */
@@ -49,6 +50,11 @@ const SECRET_PATTERNS = [
   /api\.vercel\.com\/v1\/integrations\/deploy\//,
 ]
 
+/** Tags whose `src`, `href`, `srcset`, `poster` or `data` the browser loads. Links in
+    `<a>` are only followed when clicked, so they may point anywhere. */
+const RESOURCE_TAGS =
+  /<(link|img|source|iframe|video|audio|embed|object|track|input|image|use)\b([^>]*)>/gi
+
 /** Replace a marker that must appear in index.html exactly once. */
 function fill(html, marker, value) {
   const parts = html.split(marker)
@@ -81,6 +87,18 @@ export function verifyOutput(files) {
         errors.push(`${file}: loads a third-party script`)
       if (/url\(\s*["']?(?:https?:)?\/\//i.test(text) || /@import\s/i.test(text))
         errors.push(`${file}: loads a third-party stylesheet resource`)
+      if (/\b(?:import\s*\(?|from)\s*["'](?:https?:)?\/\//.test(text))
+        errors.push(`${file}: imports a third-party module`)
+      for (const [, tag, attributes] of text.matchAll(RESOURCE_TAGS)) {
+        // Canonical and alternate links name a page; they load nothing.
+        if (
+          tag.toLowerCase() === 'link' &&
+          /\brel=["']?(?:canonical|alternate)\b/i.test(attributes)
+        )
+          continue
+        if (/\b(?:src|href|srcset|poster|data)=["']?(?:https?:)?\/\//i.test(attributes))
+          errors.push(`${file}: loads a third-party resource`)
+      }
     }
   }
   if (errors.length) throw new Error(`Website output rejected:\n  ${errors.join('\n  ')}`)

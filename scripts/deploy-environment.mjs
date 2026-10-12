@@ -303,8 +303,9 @@ export async function verifyCommit(config, event, github, pause = sleep) {
   )
   if (!website)
     throw new Error(
-      'This commit is from before the website moved into this repository, so releasing it ' +
-        'would leave qivo.io without its website. Publish a version that targets a newer commit.',
+      'This commit is from before the website moved into this repository. Its website comes ' +
+        'from the separate qivo-site project, which releases no longer deploy or verify. ' +
+        'Publish a version that targets a newer commit.',
     )
   // Re-running an old release, or republishing one, must not roll production back.
   // Version tags are compared because, unlike releases, they cannot be deleted.

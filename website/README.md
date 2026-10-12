@@ -34,9 +34,10 @@ sends `/` to the app. The tests run with the rest of the suite:
 - **No application files.** The build fails rather than replace a file that
   `vite build` wrote, and never writes under `/assets/`, where the application
   keeps its year-long cached bundles.
-- **No third-party requests.** Pages may not load scripts, stylesheets or
-  fonts from another origin, and the build rejects text that looks like a
-  credential. The website runs on the same origin as the signed-in app.
+- **No third-party requests.** Pages may not load scripts, modules,
+  stylesheets, fonts, images or frames from another origin, and the build
+  rejects text that looks like a credential. Plain links may point anywhere.
+  The website runs on the same origin as the signed-in app.
 - **Indexing.** Only production (`QIVO_ENVIRONMENT=production`) may be
   indexed. Every other build marks pages `noindex` and disallows crawling.
 - **Origin.** Canonical links and the sitemap use `SITE_ORIGIN`. Production
@@ -61,4 +62,6 @@ and licenses are listed in `public/marketing/README.md`.
 The guide is written in `docs/guide/`. See
 [publishing documentation](../docs/documentation.md) for its rules.
 `test/fixtures/docs-compatibility.json` lists published page URLs and
-anchors. Removing or renaming one needs an alias in `docs/guide/pages.json`.
+anchors. Never remove or rename a published page slug. To rename a published
+subsection heading, keep its old anchor in that page's `aliases` in
+`docs/guide/pages.json`.

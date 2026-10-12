@@ -32,8 +32,14 @@ export function finishDemoBuild(directory = 'dist') {
       }
     }
   }
+  // vercel.json redirects demo.qivo.io's `/` to `/app` first. Demo branch previews use
+  // other hosts, so this page sends them there too.
+  writeFileSync(
+    join(directory, 'index.html'),
+    '<!doctype html><html><head><meta http-equiv="refresh" content="0;url=/app"><script>location.replace(`/app${location.search}${location.hash}`)</script></head></html>\n',
+  )
   visit(directory)
-  // vercel.json redirects demo.qivo.io's `/` to `/app`; the demo hides the operator console.
+  // The demo hides the operator console.
   writeFileSync(join(directory, 'admin.html'), readFileSync(join(directory, 'app.html'), 'utf8'))
   writeFileSync(join(directory, 'robots.txt'), 'User-agent: *\nDisallow: /\n')
   const guidance =

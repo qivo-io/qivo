@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { extname, join, resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { type Connect, defineConfig, loadEnv } from 'vite'
@@ -5,20 +7,30 @@ import { demoProxy } from './scripts/demo-proxy.mjs'
 
 /* Match the app and operator console rewrites in vercel.json. The website at
    `/` is built by website/scripts/build.mjs after `vite build`, so the dev
-   server, which has no website, sends `/` to the app. `vite preview` serves
-   the built website there instead. */
+   server, which has no website, sends `/` to the app. `vite preview` passes
+   its output directory as `website`, serves the built website from it and,
+   like Vercel, serves a directory's index.html for a path without a trailing
+   slash. */
 const appRewrite =
-  (demo = false, website = false): Connect.NextHandleFunction =>
+  (demo = false, website?: string): Connect.NextHandleFunction =>
   (req, res, next) => {
     const [path, query] = (req.url || '').split(/\?(.*)/s)
+    const search = query === undefined ? '' : `?${query}`
     if (path === '/' && !website) {
       res.statusCode = 307
-      res.setHeader('Location', query === undefined ? '/app' : `/app?${query}`)
+      res.setHeader('Location', `/app${search}`)
       res.end()
       return
     }
     if (path === '/app' || path.indexOf('/app/') === 0) req.url = '/app.html'
     else if (path === '/admin' || path === '/admin/') req.url = demo ? '/app.html' : '/admin.html'
+    else if (
+      website &&
+      !path.endsWith('/') &&
+      !extname(path) &&
+      existsSync(join(website, path, 'index.html'))
+    )
+      req.url = `${path}/index.html${search}`
     next()
   }
 
@@ -36,6 +48,9 @@ export default defineConfig(({ mode, command }) => {
     // The regular app and isolated demo run together. Their different config
     // hashes must not invalidate each other's optimized browser dependencies.
     cacheDir: demo ? 'node_modules/.vite-demo' : 'node_modules/.vite',
+    // No single-page fallback: unknown paths return 404, as on Vercel, instead
+    // of the website's homepage.
+    appType: 'mpa',
     define: { __QIVO_BUILD_ID__: JSON.stringify(buildId) },
     server: {
       allowedHosts: [],
@@ -62,7 +77,8 @@ export default defineConfig(({ mode, command }) => {
           server.middlewares.use(appRewrite(demo))
         },
         configurePreviewServer(server) {
-          server.middlewares.use(appRewrite(demo, !demo))
+          const output = resolve(server.config.root, server.config.build.outDir)
+          server.middlewares.use(appRewrite(demo, demo ? undefined : output))
         },
       },
     ],
