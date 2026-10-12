@@ -29,6 +29,7 @@ import { lazyFromModule } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
+import { announce } from './lib/announce'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import {
   buildPath,
@@ -659,16 +660,29 @@ function TopBar({
 /* ---------- toasts ---------- */
 type Toast = { id: number; text: string; tone?: ToastTone }
 
+/* The visible toasts. A screen reader hears them through announce() (see
+   showToast), so they carry no live role and are not read twice. */
 function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   if (!toasts.length) return null
   return createPortal(
-    <div className="planner-toast-host [position:fixed] [bottom:20px] [left:50%] [transform:translateX(-50%)] [z-index:130] [display:flex] [flex-direction:column] [gap:8px] [align-items:center]">
+    <div
+      data-top-layer
+      className="planner-toast-host [position:fixed] [bottom:20px] [left:50%] [transform:translateX(-50%)] [z-index:130] [display:flex] [flex-direction:column] [gap:8px] [align-items:center]"
+    >
       {toasts.map((t) => (
         <div
           key={t.id}
-          role={toastLook(t.tone).role}
           data-floating-surface
-          className="animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
+          // A modal layer below turns off pointer events on <body>, and a press
+          // here would count as an outside press that closes it. Take the press
+          // so Dismiss closes only the toast, as the update notice does. While
+          // such a layer is open, a press also leaves focus inside it; otherwise
+          // the text stays selectable.
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => {
+            if (document.body.style.pointerEvents === 'none') event.preventDefault()
+          }}
+          className="pointer-events-auto animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
         >
           <Icon name={toastLook(t.tone).icon} size={16} color={toastLook(t.tone).color} />
           {t.text}
@@ -678,6 +692,8 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
             size="icon"
             className="w-control-xs h-control-xs"
             aria-label="Dismiss"
+            // leave focus in the dialog or field the user was in
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => dismiss(t.id)}
           >
             <Icon name="close" size={16} />
@@ -846,6 +862,7 @@ function App() {
   useEffect(() => {
     window.showToast = (text, tone) => {
       const id = ++toastSeq
+      announce(text, toastLook(tone).politeness)
       setToasts((t) => [...t.slice(-2), { id, text, tone }])
       setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
     }

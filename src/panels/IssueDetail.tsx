@@ -49,6 +49,7 @@ import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
 import { useUpdateBlocker } from '../lib/updateSafety'
+import { useHideOthers } from '../lib/useHideOthers'
 import { useMobile } from '../lib/useMobile'
 import '../styles/mobile-issue.css'
 import {
@@ -1222,6 +1223,14 @@ function IssueDetail({
     P.updateIssue(it.id, patch)
   }
   const open = !!it
+  const dialogRef = useRefID<HTMLDivElement>(null)
+  // Phones move focus into the window and wall off the page (below). The
+  // desktop window leaves focus where it was, so it hides the page only while
+  // focus is inside, as aria-modal did. Both keep the layers the loop keeps.
+  useHideOthers(dialogRef, open && modalActive && (!embedded || mobile), {
+    keep: '[data-focus-window], [data-modal-shell]',
+    whileFocusInside: !mobile,
+  })
   useEffectID(() => {
     if (!mobile || !open || !modalActive) return
     const frame = mobileFrameRef.current
@@ -1230,7 +1239,8 @@ function IssueDetail({
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     // The Inbox task lives inside main. Isolate sibling branches on the way
     // to body, rather than making its own ancestor inert. Menus and dialogs
-    // created later in portals remain available above the task.
+    // created later in portals remain available above the task, and so do
+    // the announcer, the toasts and the update notice ([data-top-layer]).
     const outside = new Map<HTMLElement, boolean>()
     let branch: HTMLElement = frame
     while (branch.parentElement) {
@@ -1238,7 +1248,7 @@ function IssueDetail({
         if (
           sibling !== branch &&
           sibling instanceof HTMLElement &&
-          !sibling.matches('[data-focus-window], [data-modal-shell]')
+          !sibling.matches('[data-focus-window], [data-modal-shell], [data-top-layer]')
         ) {
           outside.set(sibling, sibling.inert)
           sibling.inert = true
@@ -1989,11 +1999,14 @@ function IssueDetail({
       >
         {/* the dialog IS the window: one card, the shared chrome on top and the
           discussion + details columns below */}
-        {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-modal is set only on the branch where role is dialog — Biome cannot evaluate the paired ternaries */}
+        {/* Open as a dialog, the page behind is hidden from assistive
+            technology (useHideOthers) rather than marked off with aria-modal,
+            which would also silence the announcer for toasts. */}
+        {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: role is dialog or region, and both take aria-label — Biome cannot evaluate the ternary */}
         <div
+          ref={dialogRef}
           role={embedded && !mobile ? 'region' : 'dialog'}
           data-floating-surface={embedded && !mobile ? undefined : ''}
-          aria-modal={embedded && !mobile ? undefined : 'true'}
           aria-hidden={!open ? true : undefined}
           aria-label="Task"
           data-issue-design="alignment"

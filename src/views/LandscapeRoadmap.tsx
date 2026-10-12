@@ -2,6 +2,7 @@ import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { LandscapeContext } from '@/lib/landscape'
+import { useHideOthers } from '@/lib/useHideOthers'
 import { useMobileBackLayer } from '@/lib/useMobile'
 import { useAppearance } from '../AppearanceProvider'
 import { Icon } from '../components/qivo'
@@ -25,6 +26,9 @@ export function LandscapeRoadmap({
   const [size, setSize] = useState(() => ({ width: innerWidth, height: innerHeight }))
   const [host, setHost] = useState<HTMLDivElement | null>(null)
   const frameRef = useRef<HTMLDivElement>(null)
+  // the page behind is hidden from assistive technology while this is open;
+  // aria-modal would also silence the announcer (lib/announce)
+  useHideOthers(frameRef, true)
   const closeLayer = useMobileBackLayer(true, onClose, true)
   const closeRef = useRef(closeLayer)
   closeRef.current = closeLayer
@@ -54,7 +58,6 @@ export function LandscapeRoadmap({
       <div
         ref={frameRef}
         role="dialog"
-        aria-modal="true"
         aria-label="Landscape timeline and team"
         data-roadmap-landscape={rotated ? 'rotated' : 'natural'}
         className="mobile-roadmap-landscape"
