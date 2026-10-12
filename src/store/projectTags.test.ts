@@ -20,6 +20,14 @@ describe('duplicateNameTags', () => {
     expect(Object.fromEntries(tags)).toEqual({ a: '#1', b: '#4' })
   })
 
+  it('compares case the same way in every browser locale', () => {
+    const tags = duplicateNameTags([
+      project({ id: 'a', name: 'Istanbul', num: 1 }),
+      project({ id: 'b', name: 'istanbul', num: 2 }),
+    ])
+    expect(Object.fromEntries(tags)).toEqual({ a: '#1', b: '#2' })
+  })
+
   it('tags sub-projects only against siblings under the same parent', () => {
     const tags = duplicateNameTags([
       project({ id: 's1', name: 'Design', num: 5, parent: 'p1' }),
