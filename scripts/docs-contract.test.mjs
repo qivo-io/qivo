@@ -74,6 +74,19 @@ describe('public documentation contract', () => {
     ])
   })
 
+  it('reports aliases that are not an object and still checks the page', () => {
+    const errors = fixture(({ manifest, page }) => {
+      const first = manifest.pages[0]
+      appendFileSync(page(first.file), '\n## Renamed\n\n[x](./missing.md)\n')
+      appendFileSync(page('overview.md'), `\n[Renamed](./${first.file}#renamed)\n`)
+      first.aliases = null
+    })
+    expect(errors).toEqual([
+      expect.stringContaining('Heading aliases must be an object'),
+      expect.stringContaining('Broken internal page link "./missing.md"'),
+    ])
+  })
+
   it.each([
     [
       'an unsafe page file',

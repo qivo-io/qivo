@@ -33,6 +33,10 @@ export function render(
   const seenAliases = new Set()
   const aliasIds = new Set()
   const valid = {}
+  if (!aliases || typeof aliases !== 'object' || Array.isArray(aliases)) {
+    onError('Heading aliases must be an object that maps heading IDs to arrays')
+    aliases = {}
+  }
   for (const [target, ids] of Object.entries(aliases)) {
     valid[target] = []
     if (!Array.isArray(ids)) {
