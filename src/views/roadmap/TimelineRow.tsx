@@ -2,7 +2,7 @@ import { memo, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { Icon } from '../../components/qivo'
+import { Icon, ProjectName } from '../../components/qivo'
 import { type RoadmapEdge, roadmapEdges } from '../../lib/roadmapEdges'
 import { type IssueVM, P, type ProjectVM } from '../../store/planner'
 import type { StoreVersion } from '../../store/updates'
@@ -254,7 +254,9 @@ function TimelineRowView({
                   className={`h-full min-w-0 flex-1 justify-start rounded-none border-0 pr-0 text-left ${isSub ? 'pl-[58px] text-base font-medium' : 'pl-[52px] text-md font-semibold'}`}
                   variant="ghost"
                 >
-                  <span className="truncate">{row.proj.name}</span>
+                  <span className="truncate">
+                    <ProjectName project={row.proj} />
+                  </span>
                 </Button>
                 {remH > 0 && (
                   <HoverTooltip content={`${remH}h remaining on unfinished tasks`}>

@@ -13,7 +13,7 @@ import {
 } from '../../../convex/lib/review'
 import { navRowDiv } from '../../components/navRow'
 import { ProjectAccessEditor } from '../../components/ProjectAccessEditor'
-import { Icon, MenuItem, Popover } from '../../components/qivo'
+import { Icon, MenuItem, Popover, ProjectName } from '../../components/qivo'
 import {
   FieldHint,
   PageTitle,
@@ -91,7 +91,7 @@ export function OrgProjectsPage({
             }}
             className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
           >
-            {m.name}
+            <ProjectName project={m} />
           </Button>
           <Popover width={196} align="right" button={menuButton('Project actions')}>
             {(close) => (
@@ -146,7 +146,7 @@ export function OrgProjectsPage({
                 }}
                 className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
               >
-                {sp.name}
+                <ProjectName project={sp} wrap />
               </Button>
               <Popover width={206} align="right" button={menuButton('Sub-project actions')}>
                 {(close) => (
@@ -279,10 +279,13 @@ export function ArchivedProjectsPage() {
                 <div className="[display:flex] [align-items:center] [gap:8px]">
                   <div className="[flex:1] [min-width:0]">
                     <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                      {r.name}
+                      <ProjectName project={r} />
                       {r.type !== 'meta' && (
                         <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:500] [color:var(--text-2)]">
-                          sub-project{r.parentName ? ` of ${r.parentName}` : ''}
+                          sub-project
+                          {r.parentName && r.parent
+                            ? ` of ${P.projectLabel({ id: r.parent, name: r.parentName })}`
+                            : ''}
                         </span>
                       )}
                     </div>
@@ -348,7 +351,7 @@ export function ArchivedProjectsPage() {
                           }}
                           className="inline-flex h-6 items-center [font-size:var(--fs-xs)] [padding:0_8px] [border-radius:var(--r-sm)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
                         >
-                          {k.name}
+                          <ProjectName project={k} />
                         </span>
                       </HoverTooltip>
                     ))}
@@ -617,8 +620,8 @@ export function ProjectPage({
                 }}
                 variant="unstyled"
               >
-                <span className="[font-size:var(--fs-base)] [font-weight:500] [flex:1]">
-                  {sp.name}
+                <span className="[font-size:var(--fs-base)] [font-weight:500] [flex:1] [min-width:0]">
+                  <ProjectName project={sp} />
                 </span>
                 <Icon name="chevronRight" size={16} color="var(--text-2)" />
               </Button>

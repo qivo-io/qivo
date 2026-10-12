@@ -9,7 +9,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
-import { IssueKey, StatusDot } from '../components/qivo'
+import { IssueKey, ProjectName, ProjectNameOf, StatusDot } from '../components/qivo'
 import { restoreFocus } from '../lib/focusVisibility'
 import { createPaletteSearch } from '../lib/paletteSearch'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -110,7 +110,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
                 <span className="min-w-0 flex-1 truncate text-base text-text-1">{issue.title}</span>
                 {!P.isGroup(issue) && <StatusDot status={issue.status} />}
                 <span className="max-w-[120px] truncate text-xs text-text-3">
-                  {P.project(issue.project)?.name}
+                  <ProjectNameOf id={issue.project} />
                 </span>
               </CommandItem>
             ))}
@@ -121,15 +121,21 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
             heading="Projects"
             className="[&_[cmdk-group-heading]]:text-sm [&_[cmdk-group-heading]]:text-text-1 [&_[cmdk-group-heading]]:tracking-normal"
           >
-            {projects.map(({ project, label, sub }) => (
+            {projects.map(({ project, sub }) => (
               <CommandItem
                 key={project.id}
                 value={`project-${project.id}`}
                 className="gap-2 p-2 data-[selected=true]:bg-primary-soft"
                 onSelect={() => run(() => ctx.setScope(project.id))}
               >
-                <span className="min-w-0 flex-1 truncate text-base text-text-1">{label}</span>
-                {sub && <span className="text-xs text-text-3">{sub}</span>}
+                <span className="min-w-0 flex-1 truncate text-base text-text-1">
+                  <ProjectName project={project} />
+                </span>
+                {sub && (
+                  <span className="text-xs text-text-3">
+                    {project.parent ? P.projectLabel({ id: project.parent, name: sub }) : sub}
+                  </span>
+                )}
               </CommandItem>
             ))}
           </CommandGroup>

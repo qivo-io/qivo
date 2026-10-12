@@ -4,7 +4,7 @@ import React, { useState as useStateK } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { boardDropPatch, groupBoardAssignees, groupBoardCell } from '@/lib/boardGroups'
-import { Avatar, EmptyState, Icon, StatusDot } from '../components/qivo'
+import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import {
   type IssueFilters,
@@ -302,7 +302,9 @@ function LaneHeader({
           className="-mx-1 h-control-xs min-w-0 justify-start rounded-sm border-0 px-1 text-md font-semibold"
           variant="ghost"
         >
-          <span className="truncate">{name}</span>
+          <span className="truncate">
+            <ProjectName project={proj} />
+          </span>
         </Button>
       ) : (
         <HoverTooltip content={name}>
@@ -520,9 +522,9 @@ function Kanban({
   const cardLabel = (it, withOwner) => {
     const p = P.project(it.project)
     if (!p) return ''
-    if (!withOwner) return p.name
+    if (!withOwner) return P.projectLabel(p)
     const m = P.metaOf(it.project)
-    return m && m.id !== p.id ? `${m.name}, ${p.name}` : p.name
+    return m && m.id !== p.id ? `${P.projectLabel(m)}, ${P.projectLabel(p)}` : P.projectLabel(p)
   }
 
   // Group only after scope, filters, lane and status have selected the cell.
@@ -728,7 +730,9 @@ function Kanban({
                         className="-mx-1 h-control-xs min-w-0 justify-start rounded-sm border-0 px-1 text-md font-semibold"
                         variant="ghost"
                       >
-                        <span className="truncate">{proj.name}</span>
+                        <span className="truncate">
+                          <ProjectName project={proj} />
+                        </span>
                       </Button>
                       <div className="[flex:1]" />
                       {/* the one create affordance left in a sentinel scope, so it

@@ -14,7 +14,7 @@ import {
   ProjectDirectory,
 } from './components/MobileWorkspace'
 import { navRow, navRowDiv } from './components/navRow'
-import { Icon, MenuItem, Popover, Seg } from './components/qivo'
+import { Icon, MenuItem, Popover, ProjectName, Seg } from './components/qivo'
 import { ViewBoundary } from './components/ViewBoundary'
 import { ViewFilters } from './components/viewFilters'
 import {
@@ -301,7 +301,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                     }}
                     className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
                   >
-                    {meta.name}
+                    <ProjectName project={meta} />
                   </Button>
                   {/* Keep one trailing action target so ordinary project names
                     fit the rail. The menu retains New sub-project for leads. */}
@@ -384,7 +384,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                         }}
                         className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
                       >
-                        {sp.name}
+                        <ProjectName project={sp} wrap />
                       </Button>
                       <Popover
                         width={206}

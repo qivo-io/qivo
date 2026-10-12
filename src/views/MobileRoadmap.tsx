@@ -69,7 +69,7 @@ export function MobileRoadmap({
       <Icon name="diamond" size={16} color={P.MILESTONE_COLOR} />
       <span className="mobile-roadmap-row-body">
         <strong>{m.name}</strong>
-        <span>{P.project(m.project)?.name}</span>
+        <span>{P.projectLabelOf(m.project)}</span>
         <span>
           {P.fmtDate(P.weekToDate(m.week))}, {P.weekNumLabel(m.week)}
         </span>
@@ -190,8 +190,8 @@ export function MobileRoadmap({
             const meta = P.metaOf(it.project)
             const context =
               info.wide && meta && meta.id !== project?.id
-                ? `${meta.name}, ${project?.name || ''}`
-                : project?.name
+                ? `${P.projectLabel(meta)}, ${project ? P.projectLabel(project) : ''}`
+                : project && P.projectLabel(project)
             return (
               <Button
                 key={it.id}

@@ -82,7 +82,7 @@ function ScopeCtl({ scope, onPick }: { scope: SyncScope; onPick: (key: string) =
             label: t.name,
             icon: <Icon name="people" size={14} />,
           })),
-          ...projects.map((p) => ({ value: `project:${p.id}`, label: p.name })),
+          ...projects.map((p) => ({ value: `project:${p.id}`, label: P.projectLabel(p) })),
         ]}
         onChange={onPick}
       />

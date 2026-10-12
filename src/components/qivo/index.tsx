@@ -504,6 +504,41 @@ function IssueKey({ id, dim }: { id: string; dim?: boolean }) {
     </span>
   )
 }
+/** A project's name, followed by its number when another project shown
+    alongside it has the same name (P.projectTag). By default the name
+    truncates and the number stays visible; `wrap` lets a long name wrap.
+    Plain-text places such as <option> use P.projectLabel instead. */
+function ProjectName({ project, wrap }: { project: { id: string; name: string }; wrap?: boolean }) {
+  const tag = P.projectTag(project.id)
+  if (!tag) return <>{project.name}</>
+  const number = (gap: string) => (
+    <span
+      data-project-tag
+      className={cn(gap, 'shrink-0 whitespace-nowrap !font-mono text-xs font-normal text-text-2')}
+    >
+      {tag}
+    </span>
+  )
+  // a real space keeps "Test #4" apart for screen readers and lets it wrap
+  if (wrap) {
+    return (
+      <>
+        {project.name} {number('')}
+      </>
+    )
+  }
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-baseline align-bottom">
+      <span className="min-w-0 truncate">{project.name}</span>
+      {number('ml-1.5')}
+    </span>
+  )
+}
+/** ProjectName for a project id; nothing when the project is not loaded. */
+function ProjectNameOf({ id }: { id: string | null | undefined }) {
+  const project = P.project(id)
+  return project ? <ProjectName project={project} /> : null
+}
 function Kbd({ children }: { children?: ReactNode }) {
   return (
     <span className="!font-mono [font-size:var(--fs-xs)] [background:var(--surface-3)] [border:1px_solid_var(--border)] [color:var(--text-3)] [padding:1px_5px] [border-radius:var(--r-sm)] [line-height:1.4]">
@@ -1549,6 +1584,8 @@ export {
   Popover,
   PriorityIcon,
   ProgressBar,
+  ProjectName,
+  ProjectNameOf,
   Seg,
   StatusDot,
   UnreadDivider,

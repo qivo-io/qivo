@@ -35,6 +35,7 @@ import {
   Popover,
   PriorityIcon,
   ProgressBar,
+  ProjectName,
   Seg,
   StatusDot,
   UnreadDivider,
@@ -105,7 +106,7 @@ function MiniIssueRow({
             {it.title}
           </span>
           <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] [max-width:100%] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-            {proj.name}
+            <ProjectName project={proj} />
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-3">
@@ -1806,7 +1807,7 @@ function IssueDetail({
                       }}
                       className="max-w-60 overflow-hidden text-ellipsis whitespace-nowrap rounded-sm px-1 py-0.5 text-sm text-text-3 no-underline hover:bg-hover hover:text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
                     >
-                      {p.name}
+                      <ProjectName project={p} />
                     </a>
                   </HoverTooltip>
                 </React.Fragment>
