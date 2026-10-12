@@ -511,26 +511,26 @@ function IssueKey({ id, dim }: { id: string; dim?: boolean }) {
 function ProjectName({ project, wrap }: { project: { id: string; name: string }; wrap?: boolean }) {
   const tag = P.projectTag(project.id)
   if (!tag) return <>{project.name}</>
-  const number = (
+  const number = (gap: string) => (
     <span
       data-project-tag
-      className="ml-1.5 shrink-0 whitespace-nowrap !font-mono text-xs font-normal text-text-2"
+      className={cn(gap, 'shrink-0 whitespace-nowrap !font-mono text-xs font-normal text-text-2')}
     >
       {tag}
     </span>
   )
+  // a real space keeps "Test #4" apart for screen readers and lets it wrap
   if (wrap) {
     return (
       <>
-        {project.name}
-        {number}
+        {project.name} {number('')}
       </>
     )
   }
   return (
     <span className="inline-flex min-w-0 max-w-full items-baseline align-bottom">
       <span className="min-w-0 truncate">{project.name}</span>
-      {number}
+      {number('ml-1.5')}
     </span>
   )
 }
