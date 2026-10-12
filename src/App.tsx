@@ -123,7 +123,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
       <div className="planner-navigation">
         {/* The wordmark uses the same lowercase spelling as the website. */}
         <div className="planner-brand [padding:20px_20px_0]">
-          <span className="wordmark [font-size:29px] [line-height:1]">qivo</span>
+          <span className="wordmark [font-size:27px] [line-height:1]">qivo</span>
         </div>
         {/* Home organization identity; guest-only accounts can create their own. */}
         <div className="planner-org [padding:16px_12px_8px]">
