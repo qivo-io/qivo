@@ -66,17 +66,6 @@ const READ_ONLY = 'Read-only project access'
 
 const firstName = (name: string) => name.split(' ')[0]
 
-/** Where a task lives: the sub-project, after its project when they differ. */
-export function whereLabel(it: IssueVM) {
-  const sub = P.project(it.project)
-  const meta = P.metaOf(it.project)
-  return meta && sub && meta.id !== sub.id
-    ? `${P.projectLabel(meta)}, ${P.projectLabel(sub)}`
-    : sub
-      ? P.projectLabel(sub)
-      : ''
-}
-
 /** A person's week as the Team strip reads it: org-wide hours (P.weekLoadOf)
     over plannable hours, in the strip's colour rule. */
 export function weekFigure(u: UserVM): LoadFigure {
@@ -626,7 +615,7 @@ export function DoneItem({
       <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-text-3">
         <IssueKey id={it.key} dim />
         <span className="truncate">
-          {P.projectLabelOf(it.project)}, {dayLabel(it.doneAt ?? ctx.now, ctx.now)}
+          <ProjectNameOf id={it.project} />, {dayLabel(it.doneAt ?? ctx.now, ctx.now)}
           {kind === 'reviewed' && ', reviewed'}
         </span>
       </div>

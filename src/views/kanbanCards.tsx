@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
-import { Icon, PausedMark, PriorityIcon } from '@/components/qivo'
+import { Icon, PausedMark, PriorityIcon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
-import { type IssueVM, P } from '@/store/planner'
+import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 
 type CardActions = {
   onOpen: (id: string) => void
@@ -66,7 +66,7 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
 /** Parent context uses a small inline portrait, leaving the larger right-hand
  * portrait exclusively for the child whose row can be moved independently.
  * A group's owner is always its assignee. */
-function ParentHeading({ it, projectLabel }: { it: IssueVM; projectLabel: string }) {
+function ParentHeading({ it, place }: { it: IssueVM; place: ProjectPlace | null }) {
   const owner = P.user(it.owner)
   return (
     <span className="flex w-full min-w-0 flex-col gap-2 p-2">
@@ -91,9 +91,11 @@ function ParentHeading({ it, projectLabel }: { it: IssueVM; projectLabel: string
         <PriorityIcon priority={it.priority} size={11} />
         <DueDate it={it} />
       </span>
-      {projectLabel && (
-        <HoverTooltip content={projectLabel}>
-          <span className="truncate text-xs text-text-2">{projectLabel}</span>
+      {place && (
+        <HoverTooltip content={P.placeLabel(place)}>
+          <span className="truncate text-xs text-text-2">
+            <ProjectName {...place} />
+          </span>
         </HoverTooltip>
       )}
     </span>
@@ -106,7 +108,7 @@ function ParentHeading({ it, projectLabel }: { it: IssueVM; projectLabel: string
  * gutter as its own padding, so its hover fill reaches the card's left edge. */
 function TaskRow({
   it,
-  projectLabel,
+  place,
   parentHeader = false,
   actualIssue = true,
   indented = false,
@@ -116,7 +118,7 @@ function TaskRow({
   dragId,
 }: CardActions & {
   it: IssueVM
-  projectLabel: string
+  place: ProjectPlace | null
   parentHeader?: boolean
   actualIssue?: boolean
   indented?: boolean
@@ -153,7 +155,7 @@ function TaskRow({
       >
         {actualIssue && <DelayBanner it={it} />}
         {parentHeader ? (
-          <ParentHeading it={it} projectLabel={projectLabel} />
+          <ParentHeading it={it} place={place} />
         ) : (
           <span className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_28px] items-center gap-x-2 p-2">
             <Button
@@ -176,10 +178,10 @@ function TaskRow({
                     {remaining}h
                   </span>
                 )}
-                {projectLabel && (
-                  <HoverTooltip content={projectLabel}>
+                {place && (
+                  <HoverTooltip content={P.placeLabel(place)}>
                     <span tabIndex={-1} className="max-w-full truncate">
-                      {projectLabel}
+                      <ProjectName {...place} />
                     </span>
                   </HoverTooltip>
                 )}
@@ -197,21 +199,21 @@ function TaskRow({
 
 function BoardCard({
   group,
-  projectLabel,
+  place,
   dimmed,
   ...actions
 }: CardActions & {
   group: BoardCellGroup<IssueVM>
-  projectLabel: (issue: IssueVM) => string
+  place: (issue: IssueVM) => ProjectPlace | null
   dimmed: boolean
 }) {
   // Repeated child project labels already name this shared project. Keep the
   // parent's label when it has no local children or belongs to another project.
-  const parentProjectLabel =
+  const parentPlace =
     group.parent &&
     !(group.issues.length > 0 && group.issues.every((it) => it.project === group.parent.project))
-      ? projectLabel(group.parent)
-      : ''
+      ? place(group.parent)
+      : null
   return (
     <div
       data-parent-card={group.parent?.id}
@@ -223,7 +225,7 @@ function BoardCard({
           it={ancestor}
           parentHeader
           actualIssue={false}
-          projectLabel={projectLabel(ancestor)}
+          place={place(ancestor)}
           {...actions}
         />
       ))}
@@ -232,7 +234,7 @@ function BoardCard({
           it={group.parent}
           parentHeader
           actualIssue={false}
-          projectLabel={parentProjectLabel}
+          place={parentPlace}
           {...actions}
         />
       )}
@@ -251,12 +253,7 @@ function BoardCard({
                 : undefined
             }
           >
-            <TaskRow
-              it={it}
-              projectLabel={projectLabel(it)}
-              indented={!!group.parent}
-              {...actions}
-            />
+            <TaskRow it={it} place={place(it)} indented={!!group.parent} {...actions} />
           </div>
         ))}
       </div>

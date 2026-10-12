@@ -80,15 +80,17 @@ describe('project labels in the store', () => {
     vi.unstubAllGlobals()
   })
 
-  async function boot(names: { name: string; archived?: boolean }[]) {
+  // parent is the 1-based number of an earlier entry, making this a sub-project
+  async function boot(names: { name: string; archived?: boolean; parent?: number }[]) {
     vi.resetModules()
     vi.stubGlobal('window', { showToast: vi.fn() })
     const snap: Snapshot = fixture()
     const org = snap.orgs[0].id
-    snap.projects = names.map(({ name, archived }, i) => ({
+    snap.projects = names.map(({ name, archived, parent }, i) => ({
       id: `p${i + 1}`,
       org_id: org,
-      type: 'meta',
+      type: parent ? 'project' : 'meta',
+      ...(parent ? { parent_id: `p${parent}` } : {}),
       key: `K${i + 1}`,
       num: i + 1,
       name,
@@ -116,6 +118,27 @@ describe('project labels in the store', () => {
     expect(P.projectLabelOf('p3')).toBe('Roadmap')
     expect(P.projectTag('p3')).toBeNull()
     expect(P.projectLabelOf('missing')).toBe('')
+  })
+
+  it('names a sub-project after its project, with every shared name numbered', async () => {
+    const P = await boot([
+      { name: 'Test' },
+      { name: 'Test' },
+      { name: 'Design', parent: 1 },
+      { name: 'Design', parent: 1 },
+      { name: 'Launch', parent: 2 },
+    ])
+    const sub = P.projectPlace('p3')
+    expect(sub?.owner?.id).toBe('p1')
+    expect(sub && P.placeLabel(sub)).toBe('Test #1, Design #3')
+    const unique = P.projectPlace('p5')
+    expect(unique && P.placeLabel(unique)).toBe('Test #2, Launch')
+    // without the owner, or for a top-level project, the project stands alone
+    const alone = P.projectPlace('p4', false)
+    expect(alone?.owner).toBeNull()
+    expect(alone && P.placeLabel(alone)).toBe('Design #4')
+    expect(P.projectPlace('p1')?.owner).toBeNull()
+    expect(P.projectPlace('missing')).toBeNull()
   })
 
   it('does not tag an active project because of an archived namesake', async () => {

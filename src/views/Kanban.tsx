@@ -10,6 +10,7 @@ import {
   type IssueFilters,
   type IssueVM,
   P,
+  type ProjectPlace,
   type ProjectVM,
   type ScopeInfo,
 } from '../store/planner'
@@ -519,17 +520,11 @@ function Kanban({
      PROJECT when nothing else on the board names that (the pooled board across
      all projects). Lanes and side-boards name their own group, so they ask for
      the short form. */
-  const cardLabel = (it, withOwner) => {
-    const p = P.project(it.project)
-    if (!p) return ''
-    if (!withOwner) return P.projectLabel(p)
-    const m = P.metaOf(it.project)
-    return m && m.id !== p.id ? `${P.projectLabel(m)}, ${P.projectLabel(p)}` : P.projectLabel(p)
-  }
+  const cardPlace = (it: IssueVM, withOwner: boolean) => P.projectPlace(it.project, withOwner)
 
   // Group only after scope, filters, lane and status have selected the cell.
   // Keep the surrounding column counts and empty-state geometry unchanged.
-  function renderCards(items, projectLabel, over: boolean) {
+  function renderCards(items, place: (it: IssueVM) => ProjectPlace | null, over: boolean) {
     // Recede destination cards as a whole so the column reads as the target.
     // Keep the source cell unchanged, including its dragged row's own opacity.
     const dimmed = over && !items.some((it) => it.id === dragId)
@@ -537,7 +532,7 @@ function Kanban({
       <BoardCard
         key={group.key}
         group={group}
-        projectLabel={projectLabel}
+        place={place}
         dimmed={dimmed}
         onOpen={onOpenIssue}
         onDragStart={setDragId}
@@ -788,7 +783,7 @@ function Kanban({
                             <div className="[display:flex] [flex-direction:column] [gap:8px] [min-height:8px]">
                               {renderCards(
                                 items,
-                                (it) => (wide ? cardLabel(it, false) : ''),
+                                (it) => (wide ? cardPlace(it, false) : null),
                                 !!dragId && dragOver === dkey,
                               )}
                             </div>
@@ -840,7 +835,8 @@ function Kanban({
   const headed = (lane: Lane) => !!lane.proj || lane.owner !== undefined
   // A sub-project heading already names the card's home; a project heading
   // still owes the sub-project. Pooled and assignee lanes owe both when wide.
-  const laneLabel = (it) => (swimlanes ? (wide ? cardLabel(it, false) : '') : cardLabel(it, wide))
+  const lanePlace = (it: IssueVM) =>
+    swimlanes ? (wide ? cardPlace(it, false) : null) : cardPlace(it, wide)
 
   /* One panel with nothing to head it — the pooled layout, or a scope that IS
      a single sub-project — has no sticky heading to carry its lid. The
@@ -1005,7 +1001,7 @@ function Kanban({
                         >
                           {renderCards(
                             lane.items.filter((i) => i.status === s.id).sort(byPrio),
-                            laneLabel,
+                            lanePlace,
                             !!dragId && dragOver === laneKey,
                           )}
                         </ColumnStackInline>
