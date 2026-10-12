@@ -41,6 +41,7 @@ import { byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { type GrantLevel, vGrantLevel, vProjectType } from './lib/enums'
 import { badRequest, forbidden, notFound, orgMutation, require, rule } from './lib/functions'
+import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from './lib/projectKeys'
 import { logActivity } from './model/activity'
 import { deleteProjectDeep } from './model/cascade'
 import { ICON_COLOR_SHAPE, newUuid, nextProjectNum, weekLabel } from './model/orgs'
@@ -50,26 +51,62 @@ type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
 /* projects_key_ck (0001:62): 1–5 uppercase alphanumerics. Bare 23514/23505 in
  * SQL — badRequest lands in the client's same generic toast bucket. */
-const KEY_SHAPE = /^[A-Z0-9]{1,5}$/
-
 function cleanKey(raw: string): string {
-  if (!KEY_SHAPE.test(raw)) throw badRequest('a project key is 1-5 uppercase letters or digits')
+  if (!PROJECT_KEY_SHAPE.test(raw)) {
+    throw badRequest('a project key is 1-5 uppercase letters or digits')
+  }
   return raw
 }
 
+/** The project holding `key` in the organization, archived or not. */
+async function keyHolder(
+  ctx: QueryCtx,
+  orgId: string,
+  key: string,
+): Promise<Doc<'projects'> | null> {
+  return await ctx.db
+    .query('projects')
+    .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('key', key))
+    .first()
+}
+
+/* An explicit key change (update) is refused when another project holds the
+ * key. The REST API already admits that a key exists (rest.ts's one
+ * deliberate 403 oracle), so this sentence discloses nothing new. */
 async function assertKeyFree(
   ctx: QueryCtx,
   orgId: string,
   key: string,
-  self?: string,
+  self: string,
 ): Promise<void> {
-  const holder = await ctx.db
-    .query('projects')
-    .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('key', key))
-    .first()
+  const holder = await keyHolder(ctx, orgId, key)
   if (holder !== null && holder.id !== self) {
     throw badRequest('a project with that key already exists in this organization')
   }
+}
+
+// Bounds the reads one create spends looking for a free key.
+const KEY_CANDIDATES = 500
+
+/* A new project keeps the key its client previewed while that key is free.
+ * Archived projects and projects the caller cannot see keep their keys, and
+ * the client never receives those, so a taken key is replaced by the first
+ * free candidate derived from the name rather than refusing the project.
+ * Concurrent creates of one key conflict and Convex retries the loser, which
+ * then reads the winner's row. */
+async function allocateKey(
+  ctx: QueryCtx,
+  orgId: string,
+  suggested: string,
+  name: string,
+): Promise<string> {
+  if ((await keyHolder(ctx, orgId, suggested)) === null) return suggested
+  const base = projectKeyBase(name)
+  for (let n = 1; n <= KEY_CANDIDATES; n++) {
+    const key = projectKeyCandidate(base, n)
+    if (key !== suggested && (await keyHolder(ctx, orgId, key)) === null) return key
+  }
+  throw badRequest('no free project key is left for this name; choose another name')
 }
 
 /* Unknown and foreign-org rows are indistinguishable (0049/0056). The
@@ -140,8 +177,9 @@ const grantEntries = (map: Record<string, GrantLevel | 'lead'>): [string, GrantL
   Object.entries(map).filter((e): e is [string, GrantLevel] => e[1] !== 'lead')
 
 /* ----------------------------------------------------------------- create
- * P.addProject. The client pre-generates the uuid and reconciles its key
- * preview off the returned num (the old select('num').single() round trip). */
+ * P.addProject. The client pre-generates the uuid and previews num and key;
+ * it reconciles both from the returned values (allocateKey may replace a
+ * taken key). */
 export const create = orgMutation({
   args: {
     id: v.string(),
@@ -204,9 +242,8 @@ export const create = orgMutation({
     if (iconColor !== undefined && !ICON_COLOR_SHAPE.test(iconColor)) {
       throw badRequest('an icon color must be a #rrggbb hex')
     }
-    const key = cleanKey(args.key)
+    const key = await allocateKey(ctx, ctx.me.org_id, cleanKey(args.key), args.name)
     const description = projectDescription(args.description)
-    await assertKeyFree(ctx, ctx.me.org_id, key)
     if (lead_id !== undefined) await assertLeadAllowed(ctx, lead_id)
     const org = await byId(ctx, 'organizations', ctx.me.org_id)
     require(org !== null, notFound('organization not found'))
@@ -268,7 +305,7 @@ export const create = orgMutation({
       project_id: args.id,
       ts: now,
     })
-    return { id: args.id, num }
+    return { id: args.id, num, key }
   },
 })
 

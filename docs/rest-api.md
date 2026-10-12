@@ -153,7 +153,9 @@ GET /v1/projects/{ref}/users    → users who can see that project, for
 
 `num` is the durable per-org project number (migration 0050) — it never
 changes, while `key` is a display name an admin can rename. Prefer numbers
-or uuids in stored configuration.
+or uuids in stored configuration. Keys are unique within the organization,
+archived projects included. A new project's key comes from its name, with a
+number added when another project already holds it (`TES`, then `TES2`).
 
 `team_id` is always `null` for newly created products and sub-projects. It is
 retained as a nullable compatibility field for legacy rows; team sharing is
