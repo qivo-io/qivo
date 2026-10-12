@@ -3615,13 +3615,13 @@ export const PLANNER = {
       (created) => {
         const o = rows.orgs.get(row.org_id)
         if (o) o.next_project_num = Math.max(o.next_project_num || 0, created.num)
-        if (created.num !== previewNum) {
-          const cur = rows.projects.get(uuid)
-          if (cur) {
-            cur.num = created.num
-            rebuild()
-            emit()
-          }
+        // the server replaces a key held by an archived or hidden project
+        const cur = rows.projects.get(uuid)
+        if (cur && (cur.num !== created.num || cur.key !== created.key)) {
+          cur.num = created.num
+          cur.key = created.key
+          rebuild()
+          emit()
         }
       },
     )

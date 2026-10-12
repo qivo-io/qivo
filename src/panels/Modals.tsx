@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { DateSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -339,31 +340,17 @@ function NewIssueModal({
 /* ---------- New project & new sub-project ---------- */
 // Abbreviations (projects.key) are no longer user-facing anywhere: the DB
 // still requires a unique ≤5-char key per org, so creation derives one from
-// the name and dedupes with a numeric suffix instead of asking for it.
-const suggestKey = (n) => {
-  const words = n
-    .replace(/[^a-zA-Z0-9 ]/g, '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-  if (!words.length) return ''
-  const k =
-    words.length === 1
-      ? words[0].slice(0, 3)
-      : words
-          .map((w) => w[0])
-          .join('')
-          .slice(0, 4)
-  return k.toUpperCase()
-}
-const genKey = (name) => {
-  const taken = (k) => P.projects.some((p) => p.key === k)
-  const base = suggestKey(name) || 'P'
-  if (!taken(base)) return base
-  for (let i = 2; ; i++) {
-    const k = base.slice(0, 5 - String(i).length) + i
-    if (!taken(k)) return k
+// the name instead of asking for it. This is only a preview. projects.create
+// keeps it while it is free and otherwise picks the next candidate itself,
+// because archived and hidden projects hold keys this client never sees.
+const genKey = (name: string) => {
+  const taken = new Set([...P.projects, ...P.archivedProjects].map((p) => p.key))
+  const base = projectKeyBase(name)
+  for (let n = 1; n <= 9999; n++) {
+    const k = projectKeyCandidate(base, n)
+    if (!taken.has(k)) return k
   }
+  return base // every visible candidate is taken; the server picks one
 }
 
 function NameRow({ nameRef, name, setName, submit }) {

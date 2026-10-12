@@ -30,6 +30,14 @@ const createArgs = (f: OrgFixture, extra: Record<string, unknown> = {}) => ({
   ...extra,
 })
 
+const projectRow = (t: T, id: string) =>
+  t.run(async (ctx) =>
+    ctx.db
+      .query('projects')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique(),
+  )
+
 const lastEvent = async (t: T, orgId: string) => {
   const events = await activityFor(t, orgId)
   return events[events.length - 1]
@@ -41,6 +49,7 @@ describe('projects.create', () => {
     const f = await withOrg(t)
     const res = await as(t, f.admin).mutation(api.projects.create, createArgs(f))
     expect(res.num).toBe(6) // fixture next_project_num 5 → bump
+    expect(res.key).toBe('NEW') // a free suggested key is kept
     const row = await t.run(async (ctx) =>
       ctx.db
         .query('projects')
@@ -191,17 +200,12 @@ describe('projects.create', () => {
     )
   })
 
-  it('key shape and per-org uniqueness are checked; replayed uuid refused', async () => {
+  it('key shape is checked; replayed uuid refused', async () => {
     const t = newT()
     const f = await withOrg(t)
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, createArgs(f, { key: 'toolong' })),
       'bad_request',
-    )
-    await expectRefusal(
-      as(t, f.admin).mutation(api.projects.create, createArgs(f, { key: 'TBED' })),
-      'bad_request',
-      /already exists/,
     )
     const args = createArgs(f, { key: 'ONCE' })
     await as(t, f.admin).mutation(api.projects.create, args)
@@ -210,6 +214,53 @@ describe('projects.create', () => {
       'bad_request',
       /id already exists/,
     )
+  })
+
+  it('a taken key is replaced by the first free candidate from the name', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // TBED belongs to the fixture meta; the name derives TES instead
+    const res = await as(t, f.admin).mutation(
+      api.projects.create,
+      createArgs(f, { key: 'TBED', name: 'Test' }),
+    )
+    expect(res.key).toBe('TES')
+    expect((await projectRow(t, res.id))?.key).toBe('TES')
+    expect((await projectRow(t, f.meta.id))?.key).toBe('TBED')
+  })
+
+  it('keys of archived projects and projects the caller cannot see are skipped', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the admin's "Test" has no grants, so the user cannot see it
+    const hidden = await as(t, f.admin).mutation(
+      api.projects.create,
+      createArgs(f, { key: 'TES', name: 'Test', lead_id: f.admin.id, access: {} }),
+    )
+    expect(hidden.key).toBe('TES')
+    // what the user's client previews from its own view
+    const mine = await as(t, f.user).mutation(
+      api.projects.create,
+      createArgs(f, { key: 'TES', name: 'Test' }),
+    )
+    expect(mine.key).toBe('TES2')
+    await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: mine.id })
+    const again = await as(t, f.user).mutation(
+      api.projects.create,
+      createArgs(f, { key: 'TES', name: 'Test' }),
+    )
+    expect(again.key).toBe('TES3')
+    // sub-projects share the organization's keys
+    const sub = { type: 'project' as const, parent_id: again.id, name: 'Alpha', key: 'ALP' }
+    const alpha = await as(t, f.user).mutation(api.projects.create, createArgs(f, sub))
+    expect(alpha.key).toBe('ALP')
+    await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: alpha.id })
+    const alpha2 = await as(t, f.user).mutation(api.projects.create, createArgs(f, sub))
+    expect(alpha2.key).toBe('ALP2')
+    const keys = await t.run(async (ctx) =>
+      (await ctx.db.query('projects').collect()).map((p) => `${p.org_id}:${p.key}`),
+    )
+    expect(new Set(keys).size).toBe(keys.length)
   })
 
   it('lead rules: a viewer or a foreign profile cannot lead', async () => {
