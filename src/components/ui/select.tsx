@@ -17,7 +17,7 @@ function SelectValue({ ...props }: React.ComponentProps<typeof SelectPrimitive.V
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 
-/* The one dropdown arrow (deviation #326): a 12px chevron in
+/* The one dropdown arrow (deviation #326) is a 12px chevron in
    --muted-foreground at half strength. Every control that opens a list of
    choices ends with it, inside 8px of right padding where there is room, so
    on a bordered field it sits 9px from the edge. A native select repeats the

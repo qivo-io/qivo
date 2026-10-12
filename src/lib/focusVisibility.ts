@@ -48,7 +48,7 @@ export function restoreFocus(element: HTMLElement | null | undefined) {
 // OS-drawn list kept them to itself. Escape would close Settings, the Archive,
 // the task window, dialogs and pops, and a letter meant for typeahead would
 // fire a shortcut such as the task window's L. True for any key pressed in an
-// open list: the browser still acts on it, and nothing else should.
+// open list. The browser still acts on it, and nothing else should.
 export function isOpenSelectKey(event: Pick<KeyboardEvent, 'target'>) {
   if (!(event.target instanceof Element)) return false
   const select = event.target.closest('select')
@@ -63,7 +63,7 @@ export function isOpenSelectKey(event: Pick<KeyboardEvent, 'target'>) {
 
 /* Installs the shared input-modality tracking, and the guard that keeps an
    open select's keys from the page. Call it before anything else registers a
-   key listener: window capture runs first and in registration order, so the
+   key listener. Window capture runs first and in registration order, so the
    guard sees a key before any dialog, pop or page does. */
 export function installFocusVisibility() {
   const root = document.documentElement

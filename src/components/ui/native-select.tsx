@@ -17,7 +17,7 @@ const labelKeys = new WeakMap<HTMLSelectElement, string>()
    each option's rendered label, which select.options gives whatever shape the
    children take. React only inserts and removes its own options around it.
    The button is
-   out of the Tab order: the select takes focus, and a focus trap that counted
+   out of the Tab order. The select takes focus, and a focus trap that counted
    the button as its last stop would no longer wrap. */
 function syncSelectLabel(select: HTMLSelectElement) {
   let button = select.querySelector<HTMLButtonElement>(':scope > button[data-select-label]')
@@ -61,7 +61,7 @@ const NativeSelect = React.forwardRef<
   const pointer = React.useRef(false)
   const select = React.useRef<HTMLSelectElement | null>(null)
   React.useImperativeHandle(ref, () => select.current as HTMLSelectElement)
-  // every render: the options arrive as children and may have changed
+  // Runs every render, because the options arrive as children and may change.
   React.useLayoutEffect(() => {
     if (customizable && select.current) syncSelectLabel(select.current)
   })
@@ -74,7 +74,7 @@ const NativeSelect = React.forwardRef<
         className={cn(
           // The active look (focus, open list) is the one field rule in
           // tokens.css. The padding, chevron and open list are the dropdown
-          // face there too (deviation #326): a call site sets width, fill and
+          // face there too (deviation #326). A call site sets width, fill and
           // type size, never horizontal padding.
           'min-w-0 rounded-md border border-input bg-transparent text-foreground py-0 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50',
           'h-control',

@@ -608,9 +608,9 @@ textarea {
       padding-inline: 10px 8px;
       background-image: none;
     }
-    /* The label NativeSelect gives the closed field (native-select.tsx): the
-       chosen value with an ellipsis, over hidden copies of every option that
-       hold the field to its widest option's width. */
+    /* The label NativeSelect gives the closed field (native-select.tsx)
+       shows the chosen value with an ellipsis, over hidden copies of every
+       option that hold the field to its widest option's width. */
     [data-slot="native-select"] > button[data-select-label] {
       display: grid;
       grid-template-columns: minmax(0, auto);
