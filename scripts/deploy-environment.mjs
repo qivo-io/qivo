@@ -62,7 +62,9 @@ export function configuration(env) {
     demo,
     team: required(env, 'VERCEL_TEAM_ID'),
     githubToken: required(env, 'GH_TOKEN'),
-    appBypass: env.VERCEL_APP_PROTECTION_BYPASS,
+    // Only preview.qivo.io is behind Vercel Deployment Protection, so staging must have the
+    // bypass. Production never reads it, even when deploy.yml passes one.
+    appBypass: environment === 'staging' ? required(env, 'VERCEL_APP_PROTECTION_BYPASS') : null,
     runId: required(env, 'GITHUB_RUN_ID'),
     runAttempt: Number(env.GITHUB_RUN_ATTEMPT || 1),
     eventName: required(env, 'GITHUB_EVENT_NAME'),
