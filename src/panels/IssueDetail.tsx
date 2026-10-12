@@ -1958,9 +1958,7 @@ function IssueDetail({
             : (e) => {
                 scrimDownRef.current =
                   e.target === e.currentTarget &&
-                  !document.querySelector(
-                    '[data-fieldselect-menu], [data-slot="popover-content"], [data-slot="dropdown-menu-content"]',
-                  )
+                  !document.querySelector('[data-fieldselect-menu], [data-slot="popover-content"]')
               }
         }
         onClick={

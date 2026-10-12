@@ -49,18 +49,16 @@ export function installFocusVisibility() {
     root.dataset.focusModality = 'pointer'
   }
   const keyboard = (event: KeyboardEvent) => {
-    // Radix menus/selects support letter typeahead as well as arrows. A
-    // letter typed in an ordinary editor is not navigation, but one that
-    // selects an option or jumps to a menu item must reveal keyboard focus.
+    // Radix selects support letter typeahead as well as arrows. A letter
+    // typed in an ordinary editor is not navigation, but one that selects an
+    // option must reveal keyboard focus.
     const typeahead =
       !event.altKey &&
       !event.ctrlKey &&
       !event.metaKey &&
       event.key.length === 1 &&
       event.target instanceof Element &&
-      event.target.closest(
-        '[data-slot="select-trigger"], [data-slot="select-content"], [data-slot="dropdown-menu-content"], [data-slot="dropdown-menu-sub-content"]',
-      )
+      event.target.closest('[data-slot="select-trigger"], [data-slot="select-content"]')
     if (
       !isFocusNavigationKey(event) &&
       !(event.target instanceof HTMLSelectElement && isSelectInteractionKey(event)) &&
