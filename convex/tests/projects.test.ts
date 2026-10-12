@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
+import type { Doc } from '../_generated/dataModel'
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { weekLabel } from '../model/orgs'
 import {
@@ -863,6 +864,41 @@ describe('projects.archive / unarchive', () => {
     expect(rows.sub?.archived_at).toBeUndefined()
     expect(rows.meta?.archived_at).toBeUndefined()
     expect(rows.sub2?.archived_at).toBeDefined() // the sibling stays put
+  })
+})
+
+describe('projects.unarchive of a sub-project under an archived parent', () => {
+  // t.run hands undefined back as null
+  const archivedAt = (t: T, _id: Doc<'projects'>['_id']) =>
+    t.run(async (ctx) => (await ctx.db.get(_id))?.archived_at ?? null)
+
+  it('needs lead on the parent, because it restores the parent too', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the guest leads FW and holds a User grant on the parent f.user leads
+    await t.run(async (ctx) => ctx.db.patch(f.sub._id, { lead_id: f.guest.id }))
+    await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
+    await expectRefusal(
+      as(t, f.guest).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id }),
+      'forbidden',
+      /^requires lead access to the archived parent project$/,
+    )
+    expect(await archivedAt(t, f.meta._id)).not.toBeNull()
+    expect(await archivedAt(t, f.sub._id)).not.toBeNull()
+    // an admin leads both, so restoring the sub surfaces the parent
+    await as(t, f.admin).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id })
+    expect(await archivedAt(t, f.meta._id)).toBeNull()
+    expect(await archivedAt(t, f.sub._id)).toBeNull()
+  })
+
+  it('still lets the sub-project lead restore it while the parent is active', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => ctx.db.patch(f.sub._id, { lead_id: f.guest.id }))
+    await as(t, f.guest).mutation(api.projects.archive, { org_id: f.org.id, id: f.sub.id })
+    expect(await archivedAt(t, f.sub._id)).not.toBeNull()
+    await as(t, f.guest).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id })
+    expect(await archivedAt(t, f.sub._id)).toBeNull()
   })
 })
 

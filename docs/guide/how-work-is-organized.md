@@ -124,3 +124,8 @@ access, which organization admins and project leads have.
 Sub-projects archived with a project return with it. A sub-project archived
 separately stays archived when its project returns and then has its own row
 in the archived list.
+
+If you can access only a sub-project, the archived list shows its archived
+project too, with that sub-project under it. Restoring a sub-project also
+restores its archived project, so it needs Lead access to that project.
+Otherwise, ask the project's lead to restore the project.
