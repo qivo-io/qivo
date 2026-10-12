@@ -144,15 +144,17 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
     setV(me.name)
     setErr('')
   }, [me.name])
-  const dirty = v.trim() !== me.name
+  // compared as the store will save it, with runs of spaces collapsed
+  const next = v.replace(/\s+/g, ' ').trim()
+  const dirty = next !== me.name
   useUpdateBlocker(dirty || busy)
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)
-    const e = await P.setDisplayName(v)
+    const e = await P.setDisplayName(next)
     setBusy(false)
     setErr(e || '')
-    if (!e) window.showToast?.(`You are now “${v.trim().replace(/\s+/g, ' ')}”`)
+    if (!e) window.showToast?.(`You are now “${next}”`)
   }
   return (
     <SettingsField label="Your name" width={470}>
