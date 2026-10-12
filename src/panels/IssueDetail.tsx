@@ -41,6 +41,7 @@ import {
   UnreadDivider,
   useBottomSnap,
 } from '../components/qivo'
+import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { restoreFocus } from '../lib/focusVisibility'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
@@ -1423,23 +1424,14 @@ function IssueDetail({
     // issueLink names the task's OWN organization in the path — its number
     // alone would be ambiguous for the recipient, since numbers are per-org
     const url = location.origin + issueLink(it.id)
-    const done = () => window.showToast?.(`Copied a link to ${it.key}`)
-    try {
-      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done, copyFailed)
-      else copyFailed()
-    } catch {
-      copyFailed()
-    }
+    void copyText(url).then((ok) =>
+      ok ? window.showToast?.(`Copied a link to ${it.key}`) : copyFailed(),
+    )
   }
   const copyId = () => {
-    const done = () => window.showToast?.(`Copied ${it.key} to clipboard`)
-    try {
-      if (navigator.clipboard?.writeText)
-        navigator.clipboard.writeText(it.key).then(done, copyFailed)
-      else copyFailed()
-    } catch {
-      copyFailed()
-    }
+    void copyText(it.key).then((ok) =>
+      ok ? window.showToast?.(`Copied ${it.key} to clipboard`) : copyFailed(),
+    )
   }
 
   // ancestor chain (parent -> ... -> root)

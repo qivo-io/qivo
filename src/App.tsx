@@ -41,6 +41,7 @@ import {
   scopeForIssue,
   syncPlaceOf,
 } from './lib/router'
+import { type ToastTone, toastLook } from './lib/toasts'
 import {
   loadArchive,
   loadInbox,
@@ -54,7 +55,7 @@ import {
   loadTaskCreation,
   loadTeamSync,
 } from './lib/workspaceChunks'
-import { P, type ToastTone } from './store/planner'
+import { P } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
 import type { SyncPlace } from './views/TeamSync'
 
@@ -656,16 +657,7 @@ function TopBar({
 }
 
 /* ---------- toasts ---------- */
-type Toast = { id: number; text: string; tone: ToastTone }
-
-/* The glyph, its colour and the live-region role for each tone. An error
-   interrupts a screen reader (role "alert"); successes and notices are read
-   at its next pause (role "status"). */
-const TOAST_LOOK: Record<ToastTone, { icon: string; color: string; role: 'alert' | 'status' }> = {
-  success: { icon: 'check', color: 'var(--success)', role: 'status' },
-  error: { icon: 'alert', color: 'var(--danger)', role: 'alert' },
-  info: { icon: 'info', color: 'var(--text-2)', role: 'status' },
-}
+type Toast = { id: number; text: string; tone?: ToastTone }
 
 function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   if (!toasts.length) return null
@@ -674,11 +666,11 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
       {toasts.map((t) => (
         <div
           key={t.id}
-          role={TOAST_LOOK[t.tone].role}
+          role={toastLook(t.tone).role}
           data-floating-surface
           className="animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
         >
-          <Icon name={TOAST_LOOK[t.tone].icon} size={16} color={TOAST_LOOK[t.tone].color} />
+          <Icon name={toastLook(t.tone).icon} size={16} color={toastLook(t.tone).color} />
           {t.text}
           <Button
             type="button"
@@ -852,7 +844,7 @@ function App() {
 
   // toasts
   useEffect(() => {
-    window.showToast = (text, tone = 'success') => {
+    window.showToast = (text, tone) => {
       const id = ++toastSeq
       setToasts((t) => [...t.slice(-2), { id, text, tone }])
       setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)

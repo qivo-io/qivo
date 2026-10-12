@@ -73,6 +73,7 @@ import { groupProgress, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
+import type { ToastTone } from '../lib/toasts'
 import { beginUpdateBlock } from '../lib/updateSafety'
 import {
   committedByWeek,
@@ -485,10 +486,7 @@ function markLoadedMessagesRead(ids: string[], at: string) {
 const updates = createPlannerUpdates()
 const emit = updates.emit
 
-/* How a toast reads at a glance. 'success' confirms an action the user asked
-   for, 'error' reports something that failed, was refused, reverted or
-   discarded, and 'info' is a neutral notice about an automatic adjustment. */
-export type ToastTone = 'success' | 'error' | 'info'
+export type { ToastTone }
 
 /* The two window hooks the app hangs globally: App mounts showToast for the
    non-React layers (this store, imgActions), and the store re-exposes itself
