@@ -30,7 +30,7 @@ Parent **User** and **Viewer** grants apply to sub-projects at the same level.
 The parent lead has **User** access to a sub-project with a different lead.
 A stronger grant on the sub-project takes precedence. Access granted only to
 a sub-project makes its parent visible for read-only navigation, without
-opening sibling projects.
+opening sibling projects or the parent's change history.
 
 **New project** asks for a name, lead and optional team or individual shares.
 **New sub-project** asks for a lead; add optional shares in its settings.
@@ -45,6 +45,15 @@ Direct links do not open them. For organization admins and users, capacity
 views count hidden work anonymously under **Other projects**. Guests and
 organization Viewers receive workload only for tasks they can access or own;
 they cannot see other people's hidden workload.
+
+Change history follows the same rules. You see a change only if you can
+access the task or project it concerns and every project it involves, such as
+both ends of a task move. When a task moves to a project you cannot access,
+its history leaves your view. People who can access only the new project see
+the changes made after the move. Only organization admins see the history of
+deleted tasks and deleted projects, with two exceptions. People with access
+to a parent project see that one of its sub-projects was deleted, and a task
+that moved out of a project before it was deleted keeps that earlier history.
 
 Organization admins add people through **Organization → Users**. There is no
 purchased-seat limit on adding or reactivating users. Billing counts active

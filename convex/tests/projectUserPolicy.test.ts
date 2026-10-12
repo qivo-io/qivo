@@ -91,6 +91,10 @@ describe('named lead permission management', () => {
       expect(view.visible(f.meta.id)).toBe(true)
       expect(view.visible(f.sub.id)).toBe(true)
       expect(view.visible(f.sub2.id)).toBe(false)
+      // the parent is visible for navigation only
+      expect(view.accessible(f.meta.id)).toBe(false)
+      expect(view.accessible(f.sub.id)).toBe(true)
+      expect(view.accessible(f.sub2.id)).toBe(false)
     })
     await expectRefusal(
       as(t, person).mutation(api.projects.update, {

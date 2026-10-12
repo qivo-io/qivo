@@ -38,6 +38,7 @@ export async function logActivity(
     detail?: string
     ts: string
     project_id?: string
+    related_project_id?: string
     team_id?: string
   },
 ): Promise<void> {
@@ -52,6 +53,7 @@ export async function logActivity(
     label: e.label,
     detail: e.detail,
     project_id: e.project_id,
+    related_project_id: e.related_project_id,
     team_id: e.team_id,
   })
   const org = await byId(ctx, 'organizations', e.org_id)

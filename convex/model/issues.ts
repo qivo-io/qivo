@@ -1048,7 +1048,8 @@ export async function updateIssueCore(
  * is cleared in the move's patch instead (adapt, don't reject, as
  * clearParentRemaining does). num is org-scoped and immutable: the key
  * survives the move; labels survive too (org vocabulary). The activity row is
- * keyed to the SOURCE project. Access ('member' on BOTH ends) is the mutation
+ * keyed to the SOURCE project and records the destination as its related
+ * project. Access ('member' on BOTH ends) is the mutation
  * layer's job. */
 export async function moveIssueCore(
   ctx: MutationCtx,
@@ -1097,6 +1098,7 @@ export async function moveIssueCore(
     label: after.title,
     detail: `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}`,
     project_id: issue.project_id, // the SOURCE project (old planner.ts:2063-2066)
+    related_project_id: target.id, // the detail names it, so readers need it too
     ts: now,
   }
   await logActivity(ctx, event)

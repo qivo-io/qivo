@@ -102,9 +102,11 @@ export async function deleteIssueDeep(
  * CASCADE) each through deleteIssueDeep, which detaches cross-project
  * children WITH the issues_touch stamp + notify and reaps attachment bytes.
  * Activity rows are KEPT with project_id nulled (0001:155 SET NULL) —
- * "History survives its subjects" (0001:144). The caller (projects.deleteDeep)
- * writes the 'deleted' narration AFTER this returns, hung on the parent/team
- * branch — the project the event names is gone. */
+ * "History survives its subjects" (0001:144). Without a project, the snapshot
+ * sends those rows to org admins only, except the rows of a task that moved
+ * out before the delete (snapshot.ts memberSeesActivity). The caller
+ * (projects.deleteDeep) writes the 'deleted' narration AFTER this returns,
+ * hung on the parent/team branch — the project the event names is gone. */
 export async function deleteProjectDeep(
   ctx: MutationCtx,
   a: { project: Doc<'projects'>; actor: Doc<'profiles'>; now: string },
