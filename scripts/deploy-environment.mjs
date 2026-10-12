@@ -453,11 +453,55 @@ async function deployProject(project, prepared, revision, config, { pause, log }
   throw new Error(`${details.name} deployment timed out.`)
 }
 
+const MANIFEST_ATTEMPTS = 12
+
+/**
+ * Read a version.json until it names the expected deployment. For a few seconds after
+ * Vercel reports a deployment ready and moves the domain, the domain can still answer with
+ * Vercel's "Deployment is building" page or the previous deployment.
+ */
+async function awaitManifest(url, headers, expected, label, fetchImpl, pause) {
+  let problem
+  for (let attempt = 1; attempt <= MANIFEST_ATTEMPTS; attempt++) {
+    if (attempt > 1) await pause(10_000)
+    let response
+    try {
+      response = await fetchImpl(url, {
+        headers,
+        redirect: 'error',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(30_000),
+      })
+    } catch (error) {
+      problem = `could not be read (${error.message})`
+      continue
+    }
+    if (!response.ok) {
+      problem = `returned HTTP ${response.status}`
+      continue
+    }
+    const manifest = await response.json().catch(() => null)
+    if (manifest?.commit === expected.commit && manifest.environment === expected.environment)
+      return
+    problem = manifest ? 'does not match the approved deployment' : 'is not a manifest'
+  }
+  throw new Error(`The public ${label} manifest ${problem}.`)
+}
+
 /** Health checks perform GET requests only and never log protection-bypass credentials. */
-export async function verifyPublicBuild(config, fetchImpl = fetch) {
+export async function verifyPublicBuild(config, fetchImpl = fetch, pause = sleep) {
+  const headers = config.appBypass ? { 'x-vercel-protection-bypass': config.appBypass } : {}
+  await awaitManifest(
+    `${config.origin}/version.json`,
+    headers,
+    { commit: config.sha, environment: config.environment },
+    'app',
+    fetchImpl,
+    pause,
+  )
   const read = async (path) => {
     const response = await fetchImpl(`${config.origin}${path}`, {
-      headers: config.appBypass ? { 'x-vercel-protection-bypass': config.appBypass } : {},
+      headers,
       redirect: 'error',
       cache: 'no-store',
       signal: AbortSignal.timeout(30_000),
@@ -466,9 +510,6 @@ export async function verifyPublicBuild(config, fetchImpl = fetch) {
       throw new Error(`Deployment health check ${path} returned HTTP ${response.status}.`)
     return response
   }
-  const app = await (await read('/version.json')).json()
-  if (app.commit !== config.sha || app.environment !== config.environment)
-    throw new Error('The public app manifest does not match the approved deployment.')
   for (const path of ['/', '/app', '/admin', '/docs/', '/pricing/']) {
     const html = await (await read(path)).text()
     if (!/<(?:html|!doctype)/i.test(html))
@@ -479,17 +520,15 @@ export async function verifyPublicBuild(config, fetchImpl = fetch) {
     for (const match of html.matchAll(/(?:src|href)="(\/(?:assets|marketing)\/[^"#]+)"/g))
       await read(match[1])
   }
-  if (config.demo) {
-    const response = await fetchImpl('https://demo.qivo.io/version.json', {
-      redirect: 'error',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!response.ok) throw new Error('The public demo manifest is unavailable.')
-    const demo = await response.json()
-    if (demo.commit !== config.sha || demo.environment !== 'demo')
-      throw new Error('The public demo does not match the release commit.')
-  }
+  if (config.demo)
+    await awaitManifest(
+      'https://demo.qivo.io/version.json',
+      {},
+      { commit: config.sha, environment: 'demo' },
+      'demo',
+      fetchImpl,
+      pause,
+    )
 }
 
 /** A GitHub deployment record ("receipt") naming the exact commit. */
@@ -539,7 +578,7 @@ export async function deployEnvironment(config, event, options = {}) {
   if (config.environment === 'staging') {
     // A failed run records nothing, so a release can never pick up an unverified commit.
     await deployProject(config.app, prepared.app, config.sha, config, optionsWithDefaults)
-    await verifyPublicBuild(config, optionsWithDefaults.fetchImpl)
+    await verifyPublicBuild(config, optionsWithDefaults.fetchImpl, optionsWithDefaults.pause)
     const status = await createReceipt(github, config, { ci_run_id: verified.ciId })
     await status('success', 'App, website, revision and public routes verified.')
     log(`Staged ${config.sha} on ${config.origin}.`)
@@ -555,7 +594,7 @@ export async function deployEnvironment(config, event, options = {}) {
     await deployProject(config.app, prepared.app, config.sha, config, optionsWithDefaults)
     if (config.demo)
       await deployProject(config.demo, prepared.demo, config.sha, config, optionsWithDefaults)
-    await verifyPublicBuild(config, optionsWithDefaults.fetchImpl)
+    await verifyPublicBuild(config, optionsWithDefaults.fetchImpl, optionsWithDefaults.pause)
     await status('success', 'App, website, revision and public routes verified.')
   } catch (error) {
     await status('failure', 'Deployment or verification failed. Inspect the workflow log.')
