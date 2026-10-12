@@ -567,13 +567,13 @@ function TopBar({
           cost of keeping every control visible at a narrow window — it wraps
           rather than clipping, the same bargain the roadmap's row makes.
           The shared alignment rhythm leaves 24px between this row and the
-          view switcher (12px from each band), then 8px before the board, the
-          Roadmap toolbar's gap above its timeline. */}
+          view switcher (12px from each band), then one panel gap before the
+          board, the Roadmap toolbar's gap above its timeline. */}
       {showFilters && (
         <WorkspaceToolbar>
           <div
             data-filter-row
-            className="[display:flex] [align-items:center] [justify-content:center] [gap:8px] [padding:12px_20px_8px] [flex-wrap:wrap]"
+            className="[display:flex] [align-items:center] [justify-content:center] [gap:8px] [padding:12px_20px_var(--panel-gap)] [flex-wrap:wrap]"
           >
             {/* one well of quiet controls — the view switcher's own panel, so
                 the two rows read as one instrument (deviation #232) */}

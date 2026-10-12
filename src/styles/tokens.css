@@ -15,6 +15,14 @@
   --sidebar-w: 297.6px;
   --workspace-content-max: 1200px;
   --workspace-max: calc(var(--sidebar-w) + var(--workspace-content-max));
+  /* The space between neighbouring desktop panels. It separates a filter row
+     from the panel below it, the Board's status columns, lanes and
+     side-by-side boards, the Overview sections, Roadmap's timeline and Team,
+     and the Inbox list and task. The band below the view switcher and the
+     sidebar's spacing stay separate. Roadmap.tsx repeats this value as
+     PANEL_GAP for the gap above Team and Team's height budget, so change
+     both together. */
+  --panel-gap: 8px;
   /* Phone page content starts with the same space as project-card gaps. */
   --mobile-content-inset: 16px;
   color-scheme: dark;

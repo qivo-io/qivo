@@ -53,7 +53,10 @@ const REVEAL_MS = 2400
    participate in the timeline's vertical scrolling. */
 const CANVAS_PAD_X = 20
 const CANVAS_PAD_B = 24
-const CARD_GAP = 24
+/* Mirrors --panel-gap in tokens.css. Team's height budget subtracts the gap
+   above Team, so the budget and that gap read this number, on phones too.
+   Keep it equal to the token. */
+const PANEL_GAP = 8
 
 function Roadmap({
   info,
@@ -87,7 +90,6 @@ function Roadmap({
   const filterControls = renderFilterControls(mobile)
   const canvasPadX = mobile ? 12 : CANVAS_PAD_X
   const canvasPadB = mobile ? 12 : CANVAS_PAD_B
-  const cardGap = mobile ? 8 : CARD_GAP
   const [mobileAgendaSection, setMobileAgendaSection] = useStateR<'milestones' | 'tasks'>(
     'milestones',
   )
@@ -907,12 +909,13 @@ function Roadmap({
   // click handler: empty returns occur before those bindings are initialized.
   const toolbarRow = (moves: { id: string; start: number; end: number }[]) => (
     /* The 12px top inset combines with the shell's 12px bottom inset for
-       a 24px section gap. Controls sit 8px above the timeline. */
+       the 24px band below the view switcher. Controls sit one panel gap
+       above the timeline. */
     // This hook remains mounted for empty scopes as well as the full grid.
     <div
       ref={toolbarRef}
       data-roadmap-toolbar
-      style={{ padding: mobile ? '8px 0 12px' : `12px ${canvasPadX}px 8px` }}
+      style={{ padding: mobile ? '8px 0 12px' : `12px ${canvasPadX}px var(--panel-gap)` }}
       className="[display:flex] [gap:8px] [background:var(--bg)] [flex-wrap:wrap] [align-items:center] [justify-content:center] [flex-shrink:0]"
     >
       {/* Filters and actions wrap as separate groups while sharing one control well. */}
@@ -1278,7 +1281,7 @@ function Roadmap({
     620,
     Math.max(
       stripHeight(Math.min(1, stripUsers.length)),
-      splitT - cardGap - canvasPadB - roadMinimum,
+      splitT - PANEL_GAP - canvasPadB - roadMinimum,
     ),
   )
   const stripH =
@@ -2058,7 +2061,7 @@ function Roadmap({
         {/* In "max", the week header keeps its natural height and the strip
           fills the remaining canvas. Both retain the same horizontal grid. */}
         <div
-          style={{ padding: `${cardGap}px ${canvasPadX}px ${canvasPadB}px` }}
+          style={{ padding: `${PANEL_GAP}px ${canvasPadX}px ${canvasPadB}px` }}
           className={stripMode === 'max' ? 'min-h-0 flex-1' : 'shrink-0'}
         >
           {/* `gutter` keeps the strip's week columns under the roadmap's. The two

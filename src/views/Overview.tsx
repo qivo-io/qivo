@@ -886,7 +886,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
       data-screen-label="Overview"
       className="overview-view [flex:1] [overflow:auto]"
     >
-      <div className="[padding:0_20px_40px] [max-width:var(--workspace-content-max)] [margin:0_auto] [display:flex] [flex-direction:column] [gap:24px]">
+      <div className="[padding:0_20px_40px] [max-width:var(--workspace-content-max)] [margin:0_auto] [display:flex] [flex-direction:column] [gap:var(--panel-gap)]">
         {/* What to do, then the state it is drawn from. The sentence leads
             because it is the only thing on this page that says which of the
             numbers under it you should act on. */}
@@ -1019,92 +1019,86 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           </OvSection>
         )}
 
-        <div className="flex flex-col gap-6">
-          <div className="[display:flex] [flex-direction:column] [gap:24px]">
-            <OvSection
-              title={`Overdue & at risk${atRiskIssues.length ? `, ${atRiskIssues.length}` : ''}`}
-            >
-              {atRiskIssues.length ? (
-                <div className="[display:flex] [flex-direction:column] [gap:8px]">
-                  {atRiskIssues.map((it) => (
-                    <OvAtRiskRow
-                      key={it.id}
-                      it={it}
-                      label={rowLabel(it)}
-                      wide={wide}
-                      onOpen={actions.openIssue}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
-                  No deadlines are overdue or at risk.
-                </div>
-              )}
-            </OvSection>
-            <OvSection
-              title={`Paused tasks${pausedIssues.length ? `, ${pausedIssues.length}` : ''}`}
-            >
-              {pausedIssues.length ? (
-                <div className="[display:flex] [flex-direction:column] [gap:8px]">
-                  {pausedIssues.map((it) => (
-                    <OvPausedRow
-                      key={it.id}
-                      it={it}
-                      label={rowLabel(it)}
-                      wide={wide}
-                      onOpen={actions.openIssue}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
-                  Nothing is paused right now.
-                </div>
-              )}
-            </OvSection>
-          </div>
-          {/* a milestone belongs to ONE project's roadmap (0078) — a scope
-              spanning every project names none to add it to, so the + is a
-              project scope's affordance only */}
-          <OvSection
-            title="Milestones"
-            action={
-              wide || !P.canWrite(info.id) ? null : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="w-control-xs h-control-xs"
-                  aria-label="New milestone"
-                  title="New milestone"
-                  onClick={() => actions.newMilestone({})}
-                >
-                  <Icon name="plus" size={16} />
-                </Button>
-              )
-            }
-          >
+        <OvSection
+          title={`Overdue & at risk${atRiskIssues.length ? `, ${atRiskIssues.length}` : ''}`}
+        >
+          {atRiskIssues.length ? (
             <div className="[display:flex] [flex-direction:column] [gap:8px]">
-              {msSorted.map((m) => (
-                <OvMilestoneRow
-                  key={m.id}
-                  m={m}
-                  next={nextMs && m.id === nextMs.id}
-                  owner={wide ? P.project(m.project)?.name : null}
-                  onEdit={actions.editMilestone}
+              {atRiskIssues.map((it) => (
+                <OvAtRiskRow
+                  key={it.id}
+                  it={it}
+                  label={rowLabel(it)}
+                  wide={wide}
+                  onOpen={actions.openIssue}
                 />
               ))}
-              {msSorted.length === 0 && (
-                <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
-                  {wide
-                    ? 'No milestones in any of your projects yet.'
-                    : 'No milestones yet — add one with the + button.'}
-                </div>
-              )}
             </div>
-          </OvSection>
-        </div>
+          ) : (
+            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
+              No deadlines are overdue or at risk.
+            </div>
+          )}
+        </OvSection>
+        <OvSection title={`Paused tasks${pausedIssues.length ? `, ${pausedIssues.length}` : ''}`}>
+          {pausedIssues.length ? (
+            <div className="[display:flex] [flex-direction:column] [gap:8px]">
+              {pausedIssues.map((it) => (
+                <OvPausedRow
+                  key={it.id}
+                  it={it}
+                  label={rowLabel(it)}
+                  wide={wide}
+                  onOpen={actions.openIssue}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
+              Nothing is paused right now.
+            </div>
+          )}
+        </OvSection>
+        {/* a milestone belongs to ONE project's roadmap (0078) — a scope
+            spanning every project names none to add it to, so the + is a
+            project scope's affordance only */}
+        <OvSection
+          title="Milestones"
+          action={
+            wide || !P.canWrite(info.id) ? null : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="w-control-xs h-control-xs"
+                aria-label="New milestone"
+                title="New milestone"
+                onClick={() => actions.newMilestone({})}
+              >
+                <Icon name="plus" size={16} />
+              </Button>
+            )
+          }
+        >
+          <div className="[display:flex] [flex-direction:column] [gap:8px]">
+            {msSorted.map((m) => (
+              <OvMilestoneRow
+                key={m.id}
+                m={m}
+                next={nextMs && m.id === nextMs.id}
+                owner={wide ? P.project(m.project)?.name : null}
+                onEdit={actions.editMilestone}
+              />
+            ))}
+            {msSorted.length === 0 && (
+              <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
+                {wide
+                  ? 'No milestones in any of your projects yet.'
+                  : 'No milestones yet — add one with the + button.'}
+              </div>
+            )}
+          </div>
+        </OvSection>
       </div>
     </div>
   )
