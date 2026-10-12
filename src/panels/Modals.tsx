@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
+import { hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
@@ -1046,7 +1047,13 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   // node still run. An open calendar owns the key first (it closes itself).
   useEffectM(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || document.querySelector('[data-anchoredpop-backdrop]')) return
+      // an open tooltip closes first and passes the Escape on, read then
+      if (
+        e.key !== 'Escape' ||
+        hasOpenTooltip() ||
+        document.querySelector('[data-anchoredpop-backdrop]')
+      )
+        return
       if (e.target instanceof Node && rootRef.current?.contains(e.target)) closeRef.current()
     }
     document.addEventListener('keydown', onKey, { capture: true })

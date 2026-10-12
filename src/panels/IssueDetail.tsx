@@ -209,6 +209,7 @@ function FocusWindow({
     const h = (e) => {
       if (e.key !== 'Escape') return
       if (e.defaultPrevented) return
+      // an open tooltip closes first and passes the Escape on, read then
       if (hasOpenTooltip()) return
       if (
         e.target instanceof Element &&
