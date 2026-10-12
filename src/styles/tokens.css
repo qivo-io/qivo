@@ -9,8 +9,8 @@
 :root {
   --sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
-  /* The "qivo" wordmark only. app.html and admin.html load Outfit 700. */
-  --wordmark: "Outfit", var(--sans);
+  /* The "qivo" wordmark only. See the Qivo Wordmark face below. */
+  --wordmark: "Qivo Wordmark", var(--sans);
   /* 273.6px navigation panel plus 12px outer spacing on each side. */
   --sidebar-w: 297.6px;
   --workspace-content-max: 1200px;
@@ -476,6 +476,17 @@ body {
 }
 #root {
   height: 100vh;
+}
+/* Google's Rubik 700 subset with only q, i, v and o (about 1.2 KB), under the
+   SIL Open Font License in src/assets/fonts/rubik-OFL.txt. Vite embeds a file
+   this small in the stylesheet, so the wordmark never waits for a request and
+   never shows in another font. */
+@font-face {
+  font-family: "Qivo Wordmark";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("../assets/fonts/rubik-700-qivo.woff2") format("woff2");
 }
 /* The "qivo" wordmark wherever text names the product. Each use sets its size. */
 .wordmark {
