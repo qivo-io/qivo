@@ -40,7 +40,7 @@ function fixture() {
         description: 'Create a plan.',
       },
       {
-        file: 'planning/schedule.md',
+        file: 'schedule.md',
         slug: 'schedule',
         title: 'Schedule',
         order: 20,
@@ -55,9 +55,11 @@ function fixture() {
     writeFileSync(file, data)
   }
   mkdirSync(publicDir, { recursive: true })
+  for (const guide of ['llms.txt', 'skill.md', 'auth.md'])
+    writeFileSync(join(publicDir, guide), '## Agent guide\n')
   write('overview.md', 'Choose a topic from the navigation.\n')
   write('start.md', '## Create a plan\n\nStart with a project.\n')
-  write('planning/schedule.md', '## Weekly plan\n\nReview the schedule.\n')
+  write('schedule.md', '## Weekly plan\n\nReview the schedule.\n')
   const save = () => write('pages.json', `${JSON.stringify(metadata, null, 2)}\n`)
   save()
   return { contentDir, publicDir, metadata, write, save }
@@ -140,20 +142,22 @@ describe('documentation publishing', () => {
       'start.md',
       `## Create a plan
 
-[Schedule](./planning/schedule.md#weekly-plan)
-[Old link](./planning/schedule.md#old-weekly-plan)
-[With a query](./planning/schedule.md?view=week#weekly-plan)
+[Schedule](./schedule.md#weekly-plan)
+[Old link](schedule.md#old-weekly-plan)
+[With a query](./schedule.md?view=week#weekly-plan)
 [Absolute](/docs/schedule/#weekly-plan)
 [Canonical](https://qivo.io/docs/schedule/#old-weekly-plan)
 [Overview](./overview.md)
 [Pricing](/pricing/)
+[Pricing without a slash](/pricing)
+[Homepage section](/#features)
 [Application](/app#signup)
 [External](https://example.com/docs/unknown/#anything)
 `,
     )
     source.write(
-      'planning/schedule.md',
-      '## Weekly plan\n\n[Start](../start.md#create-a-plan) and [this section](#weekly-plan).\n',
+      'schedule.md',
+      '## Weekly plan\n\n[Start](./start.md#create-a-plan) and [this section](#weekly-plan).\n',
     )
     const files = build(source)
     const start = files.get('docs/getting-started/index.html')
@@ -172,45 +176,35 @@ describe('documentation publishing', () => {
     const image = Buffer.from(
       '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="800" height="400" fill="green"/></svg>',
     )
-    source.write('planning/images/weekly plan.svg', image)
+    source.write('images/weekly plan.svg', image)
     source.write(
-      'planning/schedule.md',
+      'schedule.md',
       '## Weekly plan\n\n![Roadmap showing scheduled tasks](./images/weekly%20plan.svg)\n\n*Tasks scheduled for the coming week.*\n',
     )
     const files = build(source)
     const html = files.get('docs/schedule/index.html')
     const src = /<img\b[^>]*src="([^"]+)"/.exec(html)?.[1]
-    expect(src).toBe('/docs/assets/planning/images/weekly%20plan.svg')
+    expect(src).toBe('/docs/assets/images/weekly%20plan.svg')
     expect(html).toContain('alt="Roadmap showing scheduled tasks"')
     expect(html).toContain('<em>Tasks scheduled for the coming week.</em>')
     expect(files.get(decodeURIComponent(src).slice(1))).toEqual(image)
     expect(files.get('sitemap.xml')).not.toContain('/docs/assets/')
     const docs = loadDocs(source)
-    expect(docs.assets.get('docs/assets/planning/images/weekly plan.svg')).toEqual(image)
+    expect(docs.assets.get('docs/assets/images/weekly plan.svg')).toEqual(image)
   })
 
-  it('resolves absolute documentation images and validates links to public files', () => {
+  it('validates links to public files', () => {
     const source = fixture()
-    source.write('images/diagram.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>')
     writeFileSync(join(source.publicDir, 'reference.md'), '## The reference\n')
-    source.write(
-      'start.md',
-      `![A project diagram](/docs/assets/images/diagram.svg)
-
-![An external diagram](https://example.com/diagram.webp)
-
-[Reference](/reference.md#the-reference)
-`,
-    )
+    source.write('start.md', '[Reference](/reference.md#the-reference)\n')
     const html = build(source).get('docs/getting-started/index.html')
-    expect(html).toContain('src="/docs/assets/images/diagram.svg"')
-    expect(html).toContain('src="https://example.com/diagram.webp"')
     expect(html).toContain('href="/reference.md#the-reference"')
   })
 
   it.each([
     ['[Missing page](./missing.md)', /missing\.md/],
-    ['[Missing fragment](./planning/schedule.md#missing-anchor)', /missing-anchor/],
+    ['[Missing fragment](./schedule.md#missing-anchor)', /missing-anchor/],
+    ['[Missing homepage section](/#missing-anchor)', /missing-anchor/],
     ['[Missing local fragment](#missing-anchor)', /missing-anchor/],
     ['[Malformed local fragment](#bad%C0)', /bad%C0/],
     ['[Missing public page](/docs/missing-page/)', /missing-page/],
@@ -221,6 +215,8 @@ describe('documentation publishing', () => {
     ],
     ['![Missing image](./images/missing.webp)', /images\/missing\.webp/],
     ['![Missing public image](/missing.webp)', /missing\.webp/],
+    ['![A root image path](/docs/assets/images/diagram.svg)', /must be a relative path/],
+    ['![An external image](https://example.com/diagram.webp)', /must be a relative path/],
     ['[Missing public file](/reference.md)', /reference\.md/],
   ])('rejects broken internal content with the source and target, %s', (body, target) => {
     const source = fixture()
@@ -238,7 +234,7 @@ describe('documentation publishing', () => {
 
   it('rejects a legacy alias whose heading no longer exists', () => {
     const source = fixture()
-    source.write('planning/schedule.md', '## A different heading\n')
+    source.write('schedule.md', '## A different heading\n')
     expect(() => build(source)).toThrow(/weekly-plan/)
   })
 

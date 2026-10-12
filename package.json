@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npx convex dev\" \"vite --port 5199 --strictPort\"",
-    "build": "tsc --noEmit && vite build && node website/scripts/build.mjs && node scripts/verify-agent-guides.mjs && node scripts/docs-contract.mjs && node scripts/verify-panel-css.mjs",
+    "build": "tsc --noEmit && vite build && node website/scripts/build.mjs && node scripts/verify-agent-guides.mjs && node scripts/verify-panel-css.mjs",
     "lint": "oxlint .",
     "preview": "vite preview",
     "test": "vitest run",
