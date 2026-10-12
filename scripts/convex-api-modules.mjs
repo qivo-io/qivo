@@ -26,7 +26,8 @@ export function sourceModules(convexDir) {
       const rel = relative(convexDir, file)
       const base = entry.name
       const ext = EXTENSIONS.find((e) => rel.endsWith(e))
-      if (!ext || rel.startsWith(`_generated${sep}`) || rel.startsWith('_deps')) continue
+      // _deps/ is reserved for bundled dependencies (the CLI refuses code there)
+      if (!ext || rel.startsWith(`_generated${sep}`) || rel.startsWith(`_deps${sep}`)) continue
       if (base.startsWith('.') || base.startsWith('#') || rel.includes(' ')) continue
       if (base === 'schema.ts' || base === 'schema.js') continue
       if ((base.match(/\./g) || []).length > 1) continue

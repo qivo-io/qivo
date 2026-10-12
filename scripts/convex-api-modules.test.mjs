@@ -67,8 +67,10 @@ describe('convex/_generated/api.d.ts', () => {
         'notes.ts': '// no import or export',
         'component/convex.config.ts': 'export default {}',
         'component/inner.ts': 'export const c = 3',
+        '_deps/chunk.js': 'export const d = 4',
+        '_depsHelper.ts': 'export const e = 5',
       },
-      ['issues'],
+      ['issues', '_depsHelper'],
     )
     expect(drift).toEqual({ missing: [], extra: [] })
   })
