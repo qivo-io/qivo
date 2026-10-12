@@ -508,40 +508,77 @@ function IssueKey({ id, dim }: { id: string; dim?: boolean }) {
     </span>
   )
 }
+type ProjectRef = { id: string; name: string }
 /** A project's name, followed by its number when another project shown
-    alongside it has the same name (P.projectTag). By default the name
-    truncates and the number stays visible; `wrap` lets a long name wrap.
-    Plain-text places such as <option> use P.projectLabel instead. */
-function ProjectName({ project, wrap }: { project: { id: string; name: string }; wrap?: boolean }) {
-  const tag = P.projectTag(project.id)
-  if (!tag) return <>{project.name}</>
-  const number = (gap: string) => (
+    alongside it has the same name (P.projectTag). `owner` names the owning
+    project first, as in "Website, Design"; spread a P.projectPlace to get both.
+    By default each name truncates and the numbers stay visible; `wrap` lets
+    long names wrap. Plain-text places such as <option> use P.projectLabel or
+    P.placeLabel instead. */
+function ProjectName({
+  project,
+  owner,
+  wrap,
+}: {
+  project: ProjectRef
+  owner?: ProjectRef | null
+  wrap?: boolean
+}) {
+  const names = owner && owner.id !== project.id ? [owner, project] : [project]
+  const parts = names.map((p) => ({ id: p.id, name: p.name, tag: P.projectTag(p.id) }))
+  if (!parts.some((p) => p.tag)) return <>{names.map((p) => p.name).join(', ')}</>
+  // line-height 1 keeps the mono number from deepening the line it sits on
+  const number = (tag: string) => (
     <span
       data-project-tag
-      className={cn(gap, 'shrink-0 whitespace-nowrap !font-mono text-xs font-normal text-text-2')}
+      className="whitespace-nowrap !font-mono text-xs leading-none font-normal text-text-2"
     >
       {tag}
     </span>
   )
-  // a real space keeps "Test #4" apart for screen readers and lets it wrap
+  // real spaces keep "Test #4" apart for screen readers and copied text
   if (wrap) {
     return (
       <>
-        {project.name} {number('')}
+        {parts.map((p, i) => (
+          <Fragment key={p.id}>
+            {i > 0 && ', '}
+            {p.name}
+            {p.tag && <> {number(p.tag)}</>}
+          </Fragment>
+        ))}
       </>
     )
   }
+  // One grid column per part. Numbers and separators keep their width; the
+  // names truncate and share what is left equally, so a short name stays
+  // whole beside a long one. A grid drops plain spaces, so separators
+  // preserve them; the space before a number is drawn 6px wide.
+  const gap = (text: string, className?: string) => (
+    <span className={cn('whitespace-pre', className)}>{text}</span>
+  )
   return (
-    <span className="inline-flex min-w-0 max-w-full items-baseline align-bottom">
-      <span className="min-w-0 truncate">{project.name}</span>
-      {number('ml-1.5')}
+    <span className="inline-grid min-w-0 max-w-full grid-flow-col items-baseline align-bottom">
+      {parts.map((p, i) => (
+        <Fragment key={p.id}>
+          {i > 0 && gap(', ')}
+          <span className="truncate">{p.name}</span>
+          {p.tag && (
+            <>
+              {gap(' ', 'w-1.5 overflow-hidden')}
+              {number(p.tag)}
+            </>
+          )}
+        </Fragment>
+      ))}
     </span>
   )
 }
-/** ProjectName for a project id; nothing when the project is not loaded. */
-function ProjectNameOf({ id }: { id: string | null | undefined }) {
-  const project = P.project(id)
-  return project ? <ProjectName project={project} /> : null
+/** ProjectName for a project id, after its owning project with `withOwner`;
+    nothing when the project is not loaded. */
+function ProjectNameOf({ id, withOwner }: { id: string | null | undefined; withOwner?: boolean }) {
+  const place = P.projectPlace(id, !!withOwner)
+  return place ? <ProjectName {...place} /> : null
 }
 function Kbd({ children }: { children?: ReactNode }) {
   return (

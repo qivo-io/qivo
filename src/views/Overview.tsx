@@ -18,7 +18,13 @@ import {
   ProjectName,
   StatusDot,
 } from '../components/qivo'
-import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
+import {
+  type IssueVM,
+  type MilestoneVM,
+  P,
+  type ProjectPlace,
+  type ScopeInfo,
+} from '../store/planner'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import './Overview.css'
 import '../styles/mobile-views.css'
@@ -513,12 +519,12 @@ function OvHealthTable({ rows, unit, sort, setSort, onOpen, mobile }) {
    edge was restating the heading above it rather than adding anything */
 function OvPausedRow({
   it,
-  label,
+  place,
   wide,
   onOpen,
 }: {
   it: IssueVM
-  label: string
+  place: ProjectPlace | null
   wide: boolean
   onOpen: (id: string) => void
 }) {
@@ -545,14 +551,16 @@ function OvPausedRow({
       <span className="min-w-0 flex-1">
         <span className="line-clamp-2 break-words text-base leading-[1.4]">{it.title}</span>
         <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
-          <HoverTooltip content={label}>
-            <span
-              tabIndex={-1}
-              className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}
-            >
-              {label}
-            </span>
-          </HoverTooltip>
+          {place && (
+            <HoverTooltip content={P.placeLabel(place)}>
+              <span
+                tabIndex={-1}
+                className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}
+              >
+                <ProjectName {...place} />
+              </span>
+            </HoverTooltip>
+          )}
         </span>
       </span>
       {it.owner && <Avatar id={it.owner} size={28} />}
@@ -564,12 +572,12 @@ function OvPausedRow({
    0064) projected by the capacity walk to miss its due date */
 function OvAtRiskRow({
   it,
-  label,
+  place,
   wide,
   onOpen,
 }: {
   it: IssueVM
-  label: string
+  place: ProjectPlace | null
   wide: boolean
   onOpen: (id: string) => void
 }) {
@@ -610,14 +618,16 @@ function OvAtRiskRow({
           <span className="whitespace-nowrap !font-mono text-danger">
             {P.fmtISO(it.due)}, {overdue ? `${days}d overdue` : 'projected to miss'}
           </span>
-          <HoverTooltip content={label}>
-            <span
-              tabIndex={-1}
-              className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}
-            >
-              {label}
-            </span>
-          </HoverTooltip>
+          {place && (
+            <HoverTooltip content={P.placeLabel(place)}>
+              <span
+                tabIndex={-1}
+                className={cn('truncate', wide ? 'max-w-[190px]' : 'max-w-[120px]')}
+              >
+                <ProjectName {...place} />
+              </span>
+            </HoverTooltip>
+          )}
         </span>
       </span>
       {it.owner && <Avatar id={it.owner} size={28} />}
@@ -883,15 +893,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const nextMs = msSorted.find((m) => m.week >= P.TODAY_WEEK)
   // where a row's task lives — the sub-project alone inside one project, the
   // owning project too when every project is on screen at once
-  const rowLabel = (it: IssueVM) => {
-    const p = P.project(it.project)
-    const m = wide ? P.metaOf(it.project) : null
-    return m && p && m.id !== p.id
-      ? `${P.projectLabel(m)}, ${P.projectLabel(p)}`
-      : p
-        ? P.projectLabel(p)
-        : ''
-  }
+  const rowPlace = (it: IssueVM) => P.projectPlace(it.project, wide)
 
   return (
     <div
@@ -1042,7 +1044,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 <OvAtRiskRow
                   key={it.id}
                   it={it}
-                  label={rowLabel(it)}
+                  place={rowPlace(it)}
                   wide={wide}
                   onOpen={actions.openIssue}
                 />
@@ -1061,7 +1063,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 <OvPausedRow
                   key={it.id}
                   it={it}
-                  label={rowLabel(it)}
+                  place={rowPlace(it)}
                   wide={wide}
                   onOpen={actions.openIssue}
                 />

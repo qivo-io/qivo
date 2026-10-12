@@ -23,7 +23,7 @@ import {
 } from '@/lib/teamSync'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
-import { LoadChip, type PageCtx, TitleButton, weekFigure, whereLabel } from './SyncCard'
+import { LoadChip, type PageCtx, TitleButton, weekFigure } from './SyncCard'
 
 function Fact({
   label,
@@ -239,7 +239,9 @@ export function TeamOpening({
                     hook={{ 'data-sync-needs-owner': it.id }}
                     meta={
                       <>
-                        <span className="truncate">{whereLabel(it)}</span>
+                        <span className="truncate">
+                          <ProjectNameOf id={it.project} withOwner />
+                        </span>
                         {(urgent || it.priority === 'high') && (
                           <span className={urgent ? 'font-semibold text-danger' : 'text-text-2'}>
                             {P.PRIORITIES[it.priority].name}
@@ -272,7 +274,9 @@ export function TeamOpening({
                   hook={{ 'data-sync-needs-reviewer': it.id }}
                   meta={
                     <>
-                      <span className="truncate">{whereLabel(it)}</span>
+                      <span className="truncate">
+                        <ProjectNameOf id={it.project} withOwner />
+                      </span>
                       {since != null && <span>{waitingLabel(since, now)}</span>}
                     </>
                   }

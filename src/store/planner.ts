@@ -1696,6 +1696,9 @@ export type NewProjectInput = {
   access?: Record<string, AccessLevel>
   teamAccess?: Record<string, TeamAccessLevel>
 }
+/** A project and the project that owns it, for labels such as "Website,
+    Design". owner is null for a project shown alone (see P.projectPlace). */
+export type ProjectPlace = { project: ProjectVM; owner: ProjectVM | null }
 export type ProjectPatch = Partial<{
   name: string
   icon: string | null
@@ -1909,6 +1912,20 @@ export const PLANNER = {
     const p = PLANNER.project(id)
     return p ? PLANNER.projectLabel(p) : ''
   },
+  /** Where something lives: project `id`, after its owning project when
+      `withOwner` and the two differ. Render it with <ProjectName {...place} />
+      or as text with placeLabel. Null when the project is not loaded. */
+  projectPlace: (id: string | null | undefined, withOwner = true): ProjectPlace | null => {
+    const project = PLANNER.project(id)
+    if (!project) return null
+    const owner = withOwner ? PLANNER.metaOf(id) : null
+    return { project, owner: owner && owner.id !== project.id ? owner : null }
+  },
+  /** A place as plain text, such as "Website, Design #2". */
+  placeLabel: ({ project, owner }: ProjectPlace): string =>
+    owner
+      ? `${PLANNER.projectLabel(owner)}, ${PLANNER.projectLabel(project)}`
+      : PLANNER.projectLabel(project),
   user: (id: string | null | undefined): UserVM | undefined => findUser(PLANNER.users, id),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
   metaOf: (pid: string | null | undefined): ProjectVM | null => {
