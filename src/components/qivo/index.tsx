@@ -534,6 +534,11 @@ function ProjectName({ project, wrap }: { project: { id: string; name: string };
     </span>
   )
 }
+/** ProjectName for a project id; nothing when the project is not loaded. */
+function ProjectNameOf({ id }: { id: string | null | undefined }) {
+  const project = P.project(id)
+  return project ? <ProjectName project={project} /> : null
+}
 function Kbd({ children }: { children?: ReactNode }) {
   return (
     <span className="!font-mono [font-size:var(--fs-xs)] [background:var(--surface-3)] [border:1px_solid_var(--border)] [color:var(--text-3)] [padding:1px_5px] [border-radius:var(--r-sm)] [line-height:1.4]">
@@ -1580,6 +1585,7 @@ export {
   PriorityIcon,
   ProgressBar,
   ProjectName,
+  ProjectNameOf,
   Seg,
   StatusDot,
   UnreadDivider,

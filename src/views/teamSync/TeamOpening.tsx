@@ -7,7 +7,7 @@
    since each person's "since" differs. */
 import type { ReactNode } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
-import { Avatar, Icon, IssueKey } from '@/components/qivo'
+import { Avatar, Icon, IssueKey, ProjectNameOf } from '@/components/qivo'
 import { relativeWeek } from '@/lib/dates'
 import {
   bannerVerdict,
@@ -204,7 +204,7 @@ export function TeamOpening({
                     {m.name}
                   </span>
                   <span className="truncate text-xs text-text-3">
-                    {P.projectLabelOf(m.project)}
+                    <ProjectNameOf id={m.project} />
                   </span>
                   <span className="flex-1" />
                   <span

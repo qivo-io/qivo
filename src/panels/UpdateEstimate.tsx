@@ -3,7 +3,7 @@
    close flushes the focused input. Reviewed ticks are session-local, and rows
    re-derive from the store so remote changes update owners and counts. */
 import { useState as useStateU } from 'react'
-import { Avatar, IssueKey, StatusDot } from '../components/qivo'
+import { Avatar, IssueKey, ProjectName, StatusDot } from '../components/qivo'
 import {
   flushWalkInput,
   planHint,
@@ -144,7 +144,7 @@ function UpdateEstimateModal({ onClose }: { onClose: () => void }) {
                       </div>
                       <div className="[display:flex] [align-items:center] [gap:8px] [margin-top:4px] [font-size:var(--fs-xs)] [color:var(--text-3)]">
                         <span className="[overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                          {proj ? P.projectLabel(proj) : '—'},
+                          {proj ? <ProjectName project={proj} /> : '—'},
                         </span>
                         <StatusDot status={it.status} size={11} />
                         <span>

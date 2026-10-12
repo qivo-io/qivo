@@ -189,8 +189,8 @@ export type ArchivedProjectVM = ReturnType<typeof shapeArchivedProject>
 
 /* Projects shown together under one name get their number as a tag
    ("Test #1", "Test #4"), the number their address already uses. Names
-   compare trimmed and case-insensitively, independent of the browser's
-   locale, among projects of one organization with the same parent. Each list
+   compare with runs of whitespace collapsed (as HTML renders them) and
+   case-insensitively, independent of the browser's locale, among projects of one organization with the same parent. Each list
    is compared on its own: active and archived projects never share a list. */
 export type TaggableProject = Pick<ProjectVM, 'id' | 'org' | 'parent' | 'name' | 'num'>
 export function duplicateNameTags(...lists: readonly TaggableProject[][]): Map<string, string> {
@@ -198,7 +198,7 @@ export function duplicateNameTags(...lists: readonly TaggableProject[][]): Map<s
   for (const list of lists) {
     const groups = new Map<string, TaggableProject[]>()
     for (const p of list) {
-      const key = `${p.org}\u0000${p.parent ?? ''}\u0000${p.name.trim().toLowerCase()}`
+      const key = `${p.org}\u0000${p.parent ?? ''}\u0000${p.name.trim().replace(/\s+/g, ' ').toLowerCase()}`
       const group = groups.get(key)
       if (group) group.push(p)
       else groups.set(key, [p])

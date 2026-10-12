@@ -13,6 +13,7 @@ import {
   IssueKey,
   MenuItem,
   PausedMark,
+  ProjectNameOf,
   StatusDot,
 } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
@@ -523,7 +524,9 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
           <IssueKey id={it.key} dim />
-          <span className="truncate">{P.projectLabelOf(it.project)}</span>
+          <span className="truncate">
+            <ProjectNameOf id={it.project} />
+          </span>
           {hint && <span className="!font-mono">{hint}</span>}
           {it.start != null && it.due && (
             <span className={cn('!font-mono', dueLate && 'font-semibold text-danger')}>

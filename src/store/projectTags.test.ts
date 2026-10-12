@@ -35,6 +35,14 @@ describe('duplicateNameTags', () => {
     expect(Object.fromEntries(tags)).toEqual({ a: '#1', b: '#2' })
   })
 
+  it('treats names that differ only in inner spacing as the same', () => {
+    const tags = duplicateNameTags([
+      project({ id: 'a', name: 'Release QA', num: 1 }),
+      project({ id: 'b', name: 'Release  QA', num: 2 }),
+    ])
+    expect(Object.fromEntries(tags)).toEqual({ a: '#1', b: '#2' })
+  })
+
   it('tags sub-projects only against siblings under the same parent', () => {
     const tags = duplicateNameTags([
       project({ id: 's1', name: 'Design', num: 5, parent: 'p1' }),

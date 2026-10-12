@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { Avatar, Icon } from '../components/qivo'
+import { Avatar, Icon, ProjectName } from '../components/qivo'
 import { WorkspacePageHeader, WorkspaceShell } from '../components/WorkspaceShell'
 import { type ArchivedIssueVM, type IssueVM, P } from '../store/planner'
 import '../styles/settings-layout.css'
@@ -257,7 +257,11 @@ function ArchivePage({
                         </HoverTooltip>
                         <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
                           <span className="!font-mono">{r.key}</span>
-                          {sp && <span className="max-w-36 truncate">{sp.name}</span>}
+                          {sp && (
+                            <span className="max-w-36 truncate">
+                              <ProjectName project={sp} />
+                            </span>
+                          )}
                           {!P.isGroup(r) && (
                             <span className="inline-flex items-center gap-1 font-semibold text-text-1">
                               <span

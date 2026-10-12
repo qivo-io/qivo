@@ -146,7 +146,7 @@ export function OrgProjectsPage({
                 }}
                 className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
               >
-                <ProjectName project={sp} />
+                <ProjectName project={sp} wrap />
               </Button>
               <Popover width={206} align="right" button={menuButton('Sub-project actions')}>
                 {(close) => (

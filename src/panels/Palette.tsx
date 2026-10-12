@@ -9,7 +9,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
-import { IssueKey, ProjectName, StatusDot } from '../components/qivo'
+import { IssueKey, ProjectName, ProjectNameOf, StatusDot } from '../components/qivo'
 import { restoreFocus } from '../lib/focusVisibility'
 import { createPaletteSearch } from '../lib/paletteSearch'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -110,7 +110,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
                 <span className="min-w-0 flex-1 truncate text-base text-text-1">{issue.title}</span>
                 {!P.isGroup(issue) && <StatusDot status={issue.status} />}
                 <span className="max-w-[120px] truncate text-xs text-text-3">
-                  {P.projectLabelOf(issue.project)}
+                  <ProjectNameOf id={issue.project} />
                 </span>
               </CommandItem>
             ))}

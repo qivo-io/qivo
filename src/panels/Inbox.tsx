@@ -18,7 +18,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { AnchoredPop, Icon, MenuDivider, MenuItem, Popover, Seg } from '../components/qivo'
+import {
+  AnchoredPop,
+  Icon,
+  MenuDivider,
+  MenuItem,
+  Popover,
+  ProjectName,
+  Seg,
+} from '../components/qivo'
 import { fmtDateTime } from '../lib/dates'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
@@ -262,7 +270,9 @@ function MessageRow({
                         className="[display:inline-block] [vertical-align:-1px] [margin:0_1px]"
                       />
                     )}
-                    <span data-msg-crumb>{P.projectLabel(p)}</span>
+                    <span data-msg-crumb>
+                      <ProjectName project={p} />
+                    </span>
                   </React.Fragment>
                 ))
               : secondLine(g)}
