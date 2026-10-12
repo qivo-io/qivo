@@ -87,7 +87,7 @@ describe('project creation through the client store', () => {
     ['bad_request', 'meta', "Couldn't create project “Test”"],
     ['not_found', 'meta', "Couldn't create project “Test”"],
     ['forbidden', 'meta', 'No permission to create project “Test”'],
-    ['rule', 'project', 'Parent project not found — reverted'],
+    ['rule', 'project', "Couldn't create sub-project “Test”. Parent project not found."],
   ] as const)('a %s refusal of a %s names it and removes it', async (code, type, message) => {
     const onSaved = vi.fn()
     const onRefused = vi.fn()

@@ -800,8 +800,8 @@ function App() {
   )
   // Where the user is, as the address mirrors it: a project create that
   // finishes saving moves the user into the project only if this is unchanged.
-  const placeRef = useRef('')
-  placeRef.current = JSON.stringify([
+  // The ref follows committed renders only.
+  const place = JSON.stringify([
     scope,
     view,
     openIssue,
@@ -811,6 +811,10 @@ function App() {
     projectsOpen,
     sync,
   ])
+  const placeRef = useRef(place)
+  useLayoutEffect(() => {
+    placeRef.current = place
+  }, [place])
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive =
     view === 'roadmap' && !settingsPage && !archiveOpen && !inboxOpen && !projectsOpen && !sync

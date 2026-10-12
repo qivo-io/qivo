@@ -641,13 +641,15 @@ function restoreErrorText(e: unknown): string {
   return "Couldn't restore"
 }
 
-/* A refused project create names what disappeared. Rule sentences and
-   billing refusals explain themselves in the shared wording; every other
-   refusal would read "Couldn't save", which does not say a project is gone. */
+/* A refused project create names what disappeared, followed by the reason
+   when a rule or billing refusal carries one; every other refusal would read
+   "Couldn't save", which does not say a project is gone. */
 function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
   if ((d.code === 'rule' || d.reason === 'billing_required') && d.message) {
-    toastWriteError(e)
+    const m = String(d.message)
+    const reason = m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+    toast(`Couldn't create ${label}. ${reason}`)
     return
   }
   toast(d.code === 'forbidden' ? `No permission to create ${label}` : `Couldn't create ${label}`)
