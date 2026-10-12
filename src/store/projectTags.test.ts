@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../convex/_generated/api'
+import type { Doc } from '../../convex/_generated/dataModel'
+import { as, newT, plantSeat, uuid, withOrg } from '../../convex/tests/helpers.setup'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 import { duplicateNameTags, type TaggableProject } from './viewModels'
 
@@ -80,10 +83,23 @@ describe('project labels in the store', () => {
     vi.unstubAllGlobals()
   })
 
-  // parent is the 1-based number of an earlier entry, making this a sub-project
-  async function boot(names: { name: string; archived?: boolean; parent?: number }[]) {
+  // a fresh store whose first delivery is `snap`
+  async function start(snap: Snapshot) {
     vi.resetModules()
     vi.stubGlobal('window', { showToast: vi.fn() })
+    network.query.mockResolvedValue(null)
+    network.mutation.mockResolvedValue(null)
+    network.onUpdate.mockImplementation((_ref, _args, next) => {
+      next(structuredClone(snap))
+      return () => {}
+    })
+    const store = await import('./planner')
+    await store.initStore()
+    return store.P
+  }
+
+  // parent is the 1-based number of an earlier entry, making this a sub-project
+  async function boot(names: { name: string; archived?: boolean; parent?: number }[]) {
     const snap: Snapshot = fixture()
     const org = snap.orgs[0].id
     snap.projects = names.map(({ name, archived, parent }, i) => ({
@@ -100,15 +116,7 @@ describe('project labels in the store', () => {
       created_at: '2026-09-14T08:00:00.000Z',
       ...(archived ? { archived_at: '2026-09-15T08:00:00.000Z' } : {}),
     }))
-    network.query.mockResolvedValue(null)
-    network.mutation.mockResolvedValue(null)
-    network.onUpdate.mockImplementation((_ref, _args, next) => {
-      next(structuredClone(snap))
-      return () => {}
-    })
-    const store = await import('./planner')
-    await store.initStore()
-    return store.P
+    return start(snap)
   }
 
   it('adds the number only where two shown projects share a name', async () => {
@@ -145,5 +153,48 @@ describe('project labels in the store', () => {
     const P = await boot([{ name: 'Test' }, { name: 'Test', archived: true }])
     expect(P.projectTag('p1')).toBeNull()
     expect(P.projectTag('p2')).toBeNull()
+  })
+
+  /* Duplicates are judged per viewer, from the projects the server lets that
+     person see. This runs the real project creation and snapshot query, so a
+     server change that starts sending other people's projects, or a client
+     change that compares names across the whole organization, fails here. */
+  it('numbers a shared name only for someone who can see both projects', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const colleague = await plantSeat(t, { org_id: f.org.id, auth_user_id: `auth_${uuid()}` })
+    // each member creates a "Test" that only they lead and nobody is granted
+    const create = (by: Doc<'profiles'>) =>
+      as(t, by).mutation(api.projects.create, {
+        org_id: f.org.id,
+        id: uuid(),
+        type: 'meta',
+        key: 'TEST',
+        name: 'Test',
+        sort_order: 9,
+      })
+    const mine = await create(f.user)
+    const theirs = await create(colleague)
+    const snapshotOf = async (profile: Doc<'profiles'>) => {
+      const snap = await as(t, profile).query(api.snapshot.forMe, {})
+      if (snap === null) throw new Error(`no snapshot for ${profile.name}`)
+      return snap
+    }
+    const forUser = await snapshotOf(f.user)
+    const forColleague = await snapshotOf(colleague)
+    const forAdmin = await snapshotOf(f.admin)
+
+    let P = await start(forUser)
+    expect(P.project(theirs.id)).toBeUndefined()
+    expect(P.projectLabelOf(mine.id)).toBe('Test')
+
+    P = await start(forColleague)
+    expect(P.project(mine.id)).toBeUndefined()
+    expect(P.projectLabelOf(theirs.id)).toBe('Test')
+
+    // an organization admin sees both, so both carry their numbers
+    P = await start(forAdmin)
+    expect(P.projectLabelOf(mine.id)).toBe(`Test #${mine.num}`)
+    expect(P.projectLabelOf(theirs.id)).toBe(`Test #${theirs.num}`)
   })
 })
