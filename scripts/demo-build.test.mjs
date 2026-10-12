@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { finishDemoBuild } from './demo-build.mjs'
+import { finishDemoBuild, WEBSITE_OUTPUT } from './demo-build.mjs'
 import { assertDemoTarget } from './demo-deploy.mjs'
 
 describe('dedicated demo deployment target', () => {
@@ -69,7 +69,10 @@ describe('demo build output', () => {
     finishDemoBuild(directory)
     const app = readFileSync(join(directory, 'app.html'), 'utf8')
     expect(readFileSync(join(directory, 'admin.html'), 'utf8')).toBe(app)
-    expect(existsSync(join(directory, 'index.html'))).toBe(false)
+    const root = readFileSync(join(directory, 'index.html'), 'utf8')
+    expect(root).toContain('content="0;url=/app"')
+    expect(root).toContain('location.replace(`/app${location.search}${location.hash}`)')
+    expect(root).toContain('<meta name="robots" content="noindex,nofollow">')
     expect(app).toContain('src="/assets/app.js"')
     expect(app).not.toContain('Operator login')
     for (const file of ['app.html', 'admin.html'])
@@ -85,6 +88,17 @@ describe('demo build output', () => {
       expect(guide).toContain('Each demo expires after 24 hours.')
       expect(guide).toContain('https://qivo.io/app#signup')
       expect(guide).not.toContain('Normal workspace credentials and OAuth instructions')
+    }
+  })
+
+  it('refuses output that contains the website', () => {
+    for (const name of WEBSITE_OUTPUT) {
+      const directory = mkdtempSync(join(tmpdir(), 'qivo-demo-build-'))
+      directories.push(directory)
+      writeFileSync(join(directory, 'app.html'), '<html><head></head></html>')
+      if (name.includes('.')) writeFileSync(join(directory, name), 'website')
+      else mkdirSync(join(directory, name))
+      expect(() => finishDemoBuild(directory), name).toThrow(/must not include the website/)
     }
   })
 })

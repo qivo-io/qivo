@@ -1,0 +1,116 @@
+[
+  {
+    "path": "/docs/",
+    "anchors": []
+  },
+  {
+    "path": "/docs/qivo-in-one-minute/",
+    "anchors": ["private-demo", "app-updates", "desktop-app", "using-qivo-on-a-phone"]
+  },
+  {
+    "path": "/docs/how-work-is-organized/",
+    "anchors": [
+      "the-task",
+      "creating-a-task",
+      "permanent-task-ids",
+      "archiving-a-project-putting-a-finished-one-away"
+    ]
+  },
+  {
+    "path": "/docs/finding-your-way-around/",
+    "anchors": [
+      "sidebar",
+      "top-bar",
+      "all-projects",
+      "my-view",
+      "the-three-views",
+      "filters-board-and-roadmap",
+      "search-palette",
+      "links-you-can-share",
+      "keyboard-in-brief"
+    ]
+  },
+  {
+    "path": "/docs/the-overview-project-health-at-a-glance/",
+    "anchors": []
+  },
+  {
+    "path": "/docs/the-board/",
+    "anchors": ["board-layouts", "cards", "stale-tasks-fade"]
+  },
+  {
+    "path": "/docs/the-roadmap/",
+    "anchors": [
+      "a-window-you-control",
+      "weeks-that-match-your-calendar",
+      "scheduling-by-hand",
+      "undo-this-roadmap-visits-changes",
+      "dependencies-you-can-see-and-safely-fix",
+      "estimates-refresh-the-numbers-before-you-plan"
+    ]
+  },
+  {
+    "path": "/docs/will-it-be-ready-in-time-the-delay-status/",
+    "anchors": [
+      "how-the-projection-works",
+      "where-you-see-it",
+      "turning-it-on-and-off",
+      "review-time"
+    ]
+  },
+  {
+    "path": "/docs/planning-against-real-capacity/",
+    "anchors": ["plan-on-roadmap", "the-team-strip", "team-sync"]
+  },
+  {
+    "path": "/docs/the-task-window/",
+    "anchors": [
+      "the-discussion-column",
+      "the-details-column",
+      "moving-a-task",
+      "archiving",
+      "archiving-done-work-leaves-the-room-on-its-own"
+    ]
+  },
+  {
+    "path": "/docs/organization-and-team-settings/",
+    "anchors": ["export-data", "organization-address", "planning-hours-and-teams", "labels"]
+  },
+  {
+    "path": "/docs/working-together/",
+    "anchors": [
+      "who-a-person-is",
+      "appearance-preferences-themes-and-the-canvas-background",
+      "your-inbox"
+    ]
+  },
+  {
+    "path": "/docs/who-sees-what-the-access-model/",
+    "anchors": ["people-outside-your-organization"]
+  },
+  {
+    "path": "/docs/automation-ai-the-rest-api-and-the-mcp-server/",
+    "anchors": [
+      "guides-for-agents",
+      "rest-api-for-scripts-and-automation",
+      "automatic-task-events",
+      "mcp-server-for-ai-assistants"
+    ]
+  },
+  {
+    "path": "/docs/administration-guard-rails-and-the-demo/",
+    "anchors": [
+      "four-ways-to-be-a-user",
+      "agent-users",
+      "managing-projects-and-accounts",
+      "billing-and-free-access",
+      "separate-app-and-admin-sign-in",
+      "demo-usage-platform-operators",
+      "background-images-platform-operators"
+    ]
+  },
+  {
+    "path": "/docs/what-sets-qivo-apart-the-marketing-summary/",
+    "anchors": []
+  }
+]

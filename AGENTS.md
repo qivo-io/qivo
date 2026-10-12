@@ -46,14 +46,13 @@ as task/tasks. Guide slugs, headings and agent-guide links are public URLs;
 `node scripts/docs-contract.mjs` checks them and follows the rules in
 `docs/documentation.md`.
 
-This repository is the application only. The qivo.io marketing, pricing and
-rendered docs website is built in qivo-internal from this repository's
-`docs/guide/` and must not be added back here. `vercel.json` proxies unknown
-paths to the production website only for the exact hosts `qivo.io` and
-`www.qivo.io`. The exact staging host `preview.qivo.io` uses its protected
-website proxy. Other hosts redirect `/` to `/app`. Keep app routes and files ahead of
-the proxy and run `npx vitest run scripts/vercel-routing.test.mjs` after any
-routing change. Changes to application access control must fail closed.
+The qivo.io website (homepage, pricing and the docs rendered from
+`docs/guide/`) is in `website/`. `npm run build` writes it into `dist/` after
+`vite build`, so one deployment serves the website, `/app` and `/admin`. The
+website build must never replace an application file, and the demo build
+leaves it out. Only `demo.qivo.io` redirects `/` to `/app`. Run
+`npx vitest run scripts/vercel-routing.test.mjs` after any routing change.
+Changes to application access control must fail closed.
 Do not create or modify GitHub issues; Qivo work items are tasks.
 
 ## Deployment and version control

@@ -10,11 +10,11 @@
   "redirects": [
     {
       "source": "/",
-      "missing": [
+      "has": [
         {
           "type": "host",
           "value": {
-            "inc": ["qivo.io", "www.qivo.io", "preview.qivo.io"]
+            "inc": ["demo.qivo.io"]
           }
         }
       ],
@@ -38,50 +38,9 @@
     {
       "source": "/admin/",
       "destination": "/admin.html"
-    },
-    {
-      "source": "/:path(.*)",
-      "has": [
-        {
-          "type": "host",
-          "value": {
-            "inc": ["qivo.io", "www.qivo.io"]
-          }
-        }
-      ],
-      "destination": "https://site-origin.qivo.io/:path"
-    },
-    {
-      "source": "/:path(.*)",
-      "has": [
-        {
-          "type": "host",
-          "value": {
-            "inc": ["preview.qivo.io"]
-          }
-        }
-      ],
-      "destination": "/api/website?__qivo_path=:path"
     }
   ],
   "headers": [
-    {
-      "source": "/:path(.*)",
-      "has": [
-        {
-          "type": "host",
-          "value": {
-            "inc": ["qivo.io", "www.qivo.io", "preview.qivo.io"]
-          }
-        }
-      ],
-      "headers": [
-        {
-          "key": "x-vercel-enable-rewrite-caching",
-          "value": "0"
-        }
-      ]
-    },
     {
       "source": "/(.*)",
       "has": [
@@ -149,6 +108,15 @@
     },
     {
       "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/marketing/fonts/:file(.+\\.[0-9a-f]{8}\\.woff2)",
       "headers": [
         {
           "key": "Cache-Control",

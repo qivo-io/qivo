@@ -18,16 +18,16 @@ Convex hosts the database, functions and storage; Better Auth provides sign-in
 and browser-approved MCP connections. Polar supports optional billing.
 
 `src/` contains the frontend, `convex/` the backend and hermetic backend tests,
-`api/` Vercel server functions, `desktop/` the Electron shell, and `scripts/`
-build and verification tools. User-facing guides are Markdown in
+`api/` Vercel server functions, `website/` the qivo.io homepage, pricing page
+and docs renderer, `desktop/` the Electron shell, and `scripts/` build and
+verification tools. User-facing guides are Markdown in
 [docs/guide/](docs/guide/) ([publishing rules](docs/documentation.md)); machine
 contracts are in [docs/rest-api.md](docs/rest-api.md) and [docs/mcp.md](docs/mcp.md).
 The agent guides `llms.txt`, `skill.md` and `auth.md` are in `public/`.
 
-This repository is the application only. The qivo.io marketing pages,
-pricing page and rendered documentation are a separate website that reads
-`docs/guide/` from this repository. A deployment of this repository serves
-the app: `/` redirects to `/app`.
+A deployment serves the website at `/`, `/docs/` and `/pricing/`, the planner
+at `/app` and the operator console at `/admin`. See
+[website/README.md](website/README.md).
 
 ## Development
 
@@ -54,6 +54,7 @@ provision shared accounts or reset data automatically.
 After configuring your development backend, `npm run dev` runs Convex and Vite
 on port 5199. `/` redirects to the planner at `/app`, and the operator console
 is `/admin`. Configure the backend `SITE_URL` to the exact development origin.
+To see the website, run `npm run build` and then `npm run preview`.
 
 ## Verification
 
@@ -72,24 +73,19 @@ non-production deployment.
 ## Deployment
 
 Successful main CI deploys the app, website and docs to persistent staging at
-`https://preview.qivo.io`. Staging builds the current main of both this
-repository and the private website repository, uses separate Vercel projects,
-a separate Convex backend and private credentials, and is access-protected.
-Feature branches retain isolated previews. Ordinary deployments preserve test
-data.
+`https://preview.qivo.io`. Staging uses its own Vercel project, a separate
+Convex backend and private credentials, and is access-protected. Feature
+branches get isolated previews that include the website. Ordinary deployments
+preserve test data.
 
 Production follows a published GitHub Release. **Prepare release** (a manual
 GitHub Actions workflow) drafts a release for exactly the commit staging
 serves, and publishing that draft deploys the app, website and demo. The
 deployment verifies CI, secret scanning and a successful staging deployment of
-the same app and website commits, and refuses any release older than the
-newest version tag. Draft releases and prereleases do not deploy production. Vercel
-production projects reject Git and deploy-hook deployment requests.
+the same commit, and refuses any release older than the newest version tag.
+Draft releases and prereleases do not deploy production. Vercel production
+projects reject Git and deploy-hook deployment requests.
 
-On `qivo.io` and `www.qivo.io`, non-app paths use `https://site-origin.qivo.io`.
-On `preview.qivo.io`, a server-side proxy serves the protected staging website.
-Other hosts redirect `/` to `/app`. App routes and assets take precedence.
-The website renders this repository's guides at the exact deployed app commit.
 See [deployment and release operations](docs/deployment.md) for setup,
 validation, failure handling and rollback. Never expose server secrets as `VITE_*`.
 
@@ -101,8 +97,8 @@ artifacts.
 ## Repository boundary and license
 
 The product source, tests, public documentation and required licensed/generated
-assets are public. Private operational notes, design studies, business plans and
-project credentials live in the access-controlled `qivo-io/qivo-internal` repo.
+assets are public. The qivo.io website and its assets are public too. Private operational notes,
+design studies, business plans and project credentials live in the access-controlled `qivo-io/qivo-internal` repo.
 A clean source snapshot was copied without importing the former repository's
 Git history. The existing destination license is [Apache-2.0](LICENSE).
 Third-party assets retain their own license and attribution. The demo

@@ -36,7 +36,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
-      - name: Verify release conditions and deploy exact revisions
+      - name: Verify release conditions and deploy the exact revision
         env:
           GH_TOKEN: ${{ github.token }}
           QIVO_ENVIRONMENT: ${{ inputs.environment }}
@@ -44,10 +44,8 @@ jobs:
           QIVO_APP_ORIGIN: ${{ vars.QIVO_APP_ORIGIN }}
           VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
           VERCEL_APP_PROJECT_ID: ${{ vars.VERCEL_APP_PROJECT_ID }}
-          VERCEL_SITE_PROJECT_ID: ${{ vars.VERCEL_SITE_PROJECT_ID }}
           VERCEL_DEMO_PROJECT_ID: ${{ vars.VERCEL_DEMO_PROJECT_ID }}
           VERCEL_APP_TOKEN: ${{ secrets.VERCEL_APP_TOKEN }}
-          VERCEL_SITE_TOKEN: ${{ secrets.VERCEL_SITE_TOKEN }}
           VERCEL_DEMO_TOKEN: ${{ secrets.VERCEL_DEMO_TOKEN }}
           VERCEL_APP_PROTECTION_BYPASS: ${{ secrets.VERCEL_APP_PROTECTION_BYPASS }}
         run: node scripts/deploy-environment.mjs

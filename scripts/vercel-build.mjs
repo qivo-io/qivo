@@ -88,6 +88,13 @@ function setPreviewSiteUrl(env) {
   }
 }
 
+/* The origin the website build writes into canonical links and the sitemap:
+ * the branch preview's own host, or the stable environment's app origin,
+ * which main() has just checked against the backend's SITE_URL. */
+export function websiteOrigin(env) {
+  return isPreviewDeployKey(env.CONVEX_DEPLOY_KEY) ? previewSiteUrl(env) : env.QIVO_APP_ORIGIN
+}
+
 function main(env) {
   if (isPreviewDeployKey(env.CONVEX_DEPLOY_KEY)) {
     if (env.QIVO_ENVIRONMENT !== 'preview')
@@ -113,7 +120,10 @@ function main(env) {
         throw new Error(`Backend ${name} does not match the build.`)
     }
   }
-  execFileSync('npm', ['run', 'build'], { stdio: 'inherit' })
+  execFileSync('npm', ['run', 'build'], {
+    stdio: 'inherit',
+    env: { ...env, SITE_ORIGIN: websiteOrigin(env) },
+  })
   writeDeploymentReceipt(env)
 }
 
