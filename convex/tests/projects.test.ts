@@ -177,7 +177,7 @@ describe('projects.create', () => {
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, subArgs(f.otherProject.id, 'SUB2')),
       'rule',
-      new RegExp(`^parent project ${f.otherProject.id} not found$`),
+      /^parent project not found$/,
     )
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, subArgs(f.sub.id, 'SUB3')),

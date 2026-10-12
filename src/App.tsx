@@ -798,6 +798,23 @@ function App() {
   const [sync, setSync] = useState<SyncPlace | null>(() =>
     r0?.sync && P.homeOrg ? syncPlaceFor(r0.sync, mobile) : null,
   )
+  // Where the user is, as the address mirrors it: a project create that
+  // finishes saving moves the user into the project only if this is unchanged.
+  // The ref follows committed renders only.
+  const place = JSON.stringify([
+    scope,
+    view,
+    openIssue,
+    settingsPage,
+    archiveOpen,
+    inboxOpen,
+    projectsOpen,
+    sync,
+  ])
+  const placeRef = useRef(place)
+  useLayoutEffect(() => {
+    placeRef.current = place
+  }, [place])
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive =
     view === 'roadmap' && !settingsPage && !archiveOpen && !inboxOpen && !projectsOpen && !sync
@@ -1305,25 +1322,32 @@ function App() {
     navOpenIssue(key)
     return true
   }
+  // The new project shows in the sidebar at once, but the toast, the starter
+  // task and the move into the project wait for the server. A refused create
+  // must not leave the user inside a project that then disappears.
   const createProject = (p, { withStarter }) => {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
-    const id = P.addProject(p)
-    if (withStarter) {
-      P.addIssue({
-        title: p.name,
-        project: id,
-        status: 'backlog',
-        priority: 'medium',
-        assignee: p.lead || null,
-        parent: null,
-      })
-    }
+    const placeAtCreate = placeRef.current
+    const id = P.addProject(p, () => {
+      if (withStarter) {
+        P.addIssue({
+          title: p.name,
+          project: id,
+          status: 'backlog',
+          priority: 'medium',
+          assignee: p.lead || null,
+          parent: null,
+        })
+      }
+      window.showToast?.(`${p.type === 'meta' ? 'Project' : 'Sub-project'} “${p.name}” created`)
+      // follow the new project unless the user moved elsewhere while it saved
+      if (placeRef.current !== placeAtCreate) return
+      setScope(id)
+      setProjectsOpen(false)
+      setSync(null)
+    })
     setModal(null)
-    window.showToast?.(`${p.type === 'meta' ? 'Project' : 'Sub-project'} “${p.name}” created`)
-    setScope(id)
-    setProjectsOpen(false)
-    setSync(null)
   }
 
   const setTweak = (patch) => {
