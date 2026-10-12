@@ -798,6 +798,19 @@ function App() {
   const [sync, setSync] = useState<SyncPlace | null>(() =>
     r0?.sync && P.homeOrg ? syncPlaceFor(r0.sync, mobile) : null,
   )
+  // Where the user is, as the address mirrors it: a project create that
+  // finishes saving moves the user into the project only if this is unchanged.
+  const placeRef = useRef('')
+  placeRef.current = JSON.stringify([
+    scope,
+    view,
+    openIssue,
+    settingsPage,
+    archiveOpen,
+    inboxOpen,
+    projectsOpen,
+    sync,
+  ])
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive =
     view === 'roadmap' && !settingsPage && !archiveOpen && !inboxOpen && !projectsOpen && !sync
@@ -1311,7 +1324,7 @@ function App() {
   const createProject = (p, { withStarter }) => {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
-    const scopeAtCreate = scopeRef.current
+    const placeAtCreate = placeRef.current
     const id = P.addProject(p, () => {
       if (withStarter) {
         P.addIssue({
@@ -1325,7 +1338,7 @@ function App() {
       }
       window.showToast?.(`${p.type === 'meta' ? 'Project' : 'Sub-project'} “${p.name}” created`)
       // follow the new project unless the user moved elsewhere while it saved
-      if (scopeRef.current !== scopeAtCreate) return
+      if (placeRef.current !== placeAtCreate) return
       setScope(id)
       setProjectsOpen(false)
       setSync(null)
