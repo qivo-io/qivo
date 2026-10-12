@@ -454,6 +454,42 @@ describe('deployment identity', () => {
       /not built for this environment/,
     )
   })
+  it('sends the protection bypass only to staging, which must have one', async () => {
+    const staging = {
+      QIVO_ENVIRONMENT: 'staging',
+      QIVO_COMMIT: SHA,
+      QIVO_APP_ORIGIN: 'https://preview.qivo.io',
+      GITHUB_REPOSITORY: 'qivo-io/qivo',
+      VERCEL_TEAM_ID: 'team-id',
+      VERCEL_APP_PROJECT_ID: 'app-id',
+      VERCEL_APP_TOKEN: 'app-test-token',
+      GH_TOKEN: 'github-test-token',
+      GITHUB_RUN_ID: '300',
+      GITHUB_EVENT_NAME: 'workflow_run',
+      GITHUB_REF: 'refs/heads/main',
+    }
+    const production = {
+      ...staging,
+      QIVO_ENVIRONMENT: 'production',
+      QIVO_APP_ORIGIN: 'https://qivo.io',
+      VERCEL_DEMO_PROJECT_ID: 'demo-id',
+      VERCEL_DEMO_TOKEN: 'demo-test-token',
+    }
+    // GitHub passes an empty string for a missing secret.
+    expect(() => configuration({ ...staging, VERCEL_APP_PROTECTION_BYPASS: '' })).toThrow(
+      /^VERCEL_APP_PROTECTION_BYPASS must be configured/,
+    )
+    expect(configuration({ ...production, VERCEL_APP_PROTECTION_BYPASS: '' }).appBypass).toBeNull()
+    const sent = async (env) => {
+      const target = configuration({ ...env, VERCEL_APP_PROTECTION_BYPASS: 'bypass-secret' })
+      const { calls, fetchImpl } = providers(target.environment)
+      await verifyPublicBuild(target, fetchImpl)
+      return [...new Set(calls.map((call) => call.bypass))]
+    }
+    expect(await sent(staging)).toEqual(['bypass-secret'])
+    // qivo.io and demo.qivo.io are public, so production ignores the secret.
+    expect(await sent(production)).toEqual([undefined])
+  })
   it('preflights every project and refuses a staging binding to production before any write', async () => {
     const calls = []
     const staging = {
@@ -517,6 +553,7 @@ function providers(environment, { servedOrigin } = {}) {
       method: request.method || 'GET',
       body,
       authorization: request.headers?.Authorization,
+      bypass: request.headers?.['x-vercel-protection-bypass'],
     })
     if (parsed.host === 'api.github.com') {
       if (request.method === 'POST') return Response.json({ id: 30 })
@@ -604,6 +641,7 @@ describe('complete deployments', () => {
     environment: 'staging',
     origin: 'https://preview.qivo.io',
     demo: null,
+    appBypass: 'bypass-secret',
     eventName: 'workflow_run',
     ref: 'refs/heads/main',
   }
