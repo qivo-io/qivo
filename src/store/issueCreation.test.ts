@@ -141,6 +141,7 @@ describe('task creation through the client store', () => {
     expect(onKeyFixed).not.toHaveBeenCalled()
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
       "You don't have permission for that — reverted",
+      'error',
     )
   })
 })

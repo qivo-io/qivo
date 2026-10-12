@@ -4,13 +4,14 @@ import { Input } from '@/components/ui/input'
 import { Avatar, type AvatarSize, Icon, MenuItem, Popover } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import { P, type UserVM } from '../../store/planner'
+import { P, type ToastTone, type UserVM } from '../../store/planner'
 
 // Account owners and organization admins share the same avatar controls.
 function useAvatarUpload(user: UserVM) {
   const ref = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
-  const toast = (m: string) => window.showToast?.(m)
+  // The avatar mutators answer an error sentence, or nothing when they worked.
+  const toast = (m: string, tone: ToastTone) => window.showToast?.(m, tone)
   const onChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     // Clear first so choosing the same file triggers another change.
@@ -19,14 +20,14 @@ function useAvatarUpload(user: UserVM) {
     setBusy(true)
     const err = await P.setAvatar(user.id, file)
     setBusy(false)
-    toast(err || 'Picture updated')
+    toast(err || 'Picture updated', err ? 'error' : 'success')
   }
   const clear = async () => {
     if (busy) return
     setBusy(true)
     const err = await P.clearAvatar(user.id)
     setBusy(false)
-    toast(err || 'Picture removed')
+    toast(err || 'Picture removed', err ? 'error' : 'success')
   }
   const input = (
     <Input

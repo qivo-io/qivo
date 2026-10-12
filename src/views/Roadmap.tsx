@@ -521,7 +521,7 @@ function Roadmap({
     // would silently write dates the user never saw — discard the gesture
     // (pickers/modals don't need this: they re-render their dates live)
     if (epoch !== undefined && epoch !== P.gridEpoch) {
-      window.showToast?.('The week grid changed mid-drag — reschedule discarded')
+      window.showToast?.('The week grid changed mid-drag — reschedule discarded', 'error')
       return
     }
     const it = P.issueById[id]
@@ -576,7 +576,7 @@ function Roadmap({
     setMsLive({})
     // same mid-drag grid-re-anchor guard as the bar commit above
     if (epoch !== undefined && epoch !== P.gridEpoch) {
-      window.showToast?.('The week grid changed mid-drag — move discarded')
+      window.showToast?.('The week grid changed mid-drag — move discarded', 'error')
       return
     }
     if (w != null) P.setMilestone(id, w)
@@ -791,7 +791,7 @@ function Roadmap({
     }
     // The task can change after the detail window requested planning.
     if (it.status === 'backlog') {
-      window.showToast?.('Move this task out of Backlog before planning it on the roadmap')
+      window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
       onFocusConsumed?.()
       return
     }

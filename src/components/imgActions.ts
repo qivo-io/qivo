@@ -1,10 +1,11 @@
 /* Shared behaviors for description images — used by the read-only renderer
    (components/markdown) and the editor's image node view (descEditor), so
    copy/download/open work identically in both. */
-import { P } from '../store/planner'
+import { P, type ToastTone } from '../store/planner'
 
-export function toast(msg: string) {
-  window.showToast?.(msg)
+/* Image and editor toasts are failures or refusals unless a tone is named. */
+export function toast(msg: string, tone: ToastTone = 'error') {
+  window.showToast?.(msg, tone)
 }
 
 /** Any raster format the clipboard won't take gets transcoded to PNG (the
@@ -43,7 +44,7 @@ export async function copyImage(freshUrl: () => Promise<string | null>) {
       return fetchPng(u)
     })
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
-    toast('Image copied')
+    toast('Image copied', 'success')
   } catch {
     toast("Couldn't copy the image")
   }
