@@ -4,6 +4,7 @@ import {
   ignoredTheTarget,
   isPreviewDeployKey,
   previewSiteUrl,
+  websiteOrigin,
 } from './vercel-build.mjs'
 
 /* The build script decides, from the environment alone, whether this deploy
@@ -112,5 +113,23 @@ describe('ignoredTheTarget — a success that went somewhere else is not a succe
       ignoredTheTarget('\u2714 Successfully set SITE_URL (on preview deployment tidy-otter-12)\n'),
     ).toBe(false)
     expect(ignoredTheTarget('')).toBe(false)
+  })
+})
+
+describe('websiteOrigin — where the website build points canonical links', () => {
+  it('uses the branch host for previews and the checked app origin for stable builds', () => {
+    expect(
+      websiteOrigin({
+        CONVEX_DEPLOY_KEY: 'preview:team:qivo|abc',
+        VERCEL_BRANCH_URL: 'qivo-git-x-techqi.vercel.app',
+        QIVO_APP_ORIGIN: 'https://qivo.io',
+      }),
+    ).toBe('https://qivo-git-x-techqi.vercel.app')
+    expect(
+      websiteOrigin({
+        CONVEX_DEPLOY_KEY: 'prod:scintillating-iguana-170|abc',
+        QIVO_APP_ORIGIN: 'https://qivo.io',
+      }),
+    ).toBe('https://qivo.io')
   })
 })

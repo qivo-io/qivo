@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { finishDemoBuild } from './demo-build.mjs'
+import { finishDemoBuild, WEBSITE_OUTPUT } from './demo-build.mjs'
 import { assertDemoTarget } from './demo-deploy.mjs'
 
 describe('dedicated demo deployment target', () => {
@@ -85,6 +85,17 @@ describe('demo build output', () => {
       expect(guide).toContain('Each demo expires after 24 hours.')
       expect(guide).toContain('https://qivo.io/app#signup')
       expect(guide).not.toContain('Normal workspace credentials and OAuth instructions')
+    }
+  })
+
+  it('refuses output that contains the website', () => {
+    for (const name of WEBSITE_OUTPUT) {
+      const directory = mkdtempSync(join(tmpdir(), 'qivo-demo-build-'))
+      directories.push(directory)
+      writeFileSync(join(directory, 'app.html'), '<html><head></head></html>')
+      if (name.includes('.')) writeFileSync(join(directory, name), 'website')
+      else mkdirSync(join(directory, name))
+      expect(() => finishDemoBuild(directory), name).toThrow(/must not include the website/)
     }
   })
 })

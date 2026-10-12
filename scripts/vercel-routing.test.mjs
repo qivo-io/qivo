@@ -3,19 +3,20 @@ import { describe, expect, it } from 'vitest'
 
 /* Route fixtures for vercel.json. Vercel's documented order is redirects,
  * then headers, then files in the deployment, then rewrites in array order.
- * Sources here use only literal paths and `(regex)` or `:name(regex)` groups,
- * which @vercel/routing-utils compiles to the same regular expression with
- * each group as a capture (checked against routing-utils 6.6.0:
- * `/app/:path(.*)` becomes `^/app(?:/(.*))$`). Any other syntax fails this
- * test instead of being guessed. Host conditions use only `{ inc: [...] }`,
- * Vercel's exact-membership operator, never a regular expression or suffix. */
+ * A directory path serves its index.html. Sources here use only literal paths
+ * and `(regex)` or `:name(regex)` groups, which @vercel/routing-utils compiles
+ * to the same regular expression with each group as a capture (checked
+ * against routing-utils 6.6.0: `/app/:path(.*)` becomes `^/app(?:/(.*))$`).
+ * Any other syntax fails this test instead of being guessed. Host conditions
+ * use only `{ inc: [...] }`, Vercel's exact-membership operator, never a
+ * regular expression or suffix. */
 const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
-const WEBSITE = 'https://site-origin.qivo.io'
-const WEBSITE_HOSTS = ['qivo.io', 'www.qivo.io']
 const STAGING_HOST = 'preview.qivo.io'
+const DEMO_HOST = 'demo.qivo.io'
+const FONT = '/marketing/fonts/manrope-normal-latin.a30ddcd3.woff2'
 
-/** Files in a normal app deployment, plus the demo visitor function. */
-const FILES = new Set([
+/** Files `vite build` writes, plus the demo visitor function. */
+const APP_FILES = [
   '/app.html',
   '/admin.html',
   '/assets/index-abc123.js',
@@ -25,7 +26,21 @@ const FILES = new Set([
   '/auth.md',
   '/favicon.svg',
   '/api/demo-visitor',
-])
+]
+/** Files website/scripts/build.mjs adds. The demo build has none of them. */
+const WEBSITE_FILES = [
+  '/index.html',
+  '/docs/index.html',
+  '/docs/the-board/index.html',
+  '/pricing/index.html',
+  '/sitemap.xml',
+  '/robots.txt',
+  '/marketing/home.js',
+  FONT,
+  '/.well-known/microsoft-identity-association.json',
+]
+const DEPLOYMENT = new Set([...APP_FILES, ...WEBSITE_FILES])
+const DEMO_DEPLOYMENT = new Set(APP_FILES)
 
 function compile(source) {
   let pattern = ''
@@ -54,8 +69,15 @@ function hostCondition(conditions = [], host) {
 const applies = (rule, host) =>
   hostCondition(rule.has, host).every(Boolean) && !hostCondition(rule.missing, host).some(Boolean)
 
+/** The deployed file a path serves, including a directory's index.html. */
+function file(files, path) {
+  for (const candidate of [path, `${path}index.html`, `${path}/index.html`])
+    if (files.has(candidate)) return candidate
+  return null
+}
+
 /** Resolve one request the way the configured phases do. */
-function route(vercel, host, path) {
+function route(vercel, host, path, files = DEPLOYMENT) {
   for (const rule of vercel.redirects || []) {
     if (compile(rule.source).test(path) && applies(rule, host))
       return { status: rule.permanent ? 308 : 307, location: rule.destination }
@@ -65,31 +87,28 @@ function route(vercel, host, path) {
     if (!compile(rule.source).test(path) || !applies(rule, host)) continue
     for (const { key, value } of rule.headers) headers[key.toLowerCase()] = value
   }
-  if (FILES.has(path)) return { file: path, headers }
+  const served = file(files, path)
+  if (served) return { file: served, headers }
   for (const rule of vercel.rewrites || []) {
     const match = compile(rule.source).exec(path)
     if (!match || !applies(rule, host)) continue
     const destination = rule.destination.replace(/:[a-z]+/i, () => match[1] ?? '')
-    return destination.startsWith('https://')
-      ? { proxy: destination, headers }
-      : { file: destination, headers }
+    return { file: destination, headers }
   }
   return { status: 404, headers }
 }
 
-const WEBSITE_PATHS = [
-  '/',
-  '/docs/',
-  '/docs/the-board/',
-  '/pricing/',
-  '/pricing',
-  '/sitemap.xml',
-  '/robots.txt',
-  '/marketing/home.js',
-  '/marketing/fonts/manrope-normal-latin.woff2',
-  '/site-version.json',
-  '/missing-page',
-]
+const WEBSITE_PATHS = {
+  '/': '/index.html',
+  '/docs/': '/docs/index.html',
+  '/docs/the-board/': '/docs/the-board/index.html',
+  '/docs/the-board': '/docs/the-board/index.html',
+  '/pricing/': '/pricing/index.html',
+  '/pricing': '/pricing/index.html',
+  '/sitemap.xml': '/sitemap.xml',
+  '/robots.txt': '/robots.txt',
+  '/marketing/home.js': '/marketing/home.js',
+}
 const APP_PATHS = {
   '/app': '/app.html',
   '/app/': '/app.html',
@@ -98,82 +117,81 @@ const APP_PATHS = {
   '/admin': '/admin.html',
   '/admin/': '/admin.html',
 }
-const OTHER_HOSTS = [
-  'demo.qivo.io',
-  'qivo-app.example',
+const HOSTS = [
+  'qivo.io',
+  'www.qivo.io',
+  STAGING_HOST,
   'qivo-git-branch-team.vercel.app',
-  'site-origin.qivo.io',
+  'qivo-app.example',
   'evilqivo.io',
-  'qivo.io.evil.test',
-  'app.qivo.io',
 ]
 
-describe('production website hosts', () => {
-  it.each(WEBSITE_HOSTS)('proxies website paths on %s without caching', (host) => {
-    for (const path of WEBSITE_PATHS) {
-      const result = route(config, host, path)
-      expect(result.proxy, path).toBe(`${WEBSITE}${path}`)
-      expect(result.headers['x-vercel-enable-rewrite-caching'], path).toBe('0')
-    }
+describe('one deployment serves the website and the application', () => {
+  it.each(HOSTS)('serves website pages, app routes and deployed files on %s', (host) => {
+    for (const [path, served] of Object.entries(WEBSITE_PATHS))
+      expect(route(config, host, path).file, path).toBe(served)
+    for (const [path, served] of Object.entries(APP_PATHS))
+      expect(route(config, host, path).file, path).toBe(served)
+    for (const path of DEPLOYMENT) expect(route(config, host, path).file, path).toBe(path)
+    expect(route(config, host, '/missing-page').status).toBe(404)
   })
 
-  it.each(WEBSITE_HOSTS)('keeps app routes and deployed files on %s', (host) => {
-    for (const [path, file] of Object.entries(APP_PATHS))
-      expect(route(config, host, path).file, path).toBe(file)
-    for (const path of FILES) expect(route(config, host, path).file, path).toBe(path)
-  })
-})
-
-describe('persistent staging website', () => {
-  it('uses the authenticated proxy only on the exact staging hostname', () => {
-    for (const path of WEBSITE_PATHS) {
-      const result = route(config, STAGING_HOST, path)
-      expect(result.file).toBe(`/api/website?__qivo_path=${path.slice(1)}`)
-      expect(result.headers['x-robots-tag']).toBe('noindex, nofollow')
-      expect(result.headers['x-vercel-enable-rewrite-caching']).toBe('0')
-    }
-    for (const [path, file] of Object.entries(APP_PATHS))
-      expect(route(config, STAGING_HOST, path).file).toBe(file)
-    for (const path of FILES) expect(route(config, STAGING_HOST, path).file).toBe(path)
+  it('keeps the staging host out of search indexes, website pages included', () => {
+    for (const path of [...Object.keys(WEBSITE_PATHS), ...Object.keys(APP_PATHS)])
+      expect(route(config, STAGING_HOST, path).headers['x-robots-tag'], path).toBe(
+        'noindex, nofollow',
+      )
     for (const host of ['evilpreview.qivo.io', 'preview.qivo.io.evil.test'])
-      expect(route(config, host, '/docs/')).toEqual({ status: 404, headers: {} })
+      expect(route(config, host, '/').headers['x-robots-tag']).toBeUndefined()
+  })
+
+  it('lets browsers keep hashed website fonts and revalidate everything else', () => {
+    expect(route(config, 'qivo.io', FONT).headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    )
+    for (const path of [
+      '/marketing/fonts/manrope-OFL.txt',
+      '/marketing/fonts/manrope-normal-latin.woff2',
+      '/marketing/home.js',
+      '/',
+      '/docs/',
+    ])
+      expect(route(config, 'qivo.io', path).headers['cache-control'], path).toBeUndefined()
   })
 })
 
-describe('self-hosted, demo and branch preview hosts', () => {
-  it.each(OTHER_HOSTS)('redirects the root of %s to the app and never proxies', (host) => {
-    expect(route(config, host, '/')).toEqual({ status: 307, location: '/app' })
-    for (const path of WEBSITE_PATHS.slice(1)) {
-      const result = route(config, host, path)
-      expect(result.proxy, path).toBeUndefined()
-      expect(result.headers['x-vercel-enable-rewrite-caching'], path).toBeUndefined()
-    }
-    for (const [path, file] of Object.entries(APP_PATHS))
-      expect(route(config, host, path).file, path).toBe(file)
+describe('public demo', () => {
+  it('sends the root to the app and serves no website pages', () => {
+    expect(route(config, DEMO_HOST, '/', DEMO_DEPLOYMENT)).toEqual({
+      status: 307,
+      location: '/app',
+    })
+    for (const path of ['/docs/', '/pricing/', '/sitemap.xml'])
+      expect(route(config, DEMO_HOST, path, DEMO_DEPLOYMENT).status, path).toBe(404)
+    for (const [path, served] of Object.entries(APP_PATHS))
+      expect(route(config, DEMO_HOST, path, DEMO_DEPLOYMENT).file, path).toBe(served)
   })
 
   it('serves the demo visitor function and keeps demo noindex headers', () => {
-    const result = route(config, 'demo.qivo.io', '/api/demo-visitor')
+    const result = route(config, DEMO_HOST, '/api/demo-visitor', DEMO_DEPLOYMENT)
     expect(result.file).toBe('/api/demo-visitor')
     expect(result.headers['x-robots-tag']).toBe('noindex, nofollow')
+    expect(result.headers['cache-control']).toBe('no-store')
   })
 })
 
 describe('security headers', () => {
-  it.each([...WEBSITE_HOSTS, STAGING_HOST, ...OTHER_HOSTS])(
-    'protect app and operator pages on %s',
-    (host) => {
-      for (const path of [...Object.keys(APP_PATHS), '/app.html', '/admin.html']) {
-        const { headers } = route(config, host, path)
-        expect(headers['x-frame-options'], path).toBe('DENY')
-        expect(headers['content-security-policy'], path).toBe("frame-ancestors 'none'")
-        expect(headers['cache-control'], path).toBe('no-store')
-      }
-      expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
-        'public, max-age=31536000, immutable',
-      )
-    },
-  )
+  it.each([...HOSTS, DEMO_HOST])('protect app and operator pages on %s', (host) => {
+    for (const path of [...Object.keys(APP_PATHS), '/app.html', '/admin.html']) {
+      const { headers } = route(config, host, path)
+      expect(headers['x-frame-options'], path).toBe('DENY')
+      expect(headers['content-security-policy'], path).toBe("frame-ancestors 'none'")
+      expect(headers['cache-control'], path).toBe('no-store')
+    }
+    expect(route(config, host, '/assets/index-abc123.js').headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    )
+  })
 })
 
 describe('route fixtures detect unsafe edits', () => {
@@ -182,24 +200,17 @@ describe('route fixtures detect unsafe edits', () => {
     change(copy)
     return copy
   }
-  const proxyIndex = config.rewrites.findIndex((rule) => rule.destination.startsWith('https://'))
 
-  it('fails if the website hosts are dropped from the root redirect', () => {
-    const copy = edited((c) => delete c.redirects[0].missing)
+  it('fails if the demo root redirect reaches other hosts', () => {
+    const copy = edited((c) => delete c.redirects[0].has)
     expect(route(copy, 'qivo.io', '/').status).toBe(307)
   })
 
-  it('fails if the proxy is not limited to the website hosts', () => {
+  it('fails if the app rewrites are dropped', () => {
     const copy = edited((c) => {
-      c.rewrites[proxyIndex].missing = c.rewrites[proxyIndex].has
-      delete c.rewrites[proxyIndex].has
+      c.rewrites = []
     })
-    expect(route(copy, 'demo.qivo.io', '/docs/').proxy).toBeDefined()
-  })
-
-  it('fails if the proxy runs before the app rewrites', () => {
-    const copy = edited((c) => c.rewrites.unshift(c.rewrites.splice(proxyIndex, 1)[0]))
-    expect(route(copy, 'qivo.io', '/app/').proxy).toBeDefined()
+    expect(route(copy, 'qivo.io', '/app/acme/board/all').status).toBe(404)
   })
 
   it('fails with the old strict wildcard that rejects trailing slashes', () => {
@@ -211,9 +222,9 @@ describe('route fixtures detect unsafe edits', () => {
       expect(() => hostCondition([{ type: 'host', value }], 'qivo.io')).toThrow(/exact host/)
   })
 
-  it('proxies only to the stable website origin', () => {
-    const destinations = config.rewrites.map((rule) => rule.destination)
-    expect(destinations.filter((d) => d.startsWith('http'))).toEqual([`${WEBSITE}/:path`])
-    expect(JSON.stringify(config)).not.toMatch(/vercel\.app/)
+  it('never sends a request to another origin', () => {
+    for (const rule of [...config.redirects, ...config.rewrites])
+      expect(rule.destination, rule.source).toMatch(/^\/[^/]/)
+    expect(JSON.stringify(config)).not.toMatch(/vercel\.app|site-origin|site-preview/)
   })
 })

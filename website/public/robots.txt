@@ -1,0 +1,12 @@
+# The marketing side is meant to be indexed; the app and the operator console
+# are not. Both also carry X-Robots-Tag: noindex from vercel.json — this file
+# stops the crawl, that header stops the listing, and a crawler that ignores
+# one usually honours the other.
+User-agent: *
+Disallow: /app
+Disallow: /app/
+Disallow: /admin
+Disallow: /app.html
+Disallow: /admin.html
+
+Sitemap: https://qivo.io/sitemap.xml

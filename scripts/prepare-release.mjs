@@ -15,7 +15,6 @@ import {
 } from './deploy-environment.mjs'
 
 const REPOSITORY = 'qivo-io/qivo'
-const SITE_REPOSITORY = 'qivo-io/qivo-internal'
 const STABLE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const ACTIONS_BOT = 'github-actions[bot]'
 const prefix = `/repos/${REPOSITORY}`
@@ -37,29 +36,22 @@ export function nextVersion(requested, newestTag) {
 }
 
 /**
- * The app and website commits qivo.io serves now, read from its public manifests. Used
- * only to link the changes a release ships. Each is null when its manifest is unavailable.
+ * The commit qivo.io serves now, read from its public manifest. Used only to link the
+ * changes a release ships. Returns null when the manifest is unavailable.
  */
-async function liveCommits(fetchImpl) {
-  const read = async (path, pick) => {
-    try {
-      const response = await fetchImpl(`https://qivo.io${path}`, {
-        redirect: 'error',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(30_000),
-      })
-      if (!response.ok) return null
-      const commit = pick(await response.json())
-      return /^[0-9a-f]{40}$/.test(commit || '') ? commit : null
-    } catch {
-      return null
-    }
+async function liveCommit(fetchImpl) {
+  try {
+    const response = await fetchImpl('https://qivo.io/version.json', {
+      redirect: 'error',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) return null
+    const { commit } = await response.json()
+    return /^[0-9a-f]{40}$/.test(commit || '') ? commit : null
+  } catch {
+    return null
   }
-  const [app, site] = await Promise.all([
-    read('/version.json', (manifest) => manifest.commit),
-    read('/site-version.json', (manifest) => manifest.website?.commit),
-  ])
-  return { app, site }
 }
 
 /**
@@ -73,23 +65,6 @@ async function notesBase(github, tags, productionApp) {
   return tags.at(-1)
 }
 
-/**
- * Staging runs of the main commit that are unfinished, or that started after the
- * recorded pair was verified, including re-runs of older runs. A failed or running
- * restage may already have replaced the website preview shows. A restage that passed
- * would have recorded a newer pair instead.
- */
-async function unsettledStagingRuns(github, main, receipt) {
-  const { workflow_runs: runs = [] } = await github(
-    `${prefix}/actions/workflows/staging.yml/runs?head_sha=${main}&per_page=50`,
-  )
-  return runs.filter(
-    (run) =>
-      run.conclusion !== 'skipped' &&
-      (run.status !== 'completed' || Date.parse(run.run_started_at) > receipt.succeededAt),
-  )
-}
-
 /** A link to the changes between two commits, followed by `note`, or why there is none. */
 function changes(repository, from, to, note = '') {
   if (!from) return 'Not recorded'
@@ -99,41 +74,27 @@ function changes(repository, from, to, note = '') {
 
 /**
  * The explanation at the top of the draft. It must stay accurate for the owner. Changes are
- * linked from the commits production serves. If qivo.io does not report its app commit,
- * the app link starts at the previous version tag instead.
+ * linked from the commit production serves. If qivo.io does not report it, the link
+ * starts at the previous version tag instead.
  */
-export function releaseHeader({
-  appSha,
-  siteSha,
-  stagedAt,
-  stagingRunId,
-  previousTag,
-  productionApp,
-  productionSite,
-}) {
-  const appLink = `[\`${short(appSha)}\`](https://github.com/${REPOSITORY}/commit/${appSha})`
-  const siteLink = `[\`${short(siteSha)}\`](https://github.com/${SITE_REPOSITORY}/commit/${siteSha})`
-  const appChanges = productionApp
+export function releaseHeader({ appSha, stagedAt, stagingRunId, previousTag, productionApp }) {
+  const commit = `[\`${short(appSha)}\`](https://github.com/${REPOSITORY}/commit/${appSha})`
+  const changed = productionApp
     ? changes(REPOSITORY, productionApp, appSha)
     : previousTag
       ? changes(REPOSITORY, previousTag, appSha, ` (since ${previousTag})`)
       : 'First release'
-  const siteChanges = changes(SITE_REPOSITORY, productionSite, siteSha, ' (private repository)')
   return [
     '## What publishing ships',
     '',
-    'Publishing this release deploys these commits to https://qivo.io and https://demo.qivo.io.',
+    `Publishing this release deploys commit ${commit} to https://qivo.io, including the ` +
+      'website and docs, and to https://demo.qivo.io.',
     '',
-    '| Part | Commit | Changes since production |',
-    '| --- | --- | --- |',
-    `| App, docs and demo | ${appLink} | ${appChanges} |`,
-    `| Website | ${siteLink} | ${siteChanges} |`,
+    `Changes since production: ${changed}`,
     '',
-    `Deploy staging verified this pair on https://preview.qivo.io at ${new Date(stagedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC ` +
+    `Deploy staging verified this commit on https://preview.qivo.io at ${new Date(stagedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC ` +
       `([staging run](https://github.com/${REPOSITORY}/actions/runs/${stagingRunId})). ` +
-      'Review it there before you publish. If the website is staged again for this app commit ' +
-      'before you publish, the newer website ships instead. If a later Deploy staging run fails, ' +
-      'preview may show a website that will not ship, so run Prepare release again.',
+      'Review it there before you publish.',
     '',
     "Do not change this draft's tag or target. To ship something else, delete this draft and run Prepare release again.",
   ].join('\n')
@@ -159,13 +120,6 @@ export async function prepareRelease({
       `preview.qivo.io does not serve main ${short(main)} yet. Wait until Deploy staging passes ` +
         'for it, or fix the failure, then run Prepare release again.',
     )
-  const unsettled = await unsettledStagingRuns(github, main, receipt)
-  if (unsettled.length)
-    throw new Error(
-      `A newer Deploy staging run for main ${short(main)} is still running or did not pass ` +
-        `(${unsettled[0].html_url}), so preview.qivo.io may show a website that staging has not ` +
-        'verified. Wait for it, or run Deploy staging again, then run Prepare release again.',
-    )
   const tags = (await stableTags(github)).sort(compareVersions)
   const newestTag = tags.at(-1)
   const version = nextVersion(requestedVersion, newestTag)
@@ -187,18 +141,16 @@ export async function prepareRelease({
         'its own commit. Delete drafts you will not publish.',
     )
 
-  const production = await liveCommits(fetchImpl)
-  const previousTag = await notesBase(github, tags, production.app)
+  const productionApp = await liveCommit(fetchImpl)
+  const previousTag = await notesBase(github, tags, productionApp)
   const body = releaseHeader({
     appSha: main,
-    siteSha: receipt.siteSha,
     stagedAt: receipt.succeededAt,
     stagingRunId: receipt.runId,
     previousTag,
-    productionApp: production.app,
-    productionSite: production.site,
+    productionApp,
   })
-  const plan = { version, appSha: main, siteSha: receipt.siteSha, previousTag }
+  const plan = { version, appSha: main, previousTag }
   if (dryRun) {
     log(
       `Dry run. Would prepare ${version}${staleDrafts.length ? ` and delete ${staleDrafts.length} older draft(s)` : ''}.`,

@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { nextVersion, prepareRelease, releaseHeader } from './prepare-release.mjs'
 
 const MAIN = 'a'.repeat(40)
-const SITE = 'b'.repeat(40)
-const OLD_SITE = 'c'.repeat(40)
 const OLD_APP = 'd'.repeat(40)
 const BOT = { login: 'github-actions[bot]' }
 
@@ -46,7 +44,6 @@ function github(change = {}) {
             payload: {
               kind: 'qivo-staging-v1',
               app_revision: MAIN,
-              site_revision: SITE,
               ci_run_id: 1,
               workflow_run_id: '100',
               workflow_run_attempt: 1,
@@ -56,25 +53,6 @@ function github(change = {}) {
       )
     if (path.includes('/statuses'))
       return [{ id: 1, state: 'success', creator: BOT, created_at: '2026-10-12T11:00:00Z' }]
-    if (path.includes('/actions/workflows/staging.yml/runs'))
-      return {
-        workflow_runs: change.stagingRuns || [
-          {
-            id: 100,
-            run_attempt: 1,
-            status: 'completed',
-            conclusion: 'success',
-            run_started_at: '2026-10-12T10:57:00Z',
-          },
-          {
-            id: 90,
-            run_attempt: 1,
-            status: 'completed',
-            conclusion: 'failure',
-            run_started_at: '2026-10-12T09:00:00Z',
-          },
-        ],
-      }
     if (path.includes('/actions/runs/100'))
       return {
         run_attempt: 1,
@@ -93,14 +71,14 @@ function github(change = {}) {
 }
 
 const quiet = () => {}
-/** What qivo.io/version.json and qivo.io/site-version.json report. */
+/** What qivo.io/version.json reports. */
 const live =
-  ({ app = OLD_APP, site = OLD_SITE } = {}) =>
+  (commit = OLD_APP) =>
   async (url) => {
-    if (url === 'https://qivo.io/version.json') return Response.json({ commit: app })
-    expect(url).toBe('https://qivo.io/site-version.json')
-    return Response.json({ website: { commit: site } })
+    expect(url).toBe('https://qivo.io/version.json')
+    return Response.json({ commit })
   }
+const unavailable = async () => new Response('unavailable', { status: 503 })
 
 describe('version choice', () => {
   it('defaults to the next patch and accepts a newer explicit version', () => {
@@ -115,10 +93,10 @@ describe('version choice', () => {
 })
 
 describe('preparing a draft', () => {
-  it('creates a draft for the staged main commit with the website change link', async () => {
+  it('creates a draft for the staged main commit with the change link', async () => {
     const { api, writes } = github()
     const plan = await prepareRelease({ github: api, log: quiet, fetchImpl: live() })
-    expect(plan).toMatchObject({ version: 'v0.1.10', appSha: MAIN, siteSha: SITE })
+    expect(plan).toMatchObject({ version: 'v0.1.10', appSha: MAIN, previousTag: 'v0.1.9' })
     expect(writes.map((write) => write.path)).toEqual([
       '/repos/qivo-io/qivo/releases/generate-notes',
       '/repos/qivo-io/qivo/releases',
@@ -136,7 +114,7 @@ describe('preparing a draft', () => {
       prerelease: false,
     })
     expect(draft.body).toContain(`qivo/compare/${OLD_APP}...${MAIN})`)
-    expect(draft.body).toContain(`qivo-internal/compare/${OLD_SITE}...${SITE}`)
+    expect(draft.body).toContain('including the website and docs')
     expect(draft.body).toContain('## Changes\n- One fix')
   })
   it('writes nothing in a dry run', async () => {
@@ -219,73 +197,9 @@ describe('preparing a draft', () => {
     expect(writes[1].body.body).toContain(`qivo/compare/${OLD_APP}...${MAIN})`)
     // Without the live app commit, the notes and the link start at the newest tag.
     ;({ api, writes } = github({ tags, tagCommits }))
-    await prepareRelease({
-      github: api,
-      log: quiet,
-      fetchImpl: async (url) =>
-        url.endsWith('/site-version.json')
-          ? Response.json({ website: { commit: OLD_SITE } })
-          : new Response('unavailable', { status: 503 }),
-    })
+    await prepareRelease({ github: api, log: quiet, fetchImpl: unavailable })
     expect(writes[0].body.previous_tag_name).toBe('v0.1.10')
     expect(writes[1].body.body).toContain(`qivo/compare/v0.1.10...${MAIN}) (since v0.1.10)`)
-  })
-  it('refuses while a newer staging run of main is running or did not pass', async () => {
-    const later = '2026-10-12T11:30:00Z'
-    for (const stagingRuns of [
-      [{ id: 101, run_attempt: 1, status: 'in_progress', conclusion: null, run_started_at: later }],
-      [
-        {
-          id: 101,
-          run_attempt: 1,
-          status: 'completed',
-          conclusion: 'failure',
-          run_started_at: later,
-        },
-      ],
-      // Re-runs of the recorded run, or of an older one, that failed after replacing the website.
-      [
-        {
-          id: 100,
-          run_attempt: 2,
-          status: 'completed',
-          conclusion: 'failure',
-          run_started_at: later,
-        },
-      ],
-      [
-        {
-          id: 90,
-          run_attempt: 2,
-          status: 'completed',
-          conclusion: 'failure',
-          run_started_at: later,
-        },
-      ],
-    ]) {
-      const { api, writes } = github({ stagingRuns })
-      await expect(prepareRelease({ github: api, log: quiet, fetchImpl: live() })).rejects.toThrow(
-        /newer Deploy staging run/,
-      )
-      expect(writes).toEqual([])
-    }
-    // Skipped runs deployed nothing.
-    const { api } = github({
-      stagingRuns: [
-        {
-          id: 101,
-          run_attempt: 1,
-          status: 'completed',
-          conclusion: 'skipped',
-          run_started_at: '2026-10-12T11:30:00Z',
-        },
-      ],
-    })
-    await expect(
-      prepareRelease({ github: api, log: quiet, fetchImpl: live() }),
-    ).resolves.toMatchObject({
-      version: 'v0.1.10',
-    })
   })
   it('numbers from version tags, so a deleted release cannot be reused', async () => {
     const { api } = github({ tags: ['v0.1.9', 'v0.2.0'] })
@@ -296,45 +210,21 @@ describe('preparing a draft', () => {
       previousTag: 'v0.2.0',
     })
   })
-  it('links website changes from what qivo.io serves, or says when that is unknown', async () => {
-    let { api, writes } = github()
-    await prepareRelease({ github: api, log: quiet, fetchImpl: live({ site: SITE }) })
-    expect(writes[1].body.body).toContain('Unchanged')
-    ;({ api, writes } = github())
-    await prepareRelease({
-      github: api,
-      log: quiet,
-      fetchImpl: async () => new Response('unavailable', { status: 503 }),
-    })
-    expect(writes[1].body.body).toContain('| Website | [`bbbbbbb`]')
-    expect(writes[1].body.body).toMatch(/\| Website \| [^\n]* \| Not recorded \|/)
+  it('says when production already serves the staged commit', async () => {
+    const { api, writes } = github()
+    await prepareRelease({ github: api, log: quiet, fetchImpl: live(MAIN) })
+    expect(writes[1].body.body).toContain('Changes since production: Unchanged')
   })
 })
 
 describe('draft text', () => {
-  it('says when the website is unchanged and when nothing was released before', () => {
-    const base = {
-      appSha: MAIN,
-      siteSha: SITE,
-      stagedAt: Date.UTC(2026, 9, 12, 11),
-      stagingRunId: 100,
-    }
-    const unchanged = releaseHeader({
-      ...base,
-      previousTag: 'v0.1.9',
-      productionApp: MAIN,
-      productionSite: SITE,
-    })
-    expect(unchanged).toContain('| App, docs and demo | [`aaaaaaa`]')
-    expect(unchanged).toMatch(/\| App, docs and demo \| [^\n]* \| Unchanged \|/)
-    expect(unchanged).toMatch(/\| Website \| [^\n]* \| Unchanged \|/)
-    const first = releaseHeader({
-      ...base,
-      previousTag: undefined,
-      productionApp: null,
-      productionSite: null,
-    })
-    expect(first).toContain('First release')
-    expect(first).toContain('2026-10-12 11:00 UTC')
+  it('names the commit, the staging run and the first release', () => {
+    const base = { appSha: MAIN, stagedAt: Date.UTC(2026, 9, 12, 11), stagingRunId: 100 }
+    const header = releaseHeader({ ...base, previousTag: 'v0.1.9', productionApp: OLD_APP })
+    expect(header).toContain('deploys commit [`aaaaaaa`]')
+    expect(header).toContain('2026-10-12 11:00 UTC')
+    expect(header).toContain('/actions/runs/100')
+    const first = releaseHeader({ ...base, previousTag: undefined, productionApp: null })
+    expect(first).toContain('Changes since production: First release')
   })
 })

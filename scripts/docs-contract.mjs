@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-/* The public contract for docs/guide. The qivo.io website renders these
- * Markdown files from an exact commit of this repository, fetching only
+/* The public contract for docs/guide. website/scripts/build.mjs renders these
+ * Markdown files into qivo.io/docs/ during `npm run build`, reading
  * `docs/guide/pages.json`, the files it lists, their relative images and the
- * agent guides in public/. This check keeps those inputs valid before merge:
- * a page the website cannot render fails its build, and qivo.io keeps the
- * previous version. Run it with `npm run build` or the test suite.
+ * agent guides in public/. This check keeps those inputs valid and reports
+ * every problem by file. Run it with `npm run build` or the test suite.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { extname, join, posix, resolve } from 'node:path'
@@ -133,7 +132,7 @@ export function checkDocs(root = projectRoot) {
       if (guideName.endsWith('.md')) anchor(agentIds.get(guideName), url.hash, where, href)
       return
     }
-    // Website and application routes are served outside this repository.
+    // The homepage, pricing page and application are not built from docs/guide.
     if (!/^\/(?:$|pricing\/$|app(?:\/.*)?$|admin$)/.test(url.pathname))
       errors.push(`${where}: unknown qivo.io path "${href}"`)
   }

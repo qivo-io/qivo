@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assertDemoTarget } from './demo-deploy.mjs'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
@@ -11,7 +11,14 @@ import {
   previewSiteUrl,
 } from './vercel-build.mjs'
 
+/** Files only the website build writes. It skips the demo, so finding one means the
+    demo would publish the marketing site, pricing and docs on demo.qivo.io. */
+export const WEBSITE_OUTPUT = ['index.html', 'docs', 'pricing', 'marketing', 'sitemap.xml']
+
 export function finishDemoBuild(directory = 'dist') {
+  for (const name of WEBSITE_OUTPUT)
+    if (existsSync(join(directory, name)))
+      throw new Error(`The demo build must not include the website, found ${name}.`)
   const visit = (path) => {
     for (const item of readdirSync(path, { withFileTypes: true })) {
       const file = join(path, item.name)
@@ -26,7 +33,7 @@ export function finishDemoBuild(directory = 'dist') {
     }
   }
   visit(directory)
-  // vercel.json redirects `/` to `/app`; the demo hides the operator console.
+  // vercel.json redirects demo.qivo.io's `/` to `/app`; the demo hides the operator console.
   writeFileSync(join(directory, 'admin.html'), readFileSync(join(directory, 'app.html'), 'utf8'))
   writeFileSync(join(directory, 'robots.txt'), 'User-agent: *\nDisallow: /\n')
   const guidance =

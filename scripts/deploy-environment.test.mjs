@@ -9,13 +9,11 @@ import {
   findStagingReceipt,
   preflightProjects,
   restApiOnly,
-  stagingWebsiteRequest,
   verifyCommit,
   verifyPublicBuild,
 } from './deploy-environment.mjs'
 
 const SHA = 'a'.repeat(40)
-const SITE_SHA = 'b'.repeat(40)
 const OTHER = 'c'.repeat(40)
 const BOT = { login: 'github-actions[bot]' }
 const config = {
@@ -23,7 +21,6 @@ const config = {
   sha: SHA,
   origin: 'https://qivo.io',
   app: { id: 'app-id', token: 'app-test-token' },
-  site: { id: 'site-id', token: 'site-test-token' },
   demo: { id: 'demo-id', token: 'demo-test-token' },
   team: 'team-id',
   githubToken: 'github-test-token',
@@ -63,7 +60,6 @@ const receipt = (id, change = {}) => ({
   payload: {
     kind: 'qivo-staging-v1',
     app_revision: SHA,
-    site_revision: SITE_SHA,
     ci_run_id: 1,
     workflow_run_id: '100',
     workflow_run_attempt: 1,
@@ -87,9 +83,16 @@ const success = (id, createdAt = '2026-10-12T11:00:00Z', change = {}) => ({
   ...change,
 })
 
-/** A read-only GitHub API double. `change` overrides one kind of response. */
+/**
+ * A read-only GitHub API double. `change` overrides one kind of response. `preMove`
+ * makes the commit predate the website moving into this repository.
+ */
 function githubFixture(change = {}) {
   return async (path, _method, _body, options = {}) => {
+    if (path.includes('/contents/website/index.html?ref=')) {
+      expect(options.allowMissing).toBe(true)
+      return change.preMove ? null : { type: 'file', path: 'website/index.html' }
+    }
     if (path.includes('/git/matching-refs/tags/'))
       return (change.tags || ['v1.0.0']).map((tag) => ({ ref: `refs/tags/${tag}` }))
     if (path.includes('/compare/'))
@@ -132,10 +135,9 @@ function githubFixture(change = {}) {
 }
 
 describe('production authorization', () => {
-  it('accepts a person publishing a prepared bot-authored draft and reuses the staged website', async () => {
+  it('accepts a person publishing a prepared bot-authored draft of a staged commit', async () => {
     await expect(verifyCommit(config, event, githubFixture())).resolves.toEqual({
       ciId: 1,
-      siteSha: SITE_SHA,
       stagingReceiptId: 20,
     })
   })
@@ -152,7 +154,7 @@ describe('production authorization', () => {
         event,
         githubFixture({ statuses: [inactive(3), inactive(2), success(1)] }),
       ),
-    ).resolves.toMatchObject({ siteSha: SITE_SHA })
+    ).resolves.toMatchObject({ stagingReceiptId: 20 })
     for (const statuses of [
       [inactive(3), { ...success(2), state: 'failure' }, success(1)],
       [inactive(3), { ...success(2), state: 'error' }, success(1)],
@@ -188,18 +190,17 @@ describe('production authorization', () => {
       { stagingRun: { conclusion: 'in_progress' } },
       { stagingRun: { path: '.github/workflows/other.yml' } },
       { deployment: { creator: { login: 'someone-else' } } },
-      { deployment: { payload: { site_revision: 'main' } } },
       { deployment: { payload: { app_revision: OTHER } } },
       { deployment: { payload: { ci_run_id: 2 } } },
       { deployments: [] },
     ])
       await expect(verifyCommit(config, event, githubFixture(change))).rejects.toThrow()
   })
-  it('deploys the newest staged website from before publication, whatever the API order', async () => {
+  it('uses the newest staging record from before publication, whatever the API order', async () => {
     const deployments = [
-      receipt(21, { payload: { site_revision: 'd'.repeat(40), workflow_run_id: '101' } }),
-      receipt(22, { payload: { site_revision: OTHER, workflow_run_id: '102' } }),
-      receipt(23, { payload: { site_revision: 'e'.repeat(40), workflow_run_id: '103' } }),
+      receipt(21, { payload: { workflow_run_id: '101' } }),
+      receipt(22, { payload: { workflow_run_id: '102' } }),
+      receipt(23, { payload: { workflow_run_id: '103' } }),
       receipt(20),
     ]
     const statusesFor = {
@@ -215,7 +216,7 @@ describe('production authorization', () => {
     }
     await expect(
       verifyCommit(config, event, githubFixture({ deployments, statusesFor })),
-    ).resolves.toEqual({ ciId: 1, siteSha: SITE_SHA, stagingReceiptId: 20 })
+    ).resolves.toEqual({ ciId: 1, stagingReceiptId: 20 })
   })
   it('refuses a release older than the newest version tag, even if that release was deleted', async () => {
     // Tags are compared, not releases. A newer release set back to draft keeps its tag.
@@ -224,7 +225,7 @@ describe('production authorization', () => {
     ).rejects.toThrow(/v1\.0\.10 is newer than v1\.0\.0/)
     for (const tags of [['v2.0.0-rc.1', 'v1.0.0'], ['v0.9.9'], [], ['main', 'v1.0.0']])
       await expect(verifyCommit(config, event, githubFixture({ tags }))).resolves.toMatchObject({
-        siteSha: SITE_SHA,
+        stagingReceiptId: 20,
       })
   })
   it('explains that only a new, higher version helps when staging is missing or came later', async () => {
@@ -266,33 +267,8 @@ describe('production authorization', () => {
         ),
       ).rejects.toThrow(/no successful staging deployment/)
   })
-  it('refuses to choose when two records name the same staging run attempt', async () => {
-    for (const second of [
-      receipt(21, { payload: { site_revision: OTHER } }),
-      // Records without an attempt name the first attempt.
-      receipt(21, { payload: { site_revision: OTHER, workflow_run_attempt: undefined } }),
-    ])
-      await expect(
-        verifyCommit(config, event, githubFixture({ deployments: [receipt(20), second] })),
-      ).rejects.toThrow(/Several staging records name staging run 100/)
-    // A malformed copy is ignored rather than counted, and cannot win.
-    const forged = receipt(21, { payload: { site_revision: OTHER, workflow_run_attempt: '01' } })
-    await expect(
-      verifyCommit(
-        config,
-        event,
-        githubFixture({
-          deployments: [receipt(20), forged],
-          statusesFor: { 20: [success(1)], 21: [success(2, '2026-10-12T11:30:00Z')] },
-        }),
-      ),
-    ).resolves.toMatchObject({ siteSha: SITE_SHA })
-  })
-  it('stops instead of falling back when the run behind a newer record was deleted', async () => {
-    const deployments = [
-      receipt(20),
-      receipt(21, { payload: { site_revision: OTHER, workflow_run_id: '200' } }),
-    ]
+  it('skips a record whose staging run was deleted, because it cannot be checked', async () => {
+    const deployments = [receipt(20), receipt(21, { payload: { workflow_run_id: '200' } })]
     const statusesFor = {
       20: [success(1, '2026-10-12T11:00:00Z')],
       21: [success(2, '2026-10-12T11:30:00Z')],
@@ -303,9 +279,10 @@ describe('production authorization', () => {
         event,
         githubFixture({ deployments, statusesFor, missingRuns: ['200'] }),
       ),
-    ).rejects.toThrow(
-      /Staging run 200, which recorded a staging deployment of this commit, was deleted/,
-    )
+    ).resolves.toMatchObject({ stagingReceiptId: 20 })
+    await expect(
+      verifyCommit(config, event, githubFixture({ missingRuns: ['100'] })),
+    ).rejects.toThrow(/no successful staging deployment/)
   })
   it('checks the named attempt, which a later re-run cannot change', async () => {
     const calls = []
@@ -322,10 +299,9 @@ describe('production authorization', () => {
       '/repos/qivo-io/qivo/actions/runs/100/attempts/1',
     ])
   })
-  it('refuses to re-run releases published before production used staging records', async () => {
-    const early = { ...event, release: { ...event.release, published_at: '2026-10-11T11:16:54Z' } }
-    await expect(verifyCommit(config, early, githubFixture())).rejects.toThrow(
-      /published before production took its website from staging records/,
+  it('refuses commits from before the website moved into this repository', async () => {
+    await expect(verifyCommit(config, event, githubFixture({ preMove: true }))).rejects.toThrow(
+      /from before the website moved into this repository/,
     )
   })
   it('does not perform any provider writes when release verification fails', async () => {
@@ -385,18 +361,15 @@ describe('release ordering', () => {
     ])
     expect(() => compareVersions('v1.0.0-rc.1', 'v1.0.0')).toThrow()
   })
-  it('finds the newest staged pair without a cutoff, for preparing a release', async () => {
+  it('finds the newest staging record without a cutoff, for preparing a release', async () => {
     const statusesFor = {
       20: [success(1, '2026-10-12T11:00:00Z')],
       21: [success(2, '2026-10-12T13:00:00Z')],
     }
-    const deployments = [
-      receipt(20),
-      receipt(21, { payload: { site_revision: OTHER, workflow_run_id: '101' } }),
-    ]
+    const deployments = [receipt(20), receipt(21, { payload: { workflow_run_id: '101' } })]
     await expect(
       findStagingReceipt(githubFixture({ deployments, statusesFor }), { sha: SHA }),
-    ).resolves.toMatchObject({ id: 21, siteSha: OTHER, runId: 101, runAttempt: 1 })
+    ).resolves.toMatchObject({ id: 21, runId: 101, runAttempt: 1 })
   })
 })
 
@@ -413,32 +386,17 @@ describe('deployment identity', () => {
     })
     expect(() => deploymentRequest({ link: { type: 'github', repoId: 123 } }, 'main')).toThrow()
   })
-  it('builds the staging website from main and reads back the exact commit Vercel built', () => {
-    expect(
-      stagingWebsiteRequest({ id: 'site-id', name: 'site', link: { type: 'github', repoId: 2 } }),
-    ).toEqual({
-      name: 'site',
-      project: 'site-id',
-      target: 'production',
-      gitSource: { type: 'github', repoId: 2, ref: 'main' },
-      meta: { qivoSiteRef: 'main' },
-    })
-    const built = {
-      gitSource: { ref: 'main', sha: SITE_SHA },
-      meta: { githubCommitRef: 'main', githubCommitSha: SITE_SHA },
-    }
-    expect(builtCommit(built, 'main')).toBe(SITE_SHA)
+  it('reads back the one exact commit Vercel built', () => {
     expect(builtCommit({ gitSource: { ref: SHA, sha: SHA } })).toBe(SHA)
+    expect(builtCommit({ gitSource: { sha: SHA }, meta: { githubCommitSha: SHA } })).toBe(SHA)
     for (const deployment of [
       { gitSource: { ref: 'main' } },
       { gitSource: { ref: 'main', sha: 'main' } },
-      { ...built, meta: { githubCommitRef: 'main', githubCommitSha: OTHER } },
-      { gitSource: { ref: 'feature', sha: SITE_SHA } },
-      { gitSource: { sha: SITE_SHA } },
+      { gitSource: { sha: SHA }, meta: { githubCommitSha: OTHER } },
     ])
-      expect(() => builtCommit(deployment, 'main')).toThrow()
+      expect(() => builtCommit(deployment)).toThrow()
   })
-  it('needs no website revision and refuses wrong environment origins and shared project IDs', () => {
+  it('ignores retired website settings and refuses wrong origins and shared project IDs', () => {
     const env = {
       QIVO_ENVIRONMENT: 'production',
       QIVO_COMMIT: SHA,
@@ -446,10 +404,8 @@ describe('deployment identity', () => {
       GITHUB_REPOSITORY: 'qivo-io/qivo',
       VERCEL_TEAM_ID: 'team-id',
       VERCEL_APP_PROJECT_ID: 'app-id',
-      VERCEL_SITE_PROJECT_ID: 'site-id',
       VERCEL_DEMO_PROJECT_ID: 'demo-id',
       VERCEL_APP_TOKEN: 'app-test-token',
-      VERCEL_SITE_TOKEN: 'site-test-token',
       VERCEL_DEMO_TOKEN: 'demo-test-token',
       GH_TOKEN: 'github-test-token',
       GITHUB_RUN_ID: '300',
@@ -457,37 +413,45 @@ describe('deployment identity', () => {
       GITHUB_REF: 'refs/tags/v1.0.0',
     }
     expect(configuration(env).sha).toBe(SHA)
-    // Release tags made before this change still pass the retired pin.
-    expect(configuration({ ...env, QIVO_SITE_REVISION: OTHER })).not.toHaveProperty('siteSha')
+    // Release tags made before the website moved here still pass the retired settings.
+    const retired = configuration({
+      ...env,
+      QIVO_SITE_REVISION: OTHER,
+      VERCEL_SITE_PROJECT_ID: 'site-id',
+      VERCEL_SITE_TOKEN: 'site-test-token',
+    })
+    expect(retired).not.toHaveProperty('site')
+    expect(JSON.stringify(retired)).not.toContain('site-test-token')
     for (const change of [
       { QIVO_COMMIT: 'main' },
       { QIVO_APP_ORIGIN: 'https://preview.qivo.io' },
-      { VERCEL_SITE_PROJECT_ID: 'app-id' },
+      { VERCEL_DEMO_PROJECT_ID: 'app-id' },
       { VERCEL_APP_TOKEN: '' },
     ])
       expect(() => configuration({ ...env, ...change })).toThrow()
   })
-  it('checks the live manifest pair and required routes, including application assets', async () => {
+  it('checks the manifest, the website origin and required routes, including their assets', async () => {
     const calls = []
-    const fetchImpl = async (url) => {
+    const page = (origin) => async (url) => {
       calls.push(url)
       if (url.endsWith('/version.json'))
         return Response.json({
           commit: SHA,
           environment: url.includes('demo.qivo.io') ? 'demo' : 'production',
         })
-      if (url.endsWith('/site-version.json'))
-        return Response.json({
-          docs: { commit: SHA },
-          website: { commit: SITE_SHA },
-          environment: 'production',
-        })
-      return new Response('<html><script src="/assets/app.js"></script></html>')
+      return new Response(
+        `<html><link rel="canonical" href="${origin}/" /><script src="/assets/app.js"></script>` +
+          '<img src="/marketing/task.webp"></html>',
+      )
     }
-    await verifyPublicBuild({ ...config, siteSha: SITE_SHA }, fetchImpl)
+    await verifyPublicBuild(config, page('https://qivo.io'))
     expect(calls).toContain('https://qivo.io/assets/app.js')
-    await expect(verifyPublicBuild({ ...config, siteSha: OTHER }, fetchImpl)).rejects.toThrow(
-      /proxied website/,
+    expect(calls).toContain('https://qivo.io/marketing/task.webp')
+    for (const path of ['/', '/app', '/admin', '/docs/', '/pricing/'])
+      expect(calls).toContain(`https://qivo.io${path}`)
+    // A staging build served by production would claim the wrong origin.
+    await expect(verifyPublicBuild(config, page('https://preview.qivo.io'))).rejects.toThrow(
+      /not built for this environment/,
     )
   })
   it('preflights every project and refuses a staging binding to production before any write', async () => {
@@ -532,17 +496,16 @@ describe('deployment identity', () => {
 })
 
 /**
- * A provider double for complete runs. Vercel resolves a `main` request to
- * `privateMain`, and the public manifests report what was deployed.
+ * A provider double for complete runs. The public routes report what was deployed, and
+ * `servedOrigin` is the origin the served website was built for.
  */
-function providers(environment, { privateMain = SITE_SHA, builtRef, served = {} } = {}) {
+function providers(environment, { servedOrigin } = {}) {
   const calls = []
   const deployed = new Map()
   const github = githubFixture()
   const origin = environment === 'production' ? 'https://qivo.io' : 'https://preview.qivo.io'
   const hosts = {
     app: environment === 'production' ? 'qivo.io' : 'preview.qivo.io',
-    site: environment === 'production' ? 'site-origin.qivo.io' : 'site-preview.qivo.io',
     demo: 'demo.qivo.io',
   }
   const fetchImpl = async (url, request = {}) => {
@@ -557,24 +520,25 @@ function providers(environment, { privateMain = SITE_SHA, builtRef, served = {} 
     })
     if (parsed.host === 'api.github.com') {
       if (request.method === 'POST') return Response.json({ id: 30 })
-      return Response.json(await github(`${parsed.pathname}${parsed.search}`))
+      // The real client turns a 404 into null; this double never answers 404.
+      return Response.json(
+        await github(`${parsed.pathname}${parsed.search}`, 'GET', undefined, {
+          allowMissing: true,
+        }),
+      )
     }
     if (parsed.host === 'api.vercel.com') {
       if (parsed.pathname === '/v13/deployments') {
-        const { ref, sha } = body.gitSource
-        deployed.set(`deployment-${body.project}`, {
-          ref: sha ? ref : builtRef || ref,
-          sha: sha || privateMain,
-        })
+        deployed.set(`deployment-${body.project}`, body.gitSource)
         return Response.json({ id: `deployment-${body.project}` })
       }
       if (parsed.pathname.startsWith('/v13/deployments/')) {
         const id = parsed.pathname.split('/').at(-1)
-        return Response.json({ id, readyState: 'READY', gitSource: deployed.get(id) })
+        const { ref, sha } = deployed.get(id)
+        return Response.json({ id, readyState: 'READY', gitSource: { ref, sha } })
       }
       const id = parsed.pathname.split('/')[3]
       const role = id.split('-')[0]
-      if (request.method === 'POST') return Response.json({})
       if (parsed.pathname.endsWith('/domains'))
         return Response.json({ domains: [{ name: hosts[role] }] })
       if (parsed.pathname.endsWith('/env'))
@@ -586,16 +550,9 @@ function providers(environment, { privateMain = SITE_SHA, builtRef, served = {} 
       return Response.json({
         id,
         name: role,
-        rootDirectory: role === 'site' ? 'website' : null,
-        sourceFilesOutsideRootDirectory: false,
         ssoProtection: { deploymentType: 'all' },
         deploymentPolicy: POLICY,
-        link: {
-          org: 'qivo-io',
-          repo: role === 'site' ? 'qivo-internal' : 'qivo',
-          type: 'github',
-          repoId: role === 'site' ? 2 : 1,
-        },
+        link: { org: 'qivo-io', repo: 'qivo', type: 'github', repoId: 1 },
       })
     }
     if (parsed.pathname === '/version.json')
@@ -603,13 +560,9 @@ function providers(environment, { privateMain = SITE_SHA, builtRef, served = {} 
         commit: SHA,
         environment: parsed.hostname === 'demo.qivo.io' ? 'demo' : environment,
       })
-    if (parsed.pathname === '/site-version.json')
-      return Response.json({
-        docs: { commit: SHA },
-        website: { commit: served.site || deployed.get('deployment-site-id')?.sha },
-        environment,
-      })
-    return new Response('<html>Qivo</html>')
+    return new Response(
+      `<html><link rel="canonical" href="${servedOrigin || origin}/" />Qivo</html>`,
+    )
   }
   return { calls, deployed, fetchImpl, origin }
 }
@@ -622,25 +575,20 @@ describe('complete deployments', () => {
         call.host === 'api.github.com' && call.method === 'POST' && call.path.endsWith(suffix),
     )
 
-  it('releases the staged pair and records which staging run it came from', async () => {
+  it('releases the staged commit to the app and demo and records its staging run', async () => {
     const { calls, deployed, fetchImpl } = providers('production')
     await deployEnvironment(config, event, { fetchImpl, ...quiet })
-    expect([...deployed.values()]).toEqual([
-      { ref: SITE_SHA, sha: SITE_SHA },
-      { ref: SHA, sha: SHA },
-      { ref: SHA, sha: SHA },
-    ])
-    const pins = calls.find((call) => call.path.endsWith('/env') && call.method === 'POST')
-    expect(pins.authorization).toBe('Bearer site-test-token')
-    expect(pins.body).toEqual([
-      { key: 'QIVO_SOURCE_REVISION', value: SHA, type: 'plain', target: ['production'] },
-      { key: 'QIVO_SITE_REVISION', value: SITE_SHA, type: 'plain', target: ['production'] },
-      { key: 'SITE_ORIGIN', value: 'https://qivo.io', type: 'plain', target: ['production'] },
-    ])
+    expect([...deployed.keys()]).toEqual(['deployment-app-id', 'deployment-demo-id'])
+    for (const source of deployed.values()) expect(source).toMatchObject({ ref: SHA, sha: SHA })
+    expect(
+      calls.some(
+        (call) =>
+          call.host === 'api.vercel.com' && call.path.endsWith('/env') && call.method === 'POST',
+      ),
+    ).toBe(false)
     expect(posted(calls, '/deployments')[0].body.payload).toEqual({
       kind: 'qivo-production-v1',
       app_revision: SHA,
-      site_revision: SITE_SHA,
       ci_run_id: 1,
       staging_receipt_id: 20,
       workflow_run_id: '300',
@@ -664,21 +612,15 @@ describe('complete deployments', () => {
     workflow_run: { ...successfulRun, head_repository: { full_name: 'qivo-io/qivo' } },
   }
 
-  it('stages current private main and records the commit Vercel built only after it serves', async () => {
-    const { calls, deployed, fetchImpl } = providers('staging', { privateMain: OTHER })
+  it('stages current main and records it only after it serves', async () => {
+    const { calls, deployed, fetchImpl } = providers('staging')
     await deployEnvironment(staging, completed, { fetchImpl, ...quiet })
-    expect([...deployed.values()]).toEqual([
-      { ref: 'main', sha: OTHER },
-      { ref: SHA, sha: SHA },
-    ])
-    const pins = calls.find((call) => call.path.endsWith('/env') && call.method === 'POST')
-    expect(pins.body.find((pin) => pin.key === 'QIVO_SITE_REVISION').value).toBe('main')
+    expect([...deployed.keys()]).toEqual(['deployment-app-id'])
     const receipts = posted(calls, '/deployments')
     expect(receipts).toHaveLength(1)
     expect(receipts[0].body.payload).toEqual({
       kind: 'qivo-staging-v1',
       app_revision: SHA,
-      site_revision: OTHER,
       ci_run_id: 1,
       workflow_run_id: '300',
       workflow_run_attempt: 1,
@@ -688,26 +630,13 @@ describe('complete deployments', () => {
       calls.findIndex(
         (call) => call.path === '/repos/qivo-io/qivo/deployments' && call.method === 'POST',
       ),
-    ).toBeGreaterThan(calls.findLastIndex((call) => call.path === '/site-version.json'))
+    ).toBeGreaterThan(calls.findLastIndex((call) => call.host === 'preview.qivo.io'))
   })
 
-  it('fails without a record when Vercel builds another branch for the staging website', async () => {
-    const { calls, fetchImpl } = providers('staging', { privateMain: OTHER, builtRef: 'feature' })
+  it('records nothing when staging serves a website built for another origin', async () => {
+    const { calls, fetchImpl } = providers('staging', { servedOrigin: 'https://qivo.io' })
     await expect(deployEnvironment(staging, completed, { fetchImpl, ...quiet })).rejects.toThrow(
-      /different Git reference/,
-    )
-    expect(calls.some((call) => call.host === 'api.github.com' && call.method === 'POST')).toBe(
-      false,
-    )
-  })
-
-  it('records nothing when the staged website does not serve the commit Vercel built', async () => {
-    const { calls, fetchImpl } = providers('staging', {
-      privateMain: OTHER,
-      served: { site: SITE_SHA },
-    })
-    await expect(deployEnvironment(staging, completed, { fetchImpl, ...quiet })).rejects.toThrow(
-      /proxied website/,
+      /not built for this environment/,
     )
     expect(calls.some((call) => call.host === 'api.github.com' && call.method === 'POST')).toBe(
       false,

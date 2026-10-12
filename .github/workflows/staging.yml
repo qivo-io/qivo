@@ -5,8 +5,8 @@ on:
     workflows: [CI]
     branches: [main]
     types: [completed]
-  # Run by hand from main to restage after a private website merge. It deploys
-  # the current public main with the current private main.
+  # Run by hand from main to restage current main, for example after a
+  # provider failure.
   workflow_dispatch:
 
 permissions:
