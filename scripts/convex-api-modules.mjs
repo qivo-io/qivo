@@ -46,8 +46,10 @@ export function sourceModules(convexDir) {
     appears in both. */
 export function generatedModules(apiDts) {
   const imports = [...apiDts.matchAll(/^import type \* as \w+ from "\.\.\/(.+)\.js";$/gm)]
-  // codegen quotes keys that are not plain identifiers ("lib/review")
-  const entries = [...apiDts.matchAll(/^ {2}(?:"([^"]+)"|(\w+)): typeof \w+;$/gm)]
+  // only the fullApi block counts; codegen quotes keys that are not plain
+  // identifiers ("lib/review")
+  const fullApi = apiDts.match(/^declare const fullApi: ApiFromModules<\{$([\s\S]*?)^\}>;$/m)
+  const entries = [...(fullApi?.[1] ?? '').matchAll(/^ {2}(?:"([^"]+)"|(\w+)): typeof \w+;$/gm)]
   return {
     imports: imports.map((m) => m[1]).sort(),
     entries: entries.map((m) => m[1] ?? m[2]).sort(),

@@ -15,8 +15,9 @@ describe('convex/_generated/api.d.ts', () => {
   })
 
   /** A small Convex directory: path → contents, plus an api.d.ts that imports
-      `listed` and maps `mapped` (default: the same modules) in fullApi. */
-  function fixture(files, listed, mapped = listed) {
+      `listed`, maps `mapped` (default: the same modules) in fullApi and maps
+      `elsewhere` in an unrelated type. */
+  function fixture(files, listed, mapped = listed, elsewhere = []) {
     copy = mkdtempSync(join(tmpdir(), 'qivo-convex-api-'))
     const alias = (m) => m.replace(/\W/g, '_')
     const all = {
@@ -26,6 +27,9 @@ describe('convex/_generated/api.d.ts', () => {
         'declare const fullApi: ApiFromModules<{',
         ...mapped.map((m) => `  "${m}": typeof ${alias(m)};`),
         '}>;',
+        'declare const other: {',
+        ...elsewhere.map((m) => `  "${m}": typeof ${alias(m)};`),
+        '};',
       ].join('\n'),
     }
     for (const [path, text] of Object.entries(all)) {
@@ -52,6 +56,16 @@ describe('convex/_generated/api.d.ts', () => {
       { 'issues.ts': 'export const a = 1', 'lib/keys.ts': 'export const b = 2' },
       ['issues', 'lib/keys'],
       ['issues'],
+    )
+    expect(drift).toEqual({ missing: ['lib/keys'], extra: [] })
+  })
+
+  it('ignores entries outside the fullApi map', () => {
+    const drift = fixture(
+      { 'issues.ts': 'export const a = 1', 'lib/keys.ts': 'export const b = 2' },
+      ['issues', 'lib/keys'],
+      ['issues'],
+      ['lib/keys'],
     )
     expect(drift).toEqual({ missing: ['lib/keys'], extra: [] })
   })
