@@ -74,14 +74,18 @@ schemes remain blocked. Use Markdown for images, links, lists, tables and code.
 To see a page with the published styling, run `npm run build` and then
 `npm run preview`, and open `/docs/`.
 
-Run `node scripts/docs-contract.mjs` for a quick check; `npm run build` and the
-test suite run it too. It validates `pages.json`, page file names and slugs,
-relative page links and subsection anchors, local images, top-level headings
-and the `https://qivo.io/docs/` links in the agent guides in `public/`. Page
-files are flat lowercase `.md` names in `docs/guide/`. The website build also
-fails on a broken link, anchor or image, and
-`website/test/fixtures/docs-compatibility.json` lists the published page URLs
-and anchors that must keep working.
+Run `node scripts/docs-contract.mjs` for a quick check. It runs the website
+build's documentation checks without building anything, lists every problem by
+file, and runs on the real guide in the test suite. It checks `pages.json`,
+page file names and slugs, Markdown files missing from `pages.json`, top-level
+headings, page links and subsection anchors, links to the homepage, pricing
+page and agent guides, local images and the `https://qivo.io/docs/` links in
+the agent guides in `public/`. Page files are flat lowercase `.md` names in
+`docs/guide/`. Relative links name a Markdown page or a section of the same
+page, and images use relative paths to files in `docs/guide/`. `npm run build`
+also rejects rendered pages that load third-party resources or contain text
+that looks like a credential. `website/test/fixtures/docs-compatibility.json`
+lists the published page URLs and anchors that must keep working.
 
 After a change reaches `main` and CI passes, staging publishes it at
 `https://preview.qivo.io/docs/`. Production documentation changes only with a

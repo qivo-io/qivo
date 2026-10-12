@@ -12,22 +12,44 @@ export const slugify = (s) =>
 /** Standard Markdown with escaped HTML and markdown-it's default URL safety.
  * Callers resolve content-relative links and images without replacing the parser.
  * Aliases retain old subsection links when contributors rename a heading.
+ * Alias problems throw. When `onError` is given, it receives each one instead
+ * and rendering continues, so callers can still check the rest of the page.
  */
 export function render(
   source,
-  { onHeading = null, resolveLink = null, resolveImage = null, aliases = {} } = {},
+  {
+    onHeading = null,
+    resolveLink = null,
+    resolveImage = null,
+    aliases = {},
+    onError = (message) => {
+      throw new Error(message)
+    },
+  } = {},
 ) {
   const md = new MarkdownIt({ html: false })
   const tokens = md.parse(source, {})
   const used = new Set()
   const seenAliases = new Set()
   const aliasIds = new Set()
-  for (const ids of Object.values(aliases)) {
-    if (!Array.isArray(ids)) throw new Error('Heading aliases must be arrays of IDs')
+  const valid = {}
+  if (!aliases || typeof aliases !== 'object' || Array.isArray(aliases)) {
+    onError('Heading aliases must be an object that maps heading IDs to arrays')
+    aliases = {}
+  }
+  for (const [target, ids] of Object.entries(aliases)) {
+    valid[target] = []
+    if (!Array.isArray(ids)) {
+      onError(`Heading aliases for "${target}" must be an array of IDs`)
+      continue
+    }
     for (const id of ids) {
       if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(id) || aliasIds.has(id))
-        throw new Error(`Invalid or duplicate heading alias "${id}"`)
-      aliasIds.add(id)
+        onError(`Invalid or duplicate heading alias "${id}"`)
+      else {
+        aliasIds.add(id)
+        valid[target].push(id)
+      }
     }
   }
 
@@ -40,9 +62,9 @@ export function render(
         let id = base
         let suffix = 1
         while (used.has(id)) id = `${base}-${++suffix}`
-        if (aliasIds.has(id)) throw new Error(`Heading ID "${id}" conflicts with an alias`)
+        if (aliasIds.has(id)) onError(`Heading ID "${id}" conflicts with an alias`)
         used.add(id)
-        const previous = Object.hasOwn(aliases, id) ? aliases[id] : []
+        const previous = Object.hasOwn(valid, id) ? valid[id] : []
         seenAliases.add(id)
         token.attrSet('id', id)
         token.meta = { aliases: previous }
@@ -61,7 +83,7 @@ export function render(
   }
   visit(tokens)
   for (const id of Object.keys(aliases)) {
-    if (!seenAliases.has(id)) throw new Error(`Heading alias target "${id}" does not exist`)
+    if (!seenAliases.has(id)) onError(`Heading alias target "${id}" does not exist`)
   }
 
   md.renderer.rules.heading_open = (list, index, options, _env, self) => {
