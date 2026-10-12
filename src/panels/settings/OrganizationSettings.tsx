@@ -59,6 +59,10 @@ function OrgAddressField() {
             setV(e.target.value.toLowerCase())
             setErr('')
           }}
+          // show the saved address again when only spaces differ
+          onBlur={() => {
+            if (!dirty) setV(current)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()

@@ -169,6 +169,10 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
             setV(e.target.value)
             setErr('')
           }}
+          // show the saved name again when only spaces differ
+          onBlur={() => {
+            if (!dirty) setV(me.name)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
