@@ -1,8 +1,13 @@
 import { Slot, Tooltip as TooltipPrimitive } from 'radix-ui'
 import * as React from 'react'
 
+import { passEscapeOn } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 
+/** True while a tooltip shows. An Escape handler that runs before the
+    tooltip's own (window capture, or document capture registered earlier)
+    skips that Escape: the tooltip closes and passes it on (passEscapeOn),
+    and the handler acts on the one passed on, so one press acts once. */
 function hasOpenTooltip() {
   return !!document.querySelector(
     '[data-slot="tooltip-content"][data-state="delayed-open"], [data-slot="tooltip-content"][data-state="instant-open"]',
@@ -114,6 +119,10 @@ function HoverTooltip({
   children: React.ReactElement<React.HTMLAttributes<HTMLElement>>
 }) {
   const [open, setOpen] = React.useState(false)
+  // closed by Escape: skip the exit animation, so the tooltip leaves Radix's
+  // layer stack at once and the Escape can go on to the layer below
+  const [escaped, setEscaped] = React.useState(false)
+  const contentRef = React.useRef<HTMLDivElement>(null)
   const hasContent =
     content !== undefined && content !== null && content !== '' && content !== false
   React.useEffect(() => {
@@ -130,7 +139,13 @@ function HoverTooltip({
     if (target.closest('[data-tooltip-trigger]') !== event.currentTarget) event.preventDefault()
   }
   return (
-    <Tooltip open={hasContent && open} onOpenChange={setOpen}>
+    <Tooltip
+      open={hasContent && open}
+      onOpenChange={(next) => {
+        if (next) setEscaped(false)
+        setOpen(next)
+      }}
+    >
       <TooltipTrigger
         asChild
         data-tooltip-trigger={hasContent ? '' : undefined}
@@ -142,10 +157,15 @@ function HoverTooltip({
       </TooltipTrigger>
       {hasContent && (
         <TooltipContent
+          ref={contentRef}
+          className={escaped ? 'data-[state=closed]:!animate-none' : undefined}
           onEscapeKeyDown={(event) => {
+            // this press reaches nothing else; passEscapeOn sends it again
             event.preventDefault()
             event.stopPropagation()
+            setEscaped(true)
             setOpen(false)
+            passEscapeOn(event.target, contentRef.current)
           }}
         >
           {content}

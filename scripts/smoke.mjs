@@ -844,17 +844,10 @@ try {
     enterTarget.key
   )
     await fail('Enter from Search opened a different task than the selected result')
-  // Closing the palette restores keyboard focus, which can show its trigger's
-  // help. Escape dismisses that layer before it dismisses the task window.
-  if (await tooltip.count()) {
-    await pageA.keyboard.press('Escape')
-    await tooltip.waitFor({ state: 'detached' })
-    if (!(await pageA.locator('[data-task-scrim]').count()))
-      await fail('Tooltip Escape also closed the task window')
-  }
+  // One Escape closes the task window, even while a tooltip shows.
   await pageA.keyboard.press('Escape')
   await pageA.locator('[data-task-scrim]').waitFor({ state: 'detached', timeout: 5000 })
-  log('A: Search has clickable esc and preserves Home/End, arrows, Enter and layered Escape')
+  log('A: Search has clickable esc and preserves Home/End, arrows, Enter and one-press Escape')
 
   // Appearance applies immediately and persists. Blue, Dark and Light keep the
   // Canvas controls enabled and paint the chosen Canvas image behind them; No
