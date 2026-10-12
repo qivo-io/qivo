@@ -116,8 +116,11 @@ export function inspectDocs({ contentDir, publicDir }) {
   const pages = loaded.filter(Boolean).sort((a, b) => a.order - b.order)
   const all = [overview, ...pages].filter(Boolean)
   const listed = new Set(entries.map((entry) => entry?.file))
-  for (const name of readdirSync(contentDir))
-    if (name.endsWith('.md') && !listed.has(name)) errors.push(`${name}: not listed in pages.json`)
+  // Nested files cannot be listed, so a Markdown file in a subfolder is reported too.
+  for (const name of readdirSync(contentDir, { recursive: true })) {
+    const file = name.split(sep).join('/')
+    if (file.endsWith('.md') && !listed.has(file)) errors.push(`${file}: not listed in pages.json`)
+  }
 
   const byPath = new Map(all.map((doc) => [doc.path, doc]))
   const assets = new Map()

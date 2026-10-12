@@ -1,4 +1,12 @@
-import { appendFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,12 +56,15 @@ describe('public documentation contract', () => {
     const errors = fixture(({ manifest, page }) => {
       manifest.pages[1].slug = 'Not A Slug'
       writeFileSync(page('orphan.md'), 'Text\n')
+      mkdirSync(page('planning'))
+      writeFileSync(page('planning/old.md'), 'Text\n')
       writeFileSync(page('overview.md'), '[x](./missing.md) ![](./images/missing.png)\n')
     })
     expect(errors).toEqual(
       expect.arrayContaining([
         'pages.json page 2: invalid slug "Not A Slug"',
         'orphan.md: not listed in pages.json',
+        'planning/old.md: not listed in pages.json',
         'overview.md: Broken internal page link "./missing.md"',
         'overview.md: Image needs descriptive alternative text "./images/missing.png"',
         expect.stringContaining('overview.md: Missing or invalid local image'),
