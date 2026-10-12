@@ -45,10 +45,10 @@ function LabelRow({
     setName(label.name)
   }, [label.name])
   const used = P.issues.filter((i) => (i.labels || []).includes(label.id)).length
+  // an empty, unchanged or refused name puts the stored one back
   const commit = () => {
     const v = name.trim()
-    if (v && v !== label.name) P.updateLabel(label.id, { name: v })
-    else setName(label.name)
+    if (!v || v === label.name || !P.updateLabel(label.id, { name: v })) setName(label.name)
   }
   return (
     <div className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]">
@@ -108,6 +108,8 @@ function LabelRow({
       {canEdit ? (
         <Input
           value={name}
+          maxLength={40}
+          aria-label={`Name of label ${label.name}`}
           onChange={(e) => setName(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {

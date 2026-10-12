@@ -25,15 +25,17 @@ function OrgAddressField() {
     setV(P.org.slug || '')
     setErr('')
   }, [P.org.slug])
-  const dirty = v !== current
+  // compared as the store will save it, so surrounding spaces are no change
+  const next = v.trim()
+  const dirty = next !== current
   useUpdateBlocker(dirty || busy)
   const save = async () => {
     if (busy || !dirty) return
     setBusy(true)
-    const e = await P.setOrgSlug(v)
+    const e = await P.setOrgSlug(next)
     setBusy(false)
     setErr(e || '')
-    if (!e) window.showToast?.(`Address changed to ${stem}${v}`)
+    if (!e) window.showToast?.(`Address changed to ${stem}${next}`)
   }
   return (
     <SettingsField
@@ -56,6 +58,10 @@ function OrgAddressField() {
           onChange={(e) => {
             setV(e.target.value.toLowerCase())
             setErr('')
+          }}
+          // show the saved address again when only spaces differ
+          onBlur={() => {
+            if (!dirty) setV(current)
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
