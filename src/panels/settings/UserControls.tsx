@@ -117,7 +117,7 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
 }
 
 // Only unclaimed invitations can change email. Claimed seats retain the
-// login address; empty or invalid edits restore the saved value.
+// login address; empty, invalid or refused edits restore the saved value.
 export function UserEmail({ user }: { user: UserVM }) {
   const canEdit = !DEMO_MODE && P.isAdmin() && user.pending
   const [v, setV] = useStateS(user.email || '')
@@ -125,14 +125,16 @@ export function UserEmail({ user }: { user: UserVM }) {
   useEffectS(() => {
     setV(user.email || '')
   }, [user.email])
+  // Stored addresses are lowercase, so a case-only edit changes nothing.
   const commit = () => {
+    const saved = user.email || ''
     const next = v.trim()
-    if (next === (user.email || '')) return
-    if (!P.emailLooksValid(next)) {
-      setV(user.email || '')
-      return
-    }
-    P.updateUser(user.id, { email: next })
+    if (
+      next.toLowerCase() === saved ||
+      !P.emailLooksValid(next) ||
+      !P.updateUser(user.id, { email: next })
+    )
+      setV(saved)
   }
   if (!canEdit) {
     return (

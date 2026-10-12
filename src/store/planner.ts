@@ -4145,9 +4145,12 @@ export const PLANNER = {
     return uuid
   },
 
-  updateUser: (id: string, patch: UserPatch) => {
+  /** Applies an admin's edit to one seat. Returns false when a client
+      rule refused the whole patch (with a toast), so an inline editor can
+      put the stored value back. */
+  updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
-    if (!row) return
+    if (!row) return false
     /* The client-predicted refusals stay audible first (the server states
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
@@ -4157,11 +4160,11 @@ export const PLANNER = {
         .trim()
       if (!next) {
         toast('A name cannot be blank')
-        return
+        return false
       }
       if ([...next].length > NAME_MAX) {
         toast(`A name is at most ${NAME_MAX} characters`)
-        return
+        return false
       }
     }
     if ('email' in patch) {
@@ -4173,19 +4176,19 @@ export const PLANNER = {
         )
       if (row.kind === 'agent') {
         toast('An agent has no email address — its login is a key')
-        return
+        return false
       }
       if (row.auth_user_id) {
         toast('This email cannot be changed after the user has signed in.')
-        return
+        return false
       }
       if (!PLANNER.emailLooksValid(next)) {
         toast('Enter an email address for sign-in.')
-        return
+        return false
       }
       if (taken) {
         toast(`${next} already has a seat in this organization`)
-        return
+        return false
       }
     }
     // teams diff — the membership mirror; the server diffs the same list
@@ -4253,6 +4256,7 @@ export const PLANNER = {
     if (Object.keys(wire).length) {
       run(write(api.profiles.update, { org_id: row.org_id, id, patch: wire }))
     }
+    return true
   },
 
   /** Does this look like an address the app can store? The UI asks before
@@ -4531,32 +4535,41 @@ export const PLANNER = {
     return uuid
   },
 
-  updateLabel: (id: string, patch: { name?: string; color?: string }) => {
+  /** Renames or recolors a label. Returns false when nothing was written,
+      either refused with a toast or already stored, so an inline editor
+      can put the stored name back. */
+  updateLabel: (id: string, patch: { name?: string; color?: string }): boolean => {
     const row = rows.labels.get(id)
-    if (!row) return
+    if (!row) return false
     const wire: FunctionArgs<typeof api.labels.update>['patch'] = {}
     if ('name' in patch) {
       const name = (patch.name || '').trim().slice(0, 40)
-      if (!name) return
+      if (!name) return false
+      // names are unique per organization, as in addLabel and on the server;
+      // a guest's cache also holds the host organization's labels
       const dup = [...rows.labels.values()].find(
-        (l) => l.id !== id && l.name.toLowerCase() === name.toLowerCase(),
+        (l) =>
+          l.id !== id && l.org_id === row.org_id && l.name.toLowerCase() === name.toLowerCase(),
       )
       if (dup) {
         toast('A label with that name already exists')
-        return
+        return false
       }
-      row.name = name
-      row.name_lower = name.toLowerCase()
-      wire.name = name
+      if (name !== row.name) {
+        row.name = name
+        row.name_lower = name.toLowerCase()
+        wire.name = name
+      }
     }
     if ('color' in patch) {
       row.color = patch.color
       wire.color = patch.color
     }
-    if (!Object.keys(wire).length) return
+    if (!Object.keys(wire).length) return false
     rebuild()
     emit()
     run(write(api.labels.update, { org_id: row.org_id, id, patch: wire }))
+    return true
   },
 
   removeLabel: (id: string) => {
