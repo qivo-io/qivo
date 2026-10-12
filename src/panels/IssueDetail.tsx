@@ -501,7 +501,10 @@ function LabelPickerPopup({
               type="button"
               key={l.id}
               onClick={() => P.toggleIssueLabel(it.id, l.id)}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover"
+              className={cn(
+                'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
+                on && 'font-semibold',
+              )}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = 'var(--hover)'
               }}
@@ -517,7 +520,9 @@ function LabelPickerPopup({
               <span className="[flex:1] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
                 {l.name}
               </span>
-              {on && <Icon name="check" size={14} color="var(--primary)" />}
+              {on && (
+                <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />
+              )}
             </Button>
           )
         })}
@@ -633,7 +638,10 @@ function IssuePickerPopup({
               type="button"
               key={x.id}
               onClick={() => pick(x)}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover"
+              className={cn(
+                'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
+                on && 'font-semibold',
+              )}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = 'var(--hover)'
               }}
@@ -646,7 +654,9 @@ function IssuePickerPopup({
               <span className="[flex:1] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
                 {x.title}
               </span>
-              {on && <Icon name="check" size={14} color="var(--primary)" />}
+              {on && (
+                <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />
+              )}
             </Button>
           )
         })}
@@ -2891,7 +2901,7 @@ function IssueDetail({
             <NativeSelect
               value={linkType}
               onChange={(e) => setLinkType(e.target.value)}
-              className="h-control-sm shrink-0 cursor-pointer rounded-sm border border-border bg-surface-1 px-1 py-0 text-sm text-text-1"
+              className="h-control-sm shrink-0 cursor-pointer bg-surface-1 text-sm text-text-1"
             >
               <option value="blocked_by">is blocked by</option>
               <option value="blocks">blocks</option>

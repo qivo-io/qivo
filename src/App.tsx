@@ -3,6 +3,7 @@
 import { type ReactNode, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
+import { DropdownChevron } from '@/components/ui/select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
@@ -599,7 +600,7 @@ function TopBar({
                     <Button
                       type="button"
                       variant="quiet"
-                      className="rounded-sm"
+                      className="rounded-sm pr-2 has-[>svg]:pr-2"
                       data-group-menu
                       onClick={t}
                       title="Arrange tasks on the board"
@@ -615,7 +616,7 @@ function TopBar({
                           sideboards: 'Separated',
                         }[tweaks.metaViz]
                       }
-                      <Icon name="chevronDown" size={13} />
+                      <DropdownChevron />
                     </Button>
                   )}
                 >

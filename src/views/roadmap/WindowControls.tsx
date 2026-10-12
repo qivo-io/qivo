@@ -215,6 +215,7 @@ export function WinMenu({
             yours to set. */}
         <MenuItem
           data-win-default
+          checkColumn
           disabled={isDefault}
           onClick={() => {
             if (!isDefault) {
@@ -231,6 +232,7 @@ export function WinMenu({
         </MenuItem>
         <MenuItem
           data-win-set-default={canForget ? 'forget' : 'save'}
+          checkColumn
           disabled={!canSave && !canForget}
           title={canForget ? `Restore the standard range: ${P.winLabel(P.DEFAULT_WIN)}` : undefined}
           onClick={() => {

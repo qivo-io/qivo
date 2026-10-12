@@ -99,8 +99,8 @@ export function TextField({
         placeholder={placeholder}
         className={
           multiline
-            ? 'min-h-control w-full resize-none overflow-y-auto bg-surface-1 px-[11px] py-1 text-base font-sans md:text-base'
-            : 'h-control w-full bg-surface-1 px-[11px] text-base font-sans'
+            ? 'min-h-control w-full resize-none overflow-y-auto bg-surface-1 px-2.5 py-1 text-base font-sans md:text-base'
+            : 'h-control w-full bg-surface-1 px-2.5 text-base font-sans'
         }
       />
     </SettingsField>

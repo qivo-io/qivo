@@ -149,9 +149,9 @@ function ArchivePage({
                   <optgroup key={g.meta.id} label={g.meta.name}>
                     <option value={g.meta.id}>{g.meta.name} — whole project</option>
                     {g.subs.map((sp) => (
-                      // native <option>s take no cross-browser padding — indent
-                      // sub-projects under their "whole project" row with NBSPs,
-                      // one visual step like options under an <optgroup> label
+                      // option padding is not portable (phones and Firefox
+                      // draw their own list), so NBSPs indent sub-projects one
+                      // step under their "whole project" row
                       <option key={sp.id} value={sp.id}>
                         {'    '}
                         {sp.name}

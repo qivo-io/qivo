@@ -655,8 +655,16 @@ function Popover({
 /* `disabled` keeps a readable supporting tone and stops the row hovering,
    rather than dropping it: a menu that changes length depending on state is
    a menu you have to re-read, and a missing row cannot tell you why. */
+/* Rows read like every dropdown list's (deviation #326): regular 14px text,
+   at least 32px tall. `active` makes the row a choice. A chosen row is
+   semibold with a check 8px from its right edge, as FieldSelect's menu and
+   every select list mark theirs, and every choice row keeps that column
+   clear, so a trailing note lines up whether or not its row is chosen. Leave
+   `active` out on action rows; pass `checkColumn` to an action row whose
+   trailing note must line up with the choice rows in the same menu. */
 function MenuItem({
   active,
+  checkColumn = false,
   danger,
   disabled,
   onClick,
@@ -665,6 +673,7 @@ function MenuItem({
   ...rest
 }: ComponentPropsWithoutRef<'button'> & {
   active?: boolean
+  checkColumn?: boolean
   danger?: boolean
   // call sites hang data-hooks on menu rows (see the comment above)
   [key: `data-${string}`]: unknown
@@ -678,14 +687,21 @@ function MenuItem({
       onClick={onClick}
       title={title}
       className={cn(
-        'h-auto min-h-8 w-full justify-start gap-2 px-2 py-1 text-left text-base text-text-1 has-[[data-slot=avatar]]:py-2',
-        active && 'bg-primary-soft font-semibold hover:bg-primary-soft',
+        'h-auto min-h-8 w-full justify-start gap-2 px-2 py-1 text-left text-base font-normal text-text-1 has-[[data-slot=avatar]]:py-2',
+        (active !== undefined || checkColumn) && 'relative pr-8 has-[>svg]:pr-8',
+        active && 'font-semibold',
         danger && 'text-danger hover:bg-danger-soft hover:text-danger',
         disabled && 'cursor-default disabled:opacity-100',
         disabled && !danger && 'text-text-2',
       )}
     >
       {children}
+      {active && (
+        // 7px inside the 1px border: 8px from the edge, as in every list
+        <span aria-hidden="true" className="absolute right-[7px] flex">
+          <Check className="size-4 text-muted-foreground" />
+        </span>
+      )}
     </Button>
   )
 }
@@ -826,7 +842,7 @@ function FieldSelect<T extends string>({
         title={title}
         aria-label={ariaLabel}
         className={cn(
-          'h-control max-w-full gap-2 bg-surface-1 px-2 text-base text-text-1 has-[[data-slot=avatar]]:h-auto has-[[data-slot=avatar]]:min-h-[46px] has-[[data-slot=avatar]]:py-2',
+          'h-control max-w-full gap-2 bg-surface-1 text-base text-text-1 has-[[data-slot=avatar]]:h-auto has-[[data-slot=avatar]]:min-h-[46px] has-[[data-slot=avatar]]:py-2',
           className,
         )}
         style={style}
@@ -849,7 +865,7 @@ function FieldSelect<T extends string>({
           <SelectItem
             key={String(o.value)}
             value={String(o.value)}
-            className="text-base text-text-1 data-[state=checked]:font-semibold"
+            className="text-base text-text-1"
           >
             {o.icon}
             <span className="truncate">{o.label}</span>

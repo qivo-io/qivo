@@ -94,7 +94,7 @@ export function ProjectAccessEditor({
                   disabled={!canManageTeams}
                   value={teamAccess[teamId]}
                   onChange={(event) => onTeamChange(teamId, event.target.value as TeamAccessLevel)}
-                  className="h-control-sm w-28 shrink-0 bg-surface-1 px-1.5 text-sm font-sans"
+                  className="h-control-sm w-28 shrink-0 bg-surface-1 text-sm font-sans"
                 >
                   <option value="user">User</option>
                   <option value="viewer">Viewer</option>
@@ -156,7 +156,7 @@ export function ProjectAccessEditor({
                   disabled={!canEdit || userRole === 'lead'}
                   value={userRole}
                   onChange={(event) => onUserChange(userId, event.target.value as AccessLevel)}
-                  className="h-control-sm w-28 shrink-0 bg-surface-1 px-1.5 text-sm font-sans"
+                  className="h-control-sm w-28 shrink-0 bg-surface-1 text-sm font-sans"
                   title={
                     user.orgRole === 'viewer'
                       ? 'Organization viewers have read-only access'
@@ -204,7 +204,7 @@ export function ProjectAccessEditor({
             if (user?.orgRole === 'viewer') onRoleChange('viewer')
             else if (next.startsWith('team:') && role === 'lead') onRoleChange('user')
           }}
-          className="h-control min-w-[160px] flex-1 bg-surface-1 px-2.5 text-base font-sans"
+          className="h-control min-w-[160px] flex-1 bg-surface-1 text-base font-sans"
         >
           <option value="">{canManageTeams ? 'Add team or user…' : 'Add user…'}</option>
           {canManageTeams && (
@@ -230,7 +230,7 @@ export function ProjectAccessEditor({
           disabled={!canPick}
           value={selectedRole}
           onChange={(event) => onRoleChange(event.target.value as AccessLevel)}
-          className="h-control w-28 bg-surface-1 px-2.5 text-base font-sans"
+          className="h-control w-28 bg-surface-1 text-base font-sans"
         >
           {canGrantLead && <option value="lead">Lead</option>}
           {!viewerOnly && <option value="user">User</option>}

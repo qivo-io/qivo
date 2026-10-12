@@ -208,7 +208,7 @@
     gap: 8px;
   }
   .mobile-task-tools select {
-    background: var(--surface-1);
+    background-color: var(--surface-1);
   }
   .mobile-task-section {
     overflow: hidden;

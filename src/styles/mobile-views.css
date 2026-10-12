@@ -51,15 +51,17 @@
     flex-shrink: 0;
   }
 
+  /* Padding and the chevron are the shared dropdown face (tokens.css). At
+     phone widths every browser draws that chevron as a background image, so
+     set only the fill colour, because the background shorthand would clear it. */
   :is(.mobile-health-sort, .mobile-roadmap-task-filter) select {
     flex: 1;
     width: 0;
     min-width: 0;
     height: var(--ctl-md);
-    padding: 0 8px;
     border: 1px solid var(--border);
     border-radius: var(--r-md);
-    background: var(--surface-1);
+    background-color: var(--surface-1);
     color: var(--text-1);
     font: inherit;
     font-size: 16px;

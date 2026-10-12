@@ -521,14 +521,17 @@ textarea {
 }
 /* The one active-field rule (deviation #253). A text box, native select,
    select trigger or the picker buttons that stand in for a select (date,
-   project access) lights the same way everywhere while it is active: its own
-   1px border turns --primary — exactly what the description box (.descfield
-   below) does — with no outline and no ring on top. Active is:
-   · a text box or native select holding focus (a click focuses these
-     visibly, and the light goes when you click out of them — NativeSelect
-     also lets go of focus after a pointer pick, see native-select.tsx);
-   · a select-look button while its menu is open — focus has moved into the
-     menu, so the open state carries the light — or on KEYBOARD focus only.
+   project access) lights the same way everywhere while it is active. Its own
+   1px border turns --primary, exactly what the description box (.descfield
+   below) does, with no outline and no ring on top. Active is:
+   · a text box or native select holding focus. A click focuses these
+     visibly, and the light goes when you click out of them. NativeSelect
+     also lets go of focus after a pointer pick, see native-select.tsx;
+   · a native select whose list is open (:open). A customizable select moves
+     focus into its list, so the open state carries the light. :is() forgives
+     the pseudo-class where a browser does not know it;
+   · a select-look button while its menu is open (focus has moved into the
+     menu, so the open state carries the light) or on KEYBOARD focus only.
      After a pointer pick the menu closes and focus returns to the button
      silently, and it must not stay lit, the way a date box goes quiet once
      its calendar closes. Gate :focus-visible on the shared input modality,
@@ -536,7 +539,7 @@ textarea {
    Unlayered on purpose: it must win over the primitives' utility classes and
    the :focus-visible outline above, so a field opts out only with !important
    or its own inline style, and none should. Search fields are the stated
-   exception (deviation #225: a quiet hairline, never the accent), as is a
+   exception (deviation #225, a quiet hairline, never the accent), as is a
    field reporting an invalid value, which keeps its danger colour. */
 :is(
   :is(
@@ -544,6 +547,7 @@ textarea {
     [data-slot="textarea"],
     [data-slot="native-select"]
   ):focus,
+  [data-slot="native-select"]:open,
   :is([data-slot="select-trigger"], [data-field-trigger]):is(
     :focus-visible:where(html:not([data-focus-modality="pointer"]) *),
     [data-state="open"],
@@ -553,6 +557,164 @@ textarea {
   border-color: var(--primary);
   outline: none;
   box-shadow: none;
+}
+
+/* One dropdown face (deviation #326). Every dropdown closes to the same
+   field: text 10px in, then a 12px chevron in --muted-foreground at half
+   strength whose right edge sits 9px inside the border (8px padding and the
+   1px border). FieldSelect and the select-look buttons draw the chevron as
+   DropdownChevron (select.tsx); a native select draws it here. Unlayered,
+   like the field rule above, so no call site's padding utility can move it.
+   · Wider than 760px, browsers with the customizable select (Chrome and
+     Edge 135+, Safari 27 and the desktop app) keep the real <select>, its
+     keyboard support and form value, and draw its open list like
+     FieldSelect's menu: 12px corners, the float rim, the pop shadow, 6px
+     from the field, 32px rows, the chosen row semibold with a check on the
+     right. The chevron is its ::picker-icon.
+   · Everywhere else (phones, Firefox) the select keeps its classic
+     appearance with a background chevron: the same closed field, the
+     system picker or the browser's own list, and the browser's own clipping
+     of a long value. --select-chevron is that glyph in each palette's
+     --text-2, which a data URI cannot read from a token. */
+:root {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b5bac1' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+:root[data-appearance="dark"] {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c4c9cf' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+:root[data-appearance="light"] {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a596c' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+:root[data-appearance="blue"] {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c8d3dc' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+[data-slot="native-select"] {
+  appearance: none;
+  padding-inline: 10px 28px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px 12px;
+}
+@supports (appearance: base-select) {
+  @media (min-width: 761px) {
+    [data-slot="native-select"],
+    [data-slot="native-select"]::picker(select) {
+      appearance: base-select;
+    }
+    [data-slot="native-select"] {
+      align-items: center;
+      gap: 8px;
+      padding-inline: 10px 8px;
+      background-image: none;
+    }
+    /* The label NativeSelect gives the closed field (native-select.tsx)
+       shows the chosen value with an ellipsis, over hidden copies of every
+       option that hold the field to its widest option's width. */
+    [data-slot="native-select"] > button[data-select-label] {
+      display: grid;
+      grid-template-columns: minmax(0, auto);
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      text-align: start;
+    }
+    [data-select-label] > :is([data-select-value], [data-select-sizer]) {
+      grid-area: 1 / 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    [data-select-label] > [data-select-sizer] {
+      height: 0;
+      visibility: hidden;
+    }
+    [data-slot="native-select"]::picker-icon {
+      content: "";
+      flex: none;
+      width: 12px;
+      height: 12px;
+      background: var(--muted-foreground);
+      opacity: 0.5;
+      mask:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      rotate: none;
+      transition: none;
+    }
+    [data-slot="native-select"]::picker(select) {
+      margin-block: 6px;
+      padding: 4px;
+      border: 1px solid var(--float-border, var(--border));
+      border-radius: var(--r-lg);
+      background: var(--popover);
+      color: var(--popover-foreground);
+      box-shadow: var(--qivo-shadow-pop);
+      min-inline-size: anchor-size(self-inline);
+    }
+    /* Blue floats its menus on --float-material, as appearance.css does for
+       FieldSelect's menu (a ::picker cannot sit in that rule's :is()). */
+    html[data-appearance="blue"] [data-slot="native-select"]::picker(select) {
+      background: var(--float-material);
+      -webkit-backdrop-filter: var(--workspace-panel-blur);
+      backdrop-filter: var(--workspace-panel-blur);
+    }
+    [data-slot="native-select"] :is(option, optgroup) {
+      font-size: var(--fs-base);
+    }
+    [data-slot="native-select"] option {
+      position: relative;
+      text-indent: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-block-size: 32px;
+      padding: 4px 32px 4px 8px;
+      border-radius: var(--r-sm);
+      background: transparent;
+      color: var(--text-1);
+      font-weight: 400;
+    }
+    [data-slot="native-select"] option:is(:hover, :focus, :focus-visible) {
+      background: var(--accent);
+      color: var(--accent-foreground);
+      outline: none;
+    }
+    [data-slot="native-select"] option:checked {
+      font-weight: 600;
+    }
+    [data-slot="native-select"] option:disabled {
+      color: var(--text-2);
+      background: transparent;
+    }
+    [data-slot="native-select"] option::checkmark {
+      content: "";
+      position: absolute;
+      right: 8px;
+      width: 16px;
+      height: 16px;
+      background: var(--muted-foreground);
+      mask:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+    /* A group's name reads like a menu heading (12px semibold --text-2),
+       its text 8px in like the rows'. The name is the browser's own box,
+       padded 6px, so it takes the last 2px as inherited text-indent, which
+       options reset. Padding on the group itself would indent its options. */
+    [data-slot="native-select"] optgroup {
+      padding: 4px 0 0;
+      color: var(--text-2);
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      text-indent: 2px;
+    }
+  }
 }
 ::-webkit-scrollbar {
   width: 20px;
@@ -724,6 +886,8 @@ textarea {
 
 /* @-mention member picker under the caret (suggestion managed mount appends
    it to document.body, so like .mdmenu it must stack above the modal) */
+/* Reads like every dropdown list (deviation #326): the float rim, 14px
+   regular names and the --accent highlight. */
 .mentionpop {
   z-index: 120;
   min-width: 260px;
@@ -731,8 +895,8 @@ textarea {
   max-height: 264px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  background: var(--popover);
+  border: 1px solid var(--float-border, var(--border));
   border-radius: var(--r-lg);
   box-shadow: var(--qivo-shadow-pop);
 }
@@ -747,12 +911,12 @@ textarea {
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-1);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-base);
   text-align: left;
   font-family: var(--sans);
 }
 .mentionpop-row.active {
-  background: var(--surface-3);
+  background: var(--accent);
 }
 .mentionpop-av {
   display: inline-grid;
@@ -781,7 +945,7 @@ textarea {
 .mentionpop-name {
   flex: 1;
   color: var(--text-1);
-  font-weight: 600;
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

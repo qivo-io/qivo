@@ -4,6 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { DropdownChevron } from '@/components/ui/select'
 import { matchesAllWords } from '../lib/search'
 import type { AccessLevel, TeamAccessLevel, TeamVM, UserVM } from '../store/planner'
 import { Avatar, Icon } from './qivo'
@@ -65,12 +66,13 @@ export function ProjectAccessSelect({
           data-new-project-access
           data-field-trigger
           aria-label={`Project users: ${summary}`}
-          className="w-full justify-between bg-surface-1 px-2.5 text-base font-normal"
+          // the dropdown face (deviation #326): text 10px in, arrow 8px in
+          className="w-full justify-between bg-surface-1 pr-2 pl-2.5 text-base font-normal has-[>svg]:pr-2"
         >
           <span className={selectionCount ? 'min-w-0 truncate' : 'min-w-0 truncate text-text-2'}>
             {summary}
           </span>
-          <Icon name="chevronDown" size={16} color="var(--text-3)" />
+          <DropdownChevron />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -142,7 +144,7 @@ export function ProjectAccessSelect({
                       onChange={(event) =>
                         onTeamChange(team.id, event.target.value as TeamAccessLevel)
                       }
-                      className="h-control-sm w-24 shrink-0 bg-surface-1 px-1.5 text-sm"
+                      className="h-control-sm w-24 shrink-0 bg-surface-1 text-sm"
                     >
                       <option value="user">User</option>
                       <option value="viewer">Viewer</option>
@@ -201,7 +203,7 @@ export function ProjectAccessSelect({
                       disabled={viewerOnly}
                       title={viewerOnly ? 'Organization viewers have read-only access' : undefined}
                       onChange={(event) => onUserChange(user.id, event.target.value as AccessLevel)}
-                      className="h-control-sm w-24 shrink-0 bg-surface-1 px-1.5 text-sm"
+                      className="h-control-sm w-24 shrink-0 bg-surface-1 text-sm"
                     >
                       {!viewerOnly && <option value="user">User</option>}
                       <option value="viewer">Viewer</option>

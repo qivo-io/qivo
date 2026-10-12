@@ -52,6 +52,7 @@ import type React from 'react'
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Input } from '@/components/ui/input'
+import { DropdownChevron } from '@/components/ui/select'
 import { compressImage } from '../lib/images'
 import type { MdBlock, MdInline } from '../lib/md'
 import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
@@ -1224,7 +1225,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
               toggleHeadMenu,
               <>
                 <span className="[font-size:var(--fs-sm)]">Aa</span>
-                <Icon name="chevronDown" size={12} />
+                <DropdownChevron />
               </>,
               'w-auto gap-1 px-1.5',
             )}

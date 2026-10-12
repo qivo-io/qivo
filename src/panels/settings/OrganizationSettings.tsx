@@ -63,7 +63,7 @@ function OrgAddressField() {
               void save()
             }
           }}
-          className="h-control w-[200px] max-w-full bg-surface-1 px-[11px] !font-mono text-base"
+          className="h-control w-[200px] max-w-full bg-surface-1 px-2.5 !font-mono text-base"
         />
         <Button
           type="button"
@@ -143,7 +143,7 @@ export function OrgGeneralPage() {
                 P.setOrg({ maxAttachmentMb: mib })
                 window.showToast?.(`Attachment limit set to ${mib} MiB`)
               }}
-              className="h-control w-15 bg-surface-1 px-[11px] text-base font-sans"
+              className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
             />
             <span className="text-base text-text-2">MiB per file</span>
           </div>
@@ -157,7 +157,7 @@ export function OrgGeneralPage() {
               P.setOrg({ dateFormat: e.target.value as OrgPatch['dateFormat'] })
               window.showToast?.(`Date format set to ${e.target.value}`)
             }}
-            className="h-control w-60 bg-surface-1 px-[11px] font-sans text-base"
+            className="h-control w-60 bg-surface-1 font-sans text-base"
           >
             {P.DATE_FORMATS.map((f) => (
               <option key={f} value={f}>
@@ -176,7 +176,7 @@ export function OrgGeneralPage() {
               P.setOrg({ weekStart: d })
               window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
             }}
-            className="h-control w-60 bg-surface-1 px-[11px] font-sans text-base"
+            className="h-control w-60 bg-surface-1 font-sans text-base"
           >
             {[1, 2, 3, 4, 5, 6, 0].map((d) => (
               <option key={d} value={d}>
@@ -194,7 +194,7 @@ export function OrgGeneralPage() {
               P.setOrg({ weekOneRule: e.target.value as OrgPatch['weekOneRule'] })
               window.showToast?.('Week numbering updated')
             }}
-            className="h-control w-60 bg-surface-1 px-[11px] font-sans text-base"
+            className="h-control w-60 bg-surface-1 font-sans text-base"
           >
             <option value="first4day">First 4-day week (ISO 8601)</option>
             <option value="jan1">Week containing Jan 1</option>
@@ -230,7 +230,7 @@ export function OrgGeneralPage() {
                 P.setOrg({ defaultPlannableHours: h })
                 window.showToast?.(`New users start on ${h} h per week`)
               }}
-              className="h-control w-15 bg-surface-1 px-[11px] text-base font-sans"
+              className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
             />
             <span className="[font-size:var(--fs-base)] [color:var(--text-2)]">
               h per week, for new users

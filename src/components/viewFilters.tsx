@@ -1,6 +1,7 @@
 import { type ComponentPropsWithoutRef, forwardRef, useImperativeHandle, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { DropdownChevron } from '@/components/ui/select'
 import { Toggle } from '@/components/ui/toggle'
 import { cn } from '@/lib/utils'
 import { type IssueFilters, P, type ScopeInfo } from '../store/planner'
@@ -65,7 +66,13 @@ const FilterMenuButton = forwardRef<
         ref={triggerRef}
         variant={menuVariant(ground)}
         data-on={lit ? '' : undefined}
-        className={cn(groundRadius(ground), className, clear && 'pr-[42px] has-[>svg]:pr-[42px]')}
+        // with no filter set the arrow ends the button 8px from its edge, like
+        // every dropdown (deviation #326); a set filter shows its clear X instead
+        className={cn(
+          groundRadius(ground),
+          className,
+          clear ? 'pr-[42px] has-[>svg]:pr-[42px]' : 'pr-2 has-[>svg]:pr-2',
+        )}
       >
         {children}
       </Button>
@@ -173,11 +180,6 @@ function PeopleRows({ filters, setFilters }: { filters: IssueFilters; setFilters
       >
         <Avatar id={P.CURRENT_USER} size={28} />
         Me only
-        {filters.mine && (
-          <span className="[margin-left:auto] [display:flex]">
-            <Icon name="check" size={14} />
-          </span>
-        )}
       </MenuItem>
       <MenuItem
         data-filter-anyone
@@ -210,11 +212,6 @@ function PeopleRows({ filters, setFilters }: { filters: IssueFilters; setFilters
           >
             <Avatar id={u.id} size={28} />
             {u.name}
-            {on && (
-              <span className="[margin-left:auto] [display:flex]">
-                <Icon name="check" size={14} />
-              </span>
-            )}
           </MenuItem>
         )
       })}
@@ -258,11 +255,6 @@ function PriorityRows({
         >
           <PriorityIcon priority={pr.id} />
           {pr.name}
-          {filters.priority === pr.id && (
-            <span className="[margin-left:auto] [display:flex]">
-              <Icon name="check" size={14} />
-            </span>
-          )}
         </MenuItem>
       ))}
     </>
@@ -409,7 +401,7 @@ function ViewFilters({
                       : filters.assignees.length === 1
                         ? P.user(filters.assignees[0]).name.split(' ')[0]
                         : `${filters.assignees.length} people`}
-                  {!who && <Icon name="chevronDown" size={13} />}
+                  {!who && <DropdownChevron />}
                 </FilterMenuButton>
               )
             }}
@@ -446,7 +438,7 @@ function ViewFilters({
           >
             <Icon name="flag" size={16} />
             {filters.priority ? P.PRIORITIES[filters.priority].name : 'Priority'}
-            {!filters.priority && <Icon name="chevronDown" size={13} />}
+            {!filters.priority && <DropdownChevron />}
           </FilterMenuButton>
         )}
       >

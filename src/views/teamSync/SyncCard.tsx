@@ -152,8 +152,9 @@ function SinceText({ mark, now }: { mark: SinceMark; now: number }) {
 }
 
 /** The row's status: the task window's Status menu (five statuses, then
-    Pause / Resume) behind a select-look trigger showing only the dot. A move
-    into In Review with no reviewer offers the reviewer picker right after. */
+    Pause / Resume) behind a select-look trigger showing the dot and the
+    dropdown arrow (deviation #326). A move into In Review with no reviewer
+    offers the reviewer picker right after. */
 function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite: boolean }) {
   return (
     <span data-sync-status={it.id} className="inline-flex shrink-0">
@@ -164,7 +165,7 @@ function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite:
         backLayer
         disabled={!canWrite}
         title={canWrite ? undefined : READ_ONLY}
-        className="min-w-control justify-center gap-0 [&>svg]:hidden [&_[data-slot=select-value]>.truncate]:hidden"
+        className="min-w-control [&_[data-slot=select-value]>.truncate]:hidden"
         options={P.STATUSES.map((s) => ({
           value: s.id,
           label: s.name,
