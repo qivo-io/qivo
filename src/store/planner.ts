@@ -94,6 +94,7 @@ import {
   type AttachmentVM,
   byOrder,
   type CommentVM,
+  duplicateNameTags,
   type IssueSubscribers,
   type IssueVM,
   isNewer,
@@ -1276,6 +1277,7 @@ function rebuild(now = new Date()) {
       return level ? [shapeArchivedProject(s, meta, level === 'lead')] : []
     })
     .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0) || a.name.localeCompare(b.name))
+  P.projectTags = duplicateNameTags(P.projects, P.archivedProjects)
 
   // issues — handle mapping first, then shapes with mirrored links + children.
   // Numbers are per ORG (0050), so a blended snapshot (0081) can hold two
@@ -1863,6 +1865,9 @@ export const PLANNER = {
   // the archived ones (0106) — kept apart from `projects` on purpose, so that
   // everything which asks P.project(id) treats an archived project as gone
   archivedProjects: [] as ArchivedProjectVM[],
+  // project id → "#num" for projects sharing a name with another one shown
+  // alongside it (duplicateNameTags); absent for every unique name
+  projectTags: new Map<string, string>(),
   STATUSES,
   PRIORITIES,
   issues: [] as IssueVM[],
@@ -1885,6 +1890,20 @@ export const PLANNER = {
 
   project: (id: string | null | undefined): ProjectVM | undefined =>
     findProject(PLANNER.projects, id),
+  /** "#4" when another project shown alongside this one has the same name. */
+  projectTag: (id: string | null | undefined): string | null =>
+    (id && PLANNER.projectTags.get(id)) || null,
+  /** A project's name for plain-text places such as select options, with its
+      number when the name is shared ("Test #4"). */
+  projectLabel: (p: { id: string; name: string }): string => {
+    const tag = PLANNER.projectTag(p.id)
+    return tag ? `${p.name} ${tag}` : p.name
+  },
+  /** projectLabel for a project id; '' when the project is not loaded. */
+  projectLabelOf: (id: string | null | undefined): string => {
+    const p = PLANNER.project(id)
+    return p ? PLANNER.projectLabel(p) : ''
+  },
   user: (id: string | null | undefined): UserVM | undefined => findUser(PLANNER.users, id),
   teamById: (id: string | null | undefined): TeamVM | undefined => findTeam(PLANNER.teams, id),
   metaOf: (pid: string | null | undefined): ProjectVM | null => {

@@ -2,7 +2,17 @@ import { useState } from 'react'
 import { matchesAllWords } from '../lib/search'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, P, type ScopeInfo } from '../store/planner'
-import { Avatar, Icon, MenuItem, PausedMark, Popover, PriorityIcon, Seg, StatusDot } from './qivo'
+import {
+  Avatar,
+  Icon,
+  MenuItem,
+  PausedMark,
+  Popover,
+  PriorityIcon,
+  ProjectName,
+  Seg,
+  StatusDot,
+} from './qivo'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
@@ -277,7 +287,9 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
                 onClick={() => actions.openProject(project.id)}
               >
                 <span className="min-w-0 flex-1 text-left">
-                  <span className="block break-words font-semibold">{project.name}</span>
+                  <span className="block break-words font-semibold">
+                    <ProjectName project={project} wrap />
+                  </span>
                   <span className="block text-xs text-text-2">
                     {P.orgs.find((org) => org.id === project.org)?.name}, {visibleChildren.length}{' '}
                     sub-projects
@@ -340,7 +352,9 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
                     className="mobile-subproject-row"
                     onClick={() => actions.openProject(sub.id)}
                   >
-                    <span className="min-w-0 flex-1 whitespace-normal text-left">{sub.name}</span>
+                    <span className="min-w-0 flex-1 whitespace-normal text-left">
+                      <ProjectName project={sub} wrap />
+                    </span>
                     <Icon name="chevronRight" size={16} />
                   </Button>
                 ))}
@@ -497,8 +511,8 @@ export function MobileTaskList({
                       </span>
                       <span className="mobile-task-meta">
                         <span>
-                          {project?.name}
-                          {sub && `, ${sub.name}`}
+                          {project && P.projectLabel(project)}
+                          {sub && `, ${P.projectLabel(sub)}`}
                         </span>
                       </span>
                       <span className="mobile-task-meta">

@@ -300,7 +300,7 @@ function NewIssueModal({
         >
           {metas.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.name}
+              {P.projectLabel(m)}
             </option>
           ))}
         </NativeSelect>
@@ -315,7 +315,7 @@ function NewIssueModal({
         >
           {subProjects.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.name}
+              {P.projectLabel(p)}
             </option>
           ))}
         </NativeSelect>
@@ -565,7 +565,7 @@ function NewSubProjectModal({
           >
             {metas.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.name}
+                {P.projectLabel(m)}
               </option>
             ))}
           </NativeSelect>
@@ -668,10 +668,10 @@ function MoveIssueModal({
             </option>
           )}
           {groups.map((g) => (
-            <optgroup key={g.meta.id} label={g.meta.name}>
+            <optgroup key={g.meta.id} label={P.projectLabel(g.meta)}>
               {g.subs.map((sp) => (
                 <option key={sp.id} value={sp.id}>
-                  {sp.name}
+                  {P.projectLabel(sp)}
                   {sp.id === it.project ? ' (current)' : ''}
                 </option>
               ))}

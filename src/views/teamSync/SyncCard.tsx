@@ -69,7 +69,11 @@ const firstName = (name: string) => name.split(' ')[0]
 export function whereLabel(it: IssueVM) {
   const sub = P.project(it.project)
   const meta = P.metaOf(it.project)
-  return meta && sub && meta.id !== sub.id ? `${meta.name}, ${sub.name}` : sub?.name || ''
+  return meta && sub && meta.id !== sub.id
+    ? `${P.projectLabel(meta)}, ${P.projectLabel(sub)}`
+    : sub
+      ? P.projectLabel(sub)
+      : ''
 }
 
 /** A person's week as the Team strip reads it: org-wide hours (P.weekLoadOf)
@@ -519,7 +523,7 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-3">
           <IssueKey id={it.key} dim />
-          <span className="truncate">{P.project(it.project)?.name}</span>
+          <span className="truncate">{P.projectLabelOf(it.project)}</span>
           {hint && <span className="!font-mono">{hint}</span>}
           {it.start != null && it.due && (
             <span className={cn('!font-mono', dueLate && 'font-semibold text-danger')}>
@@ -619,7 +623,7 @@ export function DoneItem({
       <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-text-3">
         <IssueKey id={it.key} dim />
         <span className="truncate">
-          {P.project(it.project)?.name}, {dayLabel(it.doneAt ?? ctx.now, ctx.now)}
+          {P.projectLabelOf(it.project)}, {dayLabel(it.doneAt ?? ctx.now, ctx.now)}
           {kind === 'reviewed' && ', reviewed'}
         </span>
       </div>

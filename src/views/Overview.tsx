@@ -9,7 +9,15 @@ import { type ReactNode, useState as useStateO } from 'react'
 import { relativeWeek, weekToISO } from '@/lib/dates'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
-import { Avatar, EmptyState, Icon, PausedMark, ProgressBar, StatusDot } from '../components/qivo'
+import {
+  Avatar,
+  EmptyState,
+  Icon,
+  PausedMark,
+  ProgressBar,
+  ProjectName,
+  StatusDot,
+} from '../components/qivo'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import './Overview.css'
@@ -325,7 +333,9 @@ function OvHealthTable({ rows, unit, sort, setSort, onOpen, mobile }) {
             onClick={() => onOpen(r.proj.id)}
           >
             <span className="mobile-health-heading">
-              <strong>{r.proj.name}</strong>
+              <strong>
+                <ProjectName project={r.proj} wrap />
+              </strong>
               <Icon name="chevronRight" size={16} />
             </span>
             <span className="mobile-health-progress" data-ovcell="progress">
@@ -445,7 +455,7 @@ function OvHealthTable({ rows, unit, sort, setSort, onOpen, mobile }) {
                       className="[border:none] [background:transparent] [padding:0] [font:inherit] [color:inherit] [cursor:pointer] [max-width:100%] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap] [display:block] [text-align:left]"
                       variant="unstyled"
                     >
-                      {r.proj.name}
+                      <ProjectName project={r.proj} />
                     </Button>
                   </td>
                   <td data-ovcell="lead" className={cn(tdClass, last && 'border-b-0')}>
@@ -876,7 +886,11 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const rowLabel = (it: IssueVM) => {
     const p = P.project(it.project)
     const m = wide ? P.metaOf(it.project) : null
-    return m && p && m.id !== p.id ? `${m.name}, ${p.name}` : p ? p.name : ''
+    return m && p && m.id !== p.id
+      ? `${P.projectLabel(m)}, ${P.projectLabel(p)}`
+      : p
+        ? P.projectLabel(p)
+        : ''
   }
 
   return (
@@ -1086,7 +1100,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 key={m.id}
                 m={m}
                 next={nextMs && m.id === nextMs.id}
-                owner={wide ? P.project(m.project)?.name : null}
+                owner={wide ? P.projectLabelOf(m.project) : null}
                 onEdit={actions.editMilestone}
               />
             ))}

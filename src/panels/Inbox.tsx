@@ -262,7 +262,7 @@ function MessageRow({
                         className="[display:inline-block] [vertical-align:-1px] [margin:0_1px]"
                       />
                     )}
-                    <span data-msg-crumb>{p.name}</span>
+                    <span data-msg-crumb>{P.projectLabel(p)}</span>
                   </React.Fragment>
                 ))
               : secondLine(g)}

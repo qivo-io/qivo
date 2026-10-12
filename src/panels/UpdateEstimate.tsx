@@ -144,7 +144,7 @@ function UpdateEstimateModal({ onClose }: { onClose: () => void }) {
                       </div>
                       <div className="[display:flex] [align-items:center] [gap:8px] [margin-top:4px] [font-size:var(--fs-xs)] [color:var(--text-3)]">
                         <span className="[overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                          {proj ? proj.name : '—'},
+                          {proj ? P.projectLabel(proj) : '—'},
                         </span>
                         <StatusDot status={it.status} size={11} />
                         <span>
