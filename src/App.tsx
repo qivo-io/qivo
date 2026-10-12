@@ -1305,25 +1305,32 @@ function App() {
     navOpenIssue(key)
     return true
   }
+  // The new project shows in the sidebar at once, but the toast, the starter
+  // task and the move into the project wait for the server. A refused create
+  // must not leave the user inside a project that then disappears.
   const createProject = (p, { withStarter }) => {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
-    const id = P.addProject(p)
-    if (withStarter) {
-      P.addIssue({
-        title: p.name,
-        project: id,
-        status: 'backlog',
-        priority: 'medium',
-        assignee: p.lead || null,
-        parent: null,
-      })
-    }
+    const scopeAtCreate = scopeRef.current
+    const id = P.addProject(p, () => {
+      if (withStarter) {
+        P.addIssue({
+          title: p.name,
+          project: id,
+          status: 'backlog',
+          priority: 'medium',
+          assignee: p.lead || null,
+          parent: null,
+        })
+      }
+      window.showToast?.(`${p.type === 'meta' ? 'Project' : 'Sub-project'} “${p.name}” created`)
+      // follow the new project unless the user moved elsewhere while it saved
+      if (scopeRef.current !== scopeAtCreate) return
+      setScope(id)
+      setProjectsOpen(false)
+      setSync(null)
+    })
     setModal(null)
-    window.showToast?.(`${p.type === 'meta' ? 'Project' : 'Sub-project'} “${p.name}” created`)
-    setScope(id)
-    setProjectsOpen(false)
-    setSync(null)
   }
 
   const setTweak = (patch) => {

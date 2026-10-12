@@ -223,7 +223,7 @@ export const create = orgMutation({
       // (0106:68), fence first — a foreign parent reads like a missing one
       const parent = await byId(ctx, 'projects', parent_id)
       if (parent === null || parent.org_id !== ctx.me.org_id) {
-        throw rule(`parent project ${parent_id} not found`)
+        throw rule('parent project not found')
       }
       if (parent.type !== 'meta') {
         throw rule('sub-projects live directly under a project, never under another sub-project')

@@ -1,4 +1,5 @@
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
@@ -66,6 +67,41 @@ describe('project creation through the client store', () => {
     await settled()
     expect(P.project(id)?.key).toBe('TES2')
     expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it('reports success only after the server stores the project', async () => {
+    const onSaved = vi.fn()
+    const onRefused = vi.fn()
+    const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New' }, onSaved, onRefused)!
+    expect(P.project(id)?.name).toBe('New')
+    expect(onSaved).not.toHaveBeenCalled()
+
+    requests[0].resolve({ id, num: snap.orgs[0].next_project_num + 1, key: 'NEW' })
+    await settled()
+    expect(onSaved).toHaveBeenCalledOnce()
+    expect(onRefused).not.toHaveBeenCalled()
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['bad_request', 'meta', "Couldn't create project “Test”"],
+    ['not_found', 'meta', "Couldn't create project “Test”"],
+    ['forbidden', 'meta', 'No permission to create project “Test”'],
+    ['rule', 'project', 'Parent project not found — reverted'],
+  ] as const)('a %s refusal of a %s names it and removes it', async (code, type, message) => {
+    const onSaved = vi.fn()
+    const onRefused = vi.fn()
+    const parent =
+      type === 'project' ? P.addProject({ type: 'meta', key: 'PAR', name: 'Parent' }) : undefined
+    const id = P.addProject({ type, key: 'TES', name: 'Test', parent }, onSaved, onRefused)!
+    const request = requests.find((r) => r.args.id === id)!
+    request.reject(
+      new ConvexError({ code, message: code === 'rule' ? 'parent project not found' : 'refused' }),
+    )
+    await vi.waitFor(() => expect(onRefused).toHaveBeenCalledOnce())
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(message)
+    expect(P.project(id)).toBeUndefined()
   })
 
   it('keeps a free preview key unchanged', async () => {

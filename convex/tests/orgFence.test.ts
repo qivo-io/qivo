@@ -85,9 +85,9 @@ const plantLabel = (t: T, org_id: string, name: string): Promise<Doc<'labels'>> 
     return (await ctx.db.get(_id)) as Doc<'labels'>
   })
 
-/* The no-oracle comparator: what a call ANSWERED, as data. Sentences that
- * echo the probed ref (projects.create's parent sentence) are normalized so
- * two different uuids can still answer "identically". A non-ConvexError throw
+/* The no-oracle comparator: what a call ANSWERED, as data. A sentence that
+ * echoes the probed ref would be normalized so two different uuids can still
+ * answer "identically" (none does today). A non-ConvexError throw
  * escapes — a dead backend must fail the test, never equal itself. */
 type Captured =
   | { resolved: true; value: unknown }
@@ -307,7 +307,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         as(t, f.admin).mutation(api.issues.subscribe, { org_id: f.org.id, issue_id: ref }),
       answer: { code: 'not_found', message: 'task not found' },
     },
-    // projects_insert sub branch: the sentence echoes the ref — normalized
+    // projects_insert sub branch: one sentence for foreign and unknown parents
     {
       name: 'projects.create (foreign parent)',
       ref: () => f.otherProject.id,
@@ -321,7 +321,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
           name: 'Probe',
           sort_order: 50,
         }),
-      answer: { code: 'rule', message: 'parent project <ref> not found' },
+      answer: { code: 'rule', message: 'parent project not found' },
     },
     // projects_insert meta branch — 0056's workspace fence, one silent
     // refusal for team-in-another-org and team-does-not-exist alike

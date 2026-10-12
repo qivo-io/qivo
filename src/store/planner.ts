@@ -641,6 +641,18 @@ function restoreErrorText(e: unknown): string {
   return "Couldn't restore"
 }
 
+/* A refused project create names what disappeared. Rule sentences and
+   billing refusals explain themselves in the shared wording; every other
+   refusal would read "Couldn't save", which does not say a project is gone. */
+function toastCreateProjectError(e: unknown, label: string) {
+  const d = errData(e)
+  if ((d.code === 'rule' || d.reason === 'billing_required') && d.message) {
+    toastWriteError(e)
+    return
+  }
+  toast(d.code === 'forbidden' ? `No permission to create ${label}` : `Couldn't create ${label}`)
+}
+
 /* The avatar mutators return an error SENTENCE (Settings toasts it verbatim).
    A refusal's own message — the set_avatar right, the mime/2 MB rules — is
    the best sentence there is; anything without one gets the fallback. */
@@ -3554,7 +3566,10 @@ export const PLANNER = {
     }
   },
 
-  addProject: (p: NewProjectInput) => {
+  /** Paints the project at once and returns its uuid. `onSaved` runs once the
+      server has stored it. `onRefused` runs after the refusal toast, just
+      before the rollback removes the optimistic rows. */
+  addProject: (p: NewProjectInput, onSaved?: () => void, onRefused?: () => void) => {
     const parentOrg = p.parent ? orgOfProject(p.parent) : ''
     const orgRow = rows.orgs.get(parentOrg || HOME_ORG)
     if (!orgRow) return
@@ -3623,6 +3638,15 @@ export const PLANNER = {
           rebuild()
           emit()
         }
+        onSaved?.()
+      },
+      undefined,
+      (error) => {
+        toastCreateProjectError(
+          error,
+          `${p.type === 'meta' ? 'project' : 'sub-project'} “${p.name}”`,
+        )
+        onRefused?.()
       },
     )
     return uuid
