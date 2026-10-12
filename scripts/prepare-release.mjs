@@ -37,22 +37,40 @@ export function nextVersion(requested, newestTag) {
 }
 
 /**
- * The website commit qivo.io serves now, read from its public manifest. Used only to link
- * the website changes in the draft. Returns null when the manifest is unavailable.
+ * The app and website commits qivo.io serves now, read from its public manifests. Used
+ * only to link the changes a release ships. Each is null when its manifest is unavailable.
  */
-async function liveWebsiteCommit(fetchImpl) {
-  try {
-    const response = await fetchImpl('https://qivo.io/site-version.json', {
-      redirect: 'error',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!response.ok) return null
-    const commit = (await response.json()).website?.commit
-    return /^[0-9a-f]{40}$/.test(commit || '') ? commit : null
-  } catch {
-    return null
+async function liveCommits(fetchImpl) {
+  const read = async (path, pick) => {
+    try {
+      const response = await fetchImpl(`https://qivo.io${path}`, {
+        redirect: 'error',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!response.ok) return null
+      const commit = pick(await response.json())
+      return /^[0-9a-f]{40}$/.test(commit || '') ? commit : null
+    } catch {
+      return null
+    }
   }
+  const [app, site] = await Promise.all([
+    read('/version.json', (manifest) => manifest.commit),
+    read('/site-version.json', (manifest) => manifest.website?.commit),
+  ])
+  return { app, site }
+}
+
+/**
+ * The newest version tag on the app commit production serves, so the generated notes
+ * include releases that were published but never deployed. Falls back to the newest tag.
+ */
+async function notesBase(github, tags, productionApp) {
+  if (productionApp)
+    for (const tag of tags.toReversed())
+      if ((await github(`${prefix}/commits/${tag}`)).sha === productionApp) return tag
+  return tags.at(-1)
 }
 
 /**
@@ -72,33 +90,41 @@ async function unsettledStagingRuns(github, main, receipt) {
   )
 }
 
-/** The explanation at the top of the draft. It must stay accurate for the owner. */
+/** A link to the changes between two commits, followed by `note`, or why there is none. */
+function changes(repository, from, to, note = '') {
+  if (!from) return 'Not recorded'
+  if (from === to) return 'Unchanged'
+  return `[Compare](https://github.com/${repository}/compare/${from}...${to})${note}`
+}
+
+/**
+ * The explanation at the top of the draft. It must stay accurate for the owner. Changes are
+ * linked from the commits production serves. If qivo.io does not report its app commit,
+ * the app link starts at the previous version tag instead.
+ */
 export function releaseHeader({
   appSha,
   siteSha,
   stagedAt,
   stagingRunId,
   previousTag,
+  productionApp,
   productionSite,
 }) {
   const appLink = `[\`${short(appSha)}\`](https://github.com/${REPOSITORY}/commit/${appSha})`
   const siteLink = `[\`${short(siteSha)}\`](https://github.com/${SITE_REPOSITORY}/commit/${siteSha})`
-  const appChanges = previousTag
-    ? `[Compare](https://github.com/${REPOSITORY}/compare/${previousTag}...${appSha})`
-    : 'First release'
-  const siteChanges =
-    productionSite && productionSite !== siteSha
-      ? `[Compare](https://github.com/${SITE_REPOSITORY}/compare/${productionSite}...${siteSha}) (private repository)`
-      : productionSite === siteSha
-        ? 'Unchanged'
-        : 'Not recorded'
-  const since = previousTag ? ` since ${previousTag}` : ''
+  const appChanges = productionApp
+    ? changes(REPOSITORY, productionApp, appSha)
+    : previousTag
+      ? changes(REPOSITORY, previousTag, appSha, ` (since ${previousTag})`)
+      : 'First release'
+  const siteChanges = changes(SITE_REPOSITORY, productionSite, siteSha, ' (private repository)')
   return [
     '## What publishing ships',
     '',
     'Publishing this release deploys these commits to https://qivo.io and https://demo.qivo.io.',
     '',
-    `| Part | Commit | Changes${since} |`,
+    '| Part | Commit | Changes since production |',
     '| --- | --- | --- |',
     `| App, docs and demo | ${appLink} | ${appChanges} |`,
     `| Website | ${siteLink} | ${siteChanges} |`,
@@ -115,9 +141,9 @@ export function releaseHeader({
 
 /**
  * Create (or with dryRun, describe) the draft. Throws with an explanation when staging has
- * not verified main or the version is unusable. Deletes the older drafts this workflow
+ * not verified main or the version is unusable. Then deletes the older drafts this workflow
  * created, because each targets an older commit and publishing it later would deploy that
- * commit.
+ * commit. They are kept if the new draft cannot be created.
  */
 export async function prepareRelease({
   github,
@@ -140,7 +166,8 @@ export async function prepareRelease({
         `(${unsettled[0].html_url}), so preview.qivo.io may show a website that staging has not ` +
         'verified. Wait for it, or run Deploy staging again, then run Prepare release again.',
     )
-  const newestTag = (await stableTags(github)).sort(compareVersions).at(-1)
+  const tags = (await stableTags(github)).sort(compareVersions)
+  const newestTag = tags.at(-1)
   const version = nextVersion(requestedVersion, newestTag)
   if (await github(`${prefix}/git/ref/tags/${version}`, 'GET', undefined, { allowMissing: true }))
     throw new Error(`The tag ${version} already exists. Choose a newer version.`)
@@ -160,16 +187,18 @@ export async function prepareRelease({
         'its own commit. Delete drafts you will not publish.',
     )
 
-  const productionSite = await liveWebsiteCommit(fetchImpl)
+  const production = await liveCommits(fetchImpl)
+  const previousTag = await notesBase(github, tags, production.app)
   const body = releaseHeader({
     appSha: main,
     siteSha: receipt.siteSha,
     stagedAt: receipt.succeededAt,
     stagingRunId: receipt.runId,
-    previousTag: newestTag,
-    productionSite,
+    previousTag,
+    productionApp: production.app,
+    productionSite: production.site,
   })
-  const plan = { version, appSha: main, siteSha: receipt.siteSha, previousTag: newestTag }
+  const plan = { version, appSha: main, siteSha: receipt.siteSha, previousTag }
   if (dryRun) {
     log(
       `Dry run. Would prepare ${version}${staleDrafts.length ? ` and delete ${staleDrafts.length} older draft(s)` : ''}.`,
@@ -178,15 +207,13 @@ export async function prepareRelease({
     return plan
   }
 
-  for (const draft of staleDrafts) {
-    await github(`${prefix}/releases/${draft.id}`, 'DELETE')
-    log(`Deleted the older draft ${draft.tag_name} (${draft.id}).`)
-  }
   const notes = await github(`${prefix}/releases/generate-notes`, 'POST', {
     tag_name: version,
     target_commitish: main,
-    ...(newestTag ? { previous_tag_name: newestTag } : {}),
+    ...(previousTag ? { previous_tag_name: previousTag } : {}),
   })
+  // GitHub allows several drafts with one tag name, so the new draft can exist before the
+  // older ones are removed.
   const draft = await github(`${prefix}/releases`, 'POST', {
     tag_name: version,
     target_commitish: main,
@@ -196,6 +223,10 @@ export async function prepareRelease({
     prerelease: false,
   })
   log(`Prepared draft ${version}: ${draft.html_url}`)
+  for (const stale of staleDrafts) {
+    await github(`${prefix}/releases/${stale.id}`, 'DELETE')
+    log(`Deleted the older draft ${stale.tag_name} (${stale.id}).`)
+  }
   return { ...plan, url: draft.html_url, body }
 }
 

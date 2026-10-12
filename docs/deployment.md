@@ -47,11 +47,11 @@ into staging or reuse production service credentials there.
    until staging has verified the current main commit. If **Deploy staging**
    failed, run it again by hand from main, or fix the cause on main first.
 4. Open the draft release it links. Its first section names the app and
-   website commits and links their changes since the previous release. Do not
-   change the draft's tag or target. To ship something else, run **Prepare
-   release** again. It deletes the older drafts it made. Delete any draft you
-   made yourself and will not publish, because publishing it later deploys its
-   own, older commit.
+   website commits and links their changes since what `qivo.io` serves now.
+   Do not change the draft's tag or target. To ship something else, run
+   **Prepare release** again. Once the new draft exists, it deletes the older
+   drafts it made. Delete any draft you made yourself and will not publish,
+   because publishing it later deploys its own, older commit.
 5. Publish the draft. **Production release** deploys it in about two minutes.
    Check `https://qivo.io/version.json` for the app commit.
 
