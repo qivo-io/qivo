@@ -44,12 +44,13 @@ export function restoreFocus(element: HTMLElement | null | undefined) {
 }
 
 // A customizable select (tokens.css) draws its open list in the page, so the
-// Escape that closes the list also reaches the page's own Escape handlers.
-// Settings, the Archive, the task window, dialogs and pops would close on it,
-// where an OS-drawn list used to keep the key to itself. True for that Escape
-// only: the browser still closes the list, and nothing else should act.
-export function isOpenSelectEscape(event: Pick<KeyboardEvent, 'key' | 'target'>) {
-  if (event.key !== 'Escape' || !(event.target instanceof Element)) return false
+// keys used in that list also reach the page's own key handlers, where an
+// OS-drawn list kept them to itself. Escape would close Settings, the Archive,
+// the task window, dialogs and pops, and a letter meant for typeahead would
+// fire a shortcut such as the task window's L. True for any key pressed in an
+// open list: the browser still acts on it, and nothing else should.
+export function isOpenSelectKey(event: Pick<KeyboardEvent, 'target'>) {
+  if (!(event.target instanceof Element)) return false
   const select = event.target.closest('select')
   if (!select) return false
   try {
@@ -61,9 +62,9 @@ export function isOpenSelectEscape(event: Pick<KeyboardEvent, 'key' | 'target'>)
 }
 
 /* Installs the shared input-modality tracking, and the guard that keeps an
-   open select's Escape from the page. Call it before anything else registers
-   a key listener: window capture runs first and in registration order, so the
-   guard sees Escape before any dialog, pop or page does. */
+   open select's keys from the page. Call it before anything else registers a
+   key listener: window capture runs first and in registration order, so the
+   guard sees a key before any dialog, pop or page does. */
 export function installFocusVisibility() {
   const root = document.documentElement
   const pointer = () => {
@@ -82,12 +83,7 @@ export function installFocusVisibility() {
       event.target.closest('[data-slot="select-trigger"], [data-slot="select-content"]')
     if (
       !isFocusNavigationKey(event) &&
-      // inside an open customizable select, focus is on an option
-      !(
-        event.target instanceof Element &&
-        event.target.closest('select') &&
-        isSelectInteractionKey(event)
-      ) &&
+      !(event.target instanceof HTMLSelectElement && isSelectInteractionKey(event)) &&
       !typeahead
     ) {
       return
@@ -99,14 +95,14 @@ export function installFocusVisibility() {
   // Until the first interaction, keep the browser's native focus indication.
   document.addEventListener('pointerdown', pointer, true)
   document.addEventListener('keydown', keyboard, true)
-  const selectEscape = (event: KeyboardEvent) => {
-    if (isOpenSelectEscape(event)) event.stopImmediatePropagation()
+  const selectKeys = (event: KeyboardEvent) => {
+    if (isOpenSelectKey(event)) event.stopImmediatePropagation()
   }
-  window.addEventListener('keydown', selectEscape, true)
+  window.addEventListener('keydown', selectKeys, true)
   return () => {
     document.removeEventListener('pointerdown', pointer, true)
     document.removeEventListener('keydown', keyboard, true)
-    window.removeEventListener('keydown', selectEscape, true)
+    window.removeEventListener('keydown', selectKeys, true)
     delete root.dataset.focusModality
   }
 }

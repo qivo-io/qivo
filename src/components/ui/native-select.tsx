@@ -12,32 +12,38 @@ const labelKeys = new WeakMap<HTMLSelectElement, string>()
    value would wrap onto a second line; this one ends in an ellipsis, as
    FieldSelect's does. Hidden copies of every option's text share its grid
    cell, so the field stays as wide as its widest option, as a classic select
-   is, instead of resizing with each pick. It is built outside React, which has
-   no <selectedcontent> yet and would warn about a <button> in a <select>.
-   React only inserts and removes its own options around it. */
+   is, instead of resizing with each pick. It is built in the DOM rather than
+   in JSX: React's types have no <selectedcontent> yet, and the copies need
+   each option's rendered label, which select.options gives whatever shape the
+   children take. React only inserts and removes its own options around it.
+   The button is
+   out of the Tab order: the select takes focus, and a focus trap that counted
+   the button as its last stop would no longer wrap. */
 function syncSelectLabel(select: HTMLSelectElement) {
   let button = select.querySelector<HTMLButtonElement>(':scope > button[data-select-label]')
   if (!button) {
     button = document.createElement('button')
     button.type = 'button'
+    button.tabIndex = -1
     button.dataset.selectLabel = ''
-    const value = document.createElement('selectedcontent')
-    value.dataset.selectValue = ''
-    button.append(value)
     select.prepend(button)
   }
   const labels = Array.from(select.options, (option) => option.label)
   const key = labels.join('\n')
   if (labelKeys.get(select) === key) return
   labelKeys.set(select, key)
-  for (const sizer of button.querySelectorAll('[data-select-sizer]')) sizer.remove()
-  for (const label of labels) {
+  // A new <selectedcontent> copies the chosen option afresh. The browser only
+  // copies on a pick, so the old one would keep a renamed option's old text.
+  const value = document.createElement('selectedcontent')
+  value.dataset.selectValue = ''
+  const sizers = labels.map((label) => {
     const sizer = document.createElement('span')
     sizer.dataset.selectSizer = ''
     sizer.setAttribute('aria-hidden', 'true')
     sizer.textContent = label
-    button.append(sizer)
-  }
+    return sizer
+  })
+  button.replaceChildren(value, ...sizers)
 }
 
 const NativeSelect = React.forwardRef<

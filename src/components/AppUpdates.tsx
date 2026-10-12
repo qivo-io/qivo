@@ -33,9 +33,10 @@ export function AppUpdates() {
     if (!import.meta.env.PROD) return
     let pointerDown = false
     let composing = false
+    // An open customizable select (tokens.css) holds focus on an option.
     const editableFocused = () =>
       document.activeElement?.matches(
-        'input:not([type="button"]):not([type="submit"]), textarea, select, [contenteditable="true"], [contenteditable=""]',
+        'input:not([type="button"]):not([type="submit"]), textarea, select, select *, [contenteditable="true"], [contenteditable=""]',
       ) ?? false
     const monitor = createAppUpdateMonitor({
       buildId: __QIVO_BUILD_ID__,

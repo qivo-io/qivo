@@ -599,11 +599,12 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                   variant="quiet"
                   data-on={filterCount ? '' : undefined}
                   onClick={t}
-                  className="h-control"
+                  className={mobile ? 'h-control' : 'h-control pr-2 has-[>svg]:pr-2'}
                 >
                   <Icon name="filter" size={16} />
                   {mobile ? null : 'Filter'}
                   {filterCount ? ` (${filterCount})` : ''}
+                  {mobile ? null : <DropdownChevron />}
                 </Button>
               )}
             >

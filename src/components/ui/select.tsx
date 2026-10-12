@@ -19,9 +19,10 @@ function SelectValue({ ...props }: React.ComponentProps<typeof SelectPrimitive.V
 
 /* The one dropdown arrow (deviation #326): a 12px chevron in
    --muted-foreground at half strength. Every control that opens a list of
-   choices ends with it, inside 8px of right padding, so on a bordered field it
-   sits 9px from the edge. A native select draws the same glyph in CSS
-   (tokens.css), so the two faces cannot drift apart. */
+   choices ends with it, inside 8px of right padding where there is room, so
+   on a bordered field it sits 9px from the edge. A native select repeats the
+   glyph in CSS (tokens.css: ::picker-icon and --select-chevron); change them
+   together. */
 function DropdownChevron({ className, ...props }: React.ComponentProps<typeof ChevronDownIcon>) {
   return (
     <ChevronDownIcon
@@ -127,7 +128,7 @@ const SelectItem = React.forwardRef<
     >
       <span
         data-slot="select-item-indicator"
-        className="absolute right-2 flex size-3.5 items-center justify-center"
+        className="absolute right-2 flex size-4 items-center justify-center"
       >
         <SelectPrimitive.ItemIndicator>
           <CheckIcon className="size-4" />

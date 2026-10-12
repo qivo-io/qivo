@@ -155,8 +155,8 @@ export function AssigneeAvatar({
     variant === 'portrait'
       ? 'flex cursor-pointer rounded-md outline-none hover:ring-2 hover:ring-border-strong focus-visible:ring-2 focus-visible:ring-primary'
       : variant === 'chevron'
-        ? 'inline-flex h-control-sm shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-transparent px-1 hover:border-border hover:bg-hover disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent'
-        : 'gap-1.5 px-2 font-normal'
+        ? 'inline-flex h-control-sm shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-transparent pr-2 pl-1 hover:border-border hover:bg-hover disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent'
+        : 'gap-1.5 pr-2 pl-2.5 font-normal'
   return (
     <span
       role="presentation"
