@@ -118,8 +118,6 @@ html[data-appearance] .planner-sidebar {
 html[data-appearance]
 :is(
   [data-slot="popover-content"],
-  [data-slot="dropdown-menu-content"],
-  [data-slot="dropdown-menu-sub-content"],
   [data-slot="select-content"],
   [data-anchoredpop-backdrop] + [data-floating-surface]
 ) {
@@ -145,8 +143,6 @@ html[data-appearance="blue"]
 html[data-appearance="blue"]
 :is(
   [data-slot="popover-content"],
-  [data-slot="dropdown-menu-content"],
-  [data-slot="dropdown-menu-sub-content"],
   [data-slot="select-content"],
   [data-slot="tooltip-content"],
   [data-anchoredpop-backdrop] + [data-floating-surface],

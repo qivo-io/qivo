@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeEmail, requestSize, urlForHash } from './gravatar'
 
-/* The pure half of the Gravatar module. `prime` needs crypto.subtle and a
-   network, so it belongs to scripts/verify-avatars.mjs — which recomputes the
-   hash in the browser and compares it against the rendered URL. */
+/* The pure half of the Gravatar module. `prime` (async hashing through
+   crypto.subtle) has no unit test here. */
 
 describe('normalizeEmail', () => {
   it('trims and lowercases, because that is what Gravatar hashes', () => {

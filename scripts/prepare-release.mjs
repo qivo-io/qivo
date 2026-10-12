@@ -65,11 +65,10 @@ async function notesBase(github, tags, productionApp) {
   return tags.at(-1)
 }
 
-/** A link to the changes between two commits, followed by `note`, or why there is none. */
-function changes(repository, from, to, note = '') {
-  if (!from) return 'Not recorded'
+/** A link to the changes between two commits, followed by `note`, or `Unchanged` if they are the same. */
+function changes(from, to, note = '') {
   if (from === to) return 'Unchanged'
-  return `[Compare](https://github.com/${repository}/compare/${from}...${to})${note}`
+  return `[Compare](https://github.com/${REPOSITORY}/compare/${from}...${to})${note}`
 }
 
 /**
@@ -80,9 +79,9 @@ function changes(repository, from, to, note = '') {
 export function releaseHeader({ appSha, stagedAt, stagingRunId, previousTag, productionApp }) {
   const commit = `[\`${short(appSha)}\`](https://github.com/${REPOSITORY}/commit/${appSha})`
   const changed = productionApp
-    ? changes(REPOSITORY, productionApp, appSha)
+    ? changes(productionApp, appSha)
     : previousTag
-      ? changes(REPOSITORY, previousTag, appSha, ` (since ${previousTag})`)
+      ? changes(previousTag, appSha, ` (since ${previousTag})`)
       : 'First release'
   return [
     '## What publishing ships',

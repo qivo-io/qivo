@@ -534,21 +534,6 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
 
   const initialDoc = useMemo(() => astToDoc(parseMd(rawRef.current)), []) // eslint-disable-line
 
-  // test hook: scripts/verify-md.mjs drives selections through PM commands
-  // (synthetic DOM selection doesn't reliably reach PM before the next event).
-  // v3 THROWS on .view before EditorContent mounts it, and a cold deep-link
-  // load can flush a store-emit re-render in that window (watchComments) —
-  // skip; this deps-less effect re-runs on the next render anyway.
-  useEffect(() => {
-    const ed = editorRef.current
-    if (!ed || ed.isDestroyed) return
-    try {
-      ;(ed.view.dom as HTMLElement & { qivoEditor?: Editor }).qivoEditor = ed
-    } catch {
-      /* view not mounted yet */
-    }
-  })
-
   const editor = useEditor(
     {
       extensions,

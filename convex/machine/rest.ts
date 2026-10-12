@@ -93,10 +93,9 @@ const provenanceOf = (keyName: string): string => `via the REST API (${keyName})
 /* --------------------------------------------------------- shared plumbing */
 
 /* The org project catalogue + the caller's flags on every project — ONE
- * indexed by_org scan per request (rest-api/index.ts:162-189). Org-wide on
- * purpose: this surface's one oracle has to be able to resolve a ref
- * visibility would hide. Nothing here grants anything — every disclosed id
- * runs past the flags. */
+ * indexed by_org scan per request. Org-wide on purpose: this surface's one
+ * oracle has to be able to resolve a ref visibility would hide. Nothing here
+ * grants anything — every disclosed id runs past the flags. */
 type Access = {
   me: Caller
   cat: Catalogue

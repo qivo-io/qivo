@@ -348,8 +348,7 @@
   [data-slot="dialog-content"] {
     max-width: calc(100vw - 24px);
   }
-  [data-slot="popover-content"],
-  [data-slot="dropdown-menu-content"] {
+  [data-slot="popover-content"] {
     max-width: calc(100vw - 24px);
   }
 }

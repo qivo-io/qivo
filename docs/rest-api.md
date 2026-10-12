@@ -714,8 +714,8 @@ Submission does **not** scrape or download the page, verify the photo's
 existence/license, or change the calendar. An operator must attach a
 legitimately obtained JPEG and confirm its source/license before final review.
 If the image is already in the library, the proposal is `pending`; a source
-previously removed by a human produces a `declined` proposal. See the
-[image-library workflow](background-image-library.md).
+previously removed by a human produces a `declined` proposal. The private
+operational notes describe the full image-library workflow.
 
 `Idempotency-Key` is optional and scoped to the curation key. When supplied,
 use 1–100 letters, numbers, dots, colons, underscores or hyphens. Otherwise,
@@ -825,7 +825,7 @@ origin**, returning a short-lived signed coarse-country context or `null`.
 The anonymous sign-in flow uses that context for aggregate attribution; it
 does not authorize REST access. Direct Convex geolocation headers are ignored.
 Setup, runtime-secret scopes and measurement limitations are documented in
-[public demo operations](public-demo-operations.md#connect-demo-reporting).
+the private operational notes.
 
 ## Conformance
 
