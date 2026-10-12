@@ -526,7 +526,10 @@ export const archive = orgMutation({
  * restored rows back in reactively. Restore semantics 0106:92-107: restoring
  * a sub surfaces its parent (and nothing else — the parent's other subs stay
  * archived); restoring a meta directly also restores exactly the subs
- * carrying the meta's own archive stamp. Not archived ⇒ silent no-op. */
+ * carrying the meta's own archive stamp. Surfacing an archived parent is a
+ * restore of that parent, so it needs lead on the parent as well; a
+ * sub-project's own lead cannot bring back a project its lead archived.
+ * Not archived ⇒ silent no-op. */
 export const unarchive = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
@@ -535,13 +538,16 @@ export const unarchive = orgMutation({
     await assertLead(ctx, id)
     if (project.archived_at === undefined) return null
     const stamp = project.archived_at
+    // an active project never sits under an archived one
+    const parent =
+      project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
+    const parentArchived = parent !== null && parent.archived_at !== undefined
+    if (parentArchived && !(await hasProjectLevel(ctx, ctx.me, parent.id, 'lead'))) {
+      throw forbidden('requires lead access to the archived parent project')
+    }
     await ctx.db.patch(project._id, { archived_at: undefined })
     if (project.parent_id !== undefined) {
-      // an active project never sits under an archived one
-      const parent = await byId(ctx, 'projects', project.parent_id)
-      if (parent !== null && parent.archived_at !== undefined) {
-        await ctx.db.patch(parent._id, { archived_at: undefined })
-      }
+      if (parentArchived) await ctx.db.patch(parent._id, { archived_at: undefined })
     } else {
       const subs = await ctx.db
         .query('projects')

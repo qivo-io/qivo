@@ -1260,12 +1260,19 @@ function rebuild(now = new Date()) {
      the sub-project rule the server's cascade states in timestamps: a sub
      archived along with its project comes back with it, one archived earlier
      on its own does not. Newest archived first: this is a list you scan for
-     what you just put in it, or for the oldest thing to delete. */
+     what you just put in it, or for the oldest thing to delete. A project
+     shared with you only through one of its sub-projects is listed as a
+     viewer, the server's navigation-only rule (projectLevelsForOrg), so that
+     sub-project has a row to sit under. */
+  const shapeOf = (id: string) => shapeById.get(id)
+  const viaSubProject = (s: ProjectVM) =>
+    s.type === 'meta' &&
+    (childrenOf.get(s.id) || []).some((c) => levelOnProject(shapeOf(c.id), undefined, shapeOf))
   P.archivedProjects = allShapes
     .filter((s) => s.archivedAt != null)
     .flatMap((s) => {
-      const meta = s.type === 'meta' ? s : s.parent ? shapeById.get(s.parent) : undefined
-      const level = levelOnProject(s, undefined, (id) => shapeById.get(id))
+      const meta = s.type === 'meta' ? s : s.parent ? shapeOf(s.parent) : undefined
+      const level = levelOnProject(s, undefined, shapeOf) ?? (viaSubProject(s) ? 'viewer' : null)
       return level ? [shapeArchivedProject(s, meta, level === 'lead')] : []
     })
     .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0) || a.name.localeCompare(b.name))
