@@ -72,7 +72,8 @@ export function inspectDocs({ contentDir, publicDir }) {
   const paths = new Set()
   const sources = new Map()
   const orders = new Set()
-  /** The page for one pages.json entry, or null when its file cannot be read. */
+  /** The page for one pages.json entry, or null when its file is missing,
+   * invalid, duplicated or unreadable. */
   const load = (entry, index) => {
     const overview = index === 0
     const label = `pages.json ${overview ? 'overview' : `page ${index}`}`
@@ -135,8 +136,14 @@ export function inspectDocs({ contentDir, publicDir }) {
       issue(doc, href, 'Invalid link encoding')
       return href
     }
-    // Markdown filenames refer to source files in docs/guide.
-    if (!NOT_RELATIVE.test(href) && path.endsWith('.md')) {
+    // A relative path names a Markdown source file in docs/guide. Any other
+    // relative path would break where the site serves a page without its
+    // trailing slash, such as /docs/the-board.
+    if (!NOT_RELATIVE.test(href) && source) {
+      if (!source.endsWith('.md')) {
+        issue(doc, href, 'Relative links must name a Markdown page in docs/guide')
+        return href
+      }
       const destination = sources.get(resolve(contentDir, source))
       if (!destination) {
         issue(doc, href, 'Broken internal page link')
@@ -190,6 +197,7 @@ export function inspectDocs({ contentDir, publicDir }) {
         },
         resolveLink: (href) => resolveLink(href, doc),
         resolveImage: (src, alt) => resolveImage(src, alt, doc),
+        onError: (message) => errors.push(`${doc.file}: ${message}`),
       })
     } catch (error) {
       errors.push(`${doc.file}: ${error.message}`)

@@ -36,7 +36,7 @@ describe('public documentation contract', () => {
         appendFileSync(
           page(first.file),
           `\n## Renamed\n\n![Board](./picture.png) [Back](./overview.md) [Old](#old-name)
-[Pricing](/pricing) [Board](/docs/the-board) [Features](/#features)
+[Same page](?view=week#renamed) [Pricing](/pricing) [Board](/docs/the-board) [Features](/#features)
 [Cards](https://www.qivo.io/docs/the-board/#cards)\n`,
         )
         first.aliases = { renamed: ['old-name'] }
@@ -59,6 +59,19 @@ describe('public documentation contract', () => {
         expect.stringContaining('overview.md: Missing or invalid local image'),
       ]),
     )
+  })
+
+  it('reports an invalid alias and still checks the rest of the page', () => {
+    const errors = fixture(({ manifest, page }) => {
+      const first = manifest.pages[0]
+      appendFileSync(page(first.file), '\n## Renamed\n\n[x](./missing.md)\n')
+      appendFileSync(page('overview.md'), `\n[Renamed](./${first.file}#renamed)\n`)
+      first.aliases = { renamed: ['Old Name'] }
+    })
+    expect(errors).toEqual([
+      expect.stringContaining('Invalid or duplicate heading alias "Old Name"'),
+      expect.stringContaining('Broken internal page link "./missing.md"'),
+    ])
   })
 
   it.each([
@@ -88,6 +101,11 @@ describe('public documentation contract', () => {
       'a broken page link',
       'Broken internal page link',
       ({ page }) => writeFileSync(page('overview.md'), '[x](./missing.md)\n'),
+    ],
+    [
+      'a relative link that is not a Markdown page',
+      'Relative links must name a Markdown page',
+      ({ page }) => appendFileSync(page('the-board.md'), '\n[Roadmap](../the-roadmap/)\n'),
     ],
     [
       'a broken page anchor',

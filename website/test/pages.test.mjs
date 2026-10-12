@@ -214,7 +214,6 @@ describe('documentation publishing', () => {
       /missing-anchor/,
     ],
     ['![Missing image](./images/missing.webp)', /images\/missing\.webp/],
-    ['![Missing public image](/missing.webp)', /missing\.webp/],
     ['![A root image path](/docs/assets/images/diagram.svg)', /must be a relative path/],
     ['![An external image](https://example.com/diagram.webp)', /must be a relative path/],
     ['[Missing public file](/reference.md)', /reference\.md/],

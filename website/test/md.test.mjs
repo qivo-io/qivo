@@ -93,6 +93,25 @@ An <img src=x onerror=alert(1)> and <date> stay text.
     expect(slugify('a'.repeat(70))).toHaveLength(60)
   })
 
+  it('throws on alias problems unless onError collects them', () => {
+    const source = '## Archiving\n\n## Details\n\n[Link](./page.md)'
+    const aliases = { archiving: ['Old Name', 'old-archiving', 'details'], missing: [] }
+    expect(() => render(source, { aliases })).toThrow(
+      'Invalid or duplicate heading alias "Old Name"',
+    )
+    const errors = []
+    const resolveLink = vi.fn((href) => href)
+    const html = render(source, { aliases, resolveLink, onError: (error) => errors.push(error) })
+    expect(errors).toEqual([
+      'Invalid or duplicate heading alias "Old Name"',
+      'Heading ID "details" conflicts with an alias',
+      'Heading alias target "missing" does not exist',
+    ])
+    expect(resolveLink).toHaveBeenCalledWith('./page.md')
+    expect(html).toContain('id="old-archiving"')
+    expect(html).not.toContain('Old Name')
+  })
+
   it('makes repeated heading anchors unique', () => {
     const headings = []
     const html = render('## Details\n\n### Details\n\n## Details\n\n## Constructor', {

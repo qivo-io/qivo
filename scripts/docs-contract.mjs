@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-/* The quick check for docs/guide. It runs the validation that
+/* The quick check for docs/guide. It runs the documentation checks that
  * website/scripts/build.mjs applies before it publishes qivo.io/docs/, without
  * building anything, and reports every problem by file. The rules live in
- * website/site/docs.mjs and are described in docs/documentation.md.
+ * website/site/docs.mjs and are described in docs/documentation.md. The build
+ * also rejects rendered pages that load third-party resources or contain text
+ * that looks like a credential.
  */
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
