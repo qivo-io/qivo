@@ -63,8 +63,8 @@ Apply the same strategy to the private companion repository and preserve
 unrelated work there.
 
 Production Vercel projects accept REST API deployment requests only. Git pushes
-and deploy hooks cannot start production builds. Once the new workflows are
-merged, successful main CI updates the separate persistent staging environment.
+and deploy hooks cannot start production builds. Successful main CI updates the
+separate persistent staging environment at `preview.qivo.io`.
 Publishing a stable GitHub Release authorizes production deployment of the exact
 commit that passed CI and staging. Draft releases and prereleases do not deploy
 production. See `docs/deployment.md` for configuration and release requirements.

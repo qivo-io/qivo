@@ -396,7 +396,7 @@ describe('deployment identity', () => {
     ])
       expect(() => builtCommit(deployment)).toThrow()
   })
-  it('ignores retired website settings and refuses wrong origins and shared project IDs', () => {
+  it('accepts a valid configuration and refuses wrong identities', () => {
     const env = {
       QIVO_ENVIRONMENT: 'production',
       QIVO_COMMIT: SHA,
@@ -413,15 +413,6 @@ describe('deployment identity', () => {
       GITHUB_REF: 'refs/tags/v1.0.0',
     }
     expect(configuration(env).sha).toBe(SHA)
-    // Release tags made before the website moved here still pass the retired settings.
-    const retired = configuration({
-      ...env,
-      QIVO_SITE_REVISION: OTHER,
-      VERCEL_SITE_PROJECT_ID: 'site-id',
-      VERCEL_SITE_TOKEN: 'site-test-token',
-    })
-    expect(retired).not.toHaveProperty('site')
-    expect(JSON.stringify(retired)).not.toContain('site-test-token')
     for (const change of [
       { QIVO_COMMIT: 'main' },
       { QIVO_APP_ORIGIN: 'https://preview.qivo.io' },

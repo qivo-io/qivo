@@ -9,7 +9,7 @@ const ACTIONS_BOT = 'github-actions[bot]'
 const STAGING_RECEIPT = 'qivo-staging-v1'
 const RUN_ID = /^[1-9]\d*$/
 // Commits without this file predate the website moving into this repository. Their
-// vercel.json proxies the website to a separate project that releases no longer deploy.
+// vercel.json proxies the website to the qivo-site project, which has been deleted.
 const WEBSITE_ENTRY = 'website/index.html'
 
 const required = (env, key) => {
@@ -30,9 +30,7 @@ export function compareVersions(left, right) {
 
 /**
  * Configuration contains identifiers and project-scoped tokens, never backend credentials.
- * The website is part of the application build. Older deploy.yml files still pass
- * QIVO_SITE_REVISION and the separate website project's VERCEL_SITE_* values, so those
- * are ignored rather than rejected.
+ * The application build includes the website, so the website has no settings of its own.
  */
 export function configuration(env) {
   const environment = required(env, 'QIVO_ENVIRONMENT')
@@ -306,8 +304,8 @@ export async function verifyCommit(config, event, github, pause = sleep) {
   if (!website)
     throw new Error(
       'This commit is from before the website moved into this repository. Its website comes ' +
-        'from the separate qivo-site project, which releases no longer deploy or verify. ' +
-        'Publish a version that targets a newer commit.',
+        'from the qivo-site project, which has been deleted. Publish a version that targets ' +
+        'a newer commit.',
     )
   // Re-running an old release, or republishing one, must not roll production back.
   // Version tags are compared because, unlike releases, they cannot be deleted.
