@@ -224,6 +224,13 @@ export const canManageProjectUsers = canManageOwnProjectAccess
 
 export const canManageProjectTeams = canManageProjectUsers
 
+export type OrgProjectLevels = {
+  levelOf: (project: Doc<'projects'>) => AccessLevel | null
+  /* true when levelOf answers 'viewer' only because the person can access
+   * one of the project's sub-projects */
+  navigationOnly: (projectId: string) => boolean
+}
+
 /* Amortized counterpart of projectLevel, used by snapshots and list reads.
  * Evaluate actual projects rather than reusing the parent's answer for all
  * siblings. Navigation-only parent visibility is never inherited back down.
@@ -232,7 +239,7 @@ export async function projectLevelsForOrg(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   loadedProjects?: readonly Doc<'projects'>[],
-): Promise<(project: Doc<'projects'>) => AccessLevel | null> {
+): Promise<OrgProjectLevels> {
   const projects =
     loadedProjects ??
     (await ctx.db
@@ -280,6 +287,7 @@ export async function projectLevelsForOrg(
     }
     effective.set(project.id, cappedLevel(me.org_role, level))
   }
+  const navigation = new Set<string>()
   for (const project of projects) {
     if (
       project.parent_id &&
@@ -287,9 +295,14 @@ export async function projectLevelsForOrg(
       effective.get(project.parent_id) === null
     ) {
       effective.set(project.parent_id, 'viewer')
+      navigation.add(project.parent_id)
     }
   }
-  return (project) => (project.org_id === me.org_id ? (effective.get(project.id) ?? null) : null)
+  return {
+    levelOf: (project) =>
+      project.org_id === me.org_id ? (effective.get(project.id) ?? null) : null,
+    navigationOnly: (projectId) => navigation.has(projectId),
+  }
 }
 
 /* Staff may curate organization labels when any meta grants user standing,
@@ -297,7 +310,7 @@ export async function projectLevelsForOrg(
 export async function canWriteOrgLabels(ctx: QueryCtx, me: Doc<'profiles'>): Promise<boolean> {
   if (!isOrgStaff(me)) return false
   if (me.org_role === 'admin') return true
-  const levelForRoot = await projectLevelsForOrg(ctx, me)
+  const { levelOf: levelForRoot } = await projectLevelsForOrg(ctx, me)
   const orgProjects = ctx.db.query('projects').withIndex('by_org', (q) => q.eq('org_id', me.org_id))
   for await (const p of orgProjects) {
     if (p.type === 'meta' && levelRank(levelForRoot(p)) >= LEVEL_RANK.user) return true

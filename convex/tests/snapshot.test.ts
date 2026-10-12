@@ -647,29 +647,183 @@ describe('activity', () => {
     ...extra,
   })
 
-  it('branch fences: org-wide reaches every member; team rows need admin or leader; project rows follow visibility', async () => {
-    const ids = await t.run(async (ctx) => {
-      const orgWide = ev({})
-      const teamRow = ev({ team_id: f.team.id, target_type: 'team' as const })
-      const hiddenRow = ev({ project_id: f.hidden.id, target_type: 'project' as const })
-      const visibleRow = ev({ project_id: f.sub.id, target_type: 'project' as const })
-      for (const row of [orgWide, teamRow, hiddenRow, visibleRow])
-        await ctx.db.insert('activity_events', row)
-      return {
-        orgWide: orgWide.id,
-        teamRow: teamRow.id,
-        hiddenRow: hiddenRow.id,
-        visibleRow: visibleRow.id,
-      }
-    })
+  const seen = async (p: Doc<'profiles'>) => (await snapFor(p)).activity.map((a) => a.id).sort()
 
-    const seen = async (p: Doc<'profiles'>) => (await snapFor(p)).activity.map((a) => a.id).sort()
-    // admin: all four; user: leads the team AND f.hidden — all four
+  /* A person granted only one sub-project; for f.sub or f.sub2 that shows
+   * f.meta for navigation alone. */
+  const seatOn = async (projectId: string, org_role: 'user' | 'guest' = 'user') => {
+    const seat = await plantSeat(t, {
+      org_id: f.org.id,
+      auth_user_id: `seat_${uuid()}`,
+      email: `${uuid()}@testbed.test`,
+      org_role,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: projectId,
+        profile_id: seat.id,
+        level: 'user',
+      }),
+    )
+    return seat
+  }
+  const joinTeam = (profileId: string, is_leader: boolean) =>
+    t.run((ctx) =>
+      ctx.db.insert('team_members', { team_id: f.team.id, profile_id: profileId, is_leader }),
+    )
+
+  it('each row reaches only the people who can access its subject', async () => {
+    const subOnly = await seatOn(f.sub.id)
+    // A guest seat that kept a leader membership from an earlier staff role.
+    const guestLeader = await seatOn(f.sub.id, 'guest')
+    await joinTeam(guestLeader.id, true)
+    const teamMember = await seatOn(f.sub.id)
+    await joinTeam(teamMember.id, false)
+    const ids = await t.run(async (ctx) => {
+      const rows = {
+        people: ev({ target_type: 'user', target_id: f.viewer.id, verb: 'added' }),
+        label: ev({ target_type: 'org', target_id: uuid(), verb: 'created label' }),
+        team: ev({ team_id: f.team.id, target_type: 'user', target_id: f.viewer.id }),
+        parent: ev({ project_id: f.meta.id, target_type: 'project', target_id: f.meta.id }),
+        sub: ev({ project_id: f.sub.id, target_type: 'project', target_id: f.sub.id }),
+        hidden: ev({ project_id: f.hidden.id, target_type: 'project', target_id: f.hidden.id }),
+        task: ev({ project_id: f.sub.id, target_id: issueVis.id }),
+        // names a second project, such as a move's destination
+        taskToHidden: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          related_project_id: f.hidden.id,
+        }),
+        statusMove: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          detail: 'from To Do to Done',
+        }),
+        // a project move written before related_project_id existed
+        unrecordedMove: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          detail: 'to the Secret sub-project (from Firmware)',
+        }),
+        // The task was deleted; its project remains.
+        deletedTask: ev({ project_id: f.sub.id }),
+        // Deleting a project clears project_id on its rows (model/cascade.ts):
+        // a task that moved out first keeps them, other rows go to admins.
+        survivingTask: ev({ target_id: issueVis.id }),
+        orphanTask: ev({}),
+        orphanMilestone: ev({ target_type: 'milestone' }),
+        // A deleted top-level project with a legacy owning team.
+        orphanProject: ev({ team_id: f.team.id, target_type: 'project', verb: 'deleted' }),
+      }
+      for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
+      return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
+    })
+    const only = (...keys: string[]) => keys.map((key) => ids[key]).sort()
+    const shared = ['people', 'label', 'sub', 'task', 'statusMove', 'survivingTask']
+
     expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
-    expect(await seen(f.user)).toEqual(Object.values(ids).sort())
-    // guest and viewer: org-wide + the visible project row only
-    expect(await seen(f.guest)).toEqual([ids.orgWide, ids.visibleRow].sort())
-    expect(await seen(f.viewer)).toEqual([ids.orgWide, ids.visibleRow].sort())
+    // user: leads f.meta, f.hidden and the team
+    expect(await seen(f.user)).toEqual(only(...shared, 'team', 'parent', 'hidden', 'taskToHidden'))
+    // guest and viewer: granted on f.meta, so its sub-projects too
+    for (const p of [f.guest, f.viewer]) expect(await seen(p)).toEqual(only(...shared, 'parent'))
+    // Navigation-only access to f.meta reveals none of its own history. Team
+    // history needs a leader on the organization staff.
+    for (const p of [subOnly, guestLeader, teamMember])
+      expect(await seen(p)).toEqual(only(...shared))
+  })
+
+  it('sub-project-only members receive no history of the parent, its other sub-projects or deleted projects', async () => {
+    const subOnly = await seatOn(f.sub.id)
+    const subGuest = await seatOn(f.sub.id, 'guest')
+    const writer = as(t, f.user)
+    await writer.mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      project_id: f.sub2.id,
+      title: 'Sibling task',
+    })
+    await writer.mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
+    await writer.mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.hidden.id })
+    await writer.mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
+    await writer.mutation(api.projects.unarchive, { org_id: f.org.id, id: f.meta.id })
+
+    const rows = async (p: Doc<'profiles'>) =>
+      (await snapFor(p)).activity
+        .map((a) => `${a.verb} ${a.label}${a.detail ? ` ${a.detail}` : ''}`)
+        .sort()
+    const parentHistory = [
+      'archived Testbed platform with 1 sub-project',
+      'deleted Board rev',
+      'restored Testbed platform from the archive',
+    ]
+    for (const p of [subOnly, subGuest]) expect(await rows(p)).toEqual([])
+    // f.guest holds a grant on f.meta, so it could see every sub-project
+    expect(await rows(f.guest)).toEqual(parentHistory)
+    expect(await rows(f.admin)).toEqual(
+      [...parentHistory, 'created Sibling task', 'deleted Skunkworks'].sort(),
+    )
+  })
+
+  it("a moved task's history reaches only people who can access both ends of each move", async () => {
+    const sourceOnly = await seatOn(f.sub.id)
+    const destinationOnly = await seatOn(f.sub2.id)
+    const taskId = uuid()
+    const move = (project_id: string) =>
+      as(t, f.user).mutation(api.issues.move, { org_id: f.org.id, id: taskId, project_id })
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: taskId,
+      project_id: f.sub.id,
+      title: 'Travelling task',
+    })
+    const taskRows = async (p: Doc<'profiles'>) =>
+      (await snapFor(p)).activity
+        .filter((a) => a.target_id === taskId)
+        .map((a) => `${a.verb}${a.detail ? ` ${a.detail}` : ''}`)
+        .sort()
+    const created = 'created'
+    const there = 'moved to the Board rev sub-project (from Firmware)'
+    const back = 'moved to the Firmware sub-project (from Board rev)'
+    expect(await taskRows(sourceOnly)).toEqual([created])
+
+    await move(f.sub2.id)
+    expect(await taskRows(sourceOnly)).toEqual([])
+    // the earlier rows were filed under f.sub
+    expect(await taskRows(destinationOnly)).toEqual([])
+    expect(await taskRows(f.guest)).toEqual([created, there].sort())
+
+    // Back in f.sub, the first move still names Board rev.
+    await move(f.sub.id)
+    expect(await taskRows(sourceOnly)).toEqual([created])
+    expect(await taskRows(destinationOnly)).toEqual([])
+    expect(await taskRows(f.guest)).toEqual([created, back, there].sort())
+  })
+
+  it('a task that moved out of a deleted project keeps its earlier history', async () => {
+    const destinationOnly = await seatOn(f.sub.id)
+    const taskId = uuid()
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: taskId,
+      project_id: f.sub2.id,
+      title: 'Rescued task',
+    })
+    await as(t, f.user).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: taskId,
+      project_id: f.sub.id,
+    })
+    const taskRows = async (p: Doc<'profiles'>) =>
+      (await snapFor(p)).activity
+        .filter((a) => a.target_id === taskId)
+        .map((a) => a.verb)
+        .sort()
+    expect(await taskRows(destinationOnly)).toEqual([])
+
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
+    for (const p of [destinationOnly, f.guest, f.user]) {
+      expect(await taskRows(p)).toEqual(['created', 'moved'])
+    }
   })
 
   it('caps at 500 across the blend, ts desc — the oldest rows fall out', async () => {

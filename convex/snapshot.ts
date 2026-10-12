@@ -2,11 +2,12 @@
 // comments load on demand; rows omit Convex system fields and internal counters.
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
-import { canSeeProject } from './lib/access'
+import { canSeeProject, isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
+import type { ActivityTarget } from './lib/enums'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { snapshotRelations } from './lib/snapshotRelations'
-import { orgProjectView } from './lib/visibility'
+import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { type OrgLoadRow, orgLoadRows } from './planning'
 
 type AppRow<T extends TableNames> = Omit<Doc<T>, '_id' | '_creationTime'>
@@ -31,6 +32,49 @@ type OrgRow = Omit<AppRow<'organizations'>, 'billing' | 'activity_count'> & {
 const orgRowFor = (doc: Doc<'organizations'>, isAdmin: boolean): OrgRow => {
   const { _id, _creationTime, billing, activity_count: _activityCount, ...rest } = doc
   return isAdmin && billing !== undefined ? { ...rest, billing } : rest
+}
+
+// Rows about people, labels and the organization itself, not a project.
+const NON_PROJECT_ACTIVITY = new Set<ActivityTarget>(['user', 'org'])
+
+/* A project move written before related_project_id existed names a
+ * destination that cannot be checked (model/issues.ts moveIssueCore writes
+ * "to the <name> sub-project"; status and parent moves say "from" and
+ * "under"), so only admins receive it. */
+const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
+  ev.verb === 'moved' && ev.related_project_id === undefined && !!ev.detail?.startsWith('to the ')
+
+/* Members other than organization admins receive an activity row only if
+ * they can access every project it names: the project it was filed under
+ * and its related project, such as a move's destination. Seeing a parent
+ * only to reach one of its sub-projects is not access. A task row also needs
+ * the task in the working set, which keeps out the history of a task that
+ * was deleted, archived or moved to a project the member cannot access.
+ * Deleting a project clears project_id on its rows (model/cascade.ts). A task
+ * that moved out first keeps those rows for everyone who can access it; the
+ * other project and milestone rows reach admins only. Team rows reach that
+ * team's staff leaders; the remaining rows reach every member. */
+function memberSeesActivity(
+  ev: Doc<'activity_events'>,
+  a: {
+    me: Doc<'profiles'>
+    view: OrgProjectView
+    workingSet: Set<string>
+    leaderOf: Map<string, boolean>
+  },
+): boolean {
+  if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) {
+    return false
+  }
+  if (ev.target_type === 'issue') {
+    if (!a.workingSet.has(ev.target_id)) return false
+    if (isUnrecordedProjectMove(ev)) return false
+    return ev.project_id === undefined || a.view.accessible(ev.project_id)
+  }
+  if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
+  if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
+  if (ev.team_id !== undefined) return isOrgStaff(a.me) && a.leaderOf.get(ev.team_id) === true
+  return true
 }
 
 // Unread first, then read_at ascending and created_at descending.
@@ -77,7 +121,8 @@ export const forMe = authedQuery({
      * inbox/activity/link reference outside the active set needs a lookup;
      * never walk the whole archive just to exclude it. Cache promises too so
      * concurrent references to the same task share one read. Missing tasks
-     * retain the existing historical-message/activity fallback. */
+     * retain the existing historical-message fallback, and their activity
+     * reaches org admins only (memberSeesActivity). */
     const archivedProjects = new Map<string, Promise<boolean>>()
     const archivedIssues = new Map<string, Promise<boolean>>()
     const isArchivedProject = (projectId: string): Promise<boolean> => {
@@ -116,7 +161,7 @@ export const forMe = authedQuery({
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect()
       /* per-team "me leads it" — is_team_leader amortized over the membership
-       * rows already in hand; the viewer fence is restated at the use site */
+       * rows already in hand; memberSeesActivity restates the staff fence */
       const leaderOf = new Map<string, boolean>()
       for (const team of orgTeams) {
         teams.push(rowOf(team))
@@ -249,22 +294,18 @@ export const forMe = authedQuery({
       )
       for (const { row, archived } of subStatuses) if (!archived) issueSubs.push(rowOf(row))
 
-      // Activity: project row ⇒ visible project;
-      // team row ⇒ org admin or team leader (never a viewer); org-wide row ⇒
-      // any member. Walked ts-desc; the global cap makes >CAP kept rows here
-      // unreachable, so stop early.
+      // Activity: org admins receive every row except those about archived
+      // tasks or tasks in archived projects; other members receive only the
+      // rows memberSeesActivity allows. Walked ts-desc; the global cap makes
+      // >CAP kept rows here unreachable, so stop early.
       const orgActivity = ctx.db
         .query('activity_events')
         .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
         .order('desc')
+      const workingSet = new Set(fenceIssues.map((issue) => issue.id))
       let kept = 0
       for await (const ev of orgActivity) {
-        if (ev.project_id !== undefined) {
-          if (!view.visible(ev.project_id)) continue
-        } else if (ev.team_id !== undefined) {
-          const leads = me.org_role !== 'viewer' && leaderOf.get(ev.team_id) === true
-          if (!isAdmin && !leads) continue
-        }
+        if (!isAdmin && !memberSeesActivity(ev, { me, view, workingSet, leaderOf })) continue
         if (ev.target_type === 'issue' && (await isArchivedIssue(ev.target_id))) continue
         activityDocs.push(ev)
         if (++kept >= CAP) break

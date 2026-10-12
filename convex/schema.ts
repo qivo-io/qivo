@@ -745,6 +745,10 @@ export default defineSchema({
     label: v.string(),
     detail: v.optional(v.string()),
     project_id: v.optional(v.string()),
+    // Another project the row names, such as a move's destination. Members
+    // also need access to it (snapshot.ts memberSeesActivity). Like target_id
+    // it may outlive its project.
+    related_project_id: v.optional(v.string()),
     team_id: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])

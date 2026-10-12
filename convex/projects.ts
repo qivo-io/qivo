@@ -578,7 +578,9 @@ export const unarchive = orgMutation({
  * (0106 deliberately left the delete policies alone). The 'deleted' event is
  * written AFTER the cascade and hangs on the parent (for a sub) or the team
  * (for a meta) — the project it names is gone, which is exactly why
- * (bc022c2:2952-2958). */
+ * (bc022c2:2952-2958). Members receive a sub's event only with access to the
+ * parent beyond navigation, and a meta's reaches org admins only
+ * (snapshot.ts memberSeesActivity). */
 export const deleteDeep = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {

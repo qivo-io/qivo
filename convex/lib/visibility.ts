@@ -12,6 +12,8 @@ export type OrgProjectView = {
   visibleRootIds: Set<string>
   /* can_see_project(projectId) through the precomputed roots */
   visible: (projectId: string) => boolean
+  /* visible for a reason other than read-only navigation to a sub-project */
+  accessible: (projectId: string) => boolean
 }
 
 export async function orgProjectView(ctx: QueryCtx, me: Doc<'profiles'>): Promise<OrgProjectView> {
@@ -23,14 +25,16 @@ export async function orgProjectView(ctx: QueryCtx, me: Doc<'profiles'>): Promis
   for (const p of projects) byUuid.set(p.id, p)
 
   const visibleRootIds = new Set<string>()
-  const levelForProject = await projectLevelsForOrg(ctx, me, projects)
+  const { levelOf, navigationOnly } = await projectLevelsForOrg(ctx, me, projects)
   const visibleIds = new Set<string>()
   for (const p of projects) {
-    if (levelForProject(p) === null) continue
+    if (levelOf(p) === null) continue
     visibleIds.add(p.id)
     if (p.parent_id === undefined) visibleRootIds.add(p.id)
   }
   const visible = (projectId: string): boolean => visibleIds.has(projectId)
+  const accessible = (projectId: string): boolean =>
+    visibleIds.has(projectId) && !navigationOnly(projectId)
 
-  return { projects, byUuid, visibleRootIds, visible }
+  return { projects, byUuid, visibleRootIds, visible, accessible }
 }
