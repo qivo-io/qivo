@@ -1448,13 +1448,23 @@ function App() {
             />
           </Suspense>
         </ViewBoundary>
-        {modal && modal.kind === 'program' && (
-          <DeferredOverlay onClose={() => setModal(null)}>
-            <NewProjectModal
-              init={modal.init}
-              onClose={() => setModal(null)}
-              onCreate={createProject}
-            />
+        {/* Settings opens both project dialogs: the Projects header's +
+            and a project's New sub-project… / Add sub-project */}
+        {modal && (modal.kind === 'program' || modal.kind === 'subproject') && (
+          <DeferredOverlay key={modal.kind} onClose={() => setModal(null)}>
+            {modal.kind === 'program' ? (
+              <NewProjectModal
+                init={modal.init}
+                onClose={() => setModal(null)}
+                onCreate={createProject}
+              />
+            ) : (
+              <NewSubProjectModal
+                init={modal.init}
+                onClose={() => setModal(null)}
+                onCreate={createProject}
+              />
+            )}
           </DeferredOverlay>
         )}
         <ToastHost toasts={toasts} dismiss={dismissToast} />
