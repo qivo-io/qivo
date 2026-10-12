@@ -1,7 +1,7 @@
 import * as React from 'react'
 
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { isSelectInteractionKey } from '@/lib/focusVisibility'
+import { lastInputWasPointer } from '@/lib/focusVisibility'
 import { cn } from '@/lib/utils'
 
 const customizable = typeof CSS !== 'undefined' && CSS.supports('appearance', 'base-select')
@@ -49,16 +49,14 @@ function syncSelectLabel(select: HTMLSelectElement) {
 const NativeSelect = React.forwardRef<
   HTMLSelectElement,
   Omit<React.ComponentProps<'select'>, 'size'> & { size?: 'sm' | 'default' }
->(function NativeSelect(
-  { className, size = 'default', title, onChange, onPointerDown, onKeyDown, ...props },
-  ref,
-) {
+>(function NativeSelect({ className, size = 'default', title, onChange, ...props }, ref) {
   // A pick made with the pointer ends the interaction: the browser keeps a
   // <select> focused (and so lit, see the field rule in tokens.css) after its
   // list closes, unlike a date box whose calendar closes or a text box you
-  // click out of, so let go of focus then. Changing the value from the
-  // keyboard keeps focus, as it must.
-  const pointer = React.useRef(false)
+  // click out of, so let go of focus then. A value changed from the keyboard
+  // keeps focus, as it must. The shared input modality (focusVisibility.ts)
+  // tells the two apart: Shift and OS shortcuts leave it alone, typeahead and
+  // keys in an open list make it the keyboard.
   const select = React.useRef<HTMLSelectElement | null>(null)
   React.useImperativeHandle(ref, () => select.current as HTMLSelectElement)
   // Runs every render, because the options arrive as children and may change.
@@ -81,19 +79,9 @@ const NativeSelect = React.forwardRef<
           'aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40',
           className,
         )}
-        onPointerDown={(e) => {
-          pointer.current = true
-          onPointerDown?.(e)
-        }}
-        onKeyDown={(e) => {
-          // Shift and OS/browser shortcuts don't turn a pointer pick into a
-          // keyboard pick. Native typeahead (ordinary letters) still does.
-          if (isSelectInteractionKey(e)) pointer.current = false
-          onKeyDown?.(e)
-        }}
         onChange={(e) => {
           onChange?.(e)
-          if (!pointer.current) return
+          if (!lastInputWasPointer()) return
           const select = e.currentTarget
           select.blur()
           // A customizable select (tokens.css) hands focus back to itself as
