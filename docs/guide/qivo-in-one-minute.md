@@ -61,17 +61,8 @@ disabled while a draft or save needs to finish.
 
 ## Desktop app
 
-The optional Windows and Linux apps use your existing account and the hosted
-planner. Enable native Inbox notifications in the desktop notification
-settings. Selecting one opens the relevant Inbox view.
-
-The app downloads updates in the background and asks before restarting to
-install them. Updates wait for active drafts and saves. If you start editing
-after the notice appears, it returns when you finish. **Later** defers the
-update.
-
-Linux packages include `.deb` for Ubuntu, `.rpm` for Fedora/RHEL and a
-portable AppImage.
+Windows and Linux desktop apps are in development and not available to
+download yet. Use Qivo in a browser at https://qivo.io/app in the meantime.
 
 ## Using Qivo on a phone
 

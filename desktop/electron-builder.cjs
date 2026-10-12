@@ -61,8 +61,8 @@ module.exports = {
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
   },
-  // Keep release hosting separate from the private source repository. The
-  // standard package command never publishes; upload the generated artifacts
-  // to this public HTTPS endpoint after signing and validating the installer.
+  // The update feed is written into the installed app only when
+  // QIVO_DESKTOP_UPDATE_URL is set. The package command never publishes; the
+  // artifacts are uploaded to that HTTPS feed after signing and validation.
   publish: updateUrl ? [{ provider: 'generic', url: updateUrl }] : null,
 }

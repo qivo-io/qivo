@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "if [ \"$VITE_APP_MODE\" = \"demo\" ]; then node scripts/demo-deploy.mjs; else node scripts/app-deploy.mjs; fi",
   "outputDirectory": "dist",
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  },
   "redirects": [
     {
       "source": "/",

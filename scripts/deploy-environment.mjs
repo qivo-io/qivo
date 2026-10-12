@@ -3,15 +3,38 @@ import { readFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 const COMMIT = /^[0-9a-f]{40}$/
-const STABLE_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/
+const STABLE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const REPOSITORY = 'qivo-io/qivo'
+const SITE_REPOSITORY = 'qivo-io/qivo-internal'
+const ACTIONS_BOT = 'github-actions[bot]'
+const STAGING_RECEIPT = 'qivo-staging-v1'
+const RUN_ID = /^[1-9]\d*$/
+// Releases published earlier took their website from a GitHub variable. Re-running one
+// under the staging-record rule could change the website, so they are refused.
+const STAGED_WEBSITE_SINCE = '2026-10-12T00:00:00Z'
 
 const required = (env, key) => {
   if (!env[key]) throw new Error(`${key} must be configured for this GitHub environment.`)
   return env[key]
 }
 
-/** Configuration contains identifiers and project-scoped tokens, never backend credentials. */
+/** Order stable release tags such as v1.10.0 after v1.9.2. */
+export function compareVersions(left, right) {
+  const parse = (tag) => {
+    const match = STABLE_TAG.exec(tag)
+    if (!match) throw new Error(`${tag} is not a stable vMAJOR.MINOR.PATCH tag.`)
+    return match.slice(1).map(Number)
+  }
+  const [a, b] = [parse(left), parse(right)]
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+}
+
+/**
+ * Configuration contains identifiers and project-scoped tokens, never backend credentials.
+ * The website revision is not configured. Staging builds private main, and production
+ * reuses the website commit recorded by staging. Older deploy.yml files still pass
+ * QIVO_SITE_REVISION, so it is ignored rather than rejected.
+ */
 export function configuration(env) {
   const environment = required(env, 'QIVO_ENVIRONMENT')
   if (!['staging', 'production'].includes(environment))
@@ -19,9 +42,7 @@ export function configuration(env) {
   if (env.GITHUB_REPOSITORY !== REPOSITORY)
     throw new Error('Only the upstream repository may deploy.')
   const sha = required(env, 'QIVO_COMMIT')
-  const siteSha = required(env, 'QIVO_SITE_REVISION')
-  if (!COMMIT.test(sha) || !COMMIT.test(siteSha))
-    throw new Error('Both source revisions must be full commit SHAs.')
+  if (!COMMIT.test(sha)) throw new Error('The application revision must be a full commit SHA.')
   const origin = required(env, 'QIVO_APP_ORIGIN')
   if (origin !== (environment === 'production' ? 'https://qivo.io' : 'https://preview.qivo.io'))
     throw new Error('The app origin does not match the deployment environment.')
@@ -43,7 +64,6 @@ export function configuration(env) {
   return {
     environment,
     sha,
-    siteSha,
     origin,
     app,
     site,
@@ -52,6 +72,7 @@ export function configuration(env) {
     githubToken: required(env, 'GH_TOKEN'),
     appBypass: env.VERCEL_APP_PROTECTION_BYPASS,
     runId: required(env, 'GITHUB_RUN_ID'),
+    runAttempt: Number(env.GITHUB_RUN_ATTEMPT || 1),
     eventName: required(env, 'GITHUB_EVENT_NAME'),
     ref: required(env, 'GITHUB_REF'),
   }
@@ -67,13 +88,15 @@ export function assertTrigger(config, event) {
       release.draft ||
       release.prerelease ||
       !STABLE_TAG.test(release.tag_name || '') ||
+      !release.published_at ||
       event.sender?.type !== 'User'
     )
       throw new Error('Production requires a manually published stable release.')
   } else {
+    // A manual run restages current main, for example after a private website merge.
     if (config.eventName === 'workflow_dispatch') {
-      if (config.ref !== 'refs/heads/main' || event.inputs?.app_revision !== config.sha)
-        throw new Error('Manual staging runs must use the main workflow and an explicit commit.')
+      if (config.ref !== 'refs/heads/main')
+        throw new Error('Manual staging runs must use the main workflow.')
       return
     }
     const run = event.workflow_run
@@ -89,8 +112,12 @@ export function assertTrigger(config, event) {
   }
 }
 
+/**
+ * A JSON client for one provider. `allowMissing` turns a 404 on a GET into null for
+ * existence checks; every other failure throws.
+ */
 export function apiClient(base, token, fetchImpl = fetch) {
-  return async (path, method = 'GET', body) => {
+  return async (path, method = 'GET', body, { allowMissing = false } = {}) => {
     const url = new URL(path, base)
     const response = await fetchImpl(url, {
       method,
@@ -103,13 +130,146 @@ export function apiClient(base, token, fetchImpl = fetch) {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(60_000),
     })
+    if (allowMissing && method === 'GET' && response.status === 404) return null
     // Provider errors can contain environment values. Keep error output to status and endpoint.
     if (!response.ok) throw new Error(`${method} ${url.pathname} returned HTTP ${response.status}.`)
     return response.status === 204 ? null : response.json()
   }
 }
 
-/** CI and the staging receipt must describe the release commit and approved website commit. */
+/** Every stable version tag. Unlike releases, these tags cannot be moved or deleted. */
+export async function stableTags(github) {
+  // This endpoint returns every match at once and ignores paging parameters.
+  const refs = await github(`/repos/${REPOSITORY}/git/matching-refs/tags/v`)
+  return refs
+    .map(({ ref }) => ref.replace(/^refs\/tags\//, ''))
+    .filter((tag) => STABLE_TAG.test(tag))
+}
+
+/** Every release this token can see. Drafts are visible only to tokens with write access. */
+export async function listReleases(github) {
+  const releases = []
+  for (let page = 1; page <= 10; page++) {
+    const batch = await github(`/repos/${REPOSITORY}/releases?per_page=100&page=${page}`)
+    releases.push(...batch)
+    if (batch.length < 100) break
+  }
+  return releases
+}
+
+/**
+ * The run and attempt a record names, as plain positive numbers, or null. GitHub also
+ * accepts forms such as "01", which would otherwise let two records name one attempt.
+ * Records written before attempts were recorded all came from first attempts.
+ */
+function namedAttempt(payload) {
+  const run = String(payload?.workflow_run_id ?? '')
+  const attempt = payload?.workflow_run_attempt ?? 1
+  if (!RUN_ID.test(run) || !Number.isSafeInteger(attempt) || attempt < 1) return null
+  return { run: Number(run), attempt, key: `${run}/${attempt}` }
+}
+
+/**
+ * The newest successful staging record for one application commit. A record names the
+ * exact app and website commits that staging verified on preview.qivo.io. Only records
+ * this workflow wrote during a successful main staging run attempt count, and a later
+ * failure or error status on the same record withdraws it. `before` limits the search to
+ * records that succeeded before a release was published, so re-running a release deploys
+ * the same pair. `ciRunId` ties the record to the verified CI run.
+ *
+ * Anyone who can write to the repository can create deployment records. A record and its
+ * success status must therefore fall inside the run attempt it names, two records naming
+ * the same attempt are refused rather than chosen between, and a record whose run was
+ * deleted stops the search instead of silently falling back to an older website.
+ */
+export async function findStagingReceipt(github, { sha, before, ciRunId }) {
+  const prefix = `/repos/${REPOSITORY}`
+  const receipts = (
+    await github(`${prefix}/deployments?sha=${sha}&environment=staging&per_page=100`)
+  ).filter(
+    (deployment) =>
+      deployment.sha === sha &&
+      deployment.environment === 'staging' &&
+      deployment.creator?.login === ACTIONS_BOT &&
+      deployment.payload?.kind === STAGING_RECEIPT,
+  )
+  const named = new Map()
+  for (const { payload } of receipts) {
+    const attempt = namedAttempt(payload)
+    if (attempt) named.set(attempt.key, (named.get(attempt.key) || 0) + 1)
+  }
+  const candidates = []
+  for (const deployment of receipts) {
+    const payload = deployment.payload
+    const attempt = namedAttempt(payload)
+    if (
+      !attempt ||
+      payload.app_revision !== sha ||
+      !COMMIT.test(payload.site_revision || '') ||
+      (ciRunId !== undefined && Number(payload.ci_run_id) !== Number(ciRunId))
+    )
+      continue
+    if (named.get(attempt.key) > 1)
+      throw new Error(
+        `Several staging records name staging run ${attempt.run}. Refusing to choose.`,
+      )
+    const statuses = await github(`${prefix}/deployments/${deployment.id}/statuses?per_page=100`)
+    // Actions and later staging runs can inactivate a successful receipt.
+    // Ignore that bookkeeping, but never revive success beneath a later failure.
+    const latest = statuses
+      .filter((status) => status.state !== 'inactive')
+      .sort((a, b) => b.id - a.id)[0]
+    if (latest?.state !== 'success' || latest.creator?.login !== ACTIONS_BOT) continue
+    const succeededAt = Date.parse(latest.created_at)
+    if (!Number.isFinite(succeededAt)) continue
+    if (before !== undefined && succeededAt > Date.parse(before)) continue
+    candidates.push({ deployment, attempt, succeededAt })
+  }
+  candidates.sort((a, b) => b.succeededAt - a.succeededAt)
+  for (const { deployment, attempt, succeededAt } of candidates) {
+    // A later re-run of the run does not change a recorded attempt's result.
+    const run = await github(
+      `${prefix}/actions/runs/${attempt.run}/attempts/${attempt.attempt}`,
+      'GET',
+      undefined,
+      { allowMissing: true },
+    )
+    if (!run)
+      throw new Error(
+        `Staging run ${attempt.run}, which recorded a staging deployment of this commit, was ` +
+          'deleted, so its website commit cannot be verified. Restage the commit or release a newer one.',
+      )
+    const opened = Date.parse(run.run_started_at)
+    const closed = Date.parse(run.updated_at)
+    const created = Date.parse(deployment.created_at)
+    if (
+      run.run_attempt === attempt.attempt &&
+      run.conclusion === 'success' &&
+      run.path === '.github/workflows/staging.yml' &&
+      run.head_sha === sha &&
+      run.head_branch === 'main' &&
+      ['workflow_run', 'workflow_dispatch'].includes(run.event) &&
+      run.repository?.full_name === REPOSITORY &&
+      created >= opened &&
+      created <= closed &&
+      succeededAt >= opened &&
+      succeededAt <= closed
+    )
+      return {
+        id: deployment.id,
+        siteSha: deployment.payload.site_revision,
+        runId: attempt.run,
+        runAttempt: attempt.attempt,
+        succeededAt,
+      }
+  }
+  return null
+}
+
+/**
+ * Check CI, the trigger and, for production, the release. Returns the verified CI run and
+ * the website commit to deploy (production only; staging learns it from Vercel).
+ */
 export async function verifyCommit(config, event, github, pause = sleep) {
   assertTrigger(config, event)
   const prefix = `/repos/${REPOSITORY}`
@@ -147,7 +307,7 @@ export async function verifyCommit(config, event, github, pause = sleep) {
   if (config.environment === 'staging') {
     if (config.eventName !== 'workflow_dispatch' && ci.id !== event.workflow_run.id)
       throw new Error('The CI event does not match the verified run.')
-    return ci.id
+    return { ciId: ci.id }
   }
   const release = await github(`${prefix}/releases/${event.release.id}`)
   if (
@@ -157,54 +317,97 @@ export async function verifyCommit(config, event, github, pause = sleep) {
     !STABLE_TAG.test(release.tag_name || '')
   )
     throw new Error('The published release is no longer eligible for production.')
+  if (Date.parse(event.release.published_at) < Date.parse(STAGED_WEBSITE_SINCE))
+    throw new Error(
+      'This release was published before production took its website from staging records. ' +
+        'Re-running it could change the website. Publish a new version instead.',
+    )
   const commit = await github(`${prefix}/commits/${encodeURIComponent(release.tag_name)}`)
   if (commit.sha !== config.sha)
     throw new Error('The release tag changed or does not identify this commit.')
-  const deployments = await github(
-    `${prefix}/deployments?sha=${config.sha}&environment=staging&per_page=100`,
-  )
-  for (const deployment of deployments) {
-    const payload = deployment.payload
-    if (
-      deployment.sha !== config.sha ||
-      deployment.environment !== 'staging' ||
-      deployment.creator?.login !== 'github-actions[bot]' ||
-      payload?.kind !== 'qivo-staging-v1' ||
-      payload.site_revision !== config.siteSha ||
-      payload.app_revision !== config.sha
+  // Re-running an old release, or republishing one, must not roll production back.
+  // Version tags are compared because, unlike releases, they cannot be deleted.
+  const newest = (await stableTags(github)).concat(release.tag_name).sort(compareVersions).at(-1)
+  if (newest !== release.tag_name)
+    throw new Error(
+      `${newest} is newer than ${release.tag_name}. Only the newest version can deploy ` +
+        'production. To roll back, publish a new, higher version that targets the older commit.',
     )
-      continue
-    const statuses = await github(`${prefix}/deployments/${deployment.id}/statuses?per_page=100`)
-    // Actions and later staging runs can inactivate a successful receipt.
-    // Ignore that bookkeeping, but never revive success beneath a later failure.
-    if (statuses.find((status) => status.state !== 'inactive')?.state !== 'success') continue
-    const run = await github(`${prefix}/actions/runs/${payload.workflow_run_id}`)
-    if (
-      run.conclusion === 'success' &&
-      run.path === '.github/workflows/staging.yml' &&
-      run.head_sha === config.sha &&
-      run.head_branch === 'main' &&
-      ['workflow_run', 'workflow_dispatch'].includes(run.event) &&
-      run.repository?.full_name === REPOSITORY
+  const receipt = await findStagingReceipt(github, {
+    sha: config.sha,
+    before: event.release.published_at,
+    ciRunId: ci.id,
+  })
+  if (!receipt) {
+    const later = await findStagingReceipt(github, { sha: config.sha, ciRunId: ci.id })
+    throw new Error(
+      (later
+        ? 'Staging passed for this commit only after the release was published.'
+        : 'This commit has no successful staging deployment.') +
+        ' Re-running this release cannot change that. After Deploy staging passes, publish a ' +
+        'new, higher version. Prepare release does this for the current main commit.',
     )
-      return ci.id
   }
-  throw new Error(
-    'This app and website revision pair has no successful verified staging deployment.',
-  )
+  return { ciId: ci.id, siteSha: receipt.siteSha, stagingReceiptId: receipt.id }
 }
 
-export function deploymentRequest(project, sha) {
-  if (!COMMIT.test(sha)) throw new Error('An exact source commit is required.')
+function linkedRepository(project) {
   if (project.link?.type !== 'github' || !project.link.repoId)
     throw new Error('The deployment project must have its GitHub repository connected.')
+  return project.link.repoId
+}
+
+/** A deployment of one exact commit. Production always uses this form. */
+export function deploymentRequest(project, sha) {
+  if (!COMMIT.test(sha)) throw new Error('An exact source commit is required.')
   return {
     name: project.name,
     project: project.id,
     target: 'production',
-    gitSource: { type: 'github', repoId: project.link.repoId, ref: sha, sha },
+    gitSource: { type: 'github', repoId: linkedRepository(project), ref: sha, sha },
     meta: { qivoCommit: sha },
   }
+}
+
+/** Staging builds the private website's current main; Vercel resolves and reports the commit. */
+export function stagingWebsiteRequest(project) {
+  return {
+    name: project.name,
+    project: project.id,
+    target: 'production',
+    gitSource: { type: 'github', repoId: linkedRepository(project), ref: 'main' },
+    meta: { qivoSiteRef: 'main' },
+  }
+}
+
+/** The one exact commit a Vercel deployment built from the requested Git reference. */
+export function builtCommit(deployment, ref) {
+  const commits = [deployment.gitSource?.sha, deployment.meta?.githubCommitSha].filter(Boolean)
+  const refs = [deployment.gitSource?.ref, deployment.meta?.githubCommitRef].filter(Boolean)
+  if (!commits.length || !COMMIT.test(commits[0]) || commits.some((item) => item !== commits[0]))
+    throw new Error('Vercel did not report one exact built commit.')
+  if (ref !== undefined && (!refs.length || refs.some((item) => item !== ref)))
+    throw new Error('Vercel built a different Git reference than requested.')
+  return commits[0]
+}
+
+/**
+ * Vercel's deployment policy is what stops Git pushes from deploying. Every enabled rule
+ * for the production target must allow only REST API deployments. The staging website
+ * relies on this too, because it builds whatever is on private main.
+ */
+export function restApiOnly(project) {
+  const rules = (project.deploymentPolicy?.deploymentSources || []).filter(
+    (rule) =>
+      rule.enabled &&
+      rule.environments?.some(
+        (environment) => environment.type === 'system' && environment.target === 'production',
+      ),
+  )
+  return (
+    rules.length > 0 &&
+    rules.every((rule) => rule.sources?.length === 1 && rule.sources[0] === 'rest-api')
+  )
 }
 
 /** Inspect every binding before any write, including nonsecret environment identity. */
@@ -231,6 +434,8 @@ export async function preflightProjects(config, fetchImpl = fetch) {
       details.link?.repo !== expectedRepo
     )
       throw new Error('The Vercel project is connected to an unexpected source repository.')
+    if (!restApiOnly(details))
+      throw new Error('The Vercel project must accept production deployments only through the API.')
     if (
       role === 'site' &&
       (details.rootDirectory !== 'website' || details.sourceFilesOutsideRootDirectory !== false)
@@ -267,6 +472,10 @@ export async function preflightProjects(config, fetchImpl = fetch) {
   return prepared
 }
 
+/**
+ * Deploy one project and wait until it serves. `revision` is an exact commit, or `main`
+ * for the staging website. Returns the commit Vercel built.
+ */
 async function deployProject(project, prepared, revision, config, { pause, log }, pins) {
   const { vercel, details } = prepared
   const scope = `teamId=${encodeURIComponent(config.team)}`
@@ -282,11 +491,9 @@ async function deployProject(project, prepared, revision, config, { pause, log }
       })),
     )
   }
-  const created = await vercel(
-    `/v13/deployments?${scope}`,
-    'POST',
-    deploymentRequest(details, revision),
-  )
+  const request =
+    revision === 'main' ? stagingWebsiteRequest(details) : deploymentRequest(details, revision)
+  const created = await vercel(`/v13/deployments?${scope}`, 'POST', request)
   if (!created.id) throw new Error('Vercel did not return a deployment ID.')
   log(`Started ${details.name} deployment ${created.id}.`)
   for (let attempt = 0; attempt < 180; attempt++) {
@@ -294,9 +501,10 @@ async function deployProject(project, prepared, revision, config, { pause, log }
     if (['ERROR', 'CANCELED'].includes(result.readyState))
       throw new Error(`${details.name} deployment failed.`)
     if (result.readyState === 'READY') {
-      if ((result.gitSource?.sha || result.meta?.githubCommitSha) !== revision)
+      if (revision === 'main') return builtCommit(result, 'main')
+      if (builtCommit(result) !== revision)
         throw new Error('The deployed source does not match the requested commit.')
-      return result.id
+      return revision
     }
     log(`${details.name} deployment is ${result.readyState || 'pending'}.`)
     await pause(10_000)
@@ -346,16 +554,8 @@ export async function verifyPublicBuild(config, fetchImpl = fetch) {
   }
 }
 
-/** The same bounded workflow deploys staging and a previously verified release. */
-export async function deployEnvironment(config, event, options = {}) {
-  const optionsWithDefaults = { fetchImpl: fetch, pause: sleep, log: console.log, ...options }
-  const github = apiClient(
-    'https://api.github.com',
-    config.githubToken,
-    optionsWithDefaults.fetchImpl,
-  )
-  const ciId = await verifyCommit(config, event, github, optionsWithDefaults.pause)
-  const prepared = await preflightProjects(config, optionsWithDefaults.fetchImpl)
+/** A GitHub deployment record ("receipt") naming the exact app and website commits. */
+async function createReceipt(github, config, payload) {
   const prefix = `/repos/${REPOSITORY}`
   const deployment = await github(`${prefix}/deployments`, 'POST', {
     ref: config.sha,
@@ -366,12 +566,12 @@ export async function deployEnvironment(config, event, options = {}) {
     payload: {
       kind: `qivo-${config.environment}-v1`,
       app_revision: config.sha,
-      site_revision: config.siteSha,
-      ci_run_id: ciId,
       workflow_run_id: config.runId,
+      workflow_run_attempt: config.runAttempt,
+      ...payload,
     },
   })
-  const status = (state, description) =>
+  return (state, description) =>
     github(`${prefix}/deployments/${deployment.id}/statuses`, 'POST', {
       state,
       description,
@@ -380,17 +580,73 @@ export async function deployEnvironment(config, event, options = {}) {
       // Preserve successful revision receipts when a later staging build replaces its domain.
       auto_inactive: false,
     })
+}
+
+const websiteLink = (sha) => `https://github.com/${SITE_REPOSITORY}/commit/${sha}`
+
+/**
+ * Staging deploys current public main with current private main and records the pair only
+ * after it serves correctly. Production deploys the newest pair staging recorded for the
+ * release commit. Neither path seeds, resets or migrates data.
+ */
+export async function deployEnvironment(config, event, options = {}) {
+  const optionsWithDefaults = { fetchImpl: fetch, pause: sleep, log: console.log, ...options }
+  const { log } = optionsWithDefaults
+  const github = apiClient(
+    'https://api.github.com',
+    config.githubToken,
+    optionsWithDefaults.fetchImpl,
+  )
+  const verified = await verifyCommit(config, event, github, optionsWithDefaults.pause)
+  const prepared = await preflightProjects(config, optionsWithDefaults.fetchImpl)
+  const websitePins = (siteRevision) => ({
+    QIVO_SOURCE_REVISION: config.sha,
+    QIVO_SITE_REVISION: siteRevision,
+    SITE_ORIGIN: config.origin,
+  })
+
+  if (config.environment === 'staging') {
+    // A failed run records nothing, so a release can never pick up a partial pair.
+    const siteSha = await deployProject(
+      config.site,
+      prepared.site,
+      'main',
+      config,
+      optionsWithDefaults,
+      websitePins('main'),
+    )
+    log(`Staged website commit ${siteSha}: ${websiteLink(siteSha)}`)
+    await deployProject(config.app, prepared.app, config.sha, config, optionsWithDefaults)
+    await verifyPublicBuild({ ...config, siteSha }, optionsWithDefaults.fetchImpl)
+    const status = await createReceipt(github, config, {
+      site_revision: siteSha,
+      ci_run_id: verified.ciId,
+    })
+    await status('success', 'App, website, revisions and public routes verified.')
+    return
+  }
+
+  const deployed = { ...config, siteSha: verified.siteSha }
+  log(`Releasing website commit ${deployed.siteSha}: ${websiteLink(deployed.siteSha)}`)
+  const status = await createReceipt(github, deployed, {
+    site_revision: deployed.siteSha,
+    ci_run_id: verified.ciId,
+    staging_receipt_id: verified.stagingReceiptId,
+  })
   await status('in_progress', 'Deploying the exact app and website revisions.')
   try {
-    await deployProject(config.site, prepared.site, config.siteSha, config, optionsWithDefaults, {
-      QIVO_SOURCE_REVISION: config.sha,
-      QIVO_SITE_REVISION: config.siteSha,
-      SITE_ORIGIN: config.origin,
-    })
+    await deployProject(
+      config.site,
+      prepared.site,
+      deployed.siteSha,
+      config,
+      optionsWithDefaults,
+      websitePins(deployed.siteSha),
+    )
     await deployProject(config.app, prepared.app, config.sha, config, optionsWithDefaults)
     if (config.demo)
       await deployProject(config.demo, prepared.demo, config.sha, config, optionsWithDefaults)
-    await verifyPublicBuild(config, optionsWithDefaults.fetchImpl)
+    await verifyPublicBuild(deployed, optionsWithDefaults.fetchImpl)
     await status('success', 'App, website, revisions and public routes verified.')
   } catch (error) {
     await status('failure', 'Deployment or verification failed. Inspect the workflow log.')

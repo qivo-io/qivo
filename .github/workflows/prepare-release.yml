@@ -1,0 +1,38 @@
+name: Prepare release
+
+# Creates a draft GitHub Release for the commit preview.qivo.io serves. It deploys
+# nothing. Publishing the draft by hand starts the production deployment.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version such as v1.2.0. Leave empty for the next patch version.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  deployments: read
+  actions: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    if: github.repository == 'qivo-io/qivo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QIVO_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/prepare-release.mjs
