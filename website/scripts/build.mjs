@@ -50,10 +50,42 @@ const SECRET_PATTERNS = [
   /api\.vercel\.com\/v1\/integrations\/deploy\//,
 ]
 
-/** Tags whose `src`, `href`, `srcset`, `poster` or `data` the browser loads. Links in
-    `<a>` are only followed when clicked, so they may point anywhere. */
+/** Tags whose URL attributes the browser fetches. Links in `<a>` are only followed when
+    clicked, so they may point anywhere. Quoted attribute values may contain `>`. */
 const RESOURCE_TAGS =
-  /<(link|img|source|iframe|video|audio|embed|object|track|input|image|use)\b([^>]*)>/gi
+  /<(script|link|img|source|iframe|video|audio|embed|object|track|input|image|use)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi
+/** Attributes that hold one URL, and those that hold a srcset list of URLs. */
+const URL_ATTRIBUTES = ['src', 'href', 'xlink:href', 'poster', 'data']
+const SRCSET_ATTRIBUTES = ['srcset', 'imagesrcset']
+/** `rel` values of a <link> that only name a document and load nothing. */
+const NAMING_RELS = new Set(['canonical', 'alternate', 'describedby', 'author', 'license', 'help'])
+/** An absolute or protocol-relative URL, which may leave this origin. */
+const OTHER_ORIGIN = /^\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2}/i
+
+/** Every attribute of one tag by lowercase name, whatever its quoting and spacing. */
+function attributesOf(source) {
+  const values = new Map()
+  for (const [, name, double, single, bare] of source.matchAll(
+    /([^\s"'=<>`/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
+  ))
+    values.set(name.toLowerCase(), double ?? single ?? bare ?? '')
+  return values
+}
+
+/** The URLs one resource tag would fetch. */
+function fetchedUrls(tag, source) {
+  const attributes = attributesOf(source)
+  if (tag === 'link') {
+    const rels = (attributes.get('rel') || '').toLowerCase().split(/\s+/).filter(Boolean)
+    if (rels.length && rels.every((rel) => NAMING_RELS.has(rel))) return []
+  }
+  return [
+    ...URL_ATTRIBUTES.map((name) => attributes.get(name)),
+    ...SRCSET_ATTRIBUTES.flatMap((name) =>
+      (attributes.get(name) || '').split(',').map((candidate) => candidate.trim().split(/\s+/)[0]),
+    ),
+  ].filter(Boolean)
+}
 
 /** Replace a marker that must appear in index.html exactly once. */
 function fill(html, marker, value) {
@@ -83,21 +115,14 @@ export function verifyOutput(files) {
     for (const pattern of SECRET_PATTERNS)
       if (pattern.test(text)) errors.push(`${file}: looks like it contains a credential`)
     if (/\.(?:html|js|css)$/.test(file)) {
-      if (/<script\b[^>]*\bsrc=["']?(?:https?:)?\/\//i.test(text))
-        errors.push(`${file}: loads a third-party script`)
-      if (/url\(\s*["']?(?:https?:)?\/\//i.test(text) || /@import\s/i.test(text))
+      if (/url\(\s*["']?\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2}/i.test(text) || /@import\s/i.test(text))
         errors.push(`${file}: loads a third-party stylesheet resource`)
-      if (/\b(?:import\s*\(?|from)\s*["'](?:https?:)?\/\//.test(text))
+      if (/\b(?:import\s*\(?|from)\s*["']\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2}/i.test(text))
         errors.push(`${file}: imports a third-party module`)
-      for (const [, tag, attributes] of text.matchAll(RESOURCE_TAGS)) {
-        // Canonical and alternate links name a page; they load nothing.
-        if (
-          tag.toLowerCase() === 'link' &&
-          /\brel=["']?(?:canonical|alternate)\b/i.test(attributes)
-        )
-          continue
-        if (/\b(?:src|href|srcset|poster|data)=["']?(?:https?:)?\/\//i.test(attributes))
-          errors.push(`${file}: loads a third-party resource`)
+      for (const [, name, source] of text.matchAll(RESOURCE_TAGS)) {
+        const tag = name.toLowerCase()
+        if (fetchedUrls(tag, source).some((url) => OTHER_ORIGIN.test(url)))
+          errors.push(`${file}: loads a third-party ${tag === 'script' ? 'script' : 'resource'}`)
       }
     }
   }

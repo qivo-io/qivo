@@ -192,6 +192,31 @@ describe('website build', () => {
     ['docs/index.html', '<img src="https://images.example/x.png" alt="">', /third-party resource/],
     ['marketing/home.js', "import x from 'https://cdn.example/x.js'", /third-party module/],
     ['marketing/home.js', "await import('//cdn.example/x.js')", /third-party module/],
+    // Spacing, quoting, later srcset entries and backslashes must not hide a request.
+    ['index.html', '<script src = "https://cdn.example/x.js"></script>', /third-party script/],
+    [
+      'index.html',
+      '<img alt="a > b" src = "https://images.example/x.png">',
+      /third-party resource/,
+    ],
+    ['index.html', "<img src='//images.example/x.png'>", /third-party resource/],
+    ['index.html', '<img src=https://images.example/x.png>', /third-party resource/],
+    ['index.html', '<img src="\\\\images.example/x.png">', /third-party resource/],
+    [
+      'index.html',
+      '<img srcset="/marketing/task.webp 1x, https://images.example/x.png 2x">',
+      /third-party resource/,
+    ],
+    [
+      'index.html',
+      '<link rel="preload" as="image" imagesrcset="/a.webp 1x, //images.example/b.webp 2x">',
+      /third-party resource/,
+    ],
+    [
+      'index.html',
+      '<link rel="alternate stylesheet" href="https://cdn.example/x.css">',
+      /third-party resource/,
+    ],
   ])('rejects output %s with unsafe content', (file, body, message) => {
     const files = buildSite({ outDir: appOutput(), env: {} })
     // The real pages pass, including absolute canonical links and outbound <a> links.
@@ -201,7 +226,8 @@ describe('website build', () => {
         new Map([
           [
             'a.html',
-            '<link rel="canonical" href="https://qivo.io/"><a href="https://demo.qivo.io">Demo</a>',
+            '<link rel = "canonical" href = "https://qivo.io/"><a href = "https://demo.qivo.io">Demo</a>' +
+              '<img srcset="/marketing/task.webp 1x, /marketing/task.webp 2x" src="data:image/png;base64,AA">',
           ],
         ]),
       ),
