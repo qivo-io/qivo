@@ -1267,7 +1267,7 @@ function rebuild(now = new Date()) {
   const shapeOf = (id: string) => shapeById.get(id)
   const viaSubProject = (s: ProjectVM) =>
     s.type === 'meta' &&
-    allShapes.some((c) => c.parent === s.id && levelOnProject(c, undefined, shapeOf))
+    (childrenOf.get(s.id) || []).some((c) => levelOnProject(shapeOf(c.id), undefined, shapeOf))
   P.archivedProjects = allShapes
     .filter((s) => s.archivedAt != null)
     .flatMap((s) => {
