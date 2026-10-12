@@ -80,9 +80,11 @@ The application keeps normal sign-in and authorization. The website build
 marks every page outside production `noindex` and publishes a `robots.txt`
 that disallows crawling.
 
-Branch previews remain independent and do not share staging data. Private
-operators can provision synthetic data deliberately using the private setup
-instructions. A later deployment preserves it.
+The `qivo` Vercel project creates branch previews. They remain independent and
+do not share staging data. The `qivo-staging` project serves only persistent
+staging and has preview deployment creation disabled. Private operators can
+provision synthetic data deliberately using the private setup instructions.
+A later deployment preserves it.
 
 ## Production release
 
@@ -122,10 +124,25 @@ deploy them. This policy is the enforcement and must stay enabled; the
 deployment script refuses to run if it is loosened. It does not identify the
 caller. Any token with access to a production project can create a production
 deployment, so those tokens must stay limited to the release workflow.
-`vercel.json` also turns off Git deployments of main, which only removes the
-blocked deployments and failed statuses Vercel would otherwise create on every
-main push. The staging project still reports a blocked preview on branch
-pushes. That status is expected and harmless.
+`vercel.json` also turns off Git deployments of main, avoiding blocked
+deployments and failed statuses on main pushes. Set
+`previewDeploymentsDisabled: true` on the `qivo-staging` Vercel project through
+the [project settings API](https://vercel.com/docs/rest-api/projects/update-an-existing-project)
+to prevent feature pushes from creating staging preview attempts. Keep its
+GitHub repository connected and its REST-only deployment policy enabled for
+both production and preview targets. The staging workflow uses Vercel's
+production target, so disabling preview creation does not stop it. Leave
+branch previews enabled on `qivo`.
+
+If a feature commit gets a failed `Vercel – qivo-staging` status saying
+"Deployment was blocked", inspect the deployment's error reason. A deployment
+policy rejection of a Git preview indicates that preview creation is still
+enabled. Disable preview creation on that project instead of loosening its
+policy or treating the failure as a passing check. Verify the setting with a
+project API read, then check a new branch push. It should create a
+`Vercel – qivo` preview status and no `Vercel – qivo-staging` status or
+deployment. Existing failed statuses remain attached to their historical
+commits.
 
 ## Rollback and hotfixes
 
