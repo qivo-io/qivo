@@ -10,8 +10,9 @@ import { type RefObject, useEffect, useLayoutEffect, useState } from 'react'
     opened later stay exposed too.
 
     With `whileFocusInside`, the page is hidden only while focus is inside the
-    element, as browsers apply aria-modal. Use it for a window that does not
-    move focus into itself, so focus never sits in hidden content. */
+    element or a kept layer, as browsers apply aria-modal. Use it for a window
+    that does not move focus into itself, so focus never sits in hidden
+    content. */
 export function useHideOthers(
   ref: RefObject<HTMLElement | null>,
   active: boolean,
@@ -20,8 +21,10 @@ export function useHideOthers(
   const [focusInside, setFocusInside] = useState(false)
   useEffect(() => {
     if (!active || !whileFocusInside) return
+    // a kept layer such as a focus window opened from the element counts too
     const inside = (node: EventTarget | null) =>
-      node instanceof Node && !!ref.current?.contains(node)
+      node instanceof Node &&
+      (!!ref.current?.contains(node) || (!!keep && node instanceof Element && !!node.closest(keep)))
     setFocusInside(inside(document.activeElement))
     const onFocusIn = (event: FocusEvent) => setFocusInside(inside(event.target))
     // relatedTarget is where focus goes next, null when it falls to <body>
@@ -32,7 +35,7 @@ export function useHideOthers(
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
     }
-  }, [ref, active, whileFocusInside])
+  }, [ref, active, whileFocusInside, keep])
 
   const hiding = active && (!whileFocusInside || focusInside)
   useLayoutEffect(() => {
