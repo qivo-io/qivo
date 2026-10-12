@@ -1096,6 +1096,7 @@ export async function moveIssueCore(
     target_type: 'issue' as const,
     target_id: issue.id,
     label: after.title,
+    // snapshot.ts isUnrecordedProjectMove recognizes older rows by this wording
     detail: `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}`,
     project_id: issue.project_id, // the SOURCE project (old planner.ts:2063-2066)
     related_project_id: target.id, // the detail names it, so readers need it too

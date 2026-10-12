@@ -694,6 +694,17 @@ describe('activity', () => {
           target_id: issueVis.id,
           related_project_id: f.hidden.id,
         }),
+        statusMove: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          detail: 'from To Do to Done',
+        }),
+        // a project move written before related_project_id existed
+        unrecordedMove: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          detail: 'to the Secret sub-project (from Firmware)',
+        }),
         // The task was deleted; its project remains.
         deletedTask: ev({ project_id: f.sub.id }),
         // Deleting a project clears project_id on its rows (model/cascade.ts):
@@ -708,7 +719,7 @@ describe('activity', () => {
       return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
     })
     const only = (...keys: string[]) => keys.map((key) => ids[key]).sort()
-    const shared = ['people', 'label', 'sub', 'task', 'survivingTask']
+    const shared = ['people', 'label', 'sub', 'task', 'statusMove', 'survivingTask']
 
     expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
     // user: leads f.meta, f.hidden and the team

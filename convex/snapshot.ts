@@ -37,6 +37,13 @@ const orgRowFor = (doc: Doc<'organizations'>, isAdmin: boolean): OrgRow => {
 // Rows about people, labels and the organization itself, not a project.
 const NON_PROJECT_ACTIVITY = new Set<ActivityTarget>(['user', 'org'])
 
+/* A project move written before related_project_id existed names a
+ * destination that cannot be checked (model/issues.ts moveIssueCore writes
+ * "to the <name> sub-project"; status and parent moves say "from" and
+ * "under"), so only admins receive it. */
+const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
+  ev.verb === 'moved' && ev.related_project_id === undefined && !!ev.detail?.startsWith('to the ')
+
 /* Members other than organization admins receive an activity row only if
  * they can access every project it names: the project it was filed under
  * and its related project, such as a move's destination. Seeing a parent
@@ -61,6 +68,7 @@ function memberSeesActivity(
   }
   if (ev.target_type === 'issue') {
     if (!a.workingSet.has(ev.target_id)) return false
+    if (isUnrecordedProjectMove(ev)) return false
     return ev.project_id === undefined || a.view.accessible(ev.project_id)
   }
   if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
