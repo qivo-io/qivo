@@ -141,10 +141,11 @@ from before the website moved into this repository cannot be released again.
 
 Vercel Instant Rollback changes only the frontend, leaves the Convex functions
 in place and stops Vercel from moving the domain to later deployments until
-the rollback is undone in the Vercel dashboard. Rolling back to a deployment
-from before the move works only while the old `qivo-site` project still
-serves `site-origin.qivo.io`, because those deployments fetch the website
-from there.
+the rollback is undone in the Vercel dashboard. Never use it to return
+production or staging to a deployment of a commit older than v0.1.5
+(`e758e51`). Those deployments fetch the website from Vercel projects that no
+longer exist, so the website and docs on `qivo.io` or `preview.qivo.io` would
+break.
 
 ## Environment configuration
 
@@ -158,15 +159,10 @@ Values are deployment identifiers and public origins, not credentials.
 | `VERCEL_APP_PROJECT_ID` | Application project for this environment |
 | `VERCEL_DEMO_PROJECT_ID` | Public demo project, production only |
 
-The corresponding environment secrets are `VERCEL_APP_TOKEN`,
-`VERCEL_DEMO_TOKEN` for production, and `VERCEL_APP_PROTECTION_BYPASS` for
-protected staging health checks. Each Vercel token has access to one project.
-Do not replace them with a team-wide token.
-
-The former `QIVO_SITE_REVISION`, `VERCEL_SITE_PROJECT_ID` and
-`VERCEL_SITE_TOKEN` settings belonged to the separate website project and are
-no longer read. Release tags from before the move still pass them, and the
-deployment script ignores them.
+Both environments have the secret `VERCEL_APP_TOKEN`. Production also has
+`VERCEL_DEMO_TOKEN`, and staging has `VERCEL_APP_PROTECTION_BYPASS` so health
+checks can pass its Vercel Deployment Protection. Each Vercel token has access
+to one project. Do not replace them with a team-wide token.
 
 Each stable Vercel application project sets `QIVO_ENVIRONMENT`,
 `QIVO_APP_ORIGIN`, `QIVO_CONVEX_DEPLOYMENT` and its matching
