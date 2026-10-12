@@ -40,19 +40,28 @@ export function sourceModules(convexDir) {
   return modules.sort()
 }
 
-/** Module paths the committed api.d.ts imports. */
+/** Module paths the committed api.d.ts names, once as an import and once as
+    an entry of the fullApi type map. A module counts as listed only when it
+    appears in both. */
 export function generatedModules(apiDts) {
-  return [...apiDts.matchAll(/^import type \* as \w+ from "\.\.\/(.+)\.js";$/gm)]
-    .map((m) => m[1])
-    .sort()
+  const imports = [...apiDts.matchAll(/^import type \* as \w+ from "\.\.\/(.+)\.js";$/gm)]
+  // codegen quotes keys that are not plain identifiers ("lib/review")
+  const entries = [...apiDts.matchAll(/^ {2}(?:"([^"]+)"|(\w+)): typeof \w+;$/gm)]
+  return {
+    imports: imports.map((m) => m[1]).sort(),
+    entries: entries.map((m) => m[1] ?? m[2]).sort(),
+  }
 }
 
 /** Differences between the source tree and the committed api.d.ts. */
 export function apiModuleDrift(convexDir) {
   const source = sourceModules(convexDir)
-  const listed = generatedModules(readFileSync(join(convexDir, '_generated/api.d.ts'), 'utf8'))
+  const { imports, entries } = generatedModules(
+    readFileSync(join(convexDir, '_generated/api.d.ts'), 'utf8'),
+  )
+  const named = [...new Set([...imports, ...entries])]
   return {
-    missing: source.filter((m) => !listed.includes(m)),
-    extra: listed.filter((m) => !source.includes(m)),
+    missing: source.filter((m) => !imports.includes(m) || !entries.includes(m)),
+    extra: named.filter((m) => !source.includes(m)).sort(),
   }
 }
