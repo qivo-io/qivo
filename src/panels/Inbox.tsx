@@ -10,6 +10,7 @@ import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { DropdownChevron } from '@/components/ui/select'
 import {
   HoverTooltip,
   Tooltip,
@@ -557,9 +558,15 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               <Popover
                 width={160}
                 button={(toggle) => (
-                  <Button type="button" variant="quiet" aria-label="Message order" onClick={toggle}>
+                  <Button
+                    type="button"
+                    variant="quiet"
+                    aria-label="Message order"
+                    onClick={toggle}
+                    className="pr-2 has-[>svg]:pr-2"
+                  >
                     {sort === 'new' ? 'Newest first' : 'Oldest first'}
-                    <Icon name="chevronDown" size={12} color="var(--text-3)" />
+                    <DropdownChevron />
                   </Button>
                 )}
               >
@@ -576,8 +583,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                         }}
                       >
                         {order === 'new' ? 'Newest first' : 'Oldest first'}
-                        <span className="flex-1" />
-                        {sort === order && <Icon name="check" size={16} />}
                       </MenuItem>
                     ))}
                   </>
@@ -608,11 +613,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                     <>
                       <MenuItem active={sort === 'new'} onClick={() => setSort('new')}>
                         Newest first
-                        {sort === 'new' && <Icon name="check" size={16} />}
                       </MenuItem>
                       <MenuItem active={sort === 'old'} onClick={() => setSort('old')}>
                         Oldest first
-                        {sort === 'old' && <Icon name="check" size={16} />}
                       </MenuItem>
                       <MenuDivider />
                     </>
@@ -620,8 +623,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                   <MenuItem active={unreadOnly} onClick={() => setUnreadOnly((v) => !v)}>
                     <Icon name="dot" size={13} />
                     Unread only
-                    <div className="[flex:1]" />
-                    {unreadOnly && <Icon name="check" size={13} />}
                   </MenuItem>
                   <MenuItem
                     data-inbox-show-snoozed
@@ -630,16 +631,12 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                   >
                     <Icon name="clockFading" size={13} />
                     Show snoozed
-                    <div className="[flex:1]" />
-                    {showSnoozed && <Icon name="check" size={13} />}
                   </MenuItem>
                   <MenuDivider />
                   {Object.keys(KIND_LABELS).map((k) => (
                     <MenuItem key={k} active={kinds.includes(k)} onClick={() => toggleKind(k)}>
                       <Icon name={KIND_ICONS[k]} size={13} />
                       {KIND_LABELS[k]}
-                      <div className="[flex:1]" />
-                      {kinds.includes(k) && <Icon name="check" size={13} />}
                     </MenuItem>
                   ))}
                   {mobile && perm === 'default' && (

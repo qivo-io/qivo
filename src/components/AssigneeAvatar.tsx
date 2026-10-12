@@ -7,6 +7,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import { DropdownChevron } from '@/components/ui/select'
 import { type IssueVM, P } from '@/store/planner'
 
 export type OwnerField = 'assignee' | 'reviewer'
@@ -69,11 +70,14 @@ export function OwnerPickList({
                 onPick?.(user.id)
               })
             }}
-            className="gap-2 py-2"
+            // the chosen person reads like a chosen dropdown row (deviation #326)
+            className={current === user.id ? 'gap-2 py-2 font-semibold' : 'gap-2 py-2'}
           >
             <Avatar id={user.id} size={28} />
             <span className="min-w-0 flex-1 truncate">{user.name}</span>
-            {current === user.id && <Icon name="check" size={16} />}
+            {current === user.id && (
+              <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />
+            )}
           </CommandItem>
         ))}
       </CommandList>
@@ -132,7 +136,7 @@ export function AssigneeAvatar({
     ) : variant === 'chevron' ? (
       <>
         <Avatar id={who} size={20} />
-        <Icon name="chevronDown" size={12} color="var(--text-3)" />
+        <DropdownChevron />
       </>
     ) : (
       <>
@@ -144,7 +148,7 @@ export function AssigneeAvatar({
           </span>
         )}
         <span className="text-sm text-text-2">{shown === 'reviewer' ? 'Reviewer' : 'Assign'}</span>
-        <Icon name="chevronDown" size={13} color="var(--text-3)" />
+        <DropdownChevron />
       </>
     )
   const faceClass =

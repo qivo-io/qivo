@@ -208,7 +208,7 @@ export function OrgLabelsPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addLabel()
                 }}
-                className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1]"
+                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
               />
               <Button
                 type="button"

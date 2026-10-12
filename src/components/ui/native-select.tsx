@@ -4,6 +4,42 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { isSelectInteractionKey } from '@/lib/focusVisibility'
 import { cn } from '@/lib/utils'
 
+const customizable = typeof CSS !== 'undefined' && CSS.supports('appearance', 'base-select')
+const labelKeys = new WeakMap<HTMLSelectElement, string>()
+
+/* Where the select is customizable (tokens.css), give its closed field a label
+   the page can style. The browser's own label cannot be clipped, so a long
+   value would wrap onto a second line; this one ends in an ellipsis, as
+   FieldSelect's does. Hidden copies of every option's text share its grid
+   cell, so the field stays as wide as its widest option, as a classic select
+   is, instead of resizing with each pick. It is built outside React, which has
+   no <selectedcontent> yet and would warn about a <button> in a <select>.
+   React only inserts and removes its own options around it. */
+function syncSelectLabel(select: HTMLSelectElement) {
+  let button = select.querySelector<HTMLButtonElement>(':scope > button[data-select-label]')
+  if (!button) {
+    button = document.createElement('button')
+    button.type = 'button'
+    button.dataset.selectLabel = ''
+    const value = document.createElement('selectedcontent')
+    value.dataset.selectValue = ''
+    button.append(value)
+    select.prepend(button)
+  }
+  const labels = Array.from(select.options, (option) => option.label)
+  const key = labels.join('\n')
+  if (labelKeys.get(select) === key) return
+  labelKeys.set(select, key)
+  for (const sizer of button.querySelectorAll('[data-select-sizer]')) sizer.remove()
+  for (const label of labels) {
+    const sizer = document.createElement('span')
+    sizer.dataset.selectSizer = ''
+    sizer.setAttribute('aria-hidden', 'true')
+    sizer.textContent = label
+    button.append(sizer)
+  }
+}
+
 const NativeSelect = React.forwardRef<
   HTMLSelectElement,
   Omit<React.ComponentProps<'select'>, 'size'> & { size?: 'sm' | 'default' }
@@ -13,19 +49,28 @@ const NativeSelect = React.forwardRef<
 ) {
   // A pick made with the pointer ends the interaction: the browser keeps a
   // <select> focused (and so lit, see the field rule in tokens.css) after its
-  // popup closes, unlike a date box whose calendar closes or a text box you
-  // click out of — so let go of focus then. Changing the value from the
-  // keyboard (arrows, without the popup) keeps focus, as it must.
+  // list closes, unlike a date box whose calendar closes or a text box you
+  // click out of, so let go of focus then. Changing the value from the
+  // keyboard keeps focus, as it must.
   const pointer = React.useRef(false)
+  const select = React.useRef<HTMLSelectElement | null>(null)
+  React.useImperativeHandle(ref, () => select.current as HTMLSelectElement)
+  // every render: the options arrive as children and may have changed
+  React.useLayoutEffect(() => {
+    if (customizable && select.current) syncSelectLabel(select.current)
+  })
   return (
     <HoverTooltip content={title}>
       <select
-        ref={ref}
+        ref={select}
         data-slot="native-select"
         data-size={size}
         className={cn(
-          // the active look (focus) is the one field rule in tokens.css
-          'min-w-0 rounded-md border border-input bg-transparent text-foreground px-2.5 py-0 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50',
+          // The active look (focus, open list) is the one field rule in
+          // tokens.css. The padding, chevron and open list are the dropdown
+          // face there too (deviation #326): a call site sets width, fill and
+          // type size, never horizontal padding.
+          'min-w-0 rounded-md border border-input bg-transparent text-foreground py-0 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50',
           'h-control',
           'aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40',
           className,
@@ -42,7 +87,14 @@ const NativeSelect = React.forwardRef<
         }}
         onChange={(e) => {
           onChange?.(e)
-          if (pointer.current) e.currentTarget.blur()
+          if (!pointer.current) return
+          const select = e.currentTarget
+          select.blur()
+          // A customizable select (tokens.css) hands focus back to itself as
+          // its list closes, after this event. Let go again once it has.
+          requestAnimationFrame(() => {
+            if (document.activeElement === select) select.blur()
+          })
         }}
         {...props}
       />

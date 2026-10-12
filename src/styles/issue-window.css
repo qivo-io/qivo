@@ -152,12 +152,15 @@
   min-height: 46px;
 }
 
+/* Reporter is read-only but sits in the Assignee and Reviewer column, so it
+   keeps their inset: 8px above and below the portrait, and the 10px every
+   dropdown starts its content at on the left (deviation #326). */
 .task-reporter {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 46px;
-  padding: 8px;
+  padding: 8px 8px 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface-1);

@@ -17,6 +17,22 @@ function SelectValue({ ...props }: React.ComponentProps<typeof SelectPrimitive.V
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 
+/* The one dropdown arrow (deviation #326): a 12px chevron in
+   --muted-foreground at half strength. Every control that opens a list of
+   choices ends with it, inside 8px of right padding, so on a bordered field it
+   sits 9px from the edge. A native select draws the same glyph in CSS
+   (tokens.css), so the two faces cannot drift apart. */
+function DropdownChevron({ className, ...props }: React.ComponentProps<typeof ChevronDownIcon>) {
+  return (
+    <ChevronDownIcon
+      aria-hidden="true"
+      data-slot="dropdown-chevron"
+      className={cn('size-3 shrink-0 text-muted-foreground opacity-50', className)}
+      {...props}
+    />
+  )
+}
+
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: 'sm' | 'default' }
@@ -28,8 +44,10 @@ const SelectTrigger = React.forwardRef<
         data-slot="select-trigger"
         data-size={size}
         className={cn(
-          // the active look (focus / menu open) is the one field rule in tokens.css
-          "flex w-fit items-center justify-between gap-2 rounded-md border border-input bg-transparent text-foreground px-2.5 py-0 text-base whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
+          // the active look (focus / menu open) is the one field rule in tokens.css;
+          // text starts 10px in and the chevron ends 9px from the edge, the
+          // dropdown face a native select draws in tokens.css (deviation #326)
+          "flex w-fit items-center justify-between gap-2 rounded-md border border-input bg-transparent text-foreground pl-2.5 pr-2 py-0 text-base whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
           'h-control',
           className,
         )}
@@ -37,7 +55,7 @@ const SelectTrigger = React.forwardRef<
       >
         {children}
         <SelectPrimitive.Icon asChild>
-          <ChevronDownIcon className="size-3 opacity-50" />
+          <DropdownChevron />
         </SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
     </HoverTooltip>
@@ -102,7 +120,7 @@ const SelectItem = React.forwardRef<
       ref={ref}
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-2 min-h-8 rounded-sm py-1 pr-8 pl-2 text-base has-[[data-slot=avatar]]:py-2 !outline-none select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "relative flex w-full cursor-default items-center gap-2 min-h-8 rounded-sm py-1 pr-8 pl-2 text-base data-[state=checked]:font-semibold has-[[data-slot=avatar]]:py-2 !outline-none select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className,
       )}
       {...props}
@@ -164,6 +182,7 @@ function SelectScrollDownButton({
 }
 
 export {
+  DropdownChevron,
   Select,
   SelectContent,
   SelectGroup,

@@ -31,7 +31,7 @@ import {
   type TeamAccessLevel,
 } from '../store/planner'
 
-const ctlClass = 'h-control w-full bg-surface-1 px-2.5 text-base font-sans'
+const ctlClass = 'h-control w-full bg-surface-1 text-base font-sans'
 
 function MField({
   label,

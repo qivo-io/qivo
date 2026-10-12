@@ -292,7 +292,7 @@ export function UserRoleSelect({
         else P.updateUser(user.id, { orgRole: v, active: true })
       }}
       style={{ opacity: lastAdmin ? 0.55 : 1 }}
-      className="h-control-sm w-[132px] shrink-0 bg-surface-1 px-1.5 text-sm font-sans"
+      className="h-control-sm w-[132px] shrink-0 bg-surface-1 text-sm font-sans"
     >
       {canBeAdmin && <option value="admin">Org admin</option>}
       <option value="user">Standard user</option>

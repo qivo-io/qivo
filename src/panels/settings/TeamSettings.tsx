@@ -60,7 +60,7 @@ export function TeamPage({
             <Input
               value={teamName}
               disabled
-              className="h-control bg-surface-1 px-[11px] text-base font-sans opacity-55"
+              className="h-control bg-surface-1 px-2.5 text-base font-sans opacity-55"
             />
           </SettingsField>
         )}
@@ -163,7 +163,7 @@ export function TeamPage({
               <NativeSelect
                 value={addUid}
                 onChange={(e) => setAddUid(e.target.value)}
-                className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1]"
+                className="h-control w-full bg-surface-1 text-base font-sans [flex:1]"
               >
                 <option value="">Add member…</option>
                 {addable.map((u) => (
@@ -297,7 +297,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addTeam()
                 }}
-                className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1]"
+                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
               />
               <Button type="button" disabled={!teamName.trim()} onClick={addTeam}>
                 <Icon name="plus" size={16} />

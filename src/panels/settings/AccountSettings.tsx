@@ -174,7 +174,7 @@ function RetentionField({ me }: { me: Pick<UserVM, 'messageRetentionDays'> }) {
               : `Read messages are removed after ${days(v)}`,
           )
         }}
-        className="h-control w-60 bg-surface-1 px-[11px] font-sans text-base"
+        className="h-control w-60 bg-surface-1 font-sans text-base"
       >
         {P.MESSAGE_RETENTION_DAYS.map((d: number) => (
           <option key={d} value={d}>
@@ -404,7 +404,7 @@ function McpAccessSection() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') create()
               }}
-              className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1]"
+              className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
             />
             <Button type="button" disabled={!name.trim() || busy} onClick={create}>
               <Icon name="plus" size={16} />

@@ -174,7 +174,7 @@ function AgentKeyPanel({
           onKeyDown={(e) => {
             if (e.key === 'Enter') mint()
           }}
-          className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1] [font-size:var(--fs-sm)]"
+          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1] [font-size:var(--fs-sm)]"
         />
         <Button type="button" data-new-agent-key={agent.id} disabled={busy} onClick={mint}>
           <Icon name="plus" size={16} />
@@ -480,7 +480,7 @@ export function OrgUsersPage({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addUser()
                 }}
-                className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1.2]"
+                className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1.2]"
               />
               {!agentMode && (
                 <Input
@@ -502,7 +502,7 @@ export function OrgUsersPage({
                     if (e.key === 'Enter') addUser()
                   }}
                   aria-invalid={emailBad}
-                  className="h-control flex-[1.4] bg-surface-1 px-[11px] text-base font-sans"
+                  className="h-control flex-[1.4] bg-surface-1 px-2.5 text-base font-sans"
                 />
               )}
               {/* Agents may be read-only but cannot be org admins. */}
@@ -511,7 +511,7 @@ export function OrgUsersPage({
                 aria-label="New user role"
                 value={addRole}
                 onChange={(e) => setAddRole(e.target.value as NewUserInput['orgRole'])}
-                className="h-control w-[132px] shrink-0 bg-surface-1 px-[11px] font-sans text-sm"
+                className="h-control w-[132px] shrink-0 bg-surface-1 font-sans text-sm"
               >
                 <option value="user">Standard user</option>
                 <option value="viewer">Viewer</option>

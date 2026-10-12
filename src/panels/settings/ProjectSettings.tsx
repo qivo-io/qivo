@@ -576,7 +576,7 @@ export function ProjectPage({
                 P.updateProject(proj.id, { reviewHours: h })
                 window.showToast?.(`Review time set to ${h} h`)
               }}
-              className="h-control w-15 bg-surface-1 px-[11px] text-base font-sans"
+              className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
             />
             <span className="text-base text-text-2">hours</span>
           </div>
@@ -587,7 +587,7 @@ export function ProjectPage({
             value={proj.lead || parentMeta?.lead || ''}
             disabled={!canManageUsers}
             onChange={(event) => P.setProjectAccess(proj.id, event.target.value, 'lead')}
-            className="h-control w-full bg-surface-1 px-[11px] text-base font-sans"
+            className="h-control w-full bg-surface-1 text-base font-sans"
           >
             {P.assigneesFor(proj.id).map((user) => (
               <option key={user.id} value={user.id}>
@@ -672,7 +672,7 @@ export function ProjectPage({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') e.currentTarget.blur()
                   }}
-                  className="h-control w-full bg-surface-1 px-[11px] text-base font-sans [flex:1]"
+                  className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
                 />
                 <Button
                   type="button"
