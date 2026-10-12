@@ -844,9 +844,14 @@ try {
     enterTarget.key
   )
     await fail('Enter from Search opened a different task than the selected result')
-  // One Escape closes the task window, even while a tooltip shows.
+  // One Escape closes the task window, even while a tooltip shows: the
+  // tooltip passes the press on once it has closed.
+  await pageA.locator('[data-task-scrim] [data-task-close]').hover()
+  const closeTip = tooltip.filter({ hasText: 'Close (esc)' })
+  await closeTip.waitFor({ state: 'visible', timeout: 5000 })
   await pageA.keyboard.press('Escape')
   await pageA.locator('[data-task-scrim]').waitFor({ state: 'detached', timeout: 5000 })
+  await closeTip.waitFor({ state: 'detached', timeout: 5000 })
   log('A: Search has clickable esc and preserves Home/End, arrows, Enter and one-press Escape')
 
   // Appearance applies immediately and persists. Blue, Dark and Light keep the
