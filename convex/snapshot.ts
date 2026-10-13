@@ -433,6 +433,9 @@ export const forMe = authedQuery({
       messages,
       readMessageCount,
       orgLoad,
+      // the server time of this delivery, so the client can tell messages
+      // created before it from newer ones without trusting its own clock
+      delivered_at: new Date().toISOString(),
     }
   },
 })

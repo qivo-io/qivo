@@ -73,6 +73,7 @@ function fixture(): Snapshot {
     attachments: [],
     orgLoad: [],
     readMessageCount: notifications.filter((notification) => notification.read).length,
+    delivered_at: '2026-09-15T08:00:00.000Z',
     messages: notifications.map(({ seat, task, read }) => ({
       id: crypto.randomUUID(),
       org_id: orgs[seat].id,
@@ -579,6 +580,7 @@ describe('snooze through the client store', () => {
   })
 
   it('a task that comes back into view brings its older unread messages without notifying', () => {
+    // the server stamps every delivery; messages up to the previous one are history
     const notes = () => (window as { __qivoNotes?: { title: string }[] }).__qivoNotes ?? []
     const org = snap.orgs[0]
     const seat = snap.profiles[0]
@@ -625,6 +627,50 @@ describe('snooze through the client store', () => {
     ]
     publish(structuredClone(snap))
     expect(notes().map((n) => n.title)).toEqual([expect.stringContaining('New task')])
+  })
+
+  it('judges new messages by the server delivery time, not the browser clock', () => {
+    const notes = () => (window as { __qivoNotes?: { title: string }[] }).__qivoNotes ?? []
+    const org = snap.orgs[0]
+    const task = crypto.randomUUID()
+    // the browser clock runs far ahead of the server
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2099-01-01T00:00:00.000Z'))
+    snap.issues = [
+      {
+        id: task,
+        org_id: org.id,
+        project_id: crypto.randomUUID(),
+        num: 9,
+        title: 'Brand new task',
+        description: '',
+        status: 'todo',
+        priority: 'medium',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    snap.messages = [
+      ...snap.messages,
+      {
+        id: crypto.randomUUID(),
+        org_id: org.id,
+        recipient_id: snap.profiles[0].id,
+        issue_id: task,
+        issue_title: 'Brand new task',
+        kind: 'change',
+        detail: 'Assigned to you',
+        // written after the previous delivery, which the server stamped
+        created_at: '2026-09-15T08:00:05.000Z',
+      },
+    ]
+    snap.delivered_at = '2026-09-15T08:00:06.000Z'
+    publish(structuredClone(snap))
+    vi.useRealTimers()
+    expect(notes().map((n) => n.title)).toEqual([expect.stringContaining('Brand new task')])
   })
 
   it('counts read rows like the server, leaving out read rows that are snoozed', () => {

@@ -157,8 +157,9 @@ The Inbox toolbar and context menu also offer:
 - **Remove all read notifications**, with the same scope. It preserves
   unread updates, including those on a task with older read messages.
 
-These actions also cover updates hidden because you lost access to their
-task. They leave tasks, comments and open drafts intact. The list's
+Each action is available while your inbox shows matching updates, and it then
+also covers updates hidden because you lost access to their task. These
+actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 
 **Snoozing.** In a row's menu, set the number beside **Hours** or **Days**, then

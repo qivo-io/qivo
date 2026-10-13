@@ -249,8 +249,8 @@ function adoptComments() {
    notification. adopt() calls this on every delivery, so the null-prime runs
    on the first one. */
 let announcedMessages: Map<string, string | undefined> | null = null // id → woke_at announced
-// when the previous snapshot arrived (client clock); older messages on a task
-// that newly enters the working set are history, not news
+// the server time of the previous snapshot; older messages on a task that
+// newly enters the working set are history, not news
 let lastDeliveryAt: string | null = null
 /* A restore reintroduces the task's historical inbox rows. Keep those rows
    from looking like new arrivals when the next snapshot admits the restored
@@ -4833,7 +4833,7 @@ function adopt(source: Snapshot) {
         announcedMessages.set(message.id, message.woke_at)
     }
   }
-  lastDeliveryAt = new Date().toISOString()
+  lastDeliveryAt = snap.delivered_at
   /* identity first — the snapshot says which roster rows are mine
      (myProfileIds), so the blend can be re-keyed on every delivery. The
      HOME pick mirrors the old boot: first non-guest seat, else the first
