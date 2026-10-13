@@ -522,8 +522,9 @@ describe('deleteTeamDeep', () => {
     const events = await collect(t, 'activity_events')
     const byId = new Map(events.map((e) => [e.id, e]))
     expect(byId.get(eTeam.id)).toBeDefined() // rows KEPT
-    expect(byId.get(eTeam.id)?.team_id).toBeUndefined()
-    expect(byId.get(eBoth.id)?.team_id).toBeUndefined()
+    // team references stay; membership rows of a deleted team reach admins only
+    expect(byId.get(eTeam.id)?.team_id).toBe(f.team.id)
+    expect(byId.get(eBoth.id)?.team_id).toBe(f.team.id)
     expect(byId.get(eBoth.id)?.project_id).toBe(f.sub.id)
     expect(byId.get(eControl.id)?.project_id).toBe(f.hidden.id)
 

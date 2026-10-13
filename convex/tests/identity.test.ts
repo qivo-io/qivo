@@ -64,6 +64,31 @@ const claim = (
 const reload = (on: T, seat: Doc<'profiles'>) =>
   on.run(async (ctx) => (await ctx.db.get(seat._id)) as Doc<'profiles'>)
 
+/* A team in org_id with the seat as a member (a leader by default). */
+const plantMembership = (on: T, org_id: string, profile_id: string, is_leader = true) =>
+  on.run(async (ctx) => {
+    const team_id = uuid()
+    await ctx.db.insert('teams', {
+      id: team_id,
+      org_id,
+      name: 'Crew',
+      stale_days: 14,
+      archive_days: 30,
+      track_delay_default: false,
+      created_at: NOW,
+    })
+    await ctx.db.insert('team_members', { team_id, profile_id, is_leader })
+    return team_id
+  })
+
+const membershipsOf = (on: T, profile_id: string) =>
+  on.run((ctx) =>
+    ctx.db
+      .query('team_members')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profile_id))
+      .collect(),
+  )
+
 /* A real login: a component user row plus an unexpired session, the two rows
  * getAuthUser reads. subject/sessionId mirror what the Convex JWT carries. */
 async function withLogin(on: T, email: string, emailVerified = true) {
@@ -156,6 +181,35 @@ describe('claimSeatsForLogin — the claim loop', () => {
     expect(seat.auth_user_id).toBe(LOGIN)
     expect(seat.org_role).toBe('guest')
     expect(seat.accepted_at).toBeDefined()
+  })
+
+  it('a seat demoted to guest at claim leaves every team, leadership included', async () => {
+    await plantSeat(t, {
+      org_id: f.org.id,
+      email: 'home@example.test',
+      auth_user_id: LOGIN,
+      accepted_at: NOW,
+    })
+    const org_id = uuid()
+    const waiting = await plantSeat(t, { org_id, email: EMAIL, created_at: DAY2 })
+    await plantMembership(t, org_id, waiting.id)
+    await plantMembership(t, org_id, waiting.id, false)
+    expect(await claim(t)).toBe(1)
+    expect((await reload(t, waiting)).org_role).toBe('guest')
+    expect(await membershipsOf(t, waiting.id)).toEqual([])
+    // other people's memberships are untouched
+    expect(await membershipsOf(t, f.user.id)).toHaveLength(1)
+  })
+
+  it('a home claim keeps its teams', async () => {
+    const org_id = uuid()
+    const waiting = await plantSeat(t, { org_id, email: EMAIL })
+    const team_id = await plantMembership(t, org_id, waiting.id)
+    expect(await claim(t)).toBe(1)
+    expect((await reload(t, waiting)).org_role).not.toBe('guest')
+    expect(await membershipsOf(t, waiting.id)).toEqual([
+      expect.objectContaining({ team_id, is_leader: true }),
+    ])
   })
 
   it('a waiting seat in an org where the login already sits is skipped — never two seats per (org, login)', async () => {
@@ -335,10 +389,14 @@ describe('acceptInvitation (0118)', () => {
       email: 'mine@example.test',
       auth_user_id: 'ba_accepting',
     })
+    const team_id = await plantMembership(t, f.org.id, seat.id)
     await caller().mutation(api.identity.acceptInvitation, { profile_id: seat.id })
     const accepted = await reload(t, seat)
     expect(accepted.accepted_at).toBeDefined()
     expect(accepted.org_role).toBe('user')
+    expect(await membershipsOf(t, seat.id)).toEqual([
+      expect.objectContaining({ team_id, is_leader: true }),
+    ])
   })
 
   it('re-runs the home check at accept time — a second non-guest acceptance demotes to guest', async () => {
@@ -353,10 +411,13 @@ describe('acceptInvitation (0118)', () => {
       email: 'mine@example.test',
       auth_user_id: 'ba_accepting',
     })
+    await plantMembership(t, f.otherOrg.id, pending.id)
     await caller().mutation(api.identity.acceptInvitation, { profile_id: pending.id })
     const accepted = await reload(t, pending)
     expect(accepted.accepted_at).toBeDefined()
     expect(accepted.org_role).toBe('guest')
+    // a guest is never a team member
+    expect(await membershipsOf(t, pending.id)).toEqual([])
   })
 
   it('an already-accepted seat returns silently, changing nothing', async () => {

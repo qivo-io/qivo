@@ -44,6 +44,27 @@ const NON_PROJECT_ACTIVITY = new Set<ActivityTarget>(['user', 'org'])
 const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
   ev.verb === 'moved' && ev.related_project_id === undefined && !!ev.detail?.startsWith('to the ')
 
+// profiles.ts writes these roster details with verbs team rows also use.
+const ROSTER_DETAILS = new Set([
+  'to the organization',
+  'to the organization as an agent',
+  'from the organization',
+])
+
+/* teams.ts writes 'added' (to <team>), 'removed' (from <team>), 'made' and
+ * 'demoted' with team_id. Deleting a team used to clear that id, so such a
+ * row without one may describe a deleted team, and only admins receive it. */
+const isUnscopedTeamRow = (ev: Doc<'activity_events'>): boolean => {
+  if (ev.target_type !== 'user' || ev.team_id !== undefined) return false
+  if (ev.verb === 'made' || ev.verb === 'demoted') return true
+  const detail = ev.detail ?? ''
+  if (ROSTER_DETAILS.has(detail)) return false
+  return (
+    (ev.verb === 'added' && detail.startsWith('to ')) ||
+    (ev.verb === 'removed' && detail.startsWith('from '))
+  )
+}
+
 /* Members other than organization admins receive an activity row only if
  * they can access every project it names: the project it was filed under
  * and its related project, such as a move's destination. Seeing a parent
@@ -53,7 +74,9 @@ const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
  * Deleting a project clears project_id on its rows (model/cascade.ts). A task
  * that moved out first keeps those rows for everyone who can access it; the
  * other project and milestone rows reach admins only. Team rows reach that
- * team's staff leaders; the remaining rows reach every member. */
+ * team's staff leaders. A deleted team's rows keep its id and reach admins
+ * only, as do older team rows whose id was cleared (isUnscopedTeamRow). The
+ * remaining rows reach every member. */
 function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
@@ -74,7 +97,7 @@ function memberSeesActivity(
   if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
   if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
   if (ev.team_id !== undefined) return isOrgStaff(a.me) && a.leaderOf.get(ev.team_id) === true
-  return true
+  return !isUnscopedTeamRow(ev)
 }
 
 // Unread first, then read_at ascending and created_at descending.

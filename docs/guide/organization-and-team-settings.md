@@ -77,7 +77,8 @@ Guests have a separate capacity value in each organization that invites them.
 
 Open **Settings → Organization → Teams → the team** to edit its name,
 membership, **Leader** checkboxes and planning hours. Organization admins and
-team leaders can manage the team. Members receive access to projects shared
+team leaders can manage the team. A team can have no leader, and organization
+admins still manage it. Members receive access to projects shared
 with their team ([Project access](./who-sees-what-the-access-model.md)). Team leadership alone does not grant project authority.
 
 ## Labels

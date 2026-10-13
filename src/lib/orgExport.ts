@@ -65,7 +65,9 @@ their related tables are task_links, task_labels, and task_attachments.
 
 Application id fields are UUIDs. References such as org_id, project_id, task_id,
 profile_id, and label_id refer to these application IDs in the corresponding
-tables. QN task numbers are organization-scoped; a task's num gives QN-<num>.
+tables. Activity events keep target_id, related_project_id and team_id after the
+task, project or team is deleted, so those values can name rows absent from the
+export. QN task numbers are organization-scoped; a task's num gives QN-<num>.
 The organization's next_task_num is its task-number counter. Task activity events
 use target_type "task" and target_id references the task's UUID.
 Description and comment content can contain att:<attachment UUID> image references;

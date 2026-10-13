@@ -398,6 +398,80 @@ describe('profiles.update — the admin door', () => {
     // role/active/teams narrate NOTHING — the whole test wrote zero events
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
+
+  it('a seat on a team becomes a guest only when the same patch leaves every team', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (id: string, patch: Record<string, unknown>) =>
+      as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
+    await update(f.viewer.id, { teams: [f.team.id] })
+    // a member and a leader both keep their role and their team
+    for (const p of [f.viewer, f.user]) {
+      await expectRefusal(
+        update(p.id, { org_role: 'guest' }),
+        'forbidden',
+        /^a guest is never a team member$/,
+      )
+      expect((await profileById(t, p.id))?.org_role).toBe(p.org_role)
+      expect(await membership(t, f.team.id, p.id)).not.toBeNull()
+    }
+    await expectRefusal(
+      update(f.user.id, { org_role: 'guest', teams: [f.team.id] }),
+      'forbidden',
+      /^a guest is never a team member$/,
+    )
+    // leaving every team in the same patch demotes; the team keeps running
+    await update(f.user.id, { org_role: 'guest', teams: [] })
+    expect((await profileById(t, f.user.id))?.org_role).toBe('guest')
+    expect(await membership(t, f.team.id, f.user.id)).toBeNull()
+    await as(t, f.admin).mutation(api.teams.setLeader, {
+      org_id: f.org.id,
+      team_id: f.team.id,
+      profile_id: f.admin.id,
+      is_leader: true,
+    })
+    expect((await membership(t, f.team.id, f.admin.id))?.is_leader).toBe(true)
+    // a seat on no team becomes a guest without naming teams
+    await update(f.viewer.id, { teams: [] })
+    await update(f.viewer.id, { org_role: 'guest' })
+    expect((await profileById(t, f.viewer.id))?.org_role).toBe('guest')
+    // a guest left with a stale membership can still be edited and cleaned up
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.guest.id,
+        is_leader: true,
+      }),
+    )
+    await update(f.guest.id, { name: 'Renamed guest' })
+    expect((await profileById(t, f.guest.id))?.name).toBe('Renamed guest')
+    await update(f.guest.id, { teams: [] })
+    expect(await membership(t, f.team.id, f.guest.id)).toBeNull()
+  })
+
+  it('leaving the guest role drops memberships kept from before', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (id: string, patch: Record<string, unknown>) =>
+      as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
+    const stale = () =>
+      t.run((ctx) =>
+        ctx.db.insert('team_members', {
+          team_id: f.team.id,
+          profile_id: f.guest.id,
+          is_leader: true,
+        }),
+      )
+    await stale()
+    await update(f.guest.id, { org_role: 'user' })
+    expect(await membership(t, f.team.id, f.guest.id)).toBeNull()
+    // back to guest, with a stale leader row again; a listed team arrives
+    // as a plain member, never as the old leadership
+    await update(f.guest.id, { org_role: 'guest' })
+    await stale()
+    await update(f.guest.id, { org_role: 'viewer', teams: [f.team.id] })
+    expect((await membership(t, f.team.id, f.guest.id))?.is_leader).toBe(false)
+  })
 })
 
 describe('profiles.remove', () => {
@@ -500,6 +574,31 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
       const r = await expectRefusal(set(f.user, target, 10), 'rule')
       expect(r.data.message).toBe(RIGHTS)
     }
+    // a leader row held by a guest or a viewer grants nothing
+    for (const caller of [f.guest, f.viewer]) {
+      await t.run((ctx) =>
+        ctx.db.insert('team_members', {
+          team_id: f.team.id,
+          profile_id: caller.id,
+          is_leader: true,
+        }),
+      )
+      const r = await expectRefusal(set(caller, f.admin.id, 10), 'rule')
+      expect(r.data.message).toBe(RIGHTS)
+    }
+    expect((await profileById(t, f.admin.id))?.plannable_hours).toBe(20)
+    // a guest is never a team member, so a stale row gives a leader no rights
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.guest.id,
+        is_leader: false,
+      }),
+    )
+    const overGuest = await expectRefusal(set(f.user, f.guest.id, 10), 'rule')
+    expect(overGuest.data.message).toBe(RIGHTS)
+    await set(f.admin, f.guest.id, 12)
+    expect((await profileById(t, f.guest.id))?.plannable_hours).toBe(12)
     // the agent check sits AFTER rights: only someone entitled reads it
     const agent = await expectRefusal(set(f.admin, f.agent.id, 10), 'rule')
     expect(agent.data.message).toBe('an agent has no plannable week — its capacity is unbounded')
@@ -819,6 +918,38 @@ describe('teams membership — the three verbs', () => {
     })
     expect(events[2]).toMatchObject({ detail: 'from leader of Hardware' })
   })
+
+  it('setLeader: a guest with a stale membership is never promoted, and can be demoted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lead = (is_leader: boolean) =>
+      as(t, f.admin).mutation(api.teams.setLeader, {
+        org_id: f.org.id,
+        team_id: f.team.id,
+        profile_id: f.guest.id,
+        is_leader,
+      })
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.guest.id,
+        is_leader: false,
+      }),
+    )
+    await expectRefusal(lead(true), 'forbidden', /^a guest is never a team member$/)
+    expect((await membership(t, f.team.id, f.guest.id))?.is_leader).toBe(false)
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('team_members')
+        .withIndex('by_team_profile', (q) =>
+          q.eq('team_id', f.team.id).eq('profile_id', f.guest.id),
+        )
+        .unique()
+      await ctx.db.patch(row!._id, { is_leader: true })
+    })
+    await lead(false)
+    expect((await membership(t, f.team.id, f.guest.id))?.is_leader).toBe(false)
+  })
 })
 
 describe('teams.deleteDeep', () => {
@@ -921,12 +1052,14 @@ describe('teams.deleteDeep', () => {
     expect(left.pairs).toHaveLength(1)
     expect(left.label).not.toBeNull() // labels are org-level and SURVIVE
     expect(await messagesFor(t, f.admin.id, issue.id)).toHaveLength(1)
-    // history survives its subjects: same rows, team references nulled and
+    // History survives its subjects: same rows. Team references stay, so
+    // the deleted team's history reaches admins only (snapshot.ts), and
     // project references remain valid because those projects remain.
     const after = await activityFor(t, f.org.id)
     expect(after).toHaveLength(before.length) // deleteDeep narrates nothing
+    expect(after.some((e) => e.verb === 'added' && e.team_id === f.team.id)).toBe(true)
     for (const e of after) {
-      expect(e.team_id).toBeUndefined()
+      expect(e.team_id === undefined || e.team_id === f.team.id).toBe(true)
       if (e.project_id !== undefined) {
         expect([f.meta.id, f.sub.id, f.sub2.id, f.hidden.id]).toContain(e.project_id)
       }

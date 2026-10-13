@@ -238,7 +238,9 @@ export const create = adminMutation({
 /* ----------------------------------------------------------------- update
  * P.updateUser minus plannableHours (its own fn below) — admin only. Guard
  * order: agent shape → last-admin → viewer-leads-nothing →
- * name → email → teams fences; then the writes. Role, active,
+ * name → email → teams fences; then the writes. Becoming a guest, or
+ * changing a guest's teams, must leave no team, and leaving the guest role
+ * drops memberships kept from before. Role, active,
  * email and the teams diff narrate NOTHING; a real name change writes the
  * profiles_name_narrate row (ONE row — the admin's authority stops here). */
 export const update = adminMutation({
@@ -303,12 +305,13 @@ export const update = adminMutation({
           `${effectiveName} leads ${led.length} project(s) — hand those over before making them a viewer`,
         )
       }
+      // a guest's memberships are stale and dropped below, so they lead nothing
       let teamsLed = 0
       const memberships = ctx.db
         .query('team_members')
         .withIndex('by_profile', (q) => q.eq('profile_id', row.id))
       for await (const tm of memberships) {
-        if (tm.is_leader) teamsLed += 1
+        if (tm.is_leader && row.org_role !== 'guest') teamsLed += 1
       }
       if (teamsLed > 0) {
         throw rule(
@@ -349,21 +352,31 @@ export const update = adminMutation({
     // asymmetry)
     let dels: Doc<'team_members'>[] = []
     const adds: Doc<'teams'>[] = []
-    if (patch.teams !== undefined) {
-      const next = new Set(patch.teams)
+    const becomesGuest = newRole === 'guest' && row.org_role !== 'guest'
+    const leavesGuest = row.org_role === 'guest' && newRole !== 'guest'
+    // An unrelated edit to a guest that still has a stale membership skips
+    // this block, so it is never refused.
+    if (patch.teams !== undefined || becomesGuest || leavesGuest) {
       const mine = await ctx.db
         .query('team_members')
         .withIndex('by_profile', (q) => q.eq('profile_id', row.id))
         .collect()
-      const held = new Set(mine.map((m) => m.team_id))
-      dels = mine.filter((m) => !next.has(m.team_id))
+      // A guest's memberships are stale, so they never carry over: leaving
+      // the guest role starts from no team, and listed teams arrive as plain
+      // members.
+      const kept = leavesGuest ? [] : mine
+      const held = new Set(kept.map((m) => m.team_id))
+      const next = patch.teams === undefined ? held : new Set(patch.teams)
+      dels = mine.filter((m) => !held.has(m.team_id) || !next.has(m.team_id))
       for (const tid of next) {
         if (held.has(tid)) continue
         const team = await byId(ctx, 'teams', tid)
         if (team === null || team.org_id !== row.org_id) throw notFound('team not found')
         adds.push(team)
       }
-      if (adds.length > 0 && newRole === 'guest') throw forbidden('a guest is never a team member')
+      // A guest is never a team member. Sending teams: [] with the role
+      // change drops them.
+      if (newRole === 'guest' && next.size > 0) throw forbidden('a guest is never a team member')
     }
 
     if (Object.keys(upd).length > 0) await ctx.db.patch(row._id, upd)

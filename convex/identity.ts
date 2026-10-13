@@ -26,6 +26,7 @@ import {
   createStarterLabels,
   createStarterTeam,
   generateSlug,
+  leaveAllTeams,
   nameInitials,
   newOrgDefaults,
   newUuid,
@@ -76,6 +77,8 @@ export async function claimSeatsForLogin(
       accepted_at: new Date().toISOString(),
       ...(role === seat.org_role ? {} : { org_role: role }),
     })
+    // Guests never belong to teams; nobody is present to refuse a sign-in.
+    if (role === 'guest') await leaveAllTeams(ctx, seat.id)
     adopted += 1
     changedOrgId = seat.org_id
     /* Bootstrap (0002): an org whose admins hold no login yet makes its first
@@ -219,11 +222,14 @@ export const acceptInvitation = authedMutation({
     const hasHome = mine.some(
       (p) => p._id !== seat._id && p.org_role !== 'guest' && p.accepted_at !== undefined,
     )
+    const role = seat.org_role !== 'guest' && hasHome ? 'guest' : seat.org_role
     await ctx.db.patch(seat._id, {
       accepted_at: new Date().toISOString(),
-      ...(seat.org_role !== 'guest' && hasHome ? { org_role: 'guest' as const } : {}),
+      ...(role === seat.org_role ? {} : { org_role: role }),
     })
-    if (seat.org_role !== 'guest' && hasHome) {
+    // Guests never belong to teams.
+    if (role === 'guest') await leaveAllTeams(ctx, seat.id)
+    if (role !== seat.org_role) {
       await markBillingMembershipChanged(
         ctx,
         seat.org_id,
