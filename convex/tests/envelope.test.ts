@@ -255,7 +255,7 @@ describe('issue scheduling envelope', () => {
       expect(r.data.message).toBe('parent task not found')
     }
     expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
-    // seeing the parent without Edit is not enough: attaching changes it
+    // seeing the parent without Edit is not enough, because attaching changes it
     await t.run((ctx) =>
       ctx.db.insert('project_access', {
         project_id: hiddenSub.id,
@@ -474,6 +474,38 @@ describe('issue scheduling envelope', () => {
     )
     for (const id of [root.id, kid.id]) {
       expect((await issueRow(t, id)).archived_at).toBeUndefined()
+    }
+
+    // restore: an archived parent the agent cannot edit refuses on both
+    const hiddenTop = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenTop.id,
+    })
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: hiddenTop.id })
+    const RESTORE = /^restoring this task would change a parent task in a project you cannot edit$/
+    await expectRefusal(
+      t.mutation(internal.machine.rest.updateIssue, {
+        callerId: f.agent.id,
+        keyName: 'drive',
+        ref: child.id,
+        body: JSON.stringify({ archived: false }),
+      }),
+      'rule',
+      RESTORE,
+    )
+    await expectRefusal(
+      t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: f.agent.id,
+        ref: child.id,
+        archived: false,
+      }),
+      'rule',
+      RESTORE,
+    )
+    for (const id of [child.id, hiddenTop.id]) {
+      expect((await issueRow(t, id)).archived_at).toBeDefined()
     }
   })
 })

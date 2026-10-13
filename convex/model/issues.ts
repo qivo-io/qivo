@@ -1199,8 +1199,8 @@ async function archiveSubtree(
   }
 }
 
-/* The 'archived' row names no subtask count: subtasks can sit in projects
- * some readers of the root cannot access. */
+/* The 'archived' row names no subtask count, because subtasks can sit in
+ * projects some readers of the root cannot access. */
 export async function archiveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },

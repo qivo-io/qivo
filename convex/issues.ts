@@ -12,7 +12,11 @@
  *   (the RLS 0-row successor — the client shows its fixed permission toast);
  * - a task or project the caller only REFERENCES (a parent, a link's other
  *   end, a move's destination) answers exactly like a missing one when the
- *   caller cannot see it, so no answer describes it;
+ *   caller cannot see it, so no answer describes it. One accepted exception
+ *   is restore: it is refused when it would change a parent the caller
+ *   cannot edit, so its outcome can tell whether such a parent is archived
+ *   or holds its own hours. Refusing every restore under such a parent would
+ *   stop people restoring their own task;
  * - `rule` sentences come out of the model layer verbatim.
  * Write level for issues/links is has_project_level 'user' — the 0003
  * policies' 'member', renamed by 0013.

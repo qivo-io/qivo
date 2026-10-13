@@ -711,7 +711,6 @@ function ArchiveIssueModal({
   const sub = P.progressOf(it) // whole subtree — the cascade takes all of it
   const unfinished = sub.total - sub.done
   const rootGroup = P.isGroup(it)
-  const canSubmit = reason.trim().length > 0
   // archiving changes every active subtask, so the server refuses when one is
   // in a project this person cannot edit
   // the subtree's issues, listed so it's plain what the cascade takes along
@@ -738,10 +737,12 @@ function ArchiveIssueModal({
       (a, b) => Number(String(a.key).split('-')[1]) - Number(String(b.key).split('-')[1]),
     )
   }
-  const refusal = sub.unknown
-    ? ' If any of them is in a project you cannot edit, the archive is refused.'
-    : subIssues.some((si) => !P.canWrite(si.project))
-      ? ' Some are in a project you cannot edit, so the archive will be refused.'
+  const readOnlySub = subIssues.some((si) => !P.canWrite(si.project))
+  const canSubmit = reason.trim().length > 0 && !readOnlySub
+  const refusal = readOnlySub
+    ? ' Some are in a project you cannot edit, so you cannot archive it.'
+    : sub.unknown
+      ? ' If any of them is in a project you cannot edit, the archive is refused.'
       : ''
   return (
     <ModalShell
