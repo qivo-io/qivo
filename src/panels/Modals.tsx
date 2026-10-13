@@ -719,7 +719,8 @@ function MoveIssueModal({
    already a Viewer leaves only the reassignment. The lists are taken when
    the window opens, so a choice applies only to the tasks the person read;
    if they or the chosen person's eligibility changed meanwhile, the window
-   shows the new lists and asks again. */
+   shows the new lists and asks again. It stays open, and keeps the access
+   list behind it out of reach, until the removal has finished saving. */
 const NOBODY = '__nobody__'
 function AccessRemovalModal({
   projectId,
@@ -736,6 +737,7 @@ function AccessRemovalModal({
   }
   const [{ people, items, choices }, setView] = useStateM(read)
   const [changed, setChanged] = useStateM(false)
+  const [saving, setSaving] = useStateM(false)
   const [canKeep] = useStateM(
     () => !('userId' in change && P.project(projectId)?.access?.[change.userId] === 'viewer'),
   )
@@ -757,7 +759,12 @@ function AccessRemovalModal({
     names.length === 1
       ? `${names[0].split(' ')[0]} keeps the ${tasks} and can see ${whole}, but can't change anything in it, including these tasks.`
       : `They keep their tasks and can see ${whole}, but can't change anything in it, including these tasks.`
+  const finish = (removal: Promise<boolean>) => {
+    setSaving(true)
+    void removal.then(onClose)
+  }
   const submit = () => {
+    if (saving) return
     const now = read()
     const key = (list: Holder[]) =>
       list
@@ -768,8 +775,7 @@ function AccessRemovalModal({
     if (lost || key(now.items) !== key(items)) {
       // nobody loses sight of anything any more: the plain removal applies
       if (!now.items.length) {
-        void P.removeAccess(projectId, change, { to: null }, [])
-        onClose()
+        finish(P.removeAccess(projectId, change, { to: null }, []))
         return
       }
       setView(now)
@@ -777,13 +783,14 @@ function AccessRemovalModal({
       if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
       return
     }
-    void P.removeAccess(
-      projectId,
-      change,
-      keep ? { keep: true } : { to: to === NOBODY ? null : to },
-      items,
+    finish(
+      P.removeAccess(
+        projectId,
+        change,
+        keep ? { keep: true } : { to: to === NOBODY ? null : to },
+        items,
+      ),
     )
-    onClose()
   }
   const option = (selected: boolean) =>
     cn(
@@ -794,10 +801,10 @@ function AccessRemovalModal({
     <ModalShell
       icon="warning"
       title={team ? `Remove the ${team.name} team?` : `Remove ${names[0]}?`}
-      onClose={onClose}
+      onClose={saving ? () => {} : onClose}
       onSubmit={submit}
-      canSubmit
-      submitLabel={keep ? 'Change to Viewer' : 'Reassign and remove'}
+      canSubmit={!saving}
+      submitLabel={saving ? 'Saving…' : keep ? 'Change to Viewer' : 'Reassign and remove'}
       width={500}
     >
       <div data-access-removal className="flex flex-col gap-3">
