@@ -681,7 +681,7 @@ describe('activity', () => {
     await joinTeam(teamMember.id, false)
     const ids = await t.run(async (ctx) => {
       const rows = {
-        people: ev({ target_type: 'user', target_id: f.viewer.id, verb: 'added' }),
+        people: ev({ target_type: 'user', target_id: f.viewer.id, verb: 'renamed' }),
         label: ev({ target_type: 'org', target_id: uuid(), verb: 'created label' }),
         team: ev({ team_id: f.team.id, target_type: 'user', target_id: f.viewer.id }),
         parent: ev({ project_id: f.meta.id, target_type: 'project', target_id: f.meta.id }),
@@ -725,7 +725,8 @@ describe('activity', () => {
           verb: 'demoted',
           detail: 'from leader of Hardware',
         }),
-        // Roster rows share those verbs and stay with every member.
+        // Roster rows share those verbs and may be a deleted team named "the
+        // organization", so they reach admins only too.
         rosterAdded: ev({ target_type: 'user', verb: 'added', detail: 'to the organization' }),
         rosterAgent: ev({
           target_type: 'user',
@@ -743,18 +744,7 @@ describe('activity', () => {
       return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
     })
     const only = (...keys: string[]) => keys.map((key) => ids[key]).sort()
-    const shared = [
-      'people',
-      'label',
-      'sub',
-      'task',
-      'statusMove',
-      'survivingTask',
-      'rosterAdded',
-      'rosterAgent',
-      'rosterRemoved',
-      'renamed',
-    ]
+    const shared = ['people', 'label', 'sub', 'task', 'statusMove', 'survivingTask', 'renamed']
 
     expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
     // user: leads f.meta, f.hidden and the team
