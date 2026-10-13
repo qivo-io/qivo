@@ -112,7 +112,8 @@ task's start week. Arrows update while you drag.
 **Auto-move** shifts blocked tasks to start after their blockers, including
 chains of dependent tasks. It moves a task with subtasks by moving its
 subtasks. It never moves Done or Backlog tasks, or tasks you cannot edit,
-and leaves their conflicts in red. They still count as blockers. Cycles remain unresolved with red arrows, so you must remove or change
+though they still count as blockers. A conflict stays red when fixing it
+would mean moving one of them. Cycles remain unresolved with red arrows, so you must remove or change
 those links.
 
 ## Estimates. Refresh the numbers before you plan
