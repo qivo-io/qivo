@@ -101,8 +101,9 @@ async function leadsTeam(
  * Team leadership never confers project authority. */
 function isProjectLead(me: Doc<'profiles'>, project: Doc<'projects'>, root: Doc<'projects'>) {
   // Guests may lead a project they were explicitly invited to; viewers and
-  // unknown future roles cannot. Organization staff is still required for
-  // creating a new top-level project and for team administration.
+  // unknown future roles cannot. Creating a new top-level project follows the
+  // organization's project_creators setting (lib/projectCreators.ts), and
+  // team administration still requires organization staff.
   const canLead = me.org_role === 'admin' || me.org_role === 'user' || me.org_role === 'guest'
   return canLead && (project.lead_id ?? root.lead_id) === me.id
 }

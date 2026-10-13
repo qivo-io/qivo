@@ -77,6 +77,9 @@ export async function writeNorthstarWork(
     name: data.organization.name,
     ...orgDefaults,
     gravatar_avatars: false,
+    // Not a default (missing means 'users'), so clear it by hand: a reset
+    // must not keep the setting from interactive use.
+    project_creators: undefined,
     next_issue_num: data.issues.length,
     activity_count: data.issues.length,
     next_project_num: data.projects.length,
@@ -113,6 +116,8 @@ export async function writeNorthstarWork(
       sync_at:
         p.syncDay === undefined ? undefined : marketingInstant(anchor, p.syncDay, DEMO_SYNC_TIME),
       sync_since: undefined,
+      // Nor may a reset keep a project-creation right granted in the demo.
+      can_create_projects: undefined,
     })
   }
   // The notify fan-outs read roles, so they get the profiles as patched.

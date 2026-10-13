@@ -72,6 +72,7 @@ import type * as lib_panoramaFilename from "../lib/panoramaFilename.js";
 import type * as lib_panoramaImage from "../lib/panoramaImage.js";
 import type * as lib_panoramaWeeks from "../lib/panoramaWeeks.js";
 import type * as lib_polar from "../lib/polar.js";
+import type * as lib_projectCreators from "../lib/projectCreators.js";
 import type * as lib_projectKeys from "../lib/projectKeys.js";
 import type * as lib_projectLimits from "../lib/projectLimits.js";
 import type * as lib_review from "../lib/review.js";
@@ -198,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   "lib/panoramaImage": typeof lib_panoramaImage;
   "lib/panoramaWeeks": typeof lib_panoramaWeeks;
   "lib/polar": typeof lib_polar;
+  "lib/projectCreators": typeof lib_projectCreators;
   "lib/projectKeys": typeof lib_projectKeys;
   "lib/projectLimits": typeof lib_projectLimits;
   "lib/review": typeof lib_review;

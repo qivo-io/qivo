@@ -1,4 +1,4 @@
-/* The twelve closed value sets the schema and the wire share.
+/* The thirteen closed value sets the schema and the wire share.
  * Each exports the `as const` member list, a literals() validator for
  * schema.ts / args validators, and the TS union type. */
 
@@ -57,5 +57,10 @@ export type AppearanceMode = (typeof APPEARANCE_MODES)[number]
 export const IMAGE_SOURCES = ['daily', 'custom', 'none'] as const
 export const vImageSource = literals(...IMAGE_SOURCES)
 export type ImageSource = (typeof IMAGE_SOURCES)[number]
+
+/* Who may create top-level projects besides org admins (lib/projectCreators.ts). */
+export const PROJECT_CREATORS = ['admins', 'users', 'selected'] as const
+export const vProjectCreators = literals(...PROJECT_CREATORS)
+export type ProjectCreators = (typeof PROJECT_CREATORS)[number]
 
 export const LEVEL_RANK: Record<AccessLevel, number> = { admin: 3, lead: 3, user: 2, viewer: 1 }

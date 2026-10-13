@@ -98,10 +98,11 @@ export async function claimSeatsForLogin(
     // one HOME seat per login: a second non-guest adoption becomes a guest seat
     const hasHome = mine.some((p) => p.org_role !== 'guest')
     const role = seat.org_role !== 'guest' && hasHome ? 'guest' : seat.org_role
+    // A role change clears the project-creation right (profiles.update).
     await ctx.db.patch(seat._id, {
       auth_user_id: userId,
       accepted_at: new Date().toISOString(),
-      ...(role === seat.org_role ? {} : { org_role: role }),
+      ...(role === seat.org_role ? {} : { org_role: role, can_create_projects: undefined }),
     })
     // Guests never belong to teams; nobody is present to refuse a sign-in.
     if (role === 'guest') await leaveAllTeams(ctx, seat.id)
@@ -122,7 +123,7 @@ export async function claimSeatsForLogin(
       .withIndex('by_org', (q) => q.eq('org_id', seat.org_id))
       .collect()
     if (!orgSeats.some((p) => p._id !== seat._id && countsAsAdmin(p))) {
-      await ctx.db.patch(seat._id, { org_role: 'admin' })
+      await ctx.db.patch(seat._id, { org_role: 'admin', can_create_projects: undefined })
     }
   }
   if (changedOrgId !== undefined) await markBillingMembershipChanged(ctx, changedOrgId, [em])
@@ -250,9 +251,10 @@ export const acceptInvitation = authedMutation({
       (p) => p._id !== seat._id && p.org_role !== 'guest' && p.accepted_at !== undefined,
     )
     const role = seat.org_role !== 'guest' && hasHome ? 'guest' : seat.org_role
+    // A role change clears the project-creation right (profiles.update).
     await ctx.db.patch(seat._id, {
       accepted_at: new Date().toISOString(),
-      ...(role === seat.org_role ? {} : { org_role: role }),
+      ...(role === seat.org_role ? {} : { org_role: role, can_create_projects: undefined }),
     })
     // Guests never belong to teams.
     if (role === 'guest') await leaveAllTeams(ctx, seat.id)

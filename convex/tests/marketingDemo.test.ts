@@ -833,6 +833,7 @@ describe('marketing demo rebuild ownership', () => {
       }))
     const original = await snapshot()
     const noraId = await demoId('person:nora')
+    const leoId = await demoId('person:leo')
     const task = (await t.run(async (ctx) => ctx.db.query('issues').collect()))[0]
     await t.run(async (ctx) => {
       const nora = (await ctx.db
@@ -845,6 +846,17 @@ describe('marketing demo rebuild ownership', () => {
         sync_at: NOW,
         sync_since: NOW,
       })
+      // Who can create projects, changed in the demo
+      const leo = (await ctx.db
+        .query('profiles')
+        .withIndex('by_uuid', (q) => q.eq('id', leoId))
+        .unique())!
+      await ctx.db.patch(leo._id, { can_create_projects: true })
+      const org = (await ctx.db
+        .query('organizations')
+        .withIndex('by_uuid', (q) => q.eq('id', result.org_id))
+        .unique())!
+      await ctx.db.patch(org._id, { project_creators: 'selected' })
       await ctx.db.patch(original.messages[0]._id, { read_at: NOW })
       await ctx.db.patch(original.comments[0]._id, { body: 'Manually edited conversation' })
       await ctx.db.insert('messages', {
@@ -871,6 +883,15 @@ describe('marketing demo rebuild ownership', () => {
       expect(
         roster.filter((p) => p.kind === 'person').every((p) => p.message_retention_days === 7),
       ).toBe(true)
+      // A reset keeps neither who can create projects nor a person's right to.
+      expect(roster.filter((p) => p.can_create_projects !== undefined)).toEqual([])
+      const org = await t.run(async (ctx) =>
+        ctx.db
+          .query('organizations')
+          .withIndex('by_uuid', (q) => q.eq('id', result.org_id))
+          .unique(),
+      )
+      expect(org?.project_creators).toBeUndefined()
       // Every stamp is set or cleared from the dataset, following the anchor.
       for (const person of MARKETING_DEMO.people) {
         const row = roster.find((p) => p.name === person.name)

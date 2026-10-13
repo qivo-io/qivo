@@ -459,7 +459,8 @@ export const promoteOrgAdmin = platformMutation({
       if (home !== null) throw adminElsewhere(profile.email, home)
     }
     if (profile.org_role === 'guest') await leaveAllTeams(ctx, profile.id)
-    await ctx.db.patch(profile._id, { org_role: 'admin' })
+    // An admin creates projects by role, so the per-person right is cleared.
+    await ctx.db.patch(profile._id, { org_role: 'admin', can_create_projects: undefined })
     if (profile.org_role !== 'admin') {
       await markBillingMembershipChanged(
         ctx,

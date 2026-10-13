@@ -247,6 +247,19 @@ describe('promoteOrgAdmin — the lockout rescue', () => {
     expect(await teamsOf(f.viewer.id)).toHaveLength(1)
   })
 
+  it('a promoted standard user loses the project-creation right', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const op = await withOperator(t)
+    await t.run((ctx) => ctx.db.patch(f.user._id, { can_create_projects: true }))
+
+    await op.asOp.mutation(api.admin.promoteOrgAdmin, { profile_id: f.user.id })
+
+    const row = await profileRow(t, f.user.id)
+    expect(row?.org_role).toBe('admin')
+    expect(row?.can_create_projects).toBeUndefined()
+  })
+
   it('agent target refused with the readable sentence; missing profile is not found; neither audits', async () => {
     const t = newAuthT()
     const f = await withOrg(t)

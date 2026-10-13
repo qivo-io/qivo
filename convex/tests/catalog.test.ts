@@ -8,6 +8,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { PROJECT_CREATORS } from '../lib/enums'
 import schema from '../schema'
 import {
   activityFor,
@@ -118,6 +119,39 @@ describe('orgs.update — settings, silently', () => {
       patch: { max_attachment_mb: 4 },
     })
     expect((await orgRow(t, f.org.id))?.max_attachment_mb).toBe(4)
+    expect(await orgRow(t, f.otherOrg.id)).toEqual(f.otherOrg)
+    expect(await activityFor(t, f.org.id)).toEqual([])
+  })
+
+  it('only an org admin sets who can create projects, to one of the three settings', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    expect((await orgRow(t, f.org.id))?.project_creators).toBeUndefined()
+    for (const setting of PROJECT_CREATORS) {
+      await as(t, f.admin).mutation(api.orgs.update, {
+        org_id: f.org.id,
+        patch: { project_creators: setting },
+      })
+      expect((await orgRow(t, f.org.id))?.project_creators).toBe(setting)
+    }
+    // a forged value a typed client could never send dies in the validator
+    const everyone = 'everyone' as unknown as 'users'
+    await expect(
+      as(t, f.admin).mutation(api.orgs.update, {
+        org_id: f.org.id,
+        patch: { project_creators: everyone },
+      }),
+    ).rejects.toThrowError(/Validator error/)
+    for (const actor of [f.user, f.viewer, f.guest, f.otherAdmin]) {
+      await expectRefusal(
+        as(t, actor).mutation(api.orgs.update, {
+          org_id: f.org.id,
+          patch: { project_creators: 'users' },
+        }),
+        'forbidden',
+      )
+    }
+    expect((await orgRow(t, f.org.id))?.project_creators).toBe('selected')
     expect(await orgRow(t, f.otherOrg.id)).toEqual(f.otherOrg)
     expect(await activityFor(t, f.org.id)).toEqual([])
   })

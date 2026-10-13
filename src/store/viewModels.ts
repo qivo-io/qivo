@@ -53,6 +53,9 @@ export const shapeUser = (
   kind: u.kind,
   isAgent: u.kind === 'agent',
   active: u.active,
+  // the per-person project-creation right; it only counts for a standard
+  // user who is a person while the org's setting is 'selected'
+  canCreateProjects: u.can_create_projects === true,
   // days a READ inbox message is kept before the sweep takes it (0110);
   // null is "Never", and has to survive as null — 0 would be a period
   messageRetentionDays: u.message_retention_days == null ? null : Number(u.message_retention_days),
@@ -95,6 +98,8 @@ export const shapeOrg = (
   defaultPlannableHours: home ? Number(home.default_plannable_hours) : DEFAULT_PLANNABLE_HOURS,
   maxAttachmentMb: home?.max_attachment_mb ?? 20,
   onlyTeamLeadsManageProjectUsers: home?.only_team_leads_manage_project_users !== false,
+  // who may create top-level projects besides org admins; missing is 'users'
+  projectCreators: home?.project_creators ?? 'users',
   // may the browser ask gravatar.com for a picture (0096)? The HOME org's
   // answer governs every avatar the app draws, including people from
   // organizations that shared a project with me — it is a statement about

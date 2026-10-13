@@ -6,7 +6,7 @@
  * toasts them byte-for-byte). */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { newOrgDefaults } from '../model/orgs'
@@ -471,6 +471,143 @@ describe('profiles.update — the admin door', () => {
     await stale()
     await update(f.guest.id, { org_role: 'viewer', teams: [f.team.id] })
     expect((await membership(t, f.team.id, f.guest.id))?.is_leader).toBe(false)
+  })
+})
+
+describe('profiles.update and the project-creation right', () => {
+  const flaggedSeat = (t: T, f: OrgFixture, extra: Record<string, unknown> = {}) =>
+    plantSeat(t, { org_id: f.org.id, can_create_projects: true, ...extra })
+
+  it('an admin turns the right on and off for a standard user; off is stored as absent', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (patch: { can_create_projects: boolean }) =>
+      as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id: f.user.id, patch })
+    await update({ can_create_projects: true })
+    expect((await profileById(t, f.user.id))?.can_create_projects).toBe(true)
+    await update({ can_create_projects: false })
+    const row = await profileById(t, f.user.id)
+    expect(row).not.toHaveProperty('can_create_projects')
+    expect(row?.org_role).toBe('user')
+    expect(await activityFor(t, f.org.id)).toEqual([])
+  })
+
+  it('refuses the right for agents, viewers, guests and admins; turning it off is accepted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (id: string, can_create_projects: boolean) =>
+      as(t, f.admin).mutation(api.profiles.update, {
+        org_id: f.org.id,
+        id,
+        patch: { can_create_projects },
+      })
+    await expectRefusal(
+      update(f.agent.id, true),
+      'rule',
+      /^an agent cannot be allowed to create projects$/,
+    )
+    for (const p of [f.viewer, f.guest, f.admin]) {
+      await expectRefusal(
+        update(p.id, true),
+        'rule',
+        /^only a standard user can be allowed to create projects$/,
+      )
+    }
+    // a stale value planted raw, so turning it off has something to clear
+    const stale = [f.agent, f.viewer, f.guest, f.admin]
+    await t.run(async (ctx) => {
+      for (const p of stale) await ctx.db.patch(p._id, { can_create_projects: true })
+    })
+    for (const p of stale) {
+      await update(p.id, false)
+      expect(await profileById(t, p.id)).not.toHaveProperty('can_create_projects')
+    }
+  })
+
+  it('only an org admin may set the right', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const seat = await plantSeat(t, { org_id: f.org.id })
+    for (const caller of [f.user, f.viewer, f.guest, f.otherAdmin]) {
+      await expectRefusal(
+        as(t, caller).mutation(api.profiles.update, {
+          org_id: f.org.id,
+          id: caller === f.user ? f.user.id : seat.id,
+          patch: { can_create_projects: true },
+        }),
+        'forbidden',
+      )
+    }
+    expect((await profileById(t, f.user.id))?.can_create_projects).toBeUndefined()
+    expect((await profileById(t, seat.id))?.can_create_projects).toBeUndefined()
+  })
+
+  it('a role change away from standard user clears the right; deactivating keeps it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (id: string, patch: Record<string, unknown>) =>
+      as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
+    for (const org_role of ['viewer', 'admin', 'guest'] as const) {
+      const seat = await flaggedSeat(t, f)
+      await update(seat.id, { org_role })
+      const row = await profileById(t, seat.id)
+      expect(row?.org_role).toBe(org_role)
+      expect(row?.can_create_projects).toBeUndefined()
+    }
+    const kept = await flaggedSeat(t, f)
+    await update(kept.id, { active: false })
+    expect((await profileById(t, kept.id))?.can_create_projects).toBe(true)
+    // the role select sends the unchanged role with active: true
+    await update(kept.id, { org_role: 'user', active: true })
+    expect((await profileById(t, kept.id))?.can_create_projects).toBe(true)
+    expect(await activityFor(t, f.org.id)).toEqual([])
+  })
+
+  it('making someone a standard user sets the right only when the same patch turns it on', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const update = (id: string, patch: Record<string, unknown>) =>
+      as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id, patch })
+    const promoted = await plantSeat(t, { org_id: f.org.id, org_role: 'viewer' })
+    await update(promoted.id, { org_role: 'user', can_create_projects: true })
+    expect(await profileById(t, promoted.id)).toMatchObject({
+      org_role: 'user',
+      can_create_projects: true,
+    })
+    // a stale value left on a viewer never comes back with the role
+    const stale = await flaggedSeat(t, f, { org_role: 'viewer' })
+    await update(stale.id, { org_role: 'user' })
+    const row = await profileById(t, stale.id)
+    expect(row?.org_role).toBe('user')
+    expect(row?.can_create_projects).toBeUndefined()
+    // and a demotion in the same patch as turning it on is refused whole
+    await expectRefusal(
+      update(promoted.id, { org_role: 'viewer', can_create_projects: true }),
+      'rule',
+      /^only a standard user can be allowed to create projects$/,
+    )
+    expect((await profileById(t, promoted.id))?.org_role).toBe('user')
+  })
+
+  it('the right schedules no billing reconcile, unlike a role change', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('POLAR_ACCESS_TOKEN', 'test-token')
+    try {
+      const t = newT()
+      const f = await withOrg(t)
+      const scheduled = () => t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+      const update = (patch: Record<string, unknown>) =>
+        as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id: f.user.id, patch })
+      await update({ can_create_projects: true })
+      await update({ can_create_projects: false })
+      expect(await scheduled()).toEqual([])
+      // the control: a real role change does mark billing
+      await update({ org_role: 'guest', teams: [] })
+      expect((await scheduled()).length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+    }
   })
 })
 
