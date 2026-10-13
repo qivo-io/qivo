@@ -13,7 +13,8 @@ import {
   SettingsSection,
 } from '../../components/settingsPage'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import { P } from '../../store/planner'
+import { type AccessRemoval, P } from '../../store/planner'
+import { AccessRemovalModal } from '../Modals'
 import { BackLink, TextField } from './controls'
 import { PlannableHoursInput } from './UserControls'
 
@@ -31,6 +32,9 @@ export function TeamPage({
   const ws = teamId // the update calls below all take the team id
   const canManage = P.isTeamLeader(teamId) // team leader or org admin
   const [confirm, setConfirm] = useStateS<string | null>(null)
+  /* Removing a member who would lose sight of tasks they work on first asks
+     whether to keep them as Viewers or reassign their tasks. */
+  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
   const [addUid, setAddUid] = useStateS('')
   useUpdateBlocker(!!addUid)
   // Team membership belongs to the home organization; guests cannot join.
@@ -141,7 +145,8 @@ export function TeamPage({
                         setConfirm(`m:${u.id}`)
                         return
                       }
-                      P.removeTeamMember(ws, u.id)
+                      const change = { kind: 'teamMember', teamId: ws, userId: u.id } as const
+                      if (P.startRemoval(change)) setRemoval(change)
                       setConfirm(null)
                     }}
                   >
@@ -157,6 +162,13 @@ export function TeamPage({
             </div>
           )}
         </div>
+        {removal && (
+          <AccessRemovalModal
+            key={JSON.stringify(removal)}
+            change={removal}
+            onClose={() => setRemoval(null)}
+          />
+        )}
         {canManage && (
           <SettingsGroup legend="Add a member">
             <div className="[display:flex] [gap:8px]">
@@ -200,6 +212,8 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const [teamName, setTeamName] = useStateS('')
   useUpdateBlocker(!!teamName)
   const [confirm, setConfirm] = useStateS<string | null>(null)
+  // deleting a team whose members would lose sight of their tasks asks first
+  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
   const homeTeams = P.teams.filter((t) => t.org === P.homeOrg)
   const mine = homeTeams.filter((t) => P.isTeamLeader(t.id))
   const addTeam = () => {
@@ -269,9 +283,9 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                         setConfirm(`t:${t.id}`)
                         return
                       }
-                      P.removeTeam(t.id)
+                      const change = { kind: 'deleteTeam', teamId: t.id } as const
+                      if (P.startRemoval(change)) setRemoval(change)
                       setConfirm(null)
-                      window.showToast?.(`Team “${t.name}” deleted`)
                     }}
                   >
                     <Icon name="trash" size={16} />
@@ -287,6 +301,13 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             </div>
           )}
         </div>
+        {removal && (
+          <AccessRemovalModal
+            key={JSON.stringify(removal)}
+            change={removal}
+            onClose={() => setRemoval(null)}
+          />
+        )}
         {admin && (
           <SettingsGroup legend="New team">
             <div className="[display:flex] [gap:8px]">
