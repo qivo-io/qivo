@@ -154,8 +154,10 @@ export async function deleteProjectDeep(
  * of teams, so deleting a team removes its permission grants and clears the
  * legacy ownership column while preserving projects, tasks and milestones.
  * Memberships die (team_members.team_id CASCADE, 0001:51), labels are
- * org-level and SURVIVE (0010/0078), activity rows survive with team_id
- * nulled (0001:156 SET NULL). Guards — 'team not found', 'only organization
+ * org-level and SURVIVE (0010/0078). Activity rows survive and keep their
+ * team_id, unlike 0001:156's SET NULL. snapshot.ts memberSeesActivity finds
+ * no leader for a deleted team, so only organization admins receive its
+ * membership history instead of every member. Guards — 'team not found', 'only organization
  * admins can delete teams', the last-team guard — live in the caller
  * (teams.deleteDeep), which narrates nothing (the old client wrote no event). */
 export async function deleteTeamDeep(
@@ -174,12 +176,6 @@ export async function deleteTeamDeep(
   for await (const grant of shared) await ctx.db.delete(grant._id)
   const members = ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', team.id))
   for await (const tm of members) await ctx.db.delete(tm._id)
-  const events = ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', team.org_id))
-  for await (const e of events) {
-    if (e.team_id === team.id) await ctx.db.patch(e._id, { team_id: undefined })
-  }
   await ctx.db.delete(team._id)
 }
 

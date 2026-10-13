@@ -44,6 +44,17 @@ const NON_PROJECT_ACTIVITY = new Set<ActivityTarget>(['user', 'org'])
 const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
   ev.verb === 'moved' && ev.related_project_id === undefined && !!ev.detail?.startsWith('to the ')
 
+// The verbs teams.ts writes on membership rows, which carry team_id.
+const TEAM_VERBS = new Set(['added', 'removed', 'made', 'demoted'])
+
+/* Deleting a team used to clear team_id on its membership rows. Such a row
+ * cannot be told apart from profiles.ts's roster rows ('added' to the
+ * organization, 'removed' from it), because a team may carry the same name.
+ * Failing closed, every person row with one of these verbs and no team_id
+ * reaches admins only. */
+const isUnscopedTeamRow = (ev: Doc<'activity_events'>): boolean =>
+  ev.target_type === 'user' && ev.team_id === undefined && TEAM_VERBS.has(ev.verb)
+
 /* Members other than organization admins receive an activity row only if
  * they can access every project it names: the project it was filed under
  * and its related project, such as a move's destination. Seeing a parent
@@ -53,7 +64,9 @@ const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
  * Deleting a project clears project_id on its rows (model/cascade.ts). A task
  * that moved out first keeps those rows for everyone who can access it; the
  * other project and milestone rows reach admins only. Team rows reach that
- * team's staff leaders; the remaining rows reach every member. */
+ * team's staff leaders. A deleted team's rows keep its id and reach admins
+ * only, as do person rows that may be older team rows whose id was cleared
+ * (isUnscopedTeamRow). The remaining rows reach every member. */
 function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
@@ -74,7 +87,7 @@ function memberSeesActivity(
   if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
   if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
   if (ev.team_id !== undefined) return isOrgStaff(a.me) && a.leaderOf.get(ev.team_id) === true
-  return true
+  return !isUnscopedTeamRow(ev)
 }
 
 // Unread first, then read_at ascending and created_at descending.

@@ -749,6 +749,9 @@ export default defineSchema({
     // also need access to it (snapshot.ts memberSeesActivity). Like target_id
     // it may outlive its project.
     related_project_id: v.optional(v.string()),
+    // The team a membership row describes, or a deleted project's legacy
+    // owning team. Like related_project_id it may outlive its team; a deleted
+    // team's membership rows then reach admins only (snapshot.ts).
     team_id: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])

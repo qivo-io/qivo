@@ -681,7 +681,7 @@ describe('activity', () => {
     await joinTeam(teamMember.id, false)
     const ids = await t.run(async (ctx) => {
       const rows = {
-        people: ev({ target_type: 'user', target_id: f.viewer.id, verb: 'added' }),
+        people: ev({ target_type: 'user', target_id: f.viewer.id, verb: 'renamed' }),
         label: ev({ target_type: 'org', target_id: uuid(), verb: 'created label' }),
         team: ev({ team_id: f.team.id, target_type: 'user', target_id: f.viewer.id }),
         parent: ev({ project_id: f.meta.id, target_type: 'project', target_id: f.meta.id }),
@@ -714,12 +714,37 @@ describe('activity', () => {
         orphanMilestone: ev({ target_type: 'milestone' }),
         // A deleted top-level project with a legacy owning team.
         orphanProject: ev({ team_id: f.team.id, target_type: 'project', verb: 'deleted' }),
+        // A deleted team keeps its id on its rows (model/cascade.ts).
+        deadTeam: ev({ team_id: uuid(), target_type: 'user', verb: 'added', detail: 'to Gone' }),
+        // Team rows whose id an earlier team deletion cleared.
+        legacyAdded: ev({ target_type: 'user', verb: 'added', detail: 'to Hardware' }),
+        legacyRemoved: ev({ target_type: 'user', verb: 'removed', detail: 'from Hardware' }),
+        legacyMade: ev({ target_type: 'user', verb: 'made', detail: 'a leader of Hardware' }),
+        legacyDemoted: ev({
+          target_type: 'user',
+          verb: 'demoted',
+          detail: 'from leader of Hardware',
+        }),
+        // Roster rows share those verbs and may be a deleted team named "the
+        // organization", so they reach admins only too.
+        rosterAdded: ev({ target_type: 'user', verb: 'added', detail: 'to the organization' }),
+        rosterAgent: ev({
+          target_type: 'user',
+          verb: 'added',
+          detail: 'to the organization as an agent',
+        }),
+        rosterRemoved: ev({
+          target_type: 'user',
+          verb: 'removed',
+          detail: 'from the organization',
+        }),
+        renamed: ev({ target_type: 'user', verb: 'renamed', detail: 'from “Old name”' }),
       }
       for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
       return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
     })
     const only = (...keys: string[]) => keys.map((key) => ids[key]).sort()
-    const shared = ['people', 'label', 'sub', 'task', 'statusMove', 'survivingTask']
+    const shared = ['people', 'label', 'sub', 'task', 'statusMove', 'survivingTask', 'renamed']
 
     expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
     // user: leads f.meta, f.hidden and the team
@@ -730,6 +755,33 @@ describe('activity', () => {
     // history needs a leader on the organization staff.
     for (const p of [subOnly, guestLeader, teamMember])
       expect(await seen(p)).toEqual(only(...shared))
+  })
+
+  it("a deleted team's membership history reaches only organization admins", async () => {
+    const subOnly = await seatOn(f.sub.id)
+    const teamMember = await seatOn(f.sub.id)
+    await joinTeam(teamMember.id, false)
+    // a second team, so the last-team guard lets f.team go
+    await as(t, f.admin).mutation(api.teams.create, { org_id: f.org.id, id: uuid(), name: 'Other' })
+    const leader = as(t, f.user)
+    const team = { org_id: f.org.id, team_id: f.team.id }
+    await leader.mutation(api.teams.addMember, { ...team, profile_id: f.viewer.id })
+    await leader.mutation(api.teams.setLeader, { ...team, profile_id: f.admin.id, is_leader: true })
+    await leader.mutation(api.teams.removeMember, { ...team, profile_id: f.viewer.id })
+    const teamRows = async (p: Doc<'profiles'>) =>
+      (await snapFor(p)).activity
+        .filter((a) => a.target_type === 'user')
+        .map((a) => `${a.verb} ${a.detail}`)
+        .sort()
+    const history = ['added to Hardware', 'made a leader of Hardware', 'removed from Hardware']
+    for (const p of [f.admin, f.user]) expect(await teamRows(p)).toEqual(history)
+    for (const p of [f.viewer, f.guest, subOnly, teamMember]) expect(await teamRows(p)).toEqual([])
+
+    await as(t, f.admin).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: f.team.id })
+    expect(await teamRows(f.admin)).toEqual(history)
+    for (const p of [f.user, f.viewer, f.guest, subOnly, teamMember]) {
+      expect(await teamRows(p)).toEqual([])
+    }
   })
 
   it('sub-project-only members receive no history of the parent, its other sub-projects or deleted projects', async () => {

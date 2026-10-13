@@ -343,12 +343,12 @@ describe('teams.deleteDeep names its cascade — the Northstar Labs dataset', ()
     )
     // labels are org-level and SURVIVE
     expect(await count('labels')).toBe(before.labels)
-    // history survives its subjects: every row KEPT, the doomed refs nulled
+    // history survives its subjects: every row KEPT, team references kept
     const events = await t.run(async (ctx) => await ctx.db.query('activity_events').collect())
     expect(events.length).toBe(before.events)
     expect(events.filter((e) => e.project_id === undefined).length).toBe(0)
     for (const e of events) {
-      expect(e.team_id === undefined || e.team_id === cloudLaunch).toBe(true)
+      expect([undefined, cloudLaunch, hardware]).toContain(e.team_id)
       expect(e.actor_id).toBeDefined() // the actors all live
     }
     await assertNoDanglingRefs(t, 'after Northstar delete_team')

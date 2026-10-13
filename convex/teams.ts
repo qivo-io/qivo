@@ -26,7 +26,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { isTeamLeader } from './lib/access'
+import { isOrgStaff, isTeamLeader } from './lib/access'
 import { byId, insertUnique } from './lib/db'
 import { adminMutation, badRequest, forbidden, notFound, orgMutation, rule } from './lib/functions'
 import { logActivity } from './model/activity'
@@ -138,8 +138,8 @@ export const update = orgMutation({
  * sentence, then the last-team trigger. The cascade (model/cascade) preserves
  * every project; legacy team_id values are cleared, and team
  * access grants are removed. Nothing re-homes, labels survive, and activity
- * rows survive with team_id nulled. No narration (the old client wrote no
- * event). */
+ * rows keep their team_id. The deleted team's membership rows then reach
+ * organization admins only. No narration (the old client wrote no event). */
 export const deleteDeep = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
@@ -220,8 +220,10 @@ export const removeMember = orgMutation({
  * P.setTeamLeader. Same-value and missing-row calls are silent no-ops (T15 —
  * the old client pre-checked; the SQL update matched 0 changed rows).
  * Promoting a viewer is refused — "a viewer is never a team leader" (0102's
- * WITH CHECK; no sentence existed, so forbidden). There is no last-leader
- * guard: a team may have zero leaders. */
+ * WITH CHECK; no sentence existed, so forbidden). Promoting a guest left
+ * with a stale membership is refused too. Demoting stays allowed, so stale
+ * leader rows can be cleared. There is no last-leader guard: a team may have
+ * zero leaders. */
 export const setLeader = orgMutation({
   args: { team_id: v.string(), profile_id: v.string(), is_leader: v.boolean() },
   handler: async (ctx, { team_id, profile_id, is_leader }) => {
@@ -231,8 +233,12 @@ export const setLeader = orgMutation({
     const row = await membership(ctx, team.id, profile_id)
     if (row === null || row.is_leader === is_leader) return null
     const member = await byId(ctx, 'profiles', profile_id)
-    if (is_leader && member !== null && member.org_role === 'viewer') {
-      throw forbidden('a viewer is never a team leader')
+    if (is_leader && member !== null && !isOrgStaff(member)) {
+      throw forbidden(
+        member.org_role === 'viewer'
+          ? 'a viewer is never a team leader'
+          : 'a guest is never a team member',
+      )
     }
     await ctx.db.patch(row._id, { is_leader })
     if (member !== null) {

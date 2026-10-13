@@ -51,7 +51,7 @@ access the task or project it concerns and every project it involves, such as
 both ends of a task move. When a task moves to a project you cannot access,
 its history leaves your view. People who can access only the new project see
 the changes made after the move. Only organization admins see the history of
-deleted tasks and deleted projects, with two exceptions. People with access
+deleted tasks, projects and teams, with two exceptions. People with access
 to a parent project see that one of its sub-projects was deleted, and a task
 that moved out of a project before it was deleted keeps that earlier history.
 
@@ -89,3 +89,5 @@ without showing their other organization's identity or membership details.
 If you sign up without an invitation, Qivo offers to create your own
 organization. You become its first admin, with an initial team. Invitations
 to other organizations then add guest access alongside your home organization.
+Team memberships from such an invitation end, because guests cannot join
+teams.

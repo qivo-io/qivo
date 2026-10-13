@@ -63,7 +63,6 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'activity_events', field: 'org_id', target: 'organizations' },
   { table: 'activity_events', field: 'actor_id', target: 'profiles' },
   { table: 'activity_events', field: 'project_id', target: 'projects' },
-  { table: 'activity_events', field: 'team_id', target: 'teams' },
   { table: 'comments', field: 'issue_id', target: 'issues' },
   { table: 'comments', field: 'author', target: 'profiles' },
   { table: 'comments', field: 'edited_by', target: 'profiles' },
@@ -146,6 +145,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'activity_events.target_id',
   // dangles by design: a deleted project keeps the row from members (snapshot.ts)
   'activity_events.related_project_id',
+  // dangles by design: a deleted team keeps its membership rows from members (snapshot.ts)
+  'activity_events.team_id',
   // Better Auth login ids — not rows in this schema
   'profiles.auth_user_id',
   'roadmap_history.auth_user_id',

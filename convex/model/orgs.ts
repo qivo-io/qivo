@@ -18,6 +18,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { isOrgStaff } from '../lib/access'
 import { byId } from '../lib/db'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { logActivity } from './activity'
@@ -245,6 +246,17 @@ export async function createStarterTeam(
   return teamId
 }
 
+/* A guest is never a team member (teams.addMember). When a seat becomes a
+ * guest its memberships end, leadership included. A team may be left
+ * without a leader; organization admins still run it (teams.setLeader). */
+export async function leaveAllTeams(ctx: MutationCtx, profileId: string): Promise<void> {
+  const rows = await ctx.db
+    .query('team_members')
+    .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+    .collect()
+  for (const row of rows) await ctx.db.delete(row._id)
+}
+
 /* profiles_last_admin_update / _delete (0099:286-323): the last admin who can
  * actually sign in and fix things stays. The FIRE condition lives in the
  * caller — demote/deactivate when (old admin AND old active) and NOT
@@ -281,8 +293,11 @@ export async function setPlannableHoursCore(
   const target = await byId(ctx, 'profiles', a.profile_id)
   if (target === null || target.org_id !== a.me.org_id) throw rights
   if (a.me.org_role !== 'admin') {
-    // the SQL's raw membership join — a leader row, no viewer fence of its
-    // own (a viewer never holds one, 0102's WITH CHECK)
+    // Team leadership needs an organization staff role (lib/access
+    // isTeamLeader), so a guest or viewer leader row grants nothing. A guest
+    // is never a team member, so a stale row gives no leader rights over
+    // them either. Same sentence, so probing learns nothing.
+    if (!isOrgStaff(a.me) || target.org_role === 'guest') throw rights
     let leads = false
     const memberships = ctx.db
       .query('team_members')
