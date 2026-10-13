@@ -65,6 +65,7 @@ import { deleteIssueDeep } from '../model/cascade'
 import {
   assertAssignable,
   assertLive,
+  assertNoGroupDates,
   assertNoSubtasks,
   assertReporter,
   assertWeekPair,
@@ -513,6 +514,9 @@ export const updateIssue = internalMutation({
       throw badRequest('moving a task between projects is not supported over the API')
     }
     const fields = issueFields(b, false)
+    // a group's dates come from its subtasks, so any date key on one is
+    // refused, null and unchanged values included
+    if ('start_week' in fields || 'end_week' in fields) await assertNoGroupDates(ctx, issue)
     assertEffectiveWeekPair(fields, issue)
     let archive: boolean | undefined
     if ('archived' in b) {

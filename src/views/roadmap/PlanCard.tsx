@@ -46,6 +46,7 @@ function PlanSwitch({
 }
 
 // Roadmap owns this session. Load belongs to the effective owner and grid epoch.
+// Only a leaf is planned, since a group's dates come from its subtasks.
 export type PlanSession = {
   issueId: string
   autoFit: boolean
@@ -75,11 +76,8 @@ export function PlanCard({
   const scheduled = issue.start != null && issue.end != null
   const dur = scheduled ? issue.end - issue.start + 1 : 0
   const owner = issue.owner ? P.user(issue.owner) : null
-  // Parents use their subtask envelope; only leaf hours can auto-fit.
   const remaining = issue.remaining || 0
-  const isParent = P.isGroup(issue)
-  const shownRem = P.remainingOf(issue) || 0 // parents display the sub-issue sum
-  const canFit = !isParent && !!owner && remaining > 0
+  const canFit = !!owner && remaining > 0
   const first = owner ? owner.name.split(' ')[0] : ''
   // Match auto-fit: weeks before the measurement anchor cannot dilute load.
   const fitStart =
@@ -148,7 +146,7 @@ export function PlanCard({
                 dur +
                 'w'
               : '—'}
-            {shownRem > 0 ? `, ${isParent ? 'Σ ' : ''}${shownRem}h` : ''}
+            {remaining > 0 ? `, ${remaining}h` : ''}
           </span>
         </div>
 
@@ -162,15 +160,13 @@ export function PlanCard({
               Auto-fit end to workload
             </div>
             <div className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
-              {isParent
-                ? 'Plan the subtasks; the parent follows their dates'
-                : !owner
-                  ? 'Assign someone to auto-fit'
-                  : remaining <= 0
-                    ? 'Add remaining time to auto-fit'
-                    : session.autoFit
-                      ? `End follows ${first}’s free time on drop`
-                      : 'Drag the end freely'}
+              {!owner
+                ? 'Assign someone to auto-fit'
+                : remaining <= 0
+                  ? 'Add remaining time to auto-fit'
+                  : session.autoFit
+                    ? `End follows ${first}’s free time on drop`
+                    : 'Drag the end freely'}
             </div>
           </div>
         </div>

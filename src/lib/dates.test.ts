@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   clampBarDrag,
-  coverEnvelope,
   DEFAULT_WIN,
   endpointWeek,
   fmtDateTime,
@@ -240,79 +239,28 @@ describe('roadmap view window', () => {
   })
 })
 
-describe('sub-issue date envelope', () => {
-  it('coverEnvelope widens but never shrinks', () => {
-    expect(coverEnvelope(5, 8, null)).toEqual({ start: 5, end: 8 })
-    expect(coverEnvelope(5, 8, { min: 3, max: 10 })).toEqual({ start: 3, end: 10 })
-    expect(coverEnvelope(5, 8, { min: 6, max: 7 })).toEqual({ start: 5, end: 8 }) // already covering
-    expect(coverEnvelope(5, 8, { min: 2, max: 6 })).toEqual({ start: 2, end: 8 }) // start side only
-    expect(coverEnvelope(5, 8, { min: 6, max: 12 })).toEqual({ start: 5, end: 12 }) // end side only
+describe('clampBarDrag', () => {
+  const w0 = 0,
+    w1 = 20
+
+  it('keeps the plain window clamp', () => {
+    expect(clampBarDrag('move', 4, 7, 3, w0, w1)).toEqual({ start: 7, end: 10 })
+    expect(clampBarDrag('move', 4, 7, 99, w0, w1)).toEqual({ start: 17, end: 20 })
+    expect(clampBarDrag('start', 4, 7, -99, w0, w1)).toEqual({ start: 0, end: 7 })
+    expect(clampBarDrag('end', 4, 7, 99, w0, w1)).toEqual({ start: 4, end: 20 })
+    // start edge can't cross the end
+    expect(clampBarDrag('start', 4, 7, 99, w0, w1)).toEqual({ start: 7, end: 7 })
+    // end edge can't cross the start
+    expect(clampBarDrag('end', 4, 7, -99, w0, w1)).toEqual({ start: 4, end: 4 })
   })
 
-  describe('clampBarDrag', () => {
-    const w0 = 0,
-      w1 = 20
-
-    it('without an envelope keeps the plain window clamp', () => {
-      expect(clampBarDrag('move', 4, 7, 3, w0, w1, null)).toEqual({ start: 7, end: 10 })
-      expect(clampBarDrag('move', 4, 7, 99, w0, w1, null)).toEqual({ start: 17, end: 20 })
-      expect(clampBarDrag('start', 4, 7, -99, w0, w1, null)).toEqual({ start: 0, end: 7 })
-      expect(clampBarDrag('end', 4, 7, 99, w0, w1, null)).toEqual({ start: 4, end: 20 })
-      // start edge can't cross the end
-      expect(clampBarDrag('start', 4, 7, 99, w0, w1, null)).toEqual({ start: 7, end: 7 })
-    })
-
-    it('pins a parent so it cannot shrink inside its sub-issues', () => {
-      const env = { min: 6, max: 9 } // children span weeks 6..9; parent 4..11 covers them
-      expect(clampBarDrag('move', 4, 11, 3, w0, w1, env)).toEqual({ start: 6, end: 13 }) // start stops at 6
-      expect(clampBarDrag('move', 4, 11, -3, w0, w1, env)).toEqual({ start: 2, end: 9 }) // end stops at 9
-      expect(clampBarDrag('start', 4, 11, 5, w0, w1, env)).toEqual({ start: 6, end: 11 })
-      expect(clampBarDrag('end', 4, 11, -5, w0, w1, env)).toEqual({ start: 4, end: 9 })
-      // widening is always allowed
-      expect(clampBarDrag('start', 4, 11, -2, w0, w1, env)).toEqual({ start: 2, end: 11 })
-      expect(clampBarDrag('end', 4, 11, 4, w0, w1, env)).toEqual({ start: 4, end: 15 })
-    })
-
-    it('never teleports a bar that already violates the rule', () => {
-      // parent 10..12 sits entirely AFTER its children's span 2..5 (legacy data)
-      const env = { min: 2, max: 5 }
-      // no drag / tiny drags keep it exactly where it is (bounds admit the bar)
-      expect(clampBarDrag('move', 10, 12, 0, w0, w1, env)).toEqual({ start: 10, end: 12 })
-      // dragging toward compliance works…
-      expect(clampBarDrag('move', 10, 12, -6, w0, w1, env)).toEqual({ start: 4, end: 6 })
-      // …dragging further away does nothing
-      expect(clampBarDrag('move', 10, 12, 6, w0, w1, env)).toEqual({ start: 10, end: 12 })
-      expect(clampBarDrag('start', 10, 12, 2, w0, w1, env)).toEqual({ start: 10, end: 12 })
-      // a violating end edge may still grow (the compliant direction) — by
-      // the dragged amount, not by teleporting to the envelope — but not shrink
-      expect(clampBarDrag('end', 1, 3, 1, w0, w1, { min: 2, max: 8 })).toEqual({ start: 1, end: 4 })
-      expect(clampBarDrag('end', 1, 3, -1, w0, w1, { min: 2, max: 8 })).toEqual({
-        start: 1,
-        end: 3,
-      })
-    })
-
-    it('lets the envelope beat the window clamp', () => {
-      // children start before the window: the start edge may not be dragged
-      // to w0 — it stays at the envelope even though that is off-window
-      expect(clampBarDrag('start', -5, 8, 4, 0, 20, { min: -3, max: 6 })).toEqual({
-        start: -3,
-        end: 8,
-      })
-      // children end after the window: the end edge can't come back inside
-      expect(clampBarDrag('end', 4, 25, -10, 0, 20, { min: 6, max: 24 })).toEqual({
-        start: 4,
-        end: 24,
-      })
-    })
-
-    it('keeps a dragged bar intersecting the window', () => {
-      // bar half out the right side, envelope pinned far right of it (violating):
-      // move must stay put, not chase the envelope out of the window
-      const r = clampBarDrag('move', 19, 22, 30, 0, 20, { min: 30, max: 32 })
-      expect(r.start).toBeLessThanOrEqual(20)
-      expect(r.end).toBeGreaterThanOrEqual(0)
-    })
+  it('keeps a dragged bar intersecting the window', () => {
+    // bar half out the right side, dragged further out: it stops at the edge
+    const r = clampBarDrag('move', 19, 22, 30, 0, 20)
+    expect(r).toEqual({ start: 17, end: 20 })
+    // a bar longer than the window keeps covering it
+    expect(clampBarDrag('move', -5, 25, 9, 0, 20)).toEqual({ start: 0, end: 30 })
+    expect(clampBarDrag('move', -5, 25, -9, 0, 20)).toEqual({ start: -10, end: 20 })
   })
 })
 

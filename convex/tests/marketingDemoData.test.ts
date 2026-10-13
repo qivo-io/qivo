@@ -20,6 +20,24 @@ const defaultCapacity = newOrgDefaults('2026-09-07T00:00:00.000Z').default_plann
 // Whose week a task's hours count against: the app's one Reviewer rule.
 const ownerOf = (i: (typeof issues)[number]) =>
   taskOwnerId({ status: i.status, assignee_id: i.assignee, reviewer_id: i.reviewer })
+// A task's plan weeks as the app shows them. A group's run from the earliest
+// start to the latest end of its scheduled, unarchived leaves at any depth; a
+// leaf without an end counts as its start week.
+const subtasksOf = (i: (typeof issues)[number]) =>
+  issues.filter((child) => child.parent === i.key && !child.archived)
+function weeksOf(i: (typeof issues)[number]): { start?: number; end?: number } {
+  const kids = subtasksOf(i)
+  if (!kids.length) return { start: i.startWeek, end: i.endWeek ?? i.startWeek }
+  let start: number | undefined
+  let end: number | undefined
+  for (const kid of kids) {
+    const weeks = weeksOf(kid)
+    if (weeks.start === undefined || weeks.end === undefined) continue
+    start = start === undefined ? weeks.start : Math.min(start, weeks.start)
+    end = end === undefined ? weeks.end : Math.max(end, weeks.end)
+  }
+  return { start, end }
+}
 
 describe('the versioned Northstar marketing scenario', () => {
   it('keeps the agreed organization, project mix and sole administrator', () => {
@@ -240,7 +258,10 @@ describe('the versioned Northstar marketing scenario', () => {
         expect(issueByKey.get(issue.parent)?.parent).toBeUndefined()
       }
       if (parents.has(issue.key)) {
+        // a group's hours and plan weeks both come from its subtasks
         expect(issue.remaining).toBeUndefined()
+        expect(issue.startWeek, issue.key).toBeUndefined()
+        expect(issue.endWeek, issue.key).toBeUndefined()
         const children = issues.filter((child) => child.parent === issue.key)
         expect(children.length, issue.key).toBeGreaterThanOrEqual(2)
         expect(children.length, issue.key).toBeLessThanOrEqual(4)
@@ -249,18 +270,20 @@ describe('the versioned Northstar marketing scenario', () => {
       }
       if (issue.status === 'done') expect(issue.remaining).toBe(0)
       expect(issue.startWeek === undefined).toBe(issue.endWeek === undefined)
-      if (issue.startWeek !== undefined && issue.endWeek !== undefined) {
-        expect(Number.isInteger(issue.startWeek) && Number.isInteger(issue.endWeek)).toBe(true)
-        expect(issue.startWeek).toBeLessThanOrEqual(issue.endWeek)
-        expect(issue.startWeek).toBeGreaterThanOrEqual(-3)
-        expect(issue.endWeek).toBeLessThanOrEqual(6)
-        if (issue.status === 'done') expect(issue.endWeek).toBeLessThan(0)
+      // the realism checks read the weeks the app shows, calculated for groups
+      const weeks = weeksOf(issue)
+      if (weeks.start !== undefined && weeks.end !== undefined) {
+        expect(Number.isInteger(weeks.start) && Number.isInteger(weeks.end)).toBe(true)
+        expect(weeks.start).toBeLessThanOrEqual(weeks.end)
+        expect(weeks.start).toBeGreaterThanOrEqual(-3)
+        expect(weeks.end).toBeLessThanOrEqual(6)
+        if (issue.status === 'done') expect(weeks.end).toBeLessThan(0)
       }
-      if (issue.status === 'backlog') expect(issue.startWeek).toBeUndefined()
+      if (issue.status === 'backlog') expect(weeks.start).toBeUndefined()
       if (issue.dueDay !== undefined) {
         expect(Number.isInteger(issue.dueDay)).toBe(true)
-        if (issue.endWeek !== undefined) {
-          expect(issue.endWeek * 7 + 4, issue.key).toBeLessThanOrEqual(issue.dueDay)
+        if (weeks.end !== undefined) {
+          expect(weeks.end * 7 + 4, issue.key).toBeLessThanOrEqual(issue.dueDay)
         }
       }
     }
@@ -300,10 +323,10 @@ describe('the versioned Northstar marketing scenario', () => {
       const sourceMeta = projects.find((project) => project.key === source.project)?.parent
       const targetMeta = projects.find((project) => project.key === target.project)?.parent
       if (sourceMeta !== targetMeta) crossProjectBlocks++
-      if (source.endWeek !== undefined && target.startWeek !== undefined) {
-        if (source.endWeek >= target.startWeek) {
-          blockingOverlaps.push(`${source.key} -> ${target.key}`)
-        }
+      const sourceEnd = weeksOf(source).end
+      const targetStart = weeksOf(target).start
+      if (sourceEnd !== undefined && targetStart !== undefined && sourceEnd >= targetStart) {
+        blockingOverlaps.push(`${source.key} -> ${target.key}`)
       }
     }
     expect(crossProjectBlocks).toBeGreaterThanOrEqual(4)
@@ -375,13 +398,18 @@ describe('the versioned Northstar marketing scenario', () => {
         .filter((issue) => {
           const owner = ownerOf(issue)
           const person = people.find((candidate) => candidate.key === owner)
+          // a group is judged by its calculated end and its leaves' completion
+          const kids = subtasksOf(issue)
+          const weeks = weeksOf(issue)
           const result = delayOf(
             {
               uuid: issue.key,
               status: issue.status,
+              isGroup: kids.length > 0,
+              isDone: kids.length > 0 ? kids.every((kid) => kid.status === 'done') : undefined,
               owner: owner ?? null,
-              start: issue.startWeek === undefined ? null : anchor + issue.startWeek,
-              end: issue.endWeek === undefined ? null : anchor + issue.endWeek,
+              start: weeks.start === undefined ? null : anchor + weeks.start,
+              end: weeks.end === undefined ? null : anchor + weeks.end,
               dueWeek: issue.dueDay === undefined ? null : anchor + Math.floor(issue.dueDay / 7),
               duePast: false,
               remaining: issue.remaining,

@@ -407,18 +407,19 @@ rejected with `400` and a message. `title` is trimmed and capped at 80
 characters (a longer one is a `400`; the same shared rule holds in the app
 and over MCP). `status` ∈ backlog · todo · progress ·
 review · done; `priority` ∈ urgent · high · medium · low. `paused` (a
-boolean) holds the work: only a To Do, In Progress or In Review task can be
-paused — asking for it on a Done or Backlog task, on POST or PATCH, is a
-`409` (`a Done or Backlog task cannot be paused`) — and a status move to
+boolean) holds the work. Only a To Do, In Progress or In Review task can be
+paused. Asking for it on a Done or Backlog task, on POST or PATCH, is a
+`400` (`a Done or Backlog task cannot be paused`), and a status move to
 either of those resumes the task. The reason belongs in a comment; the flag
 carries no text. `start_week`, `end_week` and `due_date` must be real calendar
 dates in `YYYY-MM-DD` form, or `null` to clear; impossible dates are refused
 instead of rolling into the next month. `start_week` and
 `end_week` must be set (or cleared) together, with `start_week` ≤ `end_week`
 — on PATCH the rule applies to the patched result, so setting one of them is
-fine when the other is already set. Both dates denote week starts and the
-end week is included: on a Monday-based calendar, `2026-09-21` through
-`2026-09-28` is a two-week plan. Use the organization's **Workdays start on**
+fine when the other is already set. A group calculates both dates from its
+subtasks and refuses them on PATCH (see **Group dates** below). Both dates
+denote week starts and the end week is included: on a Monday-based calendar,
+`2026-09-21` through `2026-09-28` is a two-week plan. Use the organization's **Workdays start on**
 setting (Settings → Organization → General); the organization REST API does
 not expose that setting, so obtain it from the user or signed-in browser
 before calculating week dates. `remaining_hours` accepts finite nonnegative
@@ -437,6 +438,23 @@ When its last active subtask is detached, deleted or archived, the task
 resumes its saved status. Archived parents retain `is_group: true` while
 they have attached subtasks. Child visibility does not change grouping;
 this flag reveals no child identities.
+
+**Group dates.** A group's `start_week` and `end_week` are calculated from
+the subtasks the key can read, at any depth. `start_week` is the earliest
+start and `end_week` the latest end of the scheduled ones, including `done`
+subtasks. Both are `null` when none is scheduled. A nested group counts only
+through its own subtasks, and the calculation stops at a subtask the key
+cannot read, so the tasks below it do not count. Like `is_group`, an active
+group counts only active subtasks, while an archived group counts its whole
+subtree. Subtasks in archived projects do not count while the group's own
+project is active. Two keys with different access can therefore get
+different dates for the same group. The group's own stored dates are not
+used while it is a group, and subtask changes never write them. They apply
+again when its last active subtask is detached, deleted or archived. A PATCH
+containing `start_week` or `end_week` on a group, including `null` or the
+current value, returns `400` with `start_week and end_week cannot be set on a
+task with subtasks; its dates come from its subtasks`, and the other fields
+in that request remain unchanged. Change the subtasks' dates instead.
 
 A task **with active subtasks** has no remaining time of its own (0066;
 archived subtasks stopped counting in 0070): a PATCH
@@ -500,7 +518,8 @@ Task shape returned by all task endpoints:
 
 `parent_id` is the parent task's uuid when the agent can read the parent, and
 `null` otherwise, the same as for a top-level task. `is_group` still reports
-subtasks the agent cannot read, without identifying them.
+subtasks the agent cannot read, without identifying them. Their dates do not
+count toward the group's `start_week` and `end_week`.
 
 `DELETE` returns `{ "deleted": true, "id": "…", "key": "QN-3" }`.
 

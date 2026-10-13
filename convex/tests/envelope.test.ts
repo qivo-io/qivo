@@ -1,13 +1,14 @@
-/* The scheduling envelope invariants, driven through the PUBLIC issue
- * mutations: clamp (parent side, 0070), the widen cascade (child side, 0070 —
- * per-ancestor touch AND notify, the phase-4 headline), the hierarchy depth
- * caps (0057/0038), the parent org/archive fences and the week-pair CHECKs.
- * Refusal sentences are asserted byte-for-byte via err.data.message. */
+/* The scheduling invariants, driven through the PUBLIC issue mutations. A
+ * group's dates are calculated from its subtasks, so a date write on a group
+ * is refused and no subtask write ever changes an ancestor. Also the
+ * hierarchy depth caps (0057/0038), the parent org/archive fences and the
+ * week-pair CHECKs. Refusal sentences are asserted byte-for-byte via
+ * err.data.message. */
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import type { CreateIssueArgs, IssuePatch } from '../model/issues'
+import { type CreateIssueArgs, GROUP_DATES_RULE, type IssuePatch } from '../model/issues'
 import {
   as,
   expectRefusal,
@@ -75,106 +76,98 @@ async function plantChain(t: T, f: OrgFixture, n: number): Promise<Doc<'issues'>
   return rows
 }
 
-describe('issue scheduling envelope', () => {
-  it('a parent edit lands pre-clamped to cover its active children; archived children do not constrain', async () => {
+describe('issue scheduling and hierarchy', () => {
+  it('a date write on a group is refused for any value, archived groups included; archived-only subtasks make no group', async () => {
     const t = newT()
     const f = await withOrg(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
-    const parent = await plantIssue(t, {
-      ...base,
-      start_week: '2026-03-02',
-      end_week: '2026-03-08',
-    })
+    const span = { start_week: '2026-03-02', end_week: '2026-03-08' }
+    const group = await plantIssue(t, { ...base, ...span })
     await plantIssue(t, {
       ...base,
-      parent_id: parent.id,
-      start_week: '2026-03-02',
+      parent_id: group.id,
+      start_week: '2026-03-09',
       end_week: '2026-03-15',
     })
-    await plantIssue(t, {
-      ...base,
-      parent_id: parent.id,
-      start_week: '2026-01-05',
-      end_week: '2026-06-01',
-      archived_at: NOW,
+    // archived with its subtree, it is still a group
+    const archivedGroup = await plantIssue(t, { ...base, ...span, archived_at: NOW })
+    await plantIssue(t, { ...base, parent_id: archivedGroup.id, archived_at: NOW })
+    const patches: IssuePatch[] = [
+      { start_week: '2026-04-06', end_week: '2026-04-12' }, // a change
+      { start_week: null, end_week: null }, // a clear
+      { end_week: null }, // half a clear
+      span, // the stored values, unchanged
+      { start_week: span.start_week }, // one key alone, unchanged
+    ]
+    for (const row of [group, archivedGroup]) {
+      for (const patch of patches) {
+        const r = await expectRefusal(updateAs(t, f, row.id, patch), 'rule')
+        expect(r.data.message).toBe(GROUP_DATES_RULE)
+        expect(await issueRow(t, row.id)).toEqual(row) // dormant dates, untouched
+      }
+    }
+    expect(await t.run((ctx) => ctx.db.query('activity_events').collect())).toEqual([])
+
+    // a parent whose only subtasks are archived is no group and plans its own dates
+    const former = await plantIssue(t, { ...base, ...span })
+    await plantIssue(t, { ...base, parent_id: former.id, ...span, archived_at: NOW })
+    const ret = await updateAs(t, f, former.id, {
+      start_week: '2026-04-06',
+      end_week: '2026-04-12',
     })
-    const ret = await updateAs(t, f, parent.id, {
-      start_week: '2026-03-09',
-      end_week: '2026-03-22',
-    })
-    // pulled back to the active child's start (never the archived one's); the
-    // asked-for end already covered — the returned row carries what landed
-    expect(ret.start_week).toBe('2026-03-02')
-    expect(ret.end_week).toBe('2026-03-22')
-    const row = await issueRow(t, parent.id)
-    expect(row.start_week).toBe('2026-03-02')
-    expect(row.end_week).toBe('2026-03-22')
+    expect(ret.start_week).toBe('2026-04-06')
+    expect(ret.end_week).toBe('2026-04-12')
   })
 
-  it('a child reschedule cascades: EACH touched ancestor is stamped and its subscribers hear the new span', async () => {
+  it('no subtask write changes an ancestor: reschedule, scheduled create and restore leave every ancestor and its followers alone', async () => {
     const t = newT()
     const f = await withOrg(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
-    const ggp = await plantIssue(t, { ...base, title: 'unscheduled top' })
-    const gp = await plantIssue(t, {
-      ...base,
-      parent_id: ggp.id,
-      start_week: '2026-02-02',
-      end_week: '2026-02-08',
-    })
-    const parent = await plantIssue(t, {
-      ...base,
-      parent_id: gp.id,
-      start_week: '2026-02-02',
-      end_week: '2026-02-08',
-    })
-    const child = await plantIssue(t, {
-      ...base,
-      parent_id: parent.id,
-      start_week: '2026-02-02',
-      end_week: '2026-02-08',
-    })
-    for (const target of [parent.id, gp.id, ggp.id]) await subscribe(t, target, f.user.id)
+    const narrow = { start_week: '2026-02-02', end_week: '2026-02-08' }
+    const top = await plantIssue(t, { ...base, title: 'unscheduled top' })
+    const gp = await plantIssue(t, { ...base, parent_id: top.id, ...narrow })
+    const parent = await plantIssue(t, { ...base, parent_id: gp.id, ...narrow })
+    const child = await plantIssue(t, { ...base, parent_id: parent.id, ...narrow })
+    const ancestors = [parent, gp, top]
+    for (const a of ancestors) await subscribe(t, a.id, f.user.id)
 
-    const ret = await updateAs(t, f, child.id, { start_week: '2026-02-02', end_week: '2026-02-15' })
-    expect(ret.end_week).toBe('2026-02-15')
-
-    for (const id of [parent.id, gp.id]) {
-      const row = await issueRow(t, id)
-      expect(row.start_week).toBe('2026-02-02')
-      expect(row.end_week).toBe('2026-02-15')
-      expect(row.updated_at).toBe(ret.updated_at) // stamped with the mutation's ONE now
-      const msgs = await inbox(t, f.user.id, id)
-      expect(msgs.map((m) => m.detail)).toEqual(['Schedule: 2 Feb – 8 Feb → 2 Feb – 15 Feb'])
-      expect(msgs[0].kind).toBe('change')
-      expect(msgs[0].actor_id).toBe(f.admin.id)
-      expect(msgs[0].created_at).toBe(ret.updated_at)
+    // a reschedule and a scheduled create, both far outside every stored span
+    const moved = await updateAs(t, f, child.id, {
+      start_week: '2026-01-05',
+      end_week: '2026-03-29',
+    })
+    expect(moved.start_week).toBe('2026-01-05')
+    expect(moved.end_week).toBe('2026-03-29')
+    await createAs(t, f, { parent_id: parent.id, start_week: '2026-05-04', end_week: '2026-05-10' })
+    for (const a of ancestors) {
+      expect(await issueRow(t, a.id)).toEqual(a) // dates and updated_at alike
+      expect(await inbox(t, f.user.id, a.id)).toEqual([])
     }
 
-    // the walk stops at the first unscheduled ancestor: untouched, unmessaged
-    const top = await issueRow(t, ggp.id)
-    expect(top.start_week).toBeUndefined()
-    expect(top.updated_at).toBe(NOW)
-    expect(await inbox(t, f.user.id, ggp.id)).toEqual([])
-  })
-
-  it('the widen fires on INSERT too: creating a scheduled child widens a narrower parent', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const parent = await plantIssue(t, {
+    // restoring a scheduled subtask under a scheduled parent the caller
+    // cannot edit (f.guest holds User on f.meta and nothing on f.hidden)
+    const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
-      project_id: f.sub.id,
-      start_week: '2026-02-02',
-      end_week: '2026-02-08',
+      type: 'project',
+      parent_id: f.hidden.id,
     })
-    await subscribe(t, parent.id, f.user.id)
-    await createAs(t, f, { parent_id: parent.id, start_week: '2026-01-26', end_week: '2026-02-08' })
-    const row = await issueRow(t, parent.id)
-    expect(row.start_week).toBe('2026-01-26')
-    expect(row.end_week).toBe('2026-02-08')
-    expect(row.updated_at).not.toBe(NOW)
-    const msgs = await inbox(t, f.user.id, parent.id)
-    expect(msgs.map((m) => m.detail)).toEqual(['Schedule: 2 Feb – 8 Feb → 26 Jan – 8 Feb'])
+    const hiddenParent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: hiddenSub.id,
+      ...narrow,
+    })
+    const buried = await plantIssue(t, {
+      ...base,
+      parent_id: hiddenParent.id,
+      start_week: '2026-03-02',
+      end_week: '2026-03-08',
+      archived_at: NOW,
+    })
+    await subscribe(t, hiddenParent.id, f.admin.id)
+    await as(t, f.guest).mutation(api.issues.unarchive, { org_id: f.org.id, id: buried.id })
+    expect((await issueRow(t, buried.id)).archived_at).toBeUndefined()
+    expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
+    expect(await inbox(t, f.admin.id, hiddenParent.id)).toEqual([])
   })
 
   it('depth caps: the up-walk refuses past 20, and a reparent may not merge two legal chains past the budget', async () => {

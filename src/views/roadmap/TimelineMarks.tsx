@@ -5,7 +5,6 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { LandscapeContext } from '@/lib/landscape'
 import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
-import type { DateEnvelope } from '../../lib/dates'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
 import { type IssueVM, type MilestoneVM, P } from '../../store/planner'
 
@@ -26,7 +25,7 @@ const roadmapBarPaint = (it: IssueVM) => {
   return {
     color,
     rim: `var(--roadmap-bar-${state}-rim, color-mix(in oklab, ${color} var(--roadmap-bar-rim), transparent))`,
-    surface: it.paused
+    surface: P.isPaused(it)
       ? `repeating-linear-gradient(135deg, ${tint} 0 3px, color-mix(in oklab, ${color} 12%, transparent) 3px 7px)`
       : tint,
   }
@@ -86,7 +85,7 @@ export function WeekCountEdge({
           '--roadmap-edge-ring': outside ? undefined : ring,
         } as CSSProperties
       }
-      aria-label={`${it.title}${it.paused ? ', paused' : ''}: ${relation}. ${explanation}. ${endpoint}. Show ${before ? 'earlier' : 'later'} weeks`}
+      aria-label={`${it.title}${P.isPaused(it) ? ', paused' : ''}: ${relation}. ${explanation}. ${endpoint}. Show ${before ? 'earlier' : 'later'} weeks`}
       title={`${verb} ${P.weekNumLabel(edge.endpoint)}`}
       onClick={onReveal}
     >
@@ -105,7 +104,6 @@ export function Bar({
   w0,
   w1,
   weekW,
-  env,
   onSched,
   onCommit,
   onOpen,
@@ -117,7 +115,6 @@ export function Bar({
   w0: number
   w1: number
   weekW: number
-  env: DateEnvelope | null
   onSched: (id: string, start: number, end: number) => void
   onCommit: (id: string, epoch: number) => void
   onOpen: (id: string) => void
@@ -142,8 +139,10 @@ export function Bar({
     frozen: boolean
   } | null>(null)
   const landscape = useContext(LandscapeContext)
-  // Keep pointer handlers for read-only clicks, but gate all plan drags.
-  const movable = P.canWrite(it.project)
+  // Keep pointer handlers for read-only clicks, but gate all plan drags. A
+  // group's dates come from its subtasks, so its bar is never dragged either.
+  const group = P.isGroup(it)
+  const movable = P.canWrite(it.project) && !group
   // Drawn across the visible weeks only: a span that continues past either
   // end stops flush at the timeline edge, squared, where its edge chip joins
   // it. Nothing the bar paints (ring, shadow) may cross that join.
@@ -183,11 +182,9 @@ export function Bar({
     if (d === 0 && !drag.current.moved) return
     if (d !== 0) drag.current.moved = true
     const { mode, s: os, e: oe } = drag.current
-    // window clamp (the bar must keep intersecting the window or it unmounts
-    // mid-drag and loses the release commit) + envelope pin (a parent never
-    // shrinks inside its sub-issues; a bar already violating the rule drags
-    // toward compliance only, never teleports) — see clampBarDrag
-    const r = P.clampBarDrag(mode, os, oe, d, w0, w1, env)
+    // the window clamp keeps the bar intersecting the window, or it would
+    // unmount mid-drag and lose the release commit (see clampBarDrag)
+    const r = P.clampBarDrag(mode, os, oe, d, w0, w1)
     onSched(it.id, r.start, r.end)
   }
   const onUp = () => {
@@ -200,7 +197,7 @@ export function Bar({
 
   return (
     <HoverTooltip
-      content={`${it.title}, ${P.fmtRange(start, end)}${it.paused ? ', paused' : ''}${delayNote}${movable ? '' : ', read-only'}`}
+      content={`${it.title}, ${P.fmtRange(start, end)}${P.isPaused(it) ? ', paused' : ''}${delayNote}${group ? ', dates from subtasks' : movable ? '' : ', read-only'}`}
     >
       <div
         data-bar={it.id}

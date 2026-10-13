@@ -534,7 +534,9 @@ export default defineSchema({
     // owns the task while it is In Review (lib/review.ts)
     reviewer_id: v.optional(v.string()),
     parent_id: v.optional(v.string()), // no self-parent, cycle walk ≤20, same org
-    start_week: v.optional(v.string()), // (start absent) = (end absent), start <= end
+    // (start absent) = (end absent), start <= end; dormant while the task has
+    // active subtasks, whose leaves give its dates
+    start_week: v.optional(v.string()),
     end_week: v.optional(v.string()),
     due_date: v.optional(v.string()),
     remaining_hours: v.optional(v.number()), // >= 0; parents with children have none

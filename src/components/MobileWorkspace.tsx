@@ -506,7 +506,7 @@ export function MobileTaskList({
                   >
                     <span className="min-w-0 flex-1">
                       <span className="mobile-task-title">
-                        {task.paused && <PausedMark size={14} />}
+                        {P.isPaused(task) && <PausedMark size={14} />}
                         {task.title}
                       </span>
                       <span className="mobile-task-meta">

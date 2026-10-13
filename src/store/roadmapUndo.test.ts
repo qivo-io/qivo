@@ -274,12 +274,15 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
-  it('rolls back a refused roadmap change and its optimistic parent widening without another snapshot', async () => {
+  it('rolls back a refused roadmap change and the group span that followed it without another snapshot', async () => {
+    // the group's own stored dates are far away and stay dormant
     const parent = {
       ...snap.issues[1],
       id: crypto.randomUUID(),
       num: 3,
       title: 'Parent planning task',
+      start_week: '2026-12-07',
+      end_week: '2026-12-14',
     }
     delete parent.remaining_hours
     delete parent.remaining_set_at
@@ -290,20 +293,26 @@ describe('roadmap undo through the client store', () => {
     const parentKey = P.issues.find((item) => item.uuid === parent.id)!.id
     const original = { start: child.start, end: child.end }
     const proposed = { start: child.start - 1, end: child.end + 1 }
+    expect(P.issueById[parentKey]).toMatchObject(original)
 
     P.updateIssue(child.id, proposed)
     expect(requests).toHaveLength(1)
-    expect(latest().name).toBe('roadmap:change')
+    expect(latest()).toMatchObject({
+      name: 'roadmap:change',
+      args: { operations: [{ kind: 'task', id: child.uuid }] },
+    })
+    expect(latest().args.operations).toHaveLength(1)
     expect(P.issueById[child.id]).toMatchObject(proposed)
     expect(P.issueById[parentKey]).toMatchObject(proposed)
-    expect(showToast).toHaveBeenCalledExactlyOnceWith(
-      `Widened ${parentKey} to keep covering ${child.id}`,
-      'info',
-    )
+    expect(showToast).not.toHaveBeenCalled()
     latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
 
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      "You don't have permission for that — reverted",
+      'error',
+    )
+    expect(requests).toHaveLength(1)
     expect(P.issueById[child.id]).toMatchObject(original)
     expect(P.issueById[parentKey]).toMatchObject(original)
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })

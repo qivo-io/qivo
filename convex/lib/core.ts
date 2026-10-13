@@ -10,10 +10,10 @@
  * compose these helpers inside ONE internal fn per endpoint (resolve + rules
  * + write + activity in one transaction). Shared RULES live in model/issues.ts
  * (cleanTitle, pairRule, metaNeedsSub, assertLive, assertAssignable,
- * assertNoSubtasks, assertWeekPair, SUB_MUST_NAME) and model/orgs.ts
- * (setPlannableHoursCore); this file adds only what the model does not own:
- * the caller shape, the ref grammar, the catalogue, the access flags, the
- * shared list reads and the wire projections.
+ * assertNoSubtasks, assertNoGroupDates, assertWeekPair, SUB_MUST_NAME) and
+ * model/orgs.ts (setPlannableHoursCore); this file adds only what the model
+ * does not own: the caller shape, the ref grammar, the catalogue, the access
+ * flags, the shared list reads and the wire projections.
  *
  * Refusal grammar: helpers here throw the shipped ConvexError {code, message,
  * reason?} values (lib/functions.ts). REST maps code → status (not_found 404,
@@ -413,7 +413,8 @@ type IssueOutCommon = {
 
 /* REST issueJson (rest:240-254): superset minus project_name; the plan weeks,
  * the parent link (null unless the caller can read the parent) and the
- * `archived` boolean are REST-only. */
+ * `archived` boolean are REST-only. A group's plan weeks are calculated
+ * (groupWeeks), never its dormant stored pair. */
 export type RestIssueJson = IssueOutCommon & {
   parent_id: string | null
   start_week: string | null
@@ -462,6 +463,68 @@ async function parentIdFor(
     : null
 }
 
+/* On REST a group's plan weeks run from the earliest start to the latest
+ * end of the scheduled leaves under it that the caller can read, at any
+ * depth. A nested group counts only through its own leaves; its stored
+ * dates are dormant. The walk passes only through readable tasks, so a
+ * subtask under one the caller cannot read never counts. Like is_group, an
+ * active group counts only active subtasks and an archived one its whole
+ * subtree. Under a group in an active project, subtasks in archived projects
+ * do not count. A leaf without an end counts as its start week. Done leaves
+ * count. Both weeks are null when no such leaf is scheduled. `readable` is
+ * the caller's project flags when the surface already holds them. */
+export async function groupWeeks(
+  ctx: QueryCtx,
+  group: Doc<'issues'>,
+  groupProject: Doc<'projects'>,
+  me: Caller,
+  readable?: (projectId: string) => boolean,
+): Promise<{ start_week: string | null; end_week: string | null }> {
+  const allArchived = group.archived_at !== undefined
+  const liveProject = groupProject.archived_at === undefined
+  // whether a subtask in this project may count, read once per project
+  const counted = new Map<string, Promise<boolean>>()
+  const countsIn = (projectId: string): Promise<boolean> => {
+    let known = counted.get(projectId)
+    if (known === undefined) {
+      known = (async () => {
+        const p = await byId(ctx, 'projects', projectId)
+        if (p === null || (liveProject && p.archived_at !== undefined)) return false
+        return readable !== undefined ? readable(p.id) : await canSeeProject(ctx, me, p)
+      })()
+      counted.set(projectId, known)
+    }
+    return known
+  }
+  let start: string | undefined
+  let end: string | undefined
+  const seen = new Set<string>([group.id])
+  let frontier = [group.id]
+  // assertParentChain bounds chains at 20 tasks, so the walk stops there
+  for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
+    const next: string[] = []
+    for (const parentId of frontier) {
+      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+      for await (const c of kids) {
+        if (seen.has(c.id)) continue
+        if (!allArchived && c.archived_at !== undefined) continue
+        if (!(await countsIn(c.project_id))) continue
+        seen.add(c.id)
+        if (await hasSubtasks(ctx, c.id, c.archived_at !== undefined)) {
+          next.push(c.id) // a nested group counts only through its leaves
+          continue
+        }
+        if (c.start_week === undefined) continue
+        const leafEnd = c.end_week ?? c.start_week
+        if (start === undefined || c.start_week < start) start = c.start_week
+        if (end === undefined || leafEnd > end) end = leafEnd
+      }
+    }
+    frontier = next
+  }
+  return { start_week: start ?? null, end_week: end ?? null }
+}
+
 type RestOut = { surface: 'rest'; me: Caller; readable?: (projectId: string) => boolean }
 
 export async function issueOut(
@@ -486,6 +549,9 @@ export async function issueOut(
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
   if (opts.surface === 'rest') {
+    const weeks = is_group
+      ? await groupWeeks(ctx, issue, project, opts.me, opts.readable)
+      : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
     return {
       id: issue.id,
       key: issueKey(issue.num),
@@ -505,8 +571,8 @@ export async function issueOut(
       reporter_id: issue.reporter_id ?? null,
       reporter_name,
       parent_id: await parentIdFor(ctx, opts.me, issue, opts.readable),
-      start_week: issue.start_week ?? null,
-      end_week: issue.end_week ?? null,
+      start_week: weeks.start_week,
+      end_week: weeks.end_week,
       due_date: issue.due_date ?? null,
       remaining_hours: issue.remaining_hours ?? null,
       remaining_set_at: issue.remaining_set_at ?? null,

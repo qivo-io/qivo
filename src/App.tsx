@@ -1104,10 +1104,14 @@ function App() {
   // Switches to the issue's project/roadmap and closes the window so the
   // timeline is interactable; the Roadmap opens a planning session (spotlight
   // + card) that owns the initial placement, auto-fit, and Confirm/Cancel.
+  // A group's dates come from its subtasks, so it gets the read-only reveal
+  // instead. That opens no session and writes nothing, and a group's dormant
+  // status never stops it as Backlog.
   const planOnRoadmap = (id) => {
     const it = P.issueById[id]
     if (!it) return
-    if (it.status === 'backlog') {
+    const group = P.isGroup(it)
+    if (!group && it.status === 'backlog') {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
       return
     }
@@ -1119,13 +1123,17 @@ function App() {
        there would open a planning session over a bar the view doesn't render. */
     const cur = scopeRef.current
     if (!(P.isAllScope(cur) || (P.isMineScope(cur) && P.isMine(it)))) setScope(meta.id)
+    // a reveal does not bypass the toolbar filters, so clear them as Team
+    // sync's jump does (Focus stays)
+    if (group) clearFilters()
     setView('roadmap')
     setProjectsOpen(false)
     setInboxOpen(false)
     setSync(null)
     setOpenIssue(null)
     focusN.current += 1
-    setFocusPlan({ id, n: focusN.current })
+    if (group) setRevealTask({ id, n: focusN.current })
+    else setFocusPlan({ id, n: focusN.current })
   }
 
   // Task breadcrumb clicks switch to the Board scoped to the clicked

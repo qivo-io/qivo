@@ -204,8 +204,9 @@ export const create = orgMutation({
  * P.updateIssue / P.setStatus. A key's PRESENCE means "set this field"; null
  * is the wire form of a clear (Convex strips undefined from args). num /
  * org_id / reporter_id / done_at / remaining_set_at / archived_at have no slot: immutable
- * or server-owned. The returned row carries the CLAMPED span and any
- * server-set review time — what actually landed. */
+ * or server-owned. The returned row is what actually landed, any
+ * server-set review time included. A date key on a task with subtasks is
+ * refused. */
 export const update = orgMutation({
   args: {
     id: v.string(),

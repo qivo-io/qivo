@@ -393,8 +393,9 @@ export async function notifyIssueInsert(
 /* ---------------------------------------------------------- notify: update
  * notify_issue_update (0114:196-352). Diffs ONLY the trigger's column list;
  * a write that changes nothing in it must not post. Callers hand the STORED
- * before/after rows — for the envelope-widen and remaining-clear side-effect
- * writes too (0075 fix 4: "dates moving on YOUR issue is real news").
+ * before/after rows, for the remaining-clear side-effect write too. A
+ * group's calculated dates are never stored, so a subtask moving its span
+ * sends the group's followers nothing.
  *
  * `suppressNotify` replaces pg_trigger_depth() <= 1: the archive cascade
  * passes it for cascade-written descendant/ancestor rows, and it suppresses

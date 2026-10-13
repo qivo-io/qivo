@@ -57,15 +57,20 @@ Tasks have these fields:
   calendar dates. The today marker and overdue checks refresh at local
   midnight and when you return to a sleeping tab, without changing plan dates.
 - **Planned period**. Start and end weeks on the Roadmap. Planning uses whole
-  weeks ([The Roadmap](./the-roadmap.md)).
+  weeks ([The Roadmap](./the-roadmap.md)). A task with active subtasks takes
+  its planned period from them, from the earliest start to the latest end of
+  the scheduled subtasks you can access. Its own saved dates are hidden and
+  cannot be edited. Removing or archiving the last active subtask, or giving
+  it another parent, restores them.
 - **Paused**. Choose **Pause** in the Status menu to hold work without
   changing its status. Choose **Resume** there, or use the adjacent play
   button on wider screens, to resume it. Paused tasks show an amber mark and
   a hatched Roadmap bar. Their hours do not count toward the owner's load,
   auto-fit or other tasks' delay projections until they resume ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works), [Planning against capacity](./planning-against-real-capacity.md)).
   Add a comment to explain the pause. Backlog and Done cannot be paused;
-  moving a paused task to either status resumes it. REST and MCP use the
-  same `paused` flag.
+  moving a paused task to either status resumes it. A task with active
+  subtasks shows no pause of its own; pause its subtasks instead. REST and
+  MCP use the same `paused` flag.
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
   **parent**, **subtasks** and task **links**. Links can mean “blocks”, “is
   blocked by” or “relates to” and may span projects and teams. You see a link

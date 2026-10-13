@@ -345,9 +345,10 @@ receive events or start work automatically.
 
 Available events are `task.created`, `task.updated`, `task.deleted` and
 `comment.created`. `task.updated` covers stored task-field changes made through
-the app, REST and MCP model paths, scheduling cascades, subtree archiving,
-restoration, automatic archiving and profile-removal cleanup. No-op updates do
-not emit events. Comment edits/deletes, labels, links, attachments, project
+the app, REST and MCP model paths, subtree archiving, restoration, automatic
+archiving and profile-removal cleanup. No-op updates do not emit events. A
+group's dates are calculated from its subtasks, so a subtask date change emits
+no event for the group. Comment edits/deletes, labels, links, attachments, project
 changes and seed/import writes do not have event types in this version.
 Project and organization deletion do not deliver events for their removed tasks.
 Deleting a project can still emit `task.updated` when it detaches a child task

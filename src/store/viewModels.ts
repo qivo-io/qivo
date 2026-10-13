@@ -265,6 +265,9 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     hasHiddenParent: ctx.hiddenParentTasks.has(i.id),
     isGroup,
     links: ctx.linkViews.get(i.id) || [],
+    // the stored plan, in week indexes. rebuild() replaces a group's pair
+    // with the calculated span of its subtasks (groupSpan); its own stored
+    // dates stay dormant in the row until its last subtask leaves
     start: i.start_week != null ? isoToWeek(i.start_week) : null,
     end:
       i.end_week != null

@@ -36,6 +36,8 @@ working connection for the requested task.
   `PATCH /v1/tasks/{ref}` accepts `start_week` and `end_week` as
   `YYYY-MM-DD`: send both to schedule, or both as `null` to clear. After a
   patch, both dates must exist or both be absent, with start no later than end.
+  On a task with `is_group: true`, both dates are calculated from the subtasks
+  you can read and cannot be patched; schedule its subtasks instead.
   These fields are not MCP write arguments; `due_date` is a separate deadline.
   Both dates name the first day of a week, and the end week is included. For
   a Monday-based calendar, `2026-09-21` through `2026-09-28` is two weeks.
@@ -121,9 +123,9 @@ Useful field rules:
 - Reporter is set only when creating a task. Any update containing
   `reporter_id` is refused in full, including its other requested changes.
 - `remaining_hours` means work left, not the original estimate. A task with
-  `is_group: true` derives its progress and remaining work from active subtasks;
-  direct status/hour edits are refused. Inspect the subtasks to determine
-  which changes match the user's request.
+  `is_group: true` derives its progress, remaining work and planned weeks from
+  active subtasks; direct status, hour and date edits are refused. Inspect the
+  subtasks to determine which changes match the user's request.
 - An agent's `plannable_hours: null` means no weekly capacity limit in Qivo,
   not zero capacity. Human capacity is shared across projects.
 

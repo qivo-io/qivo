@@ -15,6 +15,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { classifySecret, REST_AUTH_401, sha256hex } from '../machine/auth'
+import { GROUP_DATES_MACHINE } from '../model/issues'
 import {
   activityFor,
   expectRefusal,
@@ -1534,6 +1535,180 @@ describe('PATCH /v1/tasks/{ref}', () => {
       'forbidden',
       NO_WRITE,
     )
+  })
+})
+
+/* ------------------------------------------------------------ group dates */
+
+describe("a group's dates on REST", () => {
+  const span = (start_week: string, end_week: string) => ({ start_week, end_week })
+
+  it('GET calculates a group from the leaves the key can read, at any depth, and lists the same', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const archivedSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    // the group's own stored dates are dormant
+    const group = await plantIssue(t, {
+      ...base,
+      title: 'Group',
+      ...span('2026-09-07', '2026-09-13'),
+    })
+    await plantIssue(t, { ...base, parent_id: group.id, ...span('2026-02-02', '2026-02-08') })
+    // a nested group counts only through its leaves; a leaf without an end
+    // counts as its start week
+    const nested = await plantIssue(t, {
+      ...base,
+      project_id: f.sub2.id,
+      parent_id: group.id,
+      ...span('2025-01-06', '2027-12-27'),
+    })
+    await plantIssue(t, { ...base, parent_id: nested.id, ...span('2026-02-16', '2026-02-22') })
+    await plantIssue(t, { ...base, parent_id: nested.id, start_week: '2026-03-02' })
+    // never counted: an archived leaf, a leaf in an archived project
+    await plantIssue(t, {
+      ...base,
+      parent_id: group.id,
+      archived_at: NOW,
+      ...span('2025-12-01', '2027-01-04'),
+    })
+    await plantIssue(t, {
+      ...base,
+      project_id: archivedSub.id,
+      parent_id: group.id,
+      ...span('2025-10-06', '2027-03-01'),
+    })
+    // counted only once the key can read them: a hidden leaf, and a readable
+    // grandchild under a hidden middle task
+    await plantIssue(t, {
+      ...base,
+      project_id: hiddenSub.id,
+      parent_id: group.id,
+      ...span('2025-11-03', '2027-02-01'),
+    })
+    const middle = await plantIssue(t, { ...base, project_id: hiddenSub.id, parent_id: group.id })
+    await plantIssue(t, { ...base, parent_id: middle.id, ...span('2025-09-01', '2027-04-05') })
+    // a group with no scheduled leaf it can read has no dates
+    const empty = await plantIssue(t, {
+      ...base,
+      title: 'Empty',
+      ...span('2026-05-04', '2026-05-10'),
+    })
+    await plantIssue(t, { ...base, parent_id: empty.id })
+    await plantIssue(t, {
+      ...base,
+      project_id: hiddenSub.id,
+      parent_id: empty.id,
+      ...span('2026-06-01', '2026-06-07'),
+    })
+    const dates = (out: { start_week: string | null; end_week: string | null } | undefined) =>
+      out && { start_week: out.start_week, end_week: out.end_week }
+    const read = async () => {
+      const get = (ref: string) =>
+        t.query(internal.machine.rest.getIssue, { callerId: f.agent.id, ref })
+      const listed = await t.query(internal.machine.rest.listIssues, { callerId: f.agent.id })
+      const out = new Map<string, unknown>()
+      for (const row of [group, nested, empty]) {
+        const one = await get(row.id)
+        expect(one.is_group).toBe(true)
+        expect(dates(listed.find((i) => i.id === row.id)), row.title).toEqual(dates(one))
+        out.set(row.id, dates(one))
+      }
+      return out
+    }
+    let got = await read()
+    expect(got.get(group.id)).toEqual(span('2026-02-02', '2026-03-02'))
+    expect(got.get(nested.id)).toEqual(span('2026-02-16', '2026-03-02'))
+    expect(got.get(empty.id)).toEqual({ start_week: null, end_week: null })
+    // reading the hidden project brings in its leaf and the grandchild under it
+    await grant(t, f.hidden.id, f.agent.id, 'viewer')
+    got = await read()
+    expect(got.get(group.id)).toEqual(span('2025-09-01', '2027-04-05'))
+    expect(got.get(empty.id)).toEqual(span('2026-06-01', '2026-06-07'))
+  })
+
+  it('an archived group counts its archived subtree, and a leaf keeps its own dates', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const group = await plantIssue(t, {
+      ...base,
+      archived_at: NOW,
+      ...span('2026-01-05', '2026-01-11'),
+    })
+    await plantIssue(t, {
+      ...base,
+      parent_id: group.id,
+      archived_at: NOW,
+      ...span('2026-04-06', '2026-04-12'),
+    })
+    const leaf = await plantIssue(t, { ...base, ...span('2026-01-05', '2026-01-11') })
+    const get = (ref: string) =>
+      t.query(internal.machine.rest.getIssue, { callerId: f.agent.id, ref })
+    expect(await get(group.id)).toMatchObject({
+      is_group: true,
+      ...span('2026-04-06', '2026-04-12'),
+    })
+    expect(await get(leaf.id)).toMatchObject({
+      is_group: false,
+      ...span('2026-01-05', '2026-01-11'),
+    })
+  })
+
+  it('PATCH refuses any start_week or end_week on a group and changes nothing; its subtasks still plan', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const stored = span('2026-03-02', '2026-03-08')
+    const group = await plantIssue(t, { ...base, ...stored })
+    const kid = await plantIssue(t, {
+      ...base,
+      parent_id: group.id,
+      ...span('2026-03-09', '2026-03-15'),
+    })
+    const archivedGroup = await plantIssue(t, { ...base, ...stored, archived_at: NOW })
+    await plantIssue(t, { ...base, parent_id: archivedGroup.id, archived_at: NOW })
+    await plantSubscription(t, { issue_id: group.id, profile_id: f.user.id })
+    const patch = (ref: string, body: unknown) =>
+      t.mutation(internal.machine.rest.updateIssue, {
+        callerId: f.agent.id,
+        keyName: KEY,
+        ref,
+        body: JSON.stringify(body),
+      })
+    for (const row of [group, archivedGroup]) {
+      for (const body of [
+        span('2026-04-06', '2026-04-12'),
+        { start_week: null, end_week: null },
+        { end_week: null },
+        stored, // the dormant stored dates, unchanged
+        { start_week: stored.start_week, title: 'Refused whole' },
+        { end_week: '2026-03-08', archived: row.archived_at === undefined },
+      ]) {
+        await refused(patch(row.id, body), 'bad_request', GROUP_DATES_MACHINE)
+        expect(await issueRow(t, row.id)).toEqual(row)
+      }
+    }
+    expect(await activityFor(t, f.org.id)).toEqual([])
+    // a subtask still plans, and the group reads its new span without a write
+    await patch(kid.id, span('2026-05-04', '2026-05-17'))
+    expect(await issueRow(t, group.id)).toEqual(group)
+    expect(await messagesFor(t, f.user.id, group.id)).toEqual([])
+    const out = await t.query(internal.machine.rest.getIssue, {
+      callerId: f.agent.id,
+      ref: group.id,
+    })
+    expect(out).toMatchObject(span('2026-05-04', '2026-05-17'))
   })
 })
 

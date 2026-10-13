@@ -13,18 +13,16 @@
  *               parent chain guard incl. same-org → archive-parent guard →
  *               assignee guard (only when changed) → reviewer guard (only
  *               when changed; refused on a task with subtasks) → remaining
- *               guard (0072: the guard raises BEFORE the stamp)
+ *               guard (0072: the guard raises BEFORE the stamp) → status
+ *               and group-dates guards (a task with subtasks takes neither,
+ *               whatever the value)
  *   stamps      done stamp (0071) → remaining stamp (server-owned) →
  *               review-time stamp (status INTO review, no explicit hours:
  *               the project review time with a fresh remaining_set_at) →
  *               review hand-off stamp (review_at, lib/review.ts) → touch
- *   clamp       parent side, on the incoming values (0070) — the row lands
- *               already covering, and narration/notify diff the clamped row
- *   write       the row insert/patch
- *   widen loop  child side (0070), plain loop depth ≤ 20 — EACH touched
- *               ancestor is touched (updated_at) AND notified: "envelope
- *               cascade writes keep notifying: dates moving on YOUR issue is
- *               real news" (0075 fix 4)
+ *   write       the row insert/patch. A group's dates are calculated from
+ *               its leaves by every reader, so no write ever changes an
+ *               ancestor's dates because a child changed
  *   clear       clearParentRemaining on attach (0066/0067) — also notifies
  *               and touches the parent
  *   notify      notifyIssueInsert/Update fan-out for the row itself
@@ -83,6 +81,15 @@ export const REVIEWER_RULE =
   'a task can only be reviewed by an active user with Edit permission or higher on its project'
 export const REVIEWER_ON_GROUP =
   'a task with subtasks has no reviewer of its own; set reviewers on its subtasks'
+
+/* A group's dates run from the earliest start to the latest end of its
+ * scheduled leaves, so a direct date write on one is refused like its
+ * status. The first sentence is the app's, the second the machine one that
+ * names both REST fields. */
+export const GROUP_DATES_RULE =
+  'a task with subtasks takes its dates from them; plan its subtasks instead'
+export const GROUP_DATES_MACHINE =
+  'start_week and end_week cannot be set on a task with subtasks; its dates come from its subtasks'
 
 /* ------------------------------------------------------- shared guards
  * core.ts grammar (bad_request) — the machine surface's readable errors,
@@ -253,8 +260,10 @@ export async function assertNoSubtasks(ctx: QueryCtx, issueId: string): Promise<
 
 /* An active task is a grouping while it has an unarchived direct child.
  * Archived groups retain their hierarchy for display until restored. The
- * stored status stays dormant, ready to resume after the last active child
- * is detached, deleted or archived. Child visibility must not change this
+ * stored status, start_week and end_week stay dormant, ready to resume after
+ * the last active child is detached, deleted or archived. Nothing reads,
+ * clears or migrates them while the task is a group; readers calculate its
+ * dates from its leaves instead. Child visibility must not change this
  * fact: readers disclose only the boolean, never hidden child identities. */
 export async function hasSubtasks(
   ctx: QueryCtx,
@@ -279,6 +288,15 @@ export function subtaskParentIds(
     }
   }
   return parents
+}
+
+/* Machine pre-check twin of the group-dates guard in updateIssueCore,
+ * naming both REST fields. The caller runs it whenever start_week or
+ * end_week is present, so null and unchanged values are refused too. */
+export async function assertNoGroupDates(ctx: QueryCtx, issue: Doc<'issues'>): Promise<void> {
+  if (await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)) {
+    throw badRequest(GROUP_DATES_MACHINE)
+  }
 }
 
 /* The trigger's sentence (issue_remaining_guard, 0066:44 + 0070:184 child
@@ -409,77 +427,6 @@ export function doneStampUpdate(
     return now // restored while still done: the auto-archive clock restarts (0071 fix 1)
   }
   return old.done_at // steady state: a side-effect write must not stamp a stampless row
-}
-
-/* ------------------------------------------------- envelope, parent side
- * issue_envelope_clamp (0070:117-139): BEFORE-write adjustment of incoming
- * values on UPDATE of start/end — never on INSERT (a brand new row cannot
- * have children). Cleared or malformed shapes pass through untouched so the
- * pair CHECK decides uniformly with childless rows (0038 fix 3); archived
- * children do not constrain. */
-export async function clampEnvelope(
-  ctx: QueryCtx,
-  issueId: string,
-  start: string | undefined,
-  end: string | undefined,
-): Promise<{ start: string | undefined; end: string | undefined }> {
-  if (start === undefined || end === undefined || start > end) return { start, end }
-  let min: string | undefined
-  let max: string | undefined
-  const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', issueId))
-  for await (const c of kids) {
-    if (c.start_week === undefined || c.archived_at !== undefined) continue
-    const ce = c.end_week ?? c.start_week
-    if (min === undefined || c.start_week < min) min = c.start_week
-    if (max === undefined || ce > max) max = ce
-  }
-  if (min === undefined) return { start, end }
-  return { start: start < min ? start : min, end: end > (max as string) ? end : max }
-}
-
-/* -------------------------------------------------- envelope, child side
- * issue_envelope_widen (0070:141-167) as the design's plain loop: walk
- * parent_id upward, patch each non-covering scheduled ancestor wider, stop at
- * an unscheduled or already-covering one (no opportunistic repair of
- * violations the edit didn't touch — same rule as the client mirror). Every
- * touched ancestor is TOUCHED (updated_at — the stale-dimming filter reads
- * it) and NOTIFIED (its subscribers get a real Schedule message — 0075 fix 4;
- * in SQL the inner UPDATE fired issues_touch and issues_notify_update).
- * Archived rows don't constrain their ancestors. The depth raise is 0070's
- * backstop for a corrupt chain — unreachable while assertParentChain bounds
- * chains at 20 nodes, but better than committing a chain whose top was
- * silently never widened. */
-export async function widenFrom(
-  ctx: MutationCtx,
-  a: { row: Doc<'issues'>; actor: Doc<'profiles'>; now: string },
-): Promise<void> {
-  let cur = a.row
-  const seen = new Set<string>([cur.id])
-  for (let depth = 0; ; depth++) {
-    if (cur.archived_at !== undefined) return
-    if (cur.start_week === undefined || cur.parent_id === undefined) return
-    if (depth >= 20 || seen.has(cur.parent_id)) {
-      throw rule('task hierarchy too deep for the envelope cascade')
-    }
-    const parent = await byId(ctx, 'issues', cur.parent_id)
-    if (parent === null) return
-    seen.add(parent.id)
-    if (parent.start_week === undefined) return // unscheduled parents have no dates to violate
-    const cs = cur.start_week
-    const ce = cur.end_week ?? cs
-    const ps = parent.start_week
-    const pe = parent.end_week ?? ps
-    if (ps <= cs && pe >= ce) return // already covering
-    const before = { ...parent }
-    await ctx.db.patch(parent._id, {
-      start_week: ps < cs ? ps : cs,
-      end_week: pe > ce ? pe : ce,
-      updated_at: a.now,
-    })
-    const after = (await ctx.db.get(parent._id)) as Doc<'issues'>
-    await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now })
-    cur = after
-  }
 }
 
 /* --------------------------------------------- remaining clear-on-attach
@@ -816,10 +763,7 @@ export async function createIssueCore(
     badRequest('a task with this id already exists'),
   )
   const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
-  // SQL widen fired on INSERT too; then the attach clears the parent's hours
-  if (issue.parent_id !== undefined && issue.start_week !== undefined) {
-    await widenFrom(ctx, { row: issue, actor: me, now })
-  }
+  // the attach clears the parent's hours; its dates are calculated, never written
   if (issue.parent_id !== undefined) {
     await clearParentRemaining(ctx, { parentId: issue.parent_id, actor: me, now })
   }
@@ -915,7 +859,7 @@ export async function updateIssueCore(
     return project
   }
   // whether the task has active subtasks, read before the write, at most once
-  // and only by the status and reviewer guards (a group's are dormant)
+  // and only by the status, dates and reviewer guards (a group's are dormant)
   let group: boolean | undefined
   const isGroup = async (): Promise<boolean> =>
     (group ??= await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined))
@@ -960,6 +904,10 @@ export async function updateIssueCore(
     }
     w.status = patch.status
   }
+  // a group's dates come from its leaves, so any date key is refused, null
+  // and unchanged values included, and the stored pair stays dormant
+  const datesInPatch = 'start_week' in patch || 'end_week' in patch
+  if (datesInPatch && (await isGroup())) throw rule(GROUP_DATES_RULE)
   // -- review-time stamp: entering Review is a fresh measurement, so the
   //    project review time lands with a new stamp even when the hours are
   //    unchanged. An explicit non-null remaining_hours in the same write
@@ -988,42 +936,33 @@ export async function updateIssueCore(
   w.review_at = reviewStamp(issue, { status: nextStatus, reviewer_id: nextReviewer }, now)
   if (toggle !== undefined) w.archived_at = nextArchivedAt // undefined clears via patch
   w.updated_at = now
-  // -- clamp the incoming values against the active scheduled children; the
-  //    clamped span is what lands, returns, and gets narrated
-  if ('start_week' in patch || 'end_week' in patch) {
-    const s0 = 'start_week' in patch ? (patch.start_week ?? undefined) : issue.start_week
-    const e0 = 'end_week' in patch ? (patch.end_week ?? undefined) : issue.end_week
-    assertWeekPair(s0, e0)
-    const clamped = await clampEnvelope(ctx, issue.id, s0, e0)
-    w.start_week = clamped.start
-    w.end_week = clamped.end
+  // -- a leaf's plan lands as given once the resulting pair holds
+  if (datesInPatch) {
+    const start = 'start_week' in patch ? (patch.start_week ?? undefined) : issue.start_week
+    const end = 'end_week' in patch ? (patch.end_week ?? undefined) : issue.end_week
+    assertWeekPair(start, end)
+    w.start_week = start
+    w.end_week = end
   }
   // -- the row write: ONE patch, the folded archive toggle included
   await ctx.db.patch(issue._id, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
-  // -- cascade + widen loop (per-ancestor notify + touch), then clear-on-attach
+  // -- cascade, then clear-on-attach
   if (toggle === 'restored') {
     // the restore cascade: surface the ancestor chain (suppressed echoes),
-    // then every restored row re-covers upward — unarchiveIssueCore's bodies
-    const ancestors = await restoreAncestors(ctx, { row: after, actor: me, now })
-    for (const r of [after, ...ancestors]) {
-      const fresh = (await ctx.db.get(r._id)) as Doc<'issues'>
-      await widenFrom(ctx, { row: fresh, actor: me, now })
-    }
-  } else {
+    // as unarchiveIssueCore does
+    await restoreAncestors(ctx, { row: after, actor: me, now })
+  } else if (toggle === 'archived') {
     // archive branch: descendants stamped, never notified (their only change
     // is the suppressed Archived line — archiveIssueCore's walk)
-    if (toggle === 'archived') await archiveSubtree(ctx, issue.id, now, me)
-    if ('start_week' in patch || 'end_week' in patch || 'parent_id' in patch) {
-      await widenFrom(ctx, { row: after, actor: me, now }) // no-op on an archived row
-    }
+    await archiveSubtree(ctx, issue.id, now, me)
   }
   if ('parent_id' in patch && nextParent !== undefined) {
     await clearParentRemaining(ctx, { parentId: nextParent, actor: me, now })
   }
   // -- ONE fan-out for the row itself (diffs only the trigger's column list;
   //    the Archived/Restored line rides the same message as the field changes).
-  //    `group` is known whenever the status or reviewer changed; an assignee
+  //    `group` is known whenever the status, dates or reviewer changed; an assignee
   //    change alone subscribes the same people either way.
   await notifyIssueUpdate(ctx, { before: issue, after, actor: me, now, isGroup: group === true })
   // -- activity: ONE row — machine grammar when the trusted override is
@@ -1232,25 +1171,23 @@ export async function archiveIssueCore(
  * Restore branch (0071:66-75): the whole ancestor chain surfaces, each
  * restored parent also loses its own hours (it has sub-issues again — 0066,
  * like attach) with the stamp pairing kept and any review hand-off, and a
- * restored still-done row's done_at restarts (0071 fix 1). Ancestors are
- * restored FIRST, then the widen loop re-covers from the restored rows
- * (0070:169-171 — the SQL relied on alphabetical trigger order for this). Cascade echoes mask ONLY the
- * Archived/Restored line out of the diff: a cleared remaining still narrates
- * to that ancestor's subscribers. The walk stops at an active ancestor —
- * one that merely held hours loses them but the chain above it never was
- * archived. */
+ * restored still-done row's done_at restarts (0071 fix 1). No ancestor's
+ * dates change, because a restored group's span is calculated from its
+ * leaves.
+ * Cascade echoes mask ONLY the Archived/Restored line out of the diff: a
+ * cleared remaining still narrates to that ancestor's subscribers. The walk
+ * stops at an active ancestor — one that merely held hours loses them but
+ * the chain above it never was archived. */
 /* The ancestor walk, shared with updateIssueCore's folded machine toggle:
  * restores/clears the chain above `row` (each echo notified with the Restored
- * line suppressed), returning the patched ancestor rows bottom-up — the row
- * itself is the caller's to notify and widen. An ancestor it would change in
- * a project the actor cannot edit refuses the restore. */
+ * line suppressed). The row itself is the caller's to notify. An ancestor it
+ * would change in a project the actor cannot edit refuses the restore. */
 async function restoreAncestors(
   ctx: MutationCtx,
   a: { row: Doc<'issues'>; actor: Doc<'profiles'>; now: string },
-): Promise<Doc<'issues'>[]> {
+): Promise<void> {
   const { actor, now } = a
   const editable = editableBy(ctx, actor)
-  const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
   const seen = new Set<string>([a.row.id])
   for (let depth = 0; cur.parent_id !== undefined; depth++) {
@@ -1284,11 +1221,9 @@ async function restoreAncestors(
       now,
       suppressNotify: true,
     })
-    restored.push(pAfter)
     if (!wasArchived) break
     cur = pAfter
   }
-  return restored
 }
 
 export async function unarchiveIssueCore(
@@ -1304,14 +1239,7 @@ export async function unarchiveIssueCore(
     updated_at: now,
   })
   const rootAfter = (await ctx.db.get(issue._id)) as Doc<'issues'>
-  const ancestors = await restoreAncestors(ctx, { row: rootAfter, actor: me, now })
-  // ancestors are restored — now every restored row re-covers upward, exactly
-  // as each SQL row's own widen firing did (re-read: the loop above or a
-  // previous widen may have changed the row since)
-  for (const r of [rootAfter, ...ancestors]) {
-    const fresh = (await ctx.db.get(r._id)) as Doc<'issues'>
-    await widenFrom(ctx, { row: fresh, actor: me, now })
-  }
+  await restoreAncestors(ctx, { row: rootAfter, actor: me, now })
   await notifyIssueUpdate(ctx, { before, after: rootAfter, actor: me, now }) // 'Restored'
   const event = {
     org_id: issue.org_id,

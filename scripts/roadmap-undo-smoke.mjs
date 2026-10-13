@@ -92,6 +92,27 @@ async function dragWeeks(id, weeks) {
   await page.mouse.up()
 }
 
+/* A group's dates are calculated from its scheduled subtasks, so the parent's
+   span in the client store must match its only subtask, whatever the
+   parent's stored row holds. Waits because the store rebuilds after the
+   server's write arrives. */
+async function spanFollows(group, child, message) {
+  await page
+    .waitForFunction(
+      ([group, child]) => {
+        const P = window.PLANNER
+        const g = P.issueById[group]
+        const c = P.issueById[child]
+        return !!g && !!c && c.start != null && g.start === c.start && g.end === c.end
+      },
+      [group, child],
+      { timeout: 10_000 },
+    )
+    .catch(() => {
+      throw new Error(message)
+    })
+}
+
 async function readTask(id) {
   await bar(id).click({ position: { x: 18, y: 10 } })
   await page.locator('[data-issue-key]').first().waitFor({ state: 'visible' })
@@ -187,7 +208,7 @@ try {
     (ids) => ids.every((id) => window.PLANNER.issues.some((it) => it.uuid === id)),
     tasks.map(({ id }) => id),
   )
-  const [, child, leaf] = await page.evaluate(
+  const [parent, child, leaf] = await page.evaluate(
     (ids) => ids.map((id) => window.PLANNER.issues.find((it) => it.uuid === id).id),
     tasks.map(({ id }) => id),
   )
@@ -200,28 +221,34 @@ try {
   assert.equal(await page.locator('[data-roadmap-revert-all]').count(), 0)
   const baseline = await persisted()
 
+  await spanFollows(parent, child, 'Parent span does not match its subtask before planning')
+
+  // The leaf blocks the parent, so Auto-move must move the parent's subtask.
   await page.locator('[data-auto-correct]').click()
   await settled(1)
   const corrected = await persisted()
-  assert.notEqual(corrected.tasks[0].start, baseline.tasks[0].start)
-  assert.notEqual(corrected.tasks[1].start, baseline.tasks[1].start)
-  assert.deepEqual(corrected.tasks[2], baseline.tasks[2], 'Auto-correct moved its blocker')
+  assert.deepEqual(corrected.tasks[0], baseline.tasks[0], "Auto-move wrote the parent's own dates")
+  assert.notEqual(corrected.tasks[1].start, baseline.tasks[1].start, 'Auto-move left the subtask')
+  assert.deepEqual(corrected.tasks[2], baseline.tasks[2], 'Auto-move moved its blocker')
+  await spanFollows(parent, child, 'Parent span did not follow the subtask Auto-move moved')
   await undo().click()
   await settled(0)
-  assert.deepEqual(await persisted(), baseline, 'Grouped Auto-correct undo lost family dates')
-  log('One Auto-correct action creates one undo step for its whole task family')
+  assert.deepEqual(await persisted(), baseline, 'Auto-move undo did not restore the subtask')
+  await spanFollows(parent, child, 'Parent span did not follow the subtask after Auto-move undo')
+  log('One Auto-move action is one undo step; it writes only the subtask, and the parent follows')
 
   await dragWeeks(child, 2)
   await settled(1)
   const first = await persisted()
   assert.notEqual(first.tasks[1].start, baseline.tasks[1].start, 'Child drag was not saved')
-  assert.notEqual(first.tasks[0].end, baseline.tasks[0].end, 'Child drag did not widen parent')
+  assert.deepEqual(first.tasks[0], baseline.tasks[0], "Child drag wrote the parent's own dates")
+  await spanFollows(parent, child, 'Parent span did not follow the dragged subtask')
   await dragWeeks(leaf, 1)
   await settled(2)
   await undo().click()
   await settled(1)
   assert.deepEqual(await persisted(), first, 'Undo did not restore only the latest action')
-  log('Task drags save; Undo restores one step and retains earlier parent widening')
+  log("Task drags save only the dragged task; the parent's span follows; Undo restores one step")
 
   await page.evaluate(({ id, week }) => window.PLANNER.updateMilestone(id, { week }), {
     id: milestone.id,
@@ -251,9 +278,8 @@ try {
     baseline,
     'Repeated Undo did not restore dates and milestones',
   )
-  log(
-    'Repeated Undo restores widened ancestors and reverses milestone creation, edits and deletion',
-  )
+  await spanFollows(parent, child, 'Parent span did not follow the subtask after repeated Undo')
+  log('Repeated Undo restores task dates and reverses milestone creation, edits and deletion')
 
   await page.locator('[data-ue-open]').click()
   await page.locator(`[data-ue-jump="${fixture.nora}"]`).click()
