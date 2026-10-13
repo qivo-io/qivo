@@ -9,6 +9,7 @@ import React, {
   lazy,
   Suspense,
   useEffect as useEffectID,
+  useLayoutEffect as useLayoutEffectID,
   useRef as useRefID,
   useState as useStateID,
 } from 'react'
@@ -1034,9 +1035,12 @@ function IssueDetail({
   const [moveOpen, setMoveOpen] = useStateID(false)
   const [archiveOpen, setArchiveOpen] = useStateID(false)
   const [deleteOpen, setDeleteOpen] = useStateID(false)
-  // the task this window shows now, for work that finishes after a switch
+  // the task this window shows now, for work that finishes after a switch;
+  // updated once a render commits, never during one
   const shownIssue = useRefID(issueId)
-  shownIssue.current = issueId
+  useLayoutEffectID(() => {
+    shownIssue.current = issueId
+  }, [issueId])
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
   // the description discloses only in the embedded pane; the floating window
   // pins it open, which is what discussion-first means there
