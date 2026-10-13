@@ -76,10 +76,10 @@ The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
 
 Setting a parent changes both tasks, so it needs edit access to the subtask
-and to the parent. The pickers offer only tasks you can edit, plus the current
-parent so you can remove it. Removing a
-parent needs edit access to the subtask only. Linking needs edit access to one
-of the two tasks and access to the other.
+and to the parent. The parent and subtask pickers offer only tasks you can
+edit, plus the current parent so you can remove it. Removing a parent needs
+edit access to the subtask only. Linking needs edit access to one of the two
+tasks and access to the other.
 
 ## Moving a task
 
