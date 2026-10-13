@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
+type IssueRow = Snapshot['issues'][number]
+type Task = (id: string, num: number, extra?: Partial<IssueRow>) => IssueRow
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -24,7 +26,7 @@ describe('removing someone who has work in the project', () => {
   let requests: { name: string; args: Record<string, unknown> }[]
   let work: string
 
-  async function load(change?: (snap: Snapshot) => void) {
+  async function load(change?: (snap: Snapshot, task: Task) => void) {
     const snap: Snapshot = plannerFixture()
     const org = snap.orgs[0].id
     work = snap.projects[0].id
@@ -56,7 +58,7 @@ describe('removing someone who has work in the project', () => {
       { project_id: work, profile_id: 'leo', level: 'user' },
       { project_id: work, profile_id: 'dan', level: 'user' },
     )
-    const task = (id: string, num: number, extra = {}) => ({
+    const task: Task = (id, num, extra = {}) => ({
       id,
       org_id: org,
       project_id: work,
@@ -78,7 +80,7 @@ describe('removing someone who has work in the project', () => {
       task('t3', 3, { assignee_id: 'leo', status: 'done' as const }),
       task('t4', 4, { assignee_id: 'ann' }),
     )
-    change?.(snap)
+    change?.(snap, task)
     network.onUpdate.mockImplementation((ref, _args, next) => {
       if (getFunctionName(ref) === 'snapshot:forMe') next(structuredClone(snap))
       return () => {}
@@ -143,6 +145,34 @@ describe('removing someone who has work in the project', () => {
     expect(P.reassignChoices(work, { teamId: 'crew' }, crew.items).map((u) => u.id)).not.toContain(
       'ann',
     )
+  })
+
+  it('offers nobody who would lose sight of a task above once the grant is gone', async () => {
+    // Crew's only grant is on the parent project Plan, so it reaches Work and
+    // Specs; Dan, in Crew, edits Work through his own grant but sees the epic
+    // in Specs only through Crew
+    await load((snap, task) => {
+      const base = snap.projects[0]
+      snap.projects.push(
+        { ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' },
+        { ...base, id: 'specs', key: 'SPEC', num: 3, name: 'Specs', parent_id: 'plan' },
+      )
+      base.parent_id = 'plan'
+      snap.teamAccess = [{ project_id: 'plan', team_id: 'crew', level: 'user' }]
+      snap.teamMembers.push({ team_id: 'crew', profile_id: 'dan', is_leader: false })
+      snap.issues.push(
+        task('epic', 5, { project_id: 'specs' }),
+        task('sub', 6, { parent_id: 'epic', assignee_id: 'ann' }),
+      )
+    })
+    const crew = P.accessRemoval('plan', { teamId: 'crew' })
+    expect(crew.people).toEqual(['ann'])
+    expect(crew.items.map((i) => i.task.uuid)).toEqual(['t4', 'sub'])
+    const ids = P.reassignChoices('plan', { teamId: 'crew' }, crew.items).map((u) => u.id)
+    expect(P.seesTasksAbove(vm('sub'), 'dan')).toBe(true) // today, through Crew
+    expect(ids).not.toContain('dan')
+    expect(ids).not.toContain('leo') // never saw Specs
+    expect(ids).toHaveLength(1) // the organization admin
   })
 
   it('keeps a person as a Viewer with their tasks', async () => {

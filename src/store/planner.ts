@@ -2151,14 +2151,20 @@ export const PLANNER = {
      one outside it (a hidden parent) is left to the server, which refuses
      with the same rule. */
   /* The first task above `it` (its parent, then up) in a project the person
-     cannot see, or null. A task outside this view is left to the server. */
-  unseenAbove: (x: IssueVM | string, uid: string): IssueVM | null => {
+     cannot see, or null. A task outside this view is left to the server.
+     `sees` replaces the current grants, for example with grants as they
+     would be after a removal. */
+  unseenAbove: (
+    x: IssueVM | string,
+    uid: string,
+    sees = (projectId: string) => PLANNER.canSee(projectId, uid),
+  ): IssueVM | null => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     const seen = new Set<string>()
     for (let up = it?.parent ? PLANNER.issueById[it.parent] : null; up; ) {
       if (seen.has(up.id)) break
       seen.add(up.id)
-      if (!PLANNER.canSee(up.project, uid)) return up
+      if (!sees(up.project)) return up
       up = up.parent ? PLANNER.issueById[up.parent] : null
     }
     return null
@@ -2252,7 +2258,8 @@ export const PLANNER = {
     return { people: [...new Set(items.map((i) => i.uid))], items }
   },
   /* Who can take over every listed task once the grant is gone: Edit access
-     to each task's project as it would be, and sight of every task above. */
+     to each task's project and sight of every task above, both as the grants
+     would be. */
   reassignChoices: (pid: string, change: AccessRemoval, items: Holder[]): UserVM[] => {
     const project = PLANNER.project(pid)
     if (!project) return []
@@ -2265,7 +2272,7 @@ export const PLANNER = {
         items.every(
           (i) =>
             ['lead', 'user'].includes(level(u.id, i.task.project) || '') &&
-            PLANNER.seesTasksAbove(i.task, u.id),
+            !PLANNER.unseenAbove(i.task, u.id, (projectId) => !!level(u.id, projectId)),
         ),
     )
   },
