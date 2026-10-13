@@ -674,6 +674,7 @@ export function ProjectPage({
           />
           {removal && (
             <AccessRemovalModal
+              key={'userId' in removal ? removal.userId : removal.teamId}
               projectId={proj.id}
               change={removal}
               onClose={() => setRemoval(null)}

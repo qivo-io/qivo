@@ -25,7 +25,8 @@ sub-projects. The window lists those tasks and offers two choices.
 the tasks and can read the project but cannot change it. **Reassign** hands
 every listed task, reviewer roles included, to one person who keeps User or
 Lead access to those tasks, or to **Unassigned**, and removes the grant once
-every task is saved. If a task cannot be reassigned, the grant stays.
+every task is saved. If a task cannot be reassigned, the grant stays, tasks
+already saved keep their new assignee, and the window lists what remains.
 Removing someone who is already a Viewer offers only the reassignment. Done
 tasks keep their assignee and are not listed.
 

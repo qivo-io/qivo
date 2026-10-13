@@ -720,7 +720,9 @@ function MoveIssueModal({
    the window opens, so a choice applies only to the tasks the person read;
    if they or the chosen person's eligibility changed meanwhile, the window
    shows the new lists and asks again. It stays open, and keeps the access
-   list behind it out of reach, until the removal has finished saving. */
+   list behind it out of reach, until the removal has finished saving. If a
+   reassignment is refused the grant stays and so does the window, listing
+   the tasks that remain. */
 const NOBODY = '__nobody__'
 function AccessRemovalModal({
   projectId,
@@ -753,15 +755,23 @@ function AccessRemovalModal({
         ? `${names[0]} and ${names[1]}`
         : `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length > 3 ? 's' : ''}`
   const tasks = `${items.length} task${items.length === 1 ? '' : 's'}`
+  // "the task" and "this task" read better than "the 1 task"
+  const theTasks = items.length === 1 ? 'the task' : `the ${tasks}`
+  const these = items.length === 1 ? 'this task' : 'these tasks'
   const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
   const whole = project.type === 'meta' ? 'the whole project' : 'the whole sub-project'
   const keepText =
     names.length === 1
-      ? `${names[0].split(' ')[0]} keeps the ${tasks} and can see ${whole}, but can't change anything in it, including these tasks.`
-      : `They keep their tasks and can see ${whole}, but can't change anything in it, including these tasks.`
+      ? `${names[0].split(' ')[0]} keeps ${theTasks} and can see ${whole}, but can't change anything in it, including ${these}.`
+      : `They keep their tasks and can see ${whole}, but can't change anything in it, including ${these}.`
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
-    void removal.then(onClose)
+    void removal.then((removed) => {
+      const left = removed ? null : read()
+      if (!left?.items.length) return onClose()
+      setSaving(false)
+      setView(left)
+    })
   }
   const submit = () => {
     if (saving) return
@@ -862,7 +872,7 @@ function AccessRemovalModal({
             )}
             <span className="flex flex-col gap-0.5">
               <span className="text-base font-semibold text-text-1">
-                Reassign the {tasks}, then remove
+                Reassign {theTasks}, then remove
               </span>
               <span className="text-sm text-text-2">Reviewer roles move to the same person.</span>
             </span>
