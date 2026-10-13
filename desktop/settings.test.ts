@@ -85,6 +85,43 @@ describe('desktop settings', () => {
     expect(fs.readdirSync(directory)).toEqual(['desktop-settings.json'])
   })
 
+  it('keeps a failed rollback warning until an explicit retry reconciles logon startup', () => {
+    const { filePath } = setup()
+    let startupEnabled = false
+    let failRestore = false
+    const store = createDesktopSettingsStore({
+      filePath,
+      getStartAtLogin: () => startupEnabled,
+      setStartAtLogin: (enabled) => {
+        if (enabled && failRestore) throw new Error('Rollback denied')
+        startupEnabled = enabled
+      },
+    })
+    store.initialize()
+    expect(startupEnabled).toBe(true)
+
+    fs.rmSync(filePath)
+    fs.mkdirSync(filePath)
+    failRestore = true
+    expect(() => store.update({ startAtLogin: false })).toThrow(AggregateError)
+    expect(startupEnabled).toBe(false)
+    expect(store.get().startAtLogin).toBe(true)
+    const warning = store.get().startAtLoginError
+    expect(warning).toContain('couldn’t apply logon startup')
+
+    fs.rmSync(filePath, { recursive: true })
+    const changed = store.update({ showNotifications: false })
+    expect(changed.showNotifications).toBe(false)
+    expect(changed.startAtLoginError).toBe(warning)
+    expect(startupEnabled).toBe(false)
+
+    failRestore = false
+    const retried = store.update({ startAtLogin: true })
+    expect(retried).toEqual({ ...defaultDesktopSettings, showNotifications: false })
+    expect(startupEnabled).toBe(true)
+    expect(JSON.parse(fs.readFileSync(filePath, 'utf8'))).toEqual(retried)
+  })
+
   it('does not overwrite a malformed preferences file or register defaults over it', () => {
     const { filePath, setStartAtLogin, createStore } = setup()
     fs.writeFileSync(filePath, '{malformed')

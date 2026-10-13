@@ -134,6 +134,7 @@ export function createDesktopSettingsStore(options: {
           try {
             options.setStartAtLogin(previousLogin)
           } catch (rollbackError) {
+            startAtLoginError = startupFailureMessage(rollbackError)
             throw new AggregateError(
               [error, rollbackError],
               'Qivo could not save settings or restore the previous logon setting.',
