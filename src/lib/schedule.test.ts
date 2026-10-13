@@ -162,6 +162,32 @@ describe('autoMoves', () => {
     expect(solve([a, b, c], ['c'])).toEqual([{ id: 'b', start: 4, end: 6 }])
   })
 
+  it('never moves a Done or Backlog task, which still blocks others', () => {
+    for (const status of ['done', 'backlog']) {
+      const a = task('a', 0, 3)
+      const fixed = task('fixed', 2, 4, { status })
+      const after = task('after', 3, 5)
+      blocks(a, fixed)
+      blocks(fixed, after)
+      // the fixed task keeps its dates and its conflict; what follows it moves
+      expect(solve([a, fixed, after])).toEqual([{ id: 'after', start: 5, end: 7 }])
+    }
+    // one Done subtask holds back its blocked group
+    const g = task('g', 1, 6, { children: ['open', 'finished'] })
+    const open = task('open', 5, 6)
+    const finished = task('finished', 1, 2, { status: 'done' })
+    const blocker = task('blocker', 0, 4)
+    blocks(blocker, g)
+    expect(solve([blocker, g, open, finished])).toEqual([])
+    // other statuses still move
+    for (const status of ['todo', 'progress', 'review']) {
+      const b = task('b', 2, 4, { status })
+      const first = task('first', 0, 3)
+      blocks(first, b)
+      expect(solve([first, b])).toEqual([{ id: 'b', start: 4, end: 6 }])
+    }
+  })
+
   it('leaves a dependency between a group and its own leaf alone', () => {
     const g = task('g', 1, 4, { children: ['leaf'] })
     const leaf = task('leaf', 1, 4)

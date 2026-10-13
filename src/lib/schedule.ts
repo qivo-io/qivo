@@ -111,13 +111,19 @@ export type ScheduleTask = GroupIssue &
 
 export type AutoMove = { id: string; start: number; end: number }
 
+/** Statuses whose dates Auto-move leaves alone. */
+const FIXED_STATUSES: ReadonlySet<string> = new Set(['done', 'backlog'])
+
 /** The date writes that start every blocked task after its blocker ends,
     cascading. Leaves are the only work units: a group's bounds are the
     earliest start and latest end of the leaves under it, and pushing a group
     shifts those leaves by the same weeks, so positions inside a family are
-    kept. A pair whose push would move a leaf `canWrite` refuses is skipped
-    and keeps its red conflict, so a batch never holds a read-only task. Weeks
-    are unbounded, so nothing clamps the result to a viewport. */
+    kept. Done and Backlog tasks never move: finished work keeps the plan it
+    ran to, and Backlog is hidden from the Roadmap. Both still block others.
+    A pair whose push would move such a leaf, or one `canWrite` refuses, is
+    skipped and keeps its red conflict, so a batch never holds a read-only,
+    Done or Backlog task. Weeks are unbounded, so nothing clamps the result
+    to a viewport. */
 export function autoMoves<T extends ScheduleTask>({
   issues,
   byId,
@@ -156,11 +162,12 @@ export function autoMoves<T extends ScheduleTask>({
     leafCache.set(id, leaves)
     return leaves
   }
+  const movable = (leaf: string) => !FIXED_STATUSES.has(byId[leaf].status) && canWrite(byId[leaf])
   const pairs = dependencyPairs(issues).filter(
     ({ blocker, blocked }) =>
       leavesOf(blocker).length > 0 &&
       leavesOf(blocked).length > 0 &&
-      leavesOf(blocked).every((leaf) => canWrite(byId[leaf])),
+      leavesOf(blocked).every(movable),
   )
   const solvable = solvablePairs(pairs, kids, scheduledIds)
   const startOf = (id: string) => Math.min(...leavesOf(id).map((leaf) => work[leaf].start))
