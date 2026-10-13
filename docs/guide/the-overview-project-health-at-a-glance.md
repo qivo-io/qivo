@@ -31,6 +31,6 @@ timing, with the next milestone highlighted. Select **+** or a row to open
 the project's Milestones window. Add a name and week, then select **Add** or
 press Enter. Use **Edit** to change an existing milestone, then **Save**,
 **Cancel** or **Delete**. Each change saves separately; **Done** closes the
-window. Milestones belong to the top-level project. People with read-only
+window. Qivo adds milestones to the top-level project. People with read-only
 access to it, including people whose access covers only a sub-project, can
 view milestones but cannot add, move or edit them.

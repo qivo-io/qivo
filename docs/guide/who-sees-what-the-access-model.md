@@ -73,9 +73,9 @@ role.
 
 Guests can see the organization's name, people's names and email addresses,
 and shared labels needed for collaboration. A guest with User access can
-work on tasks, comments, attachments and plans, and apply labels. Milestones
-belong to the top-level project, so changing them needs User access there,
-not only on a sub-project.
+work on tasks, comments, attachments and plans, and apply labels. Qivo adds
+milestones to the top-level project, so changing them needs User access
+there, not only on a sub-project.
 Guests cannot manage the label list, join teams, create top-level projects,
 or open Organization settings or billing. They appear in the separate
 **Guests** list.

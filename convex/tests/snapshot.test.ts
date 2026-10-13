@@ -1200,6 +1200,7 @@ describe('navigation-only parents', () => {
       org_role: 'user',
     })
     const sibling = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const parentTeam = uuid()
     const milestone = (project_id: string, name: string) => ({
       id: uuid(),
       project_id,
@@ -1222,6 +1223,21 @@ describe('navigation-only parents', () => {
         project_id: f.sub2.id,
         team_id: f.team.id,
         level: 'viewer',
+      })
+      // a team subOnly is not in, granted on the parent: the sub-project inherits it
+      await ctx.db.insert('teams', {
+        id: parentTeam,
+        org_id: f.org.id,
+        name: 'Parent planners',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: parentTeam,
+        level: 'user',
       })
       await ctx.db.insert('milestones', milestone(f.meta.id, 'Parent launch'))
       await ctx.db.insert('milestones', milestone(f.sub2.id, 'Sibling demo'))
@@ -1263,6 +1279,11 @@ describe('navigation-only parents', () => {
     expect(new Set(snap.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
     expect(snap.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)
     expect(snap.teamAccess.some((g) => g.project_id === f.sub2.id)).toBe(false)
+    expect(snap.teamAccess).toContainEqual({
+      project_id: f.meta.id,
+      team_id: parentTeam,
+      level: 'user',
+    })
     expect(snap.milestones.map((m) => m.name)).toEqual(['Parent launch'])
   })
 })
