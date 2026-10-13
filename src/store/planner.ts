@@ -3131,39 +3131,60 @@ export const PLANNER = {
   /* Delete a task, and with it the `subtasks` (handles) the delete window
      listed as deletable. Every other subtask under a deleted task loses its
      parent and becomes a top-level task; the server checks the subtasks
-     again and refuses the whole delete if they changed. */
-  deleteIssue: (id: string, subtasks: string[] = []) => {
+     again and refuses the whole delete if they changed. Resolves whether the
+     server deleted it (a refusal is toasted). Normally the change paints at
+     once and rolls back on refusal; with `wait`, as the delete window asks,
+     nothing changes here until the server accepts, so a refusal leaves the
+     task and the window in place. */
+  deleteIssue: (id: string, subtasks: string[] = [], wait = false): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid) return
+    if (!row || !uuid) return Promise.resolve(false)
     const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
     const gone = new Set([uuid, ...subtaskIds])
     // local FK-cascade mirror; the server (model/cascade) owns rows AND
     // attachment bytes in one transaction, so no reap-before-delete here
-    ;[...rows.attachments.values()].forEach((a) => {
-      if (gone.has(a.issue_id)) rows.attachments.delete(a.id)
+    const mirror = () => {
+      ;[...rows.attachments.values()].forEach((a) => {
+        if (gone.has(a.issue_id)) rows.attachments.delete(a.id)
+      })
+      rows.issues.forEach((r) => {
+        // the SET NULL cascade fires the touch server-side — mirror both
+        if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
+          r.parent_id = undefined
+          r.updated_at = new Date().toISOString()
+        }
+      })
+      ;[...rows.links.values()].forEach((l) => {
+        if (gone.has(l.source_id) || gone.has(l.target_id)) rows.links.delete(l.id)
+      })
+      rows.issueLabels = rows.issueLabels.filter((il) => !gone.has(il.issue_id))
+      rows.issueSubs = rows.issueSubs.filter((s) => !gone.has(s.issue_id))
+      for (const issueId of gone) rows.issues.delete(issueId)
+      rebuild()
+      emit()
+    }
+    const sent = write(api.issues.deleteDeep, {
+      org_id: row.org_id,
+      id: uuid,
+      ...(subtaskIds.length ? { subtask_ids: subtaskIds } : {}),
     })
-    rows.issues.forEach((r) => {
-      // the SET NULL cascade fires the touch server-side — mirror both
-      if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
-        r.parent_id = undefined
-        r.updated_at = new Date().toISOString()
-      }
-    })
-    ;[...rows.links.values()].forEach((l) => {
-      if (gone.has(l.source_id) || gone.has(l.target_id)) rows.links.delete(l.id)
-    })
-    rows.issueLabels = rows.issueLabels.filter((il) => !gone.has(il.issue_id))
-    rows.issueSubs = rows.issueSubs.filter((s) => !gone.has(s.issue_id))
-    for (const issueId of gone) rows.issues.delete(issueId)
-    rebuild()
-    emit()
-    run(
-      write(api.issues.deleteDeep, {
-        org_id: row.org_id,
-        id: uuid,
-        ...(subtaskIds.length ? { subtask_ids: subtaskIds } : {}),
-      }),
+    if (!wait) {
+      mirror()
+      return runSaved(sent)
+    }
+    const epoch = storeEpoch
+    return sent.then(
+      () => {
+        // the delivery may already hold the result; the mirror finds nothing then
+        if (epoch === storeEpoch) mirror()
+        return true
+      },
+      (error) => {
+        console.error('[qivo] delete failed:', error)
+        if (epoch === storeEpoch) toastWriteError(error)
+        return false
+      },
     )
   },
 

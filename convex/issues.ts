@@ -307,8 +307,9 @@ export const unarchive = orgMutation({
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
  * the delete window listed them. Each must still be an active task under one
- * being deleted here, in a project the caller can edit; otherwise nothing is
- * deleted (SUBTASKS_CHANGED), so the outcome is the one the window showed.
+ * being deleted here, in an active project the caller can edit; otherwise
+ * nothing is deleted (SUBTASKS_CHANGED), so the outcome is the one the
+ * window showed.
  * They go deepest first, so every subtask left behind (archived, in a
  * project the caller cannot edit or see, or not chosen) is detached from the
  * task above it and becomes a top-level task, keeping its own subtasks. */
@@ -330,6 +331,8 @@ export const deleteDeep = orgMutation({
         .collect()
       for (const kid of kids) {
         if (!chosen.has(kid.id) || kid.archived_at !== undefined) continue
+        // an archived project keeps its tasks and grants, but they are put away
+        if ((await byId(ctx, 'projects', kid.project_id))?.archived_at !== undefined) continue
         if (!(await hasProjectLevel(ctx, ctx.me, kid.project_id, 'user'))) continue
         chosen.delete(kid.id)
         doomed.push(kid)

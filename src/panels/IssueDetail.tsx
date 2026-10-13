@@ -3108,16 +3108,18 @@ function IssueDetail({
           issueId={it.id}
           onClose={() => setDeleteOpen(false)}
           focusAfterClose={taskActionsButton}
-          onDelete={(subtasks) => {
-            const id = it.id
+          onDelete={async (subtasks) => {
             const shown = it.key
+            // the window waits for the server, so a refusal leaves it open
+            const deleted = await P.deleteIssue(it.id, subtasks, true)
+            if (!deleted) return false
             setDeleteOpen(false)
             onClose() // the task is gone — the window has nothing to show
-            P.deleteIssue(id, subtasks)
             const n = subtasks.length
             window.showToast?.(
               n ? `Deleted ${shown} and ${n} subtask${n === 1 ? '' : 's'}` : `Deleted ${shown}`,
             )
+            return true
           }}
         />
       )}

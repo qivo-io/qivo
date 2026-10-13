@@ -971,7 +971,9 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
    and becomes a top-level task with its own subtasks. Without deletable
    subtasks it says why the subtasks stay. The list is taken when the window
    opens; if it changed by the click, the window shows the new list and asks
-   again, so the subtasks deleted are the ones the person read. */
+   again, so the subtasks deleted are the ones the person read. It stays open,
+   showing Deleting…, until the server answers; a refusal leaves it open on
+   the list as it is now. */
 // one step per level of subtasks, as literal classes for Tailwind
 const INDENT = ['', 'ml-4', 'ml-8', 'ml-12', 'ml-16']
 function DeleteTaskModal({
@@ -982,13 +984,15 @@ function DeleteTaskModal({
 }: {
   issueId: string
   onClose: () => void
-  /** delete the task and these subtasks (handles), then close */
-  onDelete: (subtasks: string[]) => void
+  /** delete the task and these subtasks (handles); resolves whether the
+      server deleted them, and the caller closes the window when it did */
+  onDelete: (subtasks: string[]) => Promise<boolean>
   focusAfterClose?: () => HTMLElement | null
 }) {
   const [plan, setPlan] = useStateM(() => P.deletePlan(issueId))
   const [changed, setChanged] = useStateM(false)
   const [withSubtasks, setWithSubtasks] = useStateM(plan.deletable.length > 0)
+  const [saving, setSaving] = useStateM(false)
   // when the window last asked again: the click right after (a double click,
   // a repeated Enter) must not delete a list nobody has read yet
   const askedAt = useRefM(0)
@@ -1011,21 +1015,31 @@ function DeleteTaskModal({
     : n === 1
       ? 'Deletes the subtask as well.'
       : `Deletes all ${n} subtasks as well.`
+  // ask again with the list as it is now
+  const reask = (now: typeof plan) => {
+    askedAt.current = Date.now()
+    setPlan(now)
+    setChanged(true)
+    if (!now.deletable.length) setWithSubtasks(false)
+  }
+  const finish = (subtasks: string[]) => {
+    setSaving(true)
+    void onDelete(subtasks).then((deleted) => {
+      if (deleted) return // the caller closes the window
+      setSaving(false)
+      const now = P.deletePlan(issueId)
+      if (key(now) !== key(plan)) reask(now)
+    })
+  }
+  const key = (p: typeof plan) =>
+    `${p.rows.map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.deletable}`).join()}|${p.hidden}`
   const submit = () => {
-    if (Date.now() - askedAt.current < 1000) return
+    if (saving || Date.now() - askedAt.current < 1000) return
     const now = P.deletePlan(issueId)
     // nothing under it any more: the task alone goes, as the person confirmed
-    if (!now.rows.length && !now.hidden) return onDelete([])
-    const key = (p: typeof plan) =>
-      `${p.rows.map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.deletable}`).join()}|${p.hidden}`
-    if (key(now) !== key(plan)) {
-      askedAt.current = Date.now()
-      setPlan(now)
-      setChanged(true)
-      if (!now.deletable.length) setWithSubtasks(false)
-      return
-    }
-    onDelete(withSubtasks ? plan.deletable.map((t) => t.id) : [])
+    if (!now.rows.length && !now.hidden) return finish([])
+    if (key(now) !== key(plan)) return reask(now)
+    finish(withSubtasks ? plan.deletable.map((t) => t.id) : [])
   }
   const option = (selected: boolean) =>
     cn(
@@ -1036,12 +1050,20 @@ function DeleteTaskModal({
     <ModalShell
       icon="warning"
       title={`Delete ${it.key}?`}
-      onClose={onClose}
+      onClose={saving ? () => {} : onClose}
       onSubmit={submit}
-      canSubmit
+      canSubmit={!saving}
       danger
       focusAfterClose={focusAfterClose}
-      submitLabel={!n ? 'Delete task' : withSubtasks ? `Delete ${n + 1} tasks` : `Delete ${it.key}`}
+      submitLabel={
+        saving
+          ? 'Deleting…'
+          : !n
+            ? 'Delete task'
+            : withSubtasks
+              ? `Delete ${n + 1} tasks`
+              : `Delete ${it.key}`
+      }
       width={540}
     >
       <div data-delete-task className="flex flex-col gap-3">

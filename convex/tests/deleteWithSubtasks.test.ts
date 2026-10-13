@@ -84,6 +84,19 @@ describe('deleting a task with its subtasks', () => {
         new RegExp(SUBTASKS_CHANGED),
       )
     }
+    // a project archived after the window listed its subtask
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.sub2._id, { archived_at: '2026-01-02T00:00:00.000Z' })
+    })
+    await expectRefusal(
+      as(t, f.guest).mutation(api.issues.deleteDeep, {
+        org_id: f.org.id,
+        id: root.id,
+        subtask_ids: [a.id],
+      }),
+      'rule',
+      new RegExp(SUBTASKS_CHANGED),
+    )
     expect(await read(root.id)).toEqual({ parent: null })
     expect(await read(a.id)).toEqual({ parent: root.id })
   })

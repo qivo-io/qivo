@@ -23,6 +23,8 @@ const NOW = '2026-09-14T08:00:00.000Z'
 describe('deleting a task that has subtasks', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
+  // how the server answers deleteDeep: never, accept or refuse
+  let answer: Promise<null> | null
 
   // the tasks that have subtasks in projects the person cannot see
   async function load(hidden: string[]) {
@@ -34,7 +36,7 @@ describe('deleting a task that has subtasks', () => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
       requests.push({ name, args })
-      return new Promise(() => {})
+      return answer ?? new Promise(() => {})
     })
     const snap: Snapshot = plannerFixture()
     const org = snap.orgs[0].id
@@ -101,6 +103,7 @@ describe('deleting a task that has subtasks', () => {
 
   beforeEach(() => {
     vi.resetModules()
+    answer = null
   })
 
   afterEach(() => {
@@ -156,5 +159,25 @@ describe('deleting a task that has subtasks', () => {
     expect(vm('a')?.parent).toBeNull()
     expect(vm('aa')?.parent).toBe(handle('a'))
     expect(requests[0].args).not.toHaveProperty('subtask_ids')
+  })
+
+  it('waits for the server when asked, and changes nothing on a refusal', async () => {
+    await load([])
+    let accept = (_: null) => {}
+    answer = new Promise((resolve) => {
+      accept = resolve
+    })
+    const deleted = P.deleteIssue(handle('root'), [handle('a')], true)
+    expect(vm('root')).toBeDefined() // nothing changes before the server answers
+    accept(null)
+    expect(await deleted).toBe(true)
+    expect(vm('root')).toBeUndefined()
+    expect(vm('a')).toBeUndefined()
+    expect(vm('aa')?.parent).toBeNull()
+    answer = Promise.reject(new Error('the subtasks changed'))
+    answer.catch(() => {})
+    expect(await P.deleteIssue(handle('b'), [], true)).toBe(false)
+    expect(vm('b')).toBeDefined()
+    expect(window.showToast).toHaveBeenCalled()
   })
 })
