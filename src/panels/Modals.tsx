@@ -740,7 +740,7 @@ function ArchiveIssueModal({
   const readOnlySub = subIssues.some((si) => !P.canWrite(si.project))
   const canSubmit = reason.trim().length > 0 && !readOnlySub
   const refusal = readOnlySub
-    ? ' Some are in a project you cannot edit, so you cannot archive it.'
+    ? ' At least one is in a project you cannot edit, so you cannot archive it.'
     : sub.unknown
       ? ' If any of them is in a project you cannot edit, the archive is refused.'
       : ''
