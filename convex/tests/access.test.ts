@@ -4,7 +4,9 @@
  * fresh backend: the tests that plant hostile rows (a viewer leader row, a
  * cross-org leader row, a dangling parent) never leak into each other. */
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { Doc } from '../_generated/dataModel'
 import {
+  canAccessProject,
   canSeeProject,
   canWriteOrgLabels,
   cappedLevel,
@@ -16,7 +18,16 @@ import {
   rootMetaOf,
 } from '../lib/access'
 import { ACCESS_LEVELS, type AccessLevel, type OrgRole } from '../lib/enums'
-import { expectRefusal, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
+import { orgProjectView } from '../lib/visibility'
+import {
+  expectRefusal,
+  newT,
+  type OrgFixture,
+  plantSeat,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 let t: T
 let f: OrgFixture
@@ -246,6 +257,84 @@ describe('profileCanSeeProject', () => {
     await t.run((ctx) => ctx.db.patch(f.guest._id, { active: false }))
     const inactive = await t.run((ctx) => ctx.db.get(f.guest._id))
     expect(await t.run((ctx) => profileCanSeeProject(ctx, inactive!, f.sub))).toBe(true)
+  })
+})
+
+describe('canAccessProject', () => {
+  it('excludes a parent seen only for navigation and agrees with the snapshot view', async () => {
+    const seat = (name: string, org_role: OrgRole = 'user') =>
+      plantSeat(t, { org_id: f.org.id, name, org_role })
+    const subOnly = await seat('sub only')
+    const subLeadGuest = await seat('sub lead guest', 'guest')
+    const teamSib = await seat('team sibling')
+    const metaTeamGuest = await seat('meta team guest', 'guest')
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subOnly.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_access', {
+        project_id: f.sub2.id,
+        profile_id: subLeadGuest.id,
+        level: 'user',
+      })
+      await ctx.db.patch(f.sub2._id, { lead_id: subLeadGuest.id })
+      const sibTeam = uuid()
+      await ctx.db.insert('teams', {
+        id: sibTeam,
+        org_id: f.org.id,
+        name: 'Sibling team',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: '2026-01-01T00:00:00.000Z',
+      })
+      await ctx.db.insert('team_members', {
+        team_id: sibTeam,
+        profile_id: teamSib.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: sibTeam,
+        level: 'user',
+      })
+      // guests never receive team access, even on the parent itself
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: metaTeamGuest.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    await t.run(async (ctx) => {
+      const project = async (p: Doc<'projects'>) => (await ctx.db.get(p._id)) as Doc<'projects'>
+      const [meta, sub, sub2] = [await project(f.meta), await project(f.sub), await project(f.sub2)]
+      for (const p of [f.admin, f.user, f.guest, f.viewer]) {
+        expect(await canAccessProject(ctx, p, meta)).toBe(true)
+      }
+      for (const p of [subOnly, subLeadGuest, teamSib]) {
+        expect(await canSeeProject(ctx, p, meta)).toBe(true)
+        expect(await canAccessProject(ctx, p, meta)).toBe(false)
+      }
+      expect(await canAccessProject(ctx, metaTeamGuest, meta)).toBe(false)
+      expect(await canAccessProject(ctx, subOnly, sub)).toBe(true)
+      expect(await canAccessProject(ctx, subOnly, sub2)).toBe(false)
+      expect(await canAccessProject(ctx, teamSib, sub2)).toBe(true)
+      // one rule, two forms: per profile and per snapshot view
+      const people = [f.admin, f.user, f.guest, f.viewer, f.agent, subOnly, subLeadGuest, teamSib]
+      for (const p of people) {
+        const view = await orgProjectView(ctx, p)
+        for (const proj of [meta, sub, sub2, f.hidden]) {
+          expect(await canAccessProject(ctx, p, proj)).toBe(view.accessible(proj.id))
+        }
+      }
+    })
   })
 })
 

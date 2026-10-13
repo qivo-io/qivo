@@ -131,9 +131,9 @@ export async function findIssue(
  * win a collision. Resolves archived projects (refs must keep working).
  *
  * Visibility is deliberately NOT applied here: REST resolves against the
- * whole org catalogue (its one 403-oracle must name projects the caller
- * cannot see), MCP wraps this with canSeeProject → null → its uniform
- * "not found (or not visible to you)". Each surface layers its own fence. */
+ * whole org catalogue and checks the caller's flags itself, MCP wraps this
+ * with canSeeProject → null → its uniform "not found (or not visible to
+ * you)". Each surface layers its own fence. */
 export async function findProject(
   ctx: QueryCtx,
   me: Caller,
@@ -163,9 +163,8 @@ export async function findProject(
 /* --------------------------------------------------------------- catalogue
  * The org's whole project set, read in ONE indexed by_org scan per request
  * (never N point reads), is the naming service. REST resolves refs against
- * it so it can name projects the caller cannot see; MCP reuses it for list
- * scopes. Nothing here grants anything — every disclosed id runs past
- * accessFlags. */
+ * it and MCP reuses it for list scopes. Nothing here grants anything, and
+ * every disclosed id runs past accessFlags. */
 
 export type Catalogue = {
   projects: Doc<'projects'>[]
@@ -413,7 +412,8 @@ type IssueOutCommon = {
 }
 
 /* REST issueJson (rest:240-254): superset minus project_name; the plan weeks,
- * the parent link and the `archived` boolean are REST-only. */
+ * the parent link (null unless the caller can read the parent) and the
+ * `archived` boolean are REST-only. */
 export type RestIssueJson = IssueOutCommon & {
   parent_id: string | null
   start_week: string | null
@@ -444,10 +444,30 @@ export type IssueOutPre = {
   names?: ReadonlyMap<string, string>
 }
 
+/* REST's parent link: the parent's uuid only when this caller could read the
+ * parent (findIssue's rule), else null, which reads like a top-level task.
+ * `readable` is the caller's project flags when the surface already holds
+ * them, which saves the visibility walk per row. */
+async function parentIdFor(
+  ctx: QueryCtx,
+  me: Caller,
+  issue: Doc<'issues'>,
+  readable?: (projectId: string) => boolean,
+): Promise<string | null> {
+  if (issue.parent_id === undefined) return null
+  if (readable === undefined) return (await findIssue(ctx, me, issue.parent_id))?.id ?? null
+  const parent = await byId(ctx, 'issues', issue.parent_id)
+  return parent !== null && parent.org_id === me.org_id && readable(parent.project_id)
+    ? parent.id
+    : null
+}
+
+type RestOut = { surface: 'rest'; me: Caller; readable?: (projectId: string) => boolean }
+
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & { surface: 'rest' },
+  opts: IssueOutPre & RestOut,
 ): Promise<RestIssueJson>
 export async function issueOut(
   ctx: QueryCtx,
@@ -457,7 +477,7 @@ export async function issueOut(
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & { surface: 'rest' | 'mcp' },
+  opts: IssueOutPre & (RestOut | { surface: 'mcp' }),
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
@@ -484,7 +504,7 @@ export async function issueOut(
       reviewer_name,
       reporter_id: issue.reporter_id ?? null,
       reporter_name,
-      parent_id: issue.parent_id ?? null,
+      parent_id: await parentIdFor(ctx, opts.me, issue, opts.readable),
       start_week: issue.start_week ?? null,
       end_week: issue.end_week ?? null,
       due_date: issue.due_date ?? null,

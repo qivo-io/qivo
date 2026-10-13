@@ -209,22 +209,24 @@ export function pairRule(project: Doc<'projects'>, sub: Doc<'projects'>): void {
   }
 }
 
-/* The sentence a bare meta gets (core.ts:368-374): only live, caller-writable
- * sub-projects are offered. */
+/* The sentence a bare meta gets (core.ts:368-374). Sub-projects the caller
+ * cannot read are neither offered nor counted, and only live,
+ * caller-writable ones are offered. */
 export function metaNeedsSub(
   project: Doc<'projects'>,
   liveKids: Doc<'projects'>[],
-  writable: (id: string) => boolean,
+  can: { readable: (id: string) => boolean; writable: (id: string) => boolean },
 ): never {
-  const mine = liveKids
-    .filter((c) => writable(c.id))
+  const seen = liveKids.filter((c) => can.readable(c.id))
+  const mine = seen
+    .filter((c) => can.writable(c.id))
     .map((c) => c.key)
     .sort()
   throw badRequest(
     `${project.key} is a project — tasks live in its sub-projects; ${
       mine.length
         ? `pass sub_project (one of: ${mine.join(', ')})`
-        : liveKids.length
+        : seen.length
           ? 'you have no write access to any of them'
           : 'it has no sub-projects yet — create one in the app first'
     }`,
