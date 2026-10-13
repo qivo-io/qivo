@@ -129,7 +129,10 @@ export function encryptSecret(secret: string, subscriptionId: string): string {
 
 export function decryptSecret(encrypted: string, subscriptionId: string): string {
   const bytes = Buffer.from(encrypted, 'base64')
-  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), bytes.subarray(0, 12))
+  // A fixed tag length refuses truncated tags instead of accepting them.
+  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), bytes.subarray(0, 12), {
+    authTagLength: 16,
+  })
   decipher.setAAD(Buffer.from(subscriptionId))
   decipher.setAuthTag(bytes.subarray(12, 28))
   return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8')
@@ -182,6 +185,9 @@ export async function postWebhook(
     const requestOptions: RequestOptions &
       Pick<TcpNetConnectOpts, 'autoSelectFamily' | 'autoSelectFamilyAttemptTimeout'> = {
       method: 'POST',
+      // A fresh agent uses the pinned lookup below on every connection. Node
+      // 24 can route the shared agent through a proxy taken from the
+      // environment, which would resolve the host itself.
       agent: false,
       // Node tries other pinned addresses only while connecting TCP. It never
       // resends an HTTP request after TLS or request transmission begins.

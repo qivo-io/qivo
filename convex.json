@@ -1,4 +1,4 @@
 {
   "$schema": "./node_modules/convex/schemas/convex.schema.json",
-  "node": { "externalPackages": ["sharp"] }
+  "node": { "externalPackages": ["sharp"], "nodeVersion": "24" }
 }

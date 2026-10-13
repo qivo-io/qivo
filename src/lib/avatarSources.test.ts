@@ -200,6 +200,9 @@ describe('prepared profile pictures', () => {
         if (stage === 'download') f.fetcher.mockReturnValueOnce(stalled.promise)
         else f.decode.mockReturnValueOnce(stalled.promise)
         const loading = f.cache.prepare(KEY, LEASE)
+        // Node 24 reads a downloaded Blob in a later event-loop turn, not in
+        // microtasks, so wait for the decode to start before the time runs out.
+        if (stage === 'decode') await vi.waitFor(() => expect(f.decode).toHaveBeenCalledOnce())
         await vi.advanceTimersByTimeAsync(15_000)
         expect(await loading).toBe(false)
         expect(f.cache.url(KEY)).toBeNull()

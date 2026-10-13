@@ -41,6 +41,8 @@ vi.mock('node:https', async (importOriginal) => {
     request: ((url, options, callback) => {
       const pinnedLookup = options.lookup
       if (!pinnedLookup) throw new Error('Production must pin the validated DNS answers')
+      if (options.agent !== false)
+        throw new Error('Production must not use a shared or proxied agent')
       const req = actual.request(
         url,
         {
@@ -247,6 +249,10 @@ describe('standard webhook transport', () => {
     const tampered = Buffer.from(encrypted, 'base64')
     tampered[tampered.length - 1] ^= 1
     expect(() => decryptSecret(tampered.toString('base64'), 'sub-1')).toThrow()
+    // GCM accepts the first bytes of a valid tag unless the tag length is fixed.
+    const empty = Buffer.from(encryptSecret('', 'sub-1'), 'base64')
+    expect(decryptSecret(empty.toString('base64'), 'sub-1')).toBe('')
+    expect(() => decryptSecret(empty.subarray(0, 16).toString('base64'), 'sub-1')).toThrow()
     const hash = signingSecretHash(secret)
     expect(hash).toMatch(/^[0-9a-f]{64}$/)
     expect(signingSecretHash(secret)).toBe(hash)
