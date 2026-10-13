@@ -858,7 +858,9 @@ function MilestoneModal({
   })
   const project = projectId ? P.metaOf(projectId) : null
   const canWrite = !!project && ['lead', 'user'].includes(P.levelOn(project.id) || '')
-  const [editId, setEditId] = useStateM<string | null>(init.id ?? null)
+  // the row editor opens only for someone who may write: a read-only flag or
+  // row opens the list with that milestone in view
+  const [editId, setEditId] = useStateM<string | null>(canWrite ? (init.id ?? null) : null)
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
@@ -945,7 +947,7 @@ function MilestoneModal({
           </div>
           <div className="flex flex-col gap-1">
             {list.map((m) =>
-              m.id === editId ? (
+              canWrite && m.id === editId ? (
                 <MilestoneEditor key={m.id} m={m} onClose={() => setEditId(null)} />
               ) : (
                 <MilestoneRowView
