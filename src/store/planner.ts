@@ -2677,7 +2677,7 @@ export const PLANNER = {
       if (it && holder && project) {
         const who = PLANNER.user(holder)?.name || 'This person'
         toast(
-          `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is`,
+          `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
           'error',
         )
         return
