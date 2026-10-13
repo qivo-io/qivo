@@ -36,6 +36,7 @@ import type * as internal_demoCleanup from "../internal/demoCleanup.js";
 import type * as internal_demoMetrics from "../internal/demoMetrics.js";
 import type * as internal_demoTest from "../internal/demoTest.js";
 import type * as internal_guestOrg from "../internal/guestOrg.js";
+import type * as internal_guestTeams from "../internal/guestTeams.js";
 import type * as internal_marketingDemo from "../internal/marketingDemo.js";
 import type * as internal_marketingDemoData from "../internal/marketingDemoData.js";
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
@@ -158,6 +159,7 @@ declare const fullApi: ApiFromModules<{
   "internal/demoMetrics": typeof internal_demoMetrics;
   "internal/demoTest": typeof internal_demoTest;
   "internal/guestOrg": typeof internal_guestOrg;
+  "internal/guestTeams": typeof internal_guestTeams;
   "internal/marketingDemo": typeof internal_marketingDemo;
   "internal/marketingDemoData": typeof internal_marketingDemoData;
   "internal/oauthSmoke": typeof internal_oauthSmoke;

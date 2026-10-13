@@ -45,6 +45,7 @@ import {
 } from './lib/functions'
 import { allWordsMatcher } from './lib/search'
 import { audit } from './model/admin'
+import { leaveAllTeams } from './model/orgs'
 
 const DAY = 86_400_000
 
@@ -420,7 +421,9 @@ export const listUsers = platformQuery({
 /* admin_promote_org_admin (0102:431-451) — the console's lockout rescue.
  * A viewer IS promotable on purpose; the one server guard is the agent
  * sentence, verbatim ("the console's one job here is to be readable when it
- * says no"). Writes the promote_org_admin audit row as the operator. */
+ * says no"). A promoted guest starts with no team, as in profiles.update:
+ * any team row a guest still holds is stale. Writes the promote_org_admin
+ * audit row as the operator. */
 export const promoteOrgAdmin = platformMutation({
   args: { profile_id: v.string() },
   handler: async (ctx, { profile_id }): Promise<null> => {
@@ -429,6 +432,7 @@ export const promoteOrgAdmin = platformMutation({
     require(profile.kind !== 'agent', rule(
       'an agent cannot be an organization admin — it reaches only the projects it is added to',
     ))
+    if (profile.org_role === 'guest') await leaveAllTeams(ctx, profile.id)
     await ctx.db.patch(profile._id, { org_role: 'admin' })
     if (profile.org_role !== 'admin') {
       await markBillingMembershipChanged(
