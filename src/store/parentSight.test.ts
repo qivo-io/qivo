@@ -179,4 +179,18 @@ describe('assignees must see the tasks above a subtask', () => {
       'error',
     )
   })
+
+  it("names the moved task's switched-off assignee, whom the server still refuses", async () => {
+    await load((snap) => {
+      for (const p of snap.profiles) if (p.id === 'both') p.active = false
+      const free = snap.issues.find((i) => i.id === 'free')!
+      free.assignee_id = 'both'
+    })
+    const plans = P.projects.find((p) => p.name === 'Plans')!
+    const blockers = P.moveBlockers(vm('free'), plans.id)
+    expect(blockers.map((b) => [b.uid, b.task.uuid, b.edit])).toEqual([['both', 'free', true]])
+    expect(P.blockerText(blockers[0])).toBe(
+      `Both is switched off and is assigned to ${vm('free').key}. Reassign ${vm('free').key} first.`,
+    )
+  })
 })

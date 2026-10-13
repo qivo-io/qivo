@@ -695,7 +695,13 @@ function MoveIssueModal({
           {blockers.slice(0, 3).map((b) => (
             <p key={`${b.task.id}:${b.role}`}>{P.blockerText(b)}</p>
           ))}
-          {blockers.length > 3 && <p>{blockers.length - 3} more people are affected.</p>}
+          {blockers.length > 3 && (
+            <p>
+              {blockers.length === 4
+                ? '1 more assignment is affected.'
+                : `${blockers.length - 3} more assignments are affected.`}
+            </p>
+          )}
         </div>
       )}
     </ModalShell>

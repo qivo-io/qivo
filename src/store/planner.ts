@@ -2190,18 +2190,31 @@ export const PLANNER = {
   moveBlockers: (it: IssueVM, projectId: string): AccessBlocker[] => {
     const project = PLANNER.project(projectId)
     if (!project) return []
-    return PLANNER.holdersOf(it, true)
-      .map((h) => ({ ...h, project, edit: h.task === it }))
-      .filter(
-        (b) => !(b.edit ? PLANNER.canWrite(projectId, b.uid) : PLANNER.canSee(projectId, b.uid)),
-      )
+    // the task's own assignee and leaf reviewer must be able to hold it there,
+    // switched off or not; people on its subtasks only need to see it
+    const own: Holder[] = []
+    if (it.assignee) own.push({ uid: it.assignee, task: it, role: 'assignee' })
+    if (it.reviewer && !PLANNER.isGroup(it))
+      own.push({ uid: it.reviewer, task: it, role: 'reviewer' })
+    return [
+      ...own
+        .map((h) => ({ ...h, project, edit: true }))
+        .filter((b) => !PLANNER.canWrite(projectId, b.uid)),
+      ...PLANNER.holdersOf(it, false)
+        .map((h) => ({ ...h, project, edit: false }))
+        .filter((b) => !PLANNER.canSee(projectId, b.uid)),
+    ]
   },
   /* One sentence naming who blocks a change and how to clear it. */
   blockerText: (b: AccessBlocker): string => {
-    const who = PLANNER.user(b.uid)?.name || 'Someone'
+    const person = PLANNER.user(b.uid)
+    const who = person?.name || 'Someone'
     const holds = b.role === 'reviewer' ? 'is reviewing' : 'is assigned to'
     const lacks = b.edit ? "can't edit" : 'has no access to'
     const fix = b.role === 'reviewer' ? 'choose another reviewer for' : 'reassign'
+    // giving access back does not help a switched-off person
+    if (person && !person.active)
+      return `${who} is switched off and ${holds} ${b.task.key}. ${fix.charAt(0).toUpperCase()}${fix.slice(1)} ${b.task.key} first.`
     return `${who} ${holds} ${b.task.key} but ${lacks} ${PLANNER.projectLabel(b.project)}. Give them ${b.edit ? 'edit ' : ''}access or ${fix} ${b.task.key} first.`
   },
   /* my own organization's USERS — the roster, team membership, the settings
