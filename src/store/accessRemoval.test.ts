@@ -363,9 +363,11 @@ describe('removing someone who has work in the project', () => {
     await load(inPlan(false))
     expect(P.startRemoval(leaving('ann'))).toBe(true)
     expect(requests).toEqual([])
-    // the signed-in Planner leads Crew and edits Work through it, but does not lead Plan
+    // the signed-in Planner leads Crew and edits Work through it, but does not lead Plan;
+    // Ann also reviews her own task, which still counts once
     await load((snap, task) => {
       inPlan(false)(snap, task)
+      snap.issues.find((i) => i.id === 't4')!.reviewer_id = 'ann'
       const me = snap.profiles[0]
       me.org_role = 'user'
       snap.teamMembers.push({ team_id: 'crew', profile_id: me.id, is_leader: true })

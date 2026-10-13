@@ -748,10 +748,12 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
   const [to, setTo] = useStateM(NOBODY)
   if (!items.length) return null
   const names = people.map((id) => P.user(id)?.name || 'Someone')
-  const tasks = `${items.length} task${items.length === 1 ? '' : 's'}`
+  // one row per role, but a task held twice counts once
+  const count = new Set(items.map((i) => i.task.id)).size
+  const tasks = `${count} task${count === 1 ? '' : 's'}`
   // "the task" and "this task" read better than "the 1 task"
-  const theTasks = items.length === 1 ? 'the task' : `the ${tasks}`
-  const these = items.length === 1 ? 'this task' : 'these tasks'
+  const theTasks = count === 1 ? 'the task' : `the ${tasks}`
+  const these = count === 1 ? 'this task' : 'these tasks'
   const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
   const teamName = `the ${teamNoun(team?.name)}`
   const person = 'userId' in change ? P.user(change.userId)?.name || 'Someone' : ''
@@ -793,21 +795,23 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
     setSaving(true)
     void removal.then((removed) => {
       const left = removed ? null : read()
-      if (!left?.items.length) return onClose()
+      if (!left || (!left.items.length && !P.removalPending(change))) return onClose()
       setSaving(false)
-      setView(left)
+      // a refused removal whose tasks are now covered keeps its list, to retry
+      if (left.items.length) setView(left)
     })
   }
   const submit = () => {
     if (saving) return
     const now = read()
-    const key = (list: Holder[]) =>
-      list
-        .map((i) => `${i.task.id}:${i.role}:${i.uid}`)
+    // a task that moved, or a grant that now lands elsewhere, asks again
+    const key = (list: Holder[], where: string[]) =>
+      `${list
+        .map((i) => `${i.task.id}:${i.task.project}:${i.role}:${i.uid}`)
         .sort()
-        .join()
+        .join()}|${where.join()}`
     const lost = !keep && to !== NOBODY && !now.choices.some((u) => u.id === to)
-    if (lost || key(now.items) !== key(items)) {
+    if (lost || key(now.items, now.projects) !== key(items, projects)) {
       if (!now.items.length) {
         // someone else removed this access meanwhile: say so instead of a silent close
         if (!P.removalPending(change)) {
@@ -832,7 +836,9 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
       if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
       return
     }
-    finish(P.removeAccess(change, keep ? { keep: true } : { to: to === NOBODY ? null : to }, items))
+    finish(
+      P.removeAccess(change, keep ? { keep: true } : { to: to === NOBODY ? null : to }, now.items),
+    )
   }
   const option = (selected: boolean) =>
     cn(

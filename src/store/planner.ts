@@ -2358,10 +2358,12 @@ export const PLANNER = {
     void PLANNER.removeAccess(change, { to: null }, []).then((removed) => {
       if (!removed || !items.length) return
       const who = andList(people.map((id) => PLANNER.user(id)?.name || 'Someone'))
+      // one item per role: a task held twice counts once
+      const count = new Set(items.map((i) => i.task.id)).size
       toast(
-        items.length === 1
+        count === 1
           ? `${who} can no longer see a task they are assigned to or reviewing. A project lead can reassign it.`
-          : `${who} can no longer see ${items.length} tasks they are assigned to or reviewing. A project lead can reassign them.`,
+          : `${who} can no longer see ${count} tasks they are assigned to or reviewing. A project lead can reassign them.`,
         'info',
       )
     })
