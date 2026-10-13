@@ -873,7 +873,14 @@ export async function updateIssueCore(
     machine?: MachineUpdate
   },
 ): Promise<Doc<'issues'>> {
-  const { me, issue, patch, now } = a
+  const { me, issue, now } = a
+  // An unchanged parent is no attach: it is dropped, so no access check,
+  // write, hours clear or narration runs for a parent the caller may not
+  // even see.
+  const patch: IssuePatch =
+    'parent_id' in a.patch && (a.patch.parent_id ?? undefined) === issue.parent_id
+      ? (({ parent_id: _unchanged, ...rest }) => rest)(a.patch)
+      : a.patch
   // Public validators omit this field; also fail explicitly at the shared
   // model boundary so trusted callers cannot accidentally alter attribution.
   if ('reporter_id' in patch) throw badRequest(REPORTER_IMMUTABLE_SENTENCE)
@@ -891,8 +898,7 @@ export async function updateIssueCore(
   //    remaining guard (which must raise BEFORE the stamp — 0072)
   const nextParent = 'parent_id' in patch ? (patch.parent_id ?? undefined) : issue.parent_id
   if ('parent_id' in patch) {
-    // an unchanged parent is no new attach, so it needs no fresh checks
-    if (nextParent !== undefined && nextParent !== issue.parent_id) {
+    if (nextParent !== undefined) {
       const parent = await assertParentChain(ctx, issue, nextParent, me)
       assertParentActive(parent, issue.archived_at)
     }

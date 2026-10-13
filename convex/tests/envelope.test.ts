@@ -267,6 +267,26 @@ describe('issue scheduling envelope', () => {
       await expectRefusal(attempt, 'forbidden', /^no write access to the parent task$/)
     }
     expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
+    // re-sending a child's current parent, here one the guest cannot edit,
+    // is a no-op that neither clears the parent's own hours nor names it
+    const archivedChild = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenParent.id,
+      archived_at: NOW,
+    })
+    await asGuest.mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: archivedChild.id,
+      patch: { parent_id: hiddenParent.id },
+    })
+    expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
+    const named = await t.run(async (ctx) =>
+      (await ctx.db.query('activity_events').collect()).filter((e) =>
+        (e.detail ?? '').includes(`QN-${hiddenParent.num}`),
+      ),
+    )
+    expect(named).toEqual([])
     // an editable parent in another sub-project attaches as before
     const sibling = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await asGuest.mutation(api.issues.update, {
