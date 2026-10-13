@@ -68,7 +68,8 @@ Tasks have these fields:
   same `paused` flag.
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
   **parent**, **subtasks** and task **links**. Links can mean “blocks”, “is
-  blocked by” or “relates to” and may span projects and teams. Description
+  blocked by” or “relates to” and may span projects and teams. You see a link
+  only if you can access both tasks. Description
   edits appear in the activity feed with before/after excerpts.
 
 Moving a task requires its assignee and reviewer to be eligible in the

@@ -63,6 +63,7 @@ function fixture(myRole: Role) {
     created_at: ago(200 * HOUR),
     updated_at: NOW,
     has_hidden_subtasks: false,
+    has_hidden_parent: false,
     ...extra,
   })
   const done = task('Done one', {
@@ -167,6 +168,7 @@ function fixture(myRole: Role) {
     ],
     messages: [],
     readMessageCount: 0,
+    delivered_at: '2026-09-15T08:00:00.000Z',
   }
   return { snap, org, me: me.id, aisha: aisha.id, ben: ben.id, done, review, todo }
 }

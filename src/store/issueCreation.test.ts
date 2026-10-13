@@ -125,6 +125,7 @@ describe('task creation through the client store', () => {
       created_at: NOW,
       updated_at: NOW,
       has_hidden_subtasks: false,
+      has_hidden_parent: false,
     }
     snap.orgs[0].next_issue_num = competing.num
     snap.issues = [competing]

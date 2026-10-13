@@ -85,6 +85,7 @@ function fixture(): Snapshot {
       created_at: NOW,
       updated_at: NOW,
       has_hidden_subtasks: false,
+      has_hidden_parent: false,
     })),
     teams: [],
     teamMembers: [],
@@ -100,6 +101,7 @@ function fixture(): Snapshot {
     orgLoad: [],
     messages: [],
     readMessageCount: 0,
+    delivered_at: '2026-09-15T08:00:00.000Z',
   }
 }
 

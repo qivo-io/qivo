@@ -78,6 +78,7 @@ function fixture() {
     created_at: NOW,
     updated_at: NOW,
     has_hidden_subtasks: false,
+    has_hidden_parent: false,
     ...extra,
   })
   const a = task('A', {
@@ -147,6 +148,7 @@ function fixture() {
     ],
     messages: [],
     readMessageCount: 0,
+    delivered_at: '2026-09-15T08:00:00.000Z',
   }
   return { snap, me: me.id, other: other.id, sub, sub2, meta2 }
 }

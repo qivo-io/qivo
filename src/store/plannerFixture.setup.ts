@@ -67,5 +67,6 @@ export function plannerFixture(): Snapshot {
     orgLoad: [],
     messages: [],
     readMessageCount: 0,
+    delivered_at: '2026-09-15T08:00:00.000Z',
   }
 }

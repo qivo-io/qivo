@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { invokeSnapshot } from './backendPerformance.setup'
 import { as, NOW, newT, withOrg } from './helpers.setup'
 
+/* Two reads differ in their delivery time; everything else must match. */
+const sameDelivery = <S extends { delivered_at: string } | null>(snapshot: S): S =>
+  snapshot === null ? snapshot : { ...snapshot, delivered_at: '' }
+
 describe('snapshot bulk relation reads', () => {
   it('matches selective reads exactly, including ordering, permissions, archives and hidden load', async () => {
     const t = newT()
@@ -76,7 +80,7 @@ describe('snapshot bulk relation reads', () => {
       for (const org of selective.snapshot!.orgs) {
         if (org.id === f.org.id) org.next_issue_num = 64
       }
-      expect(bulk.snapshot).toEqual(selective.snapshot)
+      expect(sameDelivery(bulk.snapshot)).toEqual(sameDelivery(selective.snapshot))
       expect(bulk.metrics.databaseQueries.used).toBeLessThan(
         selective.metrics.databaseQueries.used / 2,
       )
@@ -102,7 +106,7 @@ describe('snapshot bulk relation reads', () => {
       return ids
     })
     const legacy = await read(f.admin)
-    expect(legacy.snapshot).toEqual(scoped.snapshot)
+    expect(sameDelivery(legacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
     expect(legacy.metrics.databaseQueries.used).toBeGreaterThan(scoped.metrics.databaseQueries.used)
     await t.run(async (ctx) => {
       for (const id of legacyRows) await ctx.db.patch(id, { org_id: f.org.id })
@@ -128,7 +132,7 @@ describe('snapshot bulk relation reads', () => {
       })
     })
     const foreignLegacy = await read(f.admin)
-    expect(foreignLegacy.snapshot).toEqual(scoped.snapshot)
+    expect(sameDelivery(foreignLegacy.snapshot)).toEqual(sameDelivery(scoped.snapshot))
     expect(foreignLegacy.metrics.databaseQueries.used).toBe(legacy.metrics.databaseQueries.used)
   })
 
