@@ -1,15 +1,16 @@
-/* Standalone vitest config. Its existence REPLACES the fallback to
- * vite.config.ts — deliberate: the pure-logic src/ suites use none of the
- * vite plugins (no JSX, no CSS, planner mocked where touched), so
- * they run on plain Vite transforms in the node environment.
+/* Standalone Vitest config keeps most src/ suites on plain Vite transforms
+ * in the Node environment. Component tests opt into jsdom per file and use
+ * the same source alias as the application.
  *
  * convex/ tests run in edge-runtime, the environment closest to the Convex
  * isolate (no node globals leaking into code that will not have them).
  * convex-test must be inlined so its import.meta.glob default and the
  * `global.Convex` syscall proxy are processed by vite inside that VM. */
+import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   test: {
     /* Runs inside the test environment before the test file is imported —
      * the only hook early enough for convex/auth.ts's module-scope SITE_URL
