@@ -2155,8 +2155,11 @@ export const PLANNER = {
     }
     add(it)
     eachDescendant(it, add)
+    // a switched-off person holds no new work, as on the server
     return [...holders].every(
-      (uid) => PLANNER.canSee(parent.project, uid) && PLANNER.seesTasksAbove(parent, uid),
+      (uid) =>
+        !PLANNER.user(uid)?.active ||
+        (PLANNER.canSee(parent.project, uid) && PLANNER.seesTasksAbove(parent, uid)),
     )
   },
   /* my own organization's USERS — the roster, team membership, the settings

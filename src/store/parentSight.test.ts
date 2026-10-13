@@ -23,7 +23,7 @@ describe('assignees must see the tasks above a subtask', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
 
-  async function load() {
+  async function load(change?: (snap: Snapshot) => void) {
     const snap: Snapshot = plannerFixture()
     const org = snap.orgs[0].id
     const work = snap.projects[0]
@@ -69,6 +69,7 @@ describe('assignees must see the tasks above a subtask', () => {
       task('sub', 2, work.id, { parent_id: 'epic' }),
       task('free', 3, work.id, { assignee_id: 'workOnly' }),
     )
+    change?.(snap)
     network.onUpdate.mockImplementation((ref, _args, next) => {
       if (getFunctionName(ref) === 'snapshot:forMe') next(structuredClone(snap))
       return () => {}
@@ -132,5 +133,14 @@ describe('assignees must see the tasks above a subtask', () => {
     P.updateIssue(vm('free').id, { parent: vm('epic').id })
     expect(requests.map((r) => r.name)).toEqual(['issues:update', 'issues:update'])
     expect(vm('free').parent).toBe(vm('epic').id)
+  })
+
+  it('ignores a switched-off holder, as the server does', async () => {
+    await load((snap) => {
+      for (const p of snap.profiles) if (p.id === 'workOnly') p.active = false
+    })
+    expect(P.holdersSeeParent(vm('free'), vm('epic').id)).toBe(true)
+    P.updateIssue(vm('free').id, { parent: vm('epic').id })
+    expect(requests.map((r) => r.name)).toEqual(['issues:update'])
   })
 })

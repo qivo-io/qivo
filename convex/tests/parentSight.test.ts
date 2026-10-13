@@ -112,6 +112,18 @@ describe('a subtask is held only by people who can see every task above it', () 
     expect((await issueRow(t, top.id)).parent_id).toBe(epic.id)
   })
 
+  it('ignores a switched-off holder', async () => {
+    const t = newT()
+    const { f, base, epic } = await scene(t)
+    const top = await plantIssue(t, { ...base, assignee_id: f.guest.id })
+    await t.run(async (ctx) => {
+      const guest = await ctx.db.get(f.guest._id)
+      await ctx.db.patch(guest!._id, { active: false })
+    })
+    await update(t, f, top.id, { parent_id: epic.id })
+    expect((await issueRow(t, top.id)).parent_id).toBe(epic.id)
+  })
+
   it("ignores a group's dormant reviewer and archived subtasks", async () => {
     const t = newT()
     const { f, base, epic } = await scene(t)

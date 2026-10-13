@@ -223,7 +223,8 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[]) {
 
 /* The people working on a task and its active subtasks at any depth: each
  * assignee, and each reviewer of a task without active subtasks (a group's
- * reviewer is dormant). `self` holds the task's own next values. */
+ * reviewer is dormant). `self` holds the task's own next values. Callers skip
+ * switched-off people, who hold no new work. */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
@@ -997,7 +998,11 @@ export async function updateIssueCore(
         reviewer_id: heldReviewer,
         group: await isGroup(),
       })
-      for (const holder of holders) if (!(await sees(holder))) throw rule(HOLDER_SIGHT_RULE)
+      for (const holder of holders) {
+        // a switched-off person holds no new work, so their sight is not checked
+        if (!(await byId(ctx, 'profiles', holder))?.active) continue
+        if (!(await sees(holder))) throw rule(HOLDER_SIGHT_RULE)
+      }
     }
   }
   if ('remaining_hours' in patch) {
