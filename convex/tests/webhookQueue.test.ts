@@ -167,12 +167,16 @@ describe('bounded durable webhook dispatch', () => {
       })
     const calls: { name: string; delay: number }[] = []
     await f.t.run(async (ctx) => {
-      const result = await archiveIssueCore(ctx, {
+      await archiveIssueCore(ctx, {
         me: f.fx.user,
         issue: f.issue,
         now: new Date().toISOString(),
       })
-      expect(result.descendants).toBe(50)
+      const kids = await ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', f.issue.id))
+        .collect()
+      expect(kids.filter((kid) => kid.archived_at !== undefined)).toHaveLength(50)
     })
     expect(await f.rows()).toHaveLength(0)
     expect(await f.t.run((ctx) => ctx.db.query('webhook_events').collect())).toHaveLength(51)

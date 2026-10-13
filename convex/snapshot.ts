@@ -55,6 +55,17 @@ const TEAM_VERBS = new Set(['added', 'removed', 'made', 'demoted'])
 const isUnscopedTeamRow = (ev: Doc<'activity_events'>): boolean =>
   ev.target_type === 'user' && ev.team_id === undefined && TEAM_VERBS.has(ev.verb)
 
+/* Task archive rows used to say 'with N subtasks', counting subtasks in
+ * projects a reader may not access (model/issues.ts archiveIssueCore no
+ * longer writes it). Members other than admins get such rows without it. */
+const LEGACY_SUBTASK_COUNT = /^with \d+ subtasks?$/
+function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_events'> {
+  if (ev.target_type !== 'issue' || ev.verb !== 'archived') return ev
+  if (!LEGACY_SUBTASK_COUNT.test(ev.detail ?? '')) return ev
+  const { detail: _count, ...rest } = ev
+  return rest
+}
+
 /* Members other than organization admins receive an activity row only if
  * they can access every project it names: the project it was filed under
  * and its related project, such as a move's destination. Seeing a parent
@@ -320,7 +331,7 @@ export const forMe = authedQuery({
       for await (const ev of orgActivity) {
         if (!isAdmin && !memberSeesActivity(ev, { me, view, workingSet, leaderOf })) continue
         if (ev.target_type === 'issue' && (await isArchivedIssue(ev.target_id))) continue
-        activityDocs.push(ev)
+        activityDocs.push(isAdmin ? ev : withoutLegacySubtaskCount(ev))
         if (++kept >= CAP) break
       }
 

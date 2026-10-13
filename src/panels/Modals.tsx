@@ -712,6 +712,8 @@ function ArchiveIssueModal({
   const unfinished = sub.total - sub.done
   const rootGroup = P.isGroup(it)
   const canSubmit = reason.trim().length > 0
+  // archiving changes every active subtask, so the server refuses when one is
+  // in a project this person cannot edit
   // the subtree's issues, listed so it's plain what the cascade takes along
   // (the store only mirrors active issues, so everything here is unarchived;
   // cycle-safe like progressOf)
@@ -736,6 +738,11 @@ function ArchiveIssueModal({
       (a, b) => Number(String(a.key).split('-')[1]) - Number(String(b.key).split('-')[1]),
     )
   }
+  const refusal = sub.unknown
+    ? ' If any of them is in a project you cannot edit, the archive is refused.'
+    : subIssues.some((si) => !P.canWrite(si.project))
+      ? ' Some are in a project you cannot edit, so the archive will be refused.'
+      : ''
   return (
     <ModalShell
       icon="inbox"
@@ -754,7 +761,7 @@ function ArchiveIssueModal({
         {rootGroup && sub.unknown ? (
           <>
             <b>{it.key}</b> may include work outside this view; completion is unknown. All subtasks
-            will also be archived.
+            will also be archived.{refusal}
           </>
         ) : rootGroup ? (
           <>
@@ -764,7 +771,7 @@ function ArchiveIssueModal({
               : unfinished > 1
                 ? `${unfinished} unfinished subtasks`
                 : 'unfinished subtasks'}
-            . All subtasks will also be archived.
+            . All subtasks will also be archived.{refusal}
           </>
         ) : (
           <>

@@ -44,10 +44,15 @@
 import type { WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { profileCanBeAssigned, profileCanSeeProject } from '../lib/access'
+import {
+  canSeeProject,
+  hasProjectLevel,
+  profileCanBeAssigned,
+  profileCanSeeProject,
+} from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
-import { badRequest, notFound, require, rule } from '../lib/functions'
+import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { reviewStamp } from '../lib/review'
 import { ISSUE_PREFIX } from '../lib/taskRefs'
 import { issueChanges, logActivity, machineDetail, PRIORITY_NAMES, STATUS_NAMES } from './activity'
@@ -301,19 +306,33 @@ export const PAUSE_RULE = 'a Done or Backlog task cannot be paused'
 
 /* -------------------------------------------------- the parent link fence
  * issues_check_parent (0057:38-85, final). Caller must pass the row's PINNED
- * org (0057:27-30: org from the project first, THEN this check). A
- * nonexistent parent is not_found — deliberately never mislabeled as an org
- * mismatch (0057:52-55). Returns the parent row for the follow-up guards. */
+ * org (0057:27-30: org from the project first, THEN this check). A parent the
+ * actor cannot see (missing, in another organization or in a hidden project)
+ * answers 'parent task not found' before any other guard describes it.
+ * Attaching changes the parent (it becomes a group and loses its own hours),
+ * so it also needs Edit on the parent's project, like any other change to it.
+ * Returns the parent row for the follow-up guards. */
 export async function assertParentChain(
   ctx: QueryCtx,
   issue: { id: string; org_id: string },
   parentId: string,
+  actor: Doc<'profiles'>,
 ): Promise<Doc<'issues'>> {
   if (parentId === issue.id) throw rule('a task cannot be its own parent')
   const parent = await byId(ctx, 'issues', parentId)
-  if (parent === null) throw notFound('parent task not found')
-  if (parent.org_id !== issue.org_id) {
-    throw rule('a subtask and its parent must belong to the same organization')
+  const parentProject =
+    parent === null || parent.org_id !== issue.org_id
+      ? null
+      : await byId(ctx, 'projects', parent.project_id)
+  if (
+    parent === null ||
+    parentProject === null ||
+    !(await canSeeProject(ctx, actor, parentProject))
+  ) {
+    throw notFound('parent task not found')
+  }
+  if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) {
+    throw forbidden('no write access to the parent task')
   }
   // upward walk: bound the chain above the attach point
   let cur: string | undefined = parentId
@@ -737,7 +756,7 @@ export async function createIssueCore(
   const title = cleanTitle(args.title)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
-    const parent = await assertParentChain(ctx, { id: args.id, org_id }, parent_id)
+    const parent = await assertParentChain(ctx, { id: args.id, org_id }, parent_id, me)
     assertParentActive(parent, undefined) // a fresh row is active
   }
   const assignee_id = args.assignee_id ?? undefined
@@ -872,8 +891,9 @@ export async function updateIssueCore(
   //    remaining guard (which must raise BEFORE the stamp — 0072)
   const nextParent = 'parent_id' in patch ? (patch.parent_id ?? undefined) : issue.parent_id
   if ('parent_id' in patch) {
-    if (nextParent !== undefined) {
-      const parent = await assertParentChain(ctx, issue, nextParent)
+    // an unchanged parent is no new attach, so it needs no fresh checks
+    if (nextParent !== undefined && nextParent !== issue.parent_id) {
+      const parent = await assertParentChain(ctx, issue, nextParent, me)
       assertParentActive(parent, issue.archived_at)
     }
     w.parent_id = nextParent
@@ -1051,8 +1071,9 @@ export async function updateIssueCore(
  * clearParentRemaining does). num is org-scoped and immutable: the key
  * survives the move; labels survive too (org vocabulary). The activity row is
  * keyed to the SOURCE project and records the destination as its related
- * project. Access ('member' on BOTH ends) is the mutation
- * layer's job. */
+ * project. Access ('member' on BOTH ends) is the mutation layer's job, and
+ * issues.move checks it before calling this, so these guards only ever
+ * describe a destination the caller can write. */
 export async function moveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; project_id: string; now: string },
@@ -1117,15 +1138,40 @@ export async function moveIssueCore(
  * The reason-comment (early archive) is the mutation layer's job (comments
  * model, phase 5) — it must share this same `now`. */
 
+export const ARCHIVE_CASCADE_RULE =
+  'archiving this task would change a subtask in a project you cannot edit'
+export const RESTORE_CASCADE_RULE =
+  'restoring this task would change a parent task in a project you cannot edit'
+
+/* Per-call cache of the actor's Edit access. A cascade changes only tasks in
+ * projects the actor could edit directly; otherwise the whole write is
+ * refused and rolls back. */
+function editableBy(
+  ctx: QueryCtx,
+  actor: Doc<'profiles'>,
+): (projectId: string) => Promise<boolean> {
+  const seen = new Map<string, Promise<boolean>>()
+  return (projectId) => {
+    let result = seen.get(projectId)
+    if (result === undefined) {
+      result = hasProjectLevel(ctx, actor, projectId, 'user')
+      seen.set(projectId, result)
+    }
+    return result
+  }
+}
+
 /* The descendant walk, shared with updateIssueCore's folded machine toggle:
- * stamps active descendants (touched, NEVER notified), returns the count. */
+ * stamps active descendants (touched, NEVER notified). An active descendant
+ * in a project the actor cannot edit refuses the archive, because an active
+ * task may never sit under an archived parent. */
 async function archiveSubtree(
   ctx: MutationCtx,
   rootId: string,
   now: string,
   actor: Doc<'profiles'>,
-): Promise<number> {
-  let descendants = 0
+): Promise<void> {
+  const editable = editableBy(ctx, actor)
   let frontier = [rootId]
   const seen = new Set<string>([rootId])
   for (let depth = 0; frontier.length > 0; depth++) {
@@ -1136,27 +1182,28 @@ async function archiveSubtree(
       for await (const c of kids) {
         if (c.archived_at !== undefined || seen.has(c.id)) continue
         seen.add(c.id)
+        if (!(await editable(c.project_id))) throw rule(ARCHIVE_CASCADE_RULE)
         await ctx.db.patch(c._id, { archived_at: now, updated_at: now })
         const after = (await ctx.db.get(c._id)) as Doc<'issues'>
         await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: c, actor, now })
-        descendants += 1
         next.push(c.id)
       }
     }
     frontier = next
   }
-  return descendants
 }
 
+/* The 'archived' row names no subtask count: subtasks can sit in projects
+ * some readers of the root cannot access. */
 export async function archiveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
-): Promise<{ issue: Doc<'issues'>; descendants: number }> {
+): Promise<Doc<'issues'>> {
   const { me, issue, now } = a
-  if (issue.archived_at !== undefined) return { issue, descendants: 0 }
+  if (issue.archived_at !== undefined) return issue
   const before = { ...issue }
   await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })
-  const descendants = await archiveSubtree(ctx, issue.id, now, me)
+  await archiveSubtree(ctx, issue.id, now, me)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   await notifyIssueUpdate(ctx, { before, after, actor: me, now }) // the root's own write narrates
   const event = {
@@ -1166,13 +1213,11 @@ export async function archiveIssueCore(
     target_type: 'issue' as const,
     target_id: issue.id,
     label: issue.title,
-    detail:
-      descendants > 0 ? `with ${descendants} subtask${descendants > 1 ? 's' : ''}` : undefined,
     project_id: issue.project_id,
     ts: now,
   }
   await logActivity(ctx, event)
-  return { issue: after, descendants }
+  return after
 }
 
 /* -------------------------------------------------------- unarchive core
@@ -1189,12 +1234,14 @@ export async function archiveIssueCore(
 /* The ancestor walk, shared with updateIssueCore's folded machine toggle:
  * restores/clears the chain above `row` (each echo notified with the Restored
  * line suppressed), returning the patched ancestor rows bottom-up — the row
- * itself is the caller's to notify and widen. */
+ * itself is the caller's to notify and widen. An ancestor it would change in
+ * a project the actor cannot edit refuses the restore. */
 async function restoreAncestors(
   ctx: MutationCtx,
   a: { row: Doc<'issues'>; actor: Doc<'profiles'>; now: string },
 ): Promise<Doc<'issues'>[]> {
   const { actor, now } = a
+  const editable = editableBy(ctx, actor)
   const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
   const seen = new Set<string>([a.row.id])
@@ -1209,6 +1256,7 @@ async function restoreAncestors(
     // own hours, or a review hand-off from its leaf days: a group has neither
     const hadOwn = parent.remaining_hours !== undefined || parent.review_at !== undefined
     if (!wasArchived && !hadOwn) break
+    if (!(await editable(parent.project_id))) throw rule(RESTORE_CASCADE_RULE)
     const pBefore = { ...parent }
     await ctx.db.patch(parent._id, {
       archived_at: undefined,

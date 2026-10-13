@@ -252,7 +252,7 @@ describe('logActivity — newest-500 per-org retention', () => {
 })
 
 describe('atomicity — a refused write leaves zero rows', () => {
-  it('a forbidden move rolls back the row, the messages and the activity the core already wrote', async () => {
+  it('a move to a destination the caller cannot write writes nothing', async () => {
     const t = newT()
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -262,8 +262,8 @@ describe('atomicity — a refused write leaves zero rows', () => {
       type: 'project',
       parent_id: f.hidden.id,
     })
-    // guest can write the source (grant on meta) but not the hidden target —
-    // that check runs AFTER the core patched, notified and logged
+    // guest can write the source (grant on meta) but not the hidden target;
+    // the check runs before the core, so nothing is patched, sent or logged
     await expectRefusal(
       as(t, f.guest).mutation(api.issues.move, {
         org_id: f.org.id,
@@ -463,21 +463,19 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
     await as(t, f.user).mutation(api.issues.removeLink, { org_id: f.org.id, a: id, b: other.id })
     expect(await activityFor(t, f.org.id)).toHaveLength(0)
 
-    // archived, with the subtask count (plural and singular), then restored
+    // archived without a subtask count (subtasks can sit in projects some
+    // readers cannot access), then restored
     const p2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: p2.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: p2.id })
-    await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: p2.id })
+    const archivedP2 = await as(t, f.user).mutation(api.issues.archive, {
+      org_id: f.org.id,
+      id: p2.id,
+    })
+    expect(Object.keys(archivedP2)).toEqual(['issue'])
     events = await activityFor(t, f.org.id)
     expect(events[0].verb).toBe('archived')
-    expect(events[0].detail).toBe('with 2 subtasks')
-    await drainActivity(t)
-
-    const p1 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: p1.id })
-    await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: p1.id })
-    events = await activityFor(t, f.org.id)
-    expect(events[0].detail).toBe('with 1 subtask')
+    expect(events[0].detail).toBeUndefined()
     await drainActivity(t)
 
     await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id })

@@ -5,7 +5,7 @@
  * Refusal sentences are asserted byte-for-byte via err.data.message. */
 
 import { describe, expect, it } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { CreateIssueArgs, IssuePatch } from '../model/issues'
 import {
@@ -15,6 +15,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantProject,
   type T,
   uuid,
   withOrg,
@@ -195,27 +196,85 @@ describe('issue scheduling envelope', () => {
     expect(moved.parent_id).toBe(c[9].id)
   })
 
-  it('the parent fence: a foreign-org parent answers the same-org rule, a missing one not_found, self is refused', async () => {
+  it('the parent fence: foreign-org and missing parents both answer not_found, self is refused', async () => {
     const t = newT()
     const f = await withOrg(t)
     const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
-    const crossCreate = await expectRefusal(createAs(t, f, { parent_id: foreign.id }), 'rule')
-    expect(crossCreate.data.message).toBe(
-      'a subtask and its parent must belong to the same organization',
-    )
-    const missing = await expectRefusal(createAs(t, f, { parent_id: uuid() }), 'not_found')
-    expect(missing.data.message).toBe('parent task not found')
-
     const mine = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const crossPatch = await expectRefusal(
-      updateAs(t, f, mine.id, { parent_id: foreign.id }),
-      'rule',
-    )
-    expect(crossPatch.data.message).toBe(
-      'a subtask and its parent must belong to the same organization',
-    )
+    for (const parent_id of [foreign.id, uuid()]) {
+      for (const attempt of [
+        createAs(t, f, { parent_id }),
+        updateAs(t, f, mine.id, { parent_id }),
+      ]) {
+        const r = await expectRefusal(attempt, 'not_found')
+        expect(r.data.message).toBe('parent task not found')
+      }
+    }
     const self = await expectRefusal(updateAs(t, f, mine.id, { parent_id: mine.id }), 'rule')
     expect(self.data.message).toBe('a task cannot be its own parent')
+  })
+
+  it('the parent fence: a hidden parent reads like a missing one and stays untouched; a read-only one is refused', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // f.guest holds User on f.meta and nothing on f.hidden
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const hiddenParent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: hiddenSub.id,
+      start_week: '2026-02-02',
+      end_week: '2026-02-08',
+      remaining_hours: 5,
+      remaining_set_at: NOW,
+    })
+    await subscribe(t, hiddenParent.id, f.admin.id)
+    const mine = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const weeks = { start_week: '2026-03-02', end_week: '2026-03-08' }
+    const asGuest = as(t, f.guest)
+    const attempts = () => [
+      asGuest.mutation(api.issues.create, {
+        org_id: f.org.id,
+        id: uuid(),
+        project_id: f.sub.id,
+        title: 'Probe',
+        parent_id: hiddenParent.id,
+        ...weeks,
+      }),
+      asGuest.mutation(api.issues.update, {
+        org_id: f.org.id,
+        id: mine.id,
+        patch: { parent_id: hiddenParent.id, ...weeks },
+      }),
+    ]
+    for (const attempt of attempts()) {
+      const r = await expectRefusal(attempt, 'not_found')
+      expect(r.data.message).toBe('parent task not found')
+    }
+    expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
+    // seeing the parent without Edit is not enough: attaching changes it
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: hiddenSub.id,
+        profile_id: f.guest.id,
+        level: 'viewer',
+      }),
+    )
+    for (const attempt of attempts()) {
+      await expectRefusal(attempt, 'forbidden', /^no write access to the parent task$/)
+    }
+    expect(await issueRow(t, hiddenParent.id)).toEqual(hiddenParent)
+    // an editable parent in another sub-project attaches as before
+    const sibling = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await asGuest.mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: mine.id,
+      patch: { parent_id: sibling.id },
+    })
+    expect((await issueRow(t, mine.id)).parent_id).toBe(sibling.id)
   })
 
   it('week pair: both-or-neither and ordering, on create and on a half-clear', async () => {
@@ -256,17 +315,145 @@ describe('issue scheduling envelope', () => {
     // parent IS archiving — the cascade makes it, no guard fires
     const parent = await plantIssue(t, { ...base })
     const kid = await plantIssue(t, { ...base, parent_id: parent.id })
-    const { issue: archived, descendants } = await as(t, f.admin).mutation(api.issues.archive, {
+    const { issue: archived } = await as(t, f.admin).mutation(api.issues.archive, {
       org_id: f.org.id,
       id: parent.id,
     })
-    expect(descendants).toBe(1)
     const kidRow = await issueRow(t, kid.id)
     expect(kidRow.archived_at).toBe(archived.archived_at) // the subtree shares one now
     const p2 = await plantIssue(t, { ...base })
     const k2 = await plantIssue(t, { ...base, parent_id: p2.id })
-    const solo = await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: k2.id })
-    expect(solo.descendants).toBe(0)
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: k2.id })
     expect((await issueRow(t, p2.id)).archived_at).toBeUndefined()
+  })
+
+  it('archive and restore refuse to change a task in a project the caller cannot edit', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // f.guest holds User on f.meta and nothing on f.hidden
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const asGuest = as(t, f.guest)
+    const archive = (id: string) => asGuest.mutation(api.issues.archive, { org_id: f.org.id, id })
+    const restore = (id: string) => asGuest.mutation(api.issues.unarchive, { org_id: f.org.id, id })
+    const ARCHIVE_RULE = /^archiving this task would change a subtask in a project you cannot edit$/
+    const RESTORE_RULE =
+      /^restoring this task would change a parent task in a project you cannot edit$/
+
+    // a hidden active subtask, directly or deeper, refuses the archive whole
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const mid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: root.id })
+    const deep = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: hiddenSub.id,
+      parent_id: mid.id,
+    })
+    await expectRefusal(archive(root.id), 'rule', ARCHIVE_RULE)
+    for (const id of [root.id, mid.id, deep.id]) {
+      expect((await issueRow(t, id)).archived_at).toBeUndefined()
+    }
+    // so does a visible subtask the caller can only read
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: hiddenSub.id,
+        profile_id: f.guest.id,
+        level: 'viewer',
+      }),
+    )
+    await expectRefusal(archive(root.id), 'rule', ARCHIVE_RULE)
+    // an archived hidden subtask is not changed, so it does not block
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(deep._id)
+      await ctx.db.patch(row!._id, { archived_at: NOW })
+    })
+    await archive(root.id)
+    expect((await issueRow(t, mid.id)).archived_at).toBe((await issueRow(t, root.id)).archived_at)
+    // an admin's cascade reaches every project
+    const adminRoot = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const adminKid = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: hiddenSub.id,
+      parent_id: adminRoot.id,
+    })
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: adminRoot.id })
+    expect((await issueRow(t, adminKid.id)).archived_at).toBeDefined()
+
+    // restore: an archived parent in a project the caller cannot edit refuses
+    const hiddenTop = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenTop.id,
+    })
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: hiddenTop.id })
+    await expectRefusal(restore(child.id), 'rule', RESTORE_RULE)
+    expect((await issueRow(t, child.id)).archived_at).toBeDefined()
+    expect((await issueRow(t, hiddenTop.id)).archived_at).toBeDefined()
+    // so does an active parent that would lose its own hours
+    await as(t, f.admin).mutation(api.issues.unarchive, { org_id: f.org.id, id: hiddenTop.id })
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: child.id })
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(hiddenTop._id)
+      await ctx.db.patch(row!._id, { remaining_hours: 4, remaining_set_at: NOW })
+    })
+    await expectRefusal(restore(child.id), 'rule', RESTORE_RULE)
+    // an active parent without own hours is left alone, so the restore passes
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(hiddenTop._id)
+      await ctx.db.patch(row!._id, { remaining_hours: undefined, remaining_set_at: undefined })
+    })
+    const untouched = await issueRow(t, hiddenTop.id)
+    await restore(child.id)
+    expect((await issueRow(t, child.id)).archived_at).toBeUndefined()
+    expect(await issueRow(t, hiddenTop.id)).toEqual(untouched)
+  })
+
+  it('REST and MCP archives follow the same cascade rule', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: f.agent.id,
+        level: 'user',
+      }),
+    )
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const kid = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: hiddenSub.id,
+      parent_id: root.id,
+    })
+    const RULE = /^archiving this task would change a subtask in a project you cannot edit$/
+    await expectRefusal(
+      t.mutation(internal.machine.rest.updateIssue, {
+        callerId: f.agent.id,
+        keyName: 'drive',
+        ref: root.id,
+        body: JSON.stringify({ archived: true }),
+      }),
+      'rule',
+      RULE,
+    )
+    await expectRefusal(
+      t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: f.agent.id,
+        ref: root.id,
+        archived: true,
+      }),
+      'rule',
+      RULE,
+    )
+    for (const id of [root.id, kid.id]) {
+      expect((await issueRow(t, id)).archived_at).toBeUndefined()
+    }
   })
 })

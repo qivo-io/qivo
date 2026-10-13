@@ -1502,7 +1502,9 @@ function IssueDetail({
 
   // picker candidates (cycle-safe), same sub-project first; only while open.
   // Every relation is same-ORGANIZATION by DB guard (parents 0057, links
-  // 0078), so the blended snapshot is narrowed before it is offered.
+  // 0078), so the blended snapshot is narrowed before it is offered. Setting
+  // a parent changes both tasks, so the server needs edit access to each:
+  // only tasks in editable projects are offered as parents or subtasks.
   const sameOrg = (x) => x.org === it.org
   const sameProjFirst = (a, b) =>
     Number(b.project === it.project) - Number(a.project === it.project)
@@ -1512,7 +1514,7 @@ function IssueDetail({
     // current children show a check and toggle off
     const chainSet = new Set(chain)
     subCandidates = P.issues
-      .filter((x) => sameOrg(x) && x.id !== it.id && !chainSet.has(x.id))
+      .filter((x) => sameOrg(x) && x.id !== it.id && !chainSet.has(x.id) && P.canWrite(x.project))
       .sort(sameProjFirst)
   }
   let parentCandidates = []
@@ -1528,8 +1530,15 @@ function IssueDetail({
         stack.push(k)
       })
     }
+    // the current parent stays listed so it can be cleared
     parentCandidates = P.issues
-      .filter((x) => sameOrg(x) && x.id !== it.id && !desc.has(x.id))
+      .filter(
+        (x) =>
+          sameOrg(x) &&
+          x.id !== it.id &&
+          !desc.has(x.id) &&
+          (x.id === it.parent || P.canWrite(x.project)),
+      )
       .sort(sameProjFirst)
   }
   let linkCandidates = []
