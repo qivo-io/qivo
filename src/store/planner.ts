@@ -2257,17 +2257,20 @@ export const PLANNER = {
     }
     return { people: [...new Set(items.map((i) => i.uid))], items }
   },
-  /* Who can take over every listed task once the grant is gone: Edit access
-     to each task's project and sight of every task above, both as the grants
-     would be. */
+  /* Who can take over every listed task once the grant is gone: anyone in
+     the organization who can hold work, with Edit access to each task's
+     project and sight of every task above, both as the grants would be.
+     Edit access to `pid` itself is not needed: a person who edits only the
+     affected sub-project can take its tasks. */
   reassignChoices: (pid: string, change: AccessRemoval, items: Holder[]): UserVM[] => {
     const project = PLANNER.project(pid)
     if (!project) return []
     const after = projectsWithout(project, change)
     const people = new Set(items.map((i) => i.uid))
     const level = (uid: string, projectId: string) => levelOnProject(after(projectId), uid, after)
-    return PLANNER.issueAssigneesFor(pid).filter(
+    return PLANNER.usersFor(pid).filter(
       (u) =>
+        (u.orgRole === 'admin' || u.orgRole === 'user' || u.orgRole === 'guest') &&
         !people.has(u.id) &&
         items.every(
           (i) =>
@@ -2276,21 +2279,42 @@ export const PLANNER = {
         ),
     )
   },
-  /* Apply the removal with the choice made in the removal window: keep the
-     people as Viewers (a direct Viewer grant each), or hand every listed task
-     to `to` (null clears it) and then remove the grant. */
-  removeAccess: (
+  /* Apply the removal with the choice made in the removal window, for the
+     `items` the person reviewed there: keep their holders as Viewers (a
+     direct Viewer grant each), or hand every item to `to` (null clears it)
+     and remove the grant once the server has accepted all of them. If any
+     is refused the grant stays, so nobody is left holding a task they
+     cannot see. Resolves whether the grant changed. */
+  removeAccess: async (
     pid: string,
     change: AccessRemoval,
     choice: { keep: true } | { to: string | null },
-  ) => {
-    const { people, items } = PLANNER.accessRemoval(pid, change)
+    items: Holder[],
+  ): Promise<boolean> => {
     const m = PLANNER.project(pid)
-    if (!m) return
+    if (!m) return false
+    const people = [...new Set(items.map((i) => i.uid))]
     if ('to' in choice) {
       const to = choice.to
-      for (const i of items)
-        PLANNER.updateIssue(i.task.id, i.role === 'assignee' ? { assignee: to } : { reviewer: to })
+      const saved = await Promise.all(
+        items.map((i) =>
+          PLANNER.updateIssue(
+            i.task.id,
+            i.role === 'assignee' ? { assignee: to } : { reviewer: to },
+          ),
+        ),
+      )
+      if (saved.includes(false)) {
+        const team = 'teamId' in change && PLANNER.teams.find((t) => t.id === change.teamId)
+        const who =
+          'userId' in change
+            ? PLANNER.user(change.userId)?.name || 'This person'
+            : team
+              ? `The ${team.name} team`
+              : 'The team'
+        toast(`${who} keeps access, because not every task could be reassigned.`, 'error')
+        return false
+      }
     }
     if ('userId' in change) {
       PLANNER.setProjectAccess(
@@ -2298,11 +2322,11 @@ export const PLANNER = {
         change.userId,
         'keep' in choice && people.length ? 'viewer' : null,
       )
-      return
+      return true
     }
     if (!('keep' in choice) || !people.length) {
       PLANNER.setProjectTeamAccess(pid, change.teamId, null)
-      return
+      return true
     }
     // one write: the team leaves and the people who would lose sight stay as Viewers
     const access: Record<string, AccessLevel> = {}
@@ -2313,6 +2337,7 @@ export const PLANNER = {
     const teamAccess = { ...m.teamAccess }
     delete teamAccess[change.teamId]
     PLANNER.updateProject(pid, { access, teamAccess })
+    return true
   },
   /* One sentence naming who blocks a change and how to clear it. */
   blockerText: (b: AccessBlocker): string => {
@@ -2767,10 +2792,14 @@ export const PLANNER = {
     return handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
   },
 
-  updateIssue: (id: string, patch: IssuePatch) => {
+  /* Paints the change at once and sends it. Resolves true when the server
+     accepts it or nothing needed sending, false when it is refused here or
+     by the server (both toast the reason). Callers that only paint can
+     ignore it; removeAccess waits on it before taking a grant away. */
+  updateIssue: (id: string, patch: IssuePatch): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid || !patch || !Object.keys(patch).length) return
+    if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
     // whoever holds a subtask must see every task above it: refuse here, with
     // the server's reason, before anything is painted (a hidden parent is
     // left to the server)
@@ -2778,7 +2807,7 @@ export const PLANNER = {
     const stranded = it && patch.parent ? PLANNER.parentBlockers(it, patch.parent) : []
     if (stranded.length) {
       toast(PLANNER.blockerText(stranded[0]), 'error')
-      return
+      return Promise.resolve(false)
     }
     for (const holder of [patch.assignee, patch.reviewer]) {
       const unseen = it && holder ? PLANNER.unseenAbove(it, holder) : null
@@ -2789,7 +2818,7 @@ export const PLANNER = {
           `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
           'error',
         )
-        return
+        return Promise.resolve(false)
       }
     }
     // a group's dates are calculated from its subtasks, so drop a stray date
@@ -2799,7 +2828,7 @@ export const PLANNER = {
       patch = { ...patch }
       delete patch.start
       delete patch.end
-      if (!Object.keys(patch).length) return
+      if (!Object.keys(patch).length) return Promise.resolve(true)
     }
     // remaining is computed for parents (0066): drop a stray own-hours patch
     // (the UI hides the input; the server would refuse it anyway)
@@ -2811,7 +2840,7 @@ export const PLANNER = {
       if (isParent) {
         patch = { ...patch }
         delete patch.remaining
-        if (!Object.keys(patch).length) return
+        if (!Object.keys(patch).length) return Promise.resolve(true)
       }
     }
     // attaching a sub-issue clears the new parent's own hours (0066 mirror)
@@ -2829,8 +2858,20 @@ export const PLANNER = {
     const planningOnly = Object.keys(patch).every((key) =>
       ['start', 'end', 'remaining'].includes(key),
     )
-    if (!planningOnly || !recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }))
-      run(write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }))
+    const saved =
+      planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire })
+        ? Promise.resolve(true)
+        : new Promise<boolean>((resolve) =>
+            run(
+              write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }),
+              () => resolve(true),
+              undefined,
+              (error) => {
+                toastWriteError(error)
+                resolve(false)
+              },
+            ),
+          )
     // inline description images are hidden attachments; when neither the new
     // text nor the text it just replaced references one any more, reap the
     // row + bytes. Keeping the replaced text's refs for one more save gives
@@ -2862,6 +2903,7 @@ export const PLANNER = {
           PLANNER.removeAttachment(a.id)
         })
     }
+    return saved
   },
 
   setStatus: (id: string, status: Row<'issues'>['status']) => {

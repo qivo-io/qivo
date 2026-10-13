@@ -396,7 +396,7 @@ export function ProjectPage({
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
   const removeOrAsk = (change: AccessRemoval) => {
     if (P.accessRemoval(proj.id, change).items.length) setRemoval(change)
-    else P.removeAccess(proj.id, change, { to: null })
+    else void P.removeAccess(proj.id, change, { to: null }, [])
   }
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)

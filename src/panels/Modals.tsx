@@ -26,6 +26,7 @@ import { exactWeekForDate } from '../lib/weekDrafts'
 import {
   type AccessLevel,
   type AccessRemoval,
+  type Holder,
   type IssueVM,
   type MilestoneVM,
   type NewIssueInput,
@@ -716,7 +717,9 @@ function MoveIssueModal({
    as Viewers is selected first; reassigning hands every listed task to one
    person, or to nobody, and then removes the grant. Removing someone who is
    already a Viewer leaves only the reassignment. The lists are taken when
-   the window opens, so a pick applies to what the person read. */
+   the window opens, so a choice applies only to the tasks the person read;
+   if they or the chosen person's eligibility changed meanwhile, the window
+   shows the new lists and asks again. */
 const NOBODY = '__nobody__'
 function AccessRemovalModal({
   projectId,
@@ -727,8 +730,12 @@ function AccessRemovalModal({
   change: AccessRemoval
   onClose: () => void
 }) {
-  const [{ people, items }] = useStateM(() => P.accessRemoval(projectId, change))
-  const [choices] = useStateM(() => P.reassignChoices(projectId, change, items))
+  const read = () => {
+    const removal = P.accessRemoval(projectId, change)
+    return { ...removal, choices: P.reassignChoices(projectId, change, removal.items) }
+  }
+  const [{ people, items, choices }, setView] = useStateM(read)
+  const [changed, setChanged] = useStateM(false)
   const [canKeep] = useStateM(
     () => !('userId' in change && P.project(projectId)?.access?.[change.userId] === 'viewer'),
   )
@@ -751,7 +758,31 @@ function AccessRemovalModal({
       ? `${names[0].split(' ')[0]} keeps the ${tasks} and can see ${whole}, but can't change anything in it, including these tasks.`
       : `They keep their tasks and can see ${whole}, but can't change anything in it, including these tasks.`
   const submit = () => {
-    P.removeAccess(projectId, change, keep ? { keep: true } : { to: to === NOBODY ? null : to })
+    const now = read()
+    const key = (list: Holder[]) =>
+      list
+        .map((i) => `${i.task.id}:${i.role}:${i.uid}`)
+        .sort()
+        .join()
+    const lost = !keep && to !== NOBODY && !now.choices.some((u) => u.id === to)
+    if (lost || key(now.items) !== key(items)) {
+      // nobody loses sight of anything any more: the plain removal applies
+      if (!now.items.length) {
+        void P.removeAccess(projectId, change, { to: null }, [])
+        onClose()
+        return
+      }
+      setView(now)
+      setChanged(true)
+      if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
+      return
+    }
+    void P.removeAccess(
+      projectId,
+      change,
+      keep ? { keep: true } : { to: to === NOBODY ? null : to },
+      items,
+    )
     onClose()
   }
   const option = (selected: boolean) =>
@@ -774,6 +805,11 @@ function AccessRemovalModal({
           {who} {names.length === 1 ? 'is' : 'are'} assigned to or reviewing {tasks} in{' '}
           <b className="text-text-1">{P.projectLabel(project)}</b>.
         </p>
+        {changed && (
+          <p className="text-sm [color:var(--danger)]">
+            Access or tasks changed while this window was open. Check them and choose again.
+          </p>
+        )}
         <div className="max-h-48 overflow-auto rounded-lg border border-border">
           {items.map((i) => (
             <div

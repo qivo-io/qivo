@@ -24,9 +24,10 @@ sub-projects. The window lists those tasks and offers two choices.
 **Keep as Viewer** gives each of those people a Viewer grant, so they keep
 the tasks and can read the project but cannot change it. **Reassign** hands
 every listed task, reviewer roles included, to one person who keeps User or
-Lead access, or to **Unassigned**, and then removes the grant. Removing
-someone who is already a Viewer offers only the reassignment. Done tasks keep
-their assignee and are not listed.
+Lead access to those tasks, or to **Unassigned**, and removes the grant once
+every task is saved. If a task cannot be reassigned, the grant stays.
+Removing someone who is already a Viewer offers only the reassignment. Done
+tasks keep their assignee and are not listed.
 
 Only organization admins and the named project lead can manage sharing and
 invitations. Renaming, archiving, deleting or changing project settings also
