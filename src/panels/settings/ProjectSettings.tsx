@@ -23,8 +23,9 @@ import {
 } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import type { AccessLevel, ArchivedProjectVM, ProjectVM } from '../../store/planner'
+import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
 import { P } from '../../store/planner'
+import { AccessRemovalModal } from '../Modals'
 import { BackLink, ConfirmButton, DemoCapabilityNotice, TextField, Toggle } from './controls'
 
 // Show home projects first, then foreign organizations. Remember one expanded
@@ -390,6 +391,13 @@ export function ProjectPage({
 }) {
   const proj = P.project(projectId)
   const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
+  /* Removing a grant that would leave someone unable to see tasks they work
+     on first asks whether to keep them as Viewers or reassign their tasks. */
+  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
+  const removeOrAsk = (change: AccessRemoval) => {
+    if (P.accessRemoval(proj.id, change).items.length) setRemoval(change)
+    else void P.removeAccess(proj.id, change, { to: null }, [])
+  }
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
   useUpdateBlocker(!!inviteEmail || inviting)
@@ -650,14 +658,28 @@ export function ProjectPage({
             users={grantable}
             teamAccess={proj.teamAccess || {}}
             access={proj.access || {}}
-            onTeamChange={(teamId, level) => P.setProjectTeamAccess(proj.id, teamId, level)}
-            onUserChange={(userId, level) => P.setProjectAccess(proj.id, userId, level)}
+            onTeamChange={(teamId, level) =>
+              level === null
+                ? removeOrAsk({ teamId })
+                : P.setProjectTeamAccess(proj.id, teamId, level)
+            }
+            onUserChange={(userId, level) =>
+              level === null ? removeOrAsk({ userId }) : P.setProjectAccess(proj.id, userId, level)
+            }
             role={grantRole}
             onRoleChange={setGrantRole}
             canManageUsers={canManageUsers}
             canManageTeams={canManageTeams}
             canManageUser={(userId) => P.canManageProjectUser(proj.id, userId)}
           />
+          {removal && (
+            <AccessRemovalModal
+              key={'userId' in removal ? removal.userId : removal.teamId}
+              projectId={proj.id}
+              change={removal}
+              onClose={() => setRemoval(null)}
+            />
+          )}
           {/* External invitees gain a guest seat with access to this project. */}
           {DEMO_MODE ? (
             <DemoCapabilityNotice>Inviting people is unavailable in the demo.</DemoCapabilityNotice>

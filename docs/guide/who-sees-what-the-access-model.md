@@ -18,6 +18,18 @@ The strongest applicable role wins. A Viewer team grant does not reduce an
 individual User grant. Removing one grant leaves access through other teams,
 individual grants or organization administration intact.
 
+Removing a person's or a team's grant asks first when someone would lose
+sight of open tasks they are assigned to or reviewing in that project or its
+sub-projects. The window lists those tasks and offers two choices.
+**Keep as Viewer** gives each of those people a Viewer grant, so they keep
+the tasks and can read the project but cannot change it. **Reassign** hands
+every listed task, reviewer roles included, to one person who keeps User or
+Lead access to those tasks, or to **Unassigned**, and removes the grant once
+every task is saved. If a task cannot be reassigned, the grant stays, tasks
+already saved keep their new assignee, and the window lists what remains.
+Removing someone who is already a Viewer offers only the reassignment. Done
+tasks keep their assignee and are not listed.
+
 Only organization admins and the named project lead can manage sharing and
 invitations. Renaming, archiving, deleting or changing project settings also
 requires Lead access, which organization admins have.

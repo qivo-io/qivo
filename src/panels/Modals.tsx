@@ -9,13 +9,14 @@ import {
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
-import { DateSelect, Icon } from '../components/qivo'
+import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
@@ -24,6 +25,8 @@ import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { exactWeekForDate } from '../lib/weekDrafts'
 import {
   type AccessLevel,
+  type AccessRemoval,
+  type Holder,
   type IssueVM,
   type MilestoneVM,
   type NewIssueInput,
@@ -708,6 +711,197 @@ function MoveIssueModal({
   )
 }
 
+/* ---------- Removing someone who has work in the project ----------
+   Shown before a person's or a team's grant is removed when someone would
+   lose sight of tasks they are assigned to or reviewing there. Keeping them
+   as Viewers is selected first; reassigning hands every listed task to one
+   person, or to nobody, and then removes the grant. Removing someone who is
+   already a Viewer leaves only the reassignment. The lists are taken when
+   the window opens, so a choice applies only to the tasks the person read;
+   if they or the chosen person's eligibility changed meanwhile, the window
+   shows the new lists and asks again. It stays open, and keeps the access
+   list behind it out of reach, until the removal has finished saving. If a
+   reassignment is refused the grant stays and so does the window, listing
+   the tasks that remain. */
+const NOBODY = '__nobody__'
+function AccessRemovalModal({
+  projectId,
+  change,
+  onClose,
+}: {
+  projectId: string
+  change: AccessRemoval
+  onClose: () => void
+}) {
+  const read = () => {
+    const removal = P.accessRemoval(projectId, change)
+    return { ...removal, choices: P.reassignChoices(projectId, change, removal.items) }
+  }
+  const [{ people, items, choices }, setView] = useStateM(read)
+  const [changed, setChanged] = useStateM(false)
+  const [saving, setSaving] = useStateM(false)
+  const [canKeep] = useStateM(
+    () => !('userId' in change && P.project(projectId)?.access?.[change.userId] === 'viewer'),
+  )
+  const [keep, setKeep] = useStateM(canKeep)
+  const [to, setTo] = useStateM(NOBODY)
+  const project = P.project(projectId)
+  if (!project || !items.length) return null
+  const names = people.map((id) => P.user(id)?.name || 'Someone')
+  const who =
+    names.length === 1
+      ? names[0]
+      : names.length === 2
+        ? `${names[0]} and ${names[1]}`
+        : `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length > 3 ? 's' : ''}`
+  const tasks = `${items.length} task${items.length === 1 ? '' : 's'}`
+  // "the task" and "this task" read better than "the 1 task"
+  const theTasks = items.length === 1 ? 'the task' : `the ${tasks}`
+  const these = items.length === 1 ? 'this task' : 'these tasks'
+  const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
+  const whole = project.type === 'meta' ? 'the whole project' : 'the whole sub-project'
+  const keepText =
+    names.length === 1
+      ? `${names[0].split(' ')[0]} keeps ${theTasks} and can see ${whole}, but can't change anything in it, including ${these}.`
+      : `They keep their tasks and can see ${whole}, but can't change anything in it, including ${these}.`
+  const finish = (removal: Promise<boolean>) => {
+    setSaving(true)
+    void removal.then((removed) => {
+      const left = removed ? null : read()
+      if (!left?.items.length) return onClose()
+      setSaving(false)
+      setView(left)
+    })
+  }
+  const submit = () => {
+    if (saving) return
+    const now = read()
+    const key = (list: Holder[]) =>
+      list
+        .map((i) => `${i.task.id}:${i.role}:${i.uid}`)
+        .sort()
+        .join()
+    const lost = !keep && to !== NOBODY && !now.choices.some((u) => u.id === to)
+    if (lost || key(now.items) !== key(items)) {
+      // nobody loses sight of anything any more: the plain removal applies
+      if (!now.items.length) {
+        finish(P.removeAccess(projectId, change, { to: null }, []))
+        return
+      }
+      setView(now)
+      setChanged(true)
+      if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
+      return
+    }
+    finish(
+      P.removeAccess(
+        projectId,
+        change,
+        keep ? { keep: true } : { to: to === NOBODY ? null : to },
+        items,
+      ),
+    )
+  }
+  const option = (selected: boolean) =>
+    cn(
+      'flex flex-col rounded-lg border p-3',
+      selected ? '[border-color:var(--primary)] [background:var(--accent-soft)]' : 'border-border',
+    )
+  return (
+    <ModalShell
+      icon="warning"
+      title={team ? `Remove the ${team.name} team?` : `Remove ${names[0]}?`}
+      onClose={saving ? () => {} : onClose}
+      onSubmit={submit}
+      canSubmit={!saving}
+      submitLabel={saving ? 'Saving…' : keep ? 'Change to Viewer' : 'Reassign and remove'}
+      width={500}
+    >
+      <div data-access-removal className="flex flex-col gap-3">
+        <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
+          {who} {names.length === 1 ? 'is' : 'are'} assigned to or reviewing {tasks} in{' '}
+          <b className="text-text-1">{P.projectLabel(project)}</b>.
+        </p>
+        {changed && (
+          <p className="text-sm [color:var(--danger)]">
+            Access or tasks changed while this window was open. Check them and choose again.
+          </p>
+        )}
+        <div className="max-h-48 overflow-auto rounded-lg border border-border">
+          {items.map((i) => (
+            <div
+              key={`${i.task.id}:${i.role}`}
+              className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm first:border-t-0"
+            >
+              <span className="w-12 shrink-0 font-mono text-xs text-text-2">{i.task.key}</span>
+              <span className="min-w-0 flex-1 truncate text-text-1">{i.task.title}</span>
+              <span className="shrink-0 text-xs text-text-2">
+                {names.length > 1 ? `${P.user(i.uid)?.name.split(' ')[0]}, ` : ''}
+                {i.role === 'reviewer' ? 'Reviewer' : 'Assignee'}
+              </span>
+            </div>
+          ))}
+        </div>
+        {canKeep && (
+          <div className={option(keep)}>
+            <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
+              <Input
+                type="radio"
+                name="access-removal"
+                checked={keep}
+                onChange={() => setKeep(true)}
+                className="mt-0.5"
+              />
+              <span className="flex flex-col gap-0.5">
+                <span className="text-base font-semibold text-text-1">Keep as Viewer</span>
+                <span className="text-sm text-text-2">{keepText}</span>
+              </span>
+            </Label>
+          </div>
+        )}
+        <div className={option(!keep)}>
+          <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
+            {canKeep && (
+              <Input
+                type="radio"
+                name="access-removal"
+                checked={!keep}
+                onChange={() => setKeep(false)}
+                className="mt-0.5"
+              />
+            )}
+            <span className="flex flex-col gap-0.5">
+              <span className="text-base font-semibold text-text-1">
+                Reassign {theTasks}, then remove
+              </span>
+              <span className="text-sm text-text-2">Reviewer roles move to the same person.</span>
+            </span>
+          </Label>
+          {/* outside the label, so opening the picker never toggles the radio */}
+          <FieldSelect
+            aria-label="New assignee"
+            className={cn('mt-2', canKeep && 'ml-6.5')}
+            menuWidth={240}
+            value={to}
+            options={[
+              { value: NOBODY, label: 'Unassigned' },
+              ...choices.map((u) => ({
+                value: u.id,
+                label: u.name,
+                icon: <Avatar id={u.id} size={28} />,
+              })),
+            ]}
+            onChange={(v) => {
+              setTo(v)
+              setKeep(false)
+            }}
+          />
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
 /* ---------- Archive issue (0070) ---------- */
 /* Shown whenever archiving would take UNFINISHED leaf work off the board
    (archiving is subtree-atomic). Parent statuses do not affect this decision.
@@ -1229,6 +1423,7 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
 }
 
 export {
+  AccessRemovalModal,
   ArchiveIssueModal,
   CreateOrgModal,
   fmtSize,
