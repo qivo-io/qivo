@@ -135,6 +135,26 @@ describe('website build', () => {
     }
   })
 
+  // A file missing from ASSETS would leave a page with a broken image or
+  // without its script, while the page itself still builds.
+  it('publishes every local script, image and stylesheet resource its pages load', () => {
+    const files = buildSite({ outDir: appOutput(), env: {} })
+    const loaded = new Set()
+    for (const [name, body] of files) {
+      if (!name.endsWith('.html')) continue
+      for (const [, url] of body.matchAll(
+        /<(?:script|img|link)\b[^>]*?\b(?:src|href)="(\/[^"?#]*)"/g,
+      ))
+        loaded.add(url)
+      for (const [, url] of body.matchAll(/url\("(\/[^"]+)"\)/g)) loaded.add(url)
+    }
+    expect([...loaded]).toEqual(
+      expect.arrayContaining(['/marketing/nav.js', '/marketing/home.js', '/favicon.svg']),
+    )
+    for (const url of loaded)
+      expect(files.has(url.slice(1)) || APP_FILES.includes(url.slice(1)), url).toBe(true)
+  })
+
   it('emits the Microsoft publisher-domain association', () => {
     const outDir = appOutput()
     buildSite({ outDir, env: {} })

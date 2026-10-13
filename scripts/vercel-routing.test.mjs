@@ -36,6 +36,7 @@ const WEBSITE_FILES = [
   '/sitemap.xml',
   '/robots.txt',
   '/marketing/home.js',
+  '/marketing/nav.js',
   FONT,
   '/.well-known/microsoft-identity-association.json',
 ]

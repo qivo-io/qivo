@@ -30,6 +30,7 @@ export const ASSETS = {
     'public/.well-known/microsoft-identity-association.json',
   'robots.txt': 'public/robots.txt',
   'marketing/home.js': 'site/home.mjs',
+  'marketing/nav.js': 'site/nav.mjs',
   'marketing/README.md': 'public/marketing/README.md',
   'marketing/board-canvas.webp': 'public/marketing/board-canvas.webp',
   'marketing/roadmap.webp': 'public/marketing/roadmap.webp',

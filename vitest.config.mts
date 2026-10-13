@@ -21,8 +21,16 @@ export default defineConfig({
      * deployment. `*.test.mts` matches vitest's default include, so without
      * this exclude a plain `vitest run` would pick the live suite up and stop
      * being hermetic. `.claude/**` holds other sessions' git worktrees — whole
-     * checkouts, contract suite included — that must not be tested from here. */
-    exclude: [...configDefaults.exclude, 'tests/contract/**', '.local/**', '**/.claude/**'],
+     * checkouts, contract suite included — that must not be tested from here.
+     * `dev-temp/**` holds disposable files, which can include copies of this
+     * checkout and its tests. */
+    exclude: [
+      ...configDefaults.exclude,
+      'tests/contract/**',
+      '.local/**',
+      '**/.claude/**',
+      'dev-temp/**',
+    ],
     projects: [
       {
         extends: true,
