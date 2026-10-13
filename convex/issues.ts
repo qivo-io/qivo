@@ -63,6 +63,30 @@ type MeCtx = QueryCtx & { me: Doc<'profiles'> }
  * snapshot's rows. */
 const pub = ({ _id, _creationTime, ...row }: Doc<'issues'>) => row
 
+/* A returned row names its parent only when the caller can see the parent's
+ * project, so no hidden task id leaves a read or a write's result (the
+ * snapshot's has_hidden_parent rule). `seen` caches project visibility for
+ * list reads. */
+async function pubFor(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  issue: Doc<'issues'>,
+  seen = new Map<string, Promise<boolean>>(),
+): Promise<ReturnType<typeof pub>> {
+  const { parent_id, ...row } = pub(issue)
+  if (parent_id === undefined) return row
+  const parent = await byId(ctx, 'issues', parent_id)
+  if (parent === null || parent.org_id !== me.org_id) return row
+  let visible = seen.get(parent.project_id)
+  if (visible === undefined) {
+    visible = byId(ctx, 'projects', parent.project_id).then(
+      async (project) => project !== null && (await canSeeProject(ctx, me, project)),
+    )
+    seen.set(parent.project_id, visible)
+  }
+  return (await visible) ? { ...row, parent_id } : row
+}
+
 /* Resolve an issue uuid inside the caller's org — missing and foreign rows
  * are indistinguishable (0056). */
 async function myIssue(ctx: MeCtx, id: string): Promise<Doc<'issues'>> {
@@ -121,14 +145,22 @@ export const archivedFor = authedQuery({
           ? 1
           : -1,
     )
+    // per organization: each row is fenced through the caller's seat there
+    const seenByOrg = new Map<string, Map<string, Promise<boolean>>>()
     return await Promise.all(
       out.map(async (issue) => {
+        const me = ctx.myProfiles.get(issue.org_id) as Doc<'profiles'>
+        let seen = seenByOrg.get(issue.org_id)
+        if (seen === undefined) {
+          seen = new Map()
+          seenByOrg.set(issue.org_id, seen)
+        }
         const issueLabels = await ctx.db
           .query('issue_labels')
           .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
           .collect()
         return {
-          ...pub(issue),
+          ...(await pubFor(ctx, me, issue, seen)),
           is_group: await hasSubtasks(ctx, issue.id, true),
           label_ids: issueLabels.map((label) => label.label_id),
         }
@@ -162,7 +194,7 @@ export const create = orgMutation({
     const now = new Date().toISOString()
     await assertWritable(ctx, args.project_id)
     const issue = await createIssueCore(ctx, { me: ctx.me, args, now })
-    return pub(issue)
+    return await pubFor(ctx, ctx.me, issue)
   },
 })
 
@@ -195,7 +227,7 @@ export const update = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const after = await updateIssueCore(ctx, { me: ctx.me, issue, patch, now })
-    return pub(after)
+    return await pubFor(ctx, ctx.me, after)
   },
 })
 
@@ -213,7 +245,7 @@ export const move = orgMutation({
     await assertWritable(ctx, issue.project_id)
     if (project_id !== issue.project_id) await assertWritable(ctx, project_id)
     const after = await moveIssueCore(ctx, { me: ctx.me, issue, project_id, now })
-    return pub(after)
+    return await pubFor(ctx, ctx.me, after)
   },
 })
 
@@ -243,7 +275,7 @@ export const archive = orgMutation({
       const comment = (await ctx.db.get(commentDoc)) as Doc<'comments'>
       await notifyCommentInsert(ctx, { comment, issue: after, actor: ctx.me, now })
     }
-    return { issue: pub(after) }
+    return { issue: await pubFor(ctx, ctx.me, after) }
   },
 })
 
@@ -257,7 +289,7 @@ export const unarchive = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const after = await unarchiveIssueCore(ctx, { me: ctx.me, issue, now })
-    return pub(after)
+    return await pubFor(ctx, ctx.me, after)
   },
 })
 

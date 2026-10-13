@@ -79,7 +79,10 @@ Setting a parent changes both tasks, so it needs edit access to the subtask
 and to the parent. The parent and subtask pickers offer only tasks you can
 edit, plus the current parent so you can remove it. Removing a parent needs
 edit access to the subtask only. Linking needs edit access to one of the two
-tasks and access to the other.
+tasks and access to the other. If a task's parent is in an archived project or
+a project you cannot access, **Parent** says the parent task is outside this
+view. Choosing another parent replaces it; the task window cannot remove such
+a parent directly.
 
 ## Moving a task
 

@@ -3,6 +3,7 @@ import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
+import { ISSUE_PREFIX } from '../lib/taskRefs'
 import { newUuid } from './orgs'
 
 // Shared display names for activity and inbox narration.
@@ -85,6 +86,38 @@ export async function logActivity(
   } else {
     await ctx.db.patch(org._id, { activity_count: count })
   }
+}
+
+/* Task rows that name other tasks by key: a parent change written by
+ * model/issues.ts browserVerbDetail ('moved' under QN-n (from QN-m),
+ * 'detached' from QN-m) and a link written by issues.addLink ('linked' —
+ * blocks QN-n). Returns the task numbers the row names, [] when it names
+ * none, and null when the wording is not one these writers produce, so the
+ * reader can fail closed. Keep in step with those two writers. */
+const KEY = `${ISSUE_PREFIX}-(\\d+)`
+const NAMED_PARENT_CHANGE = new RegExp(`^under (?:${KEY}|its parent)(?: \\(from ${KEY}\\))?$`)
+const NAMED_DETACH = new RegExp(`^from (?:${KEY}|its parent)$`)
+const NAMED_LINK = new RegExp(`^— (?:blocks|relates to) ${KEY}$`)
+export function namedTaskNums(
+  ev: Pick<Doc<'activity_events'>, 'target_type' | 'verb' | 'detail'>,
+): number[] | null {
+  if (ev.target_type !== 'issue') return []
+  const detail = ev.detail ?? ''
+  const grammar =
+    ev.verb === 'moved' && detail.startsWith('under ')
+      ? NAMED_PARENT_CHANGE
+      : ev.verb === 'detached'
+        ? NAMED_DETACH
+        : ev.verb === 'linked'
+          ? NAMED_LINK
+          : undefined
+  if (grammar === undefined) return []
+  const m = grammar.exec(detail)
+  if (m === null) return null
+  return m
+    .slice(1)
+    .filter((n): n is string => n !== undefined)
+    .map(Number)
 }
 
 // Stable narration order and labels.

@@ -8,6 +8,7 @@ import type { ActivityTarget } from './lib/enums'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
+import { namedTaskNums } from './model/activity'
 import { type OrgLoadRow, orgLoadRows } from './planning'
 
 type AppRow<T extends TableNames> = Omit<Doc<T>, '_id' | '_creationTime'>
@@ -66,6 +67,14 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
   return rest
 }
 
+/* tokens.ts narrates agent key creation and revocation against the agent,
+ * naming the key. Only admins manage keys (and list them), so only admins
+ * receive these rows. */
+const isAgentKeyRow = (ev: Doc<'activity_events'>): boolean =>
+  ev.target_type === 'user' &&
+  ((ev.verb === 'created' && !!ev.detail?.startsWith('a new key “')) ||
+    (ev.verb === 'revoked' && !!ev.detail?.startsWith('the key “')))
+
 /* Members other than organization admins receive an activity row only if
  * they can access every project it names: the project it was filed under
  * and its related project, such as a move's destination. Seeing a parent
@@ -74,29 +83,42 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
  * was deleted, archived or moved to a project the member cannot access.
  * Deleting a project clears project_id on its rows (model/cascade.ts). A task
  * that moved out first keeps those rows for everyone who can access it; the
- * other project and milestone rows reach admins only. Team rows reach that
- * team's staff leaders. A deleted team's rows keep its id and reach admins
- * only, as do person rows that may be older team rows whose id was cleared
- * (isUnscopedTeamRow). The remaining rows reach every member. */
-function memberSeesActivity(
+ * other project and milestone rows reach admins only. A row that names
+ * another task by key (a parent change or a link) also needs access to that
+ * task where it is now; one naming a deleted task reaches admins only. Team
+ * rows reach that team's staff leaders. A deleted team's rows keep its id
+ * and reach admins only, as do person rows that may be older team rows whose
+ * id was cleared (isUnscopedTeamRow) and agent key rows. The remaining rows
+ * reach every member. */
+async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
     me: Doc<'profiles'>
     view: OrgProjectView
     workingSet: Set<string>
     leaderOf: Map<string, boolean>
+    /* the current project of the org's task with this number, if any */
+    taskProject: (num: number) => Promise<string | undefined>
   },
-): boolean {
+): Promise<boolean> {
   if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) {
     return false
   }
   if (ev.target_type === 'issue') {
     if (!a.workingSet.has(ev.target_id)) return false
     if (isUnrecordedProjectMove(ev)) return false
-    return ev.project_id === undefined || a.view.accessible(ev.project_id)
+    if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return false
+    const named = namedTaskNums(ev)
+    if (named === null) return false
+    for (const num of named) {
+      const projectId = await a.taskProject(num)
+      if (projectId === undefined || !a.view.accessible(projectId)) return false
+    }
+    return true
   }
   if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
   if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
+  if (isAgentKeyRow(ev)) return false
   if (ev.team_id !== undefined) return isOrgStaff(a.me) && a.leaderOf.get(ev.team_id) === true
   return !isUnscopedTeamRow(ev)
 }
@@ -130,7 +152,10 @@ export const forMe = authedQuery({
     const projects: AppRow<'projects'>[] = []
     const access: AppRow<'project_access'>[] = []
     const teamAccess: AppRow<'project_team_access'>[] = []
-    const issues: (AppRow<'issues'> & { has_hidden_subtasks: boolean })[] = []
+    const issues: (AppRow<'issues'> & {
+      has_hidden_subtasks: boolean
+      has_hidden_parent: boolean
+    })[] = []
     const links: Omit<AppRow<'issue_links'>, 'org_id'>[] = []
     const labels: AppRow<'labels'>[] = []
     const issueLabels: Omit<AppRow<'issue_labels'>, 'org_id'>[] = []
@@ -141,12 +166,10 @@ export const forMe = authedQuery({
     const activityDocs: Doc<'activity_events'>[] = []
     const messageDocs: Doc<'messages'>[] = []
     const seenLinkIds = new Set<string>()
-    /* Active tasks and project rows fill these caches below. Only a legacy
-     * inbox/activity/link reference outside the active set needs a lookup;
-     * never walk the whole archive just to exclude it. Cache promises too so
-     * concurrent references to the same task share one read. Missing tasks
-     * retain the existing historical-message fallback, and their activity
-     * reaches org admins only (memberSeesActivity). */
+    /* Active tasks and project rows fill these caches below. Only an admin's
+     * activity row about a task outside the active set needs a lookup; never
+     * walk the whole archive just to exclude it. Cache promises too so
+     * concurrent references to the same task share one read. */
     const archivedProjects = new Map<string, Promise<boolean>>()
     const archivedIssues = new Map<string, Promise<boolean>>()
     const isArchivedProject = (projectId: string): Promise<boolean> => {
@@ -223,10 +246,13 @@ export const forMe = authedQuery({
         archivedProjects.set(p.id, Promise.resolve(p.archived_at !== undefined))
       }
       const visibleProjects = view.projects.filter((p) => view.visible(p.id))
-      // Preserve grouping when a child is absent from this working set.
-      // Only existence is disclosed; no hidden task or project ids leave
-      // this query. Visible children remain client-derived so optimistic
-      // detaching/deleting the last one immediately restores normal status.
+      /* The working set is the active tasks of visible, active projects.
+       * Every task id this query sends (task rows, parent ids, links, own
+       * subscriptions, inbox messages and activity targets) belongs to it. A
+       * task related to work outside it learns only that such work exists
+       * (has_hidden_subtasks, has_hidden_parent). Visible children remain
+       * client-derived so optimistic detaching/deleting the last one
+       * immediately restores normal status. */
       const hiddenSubtaskParents = new Set<string>()
       const fenceIssues: Doc<'issues'>[] = []
       for (const child of activeOrgIssues) {
@@ -241,11 +267,20 @@ export const forMe = authedQuery({
           hiddenSubtaskParents.add(child.parent_id)
         }
       }
+      const workingSet = new Set(fenceIssues.map((issue) => issue.id))
       /* Active issues of every visible, active project.  Archived issues are
        * deliberately absent from the working set; their detail rows are
-       * fetched only by the archive/read paths that explicitly ask for one. */
+       * fetched only by the archive/read paths that explicitly ask for one.
+       * A parent outside the working set keeps its id out of the row. */
       for (const issue of fenceIssues) {
-        issues.push({ ...rowOf(issue), has_hidden_subtasks: hiddenSubtaskParents.has(issue.id) })
+        const { parent_id, ...row } = rowOf(issue)
+        const parentShown = parent_id !== undefined && workingSet.has(parent_id)
+        issues.push({
+          ...row,
+          ...(parentShown ? { parent_id } : {}),
+          has_hidden_subtasks: hiddenSubtaskParents.has(issue.id),
+          has_hidden_parent: parent_id !== undefined && !parentShown,
+        })
       }
       for (const p of visibleProjects) {
         projects.push(rowOf(p))
@@ -277,19 +312,12 @@ export const forMe = authedQuery({
       const relatedRows = await snapshotRelations(ctx, org, fenceIssues.length)
       for (const issue of fenceIssues) {
         const [asSource, asTarget, ils, atts] = await relatedRows(issue.id)
-        const candidates = [
-          ...new Map([...asSource, ...asTarget].map((link) => [link.id, link])).values(),
-        ].filter((link) => !seenLinkIds.has(link.id))
-        const archivedEndpoints = await Promise.all(
-          candidates.map(async (link) => ({
-            link,
-            archived:
-              (await isArchivedIssue(link.source_id)) || (await isArchivedIssue(link.target_id)),
-          })),
-        )
-        for (const { link, archived } of archivedEndpoints) {
+        // Both ends must be in this working set. The other end may be
+        // archived, deleted or in a project this member cannot access, and
+        // its id must not leave this query.
+        for (const link of [...asSource, ...asTarget]) {
           if (seenLinkIds.has(link.id)) continue
-          if (archived) continue
+          if (!workingSet.has(link.source_id) || !workingSet.has(link.target_id)) continue
           seenLinkIds.add(link.id)
           links.push(relationRow(link))
         }
@@ -308,15 +336,14 @@ export const forMe = authedQuery({
         .collect()
       for (const l of orgLabels) labels.push(rowOf(l))
 
-      // Only the caller's subscriptions, across all seats.
+      // Only the caller's subscriptions, across all seats, and only for tasks
+      // in this working set. A subscription outlives access so a manager can
+      // still remove it, but its task id must not leave this query.
       const mySubs = await ctx.db
         .query('issue_subscriptions')
         .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
         .collect()
-      const subStatuses = await Promise.all(
-        mySubs.map(async (s) => ({ row: s, archived: await isArchivedIssue(s.issue_id) })),
-      )
-      for (const { row, archived } of subStatuses) if (!archived) issueSubs.push(rowOf(row))
+      for (const s of mySubs) if (workingSet.has(s.issue_id)) issueSubs.push(rowOf(s))
 
       // Activity: org admins receive every row except those about archived
       // tasks or tasks in archived projects; other members receive only the
@@ -326,27 +353,43 @@ export const forMe = authedQuery({
         .query('activity_events')
         .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
         .order('desc')
-      const workingSet = new Set(fenceIssues.map((issue) => issue.id))
+      // Task numbers resolve to projects from the active set, else one cached
+      // indexed read (archived or deleted tasks).
+      const taskProjects = new Map<number, Promise<string | undefined>>(
+        activeOrgIssues.map((i) => [i.num, Promise.resolve(i.project_id)]),
+      )
+      const taskProject = (num: number): Promise<string | undefined> => {
+        let result = taskProjects.get(num)
+        if (result === undefined) {
+          result = ctx.db
+            .query('issues')
+            .withIndex('by_org_num', (q) => q.eq('org_id', orgId).eq('num', num))
+            .first()
+            .then((issue) => issue?.project_id)
+          taskProjects.set(num, result)
+        }
+        return result
+      }
       let kept = 0
       for await (const ev of orgActivity) {
-        if (!isAdmin && !memberSeesActivity(ev, { me, view, workingSet, leaderOf })) continue
+        if (
+          !isAdmin &&
+          !(await memberSeesActivity(ev, { me, view, workingSet, leaderOf, taskProject }))
+        )
+          continue
         if (ev.target_type === 'issue' && (await isArchivedIssue(ev.target_id))) continue
         activityDocs.push(isAdmin ? ev : withoutLegacySubtaskCount(ev))
         if (++kept >= CAP) break
       }
 
-      // The caller's inbox; apply the blended cap below.
+      // The caller's inbox, limited to tasks in this working set; apply the
+      // blended cap below. Rows about a task the caller can no longer access
+      // stay stored and return if access does.
       const inbox = await ctx.db
         .query('messages')
         .withIndex('by_recipient', (q) => q.eq('recipient_id', me.id))
         .collect()
-      const messageStatuses = await Promise.all(
-        inbox.map(async (message) => ({
-          row: message,
-          archived: await isArchivedIssue(message.issue_id),
-        })),
-      )
-      messageDocs.push(...messageStatuses.filter(({ archived }) => !archived).map(({ row }) => row))
+      messageDocs.push(...inbox.filter((message) => workingSet.has(message.issue_id)))
 
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))
@@ -358,8 +401,10 @@ export const forMe = authedQuery({
 
     messageDocs.sort(messageOrder)
     // Cleanup must remain available when unread rows fill the client cap and
-    // hide every read notification. Count the full inbox across all seats —
-    // minus snoozed rows, which messages.removeRead leaves alone.
+    // hide every read notification. Count every deliverable read row across
+    // all seats, minus snoozed rows, which messages.removeRead leaves alone.
+    // removeRead also deletes read rows about tasks the caller can no longer
+    // access; they are not counted because the caller cannot see them.
     const readMessageCount = messageDocs.reduce(
       (count, message) =>
         count + (message.read_at !== undefined && message.snoozed_until === undefined ? 1 : 0),

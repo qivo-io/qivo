@@ -63,6 +63,7 @@ function fixture(myRole: Role) {
     created_at: ago(200 * HOUR),
     updated_at: NOW,
     has_hidden_subtasks: false,
+    has_hidden_parent: false,
     ...extra,
   })
   const done = task('Done one', {

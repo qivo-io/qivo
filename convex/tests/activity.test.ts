@@ -16,7 +16,7 @@ import type { FunctionArgs } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { issueChanges, logActivity } from '../model/activity'
+import { issueChanges, logActivity, namedTaskNums } from '../model/activity'
 import {
   activityFor,
   allMessages,
@@ -505,5 +505,37 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
           .unique(),
       ),
     ).toBeNull()
+  })
+})
+
+describe('namedTaskNums — the relation grammar the snapshot checks', () => {
+  const row = (verb: string, detail?: string, target_type: 'issue' | 'project' = 'issue') => ({
+    verb,
+    detail,
+    target_type,
+  })
+
+  it('reads the task numbers a parent change or link names', () => {
+    expect(namedTaskNums(row('moved', 'under QN-5 (from QN-3)'))).toEqual([5, 3])
+    expect(namedTaskNums(row('moved', 'under QN-5'))).toEqual([5])
+    expect(namedTaskNums(row('moved', 'under its parent (from QN-3)'))).toEqual([3])
+    expect(namedTaskNums(row('detached', 'from QN-3'))).toEqual([3])
+    expect(namedTaskNums(row('detached', 'from its parent'))).toEqual([])
+    expect(namedTaskNums(row('linked', '— blocks QN-6'))).toEqual([6])
+    expect(namedTaskNums(row('linked', '— relates to QN-6'))).toEqual([6])
+  })
+
+  it('names nothing for other rows', () => {
+    expect(namedTaskNums(row('moved', 'from To Do to Done'))).toEqual([])
+    expect(namedTaskNums(row('moved', 'to the Firmware sub-project (from Board rev)'))).toEqual([])
+    expect(namedTaskNums(row('renamed', 'from “Fix QN-9”'))).toEqual([])
+    expect(namedTaskNums(row('linked', '— blocks QN-6', 'project'))).toEqual([])
+  })
+
+  it('answers null for relation wording no writer produces, so readers fail closed', () => {
+    expect(namedTaskNums(row('linked', '— blocks PCB-12'))).toBeNull()
+    expect(namedTaskNums(row('linked'))).toBeNull()
+    expect(namedTaskNums(row('detached', 'from QN-3 and QN-4'))).toBeNull()
+    expect(namedTaskNums(row('moved', 'under QN-5 (from PCB-3)'))).toBeNull()
   })
 })

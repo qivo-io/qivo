@@ -609,7 +609,19 @@ describe('messages', () => {
       org_role: 'guest',
       email: 'user@testbed.test',
     })
+    // the second seat's messages are about a task it can access
+    const otherSub = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    const otherTask = await plantIssue(t, { org_id: f.otherOrg.id, project_id: otherSub.id })
     await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.otherProject.id,
+        profile_id: seat.id,
+        level: 'user',
+      })
       for (let i = 0; i < 500; i++) {
         await ctx.db.insert('messages', msg(f.user.id, NOW))
       }
@@ -617,7 +629,10 @@ describe('messages', () => {
         await ctx.db.insert('messages', msg(f.user.id, NOW, NOW))
       }
       for (let i = 0; i < 3; i++) {
-        await ctx.db.insert('messages', { ...msg(seat.id, NOW, NOW), org_id: f.otherOrg.id })
+        await ctx.db.insert('messages', {
+          ...msg(seat.id, NOW, NOW, otherTask.id),
+          org_id: f.otherOrg.id,
+        })
       }
       // Read notifications belonging to other people must not enter the count.
       await ctx.db.insert('messages', msg(f.admin.id, NOW, NOW))
@@ -631,6 +646,56 @@ describe('messages', () => {
     expect(snap.messages).toHaveLength(500)
     expect(snap.messages.every((message) => message.read_at === undefined)).toBe(true)
     expect(snap.readMessageCount).toBe(5)
+  })
+
+  it('a task the recipient can no longer access takes its messages out of the inbox until access returns', async () => {
+    const ids = await t.run(async (ctx) => {
+      const unread = msg(f.guest.id, NOW)
+      const read = msg(f.guest.id, NOW, NOW)
+      const admins = msg(f.admin.id, NOW)
+      for (const row of [unread, read, admins]) await ctx.db.insert('messages', row)
+      return { unread: unread.id, read: read.id, admins: admins.id }
+    })
+    const inbox = async (p: Doc<'profiles'>) => {
+      const snap = await snapFor(p)
+      return { ids: snap.messages.map((m) => m.id).sort(), read: snap.readMessageCount }
+    }
+    expect(await inbox(f.guest)).toEqual({ ids: [ids.read, ids.unread].sort(), read: 1 })
+    const grant = await t.run(async (ctx) =>
+      ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.guest.id),
+        )
+        .unique(),
+    )
+    await t.run((ctx) => ctx.db.delete(grant!._id))
+    expect(await inbox(f.guest)).toEqual({ ids: [], read: 0 })
+    // the rows stay stored and return with access
+    expect(await t.run((ctx) => ctx.db.query('messages').collect())).toHaveLength(3)
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: f.guest.id,
+        level: 'user',
+      }),
+    )
+    expect(await inbox(f.guest)).toEqual({ ids: [ids.read, ids.unread].sort(), read: 1 })
+    // a move into a project the guest cannot access hides them again
+    await t.run((ctx) => ctx.db.patch(issueVis._id, { project_id: hidden2Sub.id }))
+    expect(await inbox(f.guest)).toEqual({ ids: [], read: 0 })
+    expect((await inbox(f.admin)).ids).toEqual([ids.admins])
+  })
+
+  it('a message about a task that no longer exists reaches nobody', async () => {
+    const orphan = await t.run(async (ctx) => {
+      const row = msg(f.admin.id, NOW, NOW, uuid())
+      await ctx.db.insert('messages', row)
+      return row.id
+    })
+    const snap = await snapFor(f.admin)
+    expect(snap.messages.map((m) => m.id)).not.toContain(orphan)
+    expect(snap.readMessageCount).toBe(0)
   })
 })
 
@@ -878,6 +943,111 @@ describe('activity', () => {
     }
   })
 
+  it('a row that names another task reaches only people who can access that task where it is now', async () => {
+    const subOnly = await seatOn(f.sub.id)
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const task = (project_id: string) => plantIssue(t, { org_id: f.org.id, project_id })
+    const child = await task(f.sub.id)
+    const sameParent = await task(f.sub.id)
+    const siblingParent = await task(f.sub2.id)
+    const hiddenParent = await task(hiddenSub.id)
+    const linkSame = await task(f.sub.id)
+    const linkSibling = await task(f.sub2.id)
+    const writer = as(t, f.user) // leads f.meta and f.hidden
+    const reparent = (parent_id: string | null) =>
+      writer.mutation(api.issues.update, { org_id: f.org.id, id: child.id, patch: { parent_id } })
+    const link = (target_id: string) =>
+      writer.mutation(api.issues.addLink, {
+        org_id: f.org.id,
+        id: uuid(),
+        source_id: child.id,
+        target_id,
+        type: 'relates',
+      })
+    await reparent(sameParent.id)
+    await reparent(siblingParent.id)
+    await reparent(hiddenParent.id)
+    await reparent(null)
+    await link(linkSame.id)
+    await link(linkSibling.id)
+    // back under the hidden parent, then away to a visible one: the row
+    // still names the hidden parent it came from
+    await reparent(hiddenParent.id)
+    await reparent(sameParent.id)
+    const key = (i: Doc<'issues'>) => `QN-${i.num}`
+    const rowsAbout = {
+      A: `moved under ${key(sameParent)}`,
+      B: `moved under ${key(siblingParent)} (from ${key(sameParent)})`,
+      C: `moved under ${key(hiddenParent)} (from ${key(siblingParent)})`,
+      D: `detached from ${key(hiddenParent)}`,
+      E: `linked — relates to ${key(linkSame)}`,
+      F: `linked — relates to ${key(linkSibling)}`,
+      G: `moved under ${key(hiddenParent)}`,
+      H: `moved under ${key(sameParent)} (from ${key(hiddenParent)})`,
+    }
+    const seenRows = async (p: Doc<'profiles'>) => {
+      const mine = new Set(
+        (await snapFor(p)).activity
+          .filter((a) => a.target_id === child.id)
+          .map((a) => `${a.verb} ${a.detail}`),
+      )
+      return Object.entries(rowsAbout)
+        .filter(([, row]) => mine.has(row))
+        .map(([name]) => name)
+    }
+    const all = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+    for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(all)
+    expect(await seenRows(f.guest)).toEqual(['A', 'B', 'E', 'F'])
+    expect(await seenRows(subOnly)).toEqual(['A', 'E'])
+    // the named task's CURRENT project decides
+    await writer.mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: linkSibling.id,
+      project_id: f.sub.id,
+    })
+    expect(await seenRows(subOnly)).toEqual(['A', 'E', 'F'])
+    // a deleted named task, or wording no writer produces, reaches admins only
+    await writer.mutation(api.issues.deleteDeep, { org_id: f.org.id, id: sameParent.id })
+    expect(await seenRows(f.guest)).toEqual(['E', 'F'])
+    expect(await seenRows(f.admin)).toEqual(all)
+  })
+
+  it('task rows with unknown relation wording and agent key rows reach admins only', async () => {
+    const ids = await t.run(async (ctx) => {
+      const rows = {
+        unknownLink: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          verb: 'linked',
+          detail: '— blocks PCB-12',
+        }),
+        missingTask: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          verb: 'linked',
+          detail: '— blocks QN-999999',
+        }),
+        // a key inside other text is not a relation
+        renamed: ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          verb: 'renamed',
+          detail: '“Fix QN-999999”',
+        }),
+        keyCreated: ev({ target_type: 'user', verb: 'created', detail: 'a new key “CI”' }),
+        keyRevoked: ev({ target_type: 'user', verb: 'revoked', detail: 'the key “CI”' }),
+      }
+      for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
+      return Object.fromEntries(Object.entries(rows).map(([k, row]) => [k, row.id]))
+    })
+    expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
+    for (const p of [f.user, f.guest]) expect(await seen(p)).toEqual([ids.renamed])
+  })
+
   it('older task archive rows lose their subtask count for members, not admins', async () => {
     await t.run(async (ctx) => {
       for (const row of [
@@ -959,6 +1129,174 @@ describe('issueSubs', () => {
     expect(snap.issueSubs).toEqual([
       { issue_id: issueVis.id, profile_id: f.guest.id, created_at: NOW },
     ])
+  })
+
+  it('a subscription to a task the person cannot access stays out, whatever its state', async () => {
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    await t.run(async (ctx) => {
+      for (const issue_id of [issueVis.id, hiddenTask.id]) {
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id,
+          profile_id: f.guest.id,
+          created_at: NOW,
+        })
+      }
+    })
+    const subs = async () => (await snapFor(f.guest)).issueSubs.map((s) => s.issue_id)
+    expect(await subs()).toEqual([issueVis.id])
+    // archiving or restoring the hidden task changes nothing the guest sees
+    await t.run((ctx) => ctx.db.patch(hiddenTask._id, { archived_at: NOW }))
+    expect(await subs()).toEqual([issueVis.id])
+    await t.run((ctx) => ctx.db.patch(hiddenTask._id, { archived_at: undefined }))
+    expect(await subs()).toEqual([issueVis.id])
+  })
+})
+
+describe('links', () => {
+  const link = (source_id: string, target_id: string) => ({
+    id: uuid(),
+    org_id: f.org.id,
+    source_id,
+    target_id,
+    type: 'relates' as const,
+    pair_key: [source_id, target_id].sort().join(':'),
+    created_at: NOW,
+  })
+
+  it('a link reaches a person only when both tasks are in their working set', async () => {
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const siblingTask = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const ids = await t.run(async (ctx) => {
+      const rows = {
+        hidden: link(issueVis.id, hiddenTask.id),
+        sibling: link(siblingTask.id, issueVis.id),
+        dangling: link(issueVis.id, uuid()),
+      }
+      for (const row of Object.values(rows)) await ctx.db.insert('issue_links', row)
+      return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, row.id]))
+    })
+    const links = async (p: Doc<'profiles'>) => (await snapFor(p)).links.map((l) => l.id).sort()
+    expect(await links(f.admin)).toEqual([ids.hidden, ids.sibling].sort())
+    for (const p of [f.guest, f.viewer]) expect(await links(p)).toEqual([ids.sibling])
+  })
+})
+
+describe('hidden parents', () => {
+  it('a task row names its parent only when the parent is in the working set', async () => {
+    const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenParent.id,
+    })
+    const near = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: issueVis.id,
+    })
+    const row = async (p: Doc<'profiles'>, id: string) =>
+      (await snapFor(p)).issues.find((i) => i.id === id)
+    const guestChild = await row(f.guest, child.id)
+    expect(guestChild && 'parent_id' in guestChild).toBe(false)
+    expect(guestChild?.has_hidden_parent).toBe(true)
+    expect(await row(f.admin, child.id)).toMatchObject({
+      parent_id: hiddenParent.id,
+      has_hidden_parent: false,
+    })
+    expect(await row(f.guest, near.id)).toMatchObject({
+      parent_id: issueVis.id,
+      has_hidden_parent: false,
+    })
+    // a parent in an archived project is outside everyone's working set
+    await t.run(async (ctx) => {
+      const sub2 = await ctx.db.get(f.sub2._id)
+      await ctx.db.patch(sub2!._id, { archived_at: NOW })
+      await ctx.db.patch(near._id, { parent_id: undefined })
+    })
+    const inSub2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const underArchived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: inSub2.id,
+    })
+    for (const p of [f.guest, f.admin]) {
+      expect(await row(p, underArchived.id)).toMatchObject({ has_hidden_parent: true })
+    }
+  })
+
+  it('browser task results never return a parent the caller cannot see', async () => {
+    const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenParent.id,
+    })
+    const updated = await as(t, f.guest).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: child.id,
+      patch: { title: 'Renamed' },
+    })
+    expect('parent_id' in updated).toBe(false)
+    const adminUpdated = await as(t, f.admin).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: child.id,
+      patch: { title: 'Renamed again' },
+    })
+    expect(adminUpdated.parent_id).toBe(hiddenParent.id)
+    await t.run((ctx) => ctx.db.patch(child._id, { archived_at: NOW }))
+    const archived = await as(t, f.guest).query(api.issues.archivedFor, {
+      project_ids: [f.sub.id],
+    })
+    const row = archived.find((i) => i.id === child.id)
+    expect(row && 'parent_id' in row).toBe(false)
+  })
+
+  it("no task id outside a person's working set leaves the snapshot", async () => {
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenTask.id,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('issue_links', {
+        id: uuid(),
+        org_id: f.org.id,
+        source_id: child.id,
+        target_id: hiddenTask.id,
+        type: 'blocks',
+        pair_key: [child.id, hiddenTask.id].sort().join(':'),
+        created_at: NOW,
+      })
+      await ctx.db.insert('issue_subscriptions', {
+        issue_id: hiddenTask.id,
+        profile_id: f.guest.id,
+        created_at: NOW,
+      })
+      await ctx.db.insert('messages', {
+        id: uuid(),
+        org_id: f.org.id,
+        recipient_id: f.guest.id,
+        issue_id: hiddenTask.id,
+        issue_title: 'Hidden',
+        kind: 'change',
+        detail: 'd',
+        created_at: NOW,
+      })
+    })
+    const snap = await snapFor(f.guest)
+    const known = new Set(snap.issues.map((i) => i.id))
+    const referenced = [
+      ...snap.issues.flatMap((i) => (i.parent_id ? [i.parent_id] : [])),
+      ...snap.links.flatMap((l) => [l.source_id, l.target_id]),
+      ...snap.issueSubs.map((s) => s.issue_id),
+      ...snap.messages.map((m) => m.issue_id),
+      ...snap.issueLabels.map((l) => l.issue_id),
+      ...snap.attachments.map((a) => a.issue_id),
+      ...snap.activity.filter((a) => a.target_type === 'issue').map((a) => a.target_id),
+    ]
+    expect(referenced.filter((id) => !known.has(id))).toEqual([])
+    expect(JSON.stringify(snap)).not.toContain(hiddenTask.id)
   })
 })
 

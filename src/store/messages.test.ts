@@ -577,4 +577,63 @@ describe('snooze through the client store', () => {
     publish(structuredClone(snap))
     expect(((window as { __qivoNotes?: unknown[] }).__qivoNotes ?? []).length).toBe(1)
   })
+
+  it('a task that comes back into view brings its older unread messages without notifying', () => {
+    const notes = () => (window as { __qivoNotes?: { title: string }[] }).__qivoNotes ?? []
+    const org = snap.orgs[0]
+    const seat = snap.profiles[0]
+    const task = crypto.randomUUID()
+    const message = (title: string, created_at: string) => ({
+      id: crypto.randomUUID(),
+      org_id: org.id,
+      recipient_id: seat.id,
+      issue_id: task,
+      issue_title: title,
+      kind: 'change' as const,
+      detail: 'Status changed',
+      created_at,
+    })
+    // access returns: the task and its stored unread message arrive together
+    snap.issues = [
+      {
+        id: task,
+        org_id: org.id,
+        project_id: crypto.randomUUID(),
+        num: 9,
+        title: 'Returning task',
+        description: '',
+        status: 'todo',
+        priority: 'medium',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    const old = message('Old news', NOW)
+    snap.messages = [...snap.messages, old]
+    publish(structuredClone(snap))
+    expect(notes()).toHaveLength(0)
+    expect(P.messages.some((m) => m.id === old.id)).toBe(true)
+    // a new message on a task that enters the view still notifies
+    const later = crypto.randomUUID()
+    snap.issues = [...snap.issues, { ...snap.issues[0], id: later, num: 10, title: 'New task' }]
+    snap.messages = [
+      ...snap.messages,
+      { ...message('Fresh news', '2099-01-01T00:00:00.000Z'), issue_id: later },
+    ]
+    publish(structuredClone(snap))
+    expect(notes().map((n) => n.title)).toEqual([expect.stringContaining('New task')])
+  })
+
+  it('counts read rows like the server, leaving out read rows that are snoozed', () => {
+    const [first] = snap.messages
+    snap.messages = snap.messages.map((m) =>
+      m.id === first.id ? { ...m, read_at: NOW, snoozed_until: '2099-01-01T00:00:00.000Z' } : m,
+    )
+    snap.readMessageCount = 600
+    publish(structuredClone(snap))
+    expect(P.readMessageCount).toBe(600)
+  })
 })

@@ -176,6 +176,9 @@ const rows = {
   teamAccess: [] as Row<'project_team_access'>[],
   issues: new Map<string, Row<'issues'>>(),
   hiddenSubtaskParents: new Set<string>(),
+  // tasks whose parent is outside the working set; the snapshot omits that
+  // parent's id
+  hiddenParentTasks: new Set<string>(),
   links: new Map<string, Row<'issue_links'>>(),
   milestones: new Map<string, Row<'milestones'>>(),
   activity: new Map<string, Row<'activity_events'>>(),
@@ -246,6 +249,9 @@ function adoptComments() {
    notification. adopt() calls this on every delivery, so the null-prime runs
    on the first one. */
 let announcedMessages: Map<string, string | undefined> | null = null // id → woke_at announced
+// when the previous snapshot arrived (client clock); older messages on a task
+// that newly enters the working set are history, not news
+let lastDeliveryAt: string | null = null
 /* A restore reintroduces the task's historical inbox rows. Keep those rows
    from looking like new arrivals when the next snapshot admits the restored
    task (and any ancestors restored with it). */
@@ -1361,6 +1367,7 @@ function rebuild(now = new Date()) {
     uuidToKey,
     uuidToDisplayKey,
     hiddenSubtaskParents: rows.hiddenSubtaskParents,
+    hiddenParentTasks: rows.hiddenParentTasks,
   }
   P.issues = [...rows.issues.values()]
     .sort((a, b) => a.num - b.num)
@@ -2623,6 +2630,9 @@ export const PLANNER = {
     const paintPatch = { ...patch }
     if (PLANNER.isGroup(id)) delete paintPatch.status
     applyIssuePatchToRow(row, paintPatch)
+    // a new visible parent or a detach replaces a hidden one; a refusal
+    // re-adopts the server snapshot, which restores the flag
+    if ('parent' in patch) rows.hiddenParentTasks.delete(uuid)
     rebuild()
     emit()
     // fromWiden = a link of widenAncestors' walk: optimistic paint ONLY —
@@ -3786,6 +3796,14 @@ export const PLANNER = {
       if (parentId) rows.hiddenSubtaskParents.add(parentId)
       rows.issues.delete(iid)
     })
+    // and a child left in another project now has its parent outside this
+    // view, as the next delivery says
+    for (const r of rows.issues.values()) {
+      if (r.parent_id && issueIds.includes(r.parent_id)) {
+        r.parent_id = undefined
+        rows.hiddenParentTasks.add(r.id)
+      }
+    }
     ;[...rows.milestones.values()].forEach((m) => {
       if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
     })
@@ -4757,6 +4775,7 @@ export function disposeDemoStore() {
   delayMap.clear()
   agentKeyOrg.clear()
   announcedMessages = null
+  lastDeliveryAt = null
   pendingArchiveIssueIds.clear()
   roadmapVisit = null
   roadmapBatch = null
@@ -4801,6 +4820,20 @@ function adopt(source: Snapshot) {
       if (newlyVisibleIssueIds.has(id)) pendingRestoreIssueIds.delete(id)
     }
   }
+  /* A task also enters the working set when access returns or it moves back
+     into view, and its stored messages come with it. Those created before the
+     previous delivery raise no desktop notification; newer ones still do. */
+  if (announcedMessages !== null && lastDeliveryAt !== null) {
+    for (const message of snap.messages) {
+      if (
+        newlyVisibleIssueIds.has(message.issue_id) &&
+        message.created_at <= lastDeliveryAt &&
+        !announcedMessages.has(message.id)
+      )
+        announcedMessages.set(message.id, message.woke_at)
+    }
+  }
+  lastDeliveryAt = new Date().toISOString()
   /* identity first — the snapshot says which roster rows are mine
      (myProfileIds), so the blend can be re-keyed on every delivery. The
      HOME pick mirrors the old boot: first non-guest seat, else the first
@@ -4834,6 +4867,7 @@ function adopt(source: Snapshot) {
   rows.hiddenSubtaskParents = new Set(
     snap.issues.filter((r) => r.has_hidden_subtasks).map((r) => r.id),
   )
+  rows.hiddenParentTasks = new Set(snap.issues.filter((r) => r.has_hidden_parent).map((r) => r.id))
   rows.links = new Map(snap.links.map((r) => [r.id, r]))
   rows.milestones = new Map(snap.milestones.map((r) => [r.id, r]))
   rows.activity = new Map(snap.activity.map((r) => [r.id, r]))
@@ -4843,7 +4877,10 @@ function adopt(source: Snapshot) {
   rows.attachments = new Map(snap.attachments.map((r) => [r.id, r]))
   rows.orgLoad = snap.orgLoad
   rows.messages = new Map(snap.messages.map((r) => [r.id, r]))
-  const loadedReadCount = snap.messages.filter((message) => message.read_at !== undefined).length
+  // the server's predicate: read rows minus snoozed ones (removeRead's scope)
+  const loadedReadCount = snap.messages.filter(
+    (message) => message.read_at !== undefined && message.snoozed_until === undefined,
+  ).length
   hiddenReadMessages = Math.max(0, (snap.readMessageCount ?? loadedReadCount) - loadedReadCount)
   // ALWAYS after the messages section lands: the null-primed first call is
   // what keeps sign-in from replaying the stored inbox as OS notifications

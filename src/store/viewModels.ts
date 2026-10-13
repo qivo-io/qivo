@@ -229,6 +229,7 @@ type IssueShapeCtx = {
   uuidToKey: Map<string, string>
   uuidToDisplayKey: Map<string, string>
   hiddenSubtaskParents: Set<string>
+  hiddenParentTasks: Set<string>
   linkViews: Map<string, { type: string; id: string }[]>
   childKeys: Map<string, string[]>
   labelsByIssue: Map<string, string[]>
@@ -260,6 +261,8 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     parent: i.parent_id ? uuidToKey.get(i.parent_id) || null : null,
     children: ctx.childKeys.get(i.id) || [],
     hasHiddenSubtasks: hiddenSubtaskParents.has(i.id),
+    // the parent is outside this view; `parent` is null, as for no parent
+    hasHiddenParent: ctx.hiddenParentTasks.has(i.id),
     isGroup,
     links: ctx.linkViews.get(i.id) || [],
     start: i.start_week != null ? isoToWeek(i.start_week) : null,

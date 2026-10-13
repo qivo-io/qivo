@@ -2809,12 +2809,20 @@ function IssueDetail({
                             variant="ghost"
                             size="icon"
                             className="task-heading-action"
-                            aria-label={it.parent ? 'Change parent' : 'Set parent'}
-                            title={roTip || (it.parent ? 'Change parent' : 'Set parent')}
+                            aria-label={
+                              it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent'
+                            }
+                            title={
+                              roTip ||
+                              (it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent')
+                            }
                             disabled={!canLabel}
                             onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
                           >
-                            <Icon name={it.parent ? 'pen' : 'plus'} size={16} />
+                            <Icon
+                              name={it.parent || it.hasHiddenParent ? 'pen' : 'plus'}
+                              size={16}
+                            />
                           </Button>
                         </SectionHead>
                         {it.parent ? (
@@ -2827,7 +2835,11 @@ function IssueDetail({
                             }}
                           />
                         ) : (
-                          <div className="text-sm text-text-2 italic">No parent task.</div>
+                          <div className="text-sm text-text-2 italic">
+                            {it.hasHiddenParent
+                              ? 'The parent task is outside this view.'
+                              : 'No parent task.'}
+                          </div>
                         )}
                       </section>
 
