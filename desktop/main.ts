@@ -2,8 +2,20 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  Notification,
+  nativeImage,
+  shell,
+  Tray,
+} from 'electron'
 import electronUpdater from 'electron-updater'
+import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.js'
+import { createLoginStartup, startupArgument } from './startup.js'
 import { createUpdatePrompt } from './updatePrompt.js'
 
 // electron-updater is CommonJS. Import its default namespace explicitly so
@@ -59,6 +71,11 @@ if (
 }
 
 let mainWindow: BrowserWindow | null = null
+let appTray: Tray | null = null
+let quitting = false
+let settingsStore: ReturnType<typeof createDesktopSettingsStore> | null = null
+let settingsError: Error | null = null
+let desktopSettings = { ...defaultDesktopSettings }
 let pendingDeepLink: string | null = null
 let pendingOAuth: { state: string; expiresAt: number } | null = null
 
@@ -85,7 +102,12 @@ function isAuthorizedRenderer(event: {
   sender: Electron.WebContents
   senderFrame: Electron.WebFrameMain | null
 }): boolean {
-  if (event.sender !== mainWindow?.webContents || !event.senderFrame) return false
+  if (
+    event.sender !== mainWindow?.webContents ||
+    !event.senderFrame ||
+    event.senderFrame !== event.sender.mainFrame
+  )
+    return false
   try {
     return new URL(event.senderFrame.url).origin === appURL.origin
   } catch {
@@ -100,6 +122,7 @@ function sendUpdateState(): void {
 function setUpdateState(next: Partial<UpdateState>): UpdateState {
   updateState = { ...updateState, ...next }
   sendUpdateState()
+  updateTrayMenu()
   return updateState
 }
 
@@ -122,7 +145,7 @@ const updatePrompt = createUpdatePrompt({
   },
   install: () => autoUpdater.quitAndInstall(false, true),
   showNotification: (version, onClick) => {
-    if (!Notification.isSupported()) return false
+    if (!desktopSettings.showNotifications || !Notification.isSupported()) return false
     const notification = new Notification({
       title: 'Qivo update ready',
       body: `Qivo ${version} is ready to install.`,
@@ -211,6 +234,7 @@ function setupAutoUpdates(): void {
 }
 
 function showNotification(payload: unknown): boolean {
+  if (!desktopSettings.showNotifications) return false
   if (!payload || typeof payload !== 'object') return false
   const value = payload as Record<string, unknown>
   const tag = typeof value.tag === 'string' ? value.tag.slice(0, 256) : ''
@@ -221,11 +245,8 @@ function showNotification(payload: unknown): boolean {
   try {
     const notification = new Notification({ title, body, silent: false })
     notification.on('click', () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-      mainWindow.webContents.send('qivo:notifications:click', tag)
+      showWindow()
+      mainWindow?.webContents.send('qivo:notifications:click', tag)
     })
     notification.show()
     return true
@@ -235,7 +256,8 @@ function showNotification(payload: unknown): boolean {
 }
 
 function notificationPermission(): 'default' | 'granted' | 'denied' | 'unsupported' {
-  return Notification.isSupported() ? 'granted' : 'unsupported'
+  if (!Notification.isSupported()) return 'unsupported'
+  return desktopSettings.showNotifications ? 'granted' : 'denied'
 }
 
 function parseOAuthCallback(
@@ -270,8 +292,7 @@ function consumeDeepLink(rawURL: string): void {
   target.searchParams.delete('desktop_auth')
   if (mainWindow && !mainWindow.isDestroyed()) {
     void mainWindow.loadURL(target.href)
-    mainWindow.show()
-    mainWindow.focus()
+    showWindow()
   } else {
     pendingDeepLink = target.href
   }
@@ -288,13 +309,94 @@ function registerProtocol(): void {
   }
 }
 
-function createWindow(): void {
+function initializeSettings(): void {
+  settingsError = null
+  settingsStore = null
+  try {
+    const startup = createLoginStartup({
+      platform: process.platform,
+      packaged: app.isPackaged && !isDevelopment,
+      executablePath: process.execPath,
+      appImagePath: process.env.APPIMAGE,
+      configDirectory: app.getPath('appData'),
+      loginItems: app,
+    })
+    settingsStore = createDesktopSettingsStore({
+      filePath: path.join(app.getPath('userData'), 'desktop-settings.json'),
+      getStartAtLogin: startup.get,
+      setStartAtLogin: startup.set,
+    })
+    desktopSettings = settingsStore.get()
+    settingsStore.initialize()
+    desktopSettings = settingsStore.get()
+  } catch (error) {
+    settingsError =
+      error instanceof Error ? error : new Error('Qivo could not load desktop settings.')
+    // A damaged preferences file must not silently replace a saved opt-out or
+    // leave a startup window hidden while the user needs to fix the problem.
+    if (!settingsStore)
+      desktopSettings = {
+        startAtLogin: false,
+        closeToTray: false,
+        minimizeToTray: false,
+        showNotifications: false,
+      }
+  }
+}
+
+function showWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function updateTrayMenu(): void {
+  if (!appTray || appTray.isDestroyed()) return
+  appTray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open Qivo', click: showWindow },
+      ...(updateState.status === 'downloaded'
+        ? [
+            {
+              label: 'Restart and update',
+              enabled: !updateState.blocked,
+              click: () => {
+                showWindow()
+                void updatePrompt.install()
+              },
+            },
+          ]
+        : []),
+      { type: 'separator' },
+      { label: 'Quit Qivo', click: () => app.quit() },
+    ]),
+  )
+}
+
+function createTray(): void {
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, '../assets/qivo.png'))
+    if (icon.isEmpty()) throw new Error('Qivo tray icon is unavailable.')
+    appTray = new Tray(icon.resize({ width: 24, height: 24 }))
+    appTray.setToolTip('Qivo')
+    updateTrayMenu()
+    appTray.on('click', showWindow)
+  } catch {
+    appTray?.destroy()
+    appTray = null
+  }
+}
+
+function createWindow(startHidden = false): void {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#111113',
+    show: !startHidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -302,6 +404,7 @@ function createWindow(): void {
       sandbox: true,
     },
   })
+  mainWindow.setMenu(null)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^(mailto:|tel:)/i.test(url)) {
       void shell.openExternal(url)
@@ -315,6 +418,18 @@ function createWindow(): void {
     event.preventDefault()
     if (/^(https?:\/\/|mailto:|tel:)/i.test(url)) void shell.openExternal(url)
   })
+  mainWindow.on('close', (event) => {
+    if (quitting || !desktopSettings.closeToTray) return
+    event.preventDefault()
+    if (appTray && !appTray.isDestroyed()) mainWindow?.hide()
+    else mainWindow?.minimize()
+  })
+  mainWindow.on('minimize', () => {
+    if (desktopSettings.minimizeToTray && appTray && !appTray.isDestroyed()) mainWindow?.hide()
+  })
+  mainWindow.on('session-end', () => {
+    quitting = true
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -327,8 +442,29 @@ function createWindow(): void {
 }
 
 function installIPC(): void {
+  ipcMain.handle('qivo:settings:get', (event) => {
+    if (!isAuthorizedRenderer(event)) throw new Error('unauthorized')
+    if (settingsError) initializeSettings()
+    if (settingsError) throw settingsError
+    return settingsStore?.get() ?? { ...desktopSettings }
+  })
+  ipcMain.handle('qivo:settings:update', (event, value: unknown) => {
+    if (!isAuthorizedRenderer(event)) throw new Error('unauthorized')
+    if (settingsError) initializeSettings()
+    if (settingsError) throw settingsError
+    if (!settingsStore) throw settingsError || new Error('Desktop settings are unavailable.')
+    const previous = desktopSettings
+    desktopSettings = settingsStore.update(value)
+    settingsError = null
+    if (!previous.showNotifications && desktopSettings.showNotifications && updateState.version)
+      updatePrompt.notify(updateState.version)
+    return settingsStore.get()
+  })
   ipcMain.on('qivo:notifications:permission', (event) => {
-    if (!isAuthorizedRenderer(event)) return
+    if (!isAuthorizedRenderer(event)) {
+      event.returnValue = 'denied'
+      return
+    }
     event.returnValue = notificationPermission()
   })
   ipcMain.handle('qivo:notifications:request-permission', (event) => {
@@ -397,26 +533,37 @@ if (!gotLock) {
   app.on('second-instance', (_event, commandLine) => {
     const deepLink = commandLine.find((arg) => arg.startsWith('qivo://'))
     if (deepLink) consumeDeepLink(deepLink)
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-    }
+    if (deepLink || !commandLine.includes(startupArgument)) showWindow()
   })
   app.on('open-url', (event, url) => {
     event.preventDefault()
     consumeDeepLink(url)
   })
   void app.whenReady().then(() => {
+    Menu.setApplicationMenu(null)
+    initializeSettings()
     registerProtocol()
     installIPC()
-    createWindow()
+    createTray()
+    createWindow(
+      Boolean(
+        appTray &&
+          !settingsError &&
+          !settingsStore?.get().startAtLoginError &&
+          process.argv.includes(startupArgument),
+      ),
+    )
     setupAutoUpdates()
     const startupDeepLink = process.argv.find((arg) => arg.startsWith('qivo://'))
     if (startupDeepLink) consumeDeepLink(startupDeepLink)
-    app.on('activate', () => {
-      if (!mainWindow) createWindow()
-    })
+    app.on('activate', showWindow)
+  })
+  app.on('before-quit', () => {
+    quitting = true
+  })
+  app.on('will-quit', () => {
+    appTray?.destroy()
+    appTray = null
   })
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()

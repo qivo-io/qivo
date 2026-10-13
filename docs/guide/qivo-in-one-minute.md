@@ -64,6 +64,23 @@ disabled while a draft or save needs to finish.
 Windows and Linux desktop apps are in development and not available to
 download yet. Use Qivo in a browser at https://qivo.io/app in the meantime.
 
+In supported desktop test builds, **Settings → User account → Desktop app**
+appears below **Your preferences**. **Start Qivo at logon**, **Close to tray**
+and **Show notifications** start enabled. **Minimize to tray** starts disabled:
+
+- **Start Qivo at logon** starts Qivo in the system tray when you sign in to
+  your computer. Opening Qivo yourself shows its window.
+- **Close to tray** keeps Qivo running when you close its window. Turn it off
+  to quit on close. Use **Quit Qivo** in the tray menu to quit at any time.
+- **Minimize to tray** hides Qivo in the tray when you minimize its window.
+  When it is off, minimizing keeps Qivo in the taskbar.
+- **Show notifications** controls desktop alerts for Inbox messages and app
+  updates. It does not remove Inbox messages or in-app update notices.
+
+These settings apply to this computer. The desktop window has no application
+menu row. Linux requires a desktop environment with tray support to show the
+tray icon.
+
 ## Using Qivo on a phone
 
 The bottom navigation has **Inbox**, **My tasks**, **Projects** and **Sync**.

@@ -143,10 +143,12 @@ position. Each row's actions button provides read, snooze and removal
 controls. There is no inbox search field on phones; use global search to find
 tasks and projects. A desktop inbox search does not filter the phone list.
 
-**Desktop notifications.** Choose **Enable notifications** in Inbox to
-receive a notification for each new event. Clicking one opens Qivo. The
-Windows/Linux desktop app uses operating-system notifications, with its own
-permission controls.
+**Desktop notifications.** In a browser, choose **Enable notifications** in
+Inbox to receive a notification for each new event. Clicking one opens Qivo.
+In supported Windows and Linux desktop builds, **Settings → User account →
+Desktop app → Show notifications** controls native Inbox and update alerts
+and is on by default. Turning it off leaves your Inbox messages available.
+Your operating system's notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
 **Open task in board**, **Mark as read / unread** and **Remove notification**.
