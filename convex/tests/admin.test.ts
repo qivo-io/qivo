@@ -214,6 +214,39 @@ describe('promoteOrgAdmin — the lockout rescue', () => {
     })
   })
 
+  it('a promoted guest starts with no team; a promoted viewer keeps theirs', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const op = await withOperator(t)
+    // A guest's team row can only be stale data from before guests left teams.
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.guest.id,
+        is_leader: true,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.viewer.id,
+        is_leader: false,
+      })
+    })
+    const teamsOf = (profileId: string) =>
+      t.run((ctx) =>
+        ctx.db
+          .query('team_members')
+          .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+          .collect(),
+      )
+
+    await op.asOp.mutation(api.admin.promoteOrgAdmin, { profile_id: f.guest.id })
+    await op.asOp.mutation(api.admin.promoteOrgAdmin, { profile_id: f.viewer.id })
+
+    expect((await profileRow(t, f.guest.id))?.org_role).toBe('admin')
+    expect(await teamsOf(f.guest.id)).toEqual([])
+    expect(await teamsOf(f.viewer.id)).toHaveLength(1)
+  })
+
   it('agent target refused with the readable sentence; missing profile is not found; neither audits', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
