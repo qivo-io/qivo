@@ -1887,10 +1887,17 @@ describe('a navigation-only parent hides its other sub-projects', () => {
     }
     expect((await get(subOnly.id, child2.id)).parent_id).toBe(visibleParent.id)
     expect((await get(f.agent.id, child.id)).parent_id).toBe(hiddenParent.id)
-    // is_group still reports a subtask the key cannot read, without naming it
-    const group = await get(subOnly.id, visibleParent.id)
+    // is_group still reports subtasks the key cannot read, without naming
+    // them, even when every subtask is hidden
+    const lonely = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const hiddenKid = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      parent_id: lonely.id,
+    })
+    const group = await get(subOnly.id, lonely.id)
     expect(group.is_group).toBe(true)
-    await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: visibleParent.id })
-    expect(JSON.stringify(await get(subOnly.id, visibleParent.id))).not.toContain(f.sub2.id)
+    expect(JSON.stringify(group)).not.toContain(hiddenKid.id)
+    expect(JSON.stringify(group)).not.toContain(f.sub2.id)
   })
 })
