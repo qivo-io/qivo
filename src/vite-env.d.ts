@@ -4,6 +4,17 @@ declare const __QIVO_BUILD_ID__: string
 
 type QivoDesktopNotificationPermission = 'default' | 'granted' | 'denied' | 'unsupported'
 
+type QivoDesktopSettings = {
+  startAtLogin: boolean
+  closeToTray: boolean
+  minimizeToTray: boolean
+  showNotifications: boolean
+}
+
+type QivoDesktopSettingsSnapshot = QivoDesktopSettings & {
+  startAtLoginError?: string
+}
+
 type QivoDesktopUpdateState = {
   status:
     | 'idle'
@@ -21,6 +32,11 @@ type QivoDesktopUpdateState = {
 type QivoDesktopBridge = {
   isElectron: true
   platform: string
+  // Hosted web updates also reach older shells that do not expose settings.
+  settings?: {
+    get(): Promise<QivoDesktopSettingsSnapshot>
+    update(patch: Partial<QivoDesktopSettings>): Promise<QivoDesktopSettingsSnapshot>
+  }
   notifications: {
     supported: boolean
     readonly permission: QivoDesktopNotificationPermission

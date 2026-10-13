@@ -9,6 +9,7 @@ import { BillingSettings } from './BillingSettings'
 import '../styles/settings-layout.css'
 import '../styles/mobile-settings.css'
 import { AccountPage } from './settings/AccountSettings'
+import { DesktopSettingsPage } from './settings/DesktopSettings'
 import { OrgLabelsPage } from './settings/LabelsSettings'
 import { OrgGeneralPage } from './settings/OrganizationSettings'
 import { ArchivedProjectsPage, OrgProjectsPage, ProjectPage } from './settings/ProjectSettings'
@@ -36,6 +37,7 @@ function SettingsScreen({
 }) {
   const narrow = useMobile()
   const admin = P.isAdmin()
+  const desktopSettings = window.qivoDesktop?.isElectron ? window.qivoDesktop.settings : undefined
   // Only home-organization team leaders and admins can open team settings.
   const myTeams = P.teams.filter((t) => t.org === P.homeOrg && P.isTeamLeader(t.id))
 
@@ -54,7 +56,9 @@ function SettingsScreen({
 
   // keep the page valid for the current user
   useEffectS(() => {
-    if (page.indexOf('project:') === 0) {
+    if (page === 'desktop' && !desktopSettings) {
+      setPage('account')
+    } else if (page.indexOf('project:') === 0) {
       const pid = page.slice(8)
       const pr = P.project(pid)
       const meta = pr ? (pr.type === 'meta' ? pr : P.project(pr.parent)) : null
@@ -78,7 +82,10 @@ function SettingsScreen({
   const groups = [
     {
       label: 'User account',
-      items: [{ id: 'account', label: 'Your preferences', icon: 'user' }],
+      items: [
+        { id: 'account', label: 'Your preferences', icon: 'user' },
+        ...(desktopSettings ? [{ id: 'desktop', label: 'Desktop app', icon: 'monitor' }] : []),
+      ],
     },
   ]
   const orgItems = []
@@ -110,6 +117,8 @@ function SettingsScreen({
         onBackPage={onBackPage}
       />
     )
+  else if (page === 'desktop' && desktopSettings)
+    content = <DesktopSettingsPage settings={desktopSettings} />
   else if (page === 'projects')
     content = (
       <OrgProjectsPage

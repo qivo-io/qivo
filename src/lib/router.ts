@@ -107,16 +107,16 @@ const orgSegment = (orgId: string | undefined | null): string => {
   return o?.slug ? o.slug : ORG_NONE
 }
 
-/** Which organization a settings page is about. Everything except the project
-    form is home-org scoped by construction — P.setOrg resolves the home row,
-    and the team rail filters on P.homeOrg — while an account page is about a
-    person, not an organization, and takes `~`. */
+/** Organization and team settings use the home organization; projects use
+    their own organization. Personal and desktop settings have no organization
+    scope and take `~`. */
 const settingsOrg = (page: string): string | null => {
   if (page.indexOf('project:') === 0) {
     const p = P.project(page.slice(8))
     return p ? p.org : null
   }
-  if (page === 'account' || page.startsWith('account-') || page === 'menu') return null
+  if (page === 'account' || page.startsWith('account-') || page === 'desktop' || page === 'menu')
+    return null
   return P.homeOrg || null
 }
 

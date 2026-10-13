@@ -166,20 +166,25 @@ export function Toggle({
   disabled,
   onClick,
   title,
+  id,
+  'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
 }: {
   on: boolean
   disabled?: boolean
   onClick: () => void
   title?: string
-}) {
+} & Pick<React.ComponentProps<typeof Button>, 'id' | 'aria-label' | 'aria-describedby'>) {
   return (
     <Button
       type="button"
       role="switch"
+      id={id}
       aria-checked={on}
       disabled={disabled}
       onClick={onClick}
-      aria-label={title}
+      aria-label={ariaLabel ?? title}
+      aria-describedby={ariaDescribedBy}
       title={title}
       style={
         {

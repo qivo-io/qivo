@@ -21,11 +21,11 @@ module.exports = {
     app: 'desktop',
     output: 'desktop/release',
   },
-  files: ['dist/**/*', 'package.json'],
+  files: ['dist/**/*', 'assets/qivo.png', 'package.json'],
   // Keep one icon source for the Linux desktop entry, all package formats and
   // the Windows executable and installer. Electron-builder reads the PNG at
-  // build time and converts it for Windows; it does not need to be part of
-  // the application archive.
+  // build time and converts it for Windows. The shell also uses the packaged
+  // PNG for its tray icon.
   linux: {
     target: [
       { target: 'deb', arch: ['x64'] },

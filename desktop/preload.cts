@@ -24,6 +24,22 @@ type UpdateState = {
 
 type Unsubscribe = () => void
 
+type DesktopSettings = {
+  startAtLogin: boolean
+  closeToTray: boolean
+  minimizeToTray: boolean
+  showNotifications: boolean
+}
+
+type DesktopSettingsSnapshot = DesktopSettings & { startAtLoginError?: string }
+
+const settings = {
+  get: async (): Promise<DesktopSettingsSnapshot> =>
+    (await ipcRenderer.invoke('qivo:settings:get')) as DesktopSettingsSnapshot,
+  update: async (patch: Partial<DesktopSettings>): Promise<DesktopSettingsSnapshot> =>
+    (await ipcRenderer.invoke('qivo:settings:update', patch)) as DesktopSettingsSnapshot,
+}
+
 const notifications = {
   supported: Boolean(
     process.platform === 'win32' || process.platform === 'darwin' || process.platform === 'linux',
@@ -72,6 +88,7 @@ const auth = {
 contextBridge.exposeInMainWorld('qivoDesktop', {
   isElectron: true,
   platform: process.platform,
+  settings,
   notifications,
   updates,
   auth,

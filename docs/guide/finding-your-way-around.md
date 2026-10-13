@@ -17,6 +17,9 @@ Eligible organization staff can create projects with the Projects header's
 
 **Settings** opens **Your preferences** ([Your preferences](./working-together.md#who-a-person-is)). Its navigation also contains
 Organization settings, **Projects → All projects** and **Archived projects**.
+In supported Windows and Linux desktop builds, **Desktop app** appears below
+**Your preferences** for startup, tray and notification settings
+([Desktop app](./qivo-in-one-minute.md#desktop-app)).
 Organization settings require admin access, except **Teams**, which team
 leaders can open. The project list groups projects by organization and
 expands one project at a time. Use a row or its **…** menu to open settings

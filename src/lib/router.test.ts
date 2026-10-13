@@ -240,6 +240,7 @@ describe('parsePath — scopes and pages', () => {
     expect(parsePath('/app/~/inbox')).toEqual({ inbox: true })
     expect(parsePath('/app/home/inbox/tasks/qn-9')).toEqual({ inbox: true, issue: 'QN-9' })
     expect(parsePath('/app/~/settings/account')).toEqual({ settings: 'account' })
+    expect(parsePath('/app/~/settings/desktop')).toEqual({ settings: 'desktop' })
     expect(parsePath('/app/home/settings/org-general')).toEqual({ settings: 'org-general' })
     expect(parsePath('/app/home/settings/project/7')).toEqual({ settings: 'project:p-home-7' })
   })
@@ -270,6 +271,7 @@ describe('buildPath', () => {
     expect(buildPath({ inboxOpen: true })).toBe('/app/~/inbox')
     expect(buildPath({ archiveOpen: true })).toBe('/app/~/archive')
     expect(buildPath({ settingsPage: 'account' })).toBe('/app/~/settings/account')
+    expect(buildPath({ settingsPage: 'desktop' })).toBe('/app/~/settings/desktop')
   })
 
   it('the org settings pages ARE about an organization, so they name it', () => {

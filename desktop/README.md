@@ -4,6 +4,9 @@ This folder contains the Electron shell for Qivo on Windows and Linux. The
 shell keeps the Qivo web client in a sandboxed Chromium renderer and exposes only the native features
 that the client needs:
 
+- The window has no application menu row. Closing it keeps Qivo running in
+  the system tray by default. The tray menu offers **Open Qivo** and **Quit
+  Qivo**.
 - Inbox events can raise native desktop notifications. Clicking one restores
   Qivo and opens the Inbox.
 - Packaged builds check the configured release feed, download updates in the
@@ -12,6 +15,41 @@ that the client needs:
   also completes a downloaded update.
 - OAuth provider pages open in the system browser. A short-lived, one-time
   `qivo://` callback returns the result to the waiting Qivo window.
+
+## Desktop settings
+
+Open **Settings → User account → Desktop app**, below **Your preferences**.
+This page appears only in desktop builds that support these settings. It has
+four options. **Start Qivo at logon**, **Close to tray** and **Show
+notifications** are enabled by default. **Minimize to tray** starts disabled:
+
+- **Start Qivo at logon** starts Qivo in the system tray when you sign in to
+  your computer. Opening Qivo yourself shows its window.
+- **Close to tray** keeps Qivo running when you close its window. Turn it off
+  to quit when you close the window. **Quit Qivo** in the tray menu always
+  quits, regardless of this setting.
+- **Minimize to tray** hides Qivo in the tray when you minimize its window.
+  When it is off, minimizing keeps Qivo in the taskbar. This setting is
+  independent of **Close to tray**.
+- **Show notifications** controls native Inbox and update-ready alerts.
+  Turning it off leaves Inbox messages and in-app update notices available.
+
+When a desktop update is ready, the tray menu also offers **Restart and
+update**, including when notifications are off. Qivo still waits for active
+edits and asks before restarting.
+
+These preferences are saved for the current OS user on this computer, not
+synced with the Qivo account. A packaged build applies the defaults on its
+first run, including an upgrade from a build without desktop preferences.
+Saved choices are preserved on subsequent runs. Development launches never
+register themselves to start at logon.
+
+Windows uses the current user's login startup entry. Linux uses an XDG
+autostart entry. Keep an AppImage at a stable path without `%` so its startup
+entry can find it. Linux launchers do not reliably support `%` in executable
+paths, so Qivo reports a startup error for those paths. Linux tray visibility
+depends on the desktop environment's tray support. If Qivo cannot create a
+tray, closing the window minimizes it to the taskbar instead of hiding it.
 
 ## Development
 
