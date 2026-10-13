@@ -65,6 +65,7 @@ import { deleteIssueDeep } from '../model/cascade'
 import {
   assertAssignable,
   assertLive,
+  assertNoGroupDates,
   assertNoSubtasks,
   assertReporter,
   assertWeekPair,
@@ -376,7 +377,7 @@ export const listIssues = internalQuery({
     if (a.assignee && !UUID.test(a.assignee)) throw badRequest('assignee must be a profile uuid')
     const limit = Math.min(Math.max(Number(a.limit ?? 100) || 100, 1), 200)
     const offset = Math.max(Number(a.offset ?? 0) || 0, 0)
-    const rows = await listIssuesCore(
+    const { page, children } = await listIssuesCore(
       ctx,
       me,
       {
@@ -396,13 +397,14 @@ export const listIssues = internalQuery({
     )
     const names = await orgNames(ctx, me.org_id)
     return await Promise.all(
-      rows.map((i) =>
+      page.map((i) =>
         issueOut(ctx, i, {
           surface: 'rest',
           me,
           readable,
           project: cat.byUuid.get(i.project_id),
           names,
+          children,
         }),
       ),
     )
@@ -513,6 +515,9 @@ export const updateIssue = internalMutation({
       throw badRequest('moving a task between projects is not supported over the API')
     }
     const fields = issueFields(b, false)
+    // a group's dates come from its subtasks, so any date key on one is
+    // refused, null and unchanged values included
+    if ('start_week' in fields || 'end_week' in fields) await assertNoGroupDates(ctx, issue)
     assertEffectiveWeekPair(fields, issue)
     let archive: boolean | undefined
     if ('archived' in b) {

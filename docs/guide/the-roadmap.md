@@ -1,7 +1,8 @@
 The Roadmap shows scheduled tasks as bars on a weekly timeline. In a project,
 tasks sit under their sub-projects. **All projects** and **My view** group them
 by project, then sub-project. Undated tasks appear below the scheduled tasks
-with an **unplanned** marker and their due date, if set. Click one to schedule it.
+with an **unplanned** marker and their due date, if set. Click one to open it
+and set its plan. Tasks with subtasks take their dates from them instead.
 
 Project and sub-project headings show their unfinished tasks' total remaining
 hours and stay visible while you scroll their rows. Use a heading's arrow to
@@ -13,9 +14,11 @@ with no matching tasks; clearing a filter restores their previous collapsed stat
 when their planned period overlaps the visible window**, including its first
 and last weeks. Undated Done tasks are hidden. To Do, In Progress and In Review
 tasks outside the window remain available through edge badges or unplanned
-rows. Filters cannot bring hidden Backlog or Done tasks back. These rules also
-apply to the phone's landscape timeline and **Task schedule**, which uses the
-current roadmap window.
+rows. Filters cannot bring hidden Backlog or Done tasks back. A task with
+subtasks follows its subtasks instead of its own hidden status: it is never
+hidden as Backlog, and it counts as Done only when all its subtask work is
+Done. These rules also apply to the phone's landscape timeline and **Task
+schedule**, which uses the current roadmap window.
 
 ## A window you control
 
@@ -56,7 +59,7 @@ exact dates.
 
 With edit access, drag a bar to move it or drag either edge to resize it.
 Release to save. Click a bar or task name to open its details. Read-only bars
-open but cannot move or resize.
+and the bars of tasks with subtasks open but cannot move or resize.
 
 Click the portrait beside a task to change or clear its assignee. For a task
 **In Review** with a reviewer, the portrait and picker show the reviewer instead.
@@ -67,9 +70,12 @@ Other bars are blue unless delay tracking marks unfinished work yellow or red
 ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A **paused** task keeps its color and gains diagonal lines, including on
 its connected and adjacent edge badges.
 
-A scheduled parent's dates must cover its active scheduled subtasks. Qivo
-widens the parent when needed, including changes through the API. Unscheduled
-parents stay unscheduled.
+A task with subtasks takes its dates from them. Its bar runs from the
+earliest start to the latest end of the active scheduled subtasks you can
+access, at any depth and in any status. A subtask you cannot access hides
+the subtasks below it. To change the bar, move its subtasks.
+A task with subtasks but none scheduled shows as unplanned. While you drag a
+subtask, its parent's bar follows it.
 
 Milestones appear as violet diamonds. Drag one to move it or click it to open
 the Milestones window ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
@@ -81,8 +87,8 @@ Hover a truncated milestone name to read it in full.
 same Roadmap visit. Changes save immediately, including restored values.
 One Auto-move action counts as one undo step for all the tasks it moves.
 
-History includes task dates, parent dates widened by a subtask, milestone
-additions, edits and deletions, and Remaining edits in **Estimates**.
+History includes task dates, milestone additions, edits and deletions, and
+Remaining edits in **Estimates**.
 Restoring an estimate also restores its measurement time. Display preferences,
 filters and the visible date window are unaffected.
 
@@ -104,8 +110,10 @@ ends before the blocked task starts. Red means it ends in or after the blocked
 task's start week. Arrows update while you drag.
 
 **Auto-move** shifts blocked tasks to start after their blockers, including
-chains of dependent tasks. It moves parent and child tasks together. Cycles
-remain unresolved with red arrows, so you must remove or change those links.
+chains of dependent tasks. It moves a task with subtasks by moving its
+subtasks. It never moves tasks you cannot edit and leaves their conflicts in
+red. Cycles remain unresolved with red arrows, so you must remove or change
+those links.
 
 ## Estimates. Refresh the numbers before you plan
 

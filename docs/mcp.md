@@ -345,9 +345,10 @@ receive events or start work automatically.
 
 Available events are `task.created`, `task.updated`, `task.deleted` and
 `comment.created`. `task.updated` covers stored task-field changes made through
-the app, REST and MCP model paths, scheduling cascades, subtree archiving,
-restoration, automatic archiving and profile-removal cleanup. No-op updates do
-not emit events. Comment edits/deletes, labels, links, attachments, project
+the app, REST and MCP model paths, subtree archiving, restoration, automatic
+archiving and profile-removal cleanup. No-op updates do not emit events. A
+group's dates are calculated from its subtasks, so a subtask date change emits
+no event for the group. Comment edits/deletes, labels, links, attachments, project
 changes and seed/import writes do not have event types in this version.
 Project and organization deletion do not deliver events for their removed tasks.
 Deleting a project can still emit `task.updated` when it detaches a child task
@@ -615,7 +616,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_comments` | The task's discussion thread, oldest first, with author and edit attribution |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row — the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs — another project's sub-project is a hard error (moving tasks is the app's Move dialog). Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters. The result's `updated` lists the fields you sent (and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters. The result's `updated` lists the fields you sent (and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
 | `delete_task` | Delete a task (attachment bytes are reaped) |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to** — nobody else, your own account included; an agent is never an organization admin (0100/0102), so a leaked key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168 — the schema turns a fraction away (0095). It applies to **people only**: an agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
 
@@ -684,7 +685,7 @@ account the model guard surfaces instead ("a task with
 subtasks has no remaining time of its own — it shows the sum of its
 subtasks") — so match on "remaining time", not the exact sentence. `null`
 passes as a no-op. The hours live on the subtasks, and the app shows the
-parent's value as their recursive sum; such tasks read back
+parent's value as the sum over its unfinished subtasks; such tasks read back
 `remaining_hours: null`.
 
 Tasks also read back `remaining_set_at` (0072) — the server-stamped moment

@@ -871,7 +871,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const prog = P.progressIn(subIds, info.only)
   const inProgress = scoped.filter((i) => !P.isGroup(i) && i.status === 'progress').length
   const inReview = scoped.filter((i) => !P.isGroup(i) && i.status === 'review').length
-  const pausedIssues = scoped.filter((i) => i.paused)
+  const pausedIssues = scoped.filter((i) => P.isPaused(i))
   /* The two halves of "at risk", counted apart for the summary sentence: a date
      already lost reads differently from one the plan says is about to be. The
      list below merges them because the ROWS are the same shape; the sentence
@@ -979,7 +979,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                   lead: leadId ? P.user(leadId) : null,
                   late: delayCount('late'),
                   behind: delayCount('behind'),
-                  paused: issues.filter((i) => i.paused).length,
+                  paused: issues.filter((i) => P.isPaused(i)).length,
                 }
               })
               .filter((r) => !mine || r.issues.length > 0)

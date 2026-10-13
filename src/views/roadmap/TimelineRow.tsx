@@ -136,15 +136,6 @@ function TimelineRowView({
     row.kind === 'task' && start != null && end != null
       ? roadmapEdges(start, end, w0, w1)
       : { left: null, right: null }
-  let min = Infinity
-  let max = -Infinity
-  for (const id of row.issue?.children ?? []) {
-    const child = P.issueById[id]
-    if (!child || child.start == null) continue
-    min = Math.min(min, child.start)
-    max = Math.max(max, child.end)
-  }
-  const envelope = min === Infinity ? null : { min, max }
 
   const edgeColumn = (side: 'before' | 'after', edge: RoadmapEdge | null) => (
     <div
@@ -315,7 +306,6 @@ function TimelineRowView({
                 w0={w0}
                 w1={w1}
                 weekW={weekW}
-                env={envelope}
                 onSched={onSchedule}
                 onCommit={onCommit}
                 onOpen={onOpen}

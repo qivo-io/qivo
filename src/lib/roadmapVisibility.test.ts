@@ -5,8 +5,16 @@ describe('roadmap task visibility', () => {
   // Both boundary weeks belong to the visible window.
   const windowStart = 10
   const windowEnd = 17
+  // a leaf is done exactly when its status is Done
   const visible = (status: string, start?: number | null, end?: number | null) =>
-    isRoadmapTaskVisible({ status, start, end }, windowStart, windowEnd)
+    isRoadmapTaskVisible(
+      { status, isGroup: false, start, end },
+      status === 'done',
+      windowStart,
+      windowEnd,
+    )
+  const group = (status: string, done: boolean, start?: number | null, end?: number | null) =>
+    isRoadmapTaskVisible({ status, isGroup: true, start, end }, done, windowStart, windowEnd)
 
   it.each([
     [11, 15],
@@ -74,9 +82,26 @@ describe('roadmap task visibility', () => {
   )
 
   it('uses inclusive overlap even when only one week is visible', () => {
-    expect(isRoadmapTaskVisible({ status: 'done', start: 10, end: 10 }, 10, 10)).toBe(true)
-    expect(isRoadmapTaskVisible({ status: 'done', start: 9, end: 11 }, 10, 10)).toBe(true)
-    expect(isRoadmapTaskVisible({ status: 'done', start: 9, end: 9 }, 10, 10)).toBe(false)
-    expect(isRoadmapTaskVisible({ status: 'done', start: 11, end: 11 }, 10, 10)).toBe(false)
+    const done = (start: number, end: number) =>
+      isRoadmapTaskVisible({ status: 'done', isGroup: false, start, end }, true, 10, 10)
+    expect(done(10, 10)).toBe(true)
+    expect(done(9, 11)).toBe(true)
+    expect(done(9, 9)).toBe(false)
+    expect(done(11, 11)).toBe(false)
+  })
+
+  it.each(['backlog', 'todo', 'done'])(
+    'never hides a group as %s, since its own status is dormant',
+    (status) => {
+      expect(group(status, false, 11, 15)).toBe(true)
+      expect(group(status, false, 30, 40)).toBe(true)
+      expect(group(status, false, null, null)).toBe(true)
+    },
+  )
+
+  it('treats a group as completed only when the caller says its leaves are done', () => {
+    expect(group('backlog', true, 11, 15)).toBe(true)
+    expect(group('todo', true, 18, 20)).toBe(false)
+    expect(group('progress', true, null, null)).toBe(false)
   })
 })

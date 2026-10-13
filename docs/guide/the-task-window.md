@@ -57,6 +57,9 @@ read-only **Σ** total on a group ([Task groups](./how-work-is-organized.md#the-
 **Plan** always shows its date pickers. Setting a date on an unscheduled task
 schedules it. These pickers reject an end later than the due week. Plan also
 shows duration and **Plan on roadmap** ([Plan on roadmap](./planning-against-real-capacity.md#plan-on-roadmap)).
+On a group, the pickers show the dates from its subtasks and are disabled
+with the hint **Dates come from subtasks**. Its button reads
+**Show on roadmap**.
 
 Read-only access shows the values but disables editing ([Project access](./who-sees-what-the-access-model.md)).
 **Reviewer** uses the same eligible people as Assignee; choose **No reviewer**

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import { byId } from '../lib/db'
+import { GROUP_DATES_RULE } from '../model/issues'
 import {
   as,
   expectRefusal,
@@ -119,23 +120,24 @@ describe('roadmap visit undo', () => {
     expect((await task(t, a.id))?.remaining_hours).toBe(6)
   })
 
-  it('restores automatically widened ancestors together with descendants', async () => {
+  it('journals and writes only the task an operation names, never its ancestors', async () => {
     const t = newT(),
       f = await withOrg(t),
-      user = as(t, f.user),
+      guest = as(t, f.guest),
       session_id = uuid()
-    const ancestor = await plantIssue(t, {
+    // the middle task sits in a project the guest cannot see
+    const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
-      project_id: f.sub.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
+      type: 'project',
+      parent_id: f.hidden.id,
     })
+    const narrow = { start_week: '2026-01-05', end_week: '2026-01-12' }
+    const ancestor = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...narrow })
     const parent = await plantIssue(t, {
       org_id: f.org.id,
-      project_id: f.sub.id,
+      project_id: hiddenSub.id,
       parent_id: ancestor.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
+      ...narrow,
     })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -144,15 +146,20 @@ describe('roadmap visit undo', () => {
       start_week: '2026-01-05',
       end_week: '2026-01-05',
     })
-    await user.mutation(api.roadmap.change, {
+    await guest.mutation(api.roadmap.change, {
       session_id,
       operations: [schedule(child.id, '2026-02-02')],
     })
-    expect((await task(t, ancestor.id))?.end_week).toBe('2026-02-02')
-    await user.mutation(api.roadmap.undo, { session_id, all: false })
-    expect((await task(t, child.id))?.end_week).toBe('2026-01-05')
-    expect((await task(t, parent.id))?.end_week).toBe('2026-01-12')
-    expect((await task(t, ancestor.id))?.end_week).toBe('2026-01-12')
+    const changes = JSON.parse((await rows(t))[0].changes) as { id: string }[]
+    expect(changes.map((change) => change.id)).toEqual([child.id])
+    expect(changes[0]).not.toHaveProperty('authorities')
+    for (const row of [ancestor, parent]) expect(await task(t, row.id)).toEqual(row)
+    await guest.mutation(api.roadmap.undo, { session_id, all: false })
+    expect(await task(t, child.id)).toMatchObject({
+      start_week: '2026-01-05',
+      end_week: '2026-01-05',
+    })
+    for (const row of [ancestor, parent]) expect(await task(t, row.id)).toEqual(row)
   })
 
   it('refuses external schedule conflicts and leaves the whole revert-all transaction intact', async () => {
@@ -185,159 +192,49 @@ describe('roadmap visit undo', () => {
     expect(await rows(t)).toHaveLength(2)
   })
 
-  it.each(['hidden', 'read-only'] as const)(
-    'reverses automatic ancestor widening in a %s project using current child write access',
-    async (visibility) => {
-      const t = newT(),
-        f = await withOrg(t),
-        guest = as(t, f.guest),
-        session_id = uuid()
-      const otherSub = await plantProject(t, {
-        org_id: f.org.id,
-        type: 'project',
-        parent_id: f.hidden.id,
-      })
-      if (visibility === 'read-only')
-        await t.run((ctx) =>
-          ctx.db.insert('project_access', {
-            project_id: f.hidden.id,
-            profile_id: f.guest.id,
-            level: 'viewer',
-          }),
-        )
-      const parent = await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: otherSub.id,
-        start_week: '2026-01-05',
-        end_week: '2026-01-12',
-      })
-      const child = await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        parent_id: parent.id,
-        start_week: '2026-01-05',
-        end_week: '2026-01-05',
-      })
-      await expectRefusal(
-        guest.mutation(api.issues.update, {
-          org_id: f.org.id,
-          id: parent.id,
-          patch: { end_week: '2026-02-02' },
-        }),
-        'forbidden',
-      )
-      await guest.mutation(api.roadmap.change, {
-        session_id,
-        operations: [schedule(child.id, '2026-02-02')],
-      })
-      expect((await task(t, parent.id))?.end_week).toBe('2026-02-02')
-      expect(await guest.mutation(api.roadmap.undo, { session_id, all: true })).toEqual({
-        count: 0,
-      })
-      expect((await task(t, parent.id))?.end_week).toBe('2026-01-12')
-      expect((await task(t, child.id))?.start_week).toBe('2026-01-05')
-    },
-  )
-
-  it('refuses changed task topology and newly scheduled children before shrinking an ancestor', async () => {
-    const t = newT(),
-      f = await withOrg(t),
-      user = as(t, f.user),
-      session_id = uuid()
-    const parent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-12',
-    })
-    const child = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: parent.id,
-      start_week: '2026-01-05',
-      end_week: '2026-01-05',
-    })
-    const sibling = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: parent.id,
-    })
-    await user.mutation(api.roadmap.change, {
-      session_id,
-      operations: [schedule(child.id, '2026-02-02')],
-    })
-    await as(t, f.admin).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: sibling.id,
-      patch: { start_week: '2026-01-26', end_week: '2026-01-26' },
-    })
-    await expectRefusal(user.mutation(api.roadmap.undo, { session_id, all: true }), 'conflict')
-    expect((await task(t, child.id))?.start_week).toBe('2026-02-02')
-    // Even an unscheduled new child changes the topology receipt.
-    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: child.id })
-    await expectRefusal(user.mutation(api.roadmap.undo, { session_id, all: false }), 'conflict')
-  })
-
-  it.each(['access revoked', 'project moved'] as const)(
-    'rechecks the original child when only its ancestor has a net change: %s',
+  it.each(['gained a subtask', 'moved project'] as const)(
+    'refuses to undo a task that has since %s and leaves it as it is',
     async (condition) => {
       const t = newT(),
         f = await withOrg(t),
-        guest = as(t, f.guest),
+        user = as(t, f.user),
         session_id = uuid()
-      const otherSub = await plantProject(t, {
-        org_id: f.org.id,
-        type: 'project',
-        parent_id: f.hidden.id,
-      })
-      const parent = await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: otherSub.id,
-        start_week: '2026-01-05',
-        end_week: '2026-01-12',
-      })
-      const child = await plantIssue(t, {
+      const leaf = await plantIssue(t, {
         org_id: f.org.id,
         project_id: f.sub.id,
-        parent_id: parent.id,
         start_week: '2026-01-05',
         end_week: '2026-01-05',
       })
-      // Widening is sticky: returning the child leaves only a parent change.
-      await guest.mutation(api.roadmap.change, {
+      await user.mutation(api.roadmap.change, {
         session_id,
-        operations: [schedule(child.id, '2026-02-02'), schedule(child.id, '2026-01-05')],
+        operations: [schedule(leaf.id, '2026-02-02')],
       })
-      const changes = JSON.parse((await rows(t))[0].changes) as { id: string }[]
-      expect(changes.map((change) => change.id)).toEqual([parent.id])
-      if (condition === 'access revoked') {
-        await t.run(async (ctx) => {
-          const grant = await ctx.db
-            .query('project_access')
-            .withIndex('by_project_profile', (q) =>
-              q.eq('project_id', f.meta.id).eq('profile_id', f.guest.id),
-            )
-            .unique()
-          if (!grant) throw new Error('fixture grant missing')
-          await ctx.db.patch(grant._id, { level: 'viewer' })
+      if (condition === 'gained a subtask') {
+        // the leaf is now a group, whose dates come from its subtasks
+        const kid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+        await as(t, f.admin).mutation(api.issues.update, {
+          org_id: f.org.id,
+          id: kid.id,
+          patch: { parent_id: leaf.id },
         })
       } else {
         await as(t, f.admin).mutation(api.issues.move, {
           org_id: f.org.id,
-          id: child.id,
+          id: leaf.id,
           project_id: f.sub2.id,
         })
       }
       await expectRefusal(
-        guest.mutation(api.roadmap.undo, { session_id, all: true }),
-        condition === 'access revoked' ? 'forbidden' : 'conflict',
+        user.mutation(api.roadmap.undo, { session_id, all: true }),
+        'conflict',
+        /edited elsewhere/,
       )
-      expect((await task(t, parent.id))?.end_week).toBe('2026-02-02')
+      expect((await task(t, leaf.id))?.start_week).toBe('2026-02-02')
       expect(await rows(t)).toHaveLength(1)
     },
   )
 
-  it('expires older task receipts without captured authority paths with a typed refusal', async () => {
+  it('expires a receipt written while child edits still widened their ancestors', async () => {
     const t = newT(),
       f = await withOrg(t),
       user = as(t, f.user),
@@ -347,10 +244,11 @@ describe('roadmap visit undo', () => {
       session_id,
       operations: [schedule(a.id, '2026-01-05')],
     })
+    // in that era every task change carried `authorities`
     await t.run(async (ctx) => {
       const entry = (await ctx.db.query('roadmap_history').collect())[0]
-      const changes = JSON.parse(entry.changes) as { authorities?: unknown }[]
-      for (const change of changes) delete change.authorities
+      const changes = JSON.parse(entry.changes) as Record<string, unknown>[]
+      for (const change of changes) change.authorities = [{ id: a.id, path: [] }]
       await ctx.db.patch(entry._id, { changes: JSON.stringify(changes) })
     })
     await expectRefusal(
@@ -485,12 +383,12 @@ describe('roadmap visit undo', () => {
     expect((await task(t, b.id))?.start_week).toBeUndefined()
   })
 
-  it('skips effective no-ops including clamped dates and unchanged remaining estimates', async () => {
+  it('refuses a date operation on a group even when it would change nothing; skips an unchanged estimate', async () => {
     const t = newT(),
       f = await withOrg(t),
       user = as(t, f.user),
       session_id = uuid()
-    const parent = await plantIssue(t, {
+    const group = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       start_week: '2026-01-05',
@@ -499,22 +397,38 @@ describe('roadmap visit undo', () => {
     const child = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
-      parent_id: parent.id,
+      parent_id: group.id,
       start_week: '2026-01-05',
       end_week: '2026-02-02',
       remaining_hours: 12,
       remaining_set_at: NOW,
     })
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     expect(
       await user.mutation(api.roadmap.change, {
         session_id,
-        operations: [
-          schedule(parent.id, '2026-01-12'),
-          { kind: 'task', id: child.id, patch: { remaining_hours: 12 } },
-        ],
+        operations: [{ kind: 'task', id: child.id, patch: { remaining_hours: 12 } }],
       }),
     ).toEqual({ count: 0 })
     expect((await task(t, child.id))?.remaining_set_at).toBe(NOW)
+    for (const op of [
+      schedule(group.id, '2026-01-12'), // a change
+      schedule(group.id, '2026-01-05', '2026-02-02'), // its dormant stored dates
+      { kind: 'task' as const, id: group.id, patch: { start_week: null, end_week: null } },
+      { kind: 'task' as const, id: group.id, patch: { end_week: '2026-02-02' } },
+    ]) {
+      // the whole batch rolls back, the leaf's valid operation included
+      const r = await expectRefusal(
+        user.mutation(api.roadmap.change, {
+          session_id,
+          operations: [schedule(other.id, '2026-03-02'), op],
+        }),
+        'rule',
+      )
+      expect(r.data.message).toBe(GROUP_DATES_RULE)
+    }
+    expect(await task(t, group.id)).toEqual(group)
+    expect(await task(t, other.id)).toEqual(other)
     expect(await rows(t)).toEqual([])
     expect(await t.run((ctx) => ctx.db.query('activity_events').collect())).toEqual([])
   })

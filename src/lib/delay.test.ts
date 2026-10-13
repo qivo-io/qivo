@@ -175,6 +175,7 @@ describe('computeDelayMap', () => {
             duePast: fc.boolean(),
             isGroup: fc.boolean(),
             isDone: fc.option(fc.boolean(), { nil: undefined }),
+            partial: fc.boolean(),
             remaining: fc.option(
               fc.integer({ min: 0, max: 10000 }).map((hours) => hours / 10),
               { nil: undefined },
@@ -273,11 +274,30 @@ describe('delayOf — task groups', () => {
     })
   })
 
-  it('uses the group date envelope instead of its own hours and assignee capacity', () => {
+  it('uses the group calculated dates instead of its own hours and assignee capacity', () => {
     const group = iss({ isGroup: true, start: T, end: T + 2, remaining: 999 })
     const load = [span({ start: T, end: T + 9, remaining: 340 })]
     expect(delayOf(group, load)).toEqual({ status: 'ok', fin: T + 2 })
     expect(delayOf({ ...group, remaining: 0 }, load)).toEqual({ status: 'ok', fin: T + 2 })
+  })
+
+  it('reports only a late verdict for a group with subtasks outside the view', () => {
+    const group = iss({ isGroup: true, partial: true, start: T - 2, end: T - 1 })
+    // the same group with every subtask visible is behind its plan
+    expect(delayOf({ ...group, partial: false }, [])).toEqual({ status: 'behind', fin: T })
+    expect(delayOf(group, [])).toBeNull()
+    expect(delayOf({ ...group, start: T, end: T + 1, dueWeek: T + 3 }, [])).toBeNull()
+    // a passed due date or a visible plan ending after the due week is late
+    expect(delayOf({ ...group, duePast: true, dueWeek: T - 1 }, [])).toEqual({
+      status: 'late',
+      fin: T,
+    })
+    expect(delayOf({ ...group, start: T, end: T + 4, dueWeek: T + 2 }, [])).toEqual({
+      status: 'late',
+      fin: T + 4,
+    })
+    // a leaf ignores the flag
+    expect(delayOf({ ...group, isGroup: false }, [])).toEqual({ status: 'behind', fin: T })
   })
 
   it('has no delay once descendant work is complete, regardless of its saved status', () => {

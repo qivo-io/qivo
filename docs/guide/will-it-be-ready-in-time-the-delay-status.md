@@ -37,10 +37,18 @@ With an owner and capacity, zero projects completion in the current week or
 the planned start week if later. A passed due date still makes the task
 Delayed, and a passed planned end can still make it Currently delayed.
 
-Groups use their planned end and due date, not their saved status or a
+A group's planned end is the latest end of the scheduled subtasks you can
+access. Groups use that end and their due date, not their saved status or a
 separate estimate. A saved Done status cannot hide a missed deadline while
 descendant work is unfinished. Once all descendant work is Done, the group
 has no delay verdict.
+
+When some of a group's subtasks are outside your view, the group can show
+only **Delayed**, and only when its due date has passed or the subtasks you
+can see already end after the due week. Otherwise it has no verdict, because
+the visible plan cannot show whether the group is on track. For the same
+reason, its Roadmap due line is gray when the visible plan ends before the
+due date.
 
 ## Where you see it
 

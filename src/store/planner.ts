@@ -21,7 +21,6 @@ import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backend
 import { convex } from '../lib/convex'
 import {
   clampBarDrag,
-  coverEnvelope,
   DATE_FORMATS,
   DEFAULT_DATE_FORMAT,
   DEFAULT_WEEK_START,
@@ -69,7 +68,7 @@ import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { prime as primeGravatar } from '../lib/gravatar'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
-import { groupProgress, isIssueDone, isIssueGroup } from '../lib/issueGroups'
+import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
@@ -1378,6 +1377,19 @@ function rebuild(now = new Date()) {
     byId[it.id] = it
   })
   P.issueById = byId
+  /* A group's dates are calculated as the span of its visible scheduled
+     leaves at any depth (groupSpan). They replace the group's own start/end
+     here so every reader gets them. The stored dates stay in the row, dormant
+     like its status, and apply again once its last subtask leaves. A group with
+     subtasks outside this view is `partial`, which limits its delay verdict. */
+  const partialSpans = new Set<string>()
+  P.issues.forEach((it) => {
+    const span = groupSpan(it, byId)
+    if (!span) return
+    it.start = span.start
+    it.end = span.end
+    if (span.partial) partialSpans.add(it.uuid)
+  })
 
   // projected-delay status (0064) — each visible issue's finish week walked
   // against its effective owner's org-wide free capacity (plan_org_load), the
@@ -1412,6 +1424,7 @@ function rebuild(now = new Date()) {
       status: it.status,
       isGroup: PLANNER.isGroup(it),
       isDone: PLANNER.isDone(it),
+      partial: partialSpans.has(it.uuid),
       owner: it.owner,
       start: it.start,
       end: it.end,
@@ -1513,27 +1526,6 @@ function normalizeEmail(v: unknown): string | null {
     not by a pattern. */
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
-/* --- sub-issue date envelope ---------------------------------------------------
-   Rule: an issue never starts after its earliest scheduled sub-issue and
-   never ends before its latest one. The SERVER enforces both directions
-   inside every issue mutation (model/issues clampEnvelope + widenFrom);
-   these helpers are the client's PREDICTIVE mirror — same math, painted
-   optimistically so the bars land where the server will put them. */
-
-/** Envelope over the DIRECT scheduled children of an issue, in week indexes. */
-function childEnvelope(uuid: string): { min: number; max: number } | null {
-  let min = Infinity
-  let max = -Infinity
-  rows.issues.forEach((r) => {
-    if (r.parent_id !== uuid || r.start_week == null) return
-    const s = isoToWeek(r.start_week)
-    const e = r.end_week != null ? Math.max(s, isoToWeek(r.end_week)) : s
-    if (s < min) min = s
-    if (e > max) max = e
-  })
-  return min === Infinity ? null : { min, max }
-}
-
 /* --- sub-issue remaining rollup (0066) — the optimistic mirror ------------ */
 function clearParentRemaining(parentKey: string | null | undefined) {
   const pUuid = parentKey ? keyToUuid.get(parentKey) : null
@@ -1546,42 +1538,20 @@ function clearParentRemaining(parentKey: string | null | undefined) {
   }
 }
 
-/* Walk up from a (re)scheduled issue widening every scheduled ancestor to
-   keep covering it. Stops at an unscheduled or already-covering ancestor
-   (no opportunistic repair of violations the edit didn't touch). Iterative
-   with a visited set: parent cycles are blocked at the pickers, but a
-   corrupt chain must not hang the client.
-   OPTIMISTIC-ONLY PAINT: the server widens the ancestor chain itself, inside
-   the child's own mutation (model/issues.widenFrom fires in create/update),
-   so the fromWiden updateIssue calls below never dispatch — dispatching
-   would double-write rows the server already owns, and every bc022c2
-   wire-ordering gate around widening is dead with them. A refused child
-   write re-adopts serverSnap, which unwinds the widen too. */
-function widenAncestors(uuid: string) {
-  const widened: string[] = []
-  const seen = new Set<string>()
-  let cur = rows.issues.get(uuid)
-  while (cur?.parent_id && !seen.has(cur.id)) {
-    seen.add(cur.id)
-    if (cur.start_week == null) break
-    const parent = rows.issues.get(cur.parent_id)
-    if (!parent || parent.start_week == null) break // no dates, nothing to violate
-    const cs = isoToWeek(cur.start_week)
-    const ce = cur.end_week != null ? Math.max(cs, isoToWeek(cur.end_week)) : cs
-    const ps = isoToWeek(parent.start_week)
-    const pe = parent.end_week != null ? Math.max(ps, isoToWeek(parent.end_week)) : ps
-    const ns = Math.min(ps, cs)
-    const ne = Math.max(pe, ce)
-    if (ns === ps && ne === pe) break
-    const pKey = uuidToKey.get(parent.id)
-    if (!pKey) break
-    PLANNER.updateIssue(pKey, { start: ns, end: ne }, { fromWiden: true })
-    widened.push(pKey)
-    cur = parent
-  }
-  if (widened.length) {
-    const key = uuidToKey.get(uuid)
-    toast(`Widened ${widened.join(', ')} to keep covering ${key || 'its subtask'}`, 'info')
+/* Every visible task under `it`, once each, at any depth. The seen set keeps
+   a corrupt parent cycle from hanging the client. Subtasks outside this view
+   are not in the snapshot, so they are never visited. */
+function eachDescendant(it: IssueVM, visit: (child: IssueVM) => void) {
+  const seen = new Set([it.id])
+  const stack = [...it.children]
+  while (stack.length) {
+    const id = stack.pop() as string
+    if (seen.has(id)) continue
+    seen.add(id)
+    const child = PLANNER.issueById[id]
+    if (!child) continue
+    visit(child)
+    stack.push(...child.children)
   }
 }
 
@@ -1847,7 +1817,6 @@ export const PLANNER = {
   endpointWeek,
   winLabel,
   sameWin,
-  coverEnvelope,
   clampBarDrag,
   DATE_FORMATS,
   DEFAULT_DATE_FORMAT,
@@ -2263,7 +2232,9 @@ export const PLANNER = {
   /* stale — no activity (updated_at) for the organization's standard
      threshold. Purely
      a display/filter notion (0044): nothing is stored on the issue, and done
-     issues never count — finished work isn't stale, it's finished. */
+     issues never count, since finished work isn't stale, it's finished. A
+     group's own row is not touched when its subtasks change, so it counts the
+     newest activity among itself and its visible descendants. */
   /* "owned by me" (the assignee, or the reviewer while the task waits In
      Review; #314) — the ONE membership rule, shared by the My tasks filter,
      the "My view" scope (deviation #49) and the router. It spans every
@@ -2275,8 +2246,13 @@ export const PLANNER = {
   isStale: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     if (!it || PLANNER.isDone(it) || !it.updatedAt) return false
+    let newest = it.updatedAt
+    if (PLANNER.isGroup(it))
+      eachDescendant(it, (child) => {
+        newest = Math.max(newest, child.updatedAt || 0)
+      })
     const days = 120
-    return Date.now() - it.updatedAt > days * 86400000
+    return Date.now() - newest > days * 86400000
   },
   /* "Filter issues" — wildcard, multi-word AND over every text field the
      issue carries: QN key, title, description, status + priority display
@@ -2403,6 +2379,11 @@ export const PLANNER = {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     return !!it && isIssueGroup(it)
   },
+  /* A group's own pause is dormant like its status: only leaf work is held. */
+  isPaused: (x: IssueVM | string): boolean => {
+    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    return !!it?.paused && !PLANNER.isGroup(it)
+  },
   isDone: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     return !!it && isIssueDone(it, PLANNER.issueById)
@@ -2413,10 +2394,11 @@ export const PLANNER = {
     return it ? groupProgress(it, PLANNER.issueById) : { pct: 0, done: 0, total: 0, unknown: false }
   },
 
-  /* remaining — own hours for a leaf; for a parent, the recursive sum over
-     its subtree (an issue with sub-issues has no hours of its own — 0066).
-     Cycle-safe like progressOf. undefined when nothing in the subtree has
-     hours entered. Only the parent/sub-issue tree feeds this — linked
+  /* remaining is own hours for a leaf. For a group it is the sum over the
+     unfinished leaves of its visible subtree (a group has no hours of its
+     own, 0066, and a Done task has no work left, as in every other remaining
+     total). Cycle-safe like progressOf. undefined when no unfinished leaf has
+     hours entered. Only the parent/sub-issue tree feeds this, and linked
      issues never count. */
   remainingOf: (x: IssueVM | string): number | undefined => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
@@ -2424,22 +2406,11 @@ export const PLANNER = {
     if (!PLANNER.isGroup(it)) return it.remaining
     let sum = 0
     let any = false
-    const seen = new Set<string>()
-    const stack = [...it.children]
-    while (stack.length) {
-      const c = stack.pop() as string
-      if (seen.has(c)) continue
-      seen.add(c)
-      const ci = PLANNER.issueById[c]
-      if (!ci) continue
-      if (!PLANNER.isGroup(ci) && ci.remaining != null) {
-        sum += ci.remaining
-        any = true
-      }
-      ci.children.forEach((k) => {
-        stack.push(k)
-      })
-    }
+    eachDescendant(it, (child) => {
+      if (PLANNER.isGroup(child) || child.status === 'done' || child.remaining == null) return
+      sum += child.remaining
+      any = true
+    })
     return any ? Math.round(sum * 10) / 10 : undefined
   },
   projectProgress: (pid: string) => {
@@ -2550,9 +2521,6 @@ export const PLANNER = {
     if (row.parent_id) clearParentRemaining(it.parent)
     rebuild()
     emit()
-    // born under a parent WITH dates: the ancestor chain widens from birth —
-    // optimistic-only paint; the server widens inside create itself
-    if (row.parent_id && row.start_week != null) widenAncestors(uuid)
     run(
       write(api.issues.create, {
         org_id: row.org_id,
@@ -2596,27 +2564,18 @@ export const PLANNER = {
     return handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
   },
 
-  updateIssue: (id: string, patch: IssuePatch, opts?: { fromWiden?: boolean }) => {
+  updateIssue: (id: string, patch: IssuePatch) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || !patch || !Object.keys(patch).length) return
-    // envelope, parent side: incoming dates widen to keep covering the
-    // scheduled sub-issues — the predictive mirror of the server's
-    // clampEnvelope, same math, same toast (clearing the dates entirely
-    // stays allowed: only a SCHEDULED issue is bound by the rule)
-    if ('start' in patch || 'end' in patch) {
-      const s =
-        'start' in patch ? patch.start : row.start_week != null ? isoToWeek(row.start_week) : null
-      if (s != null) {
-        const e0 =
-          'end' in patch ? patch.end : row.end_week != null ? isoToWeek(row.end_week) : null
-        const e = e0 != null ? Math.max(s, e0) : s
-        const cov = coverEnvelope(s, e, childEnvelope(uuid))
-        if (cov.start !== s || cov.end !== e) {
-          patch = { ...patch, start: cov.start, end: cov.end }
-          if (!opts?.fromWiden) toast(`${id} spans its subtasks — dates adjusted`, 'info')
-        }
-      }
+    // a group's dates are calculated from its subtasks, so drop a stray date
+    // patch before the paint and the write (the UI offers none and the server
+    // refuses one), and the dormant stored dates stay as they are
+    if (('start' in patch || 'end' in patch) && PLANNER.isGroup(id)) {
+      patch = { ...patch }
+      delete patch.start
+      delete patch.end
+      if (!Object.keys(patch).length) return
     }
     // remaining is computed for parents (0066): drop a stray own-hours patch
     // (the UI hides the input; the server would refuse it anyway)
@@ -2642,19 +2601,12 @@ export const PLANNER = {
     if ('parent' in patch) rows.hiddenParentTasks.delete(uuid)
     rebuild()
     emit()
-    // fromWiden = a link of widenAncestors' walk: optimistic paint ONLY —
-    // the server already widened this row inside the child's own mutation
-    if (opts?.fromWiden) return
     const wire = mapIssuePatch(patch)
     const planningOnly = Object.keys(patch).every((key) =>
       ['start', 'end', 'remaining'].includes(key),
     )
     if (!planningOnly || !recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }))
       run(write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }))
-    // envelope, child side: new dates (or a new parent link) may poke outside
-    // the parent's span — the ancestors adapt, optimistically (the failure
-    // path re-adopts serverSnap and unwinds the widen too)
-    if ('start' in patch || 'end' in patch || 'parent' in patch) widenAncestors(uuid)
     // inline description images are hidden attachments; when neither the new
     // text nor the text it just replaced references one any more, reap the
     // row + bytes. Keeping the replaced text's refs for one more save gives

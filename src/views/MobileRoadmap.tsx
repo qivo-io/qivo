@@ -45,7 +45,7 @@ export function MobileRoadmap({
   const upcoming = milestones.filter((m) => m.week >= P.TODAY_WEEK)
   const past = milestones.filter((m) => m.week < P.TODAY_WEEK)
   const tasks = P.scopedIssues(info)
-    .filter((it) => isRoadmapTaskVisible(it, windowStart, windowEnd))
+    .filter((it) => isRoadmapTaskVisible(it, P.isDone(it), windowStart, windowEnd))
     .filter((it) => P.passesFilters(it, filters))
     .filter(
       (it) =>
@@ -200,7 +200,8 @@ export function MobileRoadmap({
                 className="mobile-roadmap-row"
                 onClick={() => actions.openIssue(it.id)}
               >
-                <StatusDot status={it.status} size={16} />
+                {/* a group's own status is dormant */}
+                {!P.isGroup(it) && <StatusDot status={it.status} size={16} />}
                 <span className="mobile-roadmap-row-body">
                   <strong>{it.title}</strong>
                   <span>{context}</span>

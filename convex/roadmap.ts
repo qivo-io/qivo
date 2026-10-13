@@ -1,6 +1,8 @@
 /* A roadmap visit is an owner-scoped undo journal. Clients supply commands,
- * never restoration values. Each mutation is one serializable undo step,
- * including all envelope cascades. History expires after 24 hours. */
+ * never restoration values. Each mutation is one serializable undo step that
+ * journals only the tasks its operations name. A group's dates are
+ * calculated from its subtasks, so no write changes another task's dates.
+ * History expires after 24 hours. */
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -13,8 +15,9 @@ import { logActivity } from './model/activity'
 import {
   assertOwnRemaining,
   assertWeekPair,
-  clampEnvelope,
   cleanRemaining,
+  GROUP_DATES_RULE,
+  hasSubtasks,
   updateIssueCore,
 } from './model/issues'
 import { notifyIssueUpdate } from './model/messages'
@@ -26,7 +29,6 @@ const LIMIT = 1000
 const taskFields = ['start_week', 'end_week', 'remaining_hours', 'remaining_set_at'] as const
 type TaskField = (typeof taskFields)[number]
 type TaskValues = Pick<Doc<'issues'>, TaskField>
-type TaskAuthority = { id: string; path: { id: string; guard: string }[] }
 type TaskChange = {
   kind: 'task'
   id: string
@@ -34,7 +36,6 @@ type TaskChange = {
   fields: TaskField[]
   before: TaskValues
   after: TaskValues
-  authorities: TaskAuthority[]
 }
 type Milestone = WithoutSystemFields<Doc<'milestones'>>
 type MilestoneChange = { kind: 'milestone'; id: string; before?: Milestone; after?: Milestone }
@@ -58,15 +59,6 @@ const taskValues = (row: Doc<'issues'>): TaskValues => ({
   remaining_set_at: row.remaining_set_at,
 })
 const milestoneValues = ({ _id, _creationTime, ...row }: Doc<'milestones'>): Milestone => row
-
-const ancestryGuard = (row: Doc<'issues'>) =>
-  JSON.stringify({
-    row: row._id,
-    org: row.org_id,
-    project: row.project_id,
-    parent: row.parent_id,
-    archived: row.archived_at,
-  })
 
 async function writer(ctx: Context, projectId: string) {
   const project = await byId(ctx, 'projects', projectId)
@@ -96,30 +88,12 @@ async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> 
   })
 }
 
-/* Automatic widening has the same authority as the original child edit,
- * even when an ancestor's project is hidden or read-only. The journal pins
- * each directly edited task and its complete ancestry path. Undo requires
- * current write access on those original tasks and unchanged paths; it does
- * not grant direct editing rights on any ancestor. */
-async function taskWriter(ctx: Context, row: Doc<'issues'>, change: TaskChange) {
-  // Receipts created before authority paths were introduced cannot replay.
-  if (!Array.isArray(change.authorities) || !change.authorities.length) throw expired()
-  let actor: Doc<'profiles'> | undefined
-  for (const authority of change.authorities) {
-    if (authority.path[0]?.id !== authority.id || authority.path.at(-1)?.id !== row.id)
-      throw stale()
-    const root = await byId(ctx, 'issues', authority.id)
-    if (!root) throw stale()
-    const { me } = await writer(ctx, root.project_id)
-    if (me.org_id !== row.org_id) throw stale()
-    actor = me
-    for (const node of authority.path) {
-      const current = node.id === root.id ? root : await byId(ctx, 'issues', node.id)
-      if (!current || ancestryGuard(current) !== node.guard) throw stale()
-    }
-  }
-  if (!actor) throw expired()
-  return actor
+/* Undo of a task needs current write access on that task's own project, the
+ * same access the original operation needed. */
+async function taskWriter(ctx: Context, row: Doc<'issues'>) {
+  const { me } = await writer(ctx, row.project_id)
+  if (me.org_id !== row.org_id) throw stale()
+  return me
 }
 
 async function history(ctx: Context, session: string) {
@@ -235,27 +209,7 @@ export const change = authedMutation({
         'This roadmap visit is too large. Leave and reopen the roadmap before making more changes.',
       )
     const beforeTasks = new Map<string, Doc<'issues'>>()
-    const taskAuthorities = new Map<string, Map<string, TaskAuthority>>()
     const beforeMilestones = new Map<string, Milestone | undefined>()
-    const captureChain = async (row: Doc<'issues'>) => {
-      let current: Doc<'issues'> | null = row
-      const seen = new Set<string>()
-      const path: TaskAuthority['path'] = []
-      while (current) {
-        if (seen.has(current.id) || seen.size > 20)
-          throw rule('task hierarchy too deep for the envelope cascade')
-        seen.add(current.id)
-        if (!beforeTasks.has(current.id)) beforeTasks.set(current.id, current)
-        path.push({ id: current.id, guard: ancestryGuard(current) })
-        let authorities = taskAuthorities.get(current.id)
-        if (!authorities) {
-          authorities = new Map()
-          taskAuthorities.set(current.id, authorities)
-        }
-        authorities.set(row.id, { id: row.id, path: [...path] })
-        current = current.parent_id ? await byId(ctx, 'issues', current.parent_id) : null
-      }
-    }
     const now = new Date().toISOString()
     for (const op of operations) {
       if (op.kind === 'task') {
@@ -266,12 +220,13 @@ export const change = authedMutation({
         if ('remaining_hours' in patch)
           patch.remaining_hours = cleanRemaining(patch.remaining_hours) ?? null
         if ('start_week' in patch || 'end_week' in patch) {
+          // A group takes its dates from its subtasks. Refused before the
+          // no-op skip, so a group's date operation never passes silently.
+          if (await hasSubtasks(ctx, row.id, row.archived_at !== undefined))
+            throw rule(GROUP_DATES_RULE)
           const start = 'start_week' in patch ? (patch.start_week ?? undefined) : row.start_week
           const end = 'end_week' in patch ? (patch.end_week ?? undefined) : row.end_week
           assertWeekPair(start, end)
-          const clamped = await clampEnvelope(ctx, row.id, start, end)
-          patch.start_week = clamped.start ?? null
-          patch.end_week = clamped.end ?? null
         }
         if (
           Object.entries(patch).every(
@@ -279,7 +234,7 @@ export const change = authedMutation({
           )
         )
           continue
-        await captureChain(row)
+        if (!beforeTasks.has(row.id)) beforeTasks.set(row.id, row)
         await updateIssueCore(ctx, { me, issue: row, patch, now })
       } else {
         const existing = await byId(ctx, 'milestones', op.id)
@@ -346,7 +301,6 @@ export const change = authedMutation({
         guard: await taskGuard(ctx, after),
         before: taskValues(before),
         after: taskValues(after),
-        authorities: [...(taskAuthorities.get(before.id)?.values() ?? [])],
       })
     }
     for (const [id, before] of beforeMilestones) {
@@ -374,16 +328,21 @@ export const change = authedMutation({
 })
 
 /* Exact restoration is deliberately internal to this endpoint. Calling the
- * ordinary update core would re-stamp estimates and clamp a parent before
- * its children had been restored. Validate the complete transaction, then
- * send normal notifications and activity for the actual reverse changes. */
+ * ordinary update core would re-stamp estimates. Validate the complete
+ * transaction, then send normal notifications and activity for the actual
+ * reverse changes. Each step restores only the rows it journaled. */
 async function restoreStep(ctx: Context, changes: Change[], now: string) {
   const tasks: { change: TaskChange; before: Doc<'issues'>; me: Doc<'profiles'> }[] = []
   for (const change of changes) {
     if (change.kind === 'task') {
+      // A receipt that still carries `authorities` was written while child
+      // edits widened their ancestors, so it may restore ancestor dates that
+      // no write changes any more. Receipts live 24 hours, so such a visit
+      // simply expires.
+      if ('authorities' in change) throw expired()
       const row = await byId(ctx, 'issues', change.id)
       if (!row) throw stale()
-      const me = await taskWriter(ctx, row, change)
+      const me = await taskWriter(ctx, row)
       if (
         (await taskGuard(ctx, row)) !== change.guard ||
         change.fields.some((field) => row[field] !== change.after[field])
@@ -428,21 +387,15 @@ async function restoreStep(ctx: Context, changes: Change[], now: string) {
     for (const field of change.fields) Object.assign(patch, { [field]: change.before[field] })
     await ctx.db.patch(before._id, { ...patch, updated_at: now })
   }
-  // Check both restored rows and the current ancestors: external changes to
-  // children or an untouched ancestor must never produce an invalid envelope.
-  const validated = new Set<string>()
-  for (const { before, me } of tasks) {
-    let row = await byId(ctx, 'issues', before.id)
-    while (row && !validated.has(row.id)) {
-      validated.add(row.id)
-      assertWeekPair(row.start_week, row.end_week)
-      if (row.remaining_hours !== undefined) await assertOwnRemaining(ctx, row.id)
-      const clamped = await clampEnvelope(ctx, row.id, row.start_week, row.end_week)
-      if (clamped.start !== row.start_week || clamped.end !== row.end_week) throw stale()
-      row = row.parent_id ? await byId(ctx, 'issues', row.parent_id) : null
-    }
+  // Each restored row must still hold a valid plan of its own, with a
+  // complete week pair and restored hours only on a task without active
+  // subtasks.
+  for (const { change, before, me } of tasks) {
     const after = await byId(ctx, 'issues', before.id)
     if (!after) throw stale()
+    assertWeekPair(after.start_week, after.end_week)
+    if (change.fields.includes('remaining_hours') && after.remaining_hours !== undefined)
+      await assertOwnRemaining(ctx, after.id)
     await notifyIssueUpdate(ctx, { before, after, actor: me, now })
     await logActivity(ctx, {
       org_id: after.org_id,

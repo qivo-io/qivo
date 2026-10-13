@@ -10,10 +10,10 @@
  * compose these helpers inside ONE internal fn per endpoint (resolve + rules
  * + write + activity in one transaction). Shared RULES live in model/issues.ts
  * (cleanTitle, pairRule, metaNeedsSub, assertLive, assertAssignable,
- * assertNoSubtasks, assertWeekPair, SUB_MUST_NAME) and model/orgs.ts
- * (setPlannableHoursCore); this file adds only what the model does not own:
- * the caller shape, the ref grammar, the catalogue, the access flags, the
- * shared list reads and the wire projections.
+ * assertNoSubtasks, assertNoGroupDates, assertWeekPair, SUB_MUST_NAME) and
+ * model/orgs.ts (setPlannableHoursCore); this file adds only what the model
+ * does not own: the caller shape, the ref grammar, the catalogue, the access
+ * flags, the shared list reads and the wire projections.
  *
  * Refusal grammar: helpers here throw the shipped ConvexError {code, message,
  * reason?} values (lib/functions.ts). REST maps code → status (not_found 404,
@@ -268,13 +268,15 @@ export function searchMatcher(term: string, stars: boolean): (i: Doc<'issues'>) 
   return (i) => matches(`${ISSUE_PREFIX}-${i.num}\n${i.title}\n${i.description}`)
 }
 
+/* The page of matching tasks, plus the organization's tasks indexed by
+ * parent from the same read, so group dates need no further queries. */
 export async function listIssuesCore(
   ctx: QueryCtx,
   me: Caller,
   o: ListIssueOpts,
   cat: Catalogue,
   readable: (projectId: string) => boolean,
-): Promise<Doc<'issues'>[]> {
+): Promise<{ page: Doc<'issues'>[]; children: ChildIndex }> {
   const scope = o.scope === null ? null : new Set(o.scope)
   const match = o.search ? searchMatcher(o.search, o.stars) : null
   const out: Doc<'issues'>[] = []
@@ -305,7 +307,7 @@ export async function listIssuesCore(
     const keyOf = (i: Doc<'issues'>): string => cat.byUuid.get(i.project_id)?.key ?? ''
     out.sort((a, b) => keyOf(a).localeCompare(keyOf(b)) || a.num - b.num)
   }
-  return out.slice(o.offset, o.offset + o.limit)
+  return { page: out.slice(o.offset, o.offset + o.limit), children: childIndexOf(rows) }
 }
 
 const byKeyOrder = (a: Doc<'projects'>, b: Doc<'projects'>): number => a.key.localeCompare(b.key)
@@ -413,7 +415,8 @@ type IssueOutCommon = {
 
 /* REST issueJson (rest:240-254): superset minus project_name; the plan weeks,
  * the parent link (null unless the caller can read the parent) and the
- * `archived` boolean are REST-only. */
+ * `archived` boolean are REST-only. A group's plan weeks are calculated
+ * (groupWeeks), never its dormant stored pair. */
 export type RestIssueJson = IssueOutCommon & {
   parent_id: string | null
   start_week: string | null
@@ -442,7 +445,29 @@ export type IssueOutPre = {
   project?: Doc<'projects'>
   /** profile uuid → name, for list calls (skips per-row point reads) */
   names?: ReadonlyMap<string, string>
+  /** the organization's tasks by parent, for list calls (group dates) */
+  children?: ChildIndex
 }
+
+/** An organization's tasks, archived ones included, keyed by parent id. */
+export type ChildIndex = ReadonlyMap<string, readonly Doc<'issues'>[]>
+
+export function childIndexOf(rows: Iterable<Doc<'issues'>>): ChildIndex {
+  const index = new Map<string, Doc<'issues'>[]>()
+  for (const row of rows) {
+    if (row.parent_id === undefined) continue
+    const kids = index.get(row.parent_id)
+    if (kids === undefined) index.set(row.parent_id, [row])
+    else kids.push(row)
+  }
+  return index
+}
+
+/** hasSubtasks over an index: an archived task also counts archived ones. */
+const hasSubtasksIn = (index: ChildIndex, task: Doc<'issues'>): boolean =>
+  (index.get(task.id) ?? []).some(
+    (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
+  )
 
 /* REST's parent link: the parent's uuid only when this caller could read the
  * parent (findIssue's rule), else null, which reads like a top-level task.
@@ -460,6 +485,113 @@ async function parentIdFor(
   return parent !== null && parent.org_id === me.org_id && readable(parent.project_id)
     ? parent.id
     : null
+}
+
+/* How many tasks a single group read walks one by_parent read at a time
+ * before it reads the organization's tasks once instead (the read a REST
+ * list makes anyway). It keeps both Convex limits in reach: index ranges
+ * stay far below 4,096, and only a very large group pays a full read. */
+const SUBTREE_WALK_BUDGET = 1000
+
+/* On REST a group's plan weeks run from the earliest start to the latest
+ * end of the scheduled leaves under it that the caller can read, at any
+ * depth. A nested group counts only through its own leaves; its stored
+ * dates are dormant. The walk passes only through readable tasks, so a
+ * subtask under one the caller cannot read never counts. Like is_group, an
+ * active group counts only active subtasks and an archived one its whole
+ * subtree. Under a group in an active project, subtasks in archived projects
+ * do not count. A leaf without an end counts as its start week. Done leaves
+ * count. Both weeks are null when no such leaf is scheduled. `readable` is
+ * the caller's project flags when the surface already holds them. A list
+ * passes `children`, the index built from the rows it already read. A single
+ * task walks its own subtree, one by_parent read per task it visits, and
+ * reads the organization's tasks once instead when the subtree passes
+ * SUBTREE_WALK_BUDGET. */
+export async function groupWeeks(
+  ctx: QueryCtx,
+  group: Doc<'issues'>,
+  groupProject: Doc<'projects'>,
+  me: Caller,
+  readable?: (projectId: string) => boolean,
+  children?: ChildIndex,
+): Promise<{ start_week: string | null; end_week: string | null }> {
+  const allArchived = group.archived_at !== undefined
+  const liveProject = groupProject.archived_at === undefined
+  // whether a subtask in this project may count, read once per project
+  const counted = new Map<string, Promise<boolean>>()
+  const countsIn = (projectId: string): Promise<boolean> => {
+    let known = counted.get(projectId)
+    if (known === undefined) {
+      known = (async () => {
+        const p = await byId(ctx, 'projects', projectId)
+        if (p === null || (liveProject && p.archived_at !== undefined)) return false
+        return readable !== undefined ? readable(p.id) : await canSeeProject(ctx, me, p)
+      })()
+      counted.set(projectId, known)
+    }
+    return known
+  }
+  /* One walk; null when it would read more than `budget` tasks' children.
+   * Each visited task's children are read once: they decide whether it is
+   * a group (hasSubtasks' rule, whoever can read them) and what the walk
+   * enters next. */
+  const walk = async (
+    childrenOf: (id: string) => Promise<readonly Doc<'issues'>[]>,
+    budget: number,
+  ): Promise<{ start_week: string | null; end_week: string | null } | null> => {
+    let start: string | undefined
+    let end: string | undefined
+    let reads = 0
+    const seen = new Set<string>([group.id])
+    let frontier: Doc<'issues'>[] = [group]
+    // assertParentChain bounds chains at 20 tasks, so the walk stops there
+    for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+      const next: Doc<'issues'>[] = []
+      for (const task of frontier) {
+        if (++reads > budget) return null
+        const kids = await childrenOf(task.id)
+        const isGroup = kids.some(
+          (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
+        )
+        if (task !== group && !isGroup) {
+          if (task.start_week === undefined) continue
+          const leafEnd = task.end_week ?? task.start_week
+          if (start === undefined || task.start_week < start) start = task.start_week
+          if (end === undefined || leafEnd > end) end = leafEnd
+          continue
+        }
+        // a group, the root included, counts only through its subtasks
+        for (const c of kids) {
+          if (seen.has(c.id)) continue
+          if (!allArchived && c.archived_at !== undefined) continue
+          if (!(await countsIn(c.project_id))) continue
+          seen.add(c.id)
+          next.push(c)
+        }
+      }
+      frontier = next
+    }
+    return { start_week: start ?? null, end_week: end ?? null }
+  }
+  const NONE = { start_week: null, end_week: null }
+  // an index walk has no budget, so it always answers
+  const fromIndex = async (index: ChildIndex) =>
+    (await walk(async (id) => index.get(id) ?? [], Infinity)) ?? NONE
+  if (children !== undefined) return await fromIndex(children)
+  const bySubtree = await walk(
+    (id) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', id))
+        .collect(),
+    SUBTREE_WALK_BUDGET,
+  )
+  if (bySubtree !== null) return bySubtree
+  const rows = await ctx.db
+    .query('issues')
+    .withIndex('by_org', (q) => q.eq('org_id', group.org_id))
+    .collect()
+  return await fromIndex(childIndexOf(rows))
 }
 
 type RestOut = { surface: 'rest'; me: Caller; readable?: (projectId: string) => boolean }
@@ -481,11 +613,17 @@ export async function issueOut(
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
-  const is_group = await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
+  const is_group =
+    opts.children !== undefined
+      ? hasSubtasksIn(opts.children, issue)
+      : await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
   if (opts.surface === 'rest') {
+    const weeks = is_group
+      ? await groupWeeks(ctx, issue, project, opts.me, opts.readable, opts.children)
+      : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
     return {
       id: issue.id,
       key: issueKey(issue.num),
@@ -505,8 +643,8 @@ export async function issueOut(
       reporter_id: issue.reporter_id ?? null,
       reporter_name,
       parent_id: await parentIdFor(ctx, opts.me, issue, opts.readable),
-      start_week: issue.start_week ?? null,
-      end_week: issue.end_week ?? null,
+      start_week: weeks.start_week,
+      end_week: weeks.end_week,
       due_date: issue.due_date ?? null,
       remaining_hours: issue.remaining_hours ?? null,
       remaining_set_at: issue.remaining_set_at ?? null,

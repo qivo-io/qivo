@@ -18,7 +18,8 @@ import { useMobile } from '@/lib/useMobile'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
-import { solvablePairs } from '../lib/schedule'
+import { groupSpan } from '../lib/issueGroups'
+import { autoMoves, dependencyPairs } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { committedByWeek, fitEndWeek, type LoadItem, plannableHoursOf } from '../lib/workload'
 import { UpdateEstimateModal } from '../panels/UpdateEstimate'
@@ -130,12 +131,15 @@ function Roadmap({
     [],
   )
   const planningBacklog = session && P.issueById[session.issueId]?.status === 'backlog'
+  // a task that gains a subtask mid-session takes its dates from it from then
+  // on, so there is nothing left to plan
+  const planningGroup = !!session && P.isGroup(session.issueId)
   useEffectR(() => {
-    if (P.roadmapUndo.disabled || planningBacklog) {
+    if (P.roadmapUndo.disabled || planningBacklog || planningGroup) {
       sessionRef.current = null
       setSession(null)
     }
-  }, [P.roadmapUndo.disabled, planningBacklog])
+  }, [P.roadmapUndo.disabled, planningBacklog, planningGroup])
   const undoPlanning = () => {
     // A late workload reply must not re-apply auto-fit after Undo. Ending the
     // planning card also prevents Cancel from restoring its older baseline.
@@ -175,7 +179,7 @@ function Roadmap({
   const NW = w1 - w0 + 1
   // Planning can bypass toolbar filters, but never the roadmap's status rule.
   const passes = (it: IssueVM) =>
-    isRoadmapTaskVisible(it, w0, w1) &&
+    isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
     ((session && session.issueId === it.id) || P.passesFilters(it, filters))
   /* Is a filter the Clear button can undo switched on? The same question the
      board asks (its `clearable`), and it gates the same two things here: the
@@ -493,8 +497,30 @@ function Roadmap({
   const liveRef = useRefR({})
   const draftEpoch = useRefR(P.gridEpoch)
   const draftCurrent = draftEpoch.current === P.gridEpoch
-  const getS = (it) => (draftCurrent && live[it.id] ? live[it.id].start : it.start)
-  const getE = (it) => (draftCurrent && live[it.id] ? live[it.id].end : it.end)
+  /* A group's bar is its calculated span (it.start/it.end, from the store).
+     While a subtask is dragged the span is recalculated with the live drafts,
+     once per group per render, so the group bar and its arrows follow the
+     drag. A group's own draft (a bar that gained a subtask mid-drag) is never
+     read. */
+  const dragging = draftCurrent && Object.keys(live).length > 0
+  const liveSpans = new Map<string, ReturnType<typeof groupSpan>>()
+  const liveSpan = (it: IssueVM) => {
+    if (!dragging || !P.isGroup(it)) return null
+    if (!liveSpans.has(it.id))
+      liveSpans.set(
+        it.id,
+        groupSpan(it, P.issueById, (leaf) => live[leaf.id]),
+      )
+    return liveSpans.get(it.id)
+  }
+  const getS = (it: IssueVM) => {
+    if (P.isGroup(it)) return liveSpan(it)?.start ?? it.start
+    return draftCurrent && live[it.id] ? live[it.id].start : it.start
+  }
+  const getE = (it: IssueVM) => {
+    if (P.isGroup(it)) return liveSpan(it)?.end ?? it.end
+    return draftCurrent && live[it.id] ? live[it.id].end : it.end
+  }
   const onSched = useCallback((id, start, end) => {
     const n = { ...liveRef.current, [id]: { start, end } }
     liveRef.current = n
@@ -506,7 +532,7 @@ function Roadmap({
     const entries = Object.entries(liveRef.current)
     const visible = entries.filter(([id]) => {
       const it = P.issueById[id]
-      return it && isRoadmapTaskVisible(it, w0, w1)
+      return it && isRoadmapTaskVisible(it, P.isDone(it), w0, w1)
     })
     if (visible.length === entries.length) return
     const next = Object.fromEntries(visible)
@@ -525,7 +551,8 @@ function Roadmap({
       return
     }
     const it = P.issueById[id]
-    if (!l || !it) return
+    // a bar that gained a subtask mid-drag now takes its dates from it
+    if (!l || !it || P.isGroup(it)) return
     const sess = sessionRef.current
     // auto-fit: the planned issue's end follows the owner's free capacity —
     // a move sets the start and recomputes the end; dragging the end is
@@ -534,7 +561,6 @@ function Roadmap({
       sess &&
       sess.issueId === id &&
       sess.autoFit &&
-      !P.isGroup(it) &&
       it.owner &&
       sess.loadOwner === it.owner &&
       sess.loadEpoch === P.gridEpoch &&
@@ -555,8 +581,7 @@ function Roadmap({
       return
     }
     // a drag that came back to (or was pinned at) its committed position is a
-    // no-op: don't write, don't log 'rescheduled' — and don't let the store's
-    // envelope clamp "repair" a legacy-violating bar the user merely poked
+    // no-op: don't write, don't log 'rescheduled'
     if (l.start !== it.start || l.end !== it.end) P.updateIssue(id, { start: l.start, end: l.end })
   }, [])
 
@@ -708,7 +733,9 @@ function Roadmap({
   const cancelPlanning = () => {
     const s = sessionRef.current
     sessionRef.current = null
-    if (s && P.issueById[s.issueId]) P.updateIssue(s.issueId, restoreWeekDates(s.orig))
+    // a task that became a group has calculated dates, so nothing to restore
+    if (s && P.issueById[s.issueId] && !P.isGroup(s.issueId))
+      P.updateIssue(s.issueId, restoreWeekDates(s.orig))
     setSession(null)
   }
   /* The two ways here that must SHOW one task (planning and the read-only
@@ -779,12 +806,47 @@ function Roadmap({
       cancelAnimationFrame(r2)
     }
   }
+
+  /* ---------- read-only reveal (Team sync's Roadmap jump) ----------
+     The planning spotlight without the session: show the task and ring its
+     bar for a moment. No card opens, nothing is written, and an unscheduled
+     task keeps no bar (its row is scrolled to instead). Keyed on
+     revealTask.n like focusPlan; `revealed` holds the ring after the signal
+     is consumed. */
+  const [revealed, setRevealed] = useStateR<{ id: string; n: number } | null>(null)
+  useEffectR(() => {
+    if (!revealTask) return
+    const it = P.issueById[revealTask.id]
+    if (!it) {
+      onRevealConsumed?.()
+      return
+    }
+    openTo(it)
+    setRevealed(revealTask)
+    return bringIntoView(it.id, onRevealConsumed)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealTask?.n])
+  useEffectR(() => {
+    if (!revealed) return
+    const t = window.setTimeout(() => setRevealed(null), REVEAL_MS)
+    return () => window.clearTimeout(t)
+  }, [revealed?.n])
+
   useEffectR(() => {
     if (!focusPlan) return
+    const it = P.issueById[focusPlan.id]
+    // A group's dates come from its subtasks, so it has nothing to plan. A
+    // request for one (it can gain a subtask after the detail window asked)
+    // shows it read-only instead, like revealTask, and leaves any open
+    // session and its pending workload reply alone.
+    if (it && P.isGroup(it)) {
+      openTo(it)
+      setRevealed(focusPlan)
+      return bringIntoView(it.id, onFocusConsumed)
+    }
     const request = ++planRequest.current
     const loadEpoch = P.gridEpoch
     const undoDisabledAtStart = P.roadmapUndo.disabled
-    const it = P.issueById[focusPlan.id]
     if (!it) {
       onFocusConsumed?.()
       return
@@ -839,31 +901,6 @@ function Roadmap({
     return bringIntoView(it.id, onFocusConsumed)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusPlan?.n])
-
-  /* ---------- read-only reveal (Team sync's Roadmap jump) ----------
-     The planning spotlight without the session: show the task and ring its
-     bar for a moment. No card opens, nothing is written, and an unscheduled
-     task keeps no bar (its row is scrolled to instead). Keyed on
-     revealTask.n like focusPlan; `revealed` holds the ring after the signal
-     is consumed. */
-  const [revealed, setRevealed] = useStateR<{ id: string; n: number } | null>(null)
-  useEffectR(() => {
-    if (!revealTask) return
-    const it = P.issueById[revealTask.id]
-    if (!it) {
-      onRevealConsumed?.()
-      return
-    }
-    openTo(it)
-    setRevealed(revealTask)
-    return bringIntoView(it.id, onRevealConsumed)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealTask?.n])
-  useEffectR(() => {
-    if (!revealed) return
-    const t = window.setTimeout(() => setRevealed(null), REVEAL_MS)
-    return () => window.clearTimeout(t)
-  }, [revealed?.n])
 
   const sessionOwner = session ? (P.issueById[session.issueId]?.owner ?? null) : null
   useEffectR(() => {
@@ -1289,24 +1326,7 @@ function Roadmap({
     stripMode === 'min' ? STRIP_HEAD_H + 2 : Math.min(stripHeight(stripUsers.length), stripCap)
 
   // dependency pairs (blocker -> blocked), dedup, both bars visible
-  const seen = new Set()
-  const deps = []
-  P.issues.forEach((it) => {
-    ;(it.links || []).forEach((l) => {
-      let blocker: string, blocked: string
-      if (l.type === 'blocked_by') {
-        blocker = l.id
-        blocked = it.id
-      } else if (l.type === 'blocks') {
-        blocker = it.id
-        blocked = l.id
-      } else return
-      const key = `${blocker}>${blocked}`
-      if (seen.has(key)) return
-      seen.add(key)
-      if (geom[blocker] && geom[blocked]) deps.push({ blocker, blocked })
-    })
-  })
+  const deps = dependencyPairs(P.issues).filter((dp) => geom[dp.blocker] && geom[dp.blocked])
   const depColor = (dp) =>
     getE(P.issueById[dp.blocker]) >= getS(P.issueById[dp.blocked])
       ? 'var(--danger)'
@@ -1317,133 +1337,25 @@ function Roadmap({
       barRing[dp.blocked] = 'color-mix(in oklab, var(--danger) 67%, transparent)'
   })
 
-  // Auto-move: push blocked issues past their blockers, cascading.
-  // Computed every render so the button can disable itself when there is
-  // nothing to move. Weeks are unbounded — no viewport clamp on the result.
-  const autoMoves = (() => {
-    const pairs = []
-    const pseen = new Set()
-    P.issues.forEach((it) => {
-      ;(it.links || []).forEach((l) => {
-        let blocker: string, blocked: string
-        if (l.type === 'blocked_by') {
-          blocker = l.id
-          blocked = it.id
-        } else if (l.type === 'blocks') {
-          blocker = it.id
-          blocked = l.id
-        } else return
-        const k = `${blocker}>${blocked}`
-        if (!pseen.has(k)) {
-          pseen.add(k)
-          pairs.push({ blocker, blocked })
-        }
-      })
-    })
-    // The date envelope (an issue spans its scheduled sub-issues) makes a
-    // subtree one schedulable unit: dependencies read EFFECTIVE bounds
-    // (own span ∪ scheduled children, recursively) and a push moves the
-    // whole subtree by the same delta. Relative positions inside a family
-    // are preserved — never "repaired" — so the preview matches what the
-    // store's clamps commit and re-runs converge instead of growing a
-    // clamped parent further on every click.
-    const kids = {}
-    P.issues.forEach((it) => {
-      if (it.start == null || !it.parent) return
-      const par = P.issueById[it.parent]
-      if (!par || par.start == null) return // unscheduled parents break the chain
-      kids[it.parent] ||= []
-      kids[it.parent].push(it.id)
-    })
-    // some dependencies can never be satisfied by push-forward relaxation:
-    // plain dep cycles, deps threading one scheduled parent chain (the
-    // envelope drags the blocker along with the blocked), true cross-family
-    // runaways. Relaxing them would chase their own tail — with weeks
-    // unbounded, committing runaway far-future dates. solvablePairs filters
-    // them on a two-layer moves/widens graph (see src/lib/schedule.ts);
-    // their red conflict arrows stay on as the signal to untangle by hand.
-    const solvable = solvablePairs(
-      pairs,
-      kids,
-      P.issues.filter((it) => it.start != null).map((it) => it.id),
-    )
-    const work = {}
-    P.issues.forEach((it) => {
-      if (it.start != null) work[it.id] = { start: it.start, end: it.end }
-    })
-    // kids only links issues that are in work, and the pickers keep the
-    // hierarchy acyclic — the depth caps are a corrupt-data backstop
-    const effStart = (id, depth = 0) => {
-      let s = work[id].start
-      if (depth < 32)
-        (kids[id] || []).forEach((k) => {
-          s = Math.min(s, effStart(k, depth + 1))
-        })
-      return s
-    }
-    const effEnd = (id, depth = 0) => {
-      let e = work[id].end
-      if (depth < 32)
-        (kids[id] || []).forEach((k) => {
-          e = Math.max(e, effEnd(k, depth + 1))
-        })
-      return e
-    }
-    const push = (id, dw, depth = 0) => {
-      work[id].start += dw
-      work[id].end += dw
-      if (depth < 32)
-        (kids[id] || []).forEach((k) => {
-          push(k, dw, depth + 1)
-        })
-    }
-    let changed = true,
-      guard = 0
-    while (changed && guard++ < P.issues.length + 5) {
-      changed = false
-      solvable.forEach(({ blocker, blocked }) => {
-        if (!work[blocker] || !work[blocked]) return
-        const need = effEnd(blocker) + 1
-        const cur = effStart(blocked)
-        if (cur < need) {
-          push(blocked, need - cur)
-          changed = true
-        }
-      })
-    }
-    const moves = []
-    Object.keys(work).forEach((id) => {
-      const it = P.issueById[id]
-      if (work[id].start !== it.start || work[id].end !== it.end)
-        moves.push({ id, start: work[id].start, end: work[id].end })
-    })
-    return moves
-  })()
+  // Auto-move: push blocked tasks past their blockers, cascading. Computed
+  // every render so the button can disable itself when there is nothing to
+  // move. Only leaves move, and a group's span follows them. A pair that
+  // would move a task this person cannot edit keeps its red arrow instead
+  // (see autoMoves in src/lib/schedule.ts).
+  const pendingMoves = autoMoves({
+    issues: P.issues,
+    byId: P.issueById,
+    canWrite: (it) => P.canWrite(it.project),
+  })
   const autoArrange = () => {
-    if (!autoMoves.length) return
-    // deepest first: a parent's envelope clamp reads its children's rows, so
-    // the children must land their new dates before the parent commits —
-    // committing the parent first would clamp it back to the children's OLD
-    // spot and the solver would push it again on the next click
-    const depth = (id) => {
-      let d = 0,
-        it = P.issueById[id]
-      while (it?.parent && P.issueById[it.parent] && d < 32) {
-        d++
-        it = P.issueById[it.parent]
-      }
-      return d
-    }
+    if (!pendingMoves.length) return
     P.batchRoadmapChanges(() => {
-      autoMoves
-        .slice()
-        .sort((a, b) => depth(b.id) - depth(a.id))
-        .forEach((m) => {
-          P.updateIssue(m.id, { start: m.start, end: m.end })
-        })
+      pendingMoves.forEach((m) => {
+        P.updateIssue(m.id, { start: m.start, end: m.end })
+      })
     })
     window.showToast?.(
-      `Moved ${autoMoves.length} task${autoMoves.length > 1 ? 's' : ''} after their blockers`,
+      `Moved ${pendingMoves.length} task${pendingMoves.length > 1 ? 's' : ''} after their blockers`,
     )
   }
 
@@ -1496,6 +1408,11 @@ function Roadmap({
     } else if (wkEnd != null && dueT <= wkEnd) {
       color = 'var(--warn)'
       state = 'tight — due falls in the final planned week'
+    } else if (P.isGroup(iss) && P.progressOf(iss).unknown) {
+      // subtasks outside this view may end later, so the visible plan cannot
+      // show the group finishing before its due date
+      color = 'var(--text-3)'
+      state = 'some subtasks are outside your view'
     } else {
       color = 'var(--success)'
       state = 'on track — plan ends before the due date'
@@ -1603,13 +1520,13 @@ function Roadmap({
     ;(g.bands.length ? g.bands[g.bands.length - 1].rows : g.own).push(L)
   })
 
-  if (showMobileAgenda) return mobileAgenda(autoMoves.length, autoArrange)
+  if (showMobileAgenda) return mobileAgenda(pendingMoves.length, autoArrange)
 
   return withMobileTimeline(
     <div className="roadmap-view [flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [background:var(--bg)]">
       {/* The row is drawn by `toolbarRow` above, so that the empty states can
           draw it too — see its header for why that matters. */}
-      {timelineToolbar(autoMoves)}
+      {timelineToolbar(pendingMoves)}
 
       {winPops}
 
@@ -2040,7 +1957,7 @@ function Roadmap({
                       const d = `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2 - 7} ${y2}`
                       const col = depColor(dp)
                       return (
-                        // one arrow per dedup'd pair — the same key `seen` holds
+                        // one arrow per dedup'd pair, the same key dependencyPairs uses
                         <g key={`${dp.blocker}>${dp.blocked}`}>
                           <circle cx={x1} cy={y1} r={3} fill={col} />
                           <path

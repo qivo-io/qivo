@@ -35,7 +35,7 @@ function DelayBanner({ it }: { it: IssueVM }) {
 /* The paused mark stays visible on a faded card: a pause is a fact about the
    task, not a hover detail. The reason lives in the task's comments. */
 function PausedGlyph({ it }: { it: IssueVM }) {
-  if (!it.paused) return null
+  if (!P.isPaused(it)) return null
   return (
     <HoverTooltip content="Paused">
       <PausedMark className="mt-0.5" />

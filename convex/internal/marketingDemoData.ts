@@ -65,6 +65,8 @@ export type DemoIssue = {
   reporter?: string
   archived?: boolean
   parent?: string
+  // A task with subtasks has no plan weeks of its own. The app calculates
+  // them from its subtasks.
   startWeek?: number
   endWeek?: number
   dueDay?: number
@@ -345,8 +347,6 @@ const issues: DemoIssue[] = [
       title: 'Release PCB revision B',
       status: 'progress',
       assignee: 'leo',
-      startWeek: -1,
-      endWeek: 1,
       dueDay: 11,
       priority: 'high',
       labels: ['hardware', 'pilot'],
@@ -483,8 +483,6 @@ const issues: DemoIssue[] = [
       title: 'Deliver reliable device telemetry',
       status: 'progress',
       assignee: 'aisha',
-      startWeek: -1,
-      endWeek: 1,
       dueDay: 11,
       priority: 'high',
       labels: ['firmware', 'pilot'],
@@ -603,8 +601,6 @@ const issues: DemoIssue[] = [
       title: 'Finalize the pilot enclosure',
       status: 'progress',
       assignee: 'emil',
-      startWeek: -1,
-      endWeek: 2,
       dueDay: 18,
       priority: 'high',
       labels: ['design', 'pilot'],
@@ -1160,8 +1156,6 @@ const issues: DemoIssue[] = [
       title: 'Build the room comparison dashboard',
       status: 'progress',
       assignee: 'daniel',
-      startWeek: 0,
-      endWeek: 2,
       dueDay: 18,
       priority: 'high',
       labels: ['software', 'pilot'],
@@ -1314,8 +1308,6 @@ const issues: DemoIssue[] = [
       title: 'Send alerts for sustained high CO₂',
       status: 'todo',
       assignee: 'daniel',
-      startWeek: 1,
-      endWeek: 3,
       dueDay: 25,
       priority: 'high',
       labels: ['software', 'pilot'],
@@ -1583,8 +1575,6 @@ const issues: DemoIssue[] = [
       title: 'Install Luma at the three pilot offices',
       status: 'todo',
       assignee: 'ben',
-      startWeek: 5,
-      endWeek: 5,
       dueDay: 39,
       priority: 'high',
       labels: ['pilot'],

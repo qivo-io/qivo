@@ -85,8 +85,11 @@ your account. The public demo does not keep this persistent cache.
 Your **Inbox** collects mentions in task descriptions and comments, plus
 updates to tasks you subscribe to. Updates include assignments, reviewer
 changes, status, priority, title, dates, remaining hours, pauses, moves,
-parent changes, archiving, restoring and comments. Your own actions do not
-notify you. Updates made through the REST API and MCP also generate messages.
+parent changes, archiving, restoring and comments. A task with subtasks
+takes its dates, status and remaining hours from them, so a subtask change
+that only shifts those values sends no message to the parent's subscribers.
+Your own actions do not notify you. Updates made through the REST API and MCP
+also generate messages.
 Only you can see your inbox. If you lose access to a task, its updates leave
 your inbox and you stop receiving new ones. They and your subscription return
 if you regain access.

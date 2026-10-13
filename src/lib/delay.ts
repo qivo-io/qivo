@@ -1,8 +1,10 @@
 /* Estimate completion from the effective owner's free capacity, then compare
    it with the due date and plan. Estimates start at their measurement week,
    assuming progress since then; unfinished work cannot finish before today.
-   Groups use their date envelope and descendant completion, not saved hours
-   or status. The store decides whether the project displays delay. */
+   Groups use their calculated dates and descendant completion, not saved
+   hours, dates or status. When some of a group's subtasks are outside the
+   view, its visible span can still prove it late, but cannot prove it on
+   track or behind. The store decides whether the project displays delay. */
 
 import { TODAY_WEEK } from './dates'
 import { committedByWeek, fitEndWeek, type LoadSpan, prepareLoadProjection } from './workload'
@@ -19,6 +21,7 @@ export type DelayIssue = {
   status: string // workflow status; 'done' has no delay status
   isGroup?: boolean // active children make the saved status and own hours dormant
   isDone?: boolean // effective completion, derived from descendant leaves for groups
+  partial?: boolean // a group with subtasks outside the view, which can only be shown as late
   owner: string | null // effective owner (IssueVM.owner): whose load and capacity it walks
   start: number | null // planned period, week indexes (end is the planned end)
   end: number | null
@@ -53,6 +56,9 @@ function delayWithProjection(
   }
   if (it.duePast || (it.dueWeek != null && fin != null && fin > it.dueWeek))
     return { status: 'late', fin }
+  // hidden subtasks may end later than the visible ones, so the visible span
+  // proves neither "on track" nor "behind"
+  if (it.isGroup && it.partial) return null
   if (fin == null) return null
   if (it.end != null && fin > it.end) return { status: 'behind', fin }
   if (it.end != null || it.dueWeek != null) return { status: 'ok', fin }

@@ -452,18 +452,34 @@ describe('marketing demo rebuild ownership', () => {
           root.name,
         ).toBeGreaterThan(projectTasks.length / 2)
       }
+      // The planned end the app shows. A group's is the latest end of its
+      // scheduled, unarchived leaves at any depth, never a stored date.
+      const endOf = (task: Doc<'issues'>): string | undefined => {
+        const kids = tasks.filter((c) => c.parent_id === task.id && c.archived_at === undefined)
+        if (!kids.length) return task.end_week ?? task.start_week
+        let end: string | undefined
+        for (const kid of kids) {
+          const kidEnd = endOf(kid)
+          if (kidEnd !== undefined && (end === undefined || kidEnd > end)) end = kidEnd
+        }
+        return end
+      }
       for (const task of tasks) {
         const children = tasks.filter((child) => child.parent_id === task.id)
+        const plannedEnd = endOf(task)
         if (children.length) {
           expect(children.length, task.title).toBeGreaterThanOrEqual(2)
           expect(children.length, task.title).toBeLessThanOrEqual(4)
           expect(task.remaining_hours).toBeUndefined()
+          expect(task.start_week, task.title).toBeUndefined()
+          expect(task.end_week, task.title).toBeUndefined()
+          expect(plannedEnd, task.title).toBeDefined()
         }
         if (task.archived_at !== undefined) expect(task.status).toBe('done')
-        if (task.end_week !== undefined && task.due_date !== undefined) {
+        if (plannedEnd !== undefined && task.due_date !== undefined) {
           // A scheduled week includes Friday, the latest planned working day.
-          const plannedEnd = Date.parse(task.end_week) + 4 * 86_400_000
-          expect(plannedEnd, task.title).toBeLessThanOrEqual(Date.parse(task.due_date))
+          const friday = Date.parse(plannedEnd) + 4 * 86_400_000
+          expect(friday, task.title).toBeLessThanOrEqual(Date.parse(task.due_date))
         }
       }
       for (const link of links.filter((link) => link.type === 'blocks')) {

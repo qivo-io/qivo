@@ -257,34 +257,10 @@ export function nearestWeek(s: string): number {
   return Math.round((d.getTime() - TIMELINE_START.getTime()) / (7 * DAY))
 }
 
-/* --- sub-issue date envelope -----------------------------------------------
-   Rule: an issue never starts after its earliest scheduled sub-issue, and
-   never ends before its latest one. `env` is that envelope — the span
-   [min earliest child start, max latest child end] over the DIRECT children
-   that have dates; null when no scheduled children exist. */
-
-export type DateEnvelope = { min: number; max: number }
-
-/** Widen (never shrink) an issue's dates so they span its envelope. */
-export function coverEnvelope(
-  start: number,
-  end: number,
-  env: DateEnvelope | null,
-): { start: number; end: number } {
-  if (!env) return { start, end }
-  return { start: Math.min(start, env.min), end: Math.max(end, env.max) }
-}
-
-/** Roadmap bar drag: window clamp plus the envelope pin.
+/** Roadmap bar drag, clamped to the window.
     · d is the dragged distance in whole weeks; os/oe the committed span.
-    · The window clamp keeps the bar intersecting [w0, w1] (a bar that leaves
-      the window would unmount mid-drag and lose the release commit).
-    · The envelope pin stops a parent bar from shrinking inside its
-      sub-issues. Its bounds are relaxed to admit the bar's own committed
-      position, so a bar that ALREADY violates the rule (legacy data) never
-      teleports — it can be dragged toward compliance but not further out.
-    · The pin is applied after the window clamp: when the two disagree the
-      envelope wins (the rule is an invariant, the window only a viewport). */
+    · The bar keeps intersecting [w0, w1]: a bar that leaves the window would
+      unmount mid-drag and lose the release commit. */
 export function clampBarDrag(
   mode: 'move' | 'start' | 'end',
   os: number,
@@ -292,7 +268,6 @@ export function clampBarDrag(
   d: number,
   w0: number,
   w1: number,
-  env: DateEnvelope | null,
 ): { start: number; end: number } {
   const len = oe - os
   let s = os
@@ -303,18 +278,11 @@ export function clampBarDrag(
     const sMin = Math.min(w0, w1 - len)
     const sMax = Math.max(w0, w1 - len)
     s = Math.max(sMin, Math.min(sMax, os + d))
-    if (env) {
-      const lo = Math.min(env.max - len, os)
-      const hi = Math.max(env.min, os)
-      s = Math.max(lo, Math.min(hi, s))
-    }
     en = s + len
   } else if (mode === 'start') {
     s = Math.max(w0, Math.min(Math.min(oe, w1), os + d))
-    if (env) s = Math.min(s, Math.max(env.min, os))
   } else {
     en = Math.min(w1, Math.max(Math.max(os, w0), oe + d))
-    if (env) en = Math.max(en, Math.min(env.max, oe))
   }
   return { start: s, end: en }
 }

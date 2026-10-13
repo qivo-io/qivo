@@ -2525,7 +2525,7 @@ function IssueDetail({
                               // the value is the recursive sum over the subtree
                               const rem = P.remainingOf(it)
                               return (
-                                <HoverTooltip content="Sum of subtask hours; parent tasks have no hours of their own">
+                                <HoverTooltip content="Sum of open subtask hours; parent tasks have no hours of their own">
                                   <span
                                     data-remaining-rollup
                                     style={{ color: rem != null ? undefined : 'var(--text-3)' }}
@@ -2642,10 +2642,13 @@ function IssueDetail({
                     may never end after the due date: a pick that would push End
                     past the due week is rejected with a toast rather than
                     silently clamped. Picking the roadmap window itself is a
-                    later, separate "Plan on roadmap" feature. */}
+                    later, separate "Plan on roadmap" feature. A group's dates
+                    come from its subtasks, so its pickers show them disabled. */}
                         {(() => {
                           const dueWeek = it.due ? P.isoToWeek(it.due) : null
                           const scheduled = it.start != null && it.end != null
+                          const group = P.isGroup(it)
+                          const planTip = group ? 'Dates come from subtasks' : roTip
                           const rejectPastDue = () => {
                             window.showToast?.("The end date can't be after the due date", 'error')
                           }
@@ -2682,9 +2685,9 @@ function IssueDetail({
                                   <DateSelect
                                     value={it.start}
                                     onChange={setStart}
-                                    clearable
-                                    disabled={!canLabel}
-                                    title={roTip}
+                                    clearable={!group}
+                                    disabled={!canLabel || group}
+                                    title={planTip}
                                   />
                                 </fieldset>
                                 <span className="task-plan-arrow">
@@ -2695,15 +2698,16 @@ function IssueDetail({
                                   <DateSelect
                                     value={it.end}
                                     onChange={setEnd}
-                                    clearable
-                                    disabled={!canLabel}
-                                    title={roTip}
+                                    clearable={!group}
+                                    disabled={!canLabel || group}
+                                    title={planTip}
                                   />
                                 </fieldset>
                               </div>
                               {/* plan in context: jumps to the roadmap with this issue
                           spotlit. An unscheduled issue gets a starter bar there
-                          (capped at the due week) to drag into place. */}
+                          (capped at the due week) to drag into place. A group
+                          is only shown there, read-only. */}
                               <div className="task-plan-actions">
                                 <Button
                                   type="button"
@@ -2713,7 +2717,7 @@ function IssueDetail({
                                   onClick={() => onPlanOnRoadmap?.(it.id)}
                                 >
                                   <Icon name="timeline" size={16} />
-                                  Plan on roadmap
+                                  {group ? 'Show on roadmap' : 'Plan on roadmap'}
                                 </Button>
                                 {scheduled && (
                                   <span className="text-xs text-text-2 font-mono">
