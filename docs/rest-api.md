@@ -378,7 +378,11 @@ always uses its signed-in user and never offers a reporter picker.
 The selected reporter must have access to the destination project. It may
 be inactive or an organization viewer because reporting is attribution rather
 than workload. A non-null `assignee_id` must name a row from the same route
-whose `assignable` flag is true. Thus neither field can point at a source-system-only identity or a Qivo
+whose `assignable` flag is true. On a subtask, a new assignee or reviewer
+must also be able to see every task above it; otherwise the request is a
+`400` with `a subtask can only be assigned to someone who can see every task
+above it` (or `… reviewed by …` for `reviewer_id`). `assignable` does not
+check this, because it describes the project, not the task. Thus neither field can point at a source-system-only identity or a Qivo
 user who cannot see the project. Malformed ids return `400`; unknown and
 foreign ids return `user "<uuid>" not found in your organization`, while a
 same-organization profile without project access returns

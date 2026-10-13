@@ -557,9 +557,7 @@ function Kanban({
     if (!patch) return null
     const person =
       'assignee' in patch ? patch.assignee : 'reviewer' in patch ? patch.reviewer : null
-    return person == null || P.issueAssigneesFor(task.project).some((u) => u.id === person)
-      ? patch
-      : null
+    return person == null || P.taskAssigneesFor(task).some((u) => u.id === person) ? patch : null
   }
   const moveCard = (statusId: string, id: string, target: CardDropTarget) => {
     const iid = id || dragId

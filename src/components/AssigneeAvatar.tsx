@@ -34,7 +34,7 @@ export function OwnerPickList({
 }) {
   const shown = field ?? issue.ownerField
   const current = issue[shown] || null
-  const choices = P.issueAssigneesFor(issue.project)
+  const choices = P.taskAssigneesFor(issue)
   const none = shown === 'reviewer' ? 'No reviewer' : 'Unassigned'
   const find = shown === 'reviewer' ? 'Find a reviewer' : 'Find an assignee'
   return (
@@ -55,7 +55,7 @@ export function OwnerPickList({
               // Recheck the live roster in case access changed while the menu was open.
               if (
                 !P.canWrite(live.project) ||
-                (user.id && !P.issueAssigneesFor(live.project).some((u) => u.id === user.id))
+                (user.id && !P.taskAssigneesFor(live).some((u) => u.id === user.id))
               )
                 return
               onClose(() => {

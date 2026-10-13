@@ -80,7 +80,9 @@ one organization; use the credential for the intended organization.
 Before writing `assignee_id`, `reviewer_id` or `reporter_id`, call
 `list_project_users` with the destination project, or REST
 `GET /v1/projects/{ref}/users`. Any returned profile may be the reporter; only
-`assignable: true` profiles may be assignees or reviewers.
+`assignable: true` profiles may be assignees or reviewers. On a subtask, the
+assignee or reviewer must also be able to see every task above it, which
+`assignable` does not show; Qivo refuses the write otherwise.
 The general `list_users` roster does not prove project access. Names, emails,
 and external-system IDs are not valid substitutes for Qivo profile UUIDs.
 
