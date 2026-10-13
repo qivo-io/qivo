@@ -9,6 +9,7 @@ import React, {
   lazy,
   Suspense,
   useEffect as useEffectID,
+  useLayoutEffect as useLayoutEffectID,
   useRef as useRefID,
   useState as useStateID,
 } from 'react'
@@ -58,7 +59,13 @@ import {
   type IssueVM,
   P,
 } from '../store/planner'
-import { ArchiveIssueModal, fmtSize, MoveIssueModal, useWindowDropGuard } from './Modals'
+import {
+  ArchiveIssueModal,
+  DeleteTaskModal,
+  fmtSize,
+  MoveIssueModal,
+  useWindowDropGuard,
+} from './Modals'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
 // when the modal opens; viewers render the plain Markdown component
@@ -1027,6 +1034,13 @@ function IssueDetail({
   const [confirmDel, setConfirmDel] = useStateID(false)
   const [moveOpen, setMoveOpen] = useStateID(false)
   const [archiveOpen, setArchiveOpen] = useStateID(false)
+  const [deleteOpen, setDeleteOpen] = useStateID(false)
+  // the task this window shows now, for work that finishes after a switch;
+  // updated once a render commits, never during one
+  const shownIssue = useRefID(issueId)
+  useLayoutEffectID(() => {
+    shownIssue.current = issueId
+  }, [issueId])
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
   // the description discloses only in the embedded pane; the floating window
   // pins it open, which is what discussion-first means there
@@ -1085,6 +1099,7 @@ function IssueDetail({
     setConfirmDel(false)
     setMoveOpen(false)
     setArchiveOpen(false)
+    setDeleteOpen(false)
     setActFilter('comments')
     setEditingComment(null)
     setDescOpen(!embedded)
@@ -2237,24 +2252,40 @@ function IssueDetail({
                             of the window's lines (deviation #65) — `danger`
                             already paints the entry red, which is the warning
                             the divider was repeating */}
-                          <MenuItem
-                            danger
-                            onClick={() => {
-                              if (!confirmDel) {
-                                setConfirmDel(true)
-                                return
-                              }
-                              const id = it.id
-                              const shown = it.key
-                              close()
-                              onClose()
-                              P.deleteIssue(id)
-                              window.showToast?.(`Deleted ${shown}`)
-                            }}
-                          >
-                            <Icon name="trash" size={14} />
-                            {confirmDel ? 'Confirm delete' : 'Delete task'}
-                          </MenuItem>
+                          {(() => {
+                            // a task with subtasks explains what happens to
+                            // them in a window first (DeleteTaskModal)
+                            const asks = it.children.length > 0 || it.hasHiddenSubtasks
+                            return (
+                              <MenuItem
+                                danger
+                                onClick={() => {
+                                  if (asks) {
+                                    close()
+                                    setDeleteOpen(true)
+                                    return
+                                  }
+                                  if (!confirmDel) {
+                                    setConfirmDel(true)
+                                    return
+                                  }
+                                  const id = it.id
+                                  const shown = it.key
+                                  close()
+                                  onClose()
+                                  P.deleteIssue(id)
+                                  window.showToast?.(`Deleted ${shown}`)
+                                }}
+                              >
+                                <Icon name="trash" size={14} />
+                                {asks
+                                  ? 'Delete task…'
+                                  : confirmDel
+                                    ? 'Confirm delete'
+                                    : 'Delete task'}
+                              </MenuItem>
+                            )
+                          })()}
                         </>
                       )}
                     </Popover>
@@ -3076,6 +3107,30 @@ function IssueDetail({
             window.showToast?.(
               `Moved ${P.issueById[key]?.key || key} to ${t ? t.name : 'the sub-project'}`,
             )
+          }}
+        />
+      )}
+      {it && deleteOpen && (
+        <DeleteTaskModal
+          issueId={it.id}
+          onClose={() => setDeleteOpen(false)}
+          focusAfterClose={taskActionsButton}
+          onDelete={async (subtasks) => {
+            const shown = it.key
+            const opened = issueId
+            // the window waits for the server, so a refusal leaves it open
+            const deleted = await P.deleteIssue(it.id, subtasks, true)
+            if (!deleted) return false
+            // the person may have gone to another task meanwhile: leave that one open
+            if (shownIssue.current === opened) {
+              setDeleteOpen(false)
+              onClose() // the task is gone — the window has nothing to show
+            }
+            const n = subtasks.length
+            window.showToast?.(
+              n ? `Deleted ${shown} and ${n} subtask${n === 1 ? '' : 's'}` : `Deleted ${shown}`,
+            )
+            return true
           }}
         />
       )}

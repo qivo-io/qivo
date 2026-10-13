@@ -62,6 +62,7 @@ function ModalShell({
   onSubmit,
   canSubmit,
   submitLabel,
+  danger = false,
   width = 500,
   footerLeft,
   footer,
@@ -75,6 +76,8 @@ function ModalShell({
   onSubmit?: () => void
   canSubmit?: boolean
   submitLabel?: ReactNodeM
+  /** paints the submit button red, for a submit that deletes */
+  danger?: boolean
   width?: number
   footerLeft?: ReactNodeM
   footer?: ReactNodeM
@@ -105,15 +108,17 @@ function ModalShell({
         style={{ width: mobile ? '100%' : width }}
         onOpenAutoFocus={(event) => {
           // Preserve the shell's chosen field instead of Radix's close-button
-          // fallback. data-autofocus takes precedence over document order.
+          // fallback. data-autofocus takes precedence over document order; a
+          // window with no field takes focus itself, so it never stays behind.
           event.preventDefault()
           const content = event.currentTarget as HTMLElement
           ;(
             content.querySelector<HTMLElement>('[data-autofocus]') ??
             content.querySelector<HTMLElement>(
               '[autofocus], input:not([type="hidden"]), textarea, select',
-            )
-          )?.focus()
+            ) ??
+            content
+          ).focus()
         }}
         onCloseAutoFocus={(event) => {
           event.preventDefault()
@@ -175,7 +180,7 @@ function ModalShell({
               </Button>
               <Button
                 type="button"
-                variant={canSubmit ? 'primary' : 'default'}
+                variant={canSubmit ? (danger ? 'destructive' : 'primary') : 'default'}
                 disabled={!canSubmit}
                 onClick={onSubmit}
                 className="font-semibold"
@@ -746,6 +751,9 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
   )
   const [keep, setKeep] = useStateM(canKeep)
   const [to, setTo] = useStateM(NOBODY)
+  // when the window last asked again: the click right after (a double click,
+  // a repeated Enter) must not apply to lists nobody has read yet
+  const askedAt = useRefM(0)
   if (!items.length) return null
   const names = people.map((id) => P.user(id)?.name || 'Someone')
   // one row per role, but a task held twice counts once
@@ -802,7 +810,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
     })
   }
   const submit = () => {
-    if (saving) return
+    if (saving || Date.now() - askedAt.current < 1000) return
     const now = read()
     // a task that moved, or a grant that now lands elsewhere, asks again
     const key = (list: Holder[], where: string[]) =>
@@ -831,6 +839,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
         finish(P.removeAccess(change, { to: null }, []))
         return
       }
+      askedAt.current = Date.now()
       setView(now)
       setChanged(true)
       if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
@@ -949,6 +958,198 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
             }}
           />
         </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+/* ---------- Deleting a task that has subtasks ----------
+   Shown instead of the two-click confirm when the task has subtasks. The
+   task always goes, with its comments, attachments and links. When I can
+   delete some of its subtasks, the window offers to delete them too
+   (selected first); a subtask I can't delete, or can't see, is not deleted
+   and becomes a top-level task with its own subtasks. Without deletable
+   subtasks it says why the subtasks stay. The list is taken when the window
+   opens; if it changed by the click, the window shows the new list and asks
+   again, so the subtasks deleted are the ones the person read. It stays open,
+   showing Deleting…, until the server answers; a refusal leaves it open on
+   the list as it is now. */
+// one step per level of subtasks, as literal classes for Tailwind
+const INDENT = ['', 'ml-4', 'ml-8', 'ml-12', 'ml-16']
+function DeleteTaskModal({
+  issueId,
+  onClose,
+  onDelete,
+  focusAfterClose,
+}: {
+  issueId: string
+  onClose: () => void
+  /** delete the task and these subtasks (handles); resolves whether the
+      server deleted them, and the caller closes the window when it did */
+  onDelete: (subtasks: string[]) => Promise<boolean>
+  focusAfterClose?: () => HTMLElement | null
+}) {
+  const [plan, setPlan] = useStateM(() => P.deletePlan(issueId))
+  const [changed, setChanged] = useStateM(false)
+  const [withSubtasks, setWithSubtasks] = useStateM(plan.deletable.length > 0)
+  const [saving, setSaving] = useStateM(false)
+  // when the window last asked again: the click right after (a double click,
+  // a repeated Enter) must not delete a list nobody has read yet
+  const askedAt = useRefM(0)
+  const it = P.issueById[issueId]
+  if (!it) return null
+  const n = plan.deletable.length
+  const viewOnly = plan.rows.some((r) => !r.deletable)
+  // why some subtasks are not deleted, in the words of the list. The hidden
+  // flag also covers subtasks in archived projects, which can't be opened.
+  const kept =
+    viewOnly && plan.hidden
+      ? "Subtasks marked View only, and any you can't open, aren't deleted."
+      : viewOnly
+        ? "Subtasks marked View only aren't deleted."
+        : plan.hidden
+          ? "Subtasks you can't open aren't deleted."
+          : ''
+  const deleteText = kept
+    ? `Deletes the ${n === 1 ? 'subtask' : `${n} subtasks`} you can edit. ${kept} They stay and become top-level tasks.`
+    : n === 1
+      ? 'Deletes the subtask as well.'
+      : `Deletes all ${n} subtasks as well.`
+  // ask again with the list as it is now
+  const reask = (now: typeof plan) => {
+    askedAt.current = Date.now()
+    setPlan(now)
+    setChanged(true)
+    if (!now.deletable.length) setWithSubtasks(false)
+  }
+  const finish = (subtasks: string[]) => {
+    setSaving(true)
+    void onDelete(subtasks).then((deleted) => {
+      if (deleted) return // the caller closes the window
+      setSaving(false)
+      const now = P.deletePlan(issueId)
+      if (key(now) !== key(plan)) reask(now)
+    })
+  }
+  const key = (p: typeof plan) =>
+    `${p.rows.map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.deletable}`).join()}|${p.hidden}`
+  const submit = () => {
+    if (saving || Date.now() - askedAt.current < 1000) return
+    const now = P.deletePlan(issueId)
+    // nothing under it any more: the task alone goes, as the person confirmed
+    if (!now.rows.length && !now.hidden) return finish([])
+    if (key(now) !== key(plan)) return reask(now)
+    finish(withSubtasks ? plan.deletable.map((t) => t.id) : [])
+  }
+  const option = (selected: boolean) =>
+    cn(
+      'flex flex-col rounded-lg border p-3',
+      selected ? '[border-color:var(--primary)] [background:var(--accent-soft)]' : 'border-border',
+    )
+  return (
+    <ModalShell
+      icon="warning"
+      title={`Delete ${it.key}?`}
+      onClose={saving ? () => {} : onClose}
+      onSubmit={submit}
+      canSubmit={!saving}
+      danger
+      focusAfterClose={focusAfterClose}
+      submitLabel={
+        saving
+          ? 'Deleting…'
+          : !n
+            ? 'Delete task'
+            : withSubtasks
+              ? `Delete ${n + 1} tasks`
+              : `Delete ${it.key}`
+      }
+      width={540}
+    >
+      <div data-delete-task className="flex flex-col gap-3">
+        <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
+          <b className="text-text-1">{it.title}</b> and its comments, attachments and links are
+          deleted. This can't be undone.
+        </p>
+        {!n && (
+          <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
+            You can't delete its subtasks, so they stay in their projects and become top-level
+            tasks.
+          </p>
+        )}
+        {changed && (
+          <p className="text-sm [color:var(--danger)]">
+            The subtasks changed while this window was open. Check them and choose again.
+          </p>
+        )}
+        <div className="max-h-56 overflow-auto rounded-lg border border-border">
+          {plan.rows.map((r) => (
+            <div
+              key={r.task.id}
+              className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm first:border-t-0"
+            >
+              <span
+                className={cn(
+                  'w-12 shrink-0 font-mono text-xs text-text-2',
+                  INDENT[Math.min(r.depth, INDENT.length - 1)],
+                )}
+              >
+                {r.task.key}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-text-1">{r.task.title}</span>
+              <span className="max-w-32 shrink-0 truncate text-xs text-text-2">
+                {P.projectLabelOf(r.task.project)}
+              </span>
+              <span className="w-16 shrink-0 text-right text-xs font-medium text-text-1">
+                {r.deletable ? '' : 'View only'}
+              </span>
+            </div>
+          ))}
+          {plan.hidden && (
+            <div className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm text-text-2 first:border-t-0">
+              <span className="w-12 shrink-0" />
+              <span className="min-w-0 flex-1">
+                {plan.rows.length ? 'More subtasks' : 'Subtasks'} in projects you can't open
+              </span>
+            </div>
+          )}
+        </div>
+        {n > 0 && (
+          <>
+            <div className={option(withSubtasks)}>
+              <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
+                <Input
+                  type="radio"
+                  name="delete-subtasks"
+                  checked={withSubtasks}
+                  onChange={() => setWithSubtasks(true)}
+                  className="mt-0.5"
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-base font-semibold text-text-1">Also delete subtasks</span>
+                  <span className="text-sm text-text-2">{deleteText}</span>
+                </span>
+              </Label>
+            </div>
+            <div className={option(!withSubtasks)}>
+              <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
+                <Input
+                  type="radio"
+                  name="delete-subtasks"
+                  checked={!withSubtasks}
+                  onChange={() => setWithSubtasks(false)}
+                  className="mt-0.5"
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-base font-semibold text-text-1">Keep the subtasks</span>
+                  <span className="text-sm text-text-2">
+                    They stay in their projects. Those directly under it become top-level tasks.
+                  </span>
+                </span>
+              </Label>
+            </div>
+          </>
+        )}
       </div>
     </ModalShell>
   )
@@ -1478,6 +1679,7 @@ export {
   AccessRemovalModal,
   ArchiveIssueModal,
   CreateOrgModal,
+  DeleteTaskModal,
   fmtSize,
   MilestoneModal,
   ModalShell,

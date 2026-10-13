@@ -303,24 +303,55 @@ export const unarchive = orgMutation({
  * P.deleteIssue. model/cascade owns the FK edges (children detached +
  * touched + notified, links/labels/subscriptions/comments/messages/
  * attachment rows AND bytes); activity rows survive — history outlives its
- * subjects. The 'deleted' row matches the old client's: no detail. */
+ * subjects. The 'deleted' row matches the old client's: no detail.
+ *
+ * `subtask_ids` names the subtasks the caller chose to delete with it, as
+ * the delete window listed them. Each must still be an active task under one
+ * being deleted here, in an active project the caller can edit; otherwise
+ * nothing is deleted (SUBTASKS_CHANGED), so the outcome is the one the
+ * window showed.
+ * They go deepest first, so every subtask left behind (archived, in a
+ * project the caller cannot edit or see, or not chosen) is detached from the
+ * task above it and becomes a top-level task, keeping its own subtasks. */
+export const SUBTASKS_CHANGED =
+  'the subtasks changed while the window was open; check them and delete again'
 export const deleteDeep = orgMutation({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
+  args: { id: v.string(), subtask_ids: v.optional(v.array(v.string())) },
+  handler: async (ctx, { id, subtask_ids }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
-    await deleteIssueDeep(ctx, { issue, actor: ctx.me, now })
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: ctx.me.id,
-      verb: 'deleted',
-      target_type: 'issue',
-      target_id: issue.id,
-      label: issue.title,
-      project_id: issue.project_id,
-      ts: now,
-    })
+    const chosen = new Set(subtask_ids ?? [])
+    const doomed: Doc<'issues'>[] = []
+    for (let i = -1; i < doomed.length && chosen.size; i++) {
+      const above = i < 0 ? issue : doomed[i]
+      const kids = await ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', above.id))
+        .collect()
+      for (const kid of kids) {
+        if (!chosen.has(kid.id) || kid.archived_at !== undefined) continue
+        // an archived project keeps its tasks and grants, but they are put away
+        if ((await byId(ctx, 'projects', kid.project_id))?.archived_at !== undefined) continue
+        if (!(await hasProjectLevel(ctx, ctx.me, kid.project_id, 'user'))) continue
+        chosen.delete(kid.id)
+        doomed.push(kid)
+      }
+    }
+    if (chosen.size) throw rule(SUBTASKS_CHANGED)
+    for (const gone of [...doomed.reverse(), issue]) {
+      await deleteIssueDeep(ctx, { issue: gone, actor: ctx.me, now })
+      await logActivity(ctx, {
+        org_id: gone.org_id,
+        actor_id: ctx.me.id,
+        verb: 'deleted',
+        target_type: 'issue',
+        target_id: gone.id,
+        label: gone.title,
+        project_id: gone.project_id,
+        ts: now,
+      })
+    }
     return null
   },
 })

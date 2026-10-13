@@ -2,7 +2,8 @@ Open a task to read its discussion and details. The breadcrumb links to its
 project and sub-project Boards. Click the title to edit it. The header also
 contains the subscription control ([Following tasks](./working-together.md#your-inbox)), permanent ID, **Close**, and an
 **…** menu with **Copy task ID**, **Copy link**, **Move to sub-project…**,
-**Archive** and **Delete**. Delete requires a second click to confirm.
+**Archive** and **Delete**. Delete requires a second click to confirm, or
+opens a window for a task with subtasks ([Deleting](#deleting)).
 
 Desktop shows discussion and details side by side when space allows, or
 stacked in a narrower window. On phones, **Activity / Details** tabs sit below
@@ -141,3 +142,21 @@ refuses the restore, and an organization admin can restore it instead.
 Restoring a Done task restarts its auto-archive clock where automatic
 archiving applies. Archived tasks do not appear in other views, and shared
 task links work again only after restoration.
+
+## Deleting
+
+**Delete** in the task's **…** menu removes the task permanently, with its
+comments, attachments and links. It needs edit access to the task's project.
+A task without subtasks asks for a second click.
+
+For a task with subtasks, a window lists them first. **Also delete subtasks**,
+selected first, deletes the listed subtasks you can edit, at any depth.
+Subtasks marked **View only**, in projects where you can read but not edit,
+are not deleted. Neither are subtasks in projects you cannot open, because
+you have no access or the project is archived, nor archived subtasks.
+**Keep the subtasks** deletes only the task. A subtask whose parent is
+deleted, and that is not deleted itself, stays in its project, becomes a
+top-level task and keeps its own subtasks. People following it are told its
+parent was removed. If the subtasks change while the window is open, it shows
+the new list and asks again. REST and MCP deletes keep the subtasks
+([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
