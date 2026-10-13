@@ -1034,6 +1034,9 @@ function IssueDetail({
   const [moveOpen, setMoveOpen] = useStateID(false)
   const [archiveOpen, setArchiveOpen] = useStateID(false)
   const [deleteOpen, setDeleteOpen] = useStateID(false)
+  // the task this window shows now, for work that finishes after a switch
+  const shownIssue = useRefID(issueId)
+  shownIssue.current = issueId
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
   // the description discloses only in the embedded pane; the floating window
   // pins it open, which is what discussion-first means there
@@ -3110,11 +3113,15 @@ function IssueDetail({
           focusAfterClose={taskActionsButton}
           onDelete={async (subtasks) => {
             const shown = it.key
+            const opened = issueId
             // the window waits for the server, so a refusal leaves it open
             const deleted = await P.deleteIssue(it.id, subtasks, true)
             if (!deleted) return false
-            setDeleteOpen(false)
-            onClose() // the task is gone — the window has nothing to show
+            // the person may have gone to another task meanwhile: leave that one open
+            if (shownIssue.current === opened) {
+              setDeleteOpen(false)
+              onClose() // the task is gone — the window has nothing to show
+            }
             const n = subtasks.length
             window.showToast?.(
               n ? `Deleted ${shown} and ${n} subtask${n === 1 ? '' : 's'}` : `Deleted ${shown}`,

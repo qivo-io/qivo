@@ -3145,9 +3145,6 @@ export const PLANNER = {
     // local FK-cascade mirror; the server (model/cascade) owns rows AND
     // attachment bytes in one transaction, so no reap-before-delete here
     const mirror = () => {
-      ;[...rows.attachments.values()].forEach((a) => {
-        if (gone.has(a.issue_id)) rows.attachments.delete(a.id)
-      })
       rows.issues.forEach((r) => {
         // the SET NULL cascade fires the touch server-side — mirror both
         if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
@@ -3155,12 +3152,9 @@ export const PLANNER = {
           r.updated_at = new Date().toISOString()
         }
       })
-      ;[...rows.links.values()].forEach((l) => {
-        if (gone.has(l.source_id) || gone.has(l.target_id)) rows.links.delete(l.id)
-      })
-      rows.issueLabels = rows.issueLabels.filter((il) => !gone.has(il.issue_id))
-      rows.issueSubs = rows.issueSubs.filter((s) => !gone.has(s.issue_id))
-      for (const issueId of gone) rows.issues.delete(issueId)
+      // the rows, and everything hung on them: links, labels, attachments,
+      // inbox messages, load and the watched comment thread
+      purgeIssueRows(gone)
       rebuild()
       emit()
     }
