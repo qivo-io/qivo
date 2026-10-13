@@ -15,8 +15,10 @@
  *   caller cannot see it, so no answer describes it. One accepted exception
  *   is restore: it is refused when it would change a parent the caller
  *   cannot edit, so its outcome can tell whether such a parent is archived
- *   or holds its own hours. Refusing every restore under such a parent would
- *   stop people restoring their own task;
+ *   or holds its own hours or review hand-off. It also tells a caller who
+ *   cannot see the parent that one exists: REST reads its parent_id as null
+ *   and MCP sends no parent. Refusing every restore under such a parent
+ *   would stop people restoring their own task;
  * - `rule` sentences come out of the model layer verbatim.
  * Write level for issues/links is has_project_level 'user' — the 0003
  * policies' 'member', renamed by 0013.

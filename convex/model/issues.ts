@@ -1144,10 +1144,12 @@ export async function moveIssueCore(
  * The reason-comment (early archive) is the mutation layer's job (comments
  * model, phase 5) — it must share this same `now`. */
 
+/* Both name who can finish the change: an organization admin edits every
+ * project, so neither refusal is a dead end. */
 export const ARCHIVE_CASCADE_RULE =
-  'archiving this task would change a subtask in a project you cannot edit'
+  'archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it'
 export const RESTORE_CASCADE_RULE =
-  'restoring this task would change a parent task in a project you cannot edit'
+  'restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it'
 
 /* Per-call cache of the actor's Edit access. A cascade changes only tasks in
  * projects the actor could edit directly; otherwise the whole write is

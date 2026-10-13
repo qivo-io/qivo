@@ -1181,6 +1181,92 @@ describe('links', () => {
   })
 })
 
+/* A grant on one sub-project shows its parent for navigation only. The
+ * parent's grants, team grants and milestones still arrive, because the
+ * sub-project inherits the grants and shows the milestones. A sibling
+ * sub-project, its tasks, grants and milestones never arrive. */
+describe('navigation-only parents', () => {
+  it('send the parent row and what the sub-project inherits, and nothing of its siblings', async () => {
+    const subOnly = await plantSeat(t, {
+      org_id: f.org.id,
+      auth_user_id: `seat_${uuid()}`,
+      email: `${uuid()}@testbed.test`,
+      org_role: 'user',
+    })
+    const siblingOnly = await plantSeat(t, {
+      org_id: f.org.id,
+      auth_user_id: `seat_${uuid()}`,
+      email: `${uuid()}@testbed.test`,
+      org_role: 'user',
+    })
+    const sibling = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const milestone = (project_id: string, name: string) => ({
+      id: uuid(),
+      project_id,
+      name,
+      week: '2026-01-05',
+      created_at: NOW,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subOnly.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_access', {
+        project_id: f.sub2.id,
+        profile_id: siblingOnly.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'viewer',
+      })
+      await ctx.db.insert('milestones', milestone(f.meta.id, 'Parent launch'))
+      await ctx.db.insert('milestones', milestone(f.sub2.id, 'Sibling demo'))
+      // every optional project field set, so the key list below is complete
+      const meta = await ctx.db.get(f.meta._id)
+      await ctx.db.patch(meta!._id, {
+        lead_id: f.user.id,
+        icon: 'rocket',
+        icon_color: '#335577',
+        review_hours: 3,
+        team_id: f.team.id,
+        description: 'Parent plans',
+      })
+    })
+
+    const snap = await snapFor(subOnly)
+    expect(snap.projects.map((p) => p.id).sort()).toEqual([f.meta.id, f.sub.id].sort())
+    // A new project field reaches navigation-only parents unless it is
+    // judged here first.
+    const meta = snap.projects.find((p) => p.id === f.meta.id)!
+    expect(Object.keys(meta).sort()).toEqual([
+      'created_at',
+      'description',
+      'icon',
+      'icon_color',
+      'id',
+      'key',
+      'lead_id',
+      'name',
+      'num',
+      'org_id',
+      'review_hours',
+      'sort_order',
+      'team_id',
+      'track_delay',
+      'type',
+    ])
+    expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
+    expect(new Set(snap.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
+    expect(snap.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)
+    expect(snap.teamAccess.some((g) => g.project_id === f.sub2.id)).toBe(false)
+    expect(snap.milestones.map((m) => m.name)).toEqual(['Parent launch'])
+  })
+})
+
 describe('hidden parents', () => {
   it('a task row names its parent only when the parent is in the working set', async () => {
     const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
