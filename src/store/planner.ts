@@ -1569,6 +1569,11 @@ export const NAME_MAX = 80
    for remaining) meaning clear — what every issue-editing surface hands
    updateIssue/addIssue. Status/priority stay derived from the schema row so
    a widened enum needs no edit here. */
+/** Someone working on a task, as a parent change or a move checks them. */
+export type Holder = { uid: string; task: IssueVM; role: 'assignee' | 'reviewer' }
+/** A holder who would lose access to `project` (edit access when `edit`). */
+export type AccessBlocker = Holder & { project: ProjectVM; edit: boolean }
+
 export type IssuePatch = Partial<{
   title: string
   description: string | null
@@ -2127,40 +2132,90 @@ export const PLANNER = {
      carries its context. This checks the tasks above that this view holds;
      one outside it (a hidden parent) is left to the server, which refuses
      with the same rule. */
-  seesTasksAbove: (x: IssueVM | string, uid: string): boolean => {
+  /* The first task above `it` (its parent, then up) in a project the person
+     cannot see, or null. A task outside this view is left to the server. */
+  unseenAbove: (x: IssueVM | string, uid: string): IssueVM | null => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     const seen = new Set<string>()
     for (let up = it?.parent ? PLANNER.issueById[it.parent] : null; up; ) {
       if (seen.has(up.id)) break
       seen.add(up.id)
-      if (!PLANNER.canSee(up.project, uid)) return false
+      if (!PLANNER.canSee(up.project, uid)) return up
       up = up.parent ? PLANNER.issueById[up.parent] : null
     }
-    return true
+    return null
   },
+  seesTasksAbove: (x: IssueVM | string, uid: string): boolean => !PLANNER.unseenAbove(x, uid),
   /* The people who may be picked as this task's assignee or reviewer: Edit
      access on its project, and sight of every task above it. */
   taskAssigneesFor: (it: IssueVM) =>
     PLANNER.issueAssigneesFor(it.project).filter((u) => PLANNER.seesTasksAbove(it, u.id)),
-  /* Whether everyone holding this task or a visible subtask could see `parentKey`
-     and every task above it, as the server requires before a parent is set. */
-  holdersSeeParent: (x: IssueVM | string, parentKey: string): boolean => {
-    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    const parent = PLANNER.issueById[parentKey]
-    if (!it || !parent) return true
-    const holders = new Set<string>()
-    const add = (t: IssueVM) => {
-      if (t.assignee) holders.add(t.assignee)
-      if (t.reviewer && !PLANNER.isGroup(t)) holders.add(t.reviewer)
+  /* Who works on `it` (when `self`) and on its visible subtasks at any depth:
+     each assignee, and each reviewer of a task without subtasks (a group's
+     reviewer is dormant). A switched-off person holds no new work, as on the
+     server. */
+  holdersOf: (it: IssueVM, self: boolean): Holder[] => {
+    const out: Holder[] = []
+    const add = (task: IssueVM) => {
+      for (const role of ['assignee', 'reviewer'] as const) {
+        const uid = task[role]
+        if (!uid || (role === 'reviewer' && PLANNER.isGroup(task))) continue
+        if (PLANNER.user(uid)?.active) out.push({ uid, task, role })
+      }
     }
-    add(it)
+    if (self) add(it)
     eachDescendant(it, add)
-    // a switched-off person holds no new work, as on the server
-    return [...holders].every(
-      (uid) =>
-        !PLANNER.user(uid)?.active ||
-        (PLANNER.canSee(parent.project, uid) && PLANNER.seesTasksAbove(parent, uid)),
-    )
+    return out
+  },
+  /* Who would lose sight of a task above their own if `it` got `parentKey`
+     as its parent, with the first project they cannot see. */
+  parentBlockers: (it: IssueVM, parentKey: string): AccessBlocker[] => {
+    const parent = PLANNER.issueById[parentKey]
+    if (!parent) return []
+    const out: AccessBlocker[] = []
+    for (const h of PLANNER.holdersOf(it, true)) {
+      const unseen = PLANNER.canSee(parent.project, h.uid)
+        ? PLANNER.unseenAbove(parent, h.uid)
+        : parent
+      const project = unseen && PLANNER.project(unseen.project)
+      if (project) out.push({ ...h, project, edit: false })
+    }
+    return out
+  },
+  holdersSeeParent: (it: IssueVM, parentKey: string): boolean =>
+    PLANNER.parentBlockers(it, parentKey).length === 0,
+  /* Who would lose access if `it` moved to `projectId`: its own assignee and
+     reviewer need edit access there, and the people on its subtasks need
+     sight of it, the same checks the server makes. */
+  moveBlockers: (it: IssueVM, projectId: string): AccessBlocker[] => {
+    const project = PLANNER.project(projectId)
+    if (!project) return []
+    // the task's own assignee and leaf reviewer must be able to hold it there,
+    // switched off or not; people on its subtasks only need to see it
+    const own: Holder[] = []
+    if (it.assignee) own.push({ uid: it.assignee, task: it, role: 'assignee' })
+    if (it.reviewer && !PLANNER.isGroup(it))
+      own.push({ uid: it.reviewer, task: it, role: 'reviewer' })
+    return [
+      ...own
+        .map((h) => ({ ...h, project, edit: true }))
+        .filter((b) => !PLANNER.canWrite(projectId, b.uid)),
+      ...PLANNER.holdersOf(it, false)
+        .map((h) => ({ ...h, project, edit: false }))
+        .filter((b) => !PLANNER.canSee(projectId, b.uid)),
+    ]
+  },
+  /* One sentence naming who blocks a change and how to clear it. */
+  blockerText: (b: AccessBlocker): string => {
+    const person = PLANNER.user(b.uid)
+    const who = person?.name || 'Someone'
+    const holds = b.role === 'reviewer' ? 'is reviewing' : 'is assigned to'
+    const lacks = b.edit ? "can't edit" : 'has no access to'
+    const fix = b.role === 'reviewer' ? 'choose another reviewer for' : 'reassign'
+    // giving access back does not help a switched-off person
+    if (person && !person.active)
+      return `${who} is switched off and ${holds} ${b.task.key}. ${fix.charAt(0).toUpperCase()}${fix.slice(1)} ${b.task.key} first.`
+    return `${who} ${holds} ${b.task.key} but ${lacks} ${PLANNER.projectLabel(b.project)}. Give them ${b.edit ? 'edit ' : ''}access or ${fix} ${b.task.key} first.`
   },
   /* my own organization's USERS — the roster, team membership, the settings
      page. Guests hold a seat in the org's `profiles` but are not part of it:
@@ -2611,19 +2666,22 @@ export const PLANNER = {
     // the server's reason, before anything is painted (a hidden parent is
     // left to the server)
     const it = PLANNER.issueById[id]
-    if (it && patch.parent && !PLANNER.holdersSeeParent(it, patch.parent)) {
-      toast(
-        'Everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it',
-        'error',
-      )
+    const stranded = it && patch.parent ? PLANNER.parentBlockers(it, patch.parent) : []
+    if (stranded.length) {
+      toast(PLANNER.blockerText(stranded[0]), 'error')
       return
     }
-    const blind = [patch.assignee, patch.reviewer].some(
-      (holder) => it && holder && !PLANNER.seesTasksAbove(it, holder),
-    )
-    if (blind) {
-      toast('A subtask can only go to someone who can see every task above it', 'error')
-      return
+    for (const holder of [patch.assignee, patch.reviewer]) {
+      const unseen = it && holder ? PLANNER.unseenAbove(it, holder) : null
+      const project = unseen && PLANNER.project(unseen.project)
+      if (it && holder && project) {
+        const who = PLANNER.user(holder)?.name || 'This person'
+        toast(
+          `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
+          'error',
+        )
+        return
+      }
     }
     // a group's dates are calculated from its subtasks, so drop a stray date
     // patch before the paint and the write (the UI offers none and the server

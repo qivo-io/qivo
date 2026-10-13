@@ -82,7 +82,8 @@ Setting a parent changes both tasks, so it needs edit access to the subtask
 and to the parent. The parent and subtask pickers offer only tasks you can
 edit, plus the current parent so you can remove it. Everyone assigned to or
 reviewing the task or its subtasks must be able to see the new parent and
-every task above it; otherwise Qivo refuses the parent. The assignee and
+every task above it; otherwise Qivo refuses the parent and names the person
+and the subtask to reassign. The assignee and
 reviewer pickers on a subtask offer only people who can see every task above
 it. Removing a parent needs edit access to the subtask only. Linking needs edit access to one of the two
 tasks and access to the other. If a task's parent is in an archived project or
@@ -99,7 +100,13 @@ activity and relationships.
 The assignee and, for a task without subtasks, reviewer must be active and
 have User or Lead access at the destination. Otherwise, clear or change them
 before moving. Moving a group clears an ineligible reviewer instead of
-refusing the move for that reviewer.
+refusing the move for that reviewer. Everyone assigned to or reviewing one of
+its subtasks, at any depth, needs at least View access at the destination, so
+they can still see the task. The dialog names each person who would lose
+access and keeps **Move** disabled until you give them access or reassign
+their subtask. A subtask in a project you cannot see is checked when you
+move, and Qivo refuses the move without naming the person. Switched-off
+people are not checked.
 
 ## Archiving
 

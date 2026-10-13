@@ -87,6 +87,8 @@ export const REVIEWER_SIGHT_RULE =
   'a subtask can only be reviewed by someone who can see every task above it'
 export const HOLDER_SIGHT_RULE =
   'everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it'
+export const MOVE_HOLDER_RULE =
+  'someone assigned to or reviewing a subtask of this task has no access to that sub-project'
 export const REVIEWER_ON_GROUP =
   'a task with subtasks has no reviewer of its own; set reviewers on its subtasks'
 
@@ -1170,6 +1172,14 @@ export async function moveIssueCore(
     } else if (!(await canHoldTaskIn(ctx, target, issue.reviewer_id))) {
       w.reviewer_id = undefined // ctx.db.patch unsets it
     }
+  }
+  // whoever works on a subtask must still see this task once it moves, so
+  // every active assignee or reviewer below it needs access to the
+  // destination (the sentence names no one: some subtasks may be hidden)
+  for (const holder of await holdersUnder(ctx, issue.id, { group: true })) {
+    const profile = await byId(ctx, 'profiles', holder)
+    if (!profile?.active) continue
+    if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
   }
   const source = await byId(ctx, 'projects', issue.project_id)
   const before = { ...issue }

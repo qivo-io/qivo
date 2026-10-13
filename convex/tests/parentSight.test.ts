@@ -11,6 +11,7 @@ import {
   ASSIGNEE_SIGHT_RULE,
   HOLDER_SIGHT_RULE,
   type IssuePatch,
+  MOVE_HOLDER_RULE,
   REVIEWER_SIGHT_RULE,
 } from '../model/issues'
 import {
@@ -110,6 +111,27 @@ describe('a subtask is held only by people who can see every task above it', () 
     await update(t, f, deep.id, { assignee_id: f.user.id })
     await update(t, f, top.id, { parent_id: epic.id })
     expect((await issueRow(t, top.id)).parent_id).toBe(epic.id)
+  })
+
+  it('refuses moving a task to a sub-project someone on its subtasks cannot access', async () => {
+    const t = newT()
+    const { f, base, hiddenSub } = await scene(t)
+    const move = (id: string, project_id: string) =>
+      as(t, f.admin).mutation(api.issues.move, { org_id: f.org.id, id, project_id })
+    const top = await plantIssue(t, { ...base, title: 'Top' })
+    const mid = await plantIssue(t, { ...base, parent_id: top.id })
+    const deep = await plantIssue(t, { ...base, parent_id: mid.id, reviewer_id: f.guest.id })
+    // the guest reviews a task two levels down and cannot see hiddenSub
+    const r = await expectRefusal(move(top.id, hiddenSub.id), 'rule')
+    expect(r.data.message).toBe(MOVE_HOLDER_RULE)
+    expect(await issueRow(t, top.id)).toEqual(top)
+    // a destination they can see is fine
+    await move(top.id, f.sub2.id)
+    expect((await issueRow(t, top.id)).project_id).toBe(f.sub2.id)
+    // and so is the move once nobody below is blind to it
+    await update(t, f, deep.id, { reviewer_id: f.user.id })
+    await move(top.id, hiddenSub.id)
+    expect((await issueRow(t, top.id)).project_id).toBe(hiddenSub.id)
   })
 
   it('ignores a switched-off holder', async () => {

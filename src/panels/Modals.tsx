@@ -638,7 +638,11 @@ function MoveIssueModal({
   // targetValid: a concurrently deleted target vanishes from the options but
   // would linger in state — the blank select must not leave Move enabled
   const targetValid = groups.some((g) => g.subs.some((sp) => sp.id === target))
-  const canMove = !!target && target !== it.project && targetValid
+  // whoever works on the task or its subtasks must keep access after the
+  // move; the dialog names them (subtasks outside this view are left to the
+  // server, whose refusal names no one)
+  const blockers = targetValid && target !== it.project ? P.moveBlockers(it, target) : []
+  const canMove = !!target && target !== it.project && targetValid && !blockers.length
   // no dirty-draft guard any more: the issue's key is org-scoped and
   // immutable (0050), so a move no longer remounts the editor — an open
   // description draft survives the move untouched
@@ -683,6 +687,23 @@ function MoveIssueModal({
           ))}
         </NativeSelect>
       </MField>
+      {blockers.length > 0 && (
+        <div
+          data-move-blockers
+          className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5] [margin-top:12px] flex flex-col gap-2"
+        >
+          {blockers.slice(0, 3).map((b) => (
+            <p key={`${b.task.id}:${b.role}`}>{P.blockerText(b)}</p>
+          ))}
+          {blockers.length > 3 && (
+            <p>
+              {blockers.length === 4
+                ? '1 more assignment is affected.'
+                : `${blockers.length - 3} more assignments are affected.`}
+            </p>
+          )}
+        </div>
+      )}
     </ModalShell>
   )
 }
