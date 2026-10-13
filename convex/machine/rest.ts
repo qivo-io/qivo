@@ -1,10 +1,9 @@
 /* The /v1/* REST surface. Contracts are BYTE-PRESERVED: every
  * refusal sentence, the response field lists (explicit nulls, never omitted
- * keys), the provenance string `via the REST API (<keyName>)`, and the
- * 403-vs-404 oracle asymmetry — the ONE deliberate existence oracle is POST
- * /v1/tasks' top-level `project` ref (a named project the key can't write
- * answers 403, admitting it exists); every sub_project ref and all GETs are
- * strict 404/400-no-oracle.
+ * keys) and the provenance string `via the REST API (<keyName>)`. No route is
+ * an existence oracle. A project, sub-project or task the key cannot read
+ * answers exactly like an unknown ref (404 on GETs, the 400 ref sentence on
+ * POST /v1/tasks). A readable project the key cannot write answers 403.
  *
  * Layering: the httpAction shell owns auth (ordinary routes accept agent keys;
  * webhook management also accepts personal and OAuth credentials), the per-call last_used_at stamp,
@@ -28,7 +27,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { httpAction, internalMutation, internalQuery } from '../_generated/server'
-import { hasProjectLevel, profileCanBeAssigned, profileCanSeeProject } from '../lib/access'
+import { canAccessProject, hasProjectLevel, profileCanBeAssigned } from '../lib/access'
 import {
   type AccessFlag,
   accessFlags,
@@ -93,9 +92,8 @@ const provenanceOf = (keyName: string): string => `via the REST API (${keyName})
 /* --------------------------------------------------------- shared plumbing */
 
 /* The org project catalogue + the caller's flags on every project — ONE
- * indexed by_org scan per request. Org-wide on purpose: this surface's one
- * oracle has to be able to resolve a ref visibility would hide. Nothing here
- * grants anything — every disclosed id runs past the flags. */
+ * indexed by_org scan per request. It resolves every ref in the org; nothing
+ * here grants anything, and every disclosed id runs past the flags. */
 type Access = {
   me: Caller
   cat: Catalogue
@@ -288,8 +286,10 @@ export const listProjectUsers = internalQuery({
     const project = findProjectRef(cat, a.ref)
     if (project === undefined || !readable(project.id)) throw notFound('project not found')
     const out: RestProjectUserJson[] = []
+    // A parent's people are those with standing on the parent itself; someone
+    // who sees it only through a sub-project is listed under that sub-project.
     for (const profile of await listUsersCore(ctx, me)) {
-      if (!(await profileCanSeeProject(ctx, profile, project))) continue
+      if (!(await canAccessProject(ctx, profile, project))) continue
       out.push({
         ...userJson(profile),
         assignable: await profileCanBeAssigned(ctx, profile, project),
@@ -397,7 +397,13 @@ export const listIssues = internalQuery({
     const names = await orgNames(ctx, me.org_id)
     return await Promise.all(
       rows.map((i) =>
-        issueOut(ctx, i, { surface: 'rest', project: cat.byUuid.get(i.project_id), names }),
+        issueOut(ctx, i, {
+          surface: 'rest',
+          me,
+          readable,
+          project: cat.byUuid.get(i.project_id),
+          names,
+        }),
       ),
     )
   },
@@ -410,24 +416,23 @@ export const getIssue = internalQuery({
     const me = await asMachineCaller(ctx, a.callerId)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    return await issueOut(ctx, issue, { surface: 'rest' })
+    return await issueOut(ctx, issue, { surface: 'rest', me })
   },
 })
 
-/* POST /v1/tasks — the order-sensitive dance (rest:440-471).
- * Step 3 is the surface's ONE deliberate existence oracle: a named top-level
- * project the key can't reach answers 403 before any pair validation. */
+/* POST /v1/tasks — the order-sensitive dance (rest:440-471). A project or
+ * sub_project the key cannot read answers exactly like an unknown ref, so no
+ * answer reveals that a hidden project exists. */
 export const createIssue = internalMutation({
   args: { callerId: v.string(), keyName: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<RestIssueJson> => {
     const { me, cat, readable, writable } = await withAccess(ctx, a.callerId)
     const b = needJson(a.body)
     const proj = findProjectRef(cat, typeof b.project === 'string' ? b.project : '')
-    if (proj === undefined) throw badRequest('project must name a project by uuid, number or key')
-    // authorize BEFORE validating the pair: an ungranted key gets the same
-    // 403 it always got, not a hierarchy oracle
-    if (!readable(proj.id) && !writable(proj.id)) {
-      throw forbidden('this agent has no write access to that project')
+    // A project the key cannot read reads like an unknown one (writable
+    // implies readable), before any pair validation.
+    if (proj === undefined || !readable(proj.id)) {
+      throw badRequest('project must name a project by uuid, number or key')
     }
     if ('archived' in b)
       throw badRequest('tasks are created active — archive with PATCH after creating')
@@ -436,19 +441,17 @@ export const createIssue = internalMutation({
     let target = proj
     if ('sub_project' in b && b.sub_project !== null) {
       const sp = findProjectRef(cat, typeof b.sub_project === 'string' ? b.sub_project : '')
-      // a sub_project outside the key's grants (and not proj's own child)
-      // stays indistinguishable from an unknown one — no oracle here
-      const known =
-        sp !== undefined &&
-        (readable(sp.id) || writable(sp.id) || sp.id === proj.id || sp.parent_id === proj.id)
-      if (!known || sp === undefined) throw badRequest(SUB_MUST_NAME)
+      // A sub_project the key cannot read, including a sibling under a parent
+      // it sees only for navigation, reads exactly like an unknown one (as on
+      // MCP).
+      if (sp === undefined || !readable(sp.id)) throw badRequest(SUB_MUST_NAME)
       pairRule(proj, sp)
       target = sp
     } else if (proj.type === 'meta') {
       metaNeedsSub(
         proj,
         cat.projects.filter((c) => c.parent_id === proj.id && c.archived_at === undefined),
-        writable,
+        { readable, writable },
       )
     }
     // a sub can be archived alone, so proj being live proves nothing
@@ -485,7 +488,7 @@ export const createIssue = internalMutation({
         paused: 'paused' in fields ? (fields.paused as boolean) : undefined,
       },
     })
-    return await issueOut(ctx, issue, { surface: 'rest', project: target })
+    return await issueOut(ctx, issue, { surface: 'rest', me, readable, project: target })
   },
 })
 
@@ -526,7 +529,7 @@ export const updateIssue = internalMutation({
     const toggles = archive !== undefined && archive !== (issue.archived_at !== undefined)
     if (Object.keys(fields).length === 0 && !toggles) {
       // archived matching the current state is a clean no-op, not an error
-      if ('archived' in b) return await issueOut(ctx, issue, { surface: 'rest' })
+      if ('archived' in b) return await issueOut(ctx, issue, { surface: 'rest', me })
       throw badRequest('no recognized fields to update')
     }
     // machine pre-check twin — fires on any non-null value; null clear passes
@@ -535,7 +538,7 @@ export const updateIssue = internalMutation({
     const machine: MachineUpdate = { provenance: provenanceOf(a.keyName) }
     if (toggles) machine.archive = archive
     const after = await updateIssueCore(ctx, { me, issue, patch: patchFrom(fields), now, machine })
-    return await issueOut(ctx, after, { surface: 'rest' })
+    return await issueOut(ctx, after, { surface: 'rest', me })
   },
 })
 

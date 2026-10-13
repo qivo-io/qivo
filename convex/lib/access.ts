@@ -114,10 +114,13 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
   )
 }
 
+/* includeNavigation: whether a parent visible only for navigation to one of
+ * its sub-projects counts (it then answers 'viewer'). */
 async function projectLevel(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   project: Doc<'projects'>,
+  includeNavigation = true,
 ): Promise<AccessLevel | null> {
   const root = await rootMetaOf(ctx, project)
   if (project.org_id !== me.org_id || root.org_id !== me.org_id) return null
@@ -126,7 +129,7 @@ async function projectLevel(
   if (project.id !== root.id) {
     const inherited = isProjectLead(me, root, root) ? 'user' : await directLevel(ctx, me, root)
     level = higherLevel(level, inherited)
-  } else if (level === null) {
+  } else if (level === null && includeNavigation) {
     // A child grant exposes its parent for navigation, without granting
     // permissions on siblings or control over the parent.
     const children = ctx.db
@@ -149,6 +152,18 @@ export async function canSeeProject(
   project: Doc<'projects'>,
 ): Promise<boolean> {
   return (await projectLevel(ctx, me, project)) !== null
+}
+
+/* Access for a reason other than read-only navigation, the per-profile
+ * counterpart of OrgProjectView.accessible. On a parent it means organization
+ * admin, its lead, or an individual or team grant on the parent itself. On a
+ * sub-project it equals canSeeProject. */
+export async function canAccessProject(
+  ctx: QueryCtx,
+  profile: Doc<'profiles'>,
+  project: Doc<'projects'>,
+): Promise<boolean> {
+  return (await projectLevel(ctx, profile, project, false)) !== null
 }
 
 // Recipient visibility uses the same permission rules, without an active-seat

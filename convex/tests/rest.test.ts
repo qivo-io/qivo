@@ -3,8 +3,8 @@
  * The live contract suite additionally checks deployed routing, CORS,
  * authentication envelopes and real concurrency.
  *
- * Byte-asserts every refusal sentence, the 403-vs-404 oracle asymmetry (the
- * ONE oracle is POST /v1/tasks' top-level project ref), the viewer-agent
+ * Byte-asserts every refusal sentence, that no ref is an existence oracle
+ * (unknown and unreadable refs answer identically), the viewer-agent
  * write refusals (0102, both viewer shapes), and the machine activity grammar
  * (verb + `— via the REST API (<keyName>)` suffix) including the folded
  * fields+archived single PATCH: one row write, one fan-out, one activity row,
@@ -928,28 +928,20 @@ describe('POST /v1/tasks', () => {
     )
   })
 
-  it('THE oracle: a named-but-unreachable top-level project answers 403 and admits it exists', async () => {
+  it('unknown and unreadable top-level projects read identically', async () => {
     const t = newT()
     const f = await machineOrg(t)
-    await refused(
-      t.mutation(internal.machine.rest.createIssue, {
-        callerId: f.agent.id,
-        keyName: KEY,
-        body: JSON.stringify({ project: 'SKNK', title: 'probe' }),
-      }),
-      'forbidden',
-      NO_WRITE,
-    )
-    // …but an unknown ref stays a 400
-    await refused(
-      t.mutation(internal.machine.rest.createIssue, {
-        callerId: f.agent.id,
-        keyName: KEY,
-        body: JSON.stringify({ project: 'NOPE', title: 'probe' }),
-      }),
-      'bad_request',
-      'project must name a project by uuid, number or key',
-    )
+    for (const project of ['SKNK', String(f.hidden.num), f.hidden.id, 'NOPE']) {
+      await refused(
+        t.mutation(internal.machine.rest.createIssue, {
+          callerId: f.agent.id,
+          keyName: KEY,
+          body: JSON.stringify({ project, title: 'probe' }),
+        }),
+        'bad_request',
+        'project must name a project by uuid, number or key',
+      )
+    }
   })
 
   it('sub_project refs are NEVER an oracle: unknown and unreachable read identically', async () => {
@@ -1736,5 +1728,169 @@ describe('/v1/tasks/{ref}/comments', () => {
       ref: row.id,
     })
     expect(listed).toEqual([]) // …but reading the thread is fine
+  })
+})
+
+/* A key granted one sub-project sees its parent only for navigation. The
+ * parent's other sub-projects, the people only they hold and the tasks in
+ * them must read as if they did not exist. */
+describe('a navigation-only parent hides its other sub-projects', () => {
+  const SUB_MUST_NAME = 'sub_project must name a sub-project by key, number or uuid'
+  const META_SENTENCE = (tail: string) =>
+    `TBED is a project — tasks live in its sub-projects; ${tail}`
+
+  async function subOnlyOrg(t: T) {
+    const f = await machineOrg(t)
+    const subOnly = await plantAgent(t, f.org.id, 'Sub only', 'user')
+    await grant(t, f.sub.id, subOnly.id, 'user')
+    return { f, subOnly }
+  }
+
+  const create = (t: T, callerId: string, body: Record<string, unknown>) =>
+    t.mutation(internal.machine.rest.createIssue, {
+      callerId,
+      keyName: KEY,
+      body: JSON.stringify({ title: 'probe', ...body }),
+    })
+
+  it('a sibling sub_project reads like an unknown one, live or archived', async () => {
+    const t = newT()
+    const { f, subOnly } = await subOnlyOrg(t)
+    const refs = ['PCB', String(f.sub2.num), f.sub2.id, f.sub2.id.toUpperCase(), 'NOPE', 'SKNK']
+    for (const sub_project of refs) {
+      await refused(
+        create(t, subOnly.id, { project: 'TBED', sub_project }),
+        'bad_request',
+        SUB_MUST_NAME,
+      )
+    }
+    await archiveProject(t, f.sub2)
+    for (const sub_project of ['PCB', String(f.sub2.num), f.sub2.id]) {
+      const r = await refused(
+        create(t, subOnly.id, { project: 'TBED', sub_project }),
+        'bad_request',
+        SUB_MUST_NAME,
+      )
+      expect(r.message).not.toContain('PCB')
+    }
+    // the readable sub-project still works, by pair or directly
+    await create(t, subOnly.id, { project: 'TBED', sub_project: 'FW' })
+    await create(t, subOnly.id, { project: 'FW' })
+  })
+
+  it('a bare parent offers and counts only sub-projects the key can read', async () => {
+    const t = newT()
+    const { f, subOnly } = await subOnlyOrg(t)
+    await refused(
+      create(t, subOnly.id, { project: 'TBED' }),
+      'bad_request',
+      META_SENTENCE('pass sub_project (one of: FW)'),
+    )
+    await archiveProject(t, f.sub)
+    await refused(
+      create(t, subOnly.id, { project: 'TBED' }),
+      'bad_request',
+      META_SENTENCE('it has no sub-projects yet — create one in the app first'),
+    )
+    const mcp = await expectRefusal(
+      t.mutation(internal.machine.mcp.createIssue, {
+        callerId: subOnly.id,
+        project: 'TBED',
+        title: 'p',
+      }),
+      'bad_request',
+    )
+    expect((mcp.data as Refusal).message).toBe(
+      META_SENTENCE('it has no sub-projects yet — create one in the app first'),
+    )
+  })
+
+  it("a parent's people are those with standing on the parent itself", async () => {
+    const t = newT()
+    const { f, subOnly } = await subOnlyOrg(t)
+    const sibOnly = await plantSeat(t, { org_id: f.org.id, name: 'Sibling only' })
+    await grant(t, f.sub2.id, sibOnly.id, 'user')
+    const teamSib = await plantSeat(t, { org_id: f.org.id, name: 'Team sibling' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: teamSib.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const rest = async (callerId: string, ref: string) =>
+      (await t.query(internal.machine.rest.listProjectUsers, { callerId, ref }))
+        .map((u) => u.id)
+        .sort()
+    const mcp = async (callerId: string, project: string) =>
+      (
+        JSON.parse(await t.query(internal.machine.mcp.listProjectUsers, { callerId, project })) as {
+          id: string
+        }[]
+      )
+        .map((u) => u.id)
+        .sort()
+    const parentPeople = [f.admin.id, f.user.id, f.guest.id, f.viewer.id, f.agent.id].sort()
+    for (const list of [rest, mcp]) {
+      expect(await list(subOnly.id, 'TBED')).toEqual(parentPeople)
+      expect(await list(f.agent.id, 'TBED')).toEqual(parentPeople)
+      // a sub-project's list still includes everyone who can access it
+      const fw = await list(subOnly.id, 'FW')
+      expect(fw).toContain(subOnly.id)
+      expect(fw).not.toContain(sibOnly.id)
+      expect(await list(f.agent.id, 'PCB')).toEqual(
+        expect.arrayContaining([sibOnly.id, teamSib.id]),
+      )
+    }
+    await refused(
+      t.query(internal.machine.rest.listProjectUsers, { callerId: subOnly.id, ref: 'PCB' }),
+      'not_found',
+      'project not found',
+    )
+  })
+
+  it('task output names a parent only when the key can read it', async () => {
+    const t = newT()
+    const { f, subOnly } = await subOnlyOrg(t)
+    const hiddenParent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: hiddenParent.id,
+    })
+    const visibleParent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const child2 = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: visibleParent.id,
+    })
+    const get = (callerId: string, ref: string) =>
+      t.query(internal.machine.rest.getIssue, { callerId, ref })
+    const one = await get(subOnly.id, child.id)
+    const listed = (await t.query(internal.machine.rest.listIssues, { callerId: subOnly.id })).find(
+      (i) => i.id === child.id,
+    )
+    const patched = await t.mutation(internal.machine.rest.updateIssue, {
+      callerId: subOnly.id,
+      keyName: KEY,
+      ref: child.id,
+      body: JSON.stringify({ title: 'Renamed' }),
+    })
+    for (const out of [one, listed, patched]) {
+      expect(out?.parent_id).toBeNull()
+      expect(JSON.stringify(out)).not.toContain(hiddenParent.id)
+    }
+    expect((await get(subOnly.id, child2.id)).parent_id).toBe(visibleParent.id)
+    expect((await get(f.agent.id, child.id)).parent_id).toBe(hiddenParent.id)
+    // is_group still reports a subtask the key cannot read, without naming it
+    const group = await get(subOnly.id, visibleParent.id)
+    expect(group.is_group).toBe(true)
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: visibleParent.id })
+    expect(JSON.stringify(await get(subOnly.id, visibleParent.id))).not.toContain(f.sub2.id)
   })
 })

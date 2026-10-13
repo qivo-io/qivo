@@ -26,9 +26,8 @@
  *     single non-array response.
  *
  * Every tool refusal is one isError result; existence questions all answer
- * the ONE sentence `… not found (or not visible to you)` — MCP admits
- * nothing anywhere (the 403-oracle is REST's, and only on POST /v1/tasks'
- * top-level project ref). PROVENANCE 'via MCP' signs every write's activity
+ * the ONE sentence `… not found (or not visible to you)`, so MCP, like REST,
+ * admits nothing about what the caller cannot read. PROVENANCE 'via MCP' signs every write's activity
  * row through the trusted machine-narration seam (model/issues.ts).
  *
  * The TOOLS literal below began as the captured tools/list response and is
@@ -45,7 +44,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { httpAction, internalMutation, internalQuery } from '../_generated/server'
-import { hasProjectLevel, profileCanBeAssigned, profileCanSeeProject } from '../lib/access'
+import { canAccessProject, hasProjectLevel, profileCanBeAssigned } from '../lib/access'
 import {
   accessFlags,
   asMachineCaller,
@@ -1070,8 +1069,10 @@ export const listProjectUsers = internalQuery({
       throw notFound(`project "${project}" not found (or not visible to you)`)
     }
     const out = []
+    // A parent's people are those with standing on the parent itself; someone
+    // who sees it only through a sub-project is listed under that sub-project.
     for (const profile of await listUsersCore(ctx, me)) {
-      if (!(await profileCanSeeProject(ctx, profile, target))) continue
+      if (!(await canAccessProject(ctx, profile, target))) continue
       out.push({
         ...userJson(profile),
         assignable: await profileCanBeAssigned(ctx, profile, target),
@@ -1262,7 +1263,7 @@ export const createIssue = internalMutation({
       // an archived sub takes no tasks, so it is not one to suggest, and
       // neither is one this credential could not write to
       const kids = await childProjectsCore(ctx, p.id, { includeArchived: false, readable })
-      metaNeedsSub(p, kids, writable)
+      metaNeedsSub(p, kids, { readable, writable })
     }
     // …and again on the resolved target: a sub can be archived on its own
     assertLive(target)

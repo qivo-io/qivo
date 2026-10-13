@@ -137,7 +137,7 @@ GET /v1/projects?archived=true  → the archived ones instead (0106)
 GET /v1/projects/{id|num|KEY}   → one project (uuid, per-org number, or key);
                                   an explicit ref resolves an archived
                                   project too
-GET /v1/projects/{ref}/users    → users who can see that project, for
+GET /v1/projects/{ref}/users    → users with access to that project, for
                                   reporter, assignee and reviewer
                                   selection
 ```
@@ -171,6 +171,13 @@ remains a valid reporter, but cannot be selected as assignee or reviewer.
 Unknown projects and projects the agent cannot read both return `404`. Use
 this route when mapping identities for an import instead of guessing from the
 organization-wide roster.
+
+On a parent project the rows are the people with access to the parent
+itself: organization admins, its lead and its individual or team grants. These
+are the people its **Project access** list shows in the app. Someone who
+reaches the parent only through one of its sub-projects is listed under that
+sub-project, not under the parent. An agent that sees the parent only through
+one of its sub-projects may still call this route for the parent.
 
 **Archived projects** (migration 0106) are projects that have been put away
 in the app. They keep every task, comment and attachment they had, but they
@@ -335,7 +342,13 @@ as `project` and one of **its** sub-projects as `sub_project`. Naming a
 project without a `sub_project` is a `400` listing the sub-projects the key
 can write to; a `sub_project` that belongs to a different project is a `400`
 — a task is never created under another project's sub-project (moving one
-later is the app's Move dialog, not the API):
+later is the app's Move dialog, not the API). A `project` or `sub_project`
+the agent cannot read answers exactly like an unknown one, with `400`
+`project must name a project by uuid, number or key` or `sub_project must name
+a sub-project by key, number or uuid`. This includes the other sub-projects of
+a parent the agent sees only because it can access one of its sub-projects,
+and the `400` for a project named without `sub_project` lists and counts only
+sub-projects the agent can read:
 
 ```json
 {
@@ -479,6 +492,10 @@ Task shape returned by all task endpoints:
   "created_at": "…", "updated_at": "…"
 }
 ```
+
+`parent_id` is the parent task's uuid when the agent can read the parent, and
+`null` otherwise, the same as for a top-level task. `is_group` still reports
+subtasks the agent cannot read, without identifying them.
 
 `DELETE` returns `{ "deleted": true, "id": "…", "key": "QN-3" }`.
 
