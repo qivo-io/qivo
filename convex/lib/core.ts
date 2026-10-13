@@ -487,6 +487,12 @@ async function parentIdFor(
     : null
 }
 
+/* How many tasks a single group read walks one by_parent read at a time
+ * before it reads the organization's tasks once instead (the read a REST
+ * list makes anyway). It keeps both Convex limits in reach: index ranges
+ * stay far below 4,096, and only a very large group pays a full read. */
+const SUBTREE_WALK_BUDGET = 1000
+
 /* On REST a group's plan weeks run from the earliest start to the latest
  * end of the scheduled leaves under it that the caller can read, at any
  * depth. A nested group counts only through its own leaves; its stored
@@ -497,9 +503,10 @@ async function parentIdFor(
  * do not count. A leaf without an end counts as its start week. Done leaves
  * count. Both weeks are null when no such leaf is scheduled. `readable` is
  * the caller's project flags when the surface already holds them. A list
- * passes `children`, the index built from the rows it already read; a single
- * task reads only its own subtree, one by_parent query per task it visits,
- * so the cost follows the group's size, never the organization's. */
+ * passes `children`, the index built from the rows it already read. A single
+ * task walks its own subtree, one by_parent read per task it visits, and
+ * reads the organization's tasks once instead when the subtree passes
+ * SUBTREE_WALK_BUDGET. */
 export async function groupWeeks(
   ctx: QueryCtx,
   group: Doc<'issues'>,
@@ -508,13 +515,6 @@ export async function groupWeeks(
   readable?: (projectId: string) => boolean,
   children?: ChildIndex,
 ): Promise<{ start_week: string | null; end_week: string | null }> {
-  const childrenOf = async (id: string): Promise<readonly Doc<'issues'>[]> =>
-    children !== undefined
-      ? (children.get(id) ?? [])
-      : await ctx.db
-          .query('issues')
-          .withIndex('by_parent', (q) => q.eq('parent_id', id))
-          .collect()
   const allArchived = group.archived_at !== undefined
   const liveProject = groupProject.archived_at === undefined
   // whether a subtask in this project may count, read once per project
@@ -531,39 +531,67 @@ export async function groupWeeks(
     }
     return known
   }
-  let start: string | undefined
-  let end: string | undefined
-  const seen = new Set<string>([group.id])
-  // each visited task's children are read once: they decide whether it is a
-  // group (hasSubtasks' rule, whoever can read them) and what the walk enters
-  let frontier: Doc<'issues'>[] = [group]
-  // assertParentChain bounds chains at 20 tasks, so the walk stops there
-  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
-    const next: Doc<'issues'>[] = []
-    for (const task of frontier) {
-      const kids = await childrenOf(task.id)
-      const isGroup = kids.some(
-        (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
-      )
-      if (task !== group && !isGroup) {
-        if (task.start_week === undefined) continue
-        const leafEnd = task.end_week ?? task.start_week
-        if (start === undefined || task.start_week < start) start = task.start_week
-        if (end === undefined || leafEnd > end) end = leafEnd
-        continue
+  /* One walk; null when it would read more than `budget` tasks' children.
+   * Each visited task's children are read once: they decide whether it is
+   * a group (hasSubtasks' rule, whoever can read them) and what the walk
+   * enters next. */
+  const walk = async (
+    childrenOf: (id: string) => Promise<readonly Doc<'issues'>[]>,
+    budget: number,
+  ): Promise<{ start_week: string | null; end_week: string | null } | null> => {
+    let start: string | undefined
+    let end: string | undefined
+    let reads = 0
+    const seen = new Set<string>([group.id])
+    let frontier: Doc<'issues'>[] = [group]
+    // assertParentChain bounds chains at 20 tasks, so the walk stops there
+    for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+      const next: Doc<'issues'>[] = []
+      for (const task of frontier) {
+        if (++reads > budget) return null
+        const kids = await childrenOf(task.id)
+        const isGroup = kids.some(
+          (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
+        )
+        if (task !== group && !isGroup) {
+          if (task.start_week === undefined) continue
+          const leafEnd = task.end_week ?? task.start_week
+          if (start === undefined || task.start_week < start) start = task.start_week
+          if (end === undefined || leafEnd > end) end = leafEnd
+          continue
+        }
+        // a group, the root included, counts only through its subtasks
+        for (const c of kids) {
+          if (seen.has(c.id)) continue
+          if (!allArchived && c.archived_at !== undefined) continue
+          if (!(await countsIn(c.project_id))) continue
+          seen.add(c.id)
+          next.push(c)
+        }
       }
-      // a group, the root included, counts only through its subtasks
-      for (const c of kids) {
-        if (seen.has(c.id)) continue
-        if (!allArchived && c.archived_at !== undefined) continue
-        if (!(await countsIn(c.project_id))) continue
-        seen.add(c.id)
-        next.push(c)
-      }
+      frontier = next
     }
-    frontier = next
+    return { start_week: start ?? null, end_week: end ?? null }
   }
-  return { start_week: start ?? null, end_week: end ?? null }
+  const NONE = { start_week: null, end_week: null }
+  // an index walk has no budget, so it always answers
+  const fromIndex = async (index: ChildIndex) =>
+    (await walk(async (id) => index.get(id) ?? [], Infinity)) ?? NONE
+  if (children !== undefined) return await fromIndex(children)
+  const bySubtree = await walk(
+    (id) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', id))
+        .collect(),
+    SUBTREE_WALK_BUDGET,
+  )
+  if (bySubtree !== null) return bySubtree
+  const rows = await ctx.db
+    .query('issues')
+    .withIndex('by_org', (q) => q.eq('org_id', group.org_id))
+    .collect()
+  return await fromIndex(childIndexOf(rows))
 }
 
 type RestOut = { surface: 'rest'; me: Caller; readable?: (projectId: string) => boolean }
