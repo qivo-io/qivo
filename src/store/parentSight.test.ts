@@ -143,4 +143,40 @@ describe('assignees must see the tasks above a subtask', () => {
     P.updateIssue(vm('free').id, { parent: vm('epic').id })
     expect(requests.map((r) => r.name)).toEqual(['issues:update'])
   })
+
+  it('names who would lose access, for a move and for a new parent', async () => {
+    await load((snap) => {
+      // free's subtask belongs to workOnly, who cannot see Plans
+      const free = snap.issues.find((i) => i.id === 'free')!
+      free.assignee_id = undefined
+      snap.issues.push({
+        ...free,
+        id: 'kid',
+        num: 9,
+        title: 'kid',
+        parent_id: 'free',
+        assignee_id: 'workOnly',
+      })
+    })
+    const plans = P.projects.find((p) => p.name === 'Plans')!
+    const moving = P.moveBlockers(vm('free'), plans.id)
+    expect(moving.map((b) => [b.uid, b.task.uuid, b.role, b.edit])).toEqual([
+      ['workOnly', 'kid', 'assignee', false],
+    ])
+    expect(P.blockerText(moving[0])).toBe(
+      `Work only is assigned to ${vm('kid').key} but has no access to ${P.projectLabel(plans)}. Give them access or reassign ${vm('kid').key} first.`,
+    )
+    // the task's own assignee needs edit access at the destination
+    P.updateIssue(vm('free').id, { assignee: 'workOnly' })
+    expect(P.moveBlockers(vm('free'), plans.id).map((b) => [b.task.uuid, b.edit])).toEqual([
+      ['free', true],
+      ['kid', false],
+    ])
+    // a new parent in Plans is refused with the same named sentence
+    P.updateIssue(vm('free').id, { parent: vm('epic').id })
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      P.blockerText(P.parentBlockers(vm('free'), vm('epic').id)[0]),
+      'error',
+    )
+  })
 })
