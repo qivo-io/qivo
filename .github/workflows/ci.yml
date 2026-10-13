@@ -21,7 +21,10 @@ jobs:
 
     # Hermetic: no deployment secrets, live contract reset or browser drives.
     steps:
+      # Dependency install scripts run in this job, and no step needs the token.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:

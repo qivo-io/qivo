@@ -4,7 +4,8 @@ name: Desktop test build
 # It never creates or changes a GitHub Release and builds no update feed into the
 # installers, so test installs never update themselves. It holds no signing
 # credentials, because it can build any ref, including code that is not reviewed.
-# Desktop installers are not published yet.
+# Desktop installers are not published yet. Artifacts are kept for 7 days, the
+# repository's limit.
 on:
   workflow_dispatch:
     inputs:
@@ -55,7 +56,7 @@ jobs:
         with:
           name: qivo-desktop-windows-unsigned
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
           path: desktop/release/*.exe
 
   linux:
@@ -92,7 +93,7 @@ jobs:
         with:
           name: qivo-desktop-linux
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
           path: |
             desktop/release/*.deb
             desktop/release/*.rpm

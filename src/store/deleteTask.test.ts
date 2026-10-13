@@ -163,7 +163,7 @@ describe('deleting a task that has subtasks', () => {
 
   it('waits for the server when asked, and changes nothing on a refusal', async () => {
     await load([])
-    let accept = (_: null) => {}
+    let accept: (value: null) => void = () => {}
     answer = new Promise((resolve) => {
       accept = resolve
     })
