@@ -878,6 +878,53 @@ describe('activity', () => {
     }
   })
 
+  it('older task archive rows lose their subtask count for members, not admins', async () => {
+    await t.run(async (ctx) => {
+      for (const row of [
+        ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          verb: 'archived',
+          detail: 'with 3 subtasks',
+        }),
+        ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          verb: 'archived',
+          detail: 'with 1 subtask',
+        }),
+        // a project archive keeps its count; a different verb is not touched
+        ev({
+          project_id: f.meta.id,
+          target_type: 'project',
+          target_id: f.meta.id,
+          verb: 'archived',
+          detail: 'with 1 sub-project',
+        }),
+        ev({
+          project_id: f.sub.id,
+          target_id: issueVis.id,
+          verb: 'moved',
+          detail: 'with 3 subtasks',
+        }),
+      ])
+        await ctx.db.insert('activity_events', row)
+    })
+    const details = async (p: Doc<'profiles'>) =>
+      (await snapFor(p)).activity.map((a) => `${a.verb}|${a.detail ?? ''}`).sort()
+    expect(await details(f.admin)).toEqual(
+      [
+        'archived|with 1 sub-project',
+        'archived|with 1 subtask',
+        'archived|with 3 subtasks',
+        'moved|with 3 subtasks',
+      ].sort(),
+    )
+    expect(await details(f.guest)).toEqual(
+      ['archived|', 'archived|', 'archived|with 1 sub-project', 'moved|with 3 subtasks'].sort(),
+    )
+  })
+
   it('caps at 500 across the blend, ts desc — the oldest rows fall out', async () => {
     const base = Date.parse(NOW)
     await t.run(async (ctx) => {

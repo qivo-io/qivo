@@ -75,6 +75,12 @@ groups omit status, and unowned tasks omit the portrait.
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
 
+Setting a parent changes both tasks, so it needs edit access to the subtask
+and to the parent. The parent and subtask pickers offer only tasks you can
+edit, plus the current parent so you can remove it. Removing a parent needs
+edit access to the subtask only. Linking needs edit access to one of the two
+tasks and access to the other.
+
 ## Moving a task
 
 Choose **Move to sub-project…** to move within the task's organization to a
@@ -101,7 +107,9 @@ archive on a later sweep when its original Done age meets the threshold;
 a saved To Do task returns to To Do.
 
 **Manual archiving** is available in the task's **…** menu with edit access.
-It includes the whole subtask tree. If all descendant work is Done, it archives
+It includes the whole subtask tree, including subtasks in other projects. If
+an active subtask is in a project you cannot edit, Qivo refuses the archive.
+If all descendant work is Done, it archives
 immediately. Otherwise, the dialog lists the affected tasks and requires a
 reason, which becomes a task comment. REST and MCP archiving do not collect
 a reason ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
@@ -111,6 +119,7 @@ page works with one project at a time, optionally narrowed to a sub-project.
 Desktop offers a multi-word search; phones omit it and ignore its text query.
 
 **Restore** returns a task to its Board and restores archived parents when
-needed. Restoring a Done task restarts its auto-archive clock where automatic
+needed. If that would change a parent task in a project you cannot edit, Qivo
+refuses the restore. Restoring a Done task restarts its auto-archive clock where automatic
 archiving applies. Archived tasks do not appear in other views, and shared
 task links work again only after restoration.

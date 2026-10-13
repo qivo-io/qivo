@@ -638,7 +638,7 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
     )
   })
 
-  it('addLink as guest: foreign == unknown (org rule); a hidden same-org endpoint reads the write fence', async () => {
+  it('addLink as guest: foreign == unknown == hidden (org rule); two visible read-only ends read the write fence', async () => {
     const link = (target: string) =>
       as(t, f.guest).mutation(api.issues.addLink, {
         org_id: f.org.id,
@@ -656,16 +656,28 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
       code: 'rule',
       message: 'linked tasks must belong to the same organization',
     })
-    // the endpoint the caller cannot SEE in their own org fails the
-    // member-plus-sight check (0008:12-21) — a resolvable target reads the
-    // fixed write fence, not the org sentence (issues.ts refusal posture)
-    await expectRefusal(link(hiddenIssue.id), 'forbidden', /^no write access to these tasks$/)
-    await expectRefusal(
+    // an endpoint the caller cannot SEE in their own org is only referenced,
+    // so it answers exactly like a missing one, in either position
+    expect(await capture(link(hiddenIssue.id), hiddenIssue.id)).toEqual(unknown)
+    const reversed = await capture(
       as(t, f.guest).mutation(api.issues.addLink, {
         org_id: f.org.id,
         id: uuid(),
         source_id: hiddenIssue.id,
         target_id: subIssue.id,
+        type: 'relates',
+      }),
+      hiddenIssue.id,
+    )
+    expect(reversed).toEqual(unknown)
+    // two visible ends the caller can only read keep the write fence
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await expectRefusal(
+      as(t, f.viewer).mutation(api.issues.addLink, {
+        org_id: f.org.id,
+        id: uuid(),
+        source_id: subIssue.id,
+        target_id: other.id,
         type: 'relates',
       }),
       'forbidden',
@@ -790,6 +802,54 @@ describe('0056 §D — guest write-probes into the hidden pair of their own org'
     unknown = await capture(thread(unknownRef), unknownRef)
     expect(hidden).toEqual(unknown)
     expect(hidden).toEqual({ resolved: false, code: 'not_found', message: 'task not found' })
+  })
+
+  it('move: every destination the guest cannot write answers like a nonexistent one', async () => {
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: f.guest.id,
+    })
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const archivedSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+      archived_at: NOW,
+    })
+    const readOnlySub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: readOnlySub.id,
+        profile_id: f.guest.id,
+        level: 'viewer',
+      }),
+    )
+    const move = (project_id: string) =>
+      as(t, f.guest).mutation(api.issues.move, { org_id: f.org.id, id: task.id, project_id })
+    const unknownRef = uuid()
+    const unknown = await capture(move(unknownRef), unknownRef)
+    expect(unknown).toEqual({
+      resolved: false,
+      code: 'forbidden',
+      message: 'no write access to this project',
+    })
+    // a hidden meta, a hidden sub where the assignee is ineligible, a hidden
+    // archived sub, another organization's project and a read-only sub
+    for (const dest of [f.hidden, hiddenSub, archivedSub, f.otherProject, readOnlySub]) {
+      expect(await capture(move(dest.id), dest.id)).toEqual(unknown)
+    }
+    expect((await t.run((ctx) => ctx.db.get(task._id)))?.project_id).toBe(f.sub.id)
+    await move(f.sub2.id)
+    expect((await t.run((ctx) => ctx.db.get(task._id)))?.project_id).toBe(f.sub2.id)
   })
 
   /* The level-fenced doors resolve the row first (org fence only), then

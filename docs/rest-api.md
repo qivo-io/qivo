@@ -464,7 +464,11 @@ so it never gets one. The review time is not exposed on the project routes.
 PATCH also accepts `archived: true | false` (0070 — the Active/Archived axis,
 orthogonal to `status`). Archiving a task archives its subtasks with it;
 restoring one also restores its parent chain (both server-side cascades).
-Archived tasks disappear from the default list (`?archived=true` finds
+Both reach subtasks and parents in other projects, so the agent needs User
+access on every project they change. Otherwise the PATCH is a `400` with
+`archiving this task would change a subtask in a project you cannot edit` or
+`restoring this task would change a parent task in a project you cannot
+edit`, and nothing changes. Archived tasks disappear from the default list (`?archived=true` finds
 them), stop counting as workload, and in the app leave every normal view for
 the Archive page. Where the legacy per-team setting applies, restoring a
 still-`done` task **restarts its auto-archive clock** (0071), so a restore

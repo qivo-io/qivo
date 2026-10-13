@@ -263,6 +263,23 @@ const relMapID = {
   relates: { label: 'Relates to', glyph: 'arrowLeftRight' },
 }
 
+/* Whether a visible task in this one's subtree sits in a project the person
+ * cannot edit. Archiving would change it, so the server refuses. */
+function hasReadOnlySubtask(root: IssueVM): boolean {
+  const seen = new Set<string>()
+  const stack = [...(root.children || [])]
+  while (stack.length) {
+    const id = stack.pop() as string
+    if (seen.has(id)) continue
+    seen.add(id)
+    const child = P.issueById[id]
+    if (!child) continue
+    if (!P.canWrite(child.project)) return true
+    stack.push(...(child.children || []))
+  }
+  return false
+}
+
 function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }) {
   const [arm, setArm] = useStateID(false)
   useEffectID(() => {
@@ -1502,7 +1519,9 @@ function IssueDetail({
 
   // picker candidates (cycle-safe), same sub-project first; only while open.
   // Every relation is same-ORGANIZATION by DB guard (parents 0057, links
-  // 0078), so the blended snapshot is narrowed before it is offered.
+  // 0078), so the blended snapshot is narrowed before it is offered. Setting
+  // a parent changes both tasks, so the server needs edit access to each, and
+  // only tasks in editable projects are offered as parents or subtasks.
   const sameOrg = (x) => x.org === it.org
   const sameProjFirst = (a, b) =>
     Number(b.project === it.project) - Number(a.project === it.project)
@@ -1512,7 +1531,7 @@ function IssueDetail({
     // current children show a check and toggle off
     const chainSet = new Set(chain)
     subCandidates = P.issues
-      .filter((x) => sameOrg(x) && x.id !== it.id && !chainSet.has(x.id))
+      .filter((x) => sameOrg(x) && x.id !== it.id && !chainSet.has(x.id) && P.canWrite(x.project))
       .sort(sameProjFirst)
   }
   let parentCandidates = []
@@ -1528,8 +1547,15 @@ function IssueDetail({
         stack.push(k)
       })
     }
+    // the current parent stays listed so it can be cleared
     parentCandidates = P.issues
-      .filter((x) => sameOrg(x) && x.id !== it.id && !desc.has(x.id))
+      .filter(
+        (x) =>
+          sameOrg(x) &&
+          x.id !== it.id &&
+          !desc.has(x.id) &&
+          (x.id === it.parent || P.canWrite(x.project)),
+      )
       .sort(sameProjFirst)
   }
   let linkCandidates = []
@@ -2177,7 +2203,9 @@ function IssueDetail({
                             unfinished work never leaves the board silently. */}
                           {canLabel &&
                             (() => {
-                              const needsWhy = !P.isDone(it)
+                              // a visible subtask the person cannot edit makes
+                              // the server refuse, so the dialog explains it
+                              const needsWhy = !P.isDone(it) || hasReadOnlySubtask(it)
                               return (
                                 <MenuItem
                                   onClick={() => {
@@ -2782,7 +2810,8 @@ function IssueDetail({
                             size="icon"
                             className="task-heading-action"
                             aria-label={it.parent ? 'Change parent' : 'Set parent'}
-                            title={it.parent ? 'Change parent' : 'Set parent'}
+                            title={roTip || (it.parent ? 'Change parent' : 'Set parent')}
+                            disabled={!canLabel}
                             onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
                           >
                             <Icon name={it.parent ? 'pen' : 'plus'} size={16} />
@@ -2817,7 +2846,8 @@ function IssueDetail({
                             size="icon"
                             className="task-heading-action"
                             aria-label="Add subtask"
-                            title="Add subtask"
+                            title={roTip || 'Add subtask'}
+                            disabled={!canLabel}
                             onClick={() => openPickerUnder(subSecRef, setSubAnchor, 340)}
                           >
                             <Icon name="plus" size={16} />

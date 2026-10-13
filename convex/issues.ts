@@ -10,6 +10,13 @@
  *   (the machine surface's sentence) — never a role/permission reveal;
  * - insufficient project level on a resolvable target reads `forbidden`
  *   (the RLS 0-row successor — the client shows its fixed permission toast);
+ * - a task or project the caller only REFERENCES (a parent, a link's other
+ *   end, a move's destination) answers exactly like a missing one when the
+ *   caller cannot see it, so no answer describes it. One accepted exception
+ *   is restore: it is refused when it would change a parent the caller
+ *   cannot edit, so its outcome can tell whether such a parent is archived
+ *   or holds its own hours. Refusing every restore under such a parent would
+ *   stop people restoring their own task;
  * - `rule` sentences come out of the model layer verbatim.
  * Write level for issues/links is has_project_level 'user' — the 0003
  * policies' 'member', renamed by 0013.
@@ -194,18 +201,18 @@ export const update = orgMutation({
 
 /* ------------------------------------------------------------------- move
  * P.moveIssue: browser-only (the machine surfaces deliberately refuse moves).
- * 'member' on BOTH ends. The target-level check runs AFTER the model's move
- * guards, reproducing SQL's order (BEFORE trigger raised its sentences, THEN
- * the RLS WITH CHECK evaluated the new row) — a throw rolls the whole
- * mutation back, so nothing the core wrote survives. */
+ * 'member' on BOTH ends, checked before moveIssueCore's guards as create
+ * checks its project. A destination the caller cannot write answers 'no
+ * write access to this project' whether it is missing, hidden, read-only or
+ * in another organization, so no guard describes it. */
 export const move = orgMutation({
   args: { id: v.string(), project_id: v.string() },
   handler: async (ctx, { id, project_id }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
+    if (project_id !== issue.project_id) await assertWritable(ctx, project_id)
     const after = await moveIssueCore(ctx, { me: ctx.me, issue, project_id, now })
-    if (after.project_id !== issue.project_id) await assertWritable(ctx, project_id)
     return pub(after)
   },
 })
@@ -223,7 +230,7 @@ export const archive = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const wasActive = issue.archived_at === undefined
-    const { issue: after, descendants } = await archiveIssueCore(ctx, { me: ctx.me, issue, now })
+    const after = await archiveIssueCore(ctx, { me: ctx.me, issue, now })
     const text = (reason ?? '').trim()
     if (wasActive && text !== '') {
       const commentDoc = await ctx.db.insert('comments', {
@@ -236,7 +243,7 @@ export const archive = orgMutation({
       const comment = (await ctx.db.get(commentDoc)) as Doc<'comments'>
       await notifyCommentInsert(ctx, { comment, issue: after, actor: ctx.me, now })
     }
-    return { issue: pub(after), descendants }
+    return { issue: pub(after) }
   },
 })
 
@@ -286,7 +293,7 @@ export const deleteDeep = orgMutation({
  * stored enum, never 'blocked_by'. pair_key enforces at-most-one-link-per-
  * pair (the (least, greatest) unique index's successor). Access (0008:12-21):
  * insert needs member level on EITHER endpoint plus sight of the other;
- * delete needs member level on either endpoint. A foreign or missing
+ * delete needs member level on either endpoint. A foreign, missing or hidden
  * endpoint reads the trigger's own org sentence — never an existence oracle. */
 
 const pairKey = (a: string, b: string): string => (a < b ? `${a}:${b}` : `${b}:${a}`)
@@ -307,9 +314,9 @@ export const addLink = orgMutation({
     const writeTarget = await hasProjectLevel(ctx, ctx.me, target.project_id, 'user')
     const seeSource = sourceProject !== null && (await canSeeProject(ctx, ctx.me, sourceProject))
     const seeTarget = targetProject !== null && (await canSeeProject(ctx, ctx.me, targetProject))
-    if (!((writeSource && seeTarget) || (writeTarget && seeSource))) {
-      throw forbidden('no write access to these tasks')
-    }
+    // an endpoint the caller cannot see answers like a missing one
+    if (!seeSource || !seeTarget) throw rule('linked tasks must belong to the same organization')
+    if (!writeSource && !writeTarget) throw forbidden('no write access to these tasks')
     await insertUnique(
       ctx,
       'issue_links',
