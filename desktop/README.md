@@ -89,7 +89,7 @@ The Linux package command is intentionally build-only.
 
 Desktop installers are not published yet. Run **Desktop test build** in GitHub
 Actions with a branch, tag or commit to get Windows and Linux installers as
-workflow artifacts, kept for 14 days. The workflow never creates or changes a
+workflow artifacts, kept for 7 days. The workflow never creates or changes a
 GitHub Release and sets no update feed, so test installs never update
 themselves. The installers are unsigned, so Windows SmartScreen warns about
 them. The workflow can build any ref, including code that is not reviewed, so
