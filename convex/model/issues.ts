@@ -79,6 +79,14 @@ export const ASSIGNEE_RULE =
   'a task can only be assigned to an active user with Edit permission or higher on its project'
 export const REVIEWER_RULE =
   'a task can only be reviewed by an active user with Edit permission or higher on its project'
+/* The parent carries a subtask's context, so whoever works on a subtask
+ * must be able to see every task above it. */
+export const ASSIGNEE_SIGHT_RULE =
+  'a subtask can only be assigned to someone who can see every task above it'
+export const REVIEWER_SIGHT_RULE =
+  'a subtask can only be reviewed by someone who can see every task above it'
+export const HOLDER_SIGHT_RULE =
+  'everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it'
 export const REVIEWER_ON_GROUP =
   'a task with subtasks has no reviewer of its own; set reviewers on its subtasks'
 
@@ -169,6 +177,81 @@ export async function assertAssigneeRule(
   if (!(await canHoldTaskIn(ctx, project, profileId))) {
     throw rule(role === 'reviewer' ? REVIEWER_RULE : ASSIGNEE_RULE)
   }
+}
+
+/* The tasks from `parentId` up, nearest first. assertParentChain bounds a
+ * chain at 20 tasks, and the seen set stops a corrupt cycle. */
+async function ancestorsFrom(
+  ctx: QueryCtx,
+  parentId: string | undefined,
+): Promise<Doc<'issues'>[]> {
+  const chain: Doc<'issues'>[] = []
+  const seen = new Set<string>()
+  let cur = parentId
+  while (cur !== undefined && !seen.has(cur) && chain.length < 20) {
+    seen.add(cur)
+    const row = await byId(ctx, 'issues', cur)
+    if (row === null) break
+    chain.push(row)
+    cur = row.parent_id
+  }
+  return chain
+}
+
+/* Whether a person can see every task in `chain`, through their own access
+ * to each task's project. Answers per person, read once per project. */
+function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[]) {
+  const projectIds = [...new Set(chain.map((t) => t.project_id))]
+  const known = new Map<string, Promise<boolean>>()
+  return (profileId: string): Promise<boolean> => {
+    let sees = known.get(profileId)
+    if (sees === undefined) {
+      sees = (async () => {
+        const profile = await byId(ctx, 'profiles', profileId)
+        if (profile === null) return false
+        for (const id of projectIds) {
+          const project = await byId(ctx, 'projects', id)
+          if (project === null || !(await canSeeProject(ctx, profile, project))) return false
+        }
+        return true
+      })()
+      known.set(profileId, sees)
+    }
+    return sees
+  }
+}
+
+/* The people working on a task and its active subtasks at any depth: each
+ * assignee, and each reviewer of a task without active subtasks (a group's
+ * reviewer is dormant). `self` holds the task's own next values. Callers skip
+ * switched-off people, who hold no new work. */
+async function holdersUnder(
+  ctx: QueryCtx,
+  rootId: string,
+  self: { assignee_id?: string; reviewer_id?: string; group: boolean },
+): Promise<string[]> {
+  const holders = new Set<string>()
+  if (self.assignee_id !== undefined) holders.add(self.assignee_id)
+  if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
+  const seen = new Set<string>([rootId])
+  let frontier = [rootId]
+  for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
+    const next: string[] = []
+    for (const id of frontier) {
+      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
+      for await (const c of kids) {
+        if (c.archived_at !== undefined || seen.has(c.id)) continue
+        seen.add(c.id)
+        next.push(c.id)
+        if (c.assignee_id !== undefined) holders.add(c.assignee_id)
+        if (c.reviewer_id !== undefined && !(await hasSubtasks(ctx, c.id))) {
+          holders.add(c.reviewer_id)
+        }
+      }
+    }
+    frontier = next
+  }
+  return [...holders]
 }
 
 /* The predicate behind assertAssigneeRule: an active same-org profile with
@@ -713,6 +796,12 @@ export async function createIssueCore(
   if (assignee_id !== undefined) await assertAssigneeRule(ctx, project, assignee_id)
   const reviewer_id = args.reviewer_id ?? undefined
   if (reviewer_id !== undefined) await assertAssigneeRule(ctx, project, reviewer_id, 'reviewer')
+  // whoever holds a subtask must see every task above it
+  if (parent_id !== undefined && (assignee_id !== undefined || reviewer_id !== undefined)) {
+    const sees = chainSight(ctx, await ancestorsFrom(ctx, parent_id))
+    if (assignee_id !== undefined && !(await sees(assignee_id))) throw rule(ASSIGNEE_SIGHT_RULE)
+    if (reviewer_id !== undefined && !(await sees(reviewer_id))) throw rule(REVIEWER_SIGHT_RULE)
+  }
   // Browser callers expose no override. Machine callers may credit a real
   // profile with access at creation; omission uses the authenticated actor.
   // Reporter attribution is immutable after this write, including on moves.
@@ -889,6 +978,32 @@ export async function updateIssueCore(
       }
     }
     w.reviewer_id = next
+  }
+  // whoever holds a subtask must see every task above it: a new assignee or
+  // reviewer is checked against the chain, and a new parent against
+  // everyone holding this task or its subtasks
+  const heldAssignee = 'assignee_id' in patch ? w.assignee_id : issue.assignee_id
+  const heldReviewer = 'reviewer_id' in patch ? w.reviewer_id : issue.reviewer_id
+  const newAssignee = heldAssignee !== undefined && heldAssignee !== issue.assignee_id
+  const newReviewer = heldReviewer !== undefined && heldReviewer !== issue.reviewer_id
+  const newParent =
+    'parent_id' in patch && nextParent !== undefined && nextParent !== issue.parent_id
+  if (nextParent !== undefined && (newAssignee || newReviewer || newParent)) {
+    const sees = chainSight(ctx, await ancestorsFrom(ctx, nextParent))
+    if (newAssignee && !(await sees(heldAssignee))) throw rule(ASSIGNEE_SIGHT_RULE)
+    if (newReviewer && !(await sees(heldReviewer))) throw rule(REVIEWER_SIGHT_RULE)
+    if (newParent) {
+      const holders = await holdersUnder(ctx, issue.id, {
+        assignee_id: heldAssignee,
+        reviewer_id: heldReviewer,
+        group: await isGroup(),
+      })
+      for (const holder of holders) {
+        // a switched-off person holds no new work, so their sight is not checked
+        if (!(await byId(ctx, 'profiles', holder))?.active) continue
+        if (!(await sees(holder))) throw rule(HOLDER_SIGHT_RULE)
+      }
+    }
   }
   if ('remaining_hours' in patch) {
     const next = cleanRemaining(patch.remaining_hours)

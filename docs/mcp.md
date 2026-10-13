@@ -643,7 +643,10 @@ permission downgrade and updates that omit `assignee_id`. Any explicitly
 supplied non-null `assignee_id`, even the current value, requires current
 eligibility.
 `reviewer_id` follows the same rule: only a row with `assignable: true` may be
-a reviewer, and `null` clears it. The refusal sentences are the assignee's,
+a reviewer, and `null` clears it. On a subtask, a new assignee or reviewer
+must also be able to see every task above it, which `assignable` does not
+check; otherwise the call is refused with `a subtask can only be assigned to
+someone who can see every task above it` (or `… reviewed by …`). The refusal sentences are the assignee's,
 except that the Edit-permission one ends `to review work`. A reviewer may be
 the same user as the assignee.
 The browser always uses its signed-in user as reporter and never offers a

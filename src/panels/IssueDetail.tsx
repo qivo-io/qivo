@@ -1374,7 +1374,7 @@ function IssueDetail({
   // child grant, so all task edits must follow the task's own write level.
   const canLabel = !!it && P.canWrite(it.project)
   // one roster for both people pickers: the reviewer follows the assignee rule
-  const assigneeChoices = it ? P.issueAssigneesFor(it.project) : []
+  const assigneeChoices = it ? P.taskAssigneesFor(it) : []
   // one sentence for every control the read-only case switches off, so a
   // viewer is told WHY rather than left prodding a dead field
   const roTip = canLabel ? undefined : 'Read-only project access'

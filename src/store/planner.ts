@@ -2123,6 +2123,45 @@ export const PLANNER = {
         (u.orgRole === 'admin' || u.orgRole === 'user' || u.orgRole === 'guest') &&
         PLANNER.canWrite(projectId, u.id),
     ),
+  /* Whoever holds a subtask must also see every task above it: the parent
+     carries its context. This checks the tasks above that this view holds;
+     one outside it (a hidden parent) is left to the server, which refuses
+     with the same rule. */
+  seesTasksAbove: (x: IssueVM | string, uid: string): boolean => {
+    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    const seen = new Set<string>()
+    for (let up = it?.parent ? PLANNER.issueById[it.parent] : null; up; ) {
+      if (seen.has(up.id)) break
+      seen.add(up.id)
+      if (!PLANNER.canSee(up.project, uid)) return false
+      up = up.parent ? PLANNER.issueById[up.parent] : null
+    }
+    return true
+  },
+  /* The people who may be picked as this task's assignee or reviewer: Edit
+     access on its project, and sight of every task above it. */
+  taskAssigneesFor: (it: IssueVM) =>
+    PLANNER.issueAssigneesFor(it.project).filter((u) => PLANNER.seesTasksAbove(it, u.id)),
+  /* Whether everyone holding this task or a visible subtask could see `parentKey`
+     and every task above it, as the server requires before a parent is set. */
+  holdersSeeParent: (x: IssueVM | string, parentKey: string): boolean => {
+    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    const parent = PLANNER.issueById[parentKey]
+    if (!it || !parent) return true
+    const holders = new Set<string>()
+    const add = (t: IssueVM) => {
+      if (t.assignee) holders.add(t.assignee)
+      if (t.reviewer && !PLANNER.isGroup(t)) holders.add(t.reviewer)
+    }
+    add(it)
+    eachDescendant(it, add)
+    // a switched-off person holds no new work, as on the server
+    return [...holders].every(
+      (uid) =>
+        !PLANNER.user(uid)?.active ||
+        (PLANNER.canSee(parent.project, uid) && PLANNER.seesTasksAbove(parent, uid)),
+    )
+  },
   /* my own organization's USERS — the roster, team membership, the settings
      page. Guests hold a seat in the org's `profiles` but are not part of it:
      they occupy no seat and belong to no team. */
@@ -2568,6 +2607,24 @@ export const PLANNER = {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || !patch || !Object.keys(patch).length) return
+    // whoever holds a subtask must see every task above it: refuse here, with
+    // the server's reason, before anything is painted (a hidden parent is
+    // left to the server)
+    const it = PLANNER.issueById[id]
+    if (it && patch.parent && !PLANNER.holdersSeeParent(it, patch.parent)) {
+      toast(
+        'Everyone assigned to or reviewing this task or its subtasks must be able to see the new parent and every task above it',
+        'error',
+      )
+      return
+    }
+    const blind = [patch.assignee, patch.reviewer].some(
+      (holder) => it && holder && !PLANNER.seesTasksAbove(it, holder),
+    )
+    if (blind) {
+      toast('A subtask can only go to someone who can see every task above it', 'error')
+      return
+    }
     // a group's dates are calculated from its subtasks, so drop a stray date
     // patch before the paint and the write (the UI offers none and the server
     // refuses one), and the dormant stored dates stay as they are

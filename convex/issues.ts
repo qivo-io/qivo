@@ -18,7 +18,10 @@
  *   or holds its own hours or review hand-off. It also tells a caller who
  *   cannot see the parent that one exists: REST reads its parent_id as null
  *   and MCP sends no parent. Refusing every restore under such a parent
- *   would stop people restoring their own task;
+ *   would stop people restoring their own task. A second is assignment: a
+ *   subtask's new assignee or reviewer must see every task above it, so a
+ *   refusal under a parent the caller cannot see tells whether that person
+ *   can see it;
  * - `rule` sentences come out of the model layer verbatim.
  * Write level for issues/links is has_project_level 'user' — the 0003
  * policies' 'member', renamed by 0013.
