@@ -31,5 +31,12 @@ if (lightbox && typeof lightbox.showModal === 'function') {
       }
     }
   })
-  lightbox.addEventListener('close', () => opener?.focus({ preventScroll: true }))
+  // Focus returns to the image link. The page may have scrolled behind the
+  // dialog, and focus() alone does not scroll, because the dialog usually
+  // refocuses the link first. scrollIntoView brings it back clear of the
+  // sticky header and leaves a visible link where it is.
+  lightbox.addEventListener('close', () => {
+    opener?.focus({ preventScroll: true })
+    opener?.scrollIntoView({ block: 'nearest' })
+  })
 }

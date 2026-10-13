@@ -86,6 +86,9 @@ export const CSS = `
   --danger: #b23540;
   --sans: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* The header's height, and where content starts below the sticky header. */
+  --header-height: 96px;
+  --below-header: calc(var(--header-height) + 24px);
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 24px; }
@@ -101,7 +104,7 @@ a:hover { text-decoration: underline; }
 .wrap .wrap { width: 100%; }
 
 /* Shared navigation and controls. */
-.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 96px; }
+.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--header-height); }
 .brand { color: var(--text-1); font-family: "Qivo Wordmark", var(--sans); font-size: 32px; font-weight: 700; letter-spacing: -.03em; line-height: 1; }
 .brand:hover { text-decoration: none; }
 .top nav { display: flex; align-items: center; gap: 32px; font-size: 14px; font-weight: 500; }
@@ -116,6 +119,19 @@ a:hover { text-decoration: underline; }
 .btn.disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
 .skip { position: fixed; top: -80px; left: 20px; z-index: 100; background: white; padding: 12px; }
 .skip:focus { top: 10px; }
+/* The header stays at the top of windows tall enough to spare the room (WCAG
+   technique C34). Once the page scrolls, /marketing/nav.js marks it
+   data-scrolled and a line appears under it. The z-index keeps positioned
+   page content, such as the screenshots, from painting over it and stays
+   below the skip link. The scroll padding keeps anchor targets and keyboard
+   focus clear of the header. Its own links sit inside that padding, so their
+   negative margin stops Chrome from scrolling the page when focus enters it. */
+@media (min-height: 480px) {
+  html { scroll-padding-top: var(--below-header); }
+  .top { position: sticky; top: 0; z-index: 10; background: var(--bg); }
+  .top[data-scrolled] { box-shadow: 0 1px 0 var(--border); }
+  .top a { scroll-margin-top: calc(-1 * var(--below-header)); }
+}
 footer.site { border-top: 1px solid var(--border); margin-top: 96px; padding: 32px 0; color: var(--text-2); font-size: 14px; }
 footer.site .wrap { display: flex; flex-wrap: wrap; gap: 24px 30px; align-items: center; justify-content: space-between; }
 footer.site .brand { font-size: 29px; }
@@ -156,6 +172,14 @@ footer.site a { color: var(--text-1); }
    the contents grid underneath it still uses the full width. */
 .docs .prose > p, .docs .prose > ul, .docs .prose > ol, .docs .prose > blockquote, .docs .prose > h2, .docs .prose > h3 { max-width: 72ch; }
 .docnav { position: sticky; top: 84px; font-size: 14.5px; }
+/* Under the sticky header, the sidebar starts below it and scrolls on its own
+   when it is taller than the window, with a thin scrollbar where the system
+   always shows one. /marketing/nav.js brings the current page's entry into
+   view. The padding, offset by the margin, and the scroll padding keep focus
+   outlines inside its scroll box. */
+@media (min-width: 861px) and (min-height: 480px) {
+  .docnav { top: var(--below-header); max-height: calc(100vh - var(--below-header) - 16px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; padding: 4px; margin: -4px; scroll-padding-block: 6px; }
+}
 .docnav .lbl { color: var(--text-3); font-size: 13px; letter-spacing: .07em; font-weight: 600; margin: 0 0 10px; }
 .docnav ol { list-style: none; margin: 0; padding: 0; counter-reset: s; }
 .docnav li { margin: 0 0 1px; }
@@ -509,7 +533,8 @@ button { font: inherit; cursor: pointer; }
 }
 @media (max-width: 760px) {
   .wrap { width: calc(100% - 40px); }
-  .top .wrap { min-height: 82px; gap: 18px; }
+  :root { --header-height: 82px; }
+  .top .wrap { gap: 18px; }
   .top nav { gap: 18px; }
   .top nav .features-link { display: none; }
   .brand { font-size: 29px; }
@@ -548,7 +573,8 @@ const esc = (s) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 /* The handwritten homepage repeats this shell so its complete layout remains
-   reviewable in index.html. Keep its header and footer in step with these. */
+   reviewable in index.html. Keep its header and footer in step with these,
+   and keep loading /marketing/nav.js there as page() does. */
 export function header(current) {
   const at = (href) => (href === current ? ' aria-current="page"' : '')
   return `<header class="top"><div class="wrap">
@@ -599,6 +625,7 @@ ${FONT_PRELOADS}
 <meta property="og:description" content="${esc(description)}" />
 <meta name="twitter:card" content="summary" />
 <style>${CSS}${css ? `\n${css}` : ''}</style>
+<script type="module" src="/marketing/nav.js"></script>
 </head>
 <body>
 ${header(path)}

@@ -13,6 +13,7 @@ website, `/app` and `/admin`.
 | `site/docs.mjs`, `site/md.mjs` | Guide loading, validation and Markdown rendering |
 | `site/theme.mjs` | The shared stylesheet, header, footer and fonts |
 | `site/home.mjs` | The homepage screenshot lightbox, published as `/marketing/home.js` |
+| `site/nav.mjs` | The line under the sticky header once a page scrolls, and the docs sidebar opening at the current page, published as `/marketing/nav.js` |
 | `public/` | Images, the Manrope font, `robots.txt` and the Microsoft publisher-domain file |
 
 ## Work on it
