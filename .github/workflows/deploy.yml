@@ -29,11 +29,11 @@ jobs:
     steps:
       # Deployment tooling comes from protected main. Application source is
       # selected separately by exact SHA through the Vercel Git-source API.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
       - name: Verify release conditions and deploy the exact revision
