@@ -626,7 +626,7 @@ function Kanban({
         icon="layers"
         title="No sub-projects yet"
         hint="Tasks live in sub-projects."
-        actionLabel={P.canWrite(info.id) ? 'New sub-project' : undefined}
+        actionLabel={P.levelOn(info.id) === 'lead' ? 'New sub-project' : undefined}
         onAction={() => actions.newProject({ parent: info.id })}
       />
     )

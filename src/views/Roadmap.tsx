@@ -948,12 +948,13 @@ function Roadmap({
           </Button>
           {/* a milestone lands on ONE project's roadmap (0078) — across every
             them there is no project to put it on, so the button belongs to a
-            project scope. Existing flags still render and still drag.
+            project scope. Existing flags still render, and drag for people
+            who can edit their project.
             "Milestone", not "New milestone": the row it now shares with the
             filters cannot afford the word, the diamond in front already says
             which kind of thing, and the shorter label fits beside the other
             verbs. */}
-          {!wide && P.canWrite(info.id) && (
+          {!wide && P.canAddMilestone(info.id) && (
             <Button
               type="button"
               variant="quiet"
@@ -1133,7 +1134,7 @@ function Roadmap({
         icon="timeline"
         title="Nothing to schedule yet"
         hint="Tasks live in sub-projects."
-        actionLabel={P.canWrite(info.id) ? 'New sub-project' : undefined}
+        actionLabel={P.levelOn(info.id) === 'lead' ? 'New sub-project' : undefined}
         onAction={() => actions.newProject({ parent: info.id })}
       />,
     )
@@ -1862,6 +1863,7 @@ function Roadmap({
                         w0={w0}
                         w1={w1}
                         weekW={weekW}
+                        movable={P.canWrite(m.project)}
                         onLive={msOnLive}
                         onCommit={msCommit}
                         onEdit={actions.editMilestone}

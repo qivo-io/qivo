@@ -3,6 +3,7 @@ import { useContext, useRef as useRefR } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { LandscapeContext } from '@/lib/landscape'
+import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
 import type { DateEnvelope } from '../../lib/dates'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
@@ -256,6 +257,7 @@ export function MilestoneFlag({
   w0,
   w1,
   weekW,
+  movable,
   onLive,
   onCommit,
   onEdit,
@@ -265,6 +267,7 @@ export function MilestoneFlag({
   w0: number
   w1: number
   weekW: number
+  movable: boolean // edit access to the milestone's project; otherwise a click only opens it
   onLive: (id: string, week: number) => void
   onCommit: (id: string, epoch: number) => void
   onEdit?: (id: string) => void
@@ -288,7 +291,7 @@ export function MilestoneFlag({
     }
   }
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return
+    if (!drag.current || !movable) return
     if (drag.current.epoch !== P.gridEpoch) return
     const x = drag.current.rotated ? e.clientY : e.clientX
     const d = Math.round((x - drag.current.x) / weekW)
@@ -315,7 +318,10 @@ export function MilestoneFlag({
         onPointerUp={onUp}
         onPointerCancel={onUp}
         style={{ left: (week - w0) * weekW - 4.5, width: weekW }}
-        className="[position:absolute] [bottom:3px] [display:flex] [align-items:center] [gap:8px] [cursor:ew-resize] [touch-action:none] [user-select:none] [padding:2px_4px_2px_0] [z-index:2]"
+        className={cn(
+          '[position:absolute] [bottom:3px] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none] [padding:2px_4px_2px_0] [z-index:2]',
+          movable ? '[cursor:ew-resize]' : '[cursor:pointer]',
+        )}
       >
         <span
           style={{ background: P.MILESTONE_COLOR }}

@@ -1967,6 +1967,13 @@ export const PLANNER = {
     return l === 'lead' || l === 'user'
   },
   canSee: (pid: string, uid?: string) => PLANNER.levelOn(pid, uid) !== null,
+  /* Milestones sit on the meta project (addMilestone folds a sub-project up
+     to it), so adding one needs edit access there. A sub-project grant alone
+     shows its parent read-only. */
+  canAddMilestone: (pid: string, uid?: string) => {
+    const meta = PLANNER.metaOf(pid)
+    return !!meta && PLANNER.canWrite(meta.id, uid)
+  },
   /** Project leads and organization admins control project permissions. */
   canManageOwnProjectAccess: (pid: string, uid?: string): boolean => {
     const p = PLANNER.project(pid)

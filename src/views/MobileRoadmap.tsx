@@ -132,7 +132,7 @@ export function MobileRoadmap({
         <section className="mobile-roadmap-section">
           <div className="mobile-roadmap-section-heading">
             <h2>Upcoming milestones</h2>
-            {!info.wide && P.canWrite(info.id) && (
+            {!info.wide && P.canAddMilestone(info.id) && (
               <Button
                 type="button"
                 variant="ghost"
@@ -228,7 +228,7 @@ export function MobileRoadmap({
               New task
             </Button>
           )}
-          {!info.wide && P.canWrite(info.id) && info.subIds.length === 0 && (
+          {!info.wide && P.levelOn(info.id) === 'lead' && info.subIds.length === 0 && (
             <Button type="button" onClick={() => actions.newProject({ parent: info.id })}>
               <Icon name="plus" size={16} />
               New sub-project

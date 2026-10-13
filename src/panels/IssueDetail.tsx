@@ -74,7 +74,8 @@ function MiniIssueRow({
   id: string
   onOpen: (id: string) => void
   relation?: { label: string; glyph: string; completedLabel?: string }
-  remove?: { label: string; onClick: () => void }
+  // disabled when the server would refuse the removal for read-only access
+  remove?: { label: string; onClick: () => void; disabled?: boolean }
 }) {
   const it = P.issueById[id]
   if (!it) return null
@@ -122,7 +123,8 @@ function MiniIssueRow({
           size="icon"
           className="task-related-remove mr-1 h-control-sm w-control-sm shrink-0"
           aria-label={remove.label}
-          title={remove.label}
+          title={remove.disabled ? 'Read-only project access' : remove.label}
+          disabled={remove.disabled}
           onClick={remove.onClick}
         >
           <Icon name="close" size={16} />
@@ -1558,11 +1560,16 @@ function IssueDetail({
       )
       .sort(sameProjFirst)
   }
+  // Adding or removing a link needs edit access to either task, so a
+  // read-only task can still be linked to one the person can edit.
+  const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
+  const linkable = (x: IssueVM) => sameOrg(x) && x.id !== it.id && canLink(x.id)
+  const canLinkAny = !!it && (canLabel || P.issues.some(linkable))
   let linkCandidates = []
   if (it && linkAnchor) {
     // anything except the issue itself; already-linked issues show a check
     // and toggle off (link direction has no cycle concerns)
-    linkCandidates = P.issues.filter((x) => sameOrg(x) && x.id !== it.id).sort(sameProjFirst)
+    linkCandidates = P.issues.filter(linkable).sort(sameProjFirst)
   }
 
   // the discussion spine: this issue's comments and activity interleaved in
@@ -2832,6 +2839,7 @@ function IssueDetail({
                             remove={{
                               label: 'Remove parent',
                               onClick: () => upd({ parent: null }),
+                              disabled: !canLabel,
                             }}
                           />
                         ) : (
@@ -2875,6 +2883,8 @@ function IssueDetail({
                                 remove={{
                                   label: 'Remove subtask',
                                   onClick: () => P.updateIssue(cid, { parent: null }),
+                                  // detaching edits the subtask, not this task
+                                  disabled: !P.canWrite(P.issueById[cid]?.project),
                                 }}
                               />
                             ))}
@@ -2901,7 +2911,8 @@ function IssueDetail({
                             size="icon"
                             className="task-heading-action"
                             aria-label="Link task"
-                            title="Link task"
+                            title={canLinkAny ? 'Link task' : roTip}
+                            disabled={!canLinkAny}
                             onClick={() => openPickerUnder(linkSecRef, setLinkAnchor, 340)}
                           >
                             <Icon name="plus" size={16} />
@@ -2918,6 +2929,7 @@ function IssueDetail({
                                 remove={{
                                   label: 'Remove link (both directions)',
                                   onClick: () => P.removeLink(it.id, l.id),
+                                  disabled: !canLink(l.id),
                                 }}
                               />
                             ))}
@@ -3010,10 +3022,15 @@ function IssueDetail({
             else P.addLink(it.id, linkType, x.id)
           }}
           createLabel="Create new linked task:"
-          onCreate={(title) => {
-            const key = P.addIssue({ project: it.project, title })
-            if (key) P.addLink(it.id, linkType, key)
-          }}
+          // the new task lands in this task's project, so only with edit access there
+          onCreate={
+            canLabel
+              ? (title) => {
+                  const key = P.addIssue({ project: it.project, title })
+                  if (key) P.addLink(it.id, linkType, key)
+                }
+              : undefined
+          }
         />
       )}
       {it && parentAnchor && (
