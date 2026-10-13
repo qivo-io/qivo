@@ -840,7 +840,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         icon="chart"
         title="Nothing to summarize yet"
         hint="Tasks live in sub-projects."
-        actionLabel={P.canWrite(info.id) ? 'New sub-project' : undefined}
+        actionLabel={P.levelOn(info.id) === 'lead' ? 'New sub-project' : undefined}
         onAction={() => actions.newProject({ parent: info.id })}
       />
     )
@@ -1081,7 +1081,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         <OvSection
           title="Milestones"
           action={
-            wide || !P.canWrite(info.id) ? null : (
+            wide || !P.canAddMilestone(info.id) ? null : (
               <Button
                 type="button"
                 variant="ghost"
