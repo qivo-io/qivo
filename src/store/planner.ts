@@ -1670,6 +1670,8 @@ export function andList(
 
 /** Someone working on a task, as a parent change or a move checks them. */
 export type Holder = { uid: string; task: IssueVM; role: 'assignee' | 'reviewer' }
+/** A subtask the delete window lists: see P.deletePlan. */
+export type DeleteRow = { task: IssueVM; depth: number; deletable: boolean }
 /** What a removal would do to work: see P.accessRemoval. */
 export type RemovalEffect = { people: string[]; items: Holder[]; projects: string[] }
 /** A holder who would lose access to `project` (edit access when `edit`). */
@@ -3098,31 +3100,71 @@ export const PLANNER = {
     return id
   },
 
-  deleteIssue: (id: string) => {
+  /* What the delete window lists for a task with subtasks: each subtask
+     under it, and under every subtask that would be deleted with it, with
+     whether I can delete it (Edit access to its project). A subtask I cannot
+     delete stays, keeping its own subtasks, so those are not listed.
+     `hidden` is true when the task, or a subtask that would be deleted, has
+     subtasks in projects I cannot see; how many is not known here. */
+  deletePlan: (id: string): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {
+    const root = PLANNER.issueById[id]
+    const rows: DeleteRow[] = []
+    if (!root) return { rows, deletable: [], hidden: false }
+    let hidden = root.hasHiddenSubtasks
+    const seen = new Set([root.id])
+    const walk = (it: IssueVM, depth: number) => {
+      for (const key of it.children) {
+        const child = PLANNER.issueById[key]
+        if (!child || seen.has(key)) continue
+        seen.add(key)
+        const deletable = PLANNER.canWrite(child.project)
+        rows.push({ task: child, depth, deletable })
+        if (!deletable) continue
+        hidden ||= child.hasHiddenSubtasks
+        walk(child, depth + 1)
+      }
+    }
+    walk(root, 0)
+    return { rows, deletable: rows.filter((r) => r.deletable).map((r) => r.task), hidden }
+  },
+
+  /* Delete a task, and with it the `subtasks` (handles) the delete window
+     listed as deletable. Every other subtask under a deleted task loses its
+     parent and becomes a top-level task; the server checks the subtasks
+     again and refuses the whole delete if they changed. */
+  deleteIssue: (id: string, subtasks: string[] = []) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid)
-      return // local FK-cascade mirror; the server (model/cascade) owns rows AND
-      // attachment bytes in one transaction, so no reap-before-delete here
+    if (!row || !uuid) return
+    const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
+    const gone = new Set([uuid, ...subtaskIds])
+    // local FK-cascade mirror; the server (model/cascade) owns rows AND
+    // attachment bytes in one transaction, so no reap-before-delete here
     ;[...rows.attachments.values()].forEach((a) => {
-      if (a.issue_id === uuid) rows.attachments.delete(a.id)
+      if (gone.has(a.issue_id)) rows.attachments.delete(a.id)
     })
     rows.issues.forEach((r) => {
       // the SET NULL cascade fires the touch server-side — mirror both
-      if (r.parent_id === uuid) {
+      if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
         r.parent_id = undefined
         r.updated_at = new Date().toISOString()
       }
     })
     ;[...rows.links.values()].forEach((l) => {
-      if (l.source_id === uuid || l.target_id === uuid) rows.links.delete(l.id)
+      if (gone.has(l.source_id) || gone.has(l.target_id)) rows.links.delete(l.id)
     })
-    rows.issueLabels = rows.issueLabels.filter((il) => il.issue_id !== uuid)
-    rows.issueSubs = rows.issueSubs.filter((s) => s.issue_id !== uuid)
-    rows.issues.delete(uuid)
+    rows.issueLabels = rows.issueLabels.filter((il) => !gone.has(il.issue_id))
+    rows.issueSubs = rows.issueSubs.filter((s) => !gone.has(s.issue_id))
+    for (const issueId of gone) rows.issues.delete(issueId)
     rebuild()
     emit()
-    run(write(api.issues.deleteDeep, { org_id: row.org_id, id: uuid }))
+    run(
+      write(api.issues.deleteDeep, {
+        org_id: row.org_id,
+        id: uuid,
+        ...(subtaskIds.length ? { subtask_ids: subtaskIds } : {}),
+      }),
+    )
   },
 
   /* ---- archive (0070): the Active/Archived axis, orthogonal to status ----
