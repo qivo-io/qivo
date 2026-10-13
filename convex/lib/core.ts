@@ -496,9 +496,10 @@ async function parentIdFor(
  * subtree. Under a group in an active project, subtasks in archived projects
  * do not count. A leaf without an end counts as its start week. Done leaves
  * count. Both weeks are null when no such leaf is scheduled. `readable` is
- * the caller's project flags and `children` the organization's tasks by
- * parent, when the surface already holds them; otherwise the tasks are read
- * once, so the walk costs no query per subtask. */
+ * the caller's project flags when the surface already holds them. A list
+ * passes `children`, the index built from the rows it already read; a single
+ * task reads only its own subtree, one by_parent query per task it visits,
+ * so the cost follows the group's size, never the organization's. */
 export async function groupWeeks(
   ctx: QueryCtx,
   group: Doc<'issues'>,
@@ -507,14 +508,13 @@ export async function groupWeeks(
   readable?: (projectId: string) => boolean,
   children?: ChildIndex,
 ): Promise<{ start_week: string | null; end_week: string | null }> {
-  const index =
-    children ??
-    childIndexOf(
-      await ctx.db
-        .query('issues')
-        .withIndex('by_org', (q) => q.eq('org_id', group.org_id))
-        .collect(),
-    )
+  const childrenOf = async (id: string): Promise<readonly Doc<'issues'>[]> =>
+    children !== undefined
+      ? (children.get(id) ?? [])
+      : await ctx.db
+          .query('issues')
+          .withIndex('by_parent', (q) => q.eq('parent_id', id))
+          .collect()
   const allArchived = group.archived_at !== undefined
   const liveProject = groupProject.archived_at === undefined
   // whether a subtask in this project may count, read once per project
@@ -534,24 +534,31 @@ export async function groupWeeks(
   let start: string | undefined
   let end: string | undefined
   const seen = new Set<string>([group.id])
-  let frontier = [group.id]
+  // each visited task's children are read once: they decide whether it is a
+  // group (hasSubtasks' rule, whoever can read them) and what the walk enters
+  let frontier: Doc<'issues'>[] = [group]
   // assertParentChain bounds chains at 20 tasks, so the walk stops there
-  for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
-    const next: string[] = []
-    for (const parentId of frontier) {
-      for (const c of index.get(parentId) ?? []) {
+  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+    const next: Doc<'issues'>[] = []
+    for (const task of frontier) {
+      const kids = await childrenOf(task.id)
+      const isGroup = kids.some(
+        (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
+      )
+      if (task !== group && !isGroup) {
+        if (task.start_week === undefined) continue
+        const leafEnd = task.end_week ?? task.start_week
+        if (start === undefined || task.start_week < start) start = task.start_week
+        if (end === undefined || leafEnd > end) end = leafEnd
+        continue
+      }
+      // a group, the root included, counts only through its subtasks
+      for (const c of kids) {
         if (seen.has(c.id)) continue
         if (!allArchived && c.archived_at !== undefined) continue
         if (!(await countsIn(c.project_id))) continue
         seen.add(c.id)
-        if (hasSubtasksIn(index, c)) {
-          next.push(c.id) // a nested group counts only through its leaves
-          continue
-        }
-        if (c.start_week === undefined) continue
-        const leafEnd = c.end_week ?? c.start_week
-        if (start === undefined || c.start_week < start) start = c.start_week
-        if (end === undefined || leafEnd > end) end = leafEnd
+        next.push(c)
       }
     }
     frontier = next

@@ -124,7 +124,9 @@ Useful field rules:
   `reporter_id` is refused in full, including its other requested changes.
 - `remaining_hours` means work left, not the original estimate. A task with
   `is_group: true` derives its progress, remaining work and planned weeks from
-  active subtasks; direct status, hour, date and pause edits are refused. Inspect the
+  active subtasks. Setting its status, dates, a non-null `remaining_hours` or
+  `paused: true` is refused, as is clearing its dates; `remaining_hours: null`
+  and `paused: false` pass, so a stored value can be cleared. Inspect the
   subtasks to determine which changes match the user's request.
 - An agent's `plannable_hours: null` means no weekly capacity limit in Qivo,
   not zero capacity. Human capacity is shared across projects.
