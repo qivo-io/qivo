@@ -25,7 +25,7 @@ const NOW = '2026-09-14T08:00:00.000Z'
 describe('removing someone who has work in the project', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
-  // tasks and projects whose update the server refuses
+  // tasks, projects and team members whose write the server refuses
   let refused: Set<string>
   let work: string
 
@@ -105,7 +105,9 @@ describe('removing someone who has work in the project', () => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
       requests.push({ name, args })
-      return refused.has(args.id) ? Promise.reject(new Error('refused')) : Promise.resolve(null)
+      return refused.has(args.id ?? args.profile_id)
+        ? Promise.reject(new Error('refused'))
+        : Promise.resolve(null)
     })
   })
 
@@ -369,11 +371,16 @@ describe('removing someone who has work in the project', () => {
       snap.teamMembers.push({ team_id: 'crew', profile_id: me.id, is_leader: true })
     })
     expect(P.canWrite(work)).toBe(true)
+    const notice =
+      'Ann Person can no longer see a task they are assigned to or reviewing. A project lead can reassign it.'
+    refused.add('ann')
     expect(P.startRemoval(leaving('ann'))).toBe(false)
-    await vi.waitFor(() => expect(requests.map((r) => r.name)).toEqual(['teams:removeMember']))
-    expect(window.showToast).toHaveBeenCalledWith(
-      'Ann Person can no longer see a task they are assigned to or reviewing. A project lead can reassign it.',
-      'info',
-    )
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    await vi.waitFor(() => expect(P.user('ann')?.teams).toEqual(['crew'])) // refused, rolled back
+    expect(window.showToast).not.toHaveBeenCalledWith(notice, 'info')
+    refused.clear()
+    expect(P.startRemoval(leaving('ann'))).toBe(false)
+    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalledWith(notice, 'info'))
+    expect(requests.map((r) => r.name)).toEqual(['teams:removeMember', 'teams:removeMember'])
   })
 })

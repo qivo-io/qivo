@@ -2349,14 +2349,14 @@ export const PLANNER = {
     ),
   /* Start a removal. Returns true when the removal window should ask first:
      someone would lose sight of their tasks and I can settle them. Otherwise
-     the removal goes ahead now, and if someone lost sight of tasks a notice
-     says who and how many. */
+     the removal goes ahead now, and once the server accepts it, a notice says
+     who lost sight of how many tasks. */
   startRemoval: (change: AccessRemoval): boolean => {
     const removal = PLANNER.accessRemoval(change)
     const { people, items } = removal
     if (items.length && PLANNER.canSettleRemoval(removal)) return true
-    void PLANNER.removeAccess(change, { to: null }, [])
-    if (items.length) {
+    void PLANNER.removeAccess(change, { to: null }, []).then((removed) => {
+      if (!removed || !items.length) return
       const who = andList(people.map((id) => PLANNER.user(id)?.name || 'Someone'))
       toast(
         items.length === 1
@@ -2364,7 +2364,7 @@ export const PLANNER = {
           : `${who} can no longer see ${items.length} tasks they are assigned to or reviewing. A project lead can reassign them.`,
         'info',
       )
-    }
+    })
     return false
   },
   /* Who can take over every listed task once the access is gone: anyone in
