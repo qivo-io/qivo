@@ -1,5 +1,18 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { assertAppTarget } from './app-deploy.mjs'
+
+describe('Node.js version', () => {
+  const read = (file) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'))
+
+  // Vercel and the workflows read engines.node. Convex reads convex.json and
+  // otherwise runs Node actions on its own default, Node 20.
+  it('runs the backend Node actions on the major version the app builds and tests with', () => {
+    const engines = read('package.json').engines.node
+    expect(engines).toMatch(/^\d+\.x$/)
+    expect(read('convex.json').node.nodeVersion).toBe(engines.split('.')[0])
+  })
+})
 
 describe('backend deployment boundary', () => {
   const stable = {

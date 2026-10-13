@@ -31,7 +31,7 @@ at `/app` and the operator console at `/admin`. See
 
 ## Development
 
-Use Node.js 22.12 or newer and the checked-in npm lockfiles:
+Use Node.js 24 and the checked-in npm lockfiles:
 
 ```sh
 npm ci
