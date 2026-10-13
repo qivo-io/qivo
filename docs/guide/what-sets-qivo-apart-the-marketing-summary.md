@@ -4,8 +4,8 @@ Its main features are:
 - **Delay forecasts.** Remaining work and the owner's available capacity
   determine whether a task is likely to miss its plan or due week ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
 - **Live workload.** Scheduling a task updates its owner's weekly load ([The Team strip](./planning-against-real-capacity.md#the-team-strip)).
-- **Parent schedules.** A parent's dates come from its subtasks, so its bar
-  always spans the work planned below it, including date changes through the API ([Scheduling by hand](./the-roadmap.md#scheduling-by-hand)).
+- **Parent schedules.** A parent's dates come from the scheduled subtasks you
+  can access, so its bar spans their planned work, including date changes through the API ([Scheduling by hand](./the-roadmap.md#scheduling-by-hand)).
 - **Permanent task IDs.** Moving a task keeps its number and links ([Permanent task IDs](./how-work-is-organized.md#permanent-task-ids)).
 - **Private workload.** For organization admins and standard users, hidden
   projects contribute anonymous load without revealing their tasks ([The Team strip](./planning-against-real-capacity.md#the-team-strip)).

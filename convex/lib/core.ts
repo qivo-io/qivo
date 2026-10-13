@@ -268,13 +268,15 @@ export function searchMatcher(term: string, stars: boolean): (i: Doc<'issues'>) 
   return (i) => matches(`${ISSUE_PREFIX}-${i.num}\n${i.title}\n${i.description}`)
 }
 
+/* The page of matching tasks, plus the organization's tasks indexed by
+ * parent from the same read, so group dates need no further queries. */
 export async function listIssuesCore(
   ctx: QueryCtx,
   me: Caller,
   o: ListIssueOpts,
   cat: Catalogue,
   readable: (projectId: string) => boolean,
-): Promise<Doc<'issues'>[]> {
+): Promise<{ page: Doc<'issues'>[]; children: ChildIndex }> {
   const scope = o.scope === null ? null : new Set(o.scope)
   const match = o.search ? searchMatcher(o.search, o.stars) : null
   const out: Doc<'issues'>[] = []
@@ -305,7 +307,7 @@ export async function listIssuesCore(
     const keyOf = (i: Doc<'issues'>): string => cat.byUuid.get(i.project_id)?.key ?? ''
     out.sort((a, b) => keyOf(a).localeCompare(keyOf(b)) || a.num - b.num)
   }
-  return out.slice(o.offset, o.offset + o.limit)
+  return { page: out.slice(o.offset, o.offset + o.limit), children: childIndexOf(rows) }
 }
 
 const byKeyOrder = (a: Doc<'projects'>, b: Doc<'projects'>): number => a.key.localeCompare(b.key)
@@ -443,7 +445,29 @@ export type IssueOutPre = {
   project?: Doc<'projects'>
   /** profile uuid → name, for list calls (skips per-row point reads) */
   names?: ReadonlyMap<string, string>
+  /** the organization's tasks by parent, for list calls (group dates) */
+  children?: ChildIndex
 }
+
+/** An organization's tasks, archived ones included, keyed by parent id. */
+export type ChildIndex = ReadonlyMap<string, readonly Doc<'issues'>[]>
+
+export function childIndexOf(rows: Iterable<Doc<'issues'>>): ChildIndex {
+  const index = new Map<string, Doc<'issues'>[]>()
+  for (const row of rows) {
+    if (row.parent_id === undefined) continue
+    const kids = index.get(row.parent_id)
+    if (kids === undefined) index.set(row.parent_id, [row])
+    else kids.push(row)
+  }
+  return index
+}
+
+/** hasSubtasks over an index: an archived task also counts archived ones. */
+const hasSubtasksIn = (index: ChildIndex, task: Doc<'issues'>): boolean =>
+  (index.get(task.id) ?? []).some(
+    (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
+  )
 
 /* REST's parent link: the parent's uuid only when this caller could read the
  * parent (findIssue's rule), else null, which reads like a top-level task.
@@ -472,14 +496,25 @@ async function parentIdFor(
  * subtree. Under a group in an active project, subtasks in archived projects
  * do not count. A leaf without an end counts as its start week. Done leaves
  * count. Both weeks are null when no such leaf is scheduled. `readable` is
- * the caller's project flags when the surface already holds them. */
+ * the caller's project flags and `children` the organization's tasks by
+ * parent, when the surface already holds them; otherwise the tasks are read
+ * once, so the walk costs no query per subtask. */
 export async function groupWeeks(
   ctx: QueryCtx,
   group: Doc<'issues'>,
   groupProject: Doc<'projects'>,
   me: Caller,
   readable?: (projectId: string) => boolean,
+  children?: ChildIndex,
 ): Promise<{ start_week: string | null; end_week: string | null }> {
+  const index =
+    children ??
+    childIndexOf(
+      await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', group.org_id))
+        .collect(),
+    )
   const allArchived = group.archived_at !== undefined
   const liveProject = groupProject.archived_at === undefined
   // whether a subtask in this project may count, read once per project
@@ -504,13 +539,12 @@ export async function groupWeeks(
   for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
     const next: string[] = []
     for (const parentId of frontier) {
-      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
-      for await (const c of kids) {
+      for (const c of index.get(parentId) ?? []) {
         if (seen.has(c.id)) continue
         if (!allArchived && c.archived_at !== undefined) continue
         if (!(await countsIn(c.project_id))) continue
         seen.add(c.id)
-        if (await hasSubtasks(ctx, c.id, c.archived_at !== undefined)) {
+        if (hasSubtasksIn(index, c)) {
           next.push(c.id) // a nested group counts only through its leaves
           continue
         }
@@ -544,13 +578,16 @@ export async function issueOut(
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
-  const is_group = await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
+  const is_group =
+    opts.children !== undefined
+      ? hasSubtasksIn(opts.children, issue)
+      : await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
   if (opts.surface === 'rest') {
     const weeks = is_group
-      ? await groupWeeks(ctx, issue, project, opts.me, opts.readable)
+      ? await groupWeeks(ctx, issue, project, opts.me, opts.readable, opts.children)
       : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
     return {
       id: issue.id,

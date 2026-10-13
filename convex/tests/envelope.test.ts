@@ -8,7 +8,12 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { type CreateIssueArgs, GROUP_DATES_RULE, type IssuePatch } from '../model/issues'
+import {
+  type CreateIssueArgs,
+  GROUP_DATES_RULE,
+  GROUP_PAUSE_RULE,
+  type IssuePatch,
+} from '../model/issues'
 import {
   as,
   expectRefusal,
@@ -117,6 +122,26 @@ describe('issue scheduling and hierarchy', () => {
     })
     expect(ret.start_week).toBe('2026-04-06')
     expect(ret.end_week).toBe('2026-04-12')
+  })
+
+  it("a pause on a group is refused; clearing a group's stored pause passes", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const group = await plantIssue(t, { ...base, status: 'progress' })
+    await plantIssue(t, { ...base, parent_id: group.id, status: 'todo' })
+    const r = await expectRefusal(updateAs(t, f, group.id, { paused: true }), 'rule')
+    expect(r.data.message).toBe(GROUP_PAUSE_RULE)
+    expect(await issueRow(t, group.id)).toEqual(group)
+    // a pause it kept from its leaf days is dormant and can still be cleared
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(group._id)
+      await ctx.db.patch(row!._id, { paused: true })
+    })
+    expect((await updateAs(t, f, group.id, { paused: false })).paused).toBe(false)
+    // a leaf under way still pauses
+    const leaf = await plantIssue(t, { ...base, status: 'progress' })
+    expect((await updateAs(t, f, leaf.id, { paused: true })).paused).toBe(true)
   })
 
   it('no subtask write changes an ancestor: reschedule, scheduled create and restore leave every ancestor and its followers alone', async () => {

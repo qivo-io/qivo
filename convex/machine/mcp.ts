@@ -1135,7 +1135,7 @@ export const listIssues = internalQuery({
           : []
       scope = [p.id, ...kids.map((k) => k.id)]
     }
-    const rows = await listIssuesCore(
+    const { page: rows } = await listIssuesCore(
       ctx,
       me,
       {

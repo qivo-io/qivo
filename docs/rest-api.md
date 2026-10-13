@@ -410,8 +410,10 @@ review · done; `priority` ∈ urgent · high · medium · low. `paused` (a
 boolean) holds the work. Only a To Do, In Progress or In Review task can be
 paused. Asking for it on a Done or Backlog task, on POST or PATCH, is a
 `400` (`a Done or Backlog task cannot be paused`), and a status move to
-either of those resumes the task. The reason belongs in a comment; the flag
-carries no text. `start_week`, `end_week` and `due_date` must be real calendar
+either of those resumes the task. A task with subtasks holds no work of its
+own, so `paused: true` on one is a `400` (`a task with subtasks cannot be
+paused; pause its subtasks instead`); `false` clears a stored flag. The
+reason belongs in a comment; the flag carries no text. `start_week`, `end_week` and `due_date` must be real calendar
 dates in `YYYY-MM-DD` form, or `null` to clear; impossible dates are refused
 instead of rolling into the next month. `start_week` and
 `end_week` must be set (or cleared) together, with `start_week` ≤ `end_week`
@@ -461,8 +463,8 @@ archived subtasks stopped counting in 0070): a PATCH
 sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks — it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
-subtasks, and clients compute the parent's shown value as their recursive
-sum. Such tasks return `remaining_hours: null` in the shape below. The API
+subtasks, and clients show the parent's value as the sum over its unfinished
+subtasks at any depth. Such tasks return `remaining_hours: null` in the shape below. The API
 cannot set `parent_id` (response-only), so this only ever bites PATCH.
 Writing `remaining_hours` also stamps the read-only `remaining_set_at`
 (0072): a remaining time is a measurement, and the planning math anchors on

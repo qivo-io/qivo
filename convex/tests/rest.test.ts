@@ -1710,6 +1710,61 @@ describe("a group's dates on REST", () => {
     })
     expect(out).toMatchObject(span('2026-05-04', '2026-05-17'))
   })
+
+  /* Under Convex's real limits a function may read at most 4,096 index
+   * ranges. A group's dates come from one read of the organization's tasks,
+   * so a large tree costs the same as a small one on list, get and PATCH. */
+  it('a large tree stays within transaction limits on list, get and PATCH', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const epic = await plantIssue(t, { ...base, title: 'Epic' })
+    const { _id, _creationTime, ...row } = epic
+    // features number first, so the first list page holds every group
+    await t.run(async (ctx) => {
+      let num = 20_000
+      for (let g = 0; g < 21; g++) {
+        const feature = uuid()
+        await ctx.db.insert('issues', {
+          ...row,
+          id: feature,
+          num: 10_000 + g,
+          title: `Feature ${g}`,
+          parent_id: epic.id,
+        })
+        for (let k = 0; k < 100; k++) {
+          const week = `2026-0${1 + (k % 9)}-05`
+          await ctx.db.insert('issues', {
+            ...row,
+            id: uuid(),
+            num: num++,
+            title: `Leaf ${g}.${k}`,
+            parent_id: feature,
+            start_week: week,
+            end_week: week,
+          })
+        }
+      }
+    })
+    const listed = await t.query(internal.machine.rest.listIssues, {
+      callerId: f.agent.id,
+      limit: '200',
+    })
+    expect(listed.filter((i) => i.is_group)).toHaveLength(22)
+    expect(listed.find((i) => i.id === epic.id)).toMatchObject(span('2026-01-05', '2026-09-05'))
+    const got = await t.query(internal.machine.rest.getIssue, {
+      callerId: f.agent.id,
+      ref: epic.id,
+    })
+    expect(got).toMatchObject({ is_group: true, ...span('2026-01-05', '2026-09-05') })
+    const renamed = await t.mutation(internal.machine.rest.updateIssue, {
+      callerId: f.agent.id,
+      keyName: KEY,
+      ref: epic.id,
+      body: JSON.stringify({ title: 'Renamed' }),
+    })
+    expect(renamed).toMatchObject({ title: 'Renamed', ...span('2026-01-05', '2026-09-05') })
+  })
 })
 
 /* ----------------------------------------------------------- delete issue */

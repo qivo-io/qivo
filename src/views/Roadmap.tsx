@@ -1408,6 +1408,11 @@ function Roadmap({
     } else if (wkEnd != null && dueT <= wkEnd) {
       color = 'var(--warn)'
       state = 'tight — due falls in the final planned week'
+    } else if (P.isGroup(iss) && P.progressOf(iss).unknown) {
+      // subtasks outside this view may end later, so the visible plan cannot
+      // show the group finishing before its due date
+      color = 'var(--text-3)'
+      state = 'some subtasks are outside your view'
     } else {
       color = 'var(--success)'
       state = 'on track — plan ends before the due date'

@@ -47,8 +47,8 @@ Tasks have these fields:
   Qivo uses the time of the estimate, or the planned start if later, to
   project progress ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). Empty means unestimated and displays “—”; **0**
   means no work remains. Gaining a first subtask clears the parent's own
-  estimate. The parent then shows its descendants' total, marked **Σ**,
-  excluding linked tasks. After the last active subtask leaves, the field
+  estimate. The parent then shows the total of its unfinished subtasks at any
+  depth, marked **Σ**. Done subtasks and linked tasks do not count. After the last active subtask leaves, the field
   becomes editable and starts empty. Entering **In Review** replaces
   Remaining with the project's review time, 2 h by default. A REST or MCP
   update that supplies remaining hours with that status change keeps the
@@ -59,7 +59,8 @@ Tasks have these fields:
 - **Planned period**. Start and end weeks on the Roadmap. Planning uses whole
   weeks ([The Roadmap](./the-roadmap.md)). A task with active subtasks takes
   its planned period from them, from the earliest start to the latest end of
-  the scheduled subtasks you can access. Its own saved dates are hidden and
+  the scheduled subtasks you can access. A subtask you cannot access hides
+  the subtasks below it. Its own saved dates are hidden and
   cannot be edited. Removing or archiving the last active subtask, or giving
   it another parent, restores them.
 - **Paused**. Choose **Pause** in the Status menu to hold work without

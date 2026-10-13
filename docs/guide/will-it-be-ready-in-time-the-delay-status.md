@@ -46,7 +46,9 @@ has no delay verdict.
 When some of a group's subtasks are outside your view, the group can show
 only **Delayed**, and only when its due date has passed or the subtasks you
 can see already end after the due week. Otherwise it has no verdict, because
-the visible plan cannot show whether the group is on track.
+the visible plan cannot show whether the group is on track. For the same
+reason, its Roadmap due line is gray when the visible plan ends before the
+due date.
 
 ## Where you see it
 

@@ -377,7 +377,7 @@ export const listIssues = internalQuery({
     if (a.assignee && !UUID.test(a.assignee)) throw badRequest('assignee must be a profile uuid')
     const limit = Math.min(Math.max(Number(a.limit ?? 100) || 100, 1), 200)
     const offset = Math.max(Number(a.offset ?? 0) || 0, 0)
-    const rows = await listIssuesCore(
+    const { page, children } = await listIssuesCore(
       ctx,
       me,
       {
@@ -397,13 +397,14 @@ export const listIssues = internalQuery({
     )
     const names = await orgNames(ctx, me.org_id)
     return await Promise.all(
-      rows.map((i) =>
+      page.map((i) =>
         issueOut(ctx, i, {
           surface: 'rest',
           me,
           readable,
           project: cat.byUuid.get(i.project_id),
           names,
+          children,
         }),
       ),
     )

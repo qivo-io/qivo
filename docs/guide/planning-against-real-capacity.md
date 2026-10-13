@@ -7,7 +7,8 @@ trying to plan it leaves its dates unchanged. Done tasks can still be planned.
 A task with subtasks takes its dates from them, so its button reads
 **Show on roadmap**. It opens the timeline and finds the task's bar or
 unplanned row without starting a planning session or changing any dates.
-Plan its subtasks instead.
+Other filters clear so the task stays visible; Focus is kept. Plan its
+subtasks instead.
 
 The planning panel offers:
 

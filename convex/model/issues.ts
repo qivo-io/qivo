@@ -321,6 +321,9 @@ export async function assertOwnRemaining(ctx: QueryCtx, issueId: string): Promis
 const PAUSABLE: ReadonlySet<IssueStatus> = new Set(['todo', 'progress', 'review'])
 export const isPausable = (status: IssueStatus): boolean => PAUSABLE.has(status)
 export const PAUSE_RULE = 'a Done or Backlog task cannot be paused'
+/* A group holds no work of its own (its pause is dormant like its status),
+ * so a pause asked for on one is refused; clearing a stored one passes. */
+export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause its subtasks instead'
 
 /* -------------------------------------------------- the parent link fence
  * issues_check_parent (0057:38-85, final). Caller must pass the row's PINNED
@@ -859,7 +862,8 @@ export async function updateIssueCore(
     return project
   }
   // whether the task has active subtasks, read before the write, at most once
-  // and only by the status, dates and reviewer guards (a group's are dormant)
+  // and only by the status, dates, pause and reviewer guards (a group's are
+  // dormant)
   let group: boolean | undefined
   const isGroup = async (): Promise<boolean> =>
     (group ??= await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined))
@@ -925,6 +929,7 @@ export async function updateIssueCore(
   // -- the pause follows the status: a pause request on a Done or Backlog
   //    task is refused, and a move into either clears a standing pause
   if ('paused' in patch && patch.paused !== undefined) {
+    if (patch.paused && (await isGroup())) throw rule(GROUP_PAUSE_RULE)
     if (patch.paused && !isPausable(nextStatus)) throw rule(PAUSE_RULE)
     w.paused = patch.paused
   } else if (issue.paused && !isPausable(nextStatus)) w.paused = false
