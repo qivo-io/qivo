@@ -791,6 +791,22 @@ function run<T>(
     })
 }
 
+/* run() a write and resolve whether the server accepted it. A refusal is
+   toasted and rolled back as usual before the promise settles. */
+function runSaved(op: Promise<unknown>): Promise<boolean> {
+  return new Promise<boolean>((resolve) =>
+    run(
+      op,
+      () => resolve(true),
+      undefined,
+      (error) => {
+        toastWriteError(error)
+        resolve(false)
+      },
+    ),
+  )
+}
+
 /* The last settle repaints whatever the gate held back. One rebuild+emit
    even when both a snapshot and a comments delivery were held. */
 function flushHeldPaint() {
@@ -1569,26 +1585,93 @@ export const NAME_MAX = 80
    for remaining) meaning clear — what every issue-editing surface hands
    updateIssue/addIssue. Status/priority stay derived from the schema row so
    a widened enum needs no edit here. */
-/** A grant about to be removed from a project: one person's or one team's. */
-export type AccessRemoval = { userId: string } | { teamId: string }
+/** Access about to be removed: a person's or a team's grant on one project
+    (project settings), a member leaving a team, or a team being deleted
+    (Team settings). */
+export type AccessRemoval =
+  | { kind: 'userGrant'; projectId: string; userId: string }
+  | { kind: 'teamGrant'; projectId: string; teamId: string }
+  | { kind: 'teamMember'; teamId: string; userId: string }
+  | { kind: 'deleteTeam'; teamId: string }
 
-/* The projects as they would be without `change` on `project`, for
-   levelOnProject's lookup: only that project's grant maps differ. */
-function projectsWithout(project: ProjectVM, change: AccessRemoval) {
-  const changed: ProjectVM =
-    'userId' in change
-      ? { ...project, access: omitKey(project.access, change.userId) }
-      : { ...project, teamAccess: omitKey(project.teamAccess, change.teamId) }
-  return (id: string) => (id === project.id ? changed : PLANNER.project(id))
+/* The projects as `uid` would have them after `change`, for levelOnProject's
+   lookup. A project grant changes that project for everyone; a member leaving
+   loses every grant of the team, and a deleted team's grants go for everyone. */
+function projectsAfter(change: AccessRemoval) {
+  const now = (id: string) => PLANNER.project(id)
+  if (change.kind === 'userGrant' || change.kind === 'teamGrant') {
+    const p = PLANNER.project(change.projectId)
+    const changed =
+      p &&
+      (change.kind === 'userGrant'
+        ? { ...p, access: omitKey(p.access, change.userId) }
+        : { ...p, teamAccess: omitKey(p.teamAccess, change.teamId) })
+    const after = (id: string) => (id === change.projectId ? changed : now(id))
+    return (_uid: string) => after
+  }
+  const withoutTeam = (id: string) => {
+    const p = now(id)
+    return p?.teamAccess?.[change.teamId]
+      ? { ...p, teamAccess: omitKey(p.teamAccess, change.teamId) }
+      : p
+  }
+  if (change.kind === 'deleteTeam') return (_uid: string) => withoutTeam
+  return (uid: string) => (uid === change.userId ? withoutTeam : now)
+}
+/* A person's level on a project once `change` has applied. */
+function levelAfter(change: AccessRemoval) {
+  const after = projectsAfter(change)
+  return (uid: string, projectId: string) => {
+    const projects = after(uid)
+    return levelOnProject(projects(projectId), uid, projects)
+  }
+}
+/* The people whose access `change` reduces. */
+function peopleLosing(change: AccessRemoval): Set<string> {
+  if (change.kind === 'userGrant' || change.kind === 'teamMember') return new Set([change.userId])
+  return new Set(PLANNER.users.filter((u) => u.teams.includes(change.teamId)).map((u) => u.id))
+}
+/* Where Keep as Viewer puts the Viewer grant that keeps `task` in sight: the
+   project whose grant is removed, or the project the team shared that showed
+   the task (the task's own sub-project first, then its parent). */
+function keptOn(change: AccessRemoval, task: IssueVM): string {
+  if (change.kind === 'userGrant' || change.kind === 'teamGrant') return change.projectId
+  const p = PLANNER.project(task.project)
+  return p?.parent && !p.teamAccess?.[change.teamId] ? p.parent : task.project
+}
+/* The direct grant rows on a project, without the lead (projects.lead_id). */
+function grantsOn(projectId: string): Record<string, AccessLevel> {
+  const access: Record<string, AccessLevel> = {}
+  rows.access.forEach((a) => {
+    if (a.project_id === projectId) access[a.profile_id] = a.level
+  })
+  return access
 }
 function omitKey<T>(map: Record<string, T> | undefined, key: string): Record<string, T> {
   const next = { ...(map || {}) }
   delete next[key]
   return next
 }
+/** A team named in a sentence: "Design team", or "Design team" for a team
+    already called that; "team" when it is unknown. */
+export function teamNoun(name: string | null | undefined): string {
+  if (!name) return 'team'
+  return /\bteam$/i.test(name.trim()) ? name : `${name} team`
+}
+/** "A", "A and B", or "A, B and 2 others", with `others` naming the rest. */
+export function andList(
+  words: string[],
+  others = (n: number) => `${n} other${n === 1 ? '' : 's'}`,
+): string {
+  if (words.length <= 2) return words.join(' and ')
+  if (words.length === 3) return `${words[0]}, ${words[1]} and ${words[2]}`
+  return `${words[0]}, ${words[1]} and ${others(words.length - 2)}`
+}
 
 /** Someone working on a task, as a parent change or a move checks them. */
 export type Holder = { uid: string; task: IssueVM; role: 'assignee' | 'reviewer' }
+/** What a removal would do to work: see P.accessRemoval. */
+export type RemovalEffect = { people: string[]; items: Holder[]; projects: string[] }
 /** A holder who would lose access to `project` (edit access when `edit`). */
 export type AccessBlocker = Holder & { project: ProjectVM; edit: boolean }
 
@@ -2229,47 +2312,77 @@ export const PLANNER = {
         .filter((b) => !PLANNER.canSee(projectId, b.uid)),
     ]
   },
-  /* What removing a person's or a team's grant on `pid` would do to work:
-     the active people who would lose sight of tasks they hold in that
-     project (and its sub-projects), and those tasks. Done tasks keep their
-     history and are not listed. Computed against the grants as they would
-     be, so another grant that still covers someone keeps them off the list. */
-  accessRemoval: (pid: string, change: AccessRemoval): { people: string[]; items: Holder[] } => {
-    const project = PLANNER.project(pid)
-    if (!project) return { people: [], items: [] }
-    const after = projectsWithout(project, change)
-    const removed = new Set(
-      'userId' in change
-        ? [change.userId]
-        : PLANNER.users.filter((u) => u.teams.includes(change.teamId)).map((u) => u.id),
-    )
+  /* What a removal would do to work: the active people who would lose sight
+     of open tasks they are assigned to or reviewing, those tasks, and the
+     projects where Keep as Viewer would give them Viewer access. Done tasks
+     keep their history and are not listed. Computed against the grants as
+     they would be, so another grant that still covers someone keeps them off
+     the list. */
+  accessRemoval: (change: AccessRemoval): RemovalEffect => {
+    const level = levelAfter(change)
+    const losing = peopleLosing(change)
     const items: Holder[] = []
     for (const task of PLANNER.issues) {
       const tp = PLANNER.project(task.project)
-      if (!tp || (tp.id !== pid && tp.parent !== pid) || task.status === 'done') continue
+      if (!tp || task.status === 'done') continue
       for (const role of ['assignee', 'reviewer'] as const) {
         const uid = task[role]
-        if (!uid || !removed.has(uid) || (role === 'reviewer' && PLANNER.isGroup(task))) continue
+        if (!uid || !losing.has(uid) || (role === 'reviewer' && PLANNER.isGroup(task))) continue
         if (!PLANNER.user(uid)?.active) continue
-        if (levelOnProject(tp, uid) && !levelOnProject(after(tp.id), uid, after))
-          items.push({ uid, task, role })
+        if (levelOnProject(tp, uid) && !level(uid, tp.id)) items.push({ uid, task, role })
       }
     }
-    return { people: [...new Set(items.map((i) => i.uid))], items }
+    return {
+      people: [...new Set(items.map((i) => i.uid))],
+      items,
+      projects: [...new Set(items.map((i) => keptOn(change, i.task)))],
+    }
   },
-  /* Who can take over every listed task once the grant is gone: anyone in
+  /* Whether I can carry out either choice of the removal window: give every
+     listed person Viewer access to each of `projects`, and edit every listed
+     task. A team leader without that project authority removes a member
+     straight away instead (see startRemoval). */
+  canSettleRemoval: (removal: RemovalEffect): boolean =>
+    removal.items.every((i) => PLANNER.canWrite(i.task.project)) &&
+    removal.projects.every((pid) =>
+      removal.people.every((uid) => PLANNER.canManageProjectUser(pid, uid)),
+    ),
+  /* Start a removal. Returns true when the removal window should ask first:
+     someone would lose sight of their tasks and I can settle them. Otherwise
+     the removal goes ahead now, and if someone lost sight of tasks a notice
+     says who and how many. */
+  startRemoval: (change: AccessRemoval): boolean => {
+    const removal = PLANNER.accessRemoval(change)
+    const { people, items } = removal
+    if (items.length && PLANNER.canSettleRemoval(removal)) return true
+    void PLANNER.removeAccess(change, { to: null }, [])
+    if (items.length) {
+      const who = andList(people.map((id) => PLANNER.user(id)?.name || 'Someone'))
+      toast(
+        items.length === 1
+          ? `${who} can no longer see a task they are assigned to or reviewing. A project lead can reassign it.`
+          : `${who} can no longer see ${items.length} tasks they are assigned to or reviewing. A project lead can reassign them.`,
+        'info',
+      )
+    }
+    return false
+  },
+  /* Who can take over every listed task once the access is gone: anyone in
      the organization who can hold work, with Edit access to each task's
      project and sight of every task above, both as the grants would be.
-     Edit access to `pid` itself is not needed: a person who edits only the
-     affected sub-project can take its tasks. */
-  reassignChoices: (pid: string, change: AccessRemoval, items: Holder[]): UserVM[] => {
-    const project = PLANNER.project(pid)
-    if (!project) return []
-    const after = projectsWithout(project, change)
+     Edit access to the project whose grant is removed is not needed: a
+     person who edits only the affected sub-project can take its tasks. */
+  reassignChoices: (change: AccessRemoval, items: Holder[]): UserVM[] => {
+    const orgId =
+      'projectId' in change
+        ? PLANNER.orgOf(change.projectId)
+        : PLANNER.teams.find((t) => t.id === change.teamId)?.org
+    if (!orgId) return []
+    const level = levelAfter(change)
     const people = new Set(items.map((i) => i.uid))
-    const level = (uid: string, projectId: string) => levelOnProject(after(projectId), uid, after)
-    return PLANNER.usersFor(pid).filter(
+    return PLANNER.usersIn(orgId).filter(
       (u) =>
+        u.active &&
         (u.orgRole === 'admin' || u.orgRole === 'user' || u.orgRole === 'guest') &&
         !people.has(u.id) &&
         items.every(
@@ -2281,19 +2394,33 @@ export const PLANNER = {
   },
   /* Apply the removal with the choice made in the removal window, for the
      `items` the person reviewed there: keep their holders as Viewers (a
-     direct Viewer grant each), or hand every item to `to` (null clears it)
-     and remove the grant once the server has accepted all of them. If any
-     is refused the grant stays, so nobody is left holding a task they
-     cannot see. Resolves whether the grant changed. */
+     direct Viewer grant each on the listed projects), or hand every item to
+     `to` (null clears it). The access goes once the server has accepted every
+     reassignment, and for a team member or a deleted team, every Viewer
+     grant. If one is refused the access stays, so nobody is left holding a
+     task they cannot see. Resolves whether the server accepted the removal. */
   removeAccess: async (
-    pid: string,
     change: AccessRemoval,
     choice: { keep: true } | { to: string | null },
     items: Holder[],
   ): Promise<boolean> => {
-    const m = PLANNER.project(pid)
-    if (!m) return false
-    const people = [...new Set(items.map((i) => i.uid))]
+    const team = 'teamId' in change ? PLANNER.teams.find((t) => t.id === change.teamId) : null
+    const named = teamNoun(team?.name)
+    const person = 'userId' in change ? PLANNER.user(change.userId)?.name || 'This person' : ''
+    // who keeps their access when a write is refused
+    const stays =
+      change.kind === 'userGrant'
+        ? `${person} keeps access`
+        : change.kind === 'teamGrant'
+          ? `The ${named} keeps access`
+          : change.kind === 'teamMember'
+            ? `${person} stays in the ${named}`
+            : `The ${named} stays`
+    // the server refuses to delete the last team: say so before anything is saved
+    if (change.kind === 'deleteTeam' && team && !PLANNER.canDeleteTeam(change.teamId)) {
+      toast(`The ${named} can't be deleted, because it is the organization's last team.`, 'error')
+      return false
+    }
     if ('to' in choice) {
       const to = choice.to
       const saved = await Promise.all(
@@ -2305,39 +2432,61 @@ export const PLANNER = {
         ),
       )
       if (saved.includes(false)) {
-        const team = 'teamId' in change && PLANNER.teams.find((t) => t.id === change.teamId)
-        const who =
-          'userId' in change
-            ? PLANNER.user(change.userId)?.name || 'This person'
-            : team
-              ? `The ${team.name} team`
-              : 'The team'
-        toast(`${who} keeps access, because not every task could be reassigned.`, 'error')
+        toast(`${stays}, because not every task could be reassigned.`, 'error')
         return false
       }
     }
-    if ('userId' in change) {
-      PLANNER.setProjectAccess(
-        pid,
-        change.userId,
-        'keep' in choice && people.length ? 'viewer' : null,
+    const people = [...new Set(items.map((i) => i.uid))]
+    const keep = 'keep' in choice && people.length > 0
+    // a project's grants with a Viewer grant for each listed person who
+    // would otherwise not see it
+    const level = levelAfter(change)
+    const withViewers = (pid: string) => {
+      const access = grantsOn(pid)
+      for (const uid of people) if (!level(uid, pid)) access[uid] = 'viewer'
+      return access
+    }
+    if (change.kind === 'userGrant')
+      return PLANNER.setProjectAccess(change.projectId, change.userId, keep ? 'viewer' : null)
+    if (change.kind === 'teamGrant') {
+      const teamAccess = omitKey(PLANNER.project(change.projectId)?.teamAccess, change.teamId)
+      // one write: the team leaves and the people who would lose sight stay as Viewers
+      return keep
+        ? PLANNER.updateProject(change.projectId, {
+            access: withViewers(change.projectId),
+            teamAccess,
+          })
+        : PLANNER.setProjectTeamAccess(change.projectId, change.teamId, null)
+    }
+    // the Viewer grants are saved before the team changes
+    if (keep) {
+      const projects = [...new Set(items.map((i) => keptOn(change, i.task)))]
+      const saved = await Promise.all(
+        projects.map((pid) => PLANNER.updateProject(pid, { access: withViewers(pid) })),
       )
-      return true
+      if (saved.includes(false)) {
+        toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
+        return false
+      }
     }
-    if (!('keep' in choice) || !people.length) {
-      PLANNER.setProjectTeamAccess(pid, change.teamId, null)
-      return true
+    if (change.kind === 'teamMember') return PLANNER.removeTeamMember(change.teamId, change.userId)
+    const deleted = await PLANNER.removeTeam(change.teamId)
+    if (deleted && team) toast(`Team “${team.name}” deleted`, 'success')
+    return deleted
+  },
+  /* Whether the access a removal takes away is still there: someone else may
+     have removed it while the removal window was open. */
+  removalPending: (change: AccessRemoval): boolean => {
+    switch (change.kind) {
+      case 'userGrant':
+        return !!grantsOn(change.projectId)[change.userId]
+      case 'teamGrant':
+        return !!PLANNER.project(change.projectId)?.teamAccess?.[change.teamId]
+      case 'teamMember':
+        return !!PLANNER.user(change.userId)?.teams.includes(change.teamId)
+      case 'deleteTeam':
+        return rows.teams.has(change.teamId)
     }
-    // one write: the team leaves and the people who would lose sight stay as Viewers
-    const access: Record<string, AccessLevel> = {}
-    rows.access.forEach((a) => {
-      if (a.project_id === pid) access[a.profile_id] = a.level
-    })
-    for (const uid of people) access[uid] = 'viewer'
-    const teamAccess = { ...m.teamAccess }
-    delete teamAccess[change.teamId]
-    PLANNER.updateProject(pid, { access, teamAccess })
-    return true
   },
   /* One sentence naming who blocks a change and how to clear it. */
   blockerText: (b: AccessBlocker): string => {
@@ -2861,17 +3010,7 @@ export const PLANNER = {
     const saved =
       planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire })
         ? Promise.resolve(true)
-        : new Promise<boolean>((resolve) =>
-            run(
-              write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }),
-              () => resolve(true),
-              undefined,
-              (error) => {
-                toastWriteError(error)
-                resolve(false)
-              },
-            ),
-          )
+        : runSaved(write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }))
     // inline description images are hidden attachments; when neither the new
     // text nor the text it just replaced references one any more, reap the
     // row + bytes. Keeping the replaced text's refs for one more save gives
@@ -3937,9 +4076,12 @@ export const PLANNER = {
     return uuid
   },
 
-  updateProject: (id: string, patch: ProjectPatch) => {
+  /* Paints the change at once and sends it. Resolves true when the server
+     accepts it or nothing needed sending, false when it is missing here or
+     refused by the server (toasted). removeAccess waits on it. */
+  updateProject: (id: string, patch: ProjectPatch): Promise<boolean> => {
     const row = rows.projects.get(id)
-    if (!row) return
+    if (!row) return Promise.resolve(false)
     if ('teamAccess' in patch) {
       rows.teamAccess = rows.teamAccess.filter((a) => a.project_id !== id)
       Object.entries(patch.teamAccess || {}).forEach(([teamId, level]) => {
@@ -3985,8 +4127,8 @@ export const PLANNER = {
     if ('reviewHours' in patch) wire.review_hours = patch.reviewHours ?? null
     if ('access' in patch) wire.access = patch.access || {}
     if ('teamAccess' in patch) wire.team_access = patch.teamAccess || {}
-    if (!Object.keys(wire).length) return
-    run(write(api.projects.update, { org_id: row.org_id, id, patch: wire }))
+    if (!Object.keys(wire).length) return Promise.resolve(true)
+    return runSaved(write(api.projects.update, { org_id: row.org_id, id, patch: wire }))
   },
 
   /* Archive a project (0106). The row stays — that is the difference between
@@ -4255,15 +4397,18 @@ export const PLANNER = {
     )
   },
 
-  removeTeamMember: (teamId: string, uid: string) => {
+  /* Resolves whether the server removed the membership; false when there
+     was none to remove. */
+  removeTeamMember: (teamId: string, uid: string): Promise<boolean> => {
     const team = rows.teams.get(teamId)
-    if (!team || !rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid)) return
+    if (!team || !rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid))
+      return Promise.resolve(false)
     rows.teamMembers = rows.teamMembers.filter(
       (m) => !(m.team_id === teamId && m.profile_id === uid),
     )
     rebuild()
     emit()
-    run(
+    return runSaved(
       write(api.teams.removeMember, {
         org_id: team.org_id,
         team_id: teamId,
@@ -4289,9 +4434,12 @@ export const PLANNER = {
     )
   },
 
-  removeTeam: (id: string) => {
+  /* Resolves whether the server deleted the team; false for a missing team
+     or the last team of its organization, which the server refuses. */
+  removeTeam: (id: string): Promise<boolean> => {
+    if (!PLANNER.canDeleteTeam(id)) return Promise.resolve(false)
     const team = rows.teams.get(id)
-    if (rows.teams.size <= 1 || !team) return
+    if (!team) return Promise.resolve(false)
     // Projects are independent of teams. Deleting a team removes only its
     // memberships and permission grants; project rows and their work remain.
     // labels are org-wide since 0078 — deleting a team leaves them alone
@@ -4302,7 +4450,13 @@ export const PLANNER = {
     rows.teams.delete(id)
     rebuild()
     emit()
-    run(write(api.teams.deleteDeep, { org_id: team.org_id, id }))
+    return runSaved(write(api.teams.deleteDeep, { org_id: team.org_id, id }))
+  },
+  /** Whether a team exists and is not the last one in its organization.
+      Other organizations' teams in this client do not count. */
+  canDeleteTeam: (id: string): boolean => {
+    const team = rows.teams.get(id)
+    return !!team && [...rows.teams.values()].filter((t) => t.org_id === team.org_id).length > 1
   },
 
   addUser: (rec: NewUserInput) => {
@@ -4634,34 +4788,39 @@ export const PLANNER = {
      Lead field). Promoting someone hands the lead over and steps the old
      lead down to user. The current lead cannot be removed without a handover. A pure
      delegate to updateProject — one mutation carries grants and lead. */
-  setProjectAccess: (metaId: string, userId: string, role: AccessLevel | null) => {
+  setProjectAccess: (
+    metaId: string,
+    userId: string,
+    role: AccessLevel | null,
+  ): Promise<boolean> => {
     const m = PLANNER.projects.find((p) => p.id === metaId)
-    if (!m) return
+    if (!m) return Promise.resolve(false)
     // row-level grants only — the 'lead' entry in m.access mirrors lead_id
-    const acc: Record<string, AccessLevel> = {}
-    rows.access.forEach((a) => {
-      if (a.project_id === metaId) acc[a.profile_id] = a.level
-    })
+    const acc = grantsOn(metaId)
     if (role === 'lead') {
-      if (m.lead === userId) return
+      if (m.lead === userId) return Promise.resolve(true)
       delete acc[userId]
       if (m.lead) acc[m.lead] = 'user'
-      PLANNER.updateProject(metaId, { access: acc, lead: userId })
-    } else {
-      if (role) acc[userId] = role
-      else delete acc[userId]
-      if (m.lead === userId) return
-      PLANNER.updateProject(metaId, { access: acc })
+      return PLANNER.updateProject(metaId, { access: acc, lead: userId })
     }
+    if (role) acc[userId] = role
+    else delete acc[userId]
+    // the lead's access is the Lead field: hand it over first
+    if (m.lead === userId) return Promise.resolve(false)
+    return PLANNER.updateProject(metaId, { access: acc })
   },
 
-  setProjectTeamAccess: (metaId: string, teamId: string, role: TeamAccessLevel | null) => {
+  setProjectTeamAccess: (
+    metaId: string,
+    teamId: string,
+    role: TeamAccessLevel | null,
+  ): Promise<boolean> => {
     const m = PLANNER.projects.find((p) => p.id === metaId)
-    if (!m) return
+    if (!m) return Promise.resolve(false)
     const teamAccess = { ...m.teamAccess }
     if (role) teamAccess[teamId] = role
     else delete teamAccess[teamId]
-    PLANNER.updateProject(metaId, { teamAccess })
+    return PLANNER.updateProject(metaId, { teamAccess })
   },
 
   setMilestone: (id: string, week: number) => {

@@ -1,6 +1,7 @@
 /* Modals: shared shell + New Issue + New Project (sub-project or program). */
 import {
   type ComponentPropsWithoutRef as ComponentPropsM,
+  Fragment,
   type ReactNode as ReactNodeM,
   useEffect as useEffectM,
   useRef as useRefM,
@@ -26,6 +27,7 @@ import { exactWeekForDate } from '../lib/weekDrafts'
 import {
   type AccessLevel,
   type AccessRemoval,
+  andList,
   type Holder,
   type IssueVM,
   type MilestoneVM,
@@ -33,6 +35,7 @@ import {
   type NewProjectInput,
   P,
   type TeamAccessLevel,
+  teamNoun,
 } from '../store/planner'
 
 const ctlClass = 'h-control w-full bg-surface-1 text-base font-sans'
@@ -711,59 +714,81 @@ function MoveIssueModal({
   )
 }
 
-/* ---------- Removing someone who has work in the project ----------
-   Shown before a person's or a team's grant is removed when someone would
-   lose sight of tasks they are assigned to or reviewing there. Keeping them
-   as Viewers is selected first; reassigning hands every listed task to one
-   person, or to nobody, and then removes the grant. Removing someone who is
-   already a Viewer leaves only the reassignment. The lists are taken when
-   the window opens, so a choice applies only to the tasks the person read;
-   if they or the chosen person's eligibility changed meanwhile, the window
-   shows the new lists and asks again. It stays open, and keeps the access
-   list behind it out of reach, until the removal has finished saving. If a
-   reassignment is refused the grant stays and so does the window, listing
-   the tasks that remain. */
+/* ---------- Removing access from someone who has work ----------
+   Shown before access is removed when someone would lose sight of open
+   tasks they are assigned to or reviewing: a person's or a team's grant in
+   project settings, or a member leaving a team or a team being deleted in
+   Team settings. Keeping them as Viewers is selected first; reassigning
+   hands every listed task to one person, or to nobody, and then removes the
+   access. Removing someone whose grant is already Viewer leaves only the
+   reassignment. The lists are taken when the window opens, so a choice
+   applies only to the tasks the person read; if they or the chosen person's
+   eligibility changed meanwhile, the window shows the new lists and asks
+   again. It stays open, and keeps the settings behind it out of reach, until
+   the server has accepted the removal. If a write is refused the access
+   stays and so does the window, listing the tasks that remain. If someone
+   else removed the access meanwhile, it closes and says so. */
 const NOBODY = '__nobody__'
-function AccessRemovalModal({
-  projectId,
-  change,
-  onClose,
-}: {
-  projectId: string
-  change: AccessRemoval
-  onClose: () => void
-}) {
+function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClose: () => void }) {
   const read = () => {
-    const removal = P.accessRemoval(projectId, change)
-    return { ...removal, choices: P.reassignChoices(projectId, change, removal.items) }
+    const removal = P.accessRemoval(change)
+    return { ...removal, choices: P.reassignChoices(change, removal.items) }
   }
-  const [{ people, items, choices }, setView] = useStateM(read)
+  const [{ people, items, projects, choices }, setView] = useStateM(read)
   const [changed, setChanged] = useStateM(false)
   const [saving, setSaving] = useStateM(false)
   const [canKeep] = useStateM(
-    () => !('userId' in change && P.project(projectId)?.access?.[change.userId] === 'viewer'),
+    () =>
+      !(
+        change.kind === 'userGrant' &&
+        P.project(change.projectId)?.access?.[change.userId] === 'viewer'
+      ),
   )
   const [keep, setKeep] = useStateM(canKeep)
   const [to, setTo] = useStateM(NOBODY)
-  const project = P.project(projectId)
-  if (!project || !items.length) return null
+  if (!items.length) return null
   const names = people.map((id) => P.user(id)?.name || 'Someone')
-  const who =
-    names.length === 1
-      ? names[0]
-      : names.length === 2
-        ? `${names[0]} and ${names[1]}`
-        : `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length > 3 ? 's' : ''}`
   const tasks = `${items.length} task${items.length === 1 ? '' : 's'}`
   // "the task" and "this task" read better than "the 1 task"
   const theTasks = items.length === 1 ? 'the task' : `the ${tasks}`
   const these = items.length === 1 ? 'this task' : 'these tasks'
   const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
-  const whole = project.type === 'meta' ? 'the whole project' : 'the whole sub-project'
+  const teamName = `the ${teamNoun(team?.name)}`
+  const person = 'userId' in change ? P.user(change.userId)?.name || 'Someone' : ''
+  const places = projects.flatMap((id) => P.project(id) || [])
+  // a project removal names its own project; a team change names where it reached
+  const project =
+    change.kind === 'userGrant' || change.kind === 'teamGrant' ? P.project(change.projectId) : null
+  const shown = places.length > 3 ? places.slice(0, 2) : places
+  const more = places.length - shown.length
+  const seen = project
+    ? project.type === 'meta'
+      ? 'the whole project'
+      : 'the whole sub-project'
+    : andList(
+        places.map((p) => P.projectLabel(p)),
+        (n) => `${n} other projects`,
+      )
+  const inIt = places.length > 1 ? 'them' : 'it'
   const keepText =
     names.length === 1
-      ? `${names[0].split(' ')[0]} keeps ${theTasks} and can see ${whole}, but can't change anything in it, including ${these}.`
-      : `They keep their tasks and can see ${whole}, but can't change anything in it, including ${these}.`
+      ? `${names[0].split(' ')[0]} keeps ${theTasks} and can see ${seen}, but can't change anything in ${inIt}, including ${these}.`
+      : `They keep their tasks and can see ${seen}, but can't change anything in ${inIt}, including ${these}.`
+  const deleting = change.kind === 'deleteTeam'
+  const title =
+    change.kind === 'userGrant'
+      ? `Remove ${person}?`
+      : change.kind === 'teamGrant'
+        ? `Remove ${teamName}?`
+        : change.kind === 'teamMember'
+          ? `Remove ${person} from ${teamName}?`
+          : `Delete ${teamName}?`
+  const keepLabel =
+    change.kind === 'teamMember'
+      ? 'Keep as Viewer and remove'
+      : deleting
+        ? `Keep as Viewer${people.length === 1 ? '' : 's'} and delete`
+        : 'Change to Viewer'
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
     void removal.then((removed) => {
@@ -783,9 +808,23 @@ function AccessRemovalModal({
         .join()
     const lost = !keep && to !== NOBODY && !now.choices.some((u) => u.id === to)
     if (lost || key(now.items) !== key(items)) {
-      // nobody loses sight of anything any more: the plain removal applies
       if (!now.items.length) {
-        finish(P.removeAccess(projectId, change, { to: null }, []))
+        // someone else removed this access meanwhile: say so instead of a silent close
+        if (!P.removalPending(change)) {
+          const gone =
+            change.kind === 'userGrant'
+              ? `${person} no longer has this access.`
+              : change.kind === 'teamGrant'
+                ? `The ${teamNoun(team?.name)} no longer has this access.`
+                : change.kind === 'teamMember'
+                  ? `${person} has already left ${teamName}.`
+                  : `The ${teamNoun(team?.name)} was already deleted.`
+          window.showToast?.(`${gone} Nothing was changed.`, 'info')
+          onClose()
+          return
+        }
+        // nobody loses sight of anything any more: the plain removal applies
+        finish(P.removeAccess(change, { to: null }, []))
         return
       }
       setView(now)
@@ -793,14 +832,7 @@ function AccessRemovalModal({
       if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
       return
     }
-    finish(
-      P.removeAccess(
-        projectId,
-        change,
-        keep ? { keep: true } : { to: to === NOBODY ? null : to },
-        items,
-      ),
-    )
+    finish(P.removeAccess(change, keep ? { keep: true } : { to: to === NOBODY ? null : to }, items))
   }
   const option = (selected: boolean) =>
     cn(
@@ -810,17 +842,31 @@ function AccessRemovalModal({
   return (
     <ModalShell
       icon="warning"
-      title={team ? `Remove the ${team.name} team?` : `Remove ${names[0]}?`}
+      title={title}
       onClose={saving ? () => {} : onClose}
       onSubmit={submit}
       canSubmit={!saving}
-      submitLabel={saving ? 'Saving…' : keep ? 'Change to Viewer' : 'Reassign and remove'}
+      submitLabel={
+        saving
+          ? 'Saving…'
+          : keep
+            ? keepLabel
+            : deleting
+              ? 'Reassign and delete'
+              : 'Reassign and remove'
+      }
       width={500}
     >
       <div data-access-removal className="flex flex-col gap-3">
         <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
-          {who} {names.length === 1 ? 'is' : 'are'} assigned to or reviewing {tasks} in{' '}
-          <b className="text-text-1">{P.projectLabel(project)}</b>.
+          {andList(names)} {names.length === 1 ? 'is' : 'are'} assigned to or reviewing {tasks} in{' '}
+          {shown.map((p, i) => (
+            <Fragment key={p.id}>
+              {i > 0 && (i === shown.length - 1 && !more ? ' and ' : ', ')}
+              <b className="text-text-1">{P.projectLabel(p)}</b>
+            </Fragment>
+          ))}
+          {more > 0 && ` and ${more} other projects`}.
         </p>
         {changed && (
           <p className="text-sm [color:var(--danger)]">
@@ -830,7 +876,7 @@ function AccessRemovalModal({
         <div className="max-h-48 overflow-auto rounded-lg border border-border">
           {items.map((i) => (
             <div
-              key={`${i.task.id}:${i.role}`}
+              key={`${i.task.id}:${i.role}:${i.uid}`}
               className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm first:border-t-0"
             >
               <span className="w-12 shrink-0 font-mono text-xs text-text-2">{i.task.key}</span>
@@ -872,7 +918,7 @@ function AccessRemovalModal({
             )}
             <span className="flex flex-col gap-0.5">
               <span className="text-base font-semibold text-text-1">
-                Reassign {theTasks}, then remove
+                Reassign {theTasks}, then {deleting ? 'delete the team' : 'remove'}
               </span>
               <span className="text-sm text-text-2">Reviewer roles move to the same person.</span>
             </span>

@@ -395,8 +395,7 @@ export function ProjectPage({
      on first asks whether to keep them as Viewers or reassign their tasks. */
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
   const removeOrAsk = (change: AccessRemoval) => {
-    if (P.accessRemoval(proj.id, change).items.length) setRemoval(change)
-    else void P.removeAccess(proj.id, change, { to: null }, [])
+    if (P.startRemoval(change)) setRemoval(change)
   }
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
@@ -660,11 +659,13 @@ export function ProjectPage({
             access={proj.access || {}}
             onTeamChange={(teamId, level) =>
               level === null
-                ? removeOrAsk({ teamId })
+                ? removeOrAsk({ kind: 'teamGrant', projectId: proj.id, teamId })
                 : P.setProjectTeamAccess(proj.id, teamId, level)
             }
             onUserChange={(userId, level) =>
-              level === null ? removeOrAsk({ userId }) : P.setProjectAccess(proj.id, userId, level)
+              level === null
+                ? removeOrAsk({ kind: 'userGrant', projectId: proj.id, userId })
+                : P.setProjectAccess(proj.id, userId, level)
             }
             role={grantRole}
             onRoleChange={setGrantRole}
@@ -674,8 +675,7 @@ export function ProjectPage({
           />
           {removal && (
             <AccessRemovalModal
-              key={'userId' in removal ? removal.userId : removal.teamId}
-              projectId={proj.id}
+              key={JSON.stringify(removal)}
               change={removal}
               onClose={() => setRemoval(null)}
             />
