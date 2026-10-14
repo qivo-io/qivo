@@ -137,6 +137,17 @@ describe('CopyValue', () => {
     expect(container.querySelector('button')?.textContent).toBe('Copy address qvt_new')
   })
 
+  it('reports nothing for a copy still pending when the value leaves the screen', async () => {
+    let fail!: (e: Error) => void
+    writeText.mockImplementation(() => new Promise<void>((_, reject) => (fail = reject)))
+    await render('qvt_secret')
+    await click(container.querySelector('button')!)
+
+    await act(async () => root.render(null))
+    await act(async () => fail(new Error('denied')))
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
   it('starts without the old outcome when a new value replaces this one', async () => {
     await render('qvt_first')
     await click(container.querySelector('button')!)

@@ -59,7 +59,15 @@ export function CopyValue({
     attempt.current += 1
   }, [value])
   const fallback = useRef<HTMLElement>(null)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  // Leaving the screen (Done) retires a pending copy too: its outcome would
+  // describe text that is gone.
+  useEffect(
+    () => () => {
+      attempt.current += 1
+      clearTimeout(timer.current)
+    },
+    [],
+  )
   // The fallback replaces the button that held focus, so focus moves to the
   // text and selects it whole: Ctrl/Cmd+C works at once.
   useEffect(() => {
