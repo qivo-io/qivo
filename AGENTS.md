@@ -55,6 +55,14 @@ leaves it out. Only `demo.qivo.io` redirects `/` to `/app`. Run
 Changes to application access control must fail closed.
 Do not create or modify GitHub issues; Qivo work items are tasks.
 
+## Docstrings
+
+Use concise docstrings for functions and classes, including internal code.
+Follow the language’s conventions and always include a brief summary.
+Add details only for non-obvious behavior, constraints, side effects, or errors.
+Avoid restating the signature or implementation, and update docstrings when
+behavior changes.
+
 ## Deployment and version control
 
 Work on implementation branches.
