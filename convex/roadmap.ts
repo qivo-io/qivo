@@ -21,6 +21,7 @@ import {
   updateIssueCore,
 } from './model/issues'
 import { notifyIssueUpdate } from './model/messages'
+import { changeableMilestone, cleanMilestoneWeek, milestoneTarget } from './model/milestones'
 import { weekLabel } from './model/orgs'
 
 type Context = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
@@ -69,6 +70,13 @@ async function writer(ctx: Context, projectId: string) {
     throw forbidden('no write access to this project')
   await assertBillingWritable(ctx, project.org_id)
   return { project, me }
+}
+
+/* The caller's seat in the organization that holds `projectId`, if any.
+ * The shared milestone rules (model/milestones.ts) then decide for it. */
+async function seatFor(ctx: Context, projectId: string | undefined) {
+  const project = projectId === undefined ? null : await byId(ctx, 'projects', projectId)
+  return project ? ctx.myProfiles.get(project.org_id) : undefined
 }
 
 async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> {
@@ -154,12 +162,6 @@ const operation = v.union(
   v.object({ kind: v.literal('milestone_remove'), id: v.string() }),
 )
 
-function cleanWeek(week: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(week))
-    throw badRequest('a milestone week is an ISO date (YYYY-MM-DD)')
-  return week
-}
-
 async function logMilestone(
   ctx: Context,
   before: Milestone | undefined,
@@ -241,14 +243,16 @@ export const change = authedMutation({
         if (!beforeMilestones.has(op.id))
           beforeMilestones.set(op.id, existing ? milestoneValues(existing) : undefined)
         if (op.kind === 'milestone_create') {
-          const { project } = await writer(ctx, op.project_id)
-          if (project.archived_at !== undefined)
-            throw rule('that project is archived — restore it first')
+          // A sub-project folds up to the top-level project that stores it.
+          const me = await seatFor(ctx, op.project_id)
+          if (!me) throw notFound('project not found')
+          const project = await milestoneTarget(ctx, me, op.project_id)
+          await assertBillingWritable(ctx, project.org_id)
           const after = {
             id: op.id,
-            project_id: op.project_id,
+            project_id: project.id,
             name: op.name,
-            week: cleanWeek(op.week),
+            week: cleanMilestoneWeek(op.week),
             created_at: now,
           }
           await insertUnique(
@@ -261,15 +265,17 @@ export const change = authedMutation({
           )
           await logMilestone(ctx, undefined, after, now)
         } else {
-          if (!existing) throw notFound('milestone not found')
-          await writer(ctx, existing.project_id)
+          const me = await seatFor(ctx, existing?.project_id)
+          if (!existing || !me) throw notFound('milestone not found')
+          await changeableMilestone(ctx, me, op.id)
+          await assertBillingWritable(ctx, me.org_id)
           const before = milestoneValues(existing)
           if (op.kind === 'milestone_remove') {
             await ctx.db.delete(existing._id)
             await logMilestone(ctx, before, undefined, now)
           } else {
             const patch = { ...op.patch }
-            if (patch.week !== undefined) patch.week = cleanWeek(patch.week)
+            if (patch.week !== undefined) patch.week = cleanMilestoneWeek(patch.week)
             const after = { ...before, ...patch }
             if (same(before, after)) continue
             await ctx.db.patch(existing._id, patch)

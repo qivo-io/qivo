@@ -2,17 +2,28 @@ import { badRequest } from '../lib/functions'
 
 type TaskDateField = 'start_week' | 'end_week' | 'due_date'
 
-/** Null clears a date; stored values must be real ISO calendar days. */
-export function cleanTaskDate(value: unknown, field: TaskDateField): string | undefined {
-  if (value == null) return undefined
+/** Returns `value` when it is one real calendar day written YYYY-MM-DD, the
+ * rule for task dates and milestone weeks (model/milestones.ts). Refuses
+ * other text with `refusals.shape` and a day that does not exist, such as
+ * 2026-02-31, with `refusals.date`. */
+export function calendarDay(value: unknown, refusals: { shape: string; date: string }): string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw badRequest(`${field} must be YYYY-MM-DD or null`)
+    throw badRequest(refusals.shape)
   }
   const date = new Date(`${value}T00:00:00.000Z`)
   if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
-    throw badRequest(`${field} must be a valid calendar date or null`)
+    throw badRequest(refusals.date)
   }
   return value
+}
+
+/** Null clears a date; stored values must be real ISO calendar days. */
+export function cleanTaskDate(value: unknown, field: TaskDateField): string | undefined {
+  if (value == null) return undefined
+  return calendarDay(value, {
+    shape: `${field} must be YYYY-MM-DD or null`,
+    date: `${field} must be a valid calendar date or null`,
+  })
 }
 
 /** Validate the resulting plan, including an unchanged endpoint on updates. */

@@ -640,9 +640,9 @@ export default defineSchema({
 
   milestones: defineTable({
     id: v.string(),
-    project_id: v.string(),
+    project_id: v.string(), // writes store a top-level project (model/milestones.ts)
     name: v.string(),
-    week: v.string(), // Monday of the milestone week
+    week: v.string(), // YYYY-MM-DD calendar day, usually the first day of its week
     created_at: v.string(),
   })
     .index('by_uuid', ['id'])

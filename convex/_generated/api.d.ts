@@ -102,6 +102,7 @@ import type * as model_demoSeed from "../model/demoSeed.js";
 import type * as model_demoUploads from "../model/demoUploads.js";
 import type * as model_issues from "../model/issues.js";
 import type * as model_messages from "../model/messages.js";
+import type * as model_milestones from "../model/milestones.js";
 import type * as model_orgs from "../model/orgs.js";
 import type * as model_people from "../model/people.js";
 import type * as model_projects from "../model/projects.js";
@@ -230,6 +231,7 @@ declare const fullApi: ApiFromModules<{
   "model/demoUploads": typeof model_demoUploads;
   "model/issues": typeof model_issues;
   "model/messages": typeof model_messages;
+  "model/milestones": typeof model_milestones;
   "model/orgs": typeof model_orgs;
   "model/people": typeof model_people;
   "model/projects": typeof model_projects;
