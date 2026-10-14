@@ -104,11 +104,13 @@ export function TeamPage({
                   leads are assigned from each project's access settings. */}
                 <HoverTooltip
                   content={
-                    u.orgRole === 'viewer'
-                      ? 'Organization viewers cannot lead a team.'
-                      : canManage
-                        ? 'Manage this team’s members and settings.'
-                        : 'Only team leaders and organization admins can change leaders.'
+                    u.isAgent
+                      ? 'Agents cannot lead a team.'
+                      : u.orgRole === 'viewer'
+                        ? 'Organization viewers cannot lead a team.'
+                        : canManage
+                          ? 'Manage this team’s members and settings.'
+                          : 'Only team leaders and organization admins can change leaders.'
                   }
                 >
                   <label

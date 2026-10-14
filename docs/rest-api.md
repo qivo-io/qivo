@@ -292,10 +292,10 @@ without a grant, the one thing a key must not be able to do if it leaks. The
 profile shape refuses it (0100, widened by 0102 to admit `viewer` and nothing
 else). It never leads a team either, because only people lead teams. A leaked
 agent key therefore cannot set anyone's capacity. And since 0103 an agent has
-no plannable week of its own to set either; the setter
-refuses one outright. Change a person's hours in the app, or over MCP —
-`update_user` there runs as whoever holds the credential and answers to the
-same rule. `POST`/`PATCH` on these routes are 404.
+no plannable week of its own to set either; the setter refuses one outright.
+Change a person's hours in the app, or over MCP, where `update_user` runs as
+whoever holds the credential and answers to the same rule. `POST`/`PATCH` on
+these routes are 404.
 
 ### Tasks
 

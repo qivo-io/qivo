@@ -11,7 +11,8 @@
  *   tm_insert/update/delete admin-or-leader; grantee same org, never a guest
  *                           (0081:223-251); a leader is never a viewer
  *                           (0102:334-359 — WITH CHECK, no sentence: forbidden)
- *                           and never an agent (lib/access canLeadTeams)
+ *                           and never an agent (lib/access canLeadTeams,
+ *                           a rule sentence)
  *
  * Narration is asymmetric BY DESIGN: create/update/delete write NO
  * activity; the membership verbs write three ('added'/'removed'/'made'/
@@ -223,8 +224,8 @@ export const removeMember = orgMutation({
  * P.setTeamLeader. Same-value and missing-row calls are silent no-ops (T15 —
  * the old client pre-checked; the SQL update matched 0 changed rows).
  * Only people lead teams (lib/access canLeadTeams), so promoting an agent is
- * refused with its own sentence. An agent's older leader row grants nothing
- * and can still be demoted.
+ * refused with a rule sentence the app toasts. An agent's older leader row
+ * grants nothing and can still be demoted.
  * Promoting a viewer is refused — "a viewer is never a team leader" (0102's
  * WITH CHECK; no sentence existed, so forbidden). Promoting a guest left
  * with a stale membership is refused too. Demoting stays allowed, so stale
@@ -240,12 +241,13 @@ export const setLeader = orgMutation({
     if (row === null || row.is_leader === is_leader) return null
     const member = await byId(ctx, 'profiles', profile_id)
     if (is_leader && member !== null && !canLeadTeams(member)) {
+      // The Team page offers the Leader box for agent members, so that
+      // refusal is a rule the app shows verbatim.
+      if (member.kind === 'agent') throw rule('an agent cannot lead a team')
       throw forbidden(
-        member.kind === 'agent'
-          ? 'an agent cannot lead a team'
-          : member.org_role === 'viewer'
-            ? 'a viewer is never a team leader'
-            : 'a guest is never a team member',
+        member.org_role === 'viewer'
+          ? 'a viewer is never a team leader'
+          : 'a guest is never a team member',
       )
     }
     await ctx.db.patch(row._id, { is_leader })

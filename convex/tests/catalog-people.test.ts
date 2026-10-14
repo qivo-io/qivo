@@ -1105,7 +1105,7 @@ describe('teams membership — the three verbs', () => {
     })
     // Refused for the admin and for the team's own leader alike.
     for (const caller of [f.admin, f.user]) {
-      await expectRefusal(lead(caller, true), 'forbidden', /^an agent cannot lead a team$/)
+      await expectRefusal(lead(caller, true), 'rule', /^an agent cannot lead a team$/)
     }
     expect((await membership(t, f.team.id, f.agent.id))?.is_leader).toBe(false)
     // A leader row written before this rule grants nothing and can be cleared.
