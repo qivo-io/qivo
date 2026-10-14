@@ -111,14 +111,11 @@ describe('task subscriber popover', () => {
     })
   })
 
-  it('does not grant management through ordinary sharing or relaxed policy', async () => {
+  it('does not grant management through ordinary sharing', async () => {
     const { t, f, ordinary, roster, set } = await fixture()
     const ledIssue = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
     expect((await roster(f.user, ledIssue.id)).canManage).toBe(true)
     await set(f.user, f.admin.id, true, ledIssue.id)
-    await t.run(async (ctx) => {
-      await ctx.db.patch(f.org._id, { only_team_leads_manage_project_users: false })
-    })
     expect((await roster(ordinary)).canManage).toBe(false)
     await expectRefusal(set(ordinary, f.viewer.id, true), 'forbidden')
   })

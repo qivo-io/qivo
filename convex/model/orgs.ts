@@ -193,7 +193,6 @@ export const newOrgDefaults = (now: string) => ({
   default_plannable_hours: 32,
   gravatar_avatars: true,
   max_attachment_mb: 20,
-  only_team_leads_manage_project_users: true,
 })
 
 /* New teams mark tasks stale after 120 days and auto-archive after 30 days.

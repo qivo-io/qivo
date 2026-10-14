@@ -19,7 +19,7 @@ async function fixture() {
 }
 
 describe('named lead permission management', () => {
-  it('a direct User grant and team leadership cannot administer access under either legacy policy value', async () => {
+  it('a direct User grant and team leadership cannot administer access', async () => {
     const { t, f, person } = await fixture()
     await t.run((ctx) =>
       ctx.db.insert('project_access', {
@@ -28,31 +28,25 @@ describe('named lead permission management', () => {
         level: 'user',
       }),
     )
-    for (const enabled of [true, false]) {
-      await as(t, f.admin).mutation(api.orgs.update, {
-        org_id: f.org.id,
-        patch: { only_team_leads_manage_project_users: enabled },
-      })
-      for (const patch of [
-        { access: {} },
-        { team_access: { [f.team.id]: 'user' as const } },
-        { lead_id: person.id },
-      ]) {
-        await expectRefusal(
-          as(t, person).mutation(api.projects.update, { org_id: f.org.id, id: f.meta.id, patch }),
-          'forbidden',
-        )
-      }
+    for (const patch of [
+      { access: {} },
+      { team_access: { [f.team.id]: 'user' as const } },
+      { lead_id: person.id },
+    ]) {
       await expectRefusal(
-        as(t, person).mutation(api.projects.inviteGuest, {
-          org_id: f.org.id,
-          project_id: f.meta.id,
-          email: 'guest@example.test',
-          level: 'viewer',
-        }),
-        'rule',
+        as(t, person).mutation(api.projects.update, { org_id: f.org.id, id: f.meta.id, patch }),
+        'forbidden',
       )
     }
+    await expectRefusal(
+      as(t, person).mutation(api.projects.inviteGuest, {
+        org_id: f.org.id,
+        project_id: f.meta.id,
+        email: 'guest@example.test',
+        level: 'viewer',
+      }),
+      'rule',
+    )
   })
 
   it('the named lead manages explicit team and individual permissions on either hierarchy level', async () => {

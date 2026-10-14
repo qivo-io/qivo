@@ -97,7 +97,6 @@ export const shapeOrg = (
   // people added to my organization, and a guest-only login adds none.
   defaultPlannableHours: home ? Number(home.default_plannable_hours) : DEFAULT_PLANNABLE_HOURS,
   maxAttachmentMb: home?.max_attachment_mb ?? 20,
-  onlyTeamLeadsManageProjectUsers: home?.only_team_leads_manage_project_users !== false,
   // who may create top-level projects besides org admins; missing is 'users'
   projectCreators: home?.project_creators ?? 'users',
   // may the browser ask gravatar.com for a picture (0096)? The HOME org's
