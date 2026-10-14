@@ -74,6 +74,8 @@ export function TeamPage({
         <div className="[display:flex] [flex-direction:column] [gap:6px]">
           {members.map((u) => {
             const isLeader = (u.teamLeads || []).includes(ws)
+            // Viewers and agents never lead; an old agent leader row can still be cleared.
+            const leaderLocked = u.orgRole === 'viewer' || (u.isAgent && !isLeader)
             const arm = confirm === `m:${u.id}`
             return (
               <div
@@ -117,8 +119,8 @@ export function TeamPage({
                     htmlFor={`team-leader-${ws}-${u.id}`}
                     data-team-leader-toggle
                     style={{
-                      cursor: canManage && u.orgRole !== 'viewer' ? 'pointer' : 'default',
-                      opacity: canManage && u.orgRole !== 'viewer' ? 1 : 0.55,
+                      cursor: canManage && !leaderLocked ? 'pointer' : 'default',
+                      opacity: canManage && !leaderLocked ? 1 : 0.55,
                     }}
                     className="[display:flex] [align-items:center] [gap:6px] [font-size:var(--fs-sm)] [color:var(--text-2)] [flex-shrink:0]"
                   >
@@ -126,7 +128,7 @@ export function TeamPage({
                       id={`team-leader-${ws}-${u.id}`}
                       type="checkbox"
                       checked={isLeader}
-                      disabled={!canManage || u.orgRole === 'viewer'}
+                      disabled={!canManage || leaderLocked}
                       onChange={(e) => P.setTeamLeader(ws, u.id, e.target.checked)}
                       className="[accent-color:var(--primary)]"
                     />
