@@ -125,6 +125,18 @@ describe('CopyValue', () => {
     expect(glyph()).toContain('lucide-check')
   })
 
+  it('ignores a pending copy of a value that has since been replaced', async () => {
+    let fail!: (e: Error) => void
+    writeText.mockImplementation(() => new Promise<void>((_, reject) => (fail = reject)))
+    await render('qvt_old')
+    await click(container.querySelector('button')!)
+
+    await render('qvt_new')
+    await act(async () => fail(new Error('denied')))
+    expect(showToast).not.toHaveBeenCalled()
+    expect(container.querySelector('button')?.textContent).toBe('Copy address qvt_new')
+  })
+
   it('starts without the old outcome when a new value replaces this one', async () => {
     await render('qvt_first')
     await click(container.querySelector('button')!)

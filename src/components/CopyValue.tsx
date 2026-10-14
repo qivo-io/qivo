@@ -53,7 +53,11 @@ export function CopyValue({
   const outcome = result?.value === value ? result.outcome : undefined
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   // Clicks can overlap while a write is pending; only the latest one reports.
+  // A new value also retires a pending copy, which belonged to the old one.
   const attempt = useRef(0)
+  useEffect(() => {
+    attempt.current += 1
+  }, [value])
   const fallback = useRef<HTMLElement>(null)
   useEffect(() => () => clearTimeout(timer.current), [])
   // The fallback replaces the button that held focus, so focus moves to the
