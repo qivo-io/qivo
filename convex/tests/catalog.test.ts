@@ -100,6 +100,17 @@ describe('orgs.update — settings, silently', () => {
     )
   })
 
+  it('refuses the retired team leads policy instead of storing it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a client built before the setting was retired still sends this field
+    const retired = { only_team_leads_manage_project_users: false } as unknown as { name?: string }
+    await expect(
+      as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch: retired }),
+    ).rejects.toThrowError(/Validator error/)
+    expect((await orgRow(t, f.org.id))?.only_team_leads_manage_project_users).toBeUndefined()
+  })
+
   it('only an administrator of this organization can change its attachment cap', async () => {
     const t = newT()
     const f = await withOrg(t)

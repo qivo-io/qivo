@@ -41,7 +41,6 @@ export const update = adminMutation({
       default_plannable_hours: v.optional(v.number()),
       gravatar_avatars: v.optional(v.boolean()),
       max_attachment_mb: v.optional(v.number()),
-      only_team_leads_manage_project_users: v.optional(v.boolean()),
       project_creators: v.optional(vProjectCreators),
     }),
   },
@@ -58,7 +57,6 @@ export const update = adminMutation({
         | 'default_plannable_hours'
         | 'gravatar_avatars'
         | 'max_attachment_mb'
-        | 'only_team_leads_manage_project_users'
         | 'project_creators'
       >
     > = {}
@@ -83,9 +81,6 @@ export const update = adminMutation({
       fields.default_plannable_hours = Math.max(1, Math.min(168, Math.round(n)))
     }
     if (patch.gravatar_avatars !== undefined) fields.gravatar_avatars = patch.gravatar_avatars
-    if (patch.only_team_leads_manage_project_users !== undefined) {
-      fields.only_team_leads_manage_project_users = patch.only_team_leads_manage_project_users
-    }
     if (patch.project_creators !== undefined) fields.project_creators = patch.project_creators
     if (patch.max_attachment_mb !== undefined) {
       const n = patch.max_attachment_mb

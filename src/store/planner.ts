@@ -1821,7 +1821,6 @@ export type OrgPatch = Partial<{
   weekOneRule: FunctionArgs<typeof api.orgs.update>['patch']['week_one_rule']
   defaultPlannableHours: number | string
   maxAttachmentMb: number | string
-  onlyTeamLeadsManageProjectUsers: boolean
   projectCreators: FunctionArgs<typeof api.orgs.update>['patch']['project_creators']
   gravatarAvatars: boolean
 }>
@@ -4375,11 +4374,6 @@ export const PLANNER = {
       const mb = Math.max(1, Math.min(20, Math.round(Number(patch.maxAttachmentMb) || 0)))
       org.max_attachment_mb = mb
       wire.max_attachment_mb = mb
-    }
-    if ('onlyTeamLeadsManageProjectUsers' in patch) {
-      const on = !!patch.onlyTeamLeadsManageProjectUsers
-      org.only_team_leads_manage_project_users = on
-      wire.only_team_leads_manage_project_users = on
     }
     if ('projectCreators' in patch && isProjectCreators(patch.projectCreators)) {
       org.project_creators = patch.projectCreators
