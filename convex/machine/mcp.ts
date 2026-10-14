@@ -55,6 +55,7 @@ import {
   CALLER_DEACTIVATED,
   CALLER_GONE,
   type Caller,
+  type CredentialRef,
   childProjectsCore,
   commentOut,
   findIssue,
@@ -67,7 +68,9 @@ import {
   listUsersCore,
   loadCatalogue,
   mcpProjectOut,
+  meCore,
   userJson,
+  vCredentialRef,
 } from '../lib/core'
 import { byId } from '../lib/db'
 import { vCredentialAccess, vIssuePriority, vIssueStatus } from '../lib/enums'
@@ -95,7 +98,7 @@ import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 
-/* ------------------------------------------------------------ the 12 tools
+/* ------------------------------------------------------------ the 13 tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
  * read/write `access` flag, its `def` and the `run` that calls its internal
  * fn. tools/list answers the defs in this order. Titles, descriptions and
@@ -129,13 +132,30 @@ type ToolDef = {
   }
 }
 
-/** The principal and the arguments a tool's `run` receives. */
-type ToolInput = Principal & { args: Record<string, unknown> }
+/** The principal, the credential row that authenticated the request (for
+ *  get_me) and the arguments a tool's `run` receives. */
+type ToolInput = Principal & { credential: CredentialRef; args: Record<string, unknown> }
 
 /** One MCP tool. `run` answers the already pretty-printed result text. */
 type McpTool = MachineEntry<ToolInput, string> & { def: ToolDef }
 
 export const TOOLS: McpTool[] = [
+  {
+    access: 'read',
+    def: {
+      name: 'get_me',
+      title: 'Who am I',
+      description:
+        "Your own user, your organization's settings (calendar, upload limit, who may create projects), whether billing has paused changes, and this credential's kind and access (`read` or `write`). Call it first to learn who you act as and whether you can make changes.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {},
+      },
+    },
+    run: (r, { callerId, access, credential }) =>
+      r.runQuery(internal.machine.mcp.getMe, { callerId, access, credential }),
+  },
   {
     access: 'read',
     def: {
@@ -1174,6 +1194,16 @@ const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
  * `your account has no write access to that project` write refusal, the
  * machine wordings of the shared rules. */
 
+/* get_me runs lib/core.ts meCore, shared with REST's GET /v1/me. Only this
+ * function takes the credential row. */
+export const getMe = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, credential: vCredentialRef },
+  handler: async (ctx, { callerId, access, credential }): Promise<string> => {
+    const me = await asMachineCaller(ctx, callerId, access)
+    return pretty(await meCore(ctx, me, access, credential))
+  },
+})
+
 export const listTeams = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess },
   handler: async (ctx, { callerId, access }): Promise<string> => {
@@ -1577,13 +1607,14 @@ export const deleteIssue = internalMutation({
 async function runTool(
   ctx: ActionCtx,
   principal: Principal,
+  credential: CredentialRef,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
   const tool = TOOL_INDEX.get(name)
   // Unreachable, because callTool resolves names against TOOL_INDEX first.
   if (tool === undefined) throw new Error(`unknown tool ${name}`)
-  return await runEntry(ctx, tool, { ...principal, args })
+  return await runEntry(ctx, tool, { ...principal, credential, args })
 }
 
 /* Whether the named tool needs qivo:write. A known tool does unless its flag
@@ -1733,7 +1764,13 @@ const mcpPost = httpAction(async (ctx, request) => {
           const scope = toolWrites(name) ? 'qivo:write' : 'qivo:read'
           if (!live.scopes.includes(scope))
             throw forbidden(`This connection does not have the ${scope} scope.`)
-          return runTool(ctx, { callerId: live.profileId, access: live.access }, name, args)
+          return runTool(
+            ctx,
+            { callerId: live.profileId, access: live.access },
+            { table: 'oauth_connections', id: live.connectionId, rowId: live.connectionRowId },
+            name,
+            args,
+          )
         },
       })
     } catch (error) {
@@ -1768,7 +1805,17 @@ const mcpPost = httpAction(async (ctx, request) => {
       headers: request.headers,
       bodyText,
       runTool: (name, args) =>
-        runTool(ctx, { callerId: cred.profileId, access: cred.access }, name, args),
+        runTool(
+          ctx,
+          { callerId: cred.profileId, access: cred.access },
+          {
+            table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
+            id: cred.tokenId,
+            rowId: cred.rowId,
+          },
+          name,
+          args,
+        ),
       runEvent: (method, params) =>
         ctx.runAction(internal.webhookActions.manage, {
           owner: {

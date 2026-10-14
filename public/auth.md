@@ -63,15 +63,18 @@ Use these steps for a personal-token fallback or a named agent's key:
 
 - **MCP:** `https://api.qivo.io/mcp`, using Streamable HTTP and the client's
   OAuth connection, or `Authorization: Bearer <full-qvt-or-qva-secret>`.
-  Discover the tools through
-  the MCP client, then call `list_projects` to verify readable access and
-  `list_tasks` with a returned project reference to read its tasks. The task
-  tools are `list_tasks`, `get_task`, `create_task`, `update_task` and
-  `delete_task`. Refresh discovery or reconnect if the client has an older
-  tool catalogue.
+  Discover the tools through the MCP client, then call `get_me` to check
+  who the credential acts as and whether it can make changes
+  (`credential.access` is `write` or `read`). Call `list_projects` to verify
+  readable access and `list_tasks` with a returned project reference to read
+  its tasks. The task tools are `list_tasks`, `get_task`, `create_task`,
+  `update_task` and `delete_task`. Refresh discovery or reconnect if the
+  client has an older tool catalogue.
 - **Organization REST API:** `https://api.qivo.io/v1`, using
   `Authorization: Bearer <full-qva-secret>`. `X-Api-Key` is also accepted by
-  REST. Verify access with `GET https://api.qivo.io/v1/projects`, then use
+  REST. Check the credential with `GET https://api.qivo.io/v1/me`, which
+  returns its user, kind and access, verify readable access with
+  `GET https://api.qivo.io/v1/projects`, then use
   `GET /v1/tasks?project=<ref>` for tasks in a returned project and
   `GET /v1/tasks/{ref}` for one task, on the same API origin.
 

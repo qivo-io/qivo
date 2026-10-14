@@ -33,8 +33,10 @@ only read, so every change returns `403` with
 `this agent is a Viewer and can only read`. It can still create, list and
 remove its own task event subscriptions.
 
-The API lists projects and users and supports task search, creation, updates,
-deletion, archive/restore and comments. It checks field values, including the
+`GET /v1/me` says who the key acts as, the organization's calendar settings
+and whether the key can make changes. The API lists projects and users and
+supports task search, creation, updates, deletion, archive/restore and
+comments. It checks field values, including the
 80-character title limit and paired planning dates. An unreadable task returns
 404, as does a nonexistent one. Changes name the agent in the activity feed;
 comments use the agent as their author.
@@ -109,8 +111,9 @@ created on this page can make changes and do not expire automatically, so
 revoke them when no longer needed.
 Organization admins can instead create an agent user with its own key ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
-MCP tools list teams, projects, users, project users and tasks; read and change
-tasks; read and add comments; and set plannable weekly hours. Request
+MCP tools say who the connection acts as and whether it can make changes;
+list teams, projects, users, project users and tasks; read and change tasks;
+read and add comments; and set plannable weekly hours. Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

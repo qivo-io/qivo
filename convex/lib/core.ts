@@ -24,13 +24,14 @@
  * forbidden 403, bad_request 400, rule 400 — readable beats a 500); MCP
  * collapses every refusal into the one isError sentence. */
 
-import { ConvexError } from 'convex/values'
+import { ConvexError, type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { hasSubtasks, subtaskParentIds } from '../model/issues'
-import { canSeeProject, credentialAccess, hasProjectLevel, readOnlyRefusal } from './access'
-import { assertBillingWritable } from './billingAccess'
+import { attachmentLimitMb } from '../model/orgs'
+import { canSeeProject, hasProjectLevel, machineAccess, readOnlyRefusal } from './access'
+import { assertBillingWritable, BILLING_READ_ONLY, billingReadOnly } from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
 import type {
@@ -42,6 +43,7 @@ import type {
   ProjectType,
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
+import { canCreateProjects } from './projectCreators'
 import { allWordsMatcher } from './search'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
 
@@ -66,6 +68,10 @@ export type Caller = Doc<'profiles'>
 export const CALLER_GONE = 'caller_gone'
 export const CALLER_DEACTIVATED = 'caller_deactivated'
 
+/* The refusal for a caller, or its credential, that is gone by dispatch. */
+const callerGone = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({ code: 'forbidden', message: 'unknown agent key', reason: CALLER_GONE })
+
 /**
  * The live caller profile. In a mutation it also refuses a credential that
  * can only read, before any ref resolves, so a read-only caller learns
@@ -79,13 +85,7 @@ export async function asMachineCaller(
 ): Promise<Caller> {
   refuseDemoFeature()
   const me = await byId(ctx, 'profiles', callerId)
-  if (me === null) {
-    throw new ConvexError<Refusal>({
-      code: 'forbidden',
-      message: 'unknown agent key',
-      reason: CALLER_GONE,
-    })
-  }
+  if (me === null) throw callerGone()
   if (!me.active) {
     throw new ConvexError<Refusal>({
       code: 'forbidden',
@@ -94,8 +94,7 @@ export async function asMachineCaller(
     })
   }
   if ('insert' in ctx.db) {
-    const live = me.kind === 'agent' ? credentialAccess({ table: 'agent_keys' }, me) : 'write'
-    if (access !== 'write' || live !== 'write') throw readOnlyRefusal(me)
+    if (machineAccess(me, access) !== 'write') throw readOnlyRefusal(me)
     await assertBillingWritable(ctx, me.org_id)
   }
   return me
@@ -833,3 +832,85 @@ export async function commentOut(
     edited_by_name,
   }
 }
+
+/* --------------------------------------------------------------- who am I
+ * get_me (MCP) and GET /v1/me (REST) answer with the caller's own seat, the
+ * settings of its organization that shape every request (the calendar, the
+ * upload cap, who may create projects), whether billing pauses editing, and
+ * the credential the request came with. One read and one projection serve both
+ * surfaces; each surface only encodes it. Nothing here grants anything, and
+ * no secret, hash or display prefix leaves it. */
+
+/** The credential row that authenticated a machine request, which the HTTP
+ *  action passes to get_me alone. `rowId` binds it to the exact row the
+ *  lookup found, because app uuids may be reused after deletion. */
+export const vCredentialRef = v.object({
+  table: v.union(v.literal('agent_keys'), v.literal('mcp_tokens'), v.literal('oauth_connections')),
+  id: v.string(),
+  rowId: v.string(),
+})
+export type CredentialRef = Infer<typeof vCredentialRef>
+
+/* The wire name of each credential table. */
+const CREDENTIAL_KIND = {
+  agent_keys: 'agent_key',
+  mcp_tokens: 'personal_token',
+  oauth_connections: 'oauth',
+} as const satisfies Record<CredentialRef['table'], string>
+
+/**
+ * Who the caller is acting as, through which credential, with what access.
+ * `access` is what asMachineCaller enforces (machineAccess), so a client can
+ * learn whether it may write before it tries. A credential row that is gone,
+ * revoked or bound to another profile by now answers like a caller gone
+ * between lookup and dispatch.
+ */
+export async function meCore(
+  ctx: QueryCtx,
+  me: Caller,
+  access: CredentialAccess,
+  ref: CredentialRef,
+) {
+  const row =
+    ref.table === 'agent_keys'
+      ? await byId(ctx, 'agent_keys', ref.id)
+      : ref.table === 'mcp_tokens'
+        ? await byId(ctx, 'mcp_tokens', ref.id)
+        : await byId(ctx, 'oauth_connections', ref.id)
+  if (
+    row === null ||
+    row._id !== ref.rowId ||
+    row.profile_id !== me.id ||
+    row.revoked_at !== undefined
+  ) {
+    throw callerGone()
+  }
+  const org = await byId(ctx, 'organizations', me.org_id)
+  if (org === null) throw callerGone()
+  const readOnly = await billingReadOnly(ctx, org.id)
+  return {
+    user: { ...userJson(me), email: me.kind === 'person' ? (me.email ?? null) : null },
+    organization: {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      date_format: org.date_format,
+      week_start: org.week_start,
+      week_one_rule: org.week_one_rule,
+      default_plannable_hours: org.default_plannable_hours,
+      max_attachment_mb: attachmentLimitMb(org),
+      project_creators: org.project_creators ?? 'users',
+      can_create_projects: canCreateProjects(me, org.project_creators),
+    },
+    billing: { read_only: readOnly, reason: readOnly ? BILLING_READ_ONLY : null },
+    credential: {
+      kind: CREDENTIAL_KIND[ref.table],
+      access: machineAccess(me, access),
+      expires_at: 'token_hash' in row ? (row.expires_at ?? null) : null,
+      name: 'client_name' in row ? row.client_name : row.name,
+    },
+  }
+}
+
+/** What get_me and GET /v1/me answer. */
+export type MeJson = Awaited<ReturnType<typeof meCore>>

@@ -105,7 +105,7 @@ and the profile behind it are read fresh on every request.
 **Read-only credentials.** Every credential either can make changes or can
 only read. One shared rule decides it (`credentialAccess` in
 `convex/lib/access.ts`), and MCP, the REST API and webhook management all use
-it:
+it. `get_me` reports the result as `credential.access`:
 
 - A personal token can make changes only when it was created with change
   access and has not expired.
@@ -335,7 +335,7 @@ why. What changed, for anyone writing against the endpoint directly:
   `io.modelcontextprotocol/serverInfo`, since no client can be assumed to have
   asked. Every result carries a `resultType`, `"complete"` for all of ours.
 - **`tools/list` and `server/discover` are cacheable.** Both come back with
-  `ttlMs` (an hour) and `cacheScope: "private"` — the twelve tools are
+  `ttlMs` (an hour) and `cacheScope: "private"` — the thirteen tools are
   identical for every credential, but the response sits behind a bearer
   token, so cache it per client and never in a shared cache. Stop re-listing
   on every turn.
@@ -354,7 +354,7 @@ why. What changed, for anyone writing against the endpoint directly:
 with `initialize`, so a request without the `protocolVersion` envelope is
 served by the revision's own backward-compatible leg: `initialize` (echoing
 a supported 2025-era revision), `ping` (answering `{}`), `tools/list` and
-`tools/call`, the same twelve tools, one fresh server per request. That leg
+`tools/call`, the same thirteen tools, one fresh server per request. That leg
 also keeps the old framing: each response is a single SSE `event: message`
 frame, behind the Accept header the 2025 protocol required (it must name
 both `application/json` and `text/event-stream`, or the answer is `406`);
@@ -647,6 +647,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
 |---|---|
+| `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id` and `name` — teams group users for project sharing and administration. MCP does not list team grants; `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status`, `priority`, `assignee_id`, `search` (all word fragments across task ID, title and description, case-insensitive and in any order; `*` stays literal), `limit`; every result includes reporter, assignee and reviewer. `assignee_id` matches the stored assignee, also while a reviewer owns the task. Active tasks only by default — `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106) — a different axis, and the one without a flag |
@@ -659,6 +660,56 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters. The result's `updated` lists the fields you sent (and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
 | `delete_task` | Delete a task (attachment bytes are reaped) |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
+
+### Who am I
+
+`get_me` takes no arguments and answers four objects:
+
+```json
+{
+  "user": {
+    "id": "…uuid…", "name": "Priya Patel", "org_role": "user", "kind": "person",
+    "active": true, "plannable_hours": 31, "email": "priya@example.com"
+  },
+  "organization": {
+    "id": "…uuid…", "name": "Northstar Labs", "slug": "northstar-labs",
+    "date_format": "YYYY-MM-DD", "week_start": 1, "week_one_rule": "first4day",
+    "default_plannable_hours": 32, "max_attachment_mb": 20,
+    "project_creators": "users", "can_create_projects": true
+  },
+  "billing": { "read_only": false, "reason": null },
+  "credential": {
+    "kind": "personal_token", "access": "write",
+    "expires_at": "2027-01-31T00:00:00.000Z", "name": "Laptop"
+  }
+}
+```
+
+- `organization.week_start` is the **Workdays start on** setting, `0`
+  (Sunday) through `6` (Saturday), the first day of every planning week.
+  `week_one_rule` is **Week 1 of the year** (`first4day`, `jan1` or
+  `firstfull`), and `date_format` is how the app displays dates; tools always
+  use `YYYY-MM-DD`. `default_plannable_hours` is the capacity a new person
+  starts with, `max_attachment_mb` the upload limit per file in MiB, and
+  `slug` the organization's part of app links.
+- `project_creators` is the **Who can create new projects?** setting
+  (`admins`, `users`, the default, or `selected`). `can_create_projects` says
+  whether this user may create a top-level project under it, by the same
+  rule as the app's **New project** button.
+- `billing.read_only` is `true` while organization billing pauses editing,
+  and `reason` is then the sentence every writing tool is refused with. No
+  plan, price or usage is included.
+- `credential.kind` is `personal_token`, `oauth` or `agent_key`. `access` is
+  `write` when the credential may make changes and `read` when it can only
+  read, from the same rule that refuses writing tools (see
+  **Read-only credentials** above). A change still needs the user's project
+  permission and an organization that billing does not pause. `name` is the
+  token's or key's name, or the connected app's name for OAuth. `expires_at`
+  is a personal token's expiry, and `null` for a token without one, an OAuth
+  connection or an agent key.
+
+The answer never contains a secret, a hash or a display prefix. A read-only
+OAuth connection may call `get_me`, because it only reads.
 
 ### Import attribution
 
@@ -807,7 +858,8 @@ layer looks like the object not existing, matching the app.
   tool, including every call in a batch. Every tool is one internal Convex
   function that takes the resolved user and the credential's access
   explicitly and re-asserts them, and a writing tool refuses a read-only
-  credential first. Ref resolution, the rules a write must satisfy, the write
+  credential first. `get_me` also takes the credential row that authenticated
+  the request, and shares its read with REST's `GET /v1/me`. Ref resolution, the rules a write must satisfy, the write
   and its activity trail all run in one transaction. What the surface file itself holds is the MCP grammar: the
   two protocol legs, the header rules, tool names, schemas and transport.
   The verbs and the sentences a refusal is phrased in live in the shared

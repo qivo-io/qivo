@@ -40,6 +40,7 @@ import {
   CALLER_GONE,
   type Caller,
   type Catalogue,
+  type CredentialRef,
   commentOut,
   findIssue,
   findProjectRef,
@@ -49,11 +50,14 @@ import {
   listIssuesCore,
   listUsersCore,
   loadCatalogue,
+  type MeJson,
+  meCore,
   type RestCommentJson,
   type RestIssueJson,
   restProjectJson,
   UUID,
   userJson,
+  vCredentialRef,
 } from '../lib/core'
 import {
   type CredentialAccess,
@@ -308,6 +312,19 @@ export const listProjectUsers = internalQuery({
       })
     }
     return out
+  },
+})
+
+/* ------------------------------------------------------------------- me -- */
+
+/* GET /v1/me answers who this key acts as, its organization's settings, the
+ * billing pause and the key itself (lib/core.ts meCore, shared with MCP's
+ * get_me). Only this function takes the credential row. */
+export const getMe = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, credential: vCredentialRef },
+  handler: async (ctx, a): Promise<MeJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    return await meCore(ctx, me, a.access, a.credential)
   },
 })
 
@@ -700,6 +717,8 @@ type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${in
 
 /** What a route's `run` receives once auth and routing are done. */
 type RouteInput<Name extends string> = Principal & {
+  /** the credential row that authenticated the request, for GET /v1/me */
+  credential: CredentialRef
   keyName: string
   /** One decoded `:name` segment of the request path. */
   param: (name: Name) => string
@@ -725,6 +744,14 @@ export function route<Path extends string>(
 }
 
 export const ROUTES: RestRoute[] = [
+  route({
+    method: 'GET',
+    path: 'me',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, access, credential }) =>
+      r.runQuery(internal.machine.rest.getMe, { callerId, access, credential }),
+  }),
   route({
     method: 'GET',
     path: 'projects',
@@ -1035,6 +1062,7 @@ const restHandler = httpAction(async (ctx, req) => {
     const result = await runEntry(ctx, found.route, {
       callerId,
       access,
+      credential: { table: 'agent_keys', id: res.cred.tokenId, rowId: res.cred.rowId },
       keyName,
       param: (name) => found.params[name],
       query: (name) => url.searchParams.get(name) ?? undefined,

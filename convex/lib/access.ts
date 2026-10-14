@@ -397,6 +397,21 @@ export function credentialAccess(
 }
 
 /**
+ * What a machine caller may do right now. It is the access its credential
+ * was resolved with, narrowed for an agent by its live role, which can change
+ * between authentication and dispatch. asMachineCaller refuses a write unless
+ * this is 'write', and get_me reports it.
+ */
+export function machineAccess(
+  profile: Pick<Doc<'profiles'>, 'kind' | 'org_role'>,
+  access: CredentialAccess,
+): CredentialAccess {
+  const live =
+    profile.kind === 'agent' ? credentialAccess({ table: 'agent_keys' }, profile) : 'write'
+  return access === 'write' && live === 'write' ? 'write' : 'read'
+}
+
+/**
  * Whether a personal token has expired at `now` (epoch milliseconds). A
  * token without an expiry never expires; an unreadable one counts as expired.
  */
