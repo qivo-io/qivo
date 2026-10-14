@@ -359,8 +359,8 @@ export const deleteDeep = orgMutation({
 
 /* ------------------------------------------------------------------ links
  * Canonical storage stays client-side (blocks directed source→target;
- * relates ordered by uuid — old planner.ts:2234-2238): the wire carries the
- * stored enum, never 'blocked_by'. pair_key enforces at-most-one-link-per-
+ * relates ordered by uuid, see old planner.ts:2234-2238). The wire carries
+ * the stored enum, never 'blocked_by'. pair_key enforces at-most-one-link-per-
  * pair (the (least, greatest) unique index's successor). Insert and delete
  * share model/issues linkAccess (0008:12-21), which needs sight of both ends
  * plus member level on EITHER endpoint. A foreign, missing or hidden endpoint
@@ -412,7 +412,7 @@ export const addLink = orgMutation({
 })
 
 /* Pair delete; a pair with no row is a no-op (the client already guards the
- * asked-for state). Logs nothing — the old client wrote no activity here.
+ * asked-for state). Logs nothing, since the old client wrote no activity here.
  * Either end being missing, foreign or hidden reads 'task not found', so no
  * answer tells whether a task the caller cannot see exists. */
 export const removeLink = orgMutation({

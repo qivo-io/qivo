@@ -660,7 +660,7 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
     )
   })
 
-  it('addLink as guest: foreign == unknown == hidden (org rule); two visible read-only ends read the write fence', async () => {
+  it('addLink as guest or viewer: foreign == unknown == hidden (org rule); two visible read-only ends read the write fence', async () => {
     const link = (target: string) =>
       as(t, f.guest).mutation(api.issues.addLink, {
         org_id: f.org.id,
@@ -692,22 +692,29 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
       hiddenIssue.id,
     )
     expect(reversed).toEqual(unknown)
-    // two visible ends the caller can only read keep the write fence
-    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
-    await expectRefusal(
+    // the viewer can edit neither end, so sight must be checked before the
+    // write fence, or a hidden end would read "no write access" instead
+    const viewerLink = (source_id: string, target_id: string) =>
       as(t, f.viewer).mutation(api.issues.addLink, {
         org_id: f.org.id,
         id: uuid(),
-        source_id: subIssue.id,
-        target_id: other.id,
+        source_id,
+        target_id,
         type: 'relates',
-      }),
+      })
+    expect(await capture(viewerLink(subIssue.id, unknownRef), unknownRef)).toEqual(unknown)
+    expect(await capture(viewerLink(subIssue.id, hiddenIssue.id), hiddenIssue.id)).toEqual(unknown)
+    expect(await capture(viewerLink(hiddenIssue.id, subIssue.id), hiddenIssue.id)).toEqual(unknown)
+    // two visible ends the caller can only read keep the write fence
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await expectRefusal(
+      viewerLink(subIssue.id, other.id),
       'forbidden',
       /^no write access to these tasks$/,
     )
   })
 
-  it('removeLink as guest: a hidden end answers like a missing one and its link survives; a visible pair follows the write fence', async () => {
+  it('removeLink as guest or viewer: a hidden end answers like a missing one and its link survives; a visible pair follows the write fence', async () => {
     const plantLink = (source: Doc<'issues'>, target: Doc<'issues'>) =>
       t.run(async (ctx) => {
         const [lo, hi] = [source.id, target.id].sort()
@@ -754,13 +761,22 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
     expect(
       await capture(unlink(f.guest, subIssue.id, unlinkedHidden.id), unlinkedHidden.id),
     ).toEqual(unknown)
+    // the viewer can edit neither end, so sight must be checked before the
+    // write fence, or a hidden end would read "no write access" instead
+    expect(await capture(unlink(f.viewer, subIssue.id, unknownRef), unknownRef)).toEqual(unknown)
+    expect(await capture(unlink(f.viewer, subIssue.id, hiddenIssue.id), hiddenIssue.id)).toEqual(
+      unknown,
+    )
+    expect(await capture(unlink(f.viewer, hiddenIssue.id, subIssue.id), hiddenIssue.id)).toEqual(
+      unknown,
+    )
     expect(await linkCount(subIssue, hiddenIssue)).toBe(1)
 
     // someone who sees both ends can remove the same link
     await expect(unlink(f.user, hiddenIssue.id, subIssue.id)).resolves.toBeNull()
     expect(await linkCount(subIssue, hiddenIssue)).toBe(0)
 
-    // two visible ends: the viewer can only read them, the guest can edit
+    // with two visible ends, the viewer can only read them and the guest can edit
     const visible = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     await plantLink(subIssue, visible)
     await expectRefusal(
