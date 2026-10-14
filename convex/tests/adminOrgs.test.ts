@@ -644,6 +644,22 @@ describe('setMemberRole', () => {
     )
   })
 
+  it('clears the right to create projects only when the role changes', async () => {
+    const t = newAuthT()
+    const op = await withOperator(t)
+    const f = await withOrg(t)
+    await t.run((ctx) => ctx.db.patch(f.user._id, { can_create_projects: true }))
+    const set = (role: 'admin' | 'user' | 'viewer') =>
+      op.mutation(api.adminOrgs.setMemberRole, { profile_id: f.user.id, role })
+    const right = async () => (await t.run((ctx) => ctx.db.get(f.user._id)))?.can_create_projects
+    // a refused change and an unchanged role keep it
+    await expectRefusal(set('viewer'), 'rule', /leads 2 project\(s\)/)
+    await set('user')
+    expect(await right()).toBe(true)
+    await set('admin')
+    expect(await right()).toBeUndefined()
+  })
+
   it('refuses to make an invited person org admin when their home organization is elsewhere', async () => {
     const t = newAuthT()
     const op = await withOperator(t)

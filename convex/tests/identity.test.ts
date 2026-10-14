@@ -348,10 +348,14 @@ describe('bootstrap (0002): an org with no admin makes its first login an admin'
       auth_user_id: 'early-login',
       accepted_at: NOW,
       created_at: DAY2,
+      can_create_projects: true,
     })
     expect(await claim(t)).toBe(1)
     expect((await reload(t, invited)).org_role).toBe('guest')
-    expect((await reload(t, early)).org_role).toBe('admin')
+    // the promotion clears the right, like every role change
+    const promoted = await reload(t, early)
+    expect(promoted.org_role).toBe('admin')
+    expect(promoted.can_create_projects).toBeUndefined()
   })
 
   it('a guest seat adopted by a home-less login can bootstrap to admin', async () => {

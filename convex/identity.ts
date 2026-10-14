@@ -63,7 +63,10 @@ async function replaceLostAdmin(ctx: MutationCtx, orgId: string): Promise<void> 
         p.kind === 'person' && p.active && p.org_role !== 'guest' && p.auth_user_id !== undefined,
     )
     .sort(byClaimOrder)
-  if (first !== undefined) await ctx.db.patch(first._id, { org_role: 'admin' })
+  // A role change clears the project-creation right (profiles.update).
+  if (first !== undefined) {
+    await ctx.db.patch(first._id, { org_role: 'admin', can_create_projects: undefined })
+  }
 }
 
 /* The ONE claim implementation — replaces the two GoTrue
