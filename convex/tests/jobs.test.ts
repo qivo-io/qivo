@@ -56,11 +56,12 @@ const auditRows = (t: T, action: string): Promise<Doc<'platform_audit_log'>[]> =
     return rows.filter((r) => r.action === action)
   })
 
-/* One nightly run: the cron's first leg and every leg it schedules. */
-async function runLegs(t: T): Promise<void> {
+/* One nightly run: the cron's first leg and every leg it schedules. `now`
+ * pins the run's clock; without it the first leg reads the current time. */
+async function runLegs(t: T, now?: string): Promise<void> {
   vi.useFakeTimers()
   try {
-    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await t.mutation(internal.jobs.archiveDoneIssues, now === undefined ? {} : { now })
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
   } finally {
     vi.useRealTimers()
@@ -69,8 +70,8 @@ async function runLegs(t: T): Promise<void> {
 
 /* One nightly run that must succeed. Returns the archived count from the
  * run's audit row. */
-async function runArchive(t: T): Promise<number> {
-  await runLegs(t)
+async function runArchive(t: T, now?: string): Promise<number> {
+  await runLegs(t, now)
   const last = (await auditRows(t, 'archive_done_issues')).at(-1)
   if (last === undefined) throw new Error('the archive run wrote no audit row')
   return (last.detail as { archived: number }).archived
@@ -105,20 +106,22 @@ const plantTasks = (
   })
 
 describe('archiveDoneIssues — the 0106 predicate', () => {
-  it('archives Done tasks in a teamless project after the standard threshold; fresh and unstamped ones stay', async () => {
+  it('archives Done tasks in a teamless project from the standard threshold on; younger and unstamped ones stay', async () => {
     const t = newT()
     const f = await withOrg(t) // f.sub and its root f.meta have no team
+    // The run's clock is pinned to NOW, so the boundary holds to the millisecond.
+    const cutoff = Date.parse(NOW) - DEFAULT_ARCHIVE_DAYS * DAY
     const due = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'done',
-      done_at: ago(DEFAULT_ARCHIVE_DAYS + 1),
+      done_at: new Date(cutoff).toISOString(),
     })
     const fresh = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'done',
-      done_at: ago(DEFAULT_ARCHIVE_DAYS - 1),
+      done_at: new Date(cutoff + 1).toISOString(),
     })
     // the demo-seed fact: done_at never given ⇒ the sweep never takes it
     const noStamp = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
@@ -130,8 +133,8 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     })
 
     expect(DEFAULT_ARCHIVE_DAYS).toBe(30)
-    expect(await runArchive(t)).toBe(1)
-    expect((await issueRow(t, due.id))?.archived_at).toBeDefined()
+    expect(await runArchive(t, NOW)).toBe(1)
+    expect((await issueRow(t, due.id))?.archived_at).toBe(NOW)
     expect((await issueRow(t, fresh.id))?.archived_at).toBeUndefined()
     expect((await issueRow(t, noStamp.id))?.archived_at).toBeUndefined()
     expect((await issueRow(t, open.id))?.archived_at).toBeUndefined()
