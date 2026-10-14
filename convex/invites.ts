@@ -26,6 +26,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import type { ActionCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
 import { byId } from './lib/db'
+import { isDemoDeployment } from './lib/demo'
 import { notFound } from './lib/functions'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
@@ -303,10 +304,13 @@ export async function sendInvites(
 }
 
 /* The app's invitations, scheduled by the mutation that created, corrected
- * or reactivated the seat once it commits. */
+ * or reactivated the seat once it commits. A public demo sends and records
+ * nothing. Its sample people cannot be emailed, and demo cleanup never
+ * purges the audit table. */
 export const sendFromApp = internalAction({
   args: { invites: v.array(vInvite) },
   handler: async (ctx, { invites }): Promise<null> => {
+    if (isDemoDeployment()) return null
     await sendInvites(ctx, invites, { resend: false })
     return null
   },
