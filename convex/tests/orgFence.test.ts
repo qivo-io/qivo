@@ -298,6 +298,28 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         }),
       answer: { code: 'rule', message: 'linked tasks must belong to the same organization' },
     },
+    {
+      name: 'issues.removeLink (foreign other end)',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).mutation(api.issues.removeLink, {
+          org_id: f.org.id,
+          a: ownIssue.id,
+          b: ref,
+        }),
+      answer: { code: 'not_found', message: 'task not found' },
+    },
+    {
+      name: 'issues.removeLink (foreign first end)',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).mutation(api.issues.removeLink, {
+          org_id: f.org.id,
+          a: ref,
+          b: ownIssue.id,
+        }),
+      answer: { code: 'not_found', message: 'task not found' },
+    },
     // issue_subscriptions — the public door's fence (foreign side; the
     // hidden-same-org side lives in the residuals describe below)
     {
@@ -683,6 +705,72 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
       'forbidden',
       /^no write access to these tasks$/,
     )
+  })
+
+  it('removeLink as guest: a hidden end answers like a missing one and its link survives; a visible pair follows the write fence', async () => {
+    const plantLink = (source: Doc<'issues'>, target: Doc<'issues'>) =>
+      t.run(async (ctx) => {
+        const [lo, hi] = [source.id, target.id].sort()
+        await ctx.db.insert('issue_links', {
+          id: uuid(),
+          org_id: f.org.id,
+          source_id: source.id,
+          target_id: target.id,
+          type: 'blocks',
+          pair_key: `${lo}:${hi}`,
+          created_at: NOW,
+        })
+      })
+    const linkCount = (a: Doc<'issues'>, b: Doc<'issues'>) =>
+      t.run(async (ctx) => {
+        const [lo, hi] = [a.id, b.id].sort()
+        const rows = await ctx.db
+          .query('issue_links')
+          .withIndex('by_pair', (q) => q.eq('pair_key', `${lo}:${hi}`))
+          .collect()
+        return rows.length
+      })
+    const unlink = (caller: Doc<'profiles'>, a: string, b: string) =>
+      as(t, caller).mutation(api.issues.removeLink, { org_id: f.org.id, a, b })
+
+    // the guest edits subIssue's project but cannot see hiddenIssue's; the
+    // link between them exists, yet removing it answers like an unknown task
+    await plantLink(subIssue, hiddenIssue)
+    const unknownRef = uuid()
+    const unknown = await capture(unlink(f.guest, subIssue.id, unknownRef), unknownRef)
+    expect(unknown).toEqual({ resolved: false, code: 'not_found', message: 'task not found' })
+    expect(await capture(unlink(f.guest, subIssue.id, otherIssue.id), otherIssue.id)).toEqual(
+      unknown,
+    )
+    expect(await capture(unlink(f.guest, subIssue.id, hiddenIssue.id), hiddenIssue.id)).toEqual(
+      unknown,
+    )
+    expect(await capture(unlink(f.guest, hiddenIssue.id, subIssue.id), hiddenIssue.id)).toEqual(
+      unknown,
+    )
+    // a hidden task with no link to the visible one answers the same way, so
+    // the answer tells neither whether the task exists nor whether it is linked
+    const unlinkedHidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
+    expect(
+      await capture(unlink(f.guest, subIssue.id, unlinkedHidden.id), unlinkedHidden.id),
+    ).toEqual(unknown)
+    expect(await linkCount(subIssue, hiddenIssue)).toBe(1)
+
+    // someone who sees both ends can remove the same link
+    await expect(unlink(f.user, hiddenIssue.id, subIssue.id)).resolves.toBeNull()
+    expect(await linkCount(subIssue, hiddenIssue)).toBe(0)
+
+    // two visible ends: the viewer can only read them, the guest can edit
+    const visible = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    await plantLink(subIssue, visible)
+    await expectRefusal(
+      unlink(f.viewer, subIssue.id, visible.id),
+      'forbidden',
+      /^no write access to these tasks$/,
+    )
+    expect(await linkCount(subIssue, visible)).toBe(1)
+    await expect(unlink(f.guest, visible.id, subIssue.id)).resolves.toBeNull()
+    expect(await linkCount(subIssue, visible)).toBe(0)
   })
 
   it('subscribe as guest: foreign == unknown (not_found); the hidden issue reads the visibility fence', async () => {

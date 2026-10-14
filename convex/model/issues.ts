@@ -497,6 +497,29 @@ export async function assertLinkableIssues(
   return { source, target }
 }
 
+/* Who may add or remove a link (0008:12-21), one rule for every surface. The
+ * caller must see both tasks' projects and hold Edit on at least one end.
+ * 'hidden' covers a missing, foreign or unseen end alike, so callers answer
+ * all three with one sentence and no answer describes a task the caller
+ * cannot see; 'read' means both ends are visible but neither is editable. */
+export async function linkAccess(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: Doc<'issues'> | null,
+  b: Doc<'issues'> | null,
+): Promise<'hidden' | 'read' | 'write'> {
+  if (a === null || b === null) return 'hidden'
+  for (const end of [a, b]) {
+    if (end.org_id !== me.org_id) return 'hidden'
+    const project = await byId(ctx, 'projects', end.project_id)
+    if (project === null || !(await canSeeProject(ctx, me, project))) return 'hidden'
+  }
+  for (const end of [a, b]) {
+    if (await hasProjectLevel(ctx, me, end.project_id, 'user')) return 'write'
+  }
+  return 'read'
+}
+
 /* --------------------------------------------------------- done stamp (0071)
  * done_at is fully derived, immune to direct writes; no public arg carries it. */
 
