@@ -5,8 +5,9 @@
  *   claim loop      claimSeatsForLogin — the boot path, whose extra
  *                   not-exists clause is the (org_id, auth_user_id)
  *                   uniqueness guard
- *   bootstrap       the predicate "no admin holding a login", framed as
- *                   promote-the-adopted-seat rather than create-a-profile
+ *   bootstrap       the predicate "no admin holding a login and no active
+ *                   invited admin", framed as promote-the-adopted-seat
+ *                   rather than create-a-profile
  *   acceptInvitation
  *   createOrganization  minus the cut domain gate; internals in model/orgs
  *
@@ -14,6 +15,7 @@
  * verified-email claim IS the acceptance. */
 
 import { v } from 'convex/values'
+import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import { authComponent } from './auth'
@@ -31,12 +33,38 @@ import {
   newOrgDefaults,
   newUuid,
 } from './model/orgs'
+import { byClaimOrder } from './model/people'
 
 const seatsOf = (ctx: MutationCtx, authUserId: string) =>
   ctx.db
     .query('profiles')
     .withIndex('by_auth', (q) => q.eq('auth_user_id', authUserId))
     .collect()
+
+/* The bootstrap's admin test. An admin holding a login counts, active or not
+ * as 0002 had it, and so does an active invited admin. */
+const countsAsAdmin = (p: Doc<'profiles'>) =>
+  p.org_role === 'admin' && (p.auth_user_id !== undefined || p.active)
+
+/* An invited org admin whose address had meanwhile gained a home elsewhere
+ * arrives as a guest. People who signed in earlier kept their invited roles
+ * because that invitation counted as the admin, so repeat the bootstrap for
+ * them. The earliest active person who already signed in becomes the admin.
+ * With nobody signed in yet, the next sign-in is promoted as usual. */
+async function replaceLostAdmin(ctx: MutationCtx, orgId: string): Promise<void> {
+  const seats = await ctx.db
+    .query('profiles')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  if (seats.some(countsAsAdmin)) return
+  const [first] = seats
+    .filter(
+      (p) =>
+        p.kind === 'person' && p.active && p.org_role !== 'guest' && p.auth_user_id !== undefined,
+    )
+    .sort(byClaimOrder)
+  if (first !== undefined) await ctx.db.patch(first._id, { org_role: 'admin' })
+}
 
 /* The ONE claim implementation — replaces the two GoTrue
  * triggers and the boot RPC. Adopts every unclaimed seat carrying the login's
@@ -59,9 +87,7 @@ export async function claimSeatsForLogin(
   )
     .filter((p) => p.auth_user_id === undefined)
     // order by created_at, id (0085) — first seat in wins the home role
-    .sort((a, b) =>
-      a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,
-    )
+    .sort(byClaimOrder)
   let adopted = 0
   let changedOrgId: string | undefined
   for (const seat of waiting) {
@@ -81,22 +107,23 @@ export async function claimSeatsForLogin(
     if (role === 'guest') await leaveAllTeams(ctx, seat.id)
     adopted += 1
     changedOrgId = seat.org_id
-    /* Bootstrap (0002): an org whose admins hold no login yet makes its first
-     * login an admin. Predicate ported exactly — org_role = 'admin' AND
-     * auth_user_id set; profiles.active (0099) postdates it and is not
-     * consulted. Skipped when the seat landed as guest beside an existing
-     * home seat: promotion would mint a second non-guest seat, which the
-     * profiles_home_org_uniq index (0118) refused at the database. */
+    // An invited org admin who arrives as a guest stops counting as an admin.
+    if (seat.org_role === 'admin' && role === 'guest') await replaceLostAdmin(ctx, seat.org_id)
+    /* Bootstrap (0002): an org with no admin makes its first login an admin.
+     * An active invited admin counts too (countsAsAdmin), so someone invited
+     * as a standard user or viewer who signs in before the invited admin
+     * keeps that role. Skipped when the seat landed as guest beside an
+     * existing home seat: promotion would mint a second non-guest seat, which
+     * the profiles_home_org_uniq index (0118) refused at the database. */
     if (role === 'guest' && hasHome) continue
     if (role === 'admin') continue
     const orgSeats = await ctx.db
       .query('profiles')
       .withIndex('by_org', (q) => q.eq('org_id', seat.org_id))
       .collect()
-    const hasActiveAdmin = orgSeats.some(
-      (p) => p._id !== seat._id && p.org_role === 'admin' && p.auth_user_id !== undefined,
-    )
-    if (!hasActiveAdmin) await ctx.db.patch(seat._id, { org_role: 'admin' })
+    if (!orgSeats.some((p) => p._id !== seat._id && countsAsAdmin(p))) {
+      await ctx.db.patch(seat._id, { org_role: 'admin' })
+    }
   }
   if (changedOrgId !== undefined) await markBillingMembershipChanged(ctx, changedOrgId, [em])
   return adopted

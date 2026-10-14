@@ -1,21 +1,26 @@
 /* Small shared pieces for the operator views — table, badges, headings. */
-import type { ReactNode } from 'react'
+import { type ReactNode, type Ref, useEffect, useState } from 'react'
 import { Badge as UiBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
 
+/* `headingRef` lets a view move focus to its title when it opens in place
+   of something that had focus, such as a dialog that has just closed. The
+   title is not a control, so it never shows the keyboard focus ring. */
 export function AdminPageHeader({
   title,
   description,
   eyebrow,
   actions,
+  headingRef,
 }: {
   title: string
   description?: ReactNode
   eyebrow?: ReactNode
   actions?: ReactNode
+  headingRef?: Ref<HTMLHeadingElement>
 }) {
   return (
     <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
@@ -25,7 +30,13 @@ export function AdminPageHeader({
             {eyebrow}
           </div>
         )}
-        <h1 className="text-2xl font-semibold tracking-tight text-text-1">{title}</h1>
+        <h1
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+          className="text-2xl font-semibold tracking-tight text-text-1 !outline-none"
+        >
+          {title}
+        </h1>
         {description && (
           <p className="mt-2 max-w-2xl text-sm leading-6 text-text-2">{description}</p>
         )}
@@ -141,5 +152,86 @@ export function LinkReveal({ link, onClose }: { link: string; onClose: () => voi
         </Button>
       </div>
     </div>
+  )
+}
+
+/* Shows `current` at the width of the widest of `labels`, so a button whose
+   label swaps keeps its size and the table around it stays put. */
+export function StableLabel({ labels, current }: { labels: readonly string[]; current: string }) {
+  return (
+    <span className="grid place-items-center">
+      <span className="col-start-1 row-start-1">{current}</span>
+      {labels
+        .filter((label) => label !== current)
+        .map((label) => (
+          <span key={label} className="invisible col-start-1 row-start-1">
+            {label}
+          </span>
+        ))}
+    </span>
+  )
+}
+
+/* A destructive action that takes a second click, the app's settings
+   ConfirmButton pattern (src/panels/settings/controls.tsx). That component
+   draws its icon through the planner store, so the console keeps this small
+   copy. The first click arms the button and swaps in `confirmLabel`. It
+   disarms after 3.5 seconds. `busyLabel` shows while the action runs.
+   `blockedReason` turns the action off but keeps the button focusable, so
+   the reason in its tooltip reaches the keyboard too. */
+export function ConfirmAction({
+  label,
+  confirmLabel,
+  busyLabel,
+  busy = false,
+  disabled = false,
+  blockedReason,
+  onConfirm,
+}: {
+  label: string
+  confirmLabel: string
+  busyLabel: string
+  busy?: boolean
+  disabled?: boolean
+  blockedReason?: string
+  onConfirm: () => void
+}) {
+  const [armed, setArmed] = useState(false)
+  const blocked = !!blockedReason
+  useEffect(() => {
+    if (!armed) return
+    const timer = setTimeout(() => setArmed(false), 3500)
+    return () => clearTimeout(timer)
+  }, [armed])
+  useEffect(() => {
+    if (disabled || busy || blocked) setArmed(false)
+  }, [disabled, busy, blocked])
+  return (
+    <Button
+      type="button"
+      size="sm"
+      disabled={disabled || busy}
+      aria-disabled={blocked || undefined}
+      title={blockedReason}
+      data-armed={armed ? '' : undefined}
+      className={cn(
+        'px-2 text-danger aria-disabled:cursor-not-allowed aria-disabled:opacity-55',
+        armed && 'border-danger bg-danger-soft hover:bg-danger-soft',
+      )}
+      onClick={() => {
+        if (blocked) return
+        if (!armed) {
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onConfirm()
+      }}
+    >
+      <StableLabel
+        labels={[label, confirmLabel, busyLabel]}
+        current={busy ? busyLabel : armed ? confirmLabel : label}
+      />
+    </Button>
   )
 }

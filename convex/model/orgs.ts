@@ -230,7 +230,9 @@ export async function createStarterLabels(
 
 /* create_organization's tail (0118): every new organization gets a starter
  * team for its first workstream. Products themselves are team-less; the
- * creator becomes the initial product lead in the client flow. */
+ * creator becomes the initial product lead in the client flow. An operator
+ * may create an organization before inviting anyone, so its team can start
+ * without a leader. */
 export async function createStarterTeam(
   ctx: MutationCtx,
   {
@@ -238,11 +240,13 @@ export async function createStarterTeam(
     name,
     leader_id,
     now,
-  }: { org_id: string; name: string; leader_id: string; now: string },
+  }: { org_id: string; name: string; leader_id: string | undefined; now: string },
 ): Promise<string> {
   const teamId = newUuid()
   await ctx.db.insert('teams', { id: teamId, org_id, name, ...newTeamDefaults(now) })
-  await ctx.db.insert('team_members', { team_id: teamId, profile_id: leader_id, is_leader: true })
+  if (leader_id !== undefined) {
+    await ctx.db.insert('team_members', { team_id: teamId, profile_id: leader_id, is_leader: true })
+  }
   return teamId
 }
 

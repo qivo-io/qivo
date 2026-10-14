@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
-import { sendBillingReminder } from '../mail'
+import { sendBillingReminder, sendInviteEmail } from '../mail'
 import { newT } from './helpers.setup'
 
 const letter = {
@@ -87,6 +87,93 @@ describe('authentication mail configuration', () => {
       expect(logs).not.toContain('test-only-provider-key')
     },
   )
+})
+
+describe('invitation mail', () => {
+  const invite = (deadline: number) =>
+    sendInviteEmail({
+      to: letter.to,
+      org_name: 'Brightwater Studio',
+      as_guest: false,
+      url: 'https://app.example.test/app#signup',
+      send_key: 'test-only-invite',
+      deadline,
+    })
+
+  beforeEach(() => {
+    vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
+    vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+  })
+
+  it('reports not sent, without calling the provider, once the batch deadline has passed', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() - 1)).toBe('unsent')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('gives up instead of waiting out a Retry-After that ends past the deadline', async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: () => '120' },
+      json: async () => ({}),
+    })
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() + 5_000)).toBe('uncertain')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('folds a long or multi-line organization name into one capped line', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
+    vi.stubGlobal('fetch', fetch)
+    const outcome = await sendInviteEmail({
+      to: letter.to,
+      org_name: `Acme\n\nVisit   example.test ${'x'.repeat(100)}`,
+      as_guest: true,
+      url: 'https://app.example.test/app',
+      send_key: 'test-only-invite',
+      deadline: Date.now() + 60_000,
+    })
+    expect(outcome).toBe('sent')
+    const { text } = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(text.split('\n')[2]).toMatch(
+      /^Acme Visit example\.test x{56}… has invited you to join their organization as a guest\. /,
+    )
+  })
+
+  it('is unsent after a final refusal, and uncertain after a network error', async () => {
+    const refusal = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: { get: () => null },
+      json: async () => ({ code: 'message_rejected' }),
+    })
+    vi.stubGlobal('fetch', refusal)
+    expect(await invite(Date.now() + 60_000)).toBe('unsent')
+    expect(refusal).toHaveBeenCalledOnce()
+    const unreachable = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValue({
+        ok: false,
+        status: 403,
+        headers: { get: () => null },
+        json: async () => ({}),
+      })
+    vi.stubGlobal('fetch', unreachable)
+    // the retry after the network error waits half a second
+    expect(await invite(Date.now() + 60_000)).toBe('uncertain')
+    expect(unreachable).toHaveBeenCalledTimes(2)
+  })
+
+  it('is not sent when mail is not configured', async () => {
+    vi.stubEnv('AGENTMAIL_API_KEY', '')
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() + 60_000)).toBe('unsent')
+    expect(fetch).not.toHaveBeenCalled()
+  })
 })
 
 describe('shared transactional transport', () => {

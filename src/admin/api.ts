@@ -2,6 +2,7 @@
 // operator-gated Convex functions (admin.ts platform* queries/mutations and
 // the adminAuth.ts session-bound actions).
 // Every call throws on error; views catch and surface the message.
+import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { DemoMetricsResult } from '../../convex/lib/demoMetricsReport'
@@ -62,21 +63,16 @@ export type PlatformStats = {
   weekly: { week: string; new_members: number; activity: number }[]
 }
 
-export type OrgDetail = {
-  org: { id: string; name: string; created_at: string }
-  billing: { plan: string; seats: number; renewal_date: string | null } | null
-  members: {
-    profile_id: string
-    name: string
-    email: string | null
-    org_role: 'admin' | 'user' | 'viewer' | 'guest'
-    has_login: boolean
-    last_sign_in_at: string | null
-    banned_until: string | null
-    created_at: string
-  }[]
-  teams: { id: string; name: string; member_count: number; project_count: number }[]
-}
+export type OrgDetail = FunctionReturnType<typeof api.admin.orgDetail>
+export type OrgMember = OrgDetail['members'][number]
+
+/* Organization creation and invitations (convex/adminOrgs.ts). */
+export type NewOrganization = FunctionArgs<typeof api.adminOrgs.createOrganization>
+export type PersonInput = NewOrganization['people'][number]
+export type InviteRole = PersonInput['role']
+export type InviteResult = FunctionReturnType<typeof api.adminOrgs.resendInvite>
+export type PeopleCheck = FunctionReturnType<typeof api.adminOrgs.checkPeople>[number]
+export type BillingPlans = FunctionReturnType<typeof api.adminBilling.listPlans>
 
 /* ConvexError.data = { code, message, reason? } (convex/lib/functions.ts) —
    surface the server's sentence; anything else rethrows untouched. */
@@ -106,6 +102,37 @@ export const demoMetrics = (): Promise<DemoMetricsResult> =>
   convex.query(api.adminDemo.metrics, {}).catch(mapError)
 export const promoteOrgAdmin = (profileId: string): Promise<null> =>
   convex.mutation(api.admin.promoteOrgAdmin, { profile_id: profileId }).catch(mapError)
+
+export const listPlans = (): Promise<BillingPlans> =>
+  convex.query(api.adminBilling.listPlans, {}).catch(mapError)
+/* The address the server would generate for a name. */
+export const suggestAddress = (name: string): Promise<string> =>
+  convex.query(api.adminOrgs.suggestAddress, { name }).catch(mapError)
+/* ok, or the reason code: slug_shape, slug_reserved or slug_taken. */
+export const checkAddress = (slug: string) =>
+  convex.query(api.adminOrgs.checkAddress, { slug }).catch(mapError)
+/* Omit orgId for an organization that does not exist yet. */
+export const checkPeople = (emails: string[], orgId?: string): Promise<PeopleCheck[]> =>
+  convex
+    .query(api.adminOrgs.checkPeople, orgId === undefined ? { emails } : { emails, org_id: orgId })
+    .catch(mapError)
+export const createOrganization = (input: NewOrganization) =>
+  convex.action(api.adminOrgs.createOrganization, input).catch(mapError)
+export const invitePeople = (orgId: string, people: PersonInput[]) =>
+  convex.action(api.adminOrgs.invitePeople, { org_id: orgId, people }).catch(mapError)
+export const resendInvite = (profileId: string): Promise<InviteResult> =>
+  convex.action(api.adminOrgs.resendInvite, { profile_id: profileId }).catch(mapError)
+/* sent is null when the address did not change and no email went out. */
+export const editInvite = (profileId: string, name: string, email: string) =>
+  convex.action(api.adminOrgs.editInvite, { profile_id: profileId, name, email }).catch(mapError)
+export const cancelInvite = (profileId: string): Promise<null> =>
+  convex.mutation(api.adminOrgs.cancelInvite, { profile_id: profileId }).catch(mapError)
+export const setMemberRole = (profileId: string, role: InviteRole): Promise<null> =>
+  convex.mutation(api.adminOrgs.setMemberRole, { profile_id: profileId, role }).catch(mapError)
+
+/* Where an invited person signs up or signs in. The console and the app share
+   one origin, so the link is built here rather than asked of the server. */
+export const signupLink = (): string => `${location.origin}/app#signup`
 
 // Auth-account operations run as session-bound Convex actions (the server
 // re-verifies the caller as a platform operator and audits as them).

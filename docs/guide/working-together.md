@@ -1,9 +1,12 @@
 ## Who a person is
 
 Each person has a name and email address. An admin adds them in
-**Settings → Organization → Users**. Their seat shows **invited** until they
-sign in with that email address. Admins can correct the email before sign-in;
-afterward it is read-only. Agents use keys instead of email addresses ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
+**Settings → Organization → Users**, and Qivo emails them an invitation. Their
+seat shows **invited** until they sign in with that email address. Admins can
+correct the email before sign-in, which sends a new invitation; afterward it
+is read-only. An organization can send up to 50 invitation emails an hour.
+Beyond that, people can still join by creating an account with the invited
+address. Agents use keys instead of email addresses ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 To change your name, open **Settings → Your preferences**, edit **Your name**
 and press **Save**. This updates your existing seats and pending invitations

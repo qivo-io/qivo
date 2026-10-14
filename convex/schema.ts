@@ -1035,6 +1035,15 @@ export default defineSchema({
     action: v.string(),
     target_org_id: v.optional(v.string()),
     target_profile_id: v.optional(v.string()),
+    // 'app' marks the app's own invitation emails; operator rows have none
+    channel: v.optional(v.literal('app')),
     detail: v.any(),
-  }).index('by_ts', ['ts']),
+  })
+    .index('by_ts', ['ts'])
+    // The operator's audit listing reads the rows without a channel.
+    .index('by_channel_ts', ['channel', 'ts'])
+    // A pending seat's latest invite email, and the caps on the app's
+    // invitation email per seat and per organization (invites.ts).
+    .index('by_target_profile', ['target_profile_id', 'ts'])
+    .index('by_target_org', ['target_org_id', 'ts']),
 })

@@ -1,9 +1,12 @@
 /* Shared operator user actions. Convex enforces permissions; auth actions
-   manage login accounts. Recovery links reach the view once via LinkReveal. */
+   manage login accounts. Recovery links reach the view once via LinkReveal.
+   The organization page passes promote={false}, because its role select
+   already makes people org admins. */
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { authAction, promoteOrgAdmin } from './api'
+import { StableLabel } from './ui'
 
 export function UserActions({
   email,
@@ -11,6 +14,7 @@ export function UserActions({
   orgRole,
   hasLogin,
   banned,
+  promote = true,
   onLink,
   onChanged,
   onError,
@@ -20,6 +24,7 @@ export function UserActions({
   orgRole: 'admin' | 'user' | 'viewer' | 'guest'
   hasLogin: boolean
   banned: boolean
+  promote?: boolean
   onLink: (link: string) => void
   onChanged: () => void
   onError: (message: string) => void
@@ -43,7 +48,7 @@ export function UserActions({
     <span className="inline-flex flex-wrap justify-end gap-2">
       {/* Guests cannot be promoted here. Viewers remain eligible for lockout
           rescue; the server refuses agents. */}
-      {(orgRole === 'user' || orgRole === 'viewer') && (
+      {promote && (orgRole === 'user' || orgRole === 'viewer') && (
         <Button
           type="button"
           size="sm"
@@ -56,7 +61,10 @@ export function UserActions({
             })
           }
         >
-          {busy === 'promote' ? '…' : 'Make org admin'}
+          <StableLabel
+            labels={['Make org admin', '…']}
+            current={busy === 'promote' ? '…' : 'Make org admin'}
+          />
         </Button>
       )}
       {email && hasLogin && (
@@ -73,7 +81,10 @@ export function UserActions({
             })
           }
         >
-          {busy === 'link' ? '…' : 'Recovery link'}
+          <StableLabel
+            labels={['Recovery link', '…']}
+            current={busy === 'link' ? '…' : 'Recovery link'}
+          />
         </Button>
       )}
       {email && hasLogin && (
@@ -91,7 +102,10 @@ export function UserActions({
             })
           }
         >
-          {busy === 'ban' ? '…' : banned ? 'Unban' : 'Ban'}
+          <StableLabel
+            labels={[banned ? 'Unban' : 'Ban', '…']}
+            current={busy === 'ban' ? '…' : banned ? 'Unban' : 'Ban'}
+          />
         </Button>
       )}
     </span>

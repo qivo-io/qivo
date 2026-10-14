@@ -1,21 +1,15 @@
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
-import { addCalendarMonths, subscriptionFor } from './lib/billingAccess'
+import { subscriptionFor } from './lib/billingAccess'
 import { billingPlanFields } from './lib/billingTypes'
 import { byId } from './lib/db'
-import {
-  badRequest,
-  notFound,
-  platformMutation,
-  platformQuery,
-  require,
-  rule,
-} from './lib/functions'
+import { notFound, platformMutation, platformQuery, require, rule } from './lib/functions'
 import { audit } from './model/admin'
 import {
   billingSummary,
   defaultPlan,
   enrollOrganization,
+  grantComplimentaryMonths,
   hasPendingCheckout,
   isoNow,
   planRow,
@@ -141,34 +135,13 @@ export const assignPlan = platformMutation({
 export const grantComplimentary = platformMutation({
   args: { org_id: v.string(), months: v.number() },
   handler: async (ctx, { org_id, months }) => {
-    if (!Number.isInteger(months) || months < 1 || months > 24)
-      throw badRequest('Choose 1–24 calendar months.')
-    require(await byId(ctx, 'organizations', org_id), notFound('organization not found'))
-    const sub = await enrollOrganization(ctx, org_id)
-    require(sub, rule('Create and select a default billing plan first.'))
-    require(!sub.polar_subscription_id && !hasPendingCheckout(sub), rule(
-      'Complimentary access must be granted before checkout. Manage an existing paid promotion in Polar.',
-    ))
-    const now = isoNow()
-    const from =
-      sub.complimentary_until && sub.complimentary_until > now ? sub.complimentary_until : now
-    const until = addCalendarMonths(from, months)
-    await ctx.db.patch(sub._id, {
-      complimentary_start: sub.complimentary_start ?? now,
-      complimentary_until: until,
-      updated_at: now,
-      checkout_id: undefined,
-      checkout_url: undefined,
-      checkout_expires_at: undefined,
-      checkout_lock: undefined,
-      checkout_lock_until: undefined,
-    })
+    const { until, plan_id } = await grantComplimentaryMonths(ctx, org_id, months)
     await audit(ctx, {
       actor_auth_id: ctx.authUserId,
       actor_email: 'operator',
       action: 'billing.grant_complimentary',
       target_org_id: org_id,
-      detail: { months, until, plan_id: sub.plan_id },
+      detail: { months, until, plan_id },
     })
     return null
   },

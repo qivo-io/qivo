@@ -128,6 +128,32 @@ the default without changing existing organizations. Open an organization to
 assign its plan before checkout or grant six months free. Repeating a grant
 extends its end date. The operator audit log records plan changes and grants.
 
+## Organizations and invitations. Platform operators
+
+In **Qivo Admin → Organizations**, **New organization** creates an
+organization and invites its first people in one step. Qivo suggests an
+address from the name, and you can change it before creating. The
+organization starts with a team of the same name, led by the first org admin
+you add while creating it. Choose its billing plan, and select **Grant six
+months free** to start with complimentary access.
+
+Add each person with a name, email address and role, either **Org admin**,
+**Standard user** or **Viewer**. The first person must be an org admin, and no
+other role can be invited until the organization has one. Each person
+receives an invitation email from no-reply@qivo.io and joins by signing in or
+creating an account with that address. People keep the role on their
+invitation, even if they sign in before the org admin.
+
+Open an organization to invite more people, change roles, edit, resend or
+cancel a pending invitation, or copy the sign-up link when an email could not
+be sent. Editing the address sends a new invitation. The last org admin
+cannot be demoted. The only invited org admin can be cancelled only while
+nobody else is in the organization. An account belongs to one home
+organization, so an address that already belongs to another organization can
+only join as a guest. Qivo Admin does not invite guests. Org admins and
+project leads invite them from project settings. The operator audit log
+records the invitations, email attempts and role changes made in Qivo Admin.
+
 ## Demo usage. Platform operators
 
 Open **Qivo Admin → Demos** on the regular site. The deployment manager must

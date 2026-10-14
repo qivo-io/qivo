@@ -1,0 +1,390 @@
+/* Invitation email from the app (invites.ts): an org admin adding a person,
+ * correcting a pending person's address or inviting a new project guest
+ * schedules one letter once the mutation commits. Covers the wording, the
+ * guest ending, the sign-up or sign-in link, the audit record and the cases
+ * that send nothing. */
+/// <reference types="vite/client" />
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { api, components, internal } from '../_generated/api'
+import authSchema from '../betterAuth/schema'
+import { as, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
+
+declare const process: { env: Record<string, string | undefined> }
+
+const newAuthT = (): T => {
+  const t = newT()
+  t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.ts'))
+  return t
+}
+
+type Letter = { to: string[]; subject: string; text: string; html: string }
+
+let fetch: ReturnType<typeof vi.fn>
+const letters = (): Letter[] => fetch.mock.calls.map(([, init]) => JSON.parse(init.body))
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
+  vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+  fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
+  vi.stubGlobal('fetch', fetch)
+})
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+})
+
+const flush = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
+
+const person = (orgId: string, email: string, extra: Record<string, unknown> = {}) => ({
+  org_id: orgId,
+  id: uuid(),
+  name: 'Anna Larsson',
+  email,
+  org_role: 'user' as const,
+  kind: 'person' as const,
+  color: '#123456',
+  ...extra,
+})
+
+const inviteRows = (t: T) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query('platform_audit_log').collect()).filter((r) => r.action === 'invite_email'),
+  )
+
+describe('invitations from the app', () => {
+  it('emails a person added in Settings, and records it as the system', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const added = person(f.org.id, 'Anna.L@Example.SE')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    await flush(t)
+    const [letter] = letters()
+    expect(letter.to).toEqual(['anna.l@example.se'])
+    expect(letter.subject).toBe('You are invited to Qivo')
+    expect(letter.text).toContain(
+      'Testbed Labs has invited you to join their organization. Sign in or create an account with anna.l@example.se to join:',
+    )
+    expect(letter.text.endsWith(`${process.env.SITE_URL}/app#signup`)).toBe(true)
+    expect(
+      (await inviteRows(t)).map((r) => [r.actor_email, r.target_profile_id, r.detail]),
+    ).toEqual([
+      [
+        'system',
+        added.id,
+        { email: 'anna.l@example.se', sent: true, resend: false, settled: true },
+      ],
+    ])
+  })
+
+  it('says "as a guest" when the address has a home organization elsewhere, and links to sign-in', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const now = Date.now()
+    const email = 'home@example.se'
+    await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      email,
+      auth_user_id: 'home-login',
+      accepted_at: NOW,
+    })
+    await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'user',
+        data: { name: 'other', email, emailVerified: true, createdAt: now, updatedAt: now },
+      },
+    })
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, email))
+    await flush(t)
+    const [letter] = letters()
+    expect(letter.text).toContain(
+      'Testbed Labs has invited you to join their organization as a guest.',
+    )
+    expect(letter.html).toContain('their organization as a guest.')
+    expect(letter.text.endsWith(`${process.env.SITE_URL}/app`)).toBe(true)
+  })
+
+  it('emails a new project guest once, with the guest ending', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const invite = () =>
+      as(t, f.admin).mutation(api.projects.inviteGuest, {
+        org_id: f.org.id,
+        project_id: f.meta.id,
+        email: 'Guest.New@Example.se',
+        level: 'viewer',
+      })
+    await invite()
+    await flush(t)
+    expect(letters().map((l) => l.text.split('\n')[2])).toEqual([
+      'Testbed Labs has invited you to join their organization as a guest. Sign in or create an account with guest.new@example.se to join:',
+    ])
+    // inviting the existing seat again only updates its access
+    await invite()
+    await flush(t)
+    expect(letters()).toHaveLength(1)
+  })
+
+  it('emails a quickly corrected address once, and nothing for an agent', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const added = person(f.org.id, 'typo@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    await as(t, f.admin).mutation(api.profiles.create, {
+      ...person(f.org.id, ''),
+      email: null,
+      kind: 'agent',
+      name: 'Release Bot',
+    })
+    await as(t, f.admin).mutation(api.profiles.update, {
+      org_id: f.org.id,
+      id: added.id,
+      patch: { email: 'right@example.se' },
+    })
+    await flush(t)
+    // the first send saw a different address than the seat now holds, so it stood down
+    expect(letters().map((l) => l.to[0])).toEqual(['right@example.se'])
+    await as(t, f.admin).mutation(api.profiles.update, {
+      org_id: f.org.id,
+      id: added.id,
+      patch: { name: 'Anna L' },
+    })
+    await flush(t)
+    expect(letters()).toHaveLength(1)
+    const detail = await t.run((ctx) =>
+      ctx.db
+        .query('platform_audit_log')
+        .withIndex('by_target_profile', (q) => q.eq('target_profile_id', added.id))
+        .collect(),
+    )
+    expect(detail.map((r) => r.detail.email)).toEqual(['right@example.se'])
+  })
+
+  it('skips a seat claimed before its send, and emails a reactivated seat only if never emailed', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const claimed = person(f.org.id, 'quick@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, claimed)
+    await t.run(async (ctx) => {
+      const seat = await ctx.db
+        .query('profiles')
+        .withIndex('by_uuid', (q) => q.eq('id', claimed.id))
+        .unique()
+      if (seat) await ctx.db.patch(seat._id, { auth_user_id: 'quick-login' })
+    })
+    await flush(t)
+    expect(letters()).toEqual([])
+    expect(await inviteRows(t)).toEqual([])
+
+    const later = person(f.org.id, 'typo@example.se')
+    const update = (patch: Record<string, unknown>) =>
+      as(t, f.admin).mutation(api.profiles.update, { org_id: f.org.id, id: later.id, patch })
+    await as(t, f.admin).mutation(api.profiles.create, later)
+    await flush(t)
+    await update({ active: false })
+    await update({ email: 'right@example.se' })
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['typo@example.se'])
+    await update({ active: true })
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['typo@example.se', 'right@example.se'])
+    await update({ active: false })
+    await update({ active: true })
+    await flush(t)
+    expect(letters()).toHaveLength(2)
+  })
+
+  it('lets one person receive a letter for every correction', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const added = person(f.org.id, 'try0@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    await flush(t)
+    for (let i = 1; i <= 6; i++) {
+      await as(t, f.admin).mutation(api.profiles.update, {
+        org_id: f.org.id,
+        id: added.id,
+        patch: { email: `try${i}@example.se` },
+      })
+      await flush(t)
+    }
+    expect(letters().map((l) => l.to[0])).toEqual(
+      [0, 1, 2, 3, 4, 5, 6].map((i) => `try${i}@example.se`),
+    )
+  })
+
+  it('caps an organization at 50 letters an hour, not counting held-back or unattempted ones', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const plantSends = (n: number, detail: Record<string, unknown>) =>
+      t.run(async (ctx) => {
+        for (let i = 0; i < n; i++) {
+          await ctx.db.insert('platform_audit_log', {
+            ts: new Date().toISOString(),
+            actor_email: 'system',
+            action: 'invite_email',
+            target_org_id: f.org.id,
+            detail,
+          })
+        }
+      })
+    // 46 delivered and 3 uncertain count; held-back and never-attempted ones do not
+    await plantSends(46, { email: 'earlier@example.se', sent: true, resend: false })
+    await plantSends(3, {
+      email: 'timeout@example.se',
+      sent: false,
+      resend: false,
+      settled: true,
+      uncertain: true,
+    })
+    await plantSends(3, { email: 'held@example.se', sent: false, resend: false, limited: true })
+    await plantSends(3, { email: 'unsent@example.se', sent: false, resend: false, settled: true })
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'fiftieth@example.se'))
+    await flush(t)
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'over@example.se'))
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['fiftieth@example.se'])
+    const rows = (await inviteRows(t)).filter((r) => r.target_profile_id !== undefined)
+    expect(rows.map((r) => [r.detail.email, r.detail.sent, r.detail.limited ?? false])).toEqual([
+      ['fiftieth@example.se', true, false],
+      ['over@example.se', false, true],
+    ])
+    // the next hour starts a new count
+    vi.advanceTimersByTime(3_600_001)
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'later@example.se'))
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['fiftieth@example.se', 'later@example.se'])
+  })
+
+  it('reserves the last slot under the cap for only one of two simultaneous sends', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 49; i++) {
+        await ctx.db.insert('platform_audit_log', {
+          ts: new Date().toISOString(),
+          actor_email: 'system',
+          action: 'invite_email',
+          target_org_id: f.org.id,
+          channel: 'app',
+          detail: { email: 'earlier@example.se', sent: true, resend: false },
+        })
+      }
+    })
+    const a = await plantSeat(t, { org_id: f.org.id, email: 'a@example.se' })
+    const b = await plantSeat(t, { org_id: f.org.id, email: 'b@example.se' })
+    const reserve = (seat: { id: string; email?: string }) =>
+      t.mutation(internal.invites.reserve, {
+        profile_id: seat.id,
+        org_id: f.org.id,
+        email: seat.email ?? '',
+        resend: false,
+        actor: { email: 'system' },
+        app: true,
+      })
+    const outcomes = await Promise.all([reserve(a), reserve(b)])
+    expect(outcomes.map((o) => o.allowed).sort()).toEqual([false, true])
+  })
+
+  it('reserves nothing for a seat readdressed or removed since it was read', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const added = person(f.org.id, 'anna@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    const reserve = (email: string) =>
+      t.mutation(internal.invites.reserve, {
+        profile_id: added.id,
+        org_id: f.org.id,
+        email,
+        resend: false,
+        actor: { email: 'system' },
+        app: true,
+      })
+    expect(await reserve('old@example.se')).toEqual({ row: null, allowed: false })
+    expect((await reserve('anna@example.se')).allowed).toBe(true)
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: added.id })
+    expect(await reserve('anna@example.se')).toEqual({ row: null, allowed: false })
+  })
+
+  it('skips a seat claimed since it was saved, unless the request is strict', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const targets = (strict: boolean) =>
+      t.query(internal.invites.targets, {
+        invites: [{ profile_id: f.user.id }],
+        operator: true,
+        strict,
+      })
+    expect(await targets(false)).toEqual([])
+    await expect(targets(true)).rejects.toThrow(/invitation not found/)
+  })
+
+  it('shows app sends in the organization detail but not in the operator audit listing', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const now = Date.now()
+    const user = await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'user',
+        data: {
+          name: 'op',
+          email: 'op@platform.test',
+          emailVerified: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('platform_admins', { auth_user_id: user._id, note: '', created_at: NOW }),
+    )
+    const op = t.withIdentity({ subject: user._id as string })
+    const added = person(f.org.id, 'anna@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    await flush(t)
+    const detail = await op.query(api.admin.orgDetail, { org_id: f.org.id })
+    expect(detail.members.find((m) => m.profile_id === added.id)?.invite).toMatchObject({
+      sent: true,
+    })
+    expect((await op.query(api.admin.auditLog, {})).map((r) => r.action)).not.toContain(
+      'invite_email',
+    )
+    // many newer app emails never push an operator action out of the listing
+    await t.run(async (ctx) => {
+      await ctx.db.insert('platform_audit_log', {
+        ts: new Date(Date.now() - 60_000).toISOString(),
+        actor_email: 'op@platform.test',
+        action: 'create_org',
+        target_org_id: f.org.id,
+        detail: {},
+      })
+      for (let i = 0; i < 300; i++) {
+        await ctx.db.insert('platform_audit_log', {
+          ts: new Date().toISOString(),
+          actor_email: 'system',
+          action: 'invite_email',
+          target_org_id: f.org.id,
+          channel: 'app',
+          detail: { email: `x${i}@example.se`, sent: true, resend: false },
+        })
+      }
+    })
+    expect((await op.query(api.admin.auditLog, { limit: 5 })).map((r) => r.action)).toEqual([
+      'create_org',
+    ])
+  })
+
+  it('records an unsent letter when mail is not configured', async () => {
+    vi.stubEnv('AGENTMAIL_API_KEY', '')
+    const t = newAuthT()
+    const f = await withOrg(t)
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'anna@example.se'))
+    await flush(t)
+    expect(fetch).not.toHaveBeenCalled()
+    expect((await inviteRows(t)).map((r) => [r.detail.sent, r.detail.settled])).toEqual([
+      [false, true],
+    ])
+  })
+})

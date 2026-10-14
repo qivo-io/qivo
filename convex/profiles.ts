@@ -11,13 +11,18 @@
  *   set_display_name            0116:158-199 (+ profiles_name_narrate)
  *   set_message_retention       0110:56-77 as widened by 0112:49-76
  *   profiles_last_admin_*      model/orgs (0099) — fire conditions here
- *   profiles_viewer_leads_nothing  0102:391-411
+ *   profiles_viewer_leads_nothing  model/people (0102:391-411), fire
+ *                               condition here
  *   trigger-filled defaults     plannable_hours (0092 as amended 0103),
  *                               message_retention_days (0110 default 7 +
- *                               0112 sibling inheritance), initials (0116/0117)
+ *                               0112 sibling inheritance, model/people),
+ *                               initials (0116/0117)
  *
  * An invite IS a profile with an email and no accepted_at — the seat is the
- * invitation; claiming (identity.ts) stamps accepted_at/auth_user_id.
+ * invitation; claiming (identity.ts) stamps accepted_at/auth_user_id. A new
+ * person's seat, a corrected address on a pending one and a reactivated
+ * pending person never emailed at that address schedule the invitation email
+ * (invites.ts).
  *
  * message_retention_days is STAMPED on every create path (7 when no sibling
  * seat exists): in this schema ABSENT means "keep forever", the opposite of
@@ -30,6 +35,7 @@
 
 import type { WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { markBillingMembershipChanged } from './lib/billableUsers'
@@ -49,63 +55,15 @@ import {
 import { logActivity } from './model/activity'
 import { removeProfile } from './model/cascade'
 import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model/orgs'
-
-/* The only address check the database ever had (invite_project_guest's regex,
- * mirrored by the client's EMAIL_RE): something, @, something, dot, something,
- * no whitespace. The address is proved by someone signing in with it. */
-const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
-
-const normalizeEmail = (raw: string | null | undefined): string | undefined => {
-  const e = (raw ?? '').trim().toLowerCase()
-  return e === '' ? undefined : e
-}
-
-/* 0116's normalization, shared by both rename doors AND create: collapse
- * whitespace runs, trim; then the two profiles_name_shape rules as sentences
- * (the CHECK was bare — these are 0116's own RPC wordings). */
-const cleanName = (raw: string): string => raw.replace(/\s+/g, ' ').trim()
-
-function assertNameShape(name: string): void {
-  if (name === '') throw rule('a name cannot be blank')
-  if ([...name].length > 80) throw rule('a name is at most 80 characters')
-}
-
-const byCreated = (a: Doc<'profiles'>, b: Doc<'profiles'>) =>
-  a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0
-
-/* profiles_inherit_message_retention (0112): a new seat starts where the
- * person's other seats already are — matched on login OR address across every
- * org, oldest sibling wins, and the value copies even when it is Never
- * (FOUND-not-null semantics). No sibling ⇒ the old column default, 7 —
- * stamped explicitly. */
-async function inheritedRetention(
-  ctx: QueryCtx,
-  who: { auth_user_id?: string; email?: string },
-): Promise<number | undefined> {
-  const siblings: Doc<'profiles'>[] = []
-  const auth = who.auth_user_id
-  if (auth !== undefined) {
-    siblings.push(
-      ...(await ctx.db
-        .query('profiles')
-        .withIndex('by_auth', (q) => q.eq('auth_user_id', auth))
-        .collect()),
-    )
-  }
-  const em = who.email
-  if (em !== undefined) {
-    const carriers = await ctx.db
-      .query('profiles')
-      .withIndex('by_email', (q) => q.eq('email', em))
-      .collect()
-    for (const p of carriers) {
-      if (!siblings.some((s) => s._id === p._id)) siblings.push(p)
-    }
-  }
-  if (siblings.length === 0) return 7
-  siblings.sort(byCreated)
-  return siblings[0].message_retention_days
-}
+import {
+  assertNameShape,
+  assertViewerLeadsNothing,
+  byCreated,
+  cleanName,
+  EMAIL_SHAPE,
+  inheritedRetention,
+  normalizeEmail,
+} from './model/people'
 
 /* The 0112/0116 fan-out predicate: every profile carrying the caller's login,
  * OR the address held by one of the caller's claimed seats (the unclaimed-
@@ -231,6 +189,12 @@ export const create = adminMutation({
       ts: now,
     })
     await markBillingMembershipChanged(ctx, org.id, email === undefined ? [] : [email])
+    // A person's seat is an invitation; email it once this mutation commits.
+    if (!isAgent && email !== undefined) {
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: args.id, email }],
+      })
+    }
     return null
   },
 })
@@ -293,31 +257,9 @@ export const update = adminMutation({
       await assertNotLastAdmin(ctx, row, 'demote')
     }
 
-    // viewer-leads-nothing (0102:391-411), agents included; existing grants
-    // are deliberately KEPT — they are what the viewer sees through
+    // viewer-leads-nothing (0102:391-411), agents included
     if (newRole === 'viewer' && row.org_role !== 'viewer') {
-      const led = await ctx.db
-        .query('projects')
-        .withIndex('by_lead', (q) => q.eq('lead_id', row.id))
-        .collect()
-      if (led.length > 0) {
-        throw rule(
-          `${effectiveName} leads ${led.length} project(s) — hand those over before making them a viewer`,
-        )
-      }
-      // a guest's memberships are stale and dropped below, so they lead nothing
-      let teamsLed = 0
-      const memberships = ctx.db
-        .query('team_members')
-        .withIndex('by_profile', (q) => q.eq('profile_id', row.id))
-      for await (const tm of memberships) {
-        if (tm.is_leader && row.org_role !== 'guest') teamsLed += 1
-      }
-      if (teamsLed > 0) {
-        throw rule(
-          `${effectiveName} leads ${teamsLed} team(s) — hand those over before making them a viewer`,
-        )
-      }
+      await assertViewerLeadsNothing(ctx, row, effectiveName)
     }
 
     if (patch.org_role !== undefined && patch.org_role !== row.org_role)
@@ -406,6 +348,22 @@ export const update = adminMutation({
         row.org_id,
         [row.email, upd.email].filter((email): email is string => email !== undefined),
       )
+    }
+    // A corrected address on a pending seat gets the invitation the old one
+    // did. A reactivated pending person is emailed if that address never was.
+    if (upd.email !== undefined) {
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: row.id, email: upd.email }],
+      })
+    } else if (
+      upd.active === true &&
+      row.kind === 'person' &&
+      row.auth_user_id === undefined &&
+      row.email !== undefined
+    ) {
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: row.id, email: row.email, unless_sent: true }],
+      })
     }
     return null
   },
