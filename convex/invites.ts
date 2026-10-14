@@ -15,8 +15,9 @@
  * Every attempt is recorded as an 'invite_email' platform audit row, with
  * the operator as actor for console sends and 'system' for the app's.
  * admin.orgDetail shows the newest one for the seat's current address. The
- * app's sends are capped per organization and per seat, because any org
- * admin can trigger them and they leave from the shared no-reply inbox. */
+ * app's sends are capped per organization, because any org admin can trigger
+ * them and they leave from the shared no-reply inbox. Past the cap, people
+ * can still join by creating an account with the invited address. */
 
 import { type Infer, v } from 'convex/values'
 import { components, internal } from './_generated/api'
@@ -44,10 +45,9 @@ export type ScheduledInvite = Infer<typeof vInvite>
 const vActor = v.object({ auth_user_id: v.optional(v.string()), email: v.string() })
 type Actor = Infer<typeof vActor>
 
-/* App sends allowed per organization per hour and per seat per day. Attempts
- * over the cap are recorded as not sent. */
+/* App sends allowed per organization per hour, counting console sends too.
+ * Attempts over the cap are recorded as not sent and do not count. */
 const APP_SENDS_PER_ORG_HOUR = 50
-const APP_SENDS_PER_SEAT_DAY = 5
 
 type InviteTarget = {
   profile_id: string
@@ -64,7 +64,7 @@ async function recentSends(
   ctx: QueryCtx,
   by: { org_id: string } | { profile_id: string },
   since: string,
-): Promise<Array<{ detail: { email?: unknown; sent?: unknown } }>> {
+): Promise<Array<{ detail: { email?: unknown; sent?: unknown; limited?: unknown } }>> {
   const rows =
     'org_id' in by
       ? ctx.db
@@ -75,7 +75,7 @@ async function recentSends(
           .withIndex('by_target_profile', (q) =>
             q.eq('target_profile_id', by.profile_id).gt('ts', since),
           )
-  const out: Array<{ detail: { email?: unknown; sent?: unknown } }> = []
+  const out: Array<{ detail: { email?: unknown; sent?: unknown; limited?: unknown } }> = []
   for await (const row of rows) {
     if (row.action === 'invite_email') out.push(row as { detail: { email?: unknown } })
   }
@@ -114,11 +114,6 @@ export const targets = internalQuery({
       let limited = false
       if (!operator) {
         if (invite.email !== undefined && invite.email !== email) continue
-        const daySends = await recentSends(
-          ctx,
-          { profile_id: seat.id },
-          new Date(now - 86_400_000).toISOString(),
-        )
         if (invite.unless_sent) {
           const ever = await recentSends(ctx, { profile_id: seat.id }, '')
           if (ever.some((r) => r.detail.email === email && r.detail.sent === true)) continue
@@ -129,7 +124,7 @@ export const targets = internalQuery({
           new Date(now - 3_600_000).toISOString(),
         )
         limited =
-          daySends.length >= APP_SENDS_PER_SEAT_DAY || hourSends.length >= APP_SENDS_PER_ORG_HOUR
+          hourSends.filter((r) => r.detail.limited !== true).length >= APP_SENDS_PER_ORG_HOUR
       }
       const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
         model: 'user',

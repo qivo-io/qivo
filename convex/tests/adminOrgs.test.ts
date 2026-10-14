@@ -418,22 +418,29 @@ describe('createOrganization', () => {
       name: 'Bright <b>water</b>',
       people: BRIGHTWATER,
     })
-    expect(out.invites.every((i) => i.sent)).toBe(true)
-    const sent = letters()
-    expect(sent.map((l) => l.to)).toEqual([
-      ['elin@brightwater.studio'],
-      ['tomas@brightwater.studio'],
-      ['aisha@brightwater.studio'],
+    expect(out.invites.map((i) => [i.email, i.sent])).toEqual([
+      ['elin@brightwater.studio', true],
+      ['tomas@brightwater.studio', true],
+      ['aisha@brightwater.studio', true],
     ])
-    expect(sent[0].url).toBe('https://api.agentmail.to/v0/inboxes/no-reply%40qivo.io/messages/send')
+    // letters go out a few at a time, so they may arrive in any order
+    const sent = letters()
+    const to = (email: string) => sent.find((l) => l.to[0] === email)
+    expect(sent.map((l) => l.to[0]).sort()).toEqual([
+      'aisha@brightwater.studio',
+      'elin@brightwater.studio',
+      'tomas@brightwater.studio',
+    ])
+    const elin = to('elin@brightwater.studio')
+    expect(elin?.url).toBe('https://api.agentmail.to/v0/inboxes/no-reply%40qivo.io/messages/send')
     expect(sent.every((l) => l.subject === 'You are invited to Qivo')).toBe(true)
-    expect(sent[0].text).toContain(`${process.env.SITE_URL}/app#signup`)
-    expect(sent[2].text.endsWith(`${process.env.SITE_URL}/app`)).toBe(true)
-    expect(sent[0].text).toContain(
+    expect(elin?.text).toContain(`${process.env.SITE_URL}/app#signup`)
+    expect(to('aisha@brightwater.studio')?.text.endsWith(`${process.env.SITE_URL}/app`)).toBe(true)
+    expect(elin?.text).toContain(
       'Bright <b>water</b> has invited you to join their organization. Sign in',
     )
-    expect(sent[0].html).toContain('Bright &lt;b&gt;water&lt;/b&gt;')
-    expect(sent[0].html).not.toContain('<b>water</b>')
+    expect(elin?.html).toContain('Bright &lt;b&gt;water&lt;/b&gt;')
+    expect(elin?.html).not.toContain('<b>water</b>')
     expect((await auditFor(t, 'invite_email')).map((r) => r.detail.sent)).toEqual([
       true,
       true,

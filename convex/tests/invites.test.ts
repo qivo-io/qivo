@@ -190,13 +190,13 @@ describe('invitations from the app', () => {
     expect(letters()).toHaveLength(2)
   })
 
-  it('caps the letters one seat can receive in a day', async () => {
+  it('lets one person receive a letter for every correction', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
     const added = person(f.org.id, 'try0@example.se')
     await as(t, f.admin).mutation(api.profiles.create, added)
     await flush(t)
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 6; i++) {
       await as(t, f.admin).mutation(api.profiles.update, {
         org_id: f.org.id,
         id: added.id,
@@ -204,15 +204,43 @@ describe('invitations from the app', () => {
       })
       await flush(t)
     }
-    expect(letters().map((l) => l.to[0])).toEqual([0, 1, 2, 3, 4].map((i) => `try${i}@example.se`))
-    expect((await inviteRows(t)).map((r) => r.detail.limited ?? false)).toEqual([
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
+    expect(letters().map((l) => l.to[0])).toEqual(
+      [0, 1, 2, 3, 4, 5, 6].map((i) => `try${i}@example.se`),
+    )
+  })
+
+  it('caps an organization at 50 letters an hour, not counting letters it held back', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const plantSends = (n: number, detail: Record<string, unknown>) =>
+      t.run(async (ctx) => {
+        for (let i = 0; i < n; i++) {
+          await ctx.db.insert('platform_audit_log', {
+            ts: new Date().toISOString(),
+            actor_email: 'system',
+            action: 'invite_email',
+            target_org_id: f.org.id,
+            detail,
+          })
+        }
+      })
+    await plantSends(49, { email: 'earlier@example.se', sent: true, resend: false })
+    await plantSends(3, { email: 'held@example.se', sent: false, resend: false, limited: true })
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'fiftieth@example.se'))
+    await flush(t)
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'over@example.se'))
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['fiftieth@example.se'])
+    const rows = (await inviteRows(t)).filter((r) => r.target_profile_id !== undefined)
+    expect(rows.map((r) => [r.detail.email, r.detail.sent, r.detail.limited ?? false])).toEqual([
+      ['fiftieth@example.se', true, false],
+      ['over@example.se', false, true],
     ])
+    // the next hour starts a new count
+    vi.advanceTimersByTime(3_600_001)
+    await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'later@example.se'))
+    await flush(t)
+    expect(letters().map((l) => l.to[0])).toEqual(['fiftieth@example.se', 'later@example.se'])
   })
 
   it('shows app sends in the organization detail but not in the operator audit listing', async () => {
