@@ -241,8 +241,8 @@ export const setLeader = orgMutation({
     if (row === null || row.is_leader === is_leader) return null
     const member = await byId(ctx, 'profiles', profile_id)
     if (is_leader && member !== null && !canLeadTeams(member)) {
-      // The Team page offers the Leader box for agent members, so that
-      // refusal is a rule the app shows verbatim.
+      // A rule, so the app shows the sentence verbatim to a stale client
+      // that still offers the Leader box for an agent.
       if (member.kind === 'agent') throw rule('an agent cannot lead a team')
       throw forbidden(
         member.org_role === 'viewer'
