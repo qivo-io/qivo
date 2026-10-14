@@ -45,6 +45,7 @@ import { canCreateProjects, projectCreationRefusal } from './lib/projectCreators
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from './lib/projectKeys'
 import { logActivity } from './model/activity'
 import { deleteProjectDeep } from './model/cascade'
+import { assertMilestoneArrival, cleanMilestoneWeek, milestoneHome } from './model/milestones'
 import { ICON_COLOR_SHAPE, newUuid, nextProjectNum, weekLabel } from './model/orgs'
 import { cleanReviewHours, projectDescription } from './model/projects'
 
@@ -698,18 +699,12 @@ export const inviteGuest = orgMutation({
 
 /* -------------------------------------------------------------- milestones
  * P.addMilestone / P.updateMilestone / P.removeMilestone. Level is 'user'
- * (0078:497's milestone policies, member→user). The client folds subs up to
- * the meta; the server accepts any visible project — the SQL had no meta
- * restriction. week is the ISO Monday string (the client converts its week
- * index). Narration details embed weekLabel computed against the SUBJECT
- * org's settings, frozen at write time (trap T1). */
-
-const WEEK_SHAPE = /^\d{4}-\d{2}-\d{2}$/
-
-function cleanWeek(raw: string): string {
-  if (!WEEK_SHAPE.test(raw)) throw badRequest('a milestone week is an ISO date (YYYY-MM-DD)')
-  return raw
-}
+ * (0078:497's milestone policies, member→user) on the project that stores
+ * the milestone. A new milestone named against a sub-project is stored on its
+ * top-level project, as the client already does (model/milestones.ts). week
+ * is a real calendar day, YYYY-MM-DD (the client converts its week index).
+ * Narration details embed weekLabel computed against the SUBJECT org's
+ * settings, frozen at write time (trap T1). */
 
 async function myMilestone(
   ctx: MeCtx,
@@ -739,17 +734,18 @@ export const addMilestone = orgMutation({
   args: { id: v.string(), project_id: v.string(), name: v.string(), week: v.string() },
   handler: async (ctx, { id, project_id, name, week }) => {
     const now = new Date().toISOString()
-    const project = await myProject(ctx, project_id)
-    await assertMilestoneWriter(ctx, project_id)
-    // milestones_project_archived_guard (0106:148) — the arrival sentence
-    if (project.archived_at !== undefined) throw rule('that project is archived — restore it first')
-    const iso = cleanWeek(week)
+    const named = await myProject(ctx, project_id)
+    // write access and the archive guard apply where the milestone is stored
+    const home = await milestoneHome(ctx, named)
+    await assertMilestoneWriter(ctx, home.id)
+    assertMilestoneArrival(named, home)
+    const iso = cleanMilestoneWeek(week)
     await insertUnique(
       ctx,
       'milestones',
       'by_uuid',
       { id },
-      { id, project_id, name, week: iso, created_at: now },
+      { id, project_id: home.id, name, week: iso, created_at: now },
       badRequest('a milestone with this id already exists'),
     )
     const org = await orgSettings(ctx)
@@ -761,7 +757,7 @@ export const addMilestone = orgMutation({
       target_id: id,
       label: name,
       detail: `at ${weekLabel(iso, org)}`,
-      project_id,
+      project_id: home.id,
       ts: now,
     })
     return null
@@ -782,7 +778,7 @@ export const updateMilestone = orgMutation({
     await assertMilestoneWriter(ctx, project.id)
     const db: Partial<Doc<'milestones'>> = {}
     if (patch.name !== undefined) db.name = patch.name
-    if (patch.week !== undefined) db.week = cleanWeek(patch.week)
+    if (patch.week !== undefined) db.week = cleanMilestoneWeek(patch.week)
     const weekChanged = db.week !== undefined && db.week !== milestone.week
     const renamed = db.name !== undefined && db.name !== milestone.name
     if (Object.keys(db).length > 0) await ctx.db.patch(milestone._id, db)

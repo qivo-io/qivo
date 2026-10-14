@@ -41,6 +41,14 @@ const projectRow = (t: T, id: string) =>
       .unique(),
   )
 
+const milestoneRow = (t: T, id: string) =>
+  t.run(async (ctx) =>
+    ctx.db
+      .query('milestones')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique(),
+  )
+
 const lastEvent = async (t: T, orgId: string) => {
   const events = await activityFor(t, orgId)
   return events[events.length - 1]
@@ -1258,5 +1266,141 @@ describe('milestones', () => {
       'not_found',
       /^milestone not found$/,
     )
+  })
+
+  it('stores a milestone named against a sub-project on its top-level project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const id = uuid()
+    await as(t, f.user).mutation(api.projects.addMilestone, {
+      org_id: f.org.id,
+      id,
+      project_id: f.sub.id,
+      name: 'Beta',
+      week: '2026-05-11',
+    })
+    expect(await milestoneRow(t, id)).toMatchObject({ project_id: f.meta.id, week: '2026-05-11' })
+    expect(await lastEvent(t, f.org.id)).toMatchObject({
+      verb: 'added milestone',
+      target_id: id,
+      project_id: f.meta.id,
+    })
+  })
+
+  it('needs User access on the top-level project, not only on a sub-project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const subOnly = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'sub only',
+      auth_user_id: 'auth_sub_only',
+      accepted_at: NOW,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subOnly.id,
+        level: 'user',
+      }),
+    )
+    const id = uuid()
+    await expectRefusal(
+      as(t, subOnly).mutation(api.projects.addMilestone, {
+        org_id: f.org.id,
+        id,
+        project_id: f.sub.id,
+        name: 'Beta',
+        week: '2026-05-11',
+      }),
+      'forbidden',
+      /^no write access to this project$/,
+    )
+    expect(await milestoneRow(t, id)).toBeNull()
+  })
+
+  it('refuses a milestone named against an archived sub-project of an active project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: '2026-01-02T00:00:00.000Z' }))
+    await expectRefusal(
+      as(t, f.user).mutation(api.projects.addMilestone, {
+        org_id: f.org.id,
+        id: uuid(),
+        project_id: f.sub.id,
+        name: 'Beta',
+        week: '2026-05-11',
+      }),
+      'rule',
+      /^that project is archived — restore it first$/,
+    )
+  })
+
+  it('accepts real calendar days, including a leap day', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const id = uuid()
+    await as(t, f.user).mutation(api.projects.addMilestone, {
+      org_id: f.org.id,
+      id,
+      project_id: f.meta.id,
+      name: 'Leap',
+      week: '2028-02-29',
+    })
+    expect((await milestoneRow(t, id))?.week).toBe('2028-02-29')
+    // the app keeps the picked weekday, so a mid-week day is valid too
+    await as(t, f.user).mutation(api.projects.updateMilestone, {
+      org_id: f.org.id,
+      id,
+      patch: { week: '2026-12-31' },
+    })
+    expect((await milestoneRow(t, id))?.week).toBe('2026-12-31')
+  })
+
+  it('refuses impossible dates and other text on add and update, writing nothing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const id = uuid()
+    await as(t, f.user).mutation(api.projects.addMilestone, {
+      org_id: f.org.id,
+      id,
+      project_id: f.meta.id,
+      name: 'Beta',
+      week: '2026-05-11',
+    })
+    const cases: [string, RegExp][] = [
+      ['2026-02-31', /^a milestone week must be a valid calendar date$/],
+      ['2026-13-01', /^a milestone week must be a valid calendar date$/],
+      ['2025-02-29', /^a milestone week must be a valid calendar date$/],
+      ['2026-00-10', /^a milestone week must be a valid calendar date$/],
+      ['garbage', /^a milestone week is an ISO date \(YYYY-MM-DD\)$/],
+      ['2026-5-11', /^a milestone week is an ISO date \(YYYY-MM-DD\)$/],
+      ['2026-05-11T00:00:00Z', /^a milestone week is an ISO date \(YYYY-MM-DD\)$/],
+      ['', /^a milestone week is an ISO date \(YYYY-MM-DD\)$/],
+    ]
+    for (const [week, sentence] of cases) {
+      const fresh = uuid()
+      await expectRefusal(
+        as(t, f.user).mutation(api.projects.addMilestone, {
+          org_id: f.org.id,
+          id: fresh,
+          project_id: f.meta.id,
+          name: 'Nope',
+          week,
+        }),
+        'bad_request',
+        sentence,
+      )
+      expect(await milestoneRow(t, fresh)).toBeNull()
+      await expectRefusal(
+        as(t, f.user).mutation(api.projects.updateMilestone, {
+          org_id: f.org.id,
+          id,
+          patch: { name: 'Renamed', week },
+        }),
+        'bad_request',
+        sentence,
+      )
+    }
+    expect(await milestoneRow(t, id)).toMatchObject({ name: 'Beta', week: '2026-05-11' })
   })
 })
