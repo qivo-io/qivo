@@ -28,7 +28,10 @@ guide does not sign the assistant in or grant access.
 
 REST requests use an agent's `qva_` key. Viewer access permits reading; User
 and Lead access permit changes, subject to the agent's organization role.
-Access can come from an individual or team grant.
+Access can come from an individual or team grant. A Viewer agent's key can
+only read, so every change returns `403` with
+`this agent is a Viewer and can only read`. It can still create, list and
+remove its own task event subscriptions.
 
 The API lists projects and users and supports task search, creation, updates,
 deletion, archive/restore and comments. It checks field values, including the
@@ -101,8 +104,9 @@ supported.
 
 For manual setup, use **Personal access tokens** on the same page. Your client
 must accept a custom Authorization header. Copy the token when created; it
-cannot be shown again. Qivo also supplies a `claude mcp add …` command. These
-tokens do not expire automatically, so revoke them when no longer needed.
+cannot be shown again. Qivo also supplies a `claude mcp add …` command. Tokens
+created on this page can make changes and do not expire automatically, so
+revoke them when no longer needed.
 Organization admins can instead create an agent user with its own key ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 MCP tools list teams, projects, users, project users and tasks; read and change
@@ -111,7 +115,9 @@ tasks; read and add comments; and set plannable weekly hours. Request
 its tasks, and restore it before creating new ones.
 
 A personal connection acts with your permissions, restricted further by its
-approved OAuth access. It belongs to **one organization**. Settings uses your
+approved OAuth access. A connection approved without **Allow changes** can
+still read and manage its own task event subscriptions, but every change is
+refused. It belongs to **one organization**. Settings uses your
 home account, or your first guest account if you have no home organization.
 OAuth displays that organization during approval and keeps it even if your
 home account changes. A home-organization connection cannot reach projects

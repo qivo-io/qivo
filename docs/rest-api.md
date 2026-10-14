@@ -90,13 +90,19 @@ grant, a team grant, a project-lead title, a team leadership — exceed read.
 They share a word because they are the same idea one altitude apart. An agent whose
 `org_role` is `viewer` therefore comes back with
 `"access": { "read": …, "write": false }` on **every** project, whatever it
-holds there, and task-changing `POST`/`PATCH`/`DELETE` requests return `403`.
-Managing that key's own webhooks remains allowed. That is how
-a read-only key is made: one setting on the Users page, not a grant list
-audited project by project. Nothing in this surface implements it — the cap
-lives in the shared access layer (`cappedLevel` in `convex/lib/access.ts`),
-applied inside the one authorization computation every surface calls, so the
-same profile is read-only here, over MCP and in the browser alike.
+holds there. Its key is a read-only credential, so every `POST`, `PATCH` and
+`DELETE` task or comment request returns `403` with
+`{"error": "this agent is a Viewer and can only read"}`. Qivo refuses the
+request before it resolves any project or task reference, so the answer is
+the same whether or not the reference exists. Managing that key's own
+webhooks remains allowed. That is how a read-only key is made, with one
+setting on the Users page rather than a grant list audited project by project. Nothing in this
+surface implements it. The rule lives in the shared access layer
+(`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`), which REST,
+MCP and webhook management all call, so the same agent is read-only here,
+over MCP and in the browser alike. A Standard user agent (`org_role` `user`)
+that holds only a `viewer` project role gets
+`this agent has no write access to that project` on that project instead.
 
 > **Migration note.** Org-level `qv_` keys, with their own per-project
 > read/write grant list, were removed in migration 0100. They authenticated
@@ -902,8 +908,10 @@ REST webhooks use the same event definitions, filters, callback verification,
 Standard Webhooks signatures and delivery queue as
 [MCP Events](mcp.md#task-events-and-webhook-delivery). Authenticate these routes
 with the owning agent key, personal token or a current OAuth access token for
-the owning connection. OAuth requires `qivo:read`. Read-only users can manage
-their own subscriptions without gaining rights to change tasks.
+the owning connection. OAuth requires `qivo:read`. Read-only credentials, such
+as a Viewer agent's key or a personal token created without change access,
+can create, list and remove their own subscriptions without gaining rights to
+change tasks. An expired personal token gets `401`.
 
 | Method | Path | Result |
 | --- | --- | --- |
@@ -953,18 +961,27 @@ of a disabled subscription clears the streak and re-enables delivery, while
 retaining previous success, failure and HTTP-status history. Quiet callbacks
 are not probed. Finite subscriptions must be renewed before expiry to remain
 active through the health window. Registration removes expired registrations
-and reclaims quota held by revoked/deleted credentials and removed accounts.
+and reclaims quota held by revoked, expired or deleted credentials and removed
+accounts. A personal token's subscriptions stop delivering when the token
+expires.
 Deleting then registering again cannot revive the deleted registration's
 queued events. Registering after expiry also starts fresh.
 DELETE is idempotent for absent subscriptions. Another credential's existing
 subscription answers `404`, even when both credentials belong to the same person
-or agent. OAuth access tokens from the same grant share ownership. Token expiry,
-rotation or individual access-token revocation does not cancel its subscriptions;
-disconnect the connected app or unsubscribe. A new OAuth connection is a new owner.
+or agent. OAuth access tokens from the same grant share ownership. Access-token
+expiry, rotation or individual access-token revocation does not cancel the
+grant's subscriptions; disconnect the connected app or unsubscribe. A new OAuth
+connection is a new owner.
 
 Organization routes require a personal token or OAuth connection belonging to an
 active person with the organization administrator role. Agent keys cannot use
-these routes. OAuth administrator deletion also requires `qivo:write`. These
+these routes. Deleting another owner's subscription changes shared state, so
+it also needs a credential that can make changes: a personal token created
+with change access, or an OAuth connection with `qivo:write`. A read-only
+personal token gets `403` with `{"error": "this credential can only read"}`
+and a read-only OAuth connection gets
+`OAuth connection does not have the required scope`. Listing works with a
+read-only credential. These
 routes let administrators inspect and remove subscriptions that consume shared
 quota, including callbacks owned by inactive users. They do not expose signing
 keys or transfer subscription ownership.

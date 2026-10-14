@@ -1,10 +1,12 @@
-// Indexed permission predicates over an already-resolved profile.
+// Indexed permission predicates over an already-resolved profile, plus the
+// credential access rule the machine surfaces share (end of file).
 // Identity and active-seat checks belong to lib/functions.ts.
 
+import type { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { type AccessLevel, LEVEL_RANK, type OrgRole } from './enums'
-import { notFound } from './functions'
+import { type AccessLevel, type CredentialAccess, LEVEL_RANK, type OrgRole } from './enums'
+import { badRequest, forbidden, notFound, type Refusal } from './functions'
 
 export function levelRank(l: AccessLevel | null): number {
   // No grant ranks below every permission level.
@@ -345,4 +347,84 @@ export async function canWriteOrgLabels(ctx: QueryCtx, me: Doc<'profiles'>): Pro
  * admin-only Labels settings page. */
 export function canManageOrgLabels(me: Doc<'profiles'>): boolean {
   return me.active && me.org_role === 'admin'
+}
+
+/* -------------------------------------------------------- credential access
+ * What a machine credential lets its holder do, 'read' or 'write'. It is the
+ * credential's own ceiling, and a person still needs their role's project
+ * rules to write anything. REST, MCP and webhooks all ask credentialAccess, and
+ * every branch names the writing case positively, so a missing field, an
+ * unknown role or a new credential kind can only read. */
+
+/** A resolved machine credential, keyed by its table like an EventOwner. */
+export type AccessCredential =
+  | {
+      table: 'mcp_tokens'
+      token: Pick<Doc<'mcp_tokens'>, 'access' | 'expires_at'>
+      /** epoch milliseconds the expiry is judged against */
+      now: number
+    }
+  | { table: 'oauth_connections'; scopes: readonly string[] }
+  | { table: 'agent_keys' }
+
+/**
+ * The credential's access. A personal token writes only when it was created
+ * with write access and has not expired; an OAuth grant only with both
+ * qivo:read and qivo:write; an agent key only for a Standard user agent.
+ */
+export function credentialAccess(
+  credential: AccessCredential,
+  profile: Pick<Doc<'profiles'>, 'kind' | 'org_role'>,
+): CredentialAccess {
+  switch (credential.table) {
+    case 'mcp_tokens':
+      return profile.kind === 'person' &&
+        credential.token.access === 'write' &&
+        !tokenExpired(credential.token, credential.now)
+        ? 'write'
+        : 'read'
+    case 'oauth_connections':
+      return profile.kind === 'person' &&
+        credential.scopes.includes('qivo:read') &&
+        credential.scopes.includes('qivo:write')
+        ? 'write'
+        : 'read'
+    case 'agent_keys':
+      return profile.kind === 'agent' && profile.org_role === 'user' ? 'write' : 'read'
+    default:
+      return 'read'
+  }
+}
+
+/**
+ * Whether a personal token has expired at `now` (epoch milliseconds). A
+ * token without an expiry never expires; an unreadable one counts as expired.
+ */
+export function tokenExpired(token: Pick<Doc<'mcp_tokens'>, 'expires_at'>, now: number): boolean {
+  if (token.expires_at === undefined) return false
+  return !(Date.parse(token.expires_at) > now)
+}
+
+export const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'
+export const CREDENTIAL_READS_ONLY = 'this credential can only read'
+
+/** The refusal for a write through a credential that can only read. */
+export function readOnlyRefusal(profile: Pick<Doc<'profiles'>, 'kind'>): ConvexError<Refusal> {
+  return forbidden(profile.kind === 'agent' ? VIEWER_AGENT_READS_ONLY : CREDENTIAL_READS_ONLY)
+}
+
+const UTC_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
+
+/**
+ * A personal token expiry as stored, normalized to toISOString's form so it
+ * sorts like every other timestamp. Refuses anything but a real UTC
+ * date-time such as 2027-01-31T00:00:00Z (no offsets, no rolled-over days).
+ */
+export function cleanTokenExpiry(value: string): string {
+  const at = UTC_DATE_TIME.test(value) ? new Date(value) : null
+  const iso = at !== null && !Number.isNaN(at.getTime()) ? at.toISOString() : null
+  if (iso === null || iso.slice(0, 19) !== value.slice(0, 19)) {
+    throw badRequest('expires_at must be a UTC date-time such as 2027-01-31T00:00:00Z')
+  }
+  return iso
 }

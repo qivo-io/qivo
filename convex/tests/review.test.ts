@@ -319,6 +319,7 @@ describe('the review hand-off stamp (review_at)', () => {
     const rest = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const out = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: f.admin.id,
+      access: 'write',
       keyName: 'test',
       ref: rest.id,
       body: JSON.stringify({ status: 'review' }),
@@ -327,6 +328,7 @@ describe('the review hand-off stamp (review_at)', () => {
     const mcp = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.mutation(internal.machine.mcp.updateIssue, {
       callerId: f.admin.id,
+      access: 'write',
       ref: mcp.id,
       status: 'review',
     })
@@ -342,6 +344,7 @@ describe('every writer', () => {
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const out = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: f.admin.id,
+      access: 'write',
       keyName: 'test',
       ref: row.id,
       body: JSON.stringify({ status: 'review' }),
@@ -360,6 +363,7 @@ describe('every writer', () => {
     const out = JSON.parse(
       await t.mutation(internal.machine.mcp.updateIssue, {
         callerId: f.admin.id,
+        access: 'write',
         ref: row.id,
         status: 'review',
       }),

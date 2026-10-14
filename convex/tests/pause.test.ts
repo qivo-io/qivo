@@ -16,8 +16,13 @@ describe('paused tasks', () => {
       status: 'progress',
     })
     const read = async () =>
-      (await t.query(internal.machine.rest.getIssue, { callerId: f.admin.id, ref: issue.id }))
-        .paused
+      (
+        await t.query(internal.machine.rest.getIssue, {
+          callerId: f.admin.id,
+          access: 'read',
+          ref: issue.id,
+        })
+      ).paused
     const update = (patch: { status?: 'todo' | 'done' | 'backlog'; paused?: boolean }) =>
       client.mutation(api.issues.update, { org_id: f.org.id, id: issue.id, patch })
 

@@ -561,6 +561,7 @@ describe('deleteOrgDeep', () => {
         name: 'planted',
         token_prefix: 'qvt_pla',
         token_hash: 'a'.repeat(64),
+        access: 'read',
         created_at: NOW,
       })
       await ctx.db.insert('agent_keys', {
@@ -746,6 +747,7 @@ describe('removeProfile', () => {
         name: 'Mine',
         token_prefix: 'qvt_0000000',
         token_hash: 'cd'.repeat(32),
+        access: 'read',
         created_at: NOW,
       })
       await ctx.db.insert('mcp_tokens', {
@@ -754,6 +756,7 @@ describe('removeProfile', () => {
         name: 'Kept',
         token_prefix: 'qvt_1111111',
         token_hash: 'ef'.repeat(32),
+        access: 'read',
         created_at: NOW,
       })
       for (const profile of [f.user, f.admin]) {

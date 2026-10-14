@@ -510,6 +510,7 @@ describe('issue scheduling and hierarchy', () => {
     await expectRefusal(
       t.mutation(internal.machine.rest.updateIssue, {
         callerId: f.agent.id,
+        access: 'write',
         keyName: 'drive',
         ref: root.id,
         body: JSON.stringify({ archived: true }),
@@ -520,6 +521,7 @@ describe('issue scheduling and hierarchy', () => {
     await expectRefusal(
       t.mutation(internal.machine.mcp.updateIssue, {
         callerId: f.agent.id,
+        access: 'write',
         ref: root.id,
         archived: true,
       }),
@@ -543,6 +545,7 @@ describe('issue scheduling and hierarchy', () => {
     await expectRefusal(
       t.mutation(internal.machine.rest.updateIssue, {
         callerId: f.agent.id,
+        access: 'write',
         keyName: 'drive',
         ref: child.id,
         body: JSON.stringify({ archived: false }),
@@ -553,6 +556,7 @@ describe('issue scheduling and hierarchy', () => {
     await expectRefusal(
       t.mutation(internal.machine.mcp.updateIssue, {
         callerId: f.agent.id,
+        access: 'write',
         ref: child.id,
         archived: false,
       }),

@@ -467,11 +467,12 @@ describe('admin actions that take access away during read-only access', () => {
         name: 'Laptop',
         token_prefix: 'qvt_0123456',
         token_hash: 'c3'.repeat(32),
+        access: 'write',
         created_at: NOW,
       })
     })
     const lookup = (hash: string) =>
-      t.query(internal.machine.auth.lookupCredential, { hash, isAgent: true })
+      t.query(internal.machine.auth.lookupCredential, { hash, isAgent: true, now: NOW })
     return { t, f, ids, lookup }
   }
 

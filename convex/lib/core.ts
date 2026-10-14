@@ -29,11 +29,18 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { hasSubtasks, subtaskParentIds } from '../model/issues'
-import { canSeeProject, hasProjectLevel } from './access'
+import { canSeeProject, credentialAccess, hasProjectLevel, readOnlyRefusal } from './access'
 import { assertBillingWritable } from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
-import type { IssuePriority, IssueStatus, OrgRole, ProfileKind, ProjectType } from './enums'
+import type {
+  CredentialAccess,
+  IssuePriority,
+  IssueStatus,
+  OrgRole,
+  ProfileKind,
+  ProjectType,
+} from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
 import { allWordsMatcher } from './search'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
@@ -42,8 +49,10 @@ export { machineDetail }
 
 /* ------------------------------------------------------------------ caller
  * Uuid convention: machine internal fns take `callerId: v.string()` (the
- * profile uuid the auth query resolved) and start with asMachineCaller. The
- * model layer takes the loaded doc everywhere, so the Caller IS the doc. */
+ * profile uuid the auth query resolved) and `access: vCredentialAccess` (what
+ * that credential may do, from lib/access.ts credentialAccess), and start
+ * with asMachineCaller. The model layer takes the loaded doc everywhere, so
+ * the Caller IS the doc. */
 
 export type Caller = Doc<'profiles'>
 
@@ -57,7 +66,17 @@ export type Caller = Doc<'profiles'>
 export const CALLER_GONE = 'caller_gone'
 export const CALLER_DEACTIVATED = 'caller_deactivated'
 
-export async function asMachineCaller(ctx: QueryCtx, callerId: string): Promise<Caller> {
+/**
+ * The live caller profile. In a mutation it also refuses a credential that
+ * can only read, before any ref resolves, so a read-only caller learns
+ * nothing about what exists. An agent's access follows its live role, which
+ * can change between auth and dispatch. Then the billing pause applies.
+ */
+export async function asMachineCaller(
+  ctx: QueryCtx,
+  callerId: string,
+  access: CredentialAccess,
+): Promise<Caller> {
   refuseDemoFeature()
   const me = await byId(ctx, 'profiles', callerId)
   if (me === null) {
@@ -74,7 +93,11 @@ export async function asMachineCaller(ctx: QueryCtx, callerId: string): Promise<
       reason: CALLER_DEACTIVATED,
     })
   }
-  if ('insert' in ctx.db) await assertBillingWritable(ctx, me.org_id)
+  if ('insert' in ctx.db) {
+    const live = me.kind === 'agent' ? credentialAccess({ table: 'agent_keys' }, me) : 'write'
+    if (access !== 'write' || live !== 'write') throw readOnlyRefusal(me)
+    await assertBillingWritable(ctx, me.org_id)
+  }
   return me
 }
 
@@ -200,10 +223,11 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
 /* ------------------------------------------------------------ access flags
  * What the caller holds on each named project (core.ts:307-318's successor):
  * read = canSeeProject, write = hasProjectLevel 'user'. hasProjectLevel
- * already applies the viewer ceiling (cappedLevel) — the 0102 "viewer agent
- * writes nothing" rule comes for free on BOTH the grant-viewer and the
- * org-role-viewer agent. Here code sees everything and CHOOSES what to
- * disclose; these flags are that choice's only input. */
+ * already applies the viewer ceiling (cappedLevel), so an org-role-viewer
+ * agent and a grant-viewer agent both get `write: false`. (asMachineCaller
+ * refuses a Viewer agent's writes before they get this far.) Here code sees
+ * everything and CHOOSES what to disclose; these flags are that choice's only
+ * input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 

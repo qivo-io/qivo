@@ -24,8 +24,10 @@ import { v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
+import { credentialAccess, tokenExpired } from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
+import type { CredentialAccess } from '../lib/enums'
 import { recordApiCall } from '../model/billingUsage'
 
 /* Web Crypto + TextEncoder exist in the Convex isolate; convex/tsconfig's lib
@@ -46,7 +48,8 @@ export const sha256hex = async (text: string): Promise<string> => {
  * deactivated agent answers "revoked"):
  *   missing     bad/absent prefix — decided in the action, pre-hash
  *   unknown     no row for the hash
- *   revoked     revoked_at set
+ *   revoked     revoked_at set, or a personal token past its expires_at (an
+ *               expired token answers exactly like a revoked one)
  *   wrong_kind  profile missing; agent leg: kind !== 'agent'; person leg:
  *               auth_user_id absent — a person's token is only good once the
  *               seat is actually claimed (an unclaimed profile has no login
@@ -64,6 +67,9 @@ export type MachineCredential = {
   /** the agent key's own name for qva_ (feeds the REST provenance string
    *  `via the REST API (<keyName>)`); null for qvt_ */
   keyName: string | null
+  /** what this credential may do (lib/access.ts credentialAccess), passed to
+   *  every machine internal fn */
+  access: CredentialAccess
 }
 
 export type AuthResult =
@@ -86,21 +92,30 @@ export const classifySecret = (
       ? { isAgent: false }
       : null
 
+/* `now` (ISO) comes from the action, so the query never reads the clock. */
 export const lookupCredential = internalQuery({
-  args: { hash: v.string(), isAgent: v.boolean() },
-  handler: async (ctx, { hash, isAgent }): Promise<AuthResult> => {
+  args: { hash: v.string(), isAgent: v.boolean(), now: v.string() },
+  handler: async (ctx, { hash, isAgent, now }): Promise<AuthResult> => {
     if (isDemoDeployment()) return { ok: false, why: 'unknown', isAgent }
-    const token = isAgent
+    const agentKey = isAgent
       ? await ctx.db
           .query('agent_keys')
           .withIndex('by_hash', (q) => q.eq('key_hash', hash))
           .first()
+      : null
+    const personal = isAgent
+      ? null
       : await ctx.db
           .query('mcp_tokens')
           .withIndex('by_hash', (q) => q.eq('token_hash', hash))
           .first()
+    const token = agentKey ?? personal
     if (token === null) return { ok: false, why: 'unknown', isAgent }
     if (token.revoked_at !== undefined) return { ok: false, why: 'revoked', isAgent }
+    const nowMs = Date.parse(now)
+    if (personal !== null && tokenExpired(personal, nowMs)) {
+      return { ok: false, why: 'revoked', isAgent }
+    }
     const profile = await byId(ctx, 'profiles', token.profile_id)
     const shapeOk =
       profile !== null && (isAgent ? profile.kind === 'agent' : profile.auth_user_id !== undefined)
@@ -115,6 +130,10 @@ export const lookupCredential = internalQuery({
         rowId: token._id,
         isAgent,
         keyName: isAgent ? token.name : null,
+        access:
+          personal !== null
+            ? credentialAccess({ table: 'mcp_tokens', token: personal, now: nowMs }, profile)
+            : credentialAccess({ table: 'agent_keys' }, profile),
       },
     }
   },
@@ -130,12 +149,18 @@ export async function authenticateSecret(
   const leg = classifySecret(secret, allow)
   if (leg === null) return { ok: false, why: 'missing', isAgent: false }
   const hash = await sha256hex(secret)
-  return await ctx.runQuery(internal.machine.auth.lookupCredential, { hash, isAgent: leg.isAgent })
+  return await ctx.runQuery(internal.machine.auth.lookupCredential, {
+    hash,
+    isAgent: leg.isAgent,
+    now: new Date().toISOString(),
+  })
 }
 
 /* PER-CALL stamp and usage accounting. A query cannot write, hence the
  * separate internalMutation. False means the profile's request rate is full;
- * the HTTP action returns 429 without dispatching or charging that request. */
+ * the HTTP action returns 429 without dispatching or charging that request.
+ * Null means the credential stopped being valid after lookup (revoked,
+ * replaced or expired). */
 export const touchCredential = internalMutation({
   args: {
     table: v.union(v.literal('agent_keys'), v.literal('mcp_tokens')),
@@ -155,7 +180,8 @@ export const touchCredential = internalMutation({
       row === null ||
       row._id !== rowId ||
       row.profile_id !== profileId ||
-      row.revoked_at !== undefined
+      row.revoked_at !== undefined ||
+      ('token_hash' in row && tokenExpired(row, Date.parse(now)))
     )
       return null
     await ctx.db.patch(row._id, { last_used_at: now })
@@ -186,7 +212,7 @@ export const REST_AUTH_401: Record<AuthFail, string> = {
 export const MCP_AUTH_401 = {
   missing: 'missing credential (Authorization: Bearer qvt_… or qva_…)',
   agent: 'unknown, revoked or deactivated agent key',
-  person: 'unknown or revoked MCP token',
+  person: 'unknown, expired or revoked MCP token',
 } as const
 
 export const mcpAuth401 = (fail: { why: AuthFail; isAgent: boolean }): string =>

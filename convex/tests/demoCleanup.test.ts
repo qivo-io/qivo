@@ -378,6 +378,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
         name: 'Defensive cleanup fixture',
         token_prefix: 'qvt_test',
         token_hash: 'b'.repeat(64),
+        access: 'read',
         created_at: timestamp,
       })
       const connectionId = uuid()

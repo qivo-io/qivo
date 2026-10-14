@@ -1,29 +1,38 @@
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { profileCanSeeProject } from '../lib/access'
+import { credentialAccess, profileCanSeeProject, tokenExpired } from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
+import type { CredentialAccess } from '../lib/enums'
 import { mcpResource } from '../lib/oauth'
 import { type EventName, type EventOwner, subscriptionActive } from '../lib/taskEvents'
 import { issueKey } from '../lib/taskRefs'
 import { newUuid } from './orgs'
 import { expandWebhookEventsRef } from './webhookQueue'
 
-/** Bind subscriptions to the exact credential record and its live authorization. */
-export async function eventOwnerProfile(
+/**
+ * Bind subscriptions to the exact credential record and its live
+ * authorization. Answers the owner's profile and what the credential may do
+ * (lib/access.ts credentialAccess), or null once the credential stops
+ * authorizing anything because it was revoked, expired or replaced, or its
+ * account is gone.
+ */
+export async function eventOwner(
   ctx: QueryCtx,
   owner: EventOwner,
-): Promise<Doc<'profiles'> | null> {
+): Promise<{ profile: Doc<'profiles'>; access: CredentialAccess } | null> {
   if (isDemoDeployment()) return null
   const profile = await byId(ctx, 'profiles', owner.profile_id)
   if (!profile?.active) return null
   const credential = await byId(ctx, owner.credential_table, owner.credential_id)
+  const now = Date.now()
   if (
     !credential ||
     credential._id !== owner.credential_row_id ||
     credential.profile_id !== profile.id ||
-    credential.revoked_at !== undefined
+    credential.revoked_at !== undefined ||
+    ('token_hash' in credential && tokenExpired(credential, now))
   )
     return null
   if (owner.credential_table === 'agent_keys' && profile.kind !== 'agent') return null
@@ -50,8 +59,26 @@ export async function eventOwnerProfile(
       where: [{ field: '_id', value: credential.auth_user_id }],
     })) as { banned?: boolean } | null
     if (!client || client.disabled || !user || user.banned) return null
+    return {
+      profile,
+      access: credentialAccess({ table: 'oauth_connections', scopes: credential.scopes }, profile),
+    }
   }
-  return profile
+  return {
+    profile,
+    access:
+      'token_hash' in credential
+        ? credentialAccess({ table: 'mcp_tokens', token: credential, now }, profile)
+        : credentialAccess({ table: 'agent_keys' }, profile),
+  }
+}
+
+/** The owner's profile alone, for callers that only check visibility. */
+export async function eventOwnerProfile(
+  ctx: QueryCtx,
+  owner: EventOwner,
+): Promise<Doc<'profiles'> | null> {
+  return (await eventOwner(ctx, owner))?.profile ?? null
 }
 
 /** These caches belong to one mutation context, never to a user or a later request.

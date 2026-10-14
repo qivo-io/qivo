@@ -32,6 +32,7 @@ async function fixture() {
       name: 'Cascade events',
       token_prefix: 'qvt_test',
       token_hash: uuid(),
+      access: 'read',
       created_at: new Date().toISOString(),
     })
     return {

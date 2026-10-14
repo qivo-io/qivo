@@ -113,6 +113,7 @@ describe('pooled API usage', () => {
     const auth = await t.query(internal.machine.auth.lookupCredential, {
       hash: 'old-hash',
       isAgent: true,
+      now: new Date().toISOString(),
     })
     expect(auth.ok).toBe(true)
     await t.run(async (ctx) => {
@@ -335,6 +336,7 @@ describe('machine request limits', () => {
         name: 'Personal token',
         token_prefix: 'qvt_test',
         token_hash: 'token-hash',
+        access: 'read',
         created_at: PERIOD,
       })
     })

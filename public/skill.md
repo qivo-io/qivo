@@ -238,7 +238,9 @@ success, failure and HTTP-status history. Pending retries survive a verified
 refresh before expiry. Registering after expiry or deletion starts fresh and
 cannot revive old queued events. There is no replay of failed events or changes
 missed while disabled. Registration reclaims quota held
-by expired registrations, revoked/deleted credentials and removed accounts.
+by expired registrations, by revoked, expired or deleted credentials and by
+removed accounts. A personal token's subscriptions stop delivering when it
+expires.
 OAuth subscriptions belong to the connection grant. Access-token expiry,
 rotation or revocation of an individual access token does not cancel them.
 Disconnect the connected app or unsubscribe to stop them. Unsubscribe through REST
@@ -249,8 +251,10 @@ mode is `"webhook"`; no signing key is needed to unsubscribe.
 A person who administers the organization can inspect subscriptions across
 owners with `GET /v1/webhooks/organization` and remove one with
 `DELETE /v1/webhooks/organization/{id}`. Use that person's token or OAuth
-connection. OAuth administrator deletion requires `qivo:write`. Use these
-routes to reclaim shared quota when the original owner cannot remove a callback.
+connection. Removing another owner's subscription needs a credential that can
+make changes: a personal token with change access, or an OAuth connection with
+`qivo:write`. Use these routes to reclaim shared quota when the original owner
+cannot remove a callback.
 
 ## Archives, access, and browser links
 
@@ -263,8 +267,13 @@ Archived projects are separate: use `list_projects` with `archived: true` to
 find them, then explicitly name one in the task query. They refuse new tasks;
 restore a project in the browser when that is part of the requested work.
 A viewer can read but cannot write. A not-found response can also mean the
-credential cannot see the object. A read-only OAuth approval also prevents
-writes. If the user's task needs additional access, use the client's OAuth
+credential cannot see the object. A read-only credential also prevents writes,
+and Qivo refuses its changes before looking up what you named. A read-only
+OAuth approval gets HTTP 403 `insufficient_scope`. A personal token without
+change access gets `this credential can only read`, and the key of an agent
+whose organization role is Viewer gets `this agent is a Viewer and can only
+read`. Reading and managing its own event subscriptions still work. If the
+user's task needs additional access, use the client's OAuth
 approval flow to request it; approval still cannot exceed the person's
 current project permissions.
 

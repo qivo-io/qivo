@@ -35,6 +35,7 @@ async function fixture() {
       name: 'Events',
       token_prefix: 'qvt_test',
       token_hash: 'test',
+      access: 'read',
       created_at: new Date().toISOString(),
     })
     return {
@@ -146,6 +147,7 @@ describe('durable task events', () => {
         name: 'Other',
         token_prefix: 'qvt_other',
         token_hash: 'other',
+        access: 'read',
         created_at: new Date().toISOString(),
       })
       return { ...f.owner, credential_id: id, credential_row_id: row }
@@ -197,6 +199,7 @@ describe('durable task events', () => {
         name: 'Second credential',
         token_prefix: 'qvt_second',
         token_hash: 'second',
+        access: 'read',
         created_at: new Date().toISOString(),
       })
       return { owner: { ...f.owner, credential_id: id, credential_row_id: row }, row }

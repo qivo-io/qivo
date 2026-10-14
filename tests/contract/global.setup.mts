@@ -80,6 +80,8 @@ function mint(kind: 'agent_key' | 'mcp_token', who: Record<string, string>, name
     key_prefix: secret.slice(0, 11),
     key_hash: sha256(secret),
     name,
+    // the suites write with the person token; an agent key's role decides
+    ...(kind === 'mcp_token' ? { access: 'write' } : {}),
   })
   return { id: out.id as string, secret }
 }
