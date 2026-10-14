@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
-import { sendBillingReminder } from '../mail'
+import { sendBillingReminder, sendInviteEmail } from '../mail'
 import { newT } from './helpers.setup'
 
 const letter = {
@@ -87,6 +87,50 @@ describe('authentication mail configuration', () => {
       expect(logs).not.toContain('test-only-provider-key')
     },
   )
+})
+
+describe('invitation mail', () => {
+  const invite = (deadline: number) =>
+    sendInviteEmail({
+      to: letter.to,
+      name: 'Elin Strand',
+      org_name: 'Brightwater Studio',
+      url: 'https://app.example.test/app#signup',
+      send_key: 'test-only-invite',
+      deadline,
+    })
+
+  beforeEach(() => {
+    vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
+    vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+  })
+
+  it('reports not sent, without calling the provider, once the batch deadline has passed', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() - 1)).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('gives up instead of waiting out a Retry-After that ends past the deadline', async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: () => '120' },
+      json: async () => ({}),
+    })
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() + 5_000)).toBe(false)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('is not sent when mail is not configured', async () => {
+    vi.stubEnv('AGENTMAIL_API_KEY', '')
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() + 60_000)).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
 })
 
 describe('shared transactional transport', () => {

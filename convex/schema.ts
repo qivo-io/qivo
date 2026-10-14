@@ -1036,5 +1036,8 @@ export default defineSchema({
     target_org_id: v.optional(v.string()),
     target_profile_id: v.optional(v.string()),
     detail: v.any(),
-  }).index('by_ts', ['ts']),
+  })
+    .index('by_ts', ['ts'])
+    // The operator console reads a pending seat's latest invite email here.
+    .index('by_target_profile', ['target_profile_id', 'ts']),
 })

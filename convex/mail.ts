@@ -1,6 +1,7 @@
 /* Qivo transactional mail uses the shared AgentMail account for verification,
- * password resets and billing reminders. The configured inbox supplies From;
- * customer replies go to support. No inbound mail is processed here.
+ * password resets, billing reminders and operator invitations. The configured
+ * inbox supplies From; customer replies go to support. No inbound mail is
+ * processed here.
  *
  * AGENTMAIL_API_KEY, AGENTMAIL_INBOX and AGENTMAIL_BASE_URL belong only in the
  * selected Convex deployment. Never log keys, inboxes, recipients or auth URLs.
@@ -120,8 +121,10 @@ const toHex = (bytes: Uint8Array) =>
 const sha256Hex = async (s: string): Promise<string> =>
   toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))))
 
-/* One letter, up to three attempts, nothing thrown — send-mail's postLetter,
- * minus the shared deadline (see header).
+/* One letter, up to three attempts, nothing thrown — send-mail's postLetter.
+ * A batch caller may pass a deadline (epoch ms) shared by its letters. Each
+ * attempt's timeout and each wait then stop at it, and a letter that cannot
+ * finish in time counts as not sent.
  *
  * Retry covers 408 / 429 / 5xx and a network or timeout failure. 409 gets
  * exactly ONE extra attempt: under the same idempotency key a 409 means
@@ -140,7 +143,7 @@ const sha256Hex = async (s: string): Promise<string> =>
 async function postLetter(
   letter: Letter,
   intent: string,
-  cfg: { key: string; inbox: string; idempotencyKey: string },
+  cfg: { key: string; inbox: string; idempotencyKey: string; deadline?: number },
 ): Promise<boolean> {
   if (!letter.text.trim() || !letter.html.trim()) {
     console.error('[mail] refusing an incomplete template', { intent })
@@ -164,6 +167,11 @@ async function postLetter(
   })
   for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
     let retryAfterMs = 0
+    const left = cfg.deadline === undefined ? SEND_TIMEOUT_MS : cfg.deadline - Date.now()
+    if (left <= 0) {
+      console.error('[mail] send deadline passed', { intent, attempt })
+      return false
+    }
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -173,7 +181,7 @@ async function postLetter(
           'Idempotency-Key': cfg.idempotencyKey,
         },
         body,
-        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.min(SEND_TIMEOUT_MS, left)),
       })
       if (res.ok) {
         const ok = (await res.json().catch(() => null)) as { message_id?: string } | null
@@ -204,6 +212,10 @@ async function postLetter(
       if (attempt === SEND_ATTEMPTS) return false
     }
     const wait = retryAfterMs > 0 ? retryAfterMs : attempt * 500
+    if (cfg.deadline !== undefined && Date.now() + wait >= cfg.deadline) {
+      console.error('[mail] send deadline passed', { intent, attempt })
+      return false
+    }
     await new Promise<void>((r) => setTimeout(() => r(), wait))
   }
   return false
@@ -237,6 +249,47 @@ export async function sendBillingReminder(input: {
     key,
     inbox,
     idempotencyKey: await sha256Hex(input.notice_key),
+  })
+}
+
+/** Organization invitations from the operator console use the same
+ * transport and From inbox. The organization and person names are stored
+ * text, so they appear only in the escaped body, never in the subject.
+ * Returns false when mail is not configured, delivery failed or the batch
+ * deadline passed. The caller then offers the sign-up link instead. A fresh
+ * key per send lets a resend produce a new letter while keeping postLetter's
+ * retries idempotent. */
+export async function sendInviteEmail(input: {
+  to: string
+  name: string
+  org_name: string
+  url: string
+  send_key: string
+  deadline: number
+}): Promise<boolean> {
+  const key = process.env.AGENTMAIL_API_KEY
+  const inbox = process.env.AGENTMAIL_INBOX
+  if (!key || !inbox || process.env.APP_MODE === 'demo') return false
+  const letter: Letter = {
+    to: input.to,
+    subject: 'You are invited to Qivo',
+    text: `Hi ${input.name},
+
+You are invited to join ${input.org_name} on Qivo. Sign in or create an account with ${input.to} to join:
+${input.url}`,
+    html: shell(
+      [
+        `Hi ${esc(input.name)},`,
+        `You are invited to join <strong>${esc(input.org_name)}</strong> on Qivo. Sign in or create an account with ${esc(input.to)} to join.`,
+      ],
+      { href: input.url, label: 'Join on Qivo' },
+    ),
+  }
+  return await postLetter(letter, 'invite', {
+    key,
+    inbox,
+    idempotencyKey: await sha256Hex(input.send_key),
+    deadline: input.deadline,
   })
 }
 

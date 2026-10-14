@@ -1,11 +1,13 @@
 /* platform_audit_log insert — admin_log_action's successor (0017), shared by
- * admin.ts (operator console) and adminAuth.ts (auth actions). A plain
+ * the operator console's modules and system jobs. A plain
  * exported function, never a public mutation: the deny-by-default private
  * schema becomes "no public function touches it". Callers
  * resolve the actor themselves (the operator's Better Auth email, 'system'
  * for crons, 'cli' for `npx convex run` mutations) — the SQL's
- * coalesce((select u.email from auth.users …), '') is theirs to say. */
+ * coalesce((select u.email from auth.users …), '') is theirs to say.
+ * operatorEmail below resolves it for an operator's mutation. */
 
+import { components } from '../_generated/api'
 import type { MutationCtx } from '../_generated/server'
 
 export type AuditEntry = {
@@ -29,4 +31,19 @@ export async function audit(ctx: MutationCtx, entry: AuditEntry): Promise<void> 
       : {}),
     detail: entry.detail ?? {},
   })
+}
+
+/* The actor half of an operator's audit row, their Better Auth email, as the
+ * SQL's coalesce((select u.email from auth.users …), '') had it (0015:55). An
+ * unreadable login row yields '' rather than a failed write. */
+export async function operatorEmail(ctx: MutationCtx, authUserId: string): Promise<string> {
+  try {
+    const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: 'user',
+      where: [{ field: '_id', value: authUserId }],
+    })) as { email?: string } | null
+    return user?.email ?? ''
+  } catch {
+    return ''
+  }
 }

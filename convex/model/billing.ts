@@ -1,10 +1,15 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { getBillableUsers } from '../lib/billableUsers'
-import { billingEnabled, subscriptionFor, subscriptionWritable } from '../lib/billingAccess'
+import {
+  addCalendarMonths,
+  billingEnabled,
+  subscriptionFor,
+  subscriptionWritable,
+} from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { byId } from '../lib/db'
-import { badRequest, notFound, require } from '../lib/functions'
+import { badRequest, notFound, require, rule } from '../lib/functions'
 import { polarConfigured } from '../lib/polar'
 import { newUuid } from './orgs'
 
@@ -53,6 +58,42 @@ export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId
     updated_at: now,
   })
   return await ctx.db.get(id)
+}
+
+/* Complimentary access for `months` calendar months, without a card. Enrolls
+ * the organization on the default plan when it has no subscription yet.
+ * Repeating a grant extends it from the current end date. Refused once a
+ * checkout or provider subscription exists, because Polar then owns the
+ * terms. Shared by the operator's grant on an existing organization and the
+ * grant chosen while creating one. The caller writes the audit row. */
+export async function grantComplimentaryMonths(
+  ctx: MutationCtx,
+  orgId: string,
+  months: number,
+): Promise<{ until: string; plan_id: string }> {
+  if (!Number.isInteger(months) || months < 1 || months > 24)
+    throw badRequest('Choose 1–24 calendar months.')
+  require(await byId(ctx, 'organizations', orgId), notFound('organization not found'))
+  const sub = await enrollOrganization(ctx, orgId)
+  require(sub, rule('Create and select a default billing plan first.'))
+  require(!sub.polar_subscription_id && !hasPendingCheckout(sub), rule(
+    'Complimentary access must be granted before checkout. Manage an existing paid promotion in Polar.',
+  ))
+  const now = isoNow()
+  const from =
+    sub.complimentary_until && sub.complimentary_until > now ? sub.complimentary_until : now
+  const until = addCalendarMonths(from, months)
+  await ctx.db.patch(sub._id, {
+    complimentary_start: sub.complimentary_start ?? now,
+    complimentary_until: until,
+    updated_at: now,
+    checkout_id: undefined,
+    checkout_url: undefined,
+    checkout_expires_at: undefined,
+    checkout_lock: undefined,
+    checkout_lock_until: undefined,
+  })
+  return { until, plan_id: sub.plan_id }
 }
 
 export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<BillingSummary> {

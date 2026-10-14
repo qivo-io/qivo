@@ -118,6 +118,18 @@ adminBilling:listPlans query public {"type":"object","value":{}}
 adminBilling:orgBilling query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 adminBilling:setDefaultPlan mutation public {"type":"object","value":{"plan_id":{"fieldType":{"type":"string"},"optional":false}}}
 adminDemo:metrics query public {"type":"object","value":{}}
+adminOrgs:cancelInvite mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
+adminOrgs:checkAddress query public {"type":"object","value":{"slug":{"fieldType":{"type":"string"},"optional":false}}}
+adminOrgs:checkPeople query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":true},"emails":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+adminOrgs:createOrganization action public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"slug":{"fieldType":{"type":"string"},"optional":true},"plan_id":{"fieldType":{"type":"string"},"optional":true},"complimentary_months":{"fieldType":{"type":"number"},"optional":true},"people":{"fieldType":{"type":"array","value":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}},"optional":false}}}
+adminOrgs:insertOrganization mutation internal {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"slug":{"fieldType":{"type":"string"},"optional":true},"plan_id":{"fieldType":{"type":"string"},"optional":true},"complimentary_months":{"fieldType":{"type":"number"},"optional":true},"people":{"fieldType":{"type":"array","value":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+adminOrgs:insertPeople mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"people":{"fieldType":{"type":"array","value":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+adminOrgs:invitePeople action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"people":{"fieldType":{"type":"array","value":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}},"optional":false}}}
+adminOrgs:inviteTargets query internal {"type":"object","value":{"profile_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+adminOrgs:recordInviteEmail mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"sent":{"fieldType":{"type":"boolean"},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+adminOrgs:resendInvite action public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
+adminOrgs:setMemberRole mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}
+adminOrgs:suggestAddress query public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:beginDemoUploadWork mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:cancelUpload mutation public {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:clearForDeletedLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -477,6 +489,18 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     unbanUser: 'platformAction',
     createBreakGlass: 'platformAction',
   },
+  // Operators create organizations and manage their invitations and roles.
+  // Actions send the invitation email after the seat mutation commits.
+  adminOrgs: {
+    suggestAddress: 'platformQuery',
+    checkAddress: 'platformQuery',
+    checkPeople: 'platformQuery',
+    createOrganization: 'platformAction',
+    invitePeople: 'platformAction',
+    resendInvite: 'platformAction',
+    cancelInvite: 'platformMutation',
+    setMemberRole: 'platformMutation',
+  },
   comments: { create: 'orgMutation', update: 'orgMutation', remove: 'orgMutation' },
   files: {
     uploadUrl: 'orgMutation',
@@ -607,7 +631,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 135
+const PUBLIC_COUNT = 143
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

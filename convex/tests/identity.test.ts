@@ -246,7 +246,7 @@ describe('claimSeatsForLogin — the claim loop', () => {
   })
 })
 
-describe('bootstrap (0002): an org whose admins hold no login makes its first login an admin', () => {
+describe('bootstrap (0002): an org with no admin makes its first login an admin', () => {
   it('the first claim into an admin-less org is promoted to admin', async () => {
     const seat = await plantSeat(t, { org_id: uuid(), email: EMAIL })
     expect(await claim(t)).toBe(1)
@@ -262,9 +262,22 @@ describe('bootstrap (0002): an org whose admins hold no login makes its first lo
     expect((await reload(t, seat)).org_role).toBe('user')
   })
 
-  it('an UNCLAIMED admin seat does not block promotion — the predicate is admin WITH a login', async () => {
+  it('an invited admin blocks promotion, so the first login keeps the role it was invited with', async () => {
     const orgId = uuid()
     await plantSeat(t, { org_id: orgId, email: 'founder@example.test', org_role: 'admin' })
+    const seat = await plantSeat(t, { org_id: orgId, email: EMAIL, created_at: DAY2 })
+    await claim(t)
+    expect((await reload(t, seat)).org_role).toBe('user')
+  })
+
+  it('an inactive invited admin does not block promotion', async () => {
+    const orgId = uuid()
+    await plantSeat(t, {
+      org_id: orgId,
+      email: 'founder@example.test',
+      org_role: 'admin',
+      active: false,
+    })
     const seat = await plantSeat(t, { org_id: orgId, email: EMAIL, created_at: DAY2 })
     await claim(t)
     expect((await reload(t, seat)).org_role).toBe('admin')
@@ -283,6 +296,28 @@ describe('bootstrap (0002): an org whose admins hold no login makes its first lo
     const seat = await plantSeat(t, { org_id: orgId, email: EMAIL, created_at: DAY2 })
     await claim(t)
     expect((await reload(t, seat)).org_role).toBe('user')
+  })
+
+  it('an invited admin arriving as a guest hands the admin role to the earliest signed-in member', async () => {
+    const orgId = uuid()
+    // the admin's address gained a home elsewhere after the invitation
+    await plantSeat(t, { org_id: f.org.id, email: EMAIL, auth_user_id: LOGIN, accepted_at: NOW })
+    const invited = await plantSeat(t, {
+      org_id: orgId,
+      email: EMAIL,
+      org_role: 'admin',
+      created_at: DAY2,
+    })
+    const early = await plantSeat(t, {
+      org_id: orgId,
+      email: 'early@example.test',
+      auth_user_id: 'early-login',
+      accepted_at: NOW,
+      created_at: DAY2,
+    })
+    expect(await claim(t)).toBe(1)
+    expect((await reload(t, invited)).org_role).toBe('guest')
+    expect((await reload(t, early)).org_role).toBe('admin')
   })
 
   it('a guest seat adopted by a home-less login can bootstrap to admin', async () => {

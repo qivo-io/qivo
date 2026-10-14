@@ -28,13 +28,13 @@
 import { v } from 'convex/values'
 import { components } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
-import type { MutationCtx, QueryCtx } from './_generated/server'
+import type { QueryCtx } from './_generated/server'
 import { internalMutation, query } from './_generated/server'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
-import type { OrgRole } from './lib/enums'
+import type { OrgRole, ProfileKind } from './lib/enums'
 import {
   badRequest,
   notFound,
@@ -44,8 +44,9 @@ import {
   rule,
 } from './lib/functions'
 import { allWordsMatcher } from './lib/search'
-import { audit } from './model/admin'
+import { audit, operatorEmail } from './model/admin'
 import { leaveAllTeams } from './model/orgs'
+import { adminElsewhere, homeElsewhere } from './model/people'
 
 const DAY = 86_400_000
 
@@ -109,20 +110,6 @@ async function authColumnsMap(
     map.set(p.auth_user_id, await authColumnsFor(ctx, p.auth_user_id))
   }
   return map
-}
-
-/* The actor half of every audit row — the SQL's
- * coalesce((select u.email from auth.users …), '') (0015:55). */
-async function actorEmail(ctx: MutationCtx, authUserId: string): Promise<string> {
-  try {
-    const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'user',
-      where: [{ field: '_id', value: authUserId }],
-    })) as { email?: string } | null
-    return user?.email ?? ''
-  } catch {
-    return ''
-  }
 }
 
 const sizeOf = (doc: unknown): number => JSON.stringify(doc).length
@@ -273,10 +260,35 @@ export type AdminMemberRow = {
   name: string
   email: string | null
   org_role: OrgRole
+  kind: ProfileKind
+  active: boolean
   has_login: boolean
   last_sign_in_at: string | null
   banned_until: string | null
   created_at: string
+  /* A pending person's newest invitation email (adminOrgs), or null when the
+   * operator never sent one, e.g. an invitation from in-app Settings. */
+  invite: { sent: boolean; at: string } | null
+}
+
+/* The seat's newest 'invite_email' audit row, if it went to the seat's
+ * current address. An org admin may correct a pending seat's address, and a
+ * letter to the old address says nothing about the new one. */
+async function latestInvite(
+  ctx: QueryCtx,
+  seat: Doc<'profiles'>,
+): Promise<AdminMemberRow['invite']> {
+  const rows = ctx.db
+    .query('platform_audit_log')
+    .withIndex('by_target_profile', (q) => q.eq('target_profile_id', seat.id))
+    .order('desc')
+  for await (const row of rows) {
+    if (row.action !== 'invite_email') continue
+    const detail = row.detail as { sent?: unknown; email?: unknown }
+    if (detail.email !== seat.email) return null
+    return { sent: detail.sent === true, at: row.ts }
+  }
+  return null
 }
 
 export type AdminOrgDetail = {
@@ -302,19 +314,24 @@ export const orgDetail = platformQuery({
       .collect()
     profiles.sort((a, b) => cmp(a.name, b.name))
     const authColumns = await authColumnsMap(ctx, profiles)
-    const members = profiles.map((p): AdminMemberRow => {
+    const members: AdminMemberRow[] = []
+    for (const p of profiles) {
       const cols = p.auth_user_id !== undefined ? authColumns.get(p.auth_user_id) : undefined
-      return {
+      const pending = p.kind === 'person' && p.auth_user_id === undefined
+      members.push({
         profile_id: p.id,
         name: p.name,
         email: p.email ?? null,
         org_role: p.org_role,
+        kind: p.kind,
+        active: p.active,
         has_login: p.auth_user_id !== undefined,
         last_sign_in_at: cols?.last_sign_in_at ?? null,
         banned_until: cols?.banned_until ?? null,
         created_at: p.created_at,
-      }
-    })
+        invite: pending ? await latestInvite(ctx, p) : null,
+      })
+    }
 
     const teamDocs = await ctx.db
       .query('teams')
@@ -419,11 +436,12 @@ export const listUsers = platformQuery({
 /* --------------------------------------------------------- promoteOrgAdmin */
 
 /* admin_promote_org_admin (0102:431-451) — the console's lockout rescue.
- * A viewer IS promotable on purpose; the one server guard is the agent
+ * A viewer IS promotable on purpose; the server guards are the agent
  * sentence, verbatim ("the console's one job here is to be readable when it
- * says no"). A promoted guest starts with no team, as in profiles.update:
- * any team row a guest still holds is stale. Writes the promote_org_admin
- * audit row as the operator. */
+ * says no") and the home-organization fence for a pending seat. A promoted
+ * guest starts with no team, as in profiles.update: any team row a guest
+ * still holds is stale. Writes the promote_org_admin audit row as the
+ * operator. */
 export const promoteOrgAdmin = platformMutation({
   args: { profile_id: v.string() },
   handler: async (ctx, { profile_id }): Promise<null> => {
@@ -432,6 +450,13 @@ export const promoteOrgAdmin = platformMutation({
     require(profile.kind !== 'agent', rule(
       'an agent cannot be an organization admin — it reaches only the projects it is added to',
     ))
+    /* A pending seat whose address has a home elsewhere would arrive as a
+     * guest, so it cannot be the admin. A signed-in seat is promoted as is,
+     * which keeps the lockout rescue working. */
+    if (profile.auth_user_id === undefined && profile.email !== undefined) {
+      const home = await homeElsewhere(ctx, profile.email, profile.org_id, profile)
+      if (home !== null) throw adminElsewhere(profile.email, home)
+    }
     if (profile.org_role === 'guest') await leaveAllTeams(ctx, profile.id)
     await ctx.db.patch(profile._id, { org_role: 'admin' })
     if (profile.org_role !== 'admin') {
@@ -443,7 +468,7 @@ export const promoteOrgAdmin = platformMutation({
     }
     await audit(ctx, {
       actor_auth_id: ctx.authUserId,
-      actor_email: await actorEmail(ctx, ctx.authUserId),
+      actor_email: await operatorEmail(ctx, ctx.authUserId),
       action: 'promote_org_admin',
       target_org_id: profile.org_id,
       target_profile_id: profile.id,
