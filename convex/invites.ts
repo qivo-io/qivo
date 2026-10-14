@@ -49,8 +49,8 @@ type Actor = Infer<typeof vActor>
 
 /* App sends allowed per organization per hour, counting console sends too.
  * Sends in flight, delivered or uncertain count. Attempts held back by the
- * cap and sends that never reached the provider do not, because no email
- * went out. */
+ * cap and sends the provider never accepted (refused, or never reached) do
+ * not, because no email went out. */
 const APP_SENDS_PER_ORG_HOUR = 50
 
 type InviteTarget = {
@@ -73,8 +73,7 @@ type SendRow = {
 }
 
 /* A send that counts toward the cap. It was not held back, and it is still
- * in flight, was delivered, or failed after reaching the provider, which may
- * have delivered it anyway. */
+ * in flight, was delivered, or failed in a way that may have delivered it. */
 const countsTowardCap = (r: SendRow) =>
   r.detail.limited !== true &&
   (r.detail.settled !== true || r.detail.sent === true || r.detail.uncertain === true)
@@ -198,8 +197,9 @@ export const reserve = internalMutation({
   },
 })
 
-/* Records how a reserved send ended. A send that never reached the provider
- * stops counting toward the cap, and an uncertain one keeps counting. */
+/* Records how a reserved send ended. A send that was refused or never reached
+ * the provider stops counting toward the cap, and an uncertain one keeps
+ * counting. */
 export const settle = internalMutation({
   args: { row: v.id('platform_audit_log'), sent: v.boolean(), uncertain: v.boolean() },
   handler: async (ctx, { row, sent, uncertain }) => {

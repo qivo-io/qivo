@@ -148,8 +148,11 @@ async function postLetter(
     inbox: string
     idempotencyKey: string
     deadline?: number
-    /* Called before each request to the provider. */
-    onAttempt?: () => void
+    /* Called for each failed request. 'refused' is a final provider answer
+     * (a 4xx other than 408, 409 and 429), so nothing was sent. 'ambiguous'
+     * is a timeout, network error, conflict, rate limit or server error,
+     * after which the letter may still have been delivered. */
+    onFailure?: (kind: 'refused' | 'ambiguous') => void
   },
 ): Promise<boolean> {
   if (!letter.text.trim() || !letter.html.trim()) {
@@ -180,7 +183,6 @@ async function postLetter(
       return false
     }
     try {
-      cfg.onAttempt?.()
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -199,11 +201,10 @@ async function postLetter(
       }
       const detail = (await res.json().catch(() => null)) as { code?: unknown } | null
       const code = typeof detail?.code === 'string' ? detail.code : null
-      const retryable =
-        res.status === 408 ||
-        res.status === 429 ||
-        res.status >= 500 ||
-        (res.status === 409 && attempt === 1)
+      const ambiguous =
+        res.status === 408 || res.status === 409 || res.status === 429 || res.status >= 500
+      const retryable = ambiguous && (res.status !== 409 || attempt === 1)
+      cfg.onFailure?.(ambiguous ? 'ambiguous' : 'refused')
       console.error('[mail] provider refused', { intent, status: res.status, code, attempt })
       if (!retryable || attempt === SEND_ATTEMPTS) return false
       const after = Number(res.headers.get('Retry-After'))
@@ -217,6 +218,7 @@ async function postLetter(
         name: (e as Error)?.name ?? 'error',
         attempt,
       })
+      cfg.onFailure?.('ambiguous')
       if (attempt === SEND_ATTEMPTS) return false
     }
     const wait = retryAfterMs > 0 ? retryAfterMs : attempt * 500
@@ -270,9 +272,11 @@ export type InviteOutcome = 'sent' | 'unsent' | 'uncertain'
  * text, so it appears only in the body, folded to one line, capped and escaped
  * in HTML, never in the subject. A guest invitation ends its sentence with
  * "as a guest". The outcome is 'sent' when the provider accepted the letter,
- * 'unsent' when no request reached it (mail not configured, demo, or the
- * batch deadline passed first) and 'uncertain' when requests were made but
- * none succeeded, since a timed-out request may still have been delivered.
+ * 'uncertain' when a request failed in a way that may still have delivered it
+ * (timeout, network error, conflict, rate limit or server error), and
+ * 'unsent' otherwise, that is, when the provider gave a final refusal or no
+ * request reached it (mail not configured, demo, or the batch deadline passed
+ * first).
  * For anything but 'sent' the console offers the sign-up link, and the app's
  * sends are only recorded. A fresh key per send lets a resend produce a new
  * letter while keeping postLetter's retries idempotent. */
@@ -307,17 +311,17 @@ ${input.url}`,
       { href: input.url, label: 'Accept invitation' },
     ),
   }
-  let attempted = false
+  let ambiguous = false
   const ok = await postLetter(letter, 'invite', {
     key,
     inbox,
     idempotencyKey: await sha256Hex(input.send_key),
     deadline: input.deadline,
-    onAttempt: () => {
-      attempted = true
+    onFailure: (kind) => {
+      if (kind === 'ambiguous') ambiguous = true
     },
   })
-  return ok ? 'sent' : attempted ? 'uncertain' : 'unsent'
+  return ok ? 'sent' : ambiguous ? 'uncertain' : 'unsent'
 }
 
 // ------------------------------------------------------------------- action

@@ -142,6 +142,31 @@ describe('invitation mail', () => {
     )
   })
 
+  it('is unsent after a final refusal, and uncertain after a network error', async () => {
+    const refusal = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: { get: () => null },
+      json: async () => ({ code: 'message_rejected' }),
+    })
+    vi.stubGlobal('fetch', refusal)
+    expect(await invite(Date.now() + 60_000)).toBe('unsent')
+    expect(refusal).toHaveBeenCalledOnce()
+    const unreachable = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValue({
+        ok: false,
+        status: 403,
+        headers: { get: () => null },
+        json: async () => ({}),
+      })
+    vi.stubGlobal('fetch', unreachable)
+    // the retry after the network error waits half a second
+    expect(await invite(Date.now() + 60_000)).toBe('uncertain')
+    expect(unreachable).toHaveBeenCalledTimes(2)
+  })
+
   it('is not sent when mail is not configured', async () => {
     vi.stubEnv('AGENTMAIL_API_KEY', '')
     const fetch = vi.fn()
