@@ -27,6 +27,7 @@
  * ported — field patch and access diff commit in one mutation. */
 
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import {
@@ -684,7 +685,13 @@ export const inviteGuest = orgMutation({
       .unique()
     if (grant !== null) await ctx.db.patch(grant._id, { level })
     else await ctx.db.insert('project_access', { project_id: project.id, profile_id: pid, level })
-    if (existing === null) await markBillingMembershipChanged(ctx, ctx.me.org_id, [em])
+    if (existing === null) {
+      await markBillingMembershipChanged(ctx, ctx.me.org_id, [em])
+      // A new guest seat is an invitation; email it once this mutation commits.
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: pid, email: em }],
+      })
+    }
     return pid
   },
 })

@@ -86,6 +86,7 @@ let someone join your organization without an invitation.
 ## People outside your organization
 
 Invite a guest by email in project settings, choosing **Viewer** or **User**.
+Qivo emails them an invitation to join your organization as a guest.
 An organization admin or the named project lead can later make them **Lead**.
 Guests receive access to that project and its sub-projects, subject to their
 role.

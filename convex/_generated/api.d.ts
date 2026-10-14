@@ -42,6 +42,7 @@ import type * as internal_marketingDemo from "../internal/marketingDemo.js";
 import type * as internal_marketingDemoData from "../internal/marketingDemoData.js";
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
+import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
 import type * as jobs from "../jobs.js";
 import type * as labels from "../labels.js";
@@ -167,6 +168,7 @@ declare const fullApi: ApiFromModules<{
   "internal/marketingDemoData": typeof internal_marketingDemoData;
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/operator": typeof internal_operator;
+  invites: typeof invites;
   issues: typeof issues;
   jobs: typeof jobs;
   labels: typeof labels;

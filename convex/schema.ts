@@ -1038,6 +1038,8 @@ export default defineSchema({
     detail: v.any(),
   })
     .index('by_ts', ['ts'])
-    // The operator console reads a pending seat's latest invite email here.
-    .index('by_target_profile', ['target_profile_id', 'ts']),
+    // A pending seat's latest invite email, and the caps on the app's
+    // invitation email per seat and per organization (invites.ts).
+    .index('by_target_profile', ['target_profile_id', 'ts'])
+    .index('by_target_org', ['target_org_id', 'ts']),
 })

@@ -93,8 +93,8 @@ describe('invitation mail', () => {
   const invite = (deadline: number) =>
     sendInviteEmail({
       to: letter.to,
-      name: 'Elin Strand',
       org_name: 'Brightwater Studio',
+      as_guest: false,
       url: 'https://app.example.test/app#signup',
       send_key: 'test-only-invite',
       deadline,
@@ -122,6 +122,23 @@ describe('invitation mail', () => {
     vi.stubGlobal('fetch', fetch)
     expect(await invite(Date.now() + 5_000)).toBe(false)
     expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('folds a long or multi-line organization name into one capped line', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
+    vi.stubGlobal('fetch', fetch)
+    await sendInviteEmail({
+      to: letter.to,
+      org_name: `Acme\n\nVisit   example.test ${'x'.repeat(100)}`,
+      as_guest: true,
+      url: 'https://app.example.test/app',
+      send_key: 'test-only-invite',
+      deadline: Date.now() + 60_000,
+    })
+    const { text } = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(text.split('\n')[2]).toMatch(
+      /^Acme Visit example\.test x{56}… has invited you to join their organization as a guest\. /,
+    )
   })
 
   it('is not sent when mail is not configured', async () => {

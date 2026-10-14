@@ -10,6 +10,8 @@
  *                       its first people, in one transaction
  *   invitePeople        more people for an existing organization
  *   resendInvite        another invitation email for a pending seat
+ *   editInvite          corrects a pending seat's name or address, and
+ *                       emails the corrected address
  *   cancelInvite        removes a pending seat
  *   setMemberRole       Org admin, Standard user or Viewer for a person
  *   suggestAddress, checkAddress, checkPeople
@@ -20,29 +22,30 @@
  *     signed in, the first person added must be an org admin.
  *     claimSeatsForLogin counts invited admins too, so a person invited with
  *     another role keeps it even if they sign in before the admin.
- *   - One home organization per login. A non-guest seat elsewhere turns a new
- *     seat into a guest when it is claimed, so an org admin invitation for
- *     such an address is refused, because it would leave the organization
- *     without a usable admin. Other roles are allowed, and checkPeople lets the console
- *     warn first.
+ *   - No guests. An operator invites people to a new customer's
+ *     organization, and its org admins and project leads invite guests. A
+ *     login has one home organization, and a non-guest seat elsewhere turns
+ *     a new seat into a guest when it is claimed. So an address that already
+ *     has a home organization elsewhere is refused for every role, and
+ *     checkPeople lets the console say so before sending. Guest seats are
+ *     outside every door here.
  *
  * The actions send invitation email after the seat mutation commits, through
- * mail.sendInviteEmail (From is the deployment's AgentMail inbox,
- * no-reply@qivo.io in production), and record every attempt as an
- * 'invite_email' audit row. admin.orgDetail reads the newest one per pending
- * seat. A failed or unconfigured send keeps the seat, and the console offers
- * the sign-up link instead. Every write is audited as the operator. */
+ * invites.sendInvites (From is the deployment's AgentMail inbox,
+ * no-reply@qivo.io in production), which records every attempt. A failed or
+ * unconfigured send keeps the seat, and the console offers the sign-up link
+ * instead. Every write is audited as the operator. */
 
 import { ConvexError, type Infer, v } from 'convex/values'
-import { components, internal } from './_generated/api'
+import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
-import type { ActionCtx, MutationCtx, QueryCtx } from './_generated/server'
-import { internalMutation, internalQuery } from './_generated/server'
+import type { MutationCtx, QueryCtx } from './_generated/server'
+import { internalMutation } from './_generated/server'
+import { type InviteResult, sendInvites } from './invites'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import {
   notFound,
-  type PlatformOperator,
   platformAction,
   platformMutation,
   platformQuery,
@@ -50,7 +53,6 @@ import {
   require,
   rule,
 } from './lib/functions'
-import { sendInviteEmail } from './mail'
 import { audit, operatorEmail } from './model/admin'
 import { enrollOrganization, grantComplimentaryMonths } from './model/billing'
 import { removeProfile } from './model/cascade'
@@ -100,8 +102,6 @@ const AVATAR_COLORS = [
   '#0E7490',
 ]
 
-export type InviteResult = { profile_id: string; email: string; sent: boolean }
-
 /* ----------------------------------------------------------------- lookups */
 
 /* An active org admin, invited or signed in. */
@@ -110,6 +110,14 @@ async function hasActiveAdmin(ctx: QueryCtx, orgId: string): Promise<boolean> {
   for await (const p of seats) if (p.org_role === 'admin' && p.active) return true
   return false
 }
+
+/* Refusal for an address with a home organization elsewhere. It would join
+ * as a guest, and org admins and project leads invite guests, not the
+ * operator. */
+const memberElsewhere = (email: string, org: Doc<'organizations'>) =>
+  rule(
+    `${email} already belongs to ${org.name}, so they can only join as a guest. An org admin or project lead can invite them from project settings.`,
+  )
 
 /* ------------------------------------------------------------------ writes */
 
@@ -140,11 +148,9 @@ async function addPeople(
       .first()
     if (dup !== null) throw rule(`${email} already has a seat in this organization`)
     if (!admin && person.role !== 'admin') throw rule('The first person must be an org admin.')
-    if (person.role === 'admin') {
-      const home = await homeElsewhere(ctx, email, org.id)
-      if (home !== null) throw adminElsewhere(email, home)
-      admin = true
-    }
+    const home = await homeElsewhere(ctx, email, org.id)
+    if (home !== null) throw memberElsewhere(email, home)
+    if (person.role === 'admin') admin = true
     rows.push({ name, email, role: person.role })
   }
 
@@ -269,133 +275,6 @@ export const insertPeople = internalMutation({
   },
 })
 
-/* ------------------------------------------------------------------- email */
-
-type InviteTarget = {
-  profile_id: string
-  org_id: string
-  org_name: string
-  name: string
-  email: string
-  has_account: boolean
-}
-
-/* The pending person seats to email, with whether their address already has
- * a login (it decides between the sign-in and the create-account link).
- * Anything else is uniformly not found. */
-export const inviteTargets = internalQuery({
-  args: { profile_ids: v.array(v.string()) },
-  handler: async (ctx, { profile_ids }): Promise<InviteTarget[]> => {
-    const targets: InviteTarget[] = []
-    for (const id of profile_ids) {
-      const seat = await byId(ctx, 'profiles', id)
-      // Inactive and guest seats get no invitation from here. An org admin
-      // deactivated the one, and project settings invite the other.
-      if (
-        seat === null ||
-        seat.kind !== 'person' ||
-        seat.auth_user_id !== undefined ||
-        seat.email === undefined ||
-        !seat.active ||
-        seat.org_role === 'guest'
-      ) {
-        throw notFound('invitation not found')
-      }
-      const org = await byId(ctx, 'organizations', seat.org_id)
-      if (org === null) throw notFound('organization not found')
-      const email = seat.email
-      const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-        model: 'user',
-        where: [{ field: 'email', value: email }],
-      })
-      targets.push({
-        profile_id: seat.id,
-        org_id: org.id,
-        org_name: org.name,
-        name: seat.name,
-        email,
-        has_account: account !== null,
-      })
-    }
-    return targets
-  },
-})
-
-export const recordInviteEmail = internalMutation({
-  args: {
-    profile_id: v.string(),
-    org_id: v.string(),
-    email: v.string(),
-    sent: v.boolean(),
-    resend: v.boolean(),
-    actor: vActor,
-  },
-  handler: async (ctx, a) => {
-    await audit(ctx, {
-      actor_auth_id: a.actor.auth_user_id,
-      actor_email: a.actor.email,
-      action: 'invite_email',
-      target_org_id: a.org_id,
-      target_profile_id: a.profile_id,
-      detail: { email: a.email, sent: a.sent, resend: a.resend },
-    })
-  },
-})
-
-/* Sign in for an existing login, create an account otherwise. Both pages
- * offer the other, and either way the verified address claims the seat. */
-const joinUrl = (hasAccount: boolean) => `${process.env.SITE_URL}/app${hasAccount ? '' : '#signup'}`
-
-/* Bounds the operator's wait. Letters still unsent when the budget runs out
- * count as not sent, and the console offers the sign-up link for them. */
-const SEND_BUDGET_MS = 60_000
-const SEND_CONCURRENCY = 5
-
-/* One email per seat, a few at a time, results in input order. Mail never
- * fails the action. The seats exist already, so an unsent invitation is
- * reported and recorded, not thrown. */
-async function sendInvites(
-  ctx: ActionCtx & { operator: PlatformOperator },
-  profileIds: string[],
-  resend: boolean,
-): Promise<InviteResult[]> {
-  if (profileIds.length === 0) return []
-  const targets = await ctx.runQuery(internal.adminOrgs.inviteTargets, {
-    profile_ids: profileIds,
-  })
-  const deadline = Date.now() + SEND_BUDGET_MS
-  const actor = { auth_user_id: ctx.operator.auth_user_id, email: ctx.operator.email }
-  const results: InviteResult[] = []
-  const sendOne = async (target: InviteTarget, i: number) => {
-    const sent = await sendInviteEmail({
-      to: target.email,
-      name: target.name,
-      org_name: target.org_name,
-      url: joinUrl(target.has_account),
-      send_key: `invite:${target.profile_id}:${newUuid()}`,
-      deadline,
-    })
-    await ctx.runMutation(internal.adminOrgs.recordInviteEmail, {
-      profile_id: target.profile_id,
-      org_id: target.org_id,
-      email: target.email,
-      sent,
-      resend,
-      actor,
-    })
-    results[i] = { profile_id: target.profile_id, email: target.email, sent }
-  }
-  let next = 0
-  const worker = async () => {
-    while (next < targets.length) {
-      const i = next++
-      await sendOne(targets[i], i)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(SEND_CONCURRENCY, targets.length) }, worker))
-  return results
-}
-
 /* ------------------------------------------------------------ public doors */
 
 export const createOrganization = platformAction({
@@ -411,7 +290,12 @@ export const createOrganization = platformAction({
       ...args,
       actor: { auth_user_id: ctx.operator.auth_user_id, email: ctx.operator.email },
     })
-    return { org_id: created.org_id, invites: await sendInvites(ctx, created.profile_ids, false) }
+    const invites = await sendInvites(
+      ctx,
+      created.profile_ids.map((profile_id) => ({ profile_id })),
+      { resend: false, operator: ctx.operator },
+    )
+    return { org_id: created.org_id, invites }
   },
 })
 
@@ -422,15 +306,98 @@ export const invitePeople = platformAction({
       ...args,
       actor: { auth_user_id: ctx.operator.auth_user_id, email: ctx.operator.email },
     })
-    return { invites: await sendInvites(ctx, ids, false) }
+    const invites = await sendInvites(
+      ctx,
+      ids.map((profile_id) => ({ profile_id })),
+      { resend: false, operator: ctx.operator },
+    )
+    return { invites }
   },
 })
 
 export const resendInvite = platformAction({
   args: { profile_id: v.string() },
   handler: async (ctx, { profile_id }): Promise<InviteResult> => {
-    const [result] = await sendInvites(ctx, [profile_id], true)
+    const [result] = await sendInvites(ctx, [{ profile_id }], {
+      resend: true,
+      operator: ctx.operator,
+    })
     return result
+  },
+})
+
+/* Corrects an active pending seat's name or address. A new address is judged
+ * like a new invitation, so an address with any non-guest seat elsewhere,
+ * claimed or pending, is refused. Returns whether the address changed, so the
+ * action knows to email it. */
+export const updateInvite = internalMutation({
+  args: { profile_id: v.string(), name: v.string(), email: v.string(), actor: vActor },
+  handler: async (ctx, a): Promise<{ email_changed: boolean }> => {
+    const seat = await byId(ctx, 'profiles', a.profile_id)
+    require(seat !== null &&
+      seat.kind === 'person' &&
+      seat.auth_user_id === undefined &&
+      seat.active &&
+      seat.org_role !== 'guest', notFound('invitation not found'))
+    const name = cleanName(a.name)
+    assertNameShape(name)
+    const email = normalizeEmail(a.email)
+    if (email === undefined) throw rule(`${name} needs an email address.`)
+    if (!EMAIL_SHAPE.test(email)) throw rule(`${email} is not an email address.`)
+    const patch: { name?: string; initials?: string; email?: string } = {}
+    if (name !== seat.name) {
+      patch.name = name
+      patch.initials = nameInitials(name)
+    }
+    const emailChanged = email !== seat.email
+    if (emailChanged) {
+      const dup = await ctx.db
+        .query('profiles')
+        .withIndex('by_org_email', (q) => q.eq('org_id', seat.org_id).eq('email', email))
+        .first()
+      if (dup !== null) throw rule(`${email} already has a seat in this organization`)
+      const home = await homeElsewhere(ctx, email, seat.org_id)
+      if (home !== null) throw memberElsewhere(email, home)
+      patch.email = email
+    }
+    if (Object.keys(patch).length === 0) return { email_changed: false }
+    await ctx.db.patch(seat._id, patch)
+    await audit(ctx, {
+      actor_auth_id: a.actor.auth_user_id,
+      actor_email: a.actor.email,
+      action: 'edit_invite',
+      target_org_id: seat.org_id,
+      target_profile_id: seat.id,
+      detail: {
+        from: { name: seat.name, email: seat.email ?? null },
+        to: { name, email },
+      },
+    })
+    if (emailChanged) {
+      await markBillingMembershipChanged(
+        ctx,
+        seat.org_id,
+        [seat.email, email].filter((e): e is string => e !== undefined),
+      )
+    }
+    return { email_changed: emailChanged }
+  },
+})
+
+/* sent is null when the address did not change and no email went out. */
+export const editInvite = platformAction({
+  args: { profile_id: v.string(), name: v.string(), email: v.string() },
+  handler: async (ctx, args): Promise<{ sent: boolean | null }> => {
+    const { email_changed } = await ctx.runMutation(internal.adminOrgs.updateInvite, {
+      ...args,
+      actor: { auth_user_id: ctx.operator.auth_user_id, email: ctx.operator.email },
+    })
+    if (!email_changed) return { sent: null }
+    const [result] = await sendInvites(ctx, [{ profile_id: args.profile_id }], {
+      resend: false,
+      operator: ctx.operator,
+    })
+    return { sent: result.sent }
   },
 })
 
@@ -441,9 +408,10 @@ export const cancelInvite = platformMutation({
   args: { profile_id: v.string() },
   handler: async (ctx, { profile_id }): Promise<null> => {
     const seat = await byId(ctx, 'profiles', profile_id)
-    require(seat !== null && seat.kind === 'person' && seat.auth_user_id === undefined, notFound(
-      'invitation not found',
-    ))
+    require(seat !== null &&
+      seat.kind === 'person' &&
+      seat.auth_user_id === undefined &&
+      seat.org_role !== 'guest', notFound('invitation not found'))
     if (seat.org_role === 'admin' && seat.active) {
       const others = (
         await ctx.db
@@ -453,7 +421,7 @@ export const cancelInvite = platformMutation({
       ).filter((p) => p.id !== seat.id)
       const otherAdmin = others.some((p) => p.org_role === 'admin' && p.active)
       require(otherAdmin || others.length === 0, rule(
-        'Invite another org admin before cancelling the only one.',
+        'Add another org admin before cancelling this invite.',
       ))
     }
     await removeProfile(ctx, { profile: seat, now: new Date().toISOString() })
@@ -539,8 +507,9 @@ export const checkAddress = platformQuery({
 })
 
 /* For each address, the organization that would be its home instead of
- * `org_id` (the console warns that the person joins as a guest) and whether
- * it already has a seat in `org_id`. Omit org_id for a new organization. */
+ * `org_id` (such an address cannot be invited here, and the console says so
+ * before sending) and whether it already has a seat in `org_id`. Omit org_id
+ * for a new organization. */
 export const checkPeople = platformQuery({
   args: { org_id: v.optional(v.string()), emails: v.array(v.string()) },
   handler: async (

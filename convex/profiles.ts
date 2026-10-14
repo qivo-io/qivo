@@ -19,7 +19,10 @@
  *                               initials (0116/0117)
  *
  * An invite IS a profile with an email and no accepted_at — the seat is the
- * invitation; claiming (identity.ts) stamps accepted_at/auth_user_id.
+ * invitation; claiming (identity.ts) stamps accepted_at/auth_user_id. A new
+ * person's seat, a corrected address on a pending one and a reactivated
+ * pending person never emailed at that address schedule the invitation email
+ * (invites.ts).
  *
  * message_retention_days is STAMPED on every create path (7 when no sibling
  * seat exists): in this schema ABSENT means "keep forever", the opposite of
@@ -32,6 +35,7 @@
 
 import type { WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { markBillingMembershipChanged } from './lib/billableUsers'
@@ -185,6 +189,12 @@ export const create = adminMutation({
       ts: now,
     })
     await markBillingMembershipChanged(ctx, org.id, email === undefined ? [] : [email])
+    // A person's seat is an invitation; email it once this mutation commits.
+    if (!isAgent && email !== undefined) {
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: args.id, email }],
+      })
+    }
     return null
   },
 })
@@ -338,6 +348,22 @@ export const update = adminMutation({
         row.org_id,
         [row.email, upd.email].filter((email): email is string => email !== undefined),
       )
+    }
+    // A corrected address on a pending seat gets the invitation the old one
+    // did. A reactivated pending person is emailed if that address never was.
+    if (upd.email !== undefined) {
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: row.id, email: upd.email }],
+      })
+    } else if (
+      upd.active === true &&
+      row.kind === 'person' &&
+      row.auth_user_id === undefined &&
+      row.email !== undefined
+    ) {
+      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+        invites: [{ profile_id: row.id, email: row.email, unless_sent: true }],
+      })
     }
     return null
   },

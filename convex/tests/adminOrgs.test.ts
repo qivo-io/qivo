@@ -12,7 +12,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import * as adminOrgsModule from '../adminOrgs'
 import authSchema from '../betterAuth/schema'
-import { as, expectRefusal, NOW, newT, type T, uuid, withOrg } from './helpers.setup'
+import { as, expectRefusal, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 declare const process: { env: Record<string, string | undefined> }
 
@@ -139,6 +139,8 @@ describe('the operator gate', () => {
       c.action(api.adminOrgs.createOrganization, { name: 'X', people: [] }),
     invitePeople: (c) => c.action(api.adminOrgs.invitePeople, { org_id: 'x', people: [] }),
     resendInvite: (c) => c.action(api.adminOrgs.resendInvite, { profile_id: 'x' }),
+    editInvite: (c) =>
+      c.action(api.adminOrgs.editInvite, { profile_id: 'x', name: 'X', email: 'x@x.test' }),
     cancelInvite: (c) => c.mutation(api.adminOrgs.cancelInvite, { profile_id: 'x' }),
     setMemberRole: (c) =>
       c.mutation(api.adminOrgs.setMemberRole, { profile_id: 'x', role: 'user' }),
@@ -242,11 +244,14 @@ describe('createOrganization', () => {
       'viewer',
     ])
     expect(await auditFor(t, 'billing.grant_complimentary')).toHaveLength(1)
-    expect((await auditFor(t, 'invite_email')).map((r) => r.detail.sent)).toEqual([
-      false,
-      false,
-      false,
+    expect((await auditFor(t, 'invite_email')).map((r) => [r.actor_email, r.detail.sent])).toEqual([
+      ['operator@platform.test', false],
+      ['operator@platform.test', false],
+      ['operator@platform.test', false],
     ])
+    expect((await auditFor(t, 'invite_email')).every((r) => r.actor_auth_id !== undefined)).toBe(
+      true,
+    )
   })
 
   it('enrolls the chosen plan rather than the default, with or without months free', async () => {
@@ -367,35 +372,39 @@ describe('createOrganization', () => {
     expect(await orgCount(t)).toBe(count)
   })
 
-  it('refuses an org admin whose address already has a home organization, and allows other roles', async () => {
+  it('refuses any role for an address whose home organization is elsewhere', async () => {
     const t = newAuthT()
     const op = await withOperator(t)
     const f = await withOrg(t)
     const homed = f.user.email ?? ''
-    await expectRefusal(
-      op.action(api.adminOrgs.createOrganization, {
-        name: 'Second Home',
-        people: [{ name: 'User', email: homed, role: 'admin' }],
-      }),
-      'rule',
-      /already belongs to Testbed Labs, so they would join as a guest/,
-    )
+    const count = await orgCount(t)
+    for (const role of ['admin', 'user', 'viewer'] as const) {
+      await expectRefusal(
+        op.action(api.adminOrgs.createOrganization, {
+          name: 'Second Home',
+          people: [
+            { name: 'Elin Strand', email: 'elin@example.test', role: 'admin' as const },
+            { name: 'User', email: homed, role },
+          ].slice(role === 'admin' ? 1 : 0),
+        }),
+        'rule',
+        /already belongs to Testbed Labs, so they can only join as a guest/,
+      )
+    }
+    expect(await orgCount(t)).toBe(count)
+    // A guest seat elsewhere is no home, so its address can be invited.
     const out = await op.action(api.adminOrgs.createOrganization, {
-      name: 'Second Home',
-      people: [
-        { name: 'Elin Strand', email: 'elin@example.test', role: 'admin' },
-        { name: 'User', email: homed, role: 'user' },
-      ],
+      name: 'Guest Home',
+      people: [{ name: 'Guest', email: f.guest.email ?? '', role: 'admin' }],
     })
-    expect((await seatsOf(t, out.org_id)).map((s) => s.org_role)).toEqual(['admin', 'user'])
     expect(
       await op.query(api.adminOrgs.checkPeople, {
         org_id: out.org_id,
-        emails: [homed, 'ELIN@example.test', 'new@example.test'],
+        emails: [homed, f.guest.email ?? '', 'NEW@example.test'],
       }),
     ).toEqual([
-      { email: homed, home_org_name: 'Testbed Labs', in_org: true },
-      { email: 'elin@example.test', home_org_name: null, in_org: true },
+      { email: homed, home_org_name: 'Testbed Labs', in_org: false },
+      { email: f.guest.email, home_org_name: null, in_org: true },
       { email: 'new@example.test', home_org_name: null, in_org: false },
     ])
   })
@@ -420,7 +429,9 @@ describe('createOrganization', () => {
     expect(sent.every((l) => l.subject === 'You are invited to Qivo')).toBe(true)
     expect(sent[0].text).toContain(`${process.env.SITE_URL}/app#signup`)
     expect(sent[2].text.endsWith(`${process.env.SITE_URL}/app`)).toBe(true)
-    expect(sent[0].text).toContain('Bright <b>water</b>')
+    expect(sent[0].text).toContain(
+      'Bright <b>water</b> has invited you to join their organization. Sign in',
+    )
     expect(sent[0].html).toContain('Bright &lt;b&gt;water&lt;/b&gt;')
     expect(sent[0].html).not.toContain('<b>water</b>')
     expect((await auditFor(t, 'invite_email')).map((r) => r.detail.sent)).toEqual([
@@ -575,7 +586,7 @@ describe('cancelInvite', () => {
     await expectRefusal(
       op.mutation(api.adminOrgs.cancelInvite, { profile_id: elin.id }),
       'rule',
-      /Invite another org admin before cancelling the only one/,
+      /Add another org admin before cancelling this invite/,
     )
     await op.mutation(api.adminOrgs.cancelInvite, { profile_id: tomas.id })
     await op.mutation(api.adminOrgs.cancelInvite, { profile_id: elin.id })
@@ -632,12 +643,10 @@ describe('setMemberRole', () => {
     const f = await withOrg(t)
     const out = await op.action(api.adminOrgs.createOrganization, {
       name: 'Promote Co',
-      people: [
-        { name: 'Elin', email: 'elin@example.test', role: 'admin' },
-        { name: 'User', email: f.user.email ?? '', role: 'user' },
-      ],
+      people: [{ name: 'Elin', email: 'elin@example.test', role: 'admin' }],
     })
-    const [, user] = await seatsOf(t, out.org_id)
+    // an org admin added this address in the app
+    const user = await plantSeat(t, { org_id: out.org_id, email: f.user.email, name: 'User' })
     await expectRefusal(
       op.mutation(api.adminOrgs.setMemberRole, { profile_id: user.id, role: 'admin' }),
       'rule',
@@ -657,12 +666,15 @@ describe('the home organization fence follows claim order', () => {
         { name: 'Alice', email: 'alice@example.test', role: 'user' },
       ],
     })
-    await op.action(api.adminOrgs.createOrganization, {
+    const second = await op.action(api.adminOrgs.createOrganization, {
       name: 'Second Co',
-      people: [
-        { name: 'Noah', email: 'noah@example.test', role: 'admin' },
-        { name: 'Alice', email: 'alice@example.test', role: 'user' },
-      ],
+      people: [{ name: 'Noah', email: 'noah@example.test', role: 'admin' }],
+    })
+    // a later in-app invitation for the same address in another organization
+    await plantSeat(t, {
+      org_id: second.org_id,
+      email: 'alice@example.test',
+      created_at: '2099-01-01T00:00:00.000Z',
     })
     const [, alice] = await seatsOf(t, first.org_id)
     await op.mutation(api.adminOrgs.setMemberRole, { profile_id: alice.id, role: 'admin' })
@@ -677,9 +689,12 @@ describe('the home organization fence follows claim order', () => {
           .query('profiles')
           .withIndex('by_email', (q) => q.eq('email', 'alice@example.test'))
           .collect()
-      ).map((p) => p.org_role),
+      ).map((p) => [p.org_id === first.org_id ? 'first' : 'second', p.org_role]),
     )
-    expect(roles).toEqual(['admin', 'guest'])
+    expect(roles.sort()).toEqual([
+      ['first', 'admin'],
+      ['second', 'guest'],
+    ])
   })
 
   it('applies to Make org admin for a pending seat, but not a signed-in one', async () => {
@@ -688,18 +703,135 @@ describe('the home organization fence follows claim order', () => {
     const f = await withOrg(t)
     const out = await op.action(api.adminOrgs.createOrganization, {
       name: 'Rescue Co',
-      people: [
-        { name: 'Elin', email: 'elin@example.test', role: 'admin' },
-        { name: 'User', email: f.user.email ?? '', role: 'user' },
-      ],
+      people: [{ name: 'Elin', email: 'elin@example.test', role: 'admin' }],
     })
-    const [, user] = await seatsOf(t, out.org_id)
+    const user = await plantSeat(t, { org_id: out.org_id, email: f.user.email, name: 'User' })
     await expectRefusal(
       op.mutation(api.admin.promoteOrgAdmin, { profile_id: user.id }),
       'rule',
       /already belongs to Testbed Labs/,
     )
     await op.mutation(api.admin.promoteOrgAdmin, { profile_id: f.viewer.id })
+  })
+})
+
+describe('editInvite', () => {
+  it('corrects a pending invitation and emails the new address', async () => {
+    const t = newAuthT()
+    const op = await withOperator(t)
+    const out = await op.action(api.adminOrgs.createOrganization, {
+      name: 'Edit Co',
+      people: BRIGHTWATER.slice(0, 2),
+    })
+    const [elin, tomas] = await seatsOf(t, out.org_id)
+    const letters = stubMail()
+    expect(
+      await op.action(api.adminOrgs.editInvite, {
+        profile_id: elin.id,
+        name: 'Elin  Strand-Berg',
+        email: elin.email ?? '',
+      }),
+    ).toEqual({ sent: null })
+    expect(letters()).toEqual([])
+    expect(
+      await op.action(api.adminOrgs.editInvite, {
+        profile_id: elin.id,
+        name: 'Elin Strand-Berg',
+        email: ' Elin.Strand@Brightwater.Studio',
+      }),
+    ).toEqual({ sent: true })
+    expect(letters().map((l) => l.to)).toEqual([['elin.strand@brightwater.studio']])
+    const [after] = await seatsOf(t, out.org_id)
+    expect([after.name, after.initials, after.email]).toEqual([
+      'Elin Strand-Berg',
+      'ES',
+      'elin.strand@brightwater.studio',
+    ])
+    expect((await auditFor(t, 'edit_invite')).map((r) => r.detail.to)).toEqual([
+      { name: 'Elin Strand-Berg', email: 'elin@brightwater.studio' },
+      { name: 'Elin Strand-Berg', email: 'elin.strand@brightwater.studio' },
+    ])
+    const detail = await op.query(api.admin.orgDetail, { org_id: out.org_id })
+    expect(detail.members.find((m) => m.profile_id === elin.id)?.invite).toMatchObject({
+      sent: true,
+    })
+    await expectRefusal(
+      op.action(api.adminOrgs.editInvite, {
+        profile_id: elin.id,
+        name: 'Elin',
+        email: tomas.email ?? '',
+      }),
+      'rule',
+      /already has a seat in this organization/,
+    )
+  })
+
+  it('judges a new address like a new invitation, and refuses an inactive seat', async () => {
+    const t = newAuthT()
+    const op = await withOperator(t)
+    const alpha = await op.action(api.adminOrgs.createOrganization, {
+      name: 'Alpha Co',
+      people: [{ name: 'Typo', email: 'typo@alpha.test', role: 'admin' }],
+    })
+    // Beta's only admin is invited after Alpha's seat was created
+    await op.action(api.adminOrgs.createOrganization, {
+      name: 'Beta Co',
+      people: [{ name: 'Noah', email: 'noah@beta.test', role: 'admin' }],
+    })
+    const [typo] = await seatsOf(t, alpha.org_id)
+    await expectRefusal(
+      op.action(api.adminOrgs.editInvite, {
+        profile_id: typo.id,
+        name: 'Noah',
+        email: 'noah@beta.test',
+      }),
+      'rule',
+      /already belongs to Beta Co/,
+    )
+    await t.run((ctx) => ctx.db.patch(typo._id, { active: false }))
+    await expectRefusal(
+      op.action(api.adminOrgs.editInvite, {
+        profile_id: typo.id,
+        name: 'Elin',
+        email: 'elin@alpha.test',
+      }),
+      'not_found',
+      /invitation not found/,
+    )
+    const [after] = await seatsOf(t, alpha.org_id)
+    expect(after.email).toBe('typo@alpha.test')
+    expect(await auditFor(t, 'edit_invite')).toEqual([])
+  })
+
+  it('refuses an address with a home elsewhere, a claimed seat and a guest seat', async () => {
+    const t = newAuthT()
+    const op = await withOperator(t)
+    const f = await withOrg(t)
+    const out = await op.action(api.adminOrgs.createOrganization, {
+      name: 'Edit Rules Co',
+      people: [BRIGHTWATER[0]],
+    })
+    const [elin] = await seatsOf(t, out.org_id)
+    const edit = (profile_id: string, email: string) =>
+      op.action(api.adminOrgs.editInvite, { profile_id, name: 'Someone', email })
+    await expectRefusal(edit(elin.id, f.user.email ?? ''), 'rule', /only join as a guest/)
+    await expectRefusal(edit(f.user.id, 'x@example.test'), 'not_found', /invitation not found/)
+    const guest = await plantSeat(t, {
+      org_id: out.org_id,
+      email: 'guest@example.test',
+      org_role: 'guest',
+    })
+    await expectRefusal(edit(guest.id, 'y@example.test'), 'not_found', /invitation not found/)
+    await expectRefusal(
+      op.mutation(api.adminOrgs.cancelInvite, { profile_id: guest.id }),
+      'not_found',
+      /invitation not found/,
+    )
+    await expectRefusal(
+      op.action(api.adminOrgs.resendInvite, { profile_id: guest.id }),
+      'not_found',
+      /invitation not found/,
+    )
   })
 })
 

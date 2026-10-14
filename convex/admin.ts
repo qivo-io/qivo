@@ -266,14 +266,15 @@ export type AdminMemberRow = {
   last_sign_in_at: string | null
   banned_until: string | null
   created_at: string
-  /* A pending person's newest invitation email (adminOrgs), or null when the
-   * operator never sent one, e.g. an invitation from in-app Settings. */
+  /* A pending person's newest invitation email to their current address,
+   * sent from the console or the app (invites.ts), or null when none was
+   * recorded. */
   invite: { sent: boolean; at: string } | null
 }
 
-/* The seat's newest 'invite_email' audit row, if it went to the seat's
- * current address. An org admin may correct a pending seat's address, and a
- * letter to the old address says nothing about the new one. */
+/* The seat's newest 'invite_email' audit row for its current address. An
+ * org admin may correct a pending seat's address, and a letter to the old
+ * address says nothing about the new one. */
 async function latestInvite(
   ctx: QueryCtx,
   seat: Doc<'profiles'>,
@@ -285,7 +286,7 @@ async function latestInvite(
   for await (const row of rows) {
     if (row.action !== 'invite_email') continue
     const detail = row.detail as { sent?: unknown; email?: unknown }
-    if (detail.email !== seat.email) return null
+    if (detail.email !== seat.email) continue
     return { sent: detail.sent === true, at: row.ts }
   }
   return null
@@ -601,15 +602,24 @@ export type AdminAuditRow = {
 /* admin_audit_log (0015:231-245): newest first, limit clamped to 1..1000
  * (default 200). The table has no app uuid — _id serves as the row key the
  * console's list needs. */
+/* The app's own invitation emails (actor 'system', invites.ts) are left out.
+ * They are per-customer delivery records, shown through orgDetail, and would
+ * push operator actions out of the window. The scan stops after this many
+ * rows. */
+const AUDIT_SCAN_MAX = 8000
+
 export const auditLog = platformQuery({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }): Promise<AdminAuditRow[]> => {
     const clamped = Math.min(Math.max(limit ?? 200, 1), 1000)
-    const rows = await ctx.db
-      .query('platform_audit_log')
-      .withIndex('by_ts')
-      .order('desc')
-      .take(clamped)
+    const rows: Doc<'platform_audit_log'>[] = []
+    let scanned = 0
+    for await (const r of ctx.db.query('platform_audit_log').withIndex('by_ts').order('desc')) {
+      if (++scanned > AUDIT_SCAN_MAX) break
+      if (r.action === 'invite_email' && r.actor_email === 'system') continue
+      rows.push(r)
+      if (rows.length >= clamped) break
+    }
     return rows.map((r) => ({
       id: r._id,
       ts: r.ts,

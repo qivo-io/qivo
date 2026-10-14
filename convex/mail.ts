@@ -1,7 +1,7 @@
 /* Qivo transactional mail uses the shared AgentMail account for verification,
- * password resets, billing reminders and operator invitations. The configured
- * inbox supplies From; customer replies go to support. No inbound mail is
- * processed here.
+ * password resets, billing reminders and organization invitations. The
+ * configured inbox supplies From; customer replies go to support. No inbound
+ * mail is processed here.
  *
  * AGENTMAIL_API_KEY, AGENTMAIL_INBOX and AGENTMAIL_BASE_URL belong only in the
  * selected Convex deployment. Never log keys, inboxes, recipients or auth URLs.
@@ -252,17 +252,21 @@ export async function sendBillingReminder(input: {
   })
 }
 
-/** Organization invitations from the operator console use the same
- * transport and From inbox. The organization and person names are stored
- * text, so they appear only in the escaped body, never in the subject.
- * Returns false when mail is not configured, delivery failed or the batch
- * deadline passed. The caller then offers the sign-up link instead. A fresh
- * key per send lets a resend produce a new letter while keeping postLetter's
- * retries idempotent. */
+/* Longest organization name a letter repeats. */
+const ORG_NAME_MAX = 80
+
+/** Organization invitations (invites.ts), from the operator console and the
+ * app, use the same transport and From inbox. The organization name is stored
+ * text, so it appears only in the body, folded to one line, capped and escaped
+ * in HTML, never in the subject. A guest invitation ends its sentence with
+ * "as a guest". Returns false when mail is not configured, delivery failed or
+ * the batch deadline passed. The console then offers the sign-up link, and
+ * the app's sends are only recorded. A fresh key per send lets a resend
+ * produce a new letter while keeping postLetter's retries idempotent. */
 export async function sendInviteEmail(input: {
   to: string
-  name: string
   org_name: string
+  as_guest: boolean
   url: string
   send_key: string
   deadline: number
@@ -270,19 +274,24 @@ export async function sendInviteEmail(input: {
   const key = process.env.AGENTMAIL_API_KEY
   const inbox = process.env.AGENTMAIL_INBOX
   if (!key || !inbox || process.env.APP_MODE === 'demo') return false
+  const folded = input.org_name.replace(/\s+/g, ' ').trim()
+  const org =
+    [...folded].length > ORG_NAME_MAX ? `${[...folded].slice(0, ORG_NAME_MAX).join('')}…` : folded
+  const join = (name: string) =>
+    `${name} has invited you to join their organization${input.as_guest ? ' as a guest' : ''}.`
   const letter: Letter = {
     to: input.to,
     subject: 'You are invited to Qivo',
-    text: `Hi ${input.name},
+    text: `Hi,
 
-You are invited to join ${input.org_name} on Qivo. Sign in or create an account with ${input.to} to join:
+${join(org)} Sign in or create an account with ${input.to} to join:
 ${input.url}`,
     html: shell(
       [
-        `Hi ${esc(input.name)},`,
-        `You are invited to join <strong>${esc(input.org_name)}</strong> on Qivo. Sign in or create an account with ${esc(input.to)} to join.`,
+        'Hi,',
+        `${join(`<strong>${esc(org)}</strong>`)} Sign in or create an account with ${esc(input.to)} to join.`,
       ],
-      { href: input.url, label: 'Join on Qivo' },
+      { href: input.url, label: 'Accept invitation' },
     ),
   }
   return await postLetter(letter, 'invite', {
