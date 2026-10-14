@@ -239,7 +239,7 @@ describe('identity.createOrganization — the whole door', () => {
     expect(org!.default_plannable_hours).toBe(32)
     expect(org!.gravatar_avatars).toBe(true)
     expect(org!.max_attachment_mb).toBe(20)
-    // retired setting: new organizations no longer store it
+    // New organizations no longer store the retired setting.
     expect(org!.only_team_leads_manage_project_users).toBeUndefined()
     // absent means every standard user can create projects
     expect(org!.project_creators).toBeUndefined()

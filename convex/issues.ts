@@ -515,9 +515,9 @@ export const subscribers = orgQuery({
 })
 
 /* Project leads and organization admins may manage other profiles.
- * Team leadership or a relaxed sharing policy alone is insufficient. Adds
- * revalidate recipient eligibility; removal also permits stale same-org
- * subscribers. Both requested states are idempotent. */
+ * Team leadership alone is insufficient. Adds revalidate recipient
+ * eligibility; removal also permits stale same-org subscribers. Both
+ * requested states are idempotent. */
 export const setSubscriber = orgMutation({
   args: { issue_id: v.string(), profile_id: v.string(), subscribed: v.boolean() },
   handler: async (ctx, { issue_id, profile_id, subscribed }) => {

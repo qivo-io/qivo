@@ -383,7 +383,7 @@ export default defineSchema({
     gravatar_avatars: v.boolean(),
     // Org-wide upload cap, 1..20 MiB. Older organizations default to 20.
     max_attachment_mb: v.optional(v.number()),
-    // Retired and unread: no rule consults it and nothing writes it. Kept
+    // Retired and unread. No rule consults it and nothing writes it. Kept
     // optional so rows that stored it still validate.
     only_team_leads_manage_project_users: v.optional(v.boolean()),
     // Who may create top-level projects besides org admins, who always can.
