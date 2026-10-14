@@ -338,6 +338,7 @@ planning:assigneeLoad query public {"type":"object","value":{"assignee_id":{"fie
 prefs:get query public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":true}}}
 prefs:save mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"prefs":{"fieldType":{"type":"any"},"optional":false}}}
 profiles:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"org_role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"guest"},{"type":"literal","value":"viewer"}]},"optional":false},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"person"},{"type":"literal","value":"agent"}]},"optional":false},"color":{"fieldType":{"type":"string"},"optional":false},"teams":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+profiles:deactivate mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 profiles:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 profiles:setDisplayName mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 profiles:setMessageRetention mutation public {"type":"object","value":{"days":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false}}}
@@ -406,15 +407,18 @@ describe('the function-surface manifest', () => {
 
 /* ------------------------------------------------------- the public subset */
 
-/* Auth posture per public door, hand-grouped. `org*`/`adminMutation` consume
- * a wrapper-injected org_id wire arg; `authed*` gate on a login only;
- * `platform*` gate on a platform_admins row. `query` marks the ONE deliberate
- * bare registration (see the wrapper rule below). */
+/* Auth posture per public door, hand-grouped. `org*`/`adminMutation`/
+ * `accessRemovalMutation` consume a wrapper-injected org_id wire arg;
+ * `accessRemovalMutation` lets an org admin past the billing gate for writes
+ * that only take access away. `authed*` gate on a login only; `platform*`
+ * gate on a platform_admins row. `query` marks the ONE deliberate bare
+ * registration (see the wrapper rule below). */
 type Wrapper =
   | 'orgAction'
   | 'orgQuery'
   | 'orgMutation'
   | 'adminMutation'
+  | 'accessRemovalMutation'
   | 'authedQuery'
   | 'authedMutation'
   | 'platformQuery'
@@ -592,10 +596,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     mintCustomUrl: 'authedQuery',
   },
   prefs: { get: 'authedQuery', save: 'authedMutation' },
+  // Deactivate and remove stay open to org admins during a billing pause.
   profiles: {
     create: 'adminMutation',
     update: 'adminMutation',
-    remove: 'orgMutation',
+    deactivate: 'accessRemovalMutation',
+    remove: 'accessRemovalMutation',
     setPlannableHours: 'orgMutation',
     setDisplayName: 'authedMutation',
     setMessageRetention: 'authedMutation',
@@ -615,19 +621,23 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
   teamSync: { lastComments: 'orgQuery', stamp: 'orgMutation' },
+  // Removing a member stays open to org admins during a billing pause;
+  // adding one does not.
   teams: {
     create: 'adminMutation',
     update: 'orgMutation',
     deleteDeep: 'orgMutation',
     addMember: 'orgMutation',
-    removeMember: 'orgMutation',
+    removeMember: 'accessRemovalMutation',
     setLeader: 'orgMutation',
   },
+  // Revoking and deleting an agent key stay open to org admins during a
+  // billing pause; creating one does not.
   tokens: {
     listAgentKeys: 'authedQuery',
     createAgentKey: 'orgMutation',
-    revokeAgentKey: 'orgMutation',
-    deleteAgentKey: 'orgMutation',
+    revokeAgentKey: 'accessRemovalMutation',
+    deleteAgentKey: 'accessRemovalMutation',
     listMcpTokens: 'authedQuery',
     createMcpToken: 'authedMutation',
     revokeMcpToken: 'authedMutation',
@@ -636,7 +646,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 144
+const PUBLIC_COUNT = 145
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
@@ -734,7 +744,13 @@ describe('the wrapper rule', () => {
    * must agree with the registered kind. No inverse assertion: a non-org
    * door may legitimately take org_id as a TARGET argument (admin:orgDetail
    * asks about an org, it is not scoped to one). */
-  const ORG_WRAPPERS = new Set<Wrapper>(['orgQuery', 'orgMutation', 'adminMutation', 'orgAction'])
+  const ORG_WRAPPERS = new Set<Wrapper>([
+    'orgQuery',
+    'orgMutation',
+    'adminMutation',
+    'accessRemovalMutation',
+    'orgAction',
+  ])
   const NON_ORG_ALLOWLIST = new Set(
     Object.entries(PUBLIC).flatMap(([m, fns]) =>
       Object.entries(fns)
@@ -750,6 +766,7 @@ describe('the wrapper rule', () => {
     orgQuery: 'query',
     orgMutation: 'mutation',
     adminMutation: 'mutation',
+    accessRemovalMutation: 'mutation',
     authedQuery: 'query',
     authedMutation: 'mutation',
     platformQuery: 'query',

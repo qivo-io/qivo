@@ -197,6 +197,19 @@ describe('settings edits through the client store', () => {
       expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'viewer', active: true })
     })
 
+    it('sends deactivation alone to its own door and reactivation through update', () => {
+      P.updateUser('u-ana', { active: false })
+      expect(P.user('u-ana')?.active).toBe(false)
+      P.updateUser('u-ana', { orgRole: 'user', active: true })
+      expect(requests.map((r) => [r.name, r.args])).toEqual([
+        ['profiles:deactivate', { org_id: snap.orgs[0].id, id: 'u-ana' }],
+        [
+          'profiles:update',
+          { org_id: snap.orgs[0].id, id: 'u-ana', patch: { org_role: 'user', active: true } },
+        ],
+      ])
+    })
+
     it('sets the right with the standard user role only when the same patch turns it on', () => {
       // a stale right on a viewer never comes back with the role
       P.updateUser('u-cat', { orgRole: 'user', active: true })

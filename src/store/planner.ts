@@ -4768,7 +4768,13 @@ export const PLANNER = {
     Object.assign(row, db)
     rebuild()
     emit()
-    if (Object.keys(wire).length) {
+    // Deactivation alone has its own door, which an admin can still use while
+    // billing has paused editing. Every other change, reactivation included,
+    // goes through update.
+    const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
+    if (deactivateOnly) {
+      run(write(api.profiles.deactivate, { org_id: row.org_id, id }))
+    } else if (Object.keys(wire).length) {
       run(write(api.profiles.update, { org_id: row.org_id, id, patch: wire }))
     }
     return true

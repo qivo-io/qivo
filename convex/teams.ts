@@ -30,7 +30,15 @@ import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { canLeadTeams, isTeamLeader } from './lib/access'
 import { byId, insertUnique } from './lib/db'
-import { adminMutation, badRequest, forbidden, notFound, orgMutation, rule } from './lib/functions'
+import {
+  accessRemovalMutation,
+  adminMutation,
+  badRequest,
+  forbidden,
+  notFound,
+  orgMutation,
+  rule,
+} from './lib/functions'
 import { logActivity } from './model/activity'
 import { deleteTeamDeep } from './model/cascade'
 import { assertNotLastTeam, ICON_COLOR_SHAPE, newTeamDefaults } from './model/orgs'
@@ -192,8 +200,12 @@ export const addMember = orgMutation({
 
 /* ----------------------------------------------------------- removeMember
  * P.removeTeamMember. A missing membership is a silent no-op (the SQL delete
- * matched 0 rows). Removing a leader drops the leadership with the row. */
-export const removeMember = orgMutation({
+ * matched 0 rows). Removing a leader drops the leadership with the row.
+ * Removal only takes access away (the projects shared with the team), so an
+ * organization admin can still run it while billing has made the
+ * organization read-only (accessRemovalMutation). A team leader who is not an
+ * admin still meets the billing gate, and adding members stays behind it. */
+export const removeMember = accessRemovalMutation({
   args: { team_id: v.string(), profile_id: v.string() },
   handler: async (ctx, { team_id, profile_id }) => {
     const now = new Date().toISOString()
