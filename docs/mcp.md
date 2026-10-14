@@ -81,11 +81,13 @@ links and record agent prechecks; final image approval and calendar assignment
 remain operator actions in Qivo.
 
 Everything below is written against *the user the credential resolves to*,
-with OAuth scopes imposing an additional ceiling on that user's access.
+with the credential's own access as an additional ceiling on that user's
+access. That ceiling is the OAuth scopes, the personal token's access or the
+agent's organization role, as **Read-only credentials** below describes.
 
 Every tool call runs as that user, through the same access layer the app
-itself queries: readable data stays within the user's access, and writes
-require both the user's permission and, for OAuth, an approved write scope.
+itself queries. Readable data stays within the user's access, and writes
+require both the user's permission and a credential that can make changes.
 Projects and sub-projects have named leads and no owning team; products can
 span teams through explicit access grants. Projects can be shared with teams as well as individual users. A team grant
 applies to its current members as `user` or `viewer`, and the strongest direct
@@ -616,8 +618,10 @@ REST `GET /v1/webhooks/organization` and `DELETE /v1/webhooks/organization/{id}`
 to inspect and reclaim shared quota with a personal token or OAuth connection.
 Deleting another owner's subscription needs a credential that can make
 changes: a personal token created with change access, or an OAuth connection
-with `qivo:write`. A read-only credential gets HTTP 403 with
-`this credential can only read` there. Managing your own subscriptions, and
+with `qivo:write`. A read-only personal token gets HTTP 403 with
+`this credential can only read` there, and a read-only OAuth connection gets
+HTTP 403 with `OAuth connection does not have the required scope`. Managing
+your own subscriptions, and
 listing the organization's, works with a read-only credential too, so OAuth
 needs only `qivo:read` for them.
 
@@ -816,11 +820,11 @@ layer looks like the object not existing, matching the app.
   key; the HTTP action is the authenticator. A `401` carries
   `WWW-Authenticate: Bearer` with protected-resource metadata and
   `qivo:read qivo:write offline_access` scope guidance. Existing manual
-  credentials retain their three refusal sentences —
-  `missing credential (Authorization: Bearer qvt_… or
-  qva_…)`, or per credential kind `unknown, revoked or deactivated agent
-  key` / `unknown, expired or revoked MCP token` — the credential's exact state is
-  deliberately not disclosed.
+  credentials keep three refusal sentences:
+  `missing credential (Authorization: Bearer qvt_… or qva_…)`,
+  `unknown, revoked or deactivated agent key` and
+  `unknown, expired or revoked MCP token`. They deliberately do not disclose
+  the credential's exact state.
 - Any verb but POST and the CORS preflight answers `405` with `Allow: POST,
   OPTIONS` and the body `stateless MCP server — POST JSON-RPC only`, before
   any authentication or work: an old client probing for the removed GET

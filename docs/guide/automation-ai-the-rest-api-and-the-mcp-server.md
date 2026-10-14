@@ -30,7 +30,8 @@ REST requests use an agent's `qva_` key. Viewer access permits reading; User
 and Lead access permit changes, subject to the agent's organization role.
 Access can come from an individual or team grant. A Viewer agent's key can
 only read, so every change returns `403` with
-`this agent is a Viewer and can only read`.
+`this agent is a Viewer and can only read`. It can still create, list and
+remove its own task event subscriptions.
 
 The API lists projects and users and supports task search, creation, updates,
 deletion, archive/restore and comments. It checks field values, including the

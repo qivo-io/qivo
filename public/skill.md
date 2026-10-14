@@ -267,12 +267,13 @@ Archived projects are separate: use `list_projects` with `archived: true` to
 find them, then explicitly name one in the task query. They refuse new tasks;
 restore a project in the browser when that is part of the requested work.
 A viewer can read but cannot write. A not-found response can also mean the
-credential cannot see the object. A read-only credential also prevents writes:
-a read-only OAuth approval, a personal token without change access, or the key
-of an agent whose organization role is Viewer. Qivo refuses its changes before
-looking up what you named, with `this agent is a Viewer and can only read` or
-`this credential can only read`; reading and managing its own event
-subscriptions still work. If the user's task needs additional access, use the client's OAuth
+credential cannot see the object. A read-only credential also prevents writes,
+and Qivo refuses its changes before looking up what you named. A read-only
+OAuth approval gets HTTP 403 `insufficient_scope`. A personal token without
+change access gets `this credential can only read`, and the key of an agent
+whose organization role is Viewer gets `this agent is a Viewer and can only
+read`. Reading and managing its own event subscriptions still work. If the
+user's task needs additional access, use the client's OAuth
 approval flow to request it; approval still cannot exceed the person's
 current project permissions.
 

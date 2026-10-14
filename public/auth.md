@@ -166,12 +166,13 @@ Each credential either can make changes or can only read. An OAuth
 connection can make changes only with `qivo:write`. A personal token can make
 changes only if it was created with change access and has not expired; a
 token stored without an access setting can only read. An agent key can make
-changes only for an agent whose organization role is **User**; a **Viewer**
-agent's key is read-only. A read-only credential still reads everything its
-user can and manages its own task event subscriptions, but every change is
-refused before Qivo looks up the task or project you named:
-`this agent is a Viewer and can only read` for an agent key, and
-`this credential can only read` for a personal token.
+changes only for an agent whose organization role is **Standard user**; a
+**Viewer** agent's key is read-only. A read-only credential still reads
+everything its user can and manages its own task event subscriptions, but Qivo
+refuses every change before it looks up the task or project you named. An
+agent key gets `this agent is a Viewer and can only read`, a personal token
+gets `this credential can only read`, and an OAuth connection without
+`qivo:write` gets the MCP 403 `insufficient_scope` challenge.
 
 Project access follows the user's direct grants, current team memberships
 and applicable leadership rights. Sub-projects inherit access from their
@@ -206,7 +207,8 @@ and verify the client, then revoke the old one.
   owner/admin to restore access or create a replacement.
 - **REST 403:** Authentication succeeded, but the operation is forbidden. A
   Viewer agent's key answers `this agent is a Viewer and can only read` for
-  every change.
+  every change. It can still create, list and remove its own task event
+  subscriptions.
 - **MCP 403 with `insufficient_scope`:** The OAuth connection lacks the
   requested read or write access. Start a new approval for the required access.
 - **REST 404:** The route or resource is absent, or the resource is unreadable.
