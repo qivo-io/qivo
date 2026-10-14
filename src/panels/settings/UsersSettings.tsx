@@ -172,6 +172,11 @@ function AgentKeyPanel({
   )
 }
 
+/* The Settings → Organization → Users page. It lists the home organization's
+   people and agents with their roles, holds the form that adds a person or an
+   agent, and lists guests. On a narrow screen the roster becomes a list of
+   links, and a `user:<id>` page (passed as `userId`) shows one member's
+   controls with a link back to the list. */
 export function OrgUsersPage({
   narrow = false,
   userId,
