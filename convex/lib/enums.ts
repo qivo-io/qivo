@@ -1,4 +1,4 @@
-/* The thirteen closed value sets the schema and the wire share.
+/* The fourteen closed value sets the schema and the wire share.
  * Each exports the `as const` member list, a literals() validator for
  * schema.ts / args validators, and the TS union type. */
 
@@ -62,5 +62,10 @@ export type ImageSource = (typeof IMAGE_SOURCES)[number]
 export const PROJECT_CREATORS = ['admins', 'users', 'selected'] as const
 export const vProjectCreators = literals(...PROJECT_CREATORS)
 export type ProjectCreators = (typeof PROJECT_CREATORS)[number]
+
+/* What a machine credential may do (lib/access.ts credentialAccess). */
+export const CREDENTIAL_ACCESS = ['read', 'write'] as const
+export const vCredentialAccess = literals(...CREDENTIAL_ACCESS)
+export type CredentialAccess = (typeof CREDENTIAL_ACCESS)[number]
 
 export const LEVEL_RANK: Record<AccessLevel, number> = { admin: 3, lead: 3, user: 2, viewer: 1 }

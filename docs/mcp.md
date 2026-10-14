@@ -58,15 +58,22 @@ requested manual setup; agent keys give automation its own identity.
 - **A person's token.** Each person mints their own under **Settings → User
   account → MCP access → Personal access tokens**; the secret (`qvt_…`, shown once,
   stored as SHA-256 + display prefix, migration 0030) maps to that account,
-  and the client then acts as them. These permanent tokens do not expire
-  automatically and remain a secondary option below the OAuth
-  setup and its copyable MCP server address.
+  and the client then acts as them. Personal tokens remain a secondary option
+  below the OAuth setup and its copyable MCP server address. Each token
+  records whether it can make changes or only read, and may record an expiry
+  date, both fixed when it is created. Today every token the settings page
+  creates can make changes and never expires; a choice of read-only access
+  and an expiry date is planned for that page. A token stored without an
+  access setting, created before tokens had one, can only read. After its
+  expiry date a token is refused exactly like a revoked one. The same token
+  also authenticates the [organization REST API](rest-api.md) as that person.
 - **An agent's key.** An agent is a user of the organization that is not a
   person — no email, no password — created by an org admin under **Settings →
   Organization → Users**, where it is given a name and a key (`qva_…`,
   migration 0100). The client acts as the agent, which reaches exactly the
-  projects the agent was given a role on. This is also the credential the
-  [organization REST API](rest-api.md) takes, so one key serves both surfaces.
+  projects the agent was given a role on. The
+  [organization REST API](rest-api.md) takes it too, so one key serves both
+  surfaces.
 
 Global background curation uses the separate
 [curation REST API](rest-api.md#background-curation-api) and an operator-issued
@@ -76,11 +83,13 @@ links and record agent prechecks; final image approval and calendar assignment
 remain operator actions in Qivo.
 
 Everything below is written against *the user the credential resolves to*,
-with OAuth scopes imposing an additional ceiling on that user's access.
+with the credential's own access as an additional ceiling on that user's
+access. That ceiling is the OAuth scopes, the personal token's access or the
+agent's organization role, as **Read-only credentials** below describes.
 
 Every tool call runs as that user, through the same access layer the app
-itself queries: readable data stays within the user's access, and writes
-require both the user's permission and, for OAuth, an approved write scope.
+itself queries. Readable data stays within the user's access, and writes
+require both the user's permission and a credential that can make changes.
 Projects and sub-projects have named leads and no owning team; products can
 span teams through explicit access grants. Projects can be shared with teams as well as individual users. A team grant
 applies to its current members as `user` or `viewer`, and the strongest direct
@@ -95,19 +104,41 @@ user to **Inactive**, which stops every key or token they hold at once
 without anything having to be revoked one by one: both the credential row
 and the profile behind it are read fresh on every request.
 
-**A read-only credential.** A user whose **organization role** is `viewer`
+**Read-only credentials.** Every credential either can make changes or can
+only read. One shared rule decides it (`credentialAccess` in
+`convex/lib/access.ts`), and MCP, the REST API and webhook management all use
+it. `get_me` reports the result as `credential.access`:
+
+- A personal token can make changes only when it was created with change
+  access and has not expired.
+- An OAuth connection can make changes only with both `qivo:read` and
+  `qivo:write`.
+- An agent key can make changes only when its agent's organization role is
+  `user` (Standard user). A **Viewer agent** is fully read-only.
+
+Qivo refuses every writing tool called with a read-only credential before it
+resolves any reference, so the refusal reveals nothing about what exists. An
+agent key gets `this agent is a Viewer and can only read` and a personal
+token gets `this credential can only read`, both as the tool's error result.
+A read-only OAuth connection gets the HTTP 403 `insufficient_scope` challenge
+described under [OAuth protocol and deployment](#oauth-protocol-and-deployment).
+A read-only credential still reads everything its user can, and it can still
+create, list and remove its own [webhook subscriptions](#task-events-and-webhook-delivery).
+
+**The Viewer role.** A user whose **organization role** is `viewer`
 (migration 0102) holds a seat and signs in, reads exactly the projects they
-can access directly or through a team, and writes nothing: every writing tool
-is refused with the same
-"your account has no write access to that project" a missing grant produces,
-and they are never handed a task. It is a ceiling, not a grant — it opens no
-project, it only refuses to let any other path (an individual or team grant, a
-project-lead title, a team leadership) exceed read. An **agent** can be a
-viewer too, which is how a read-only key is made: one setting on the Users
-page instead of a grant list audited project by project. Nothing here
-implements any of it — the cap lives in the shared access layer
-(`cappedLevel` in `convex/lib/access.ts`), so the same profile is read-only
-over MCP, over the REST API and in the browser alike.
+can access directly or through a team, and writes nothing. A Viewer person's
+credential may be able to make changes, but every writing tool still refuses
+with the same "your account has no write access to that project" a missing
+grant produces, and they are never handed a task. It is a ceiling, not a
+grant. It opens no project and only stops any other path (an individual or
+team grant, a project-lead title, a team leadership) from exceeding read. An
+**agent** can be a viewer too, which is how a read-only key is made, with one
+setting on the Users page instead of a grant list audited project by project.
+That key's agent is then refused as a Viewer agent, as described above. The
+cap lives in the shared access layer (`cappedLevel` and `credentialAccess` in
+`convex/lib/access.ts`), so the same profile is read-only over MCP, over the
+REST API and in the browser alike.
 
 Note that `viewer` is also the name of the lowest **project** role — a grant on
 one project. The two are the same idea one altitude apart, which is why they
@@ -306,7 +337,7 @@ why. What changed, for anyone writing against the endpoint directly:
   `io.modelcontextprotocol/serverInfo`, since no client can be assumed to have
   asked. Every result carries a `resultType`, `"complete"` for all of ours.
 - **`tools/list` and `server/discover` are cacheable.** Both come back with
-  `ttlMs` (an hour) and `cacheScope: "private"` — the twelve tools are
+  `ttlMs` (an hour) and `cacheScope: "private"` — the thirteen tools are
   identical for every credential, but the response sits behind a bearer
   token, so cache it per client and never in a shared cache. Stop re-listing
   on every turn.
@@ -325,7 +356,7 @@ why. What changed, for anyone writing against the endpoint directly:
 with `initialize`, so a request without the `protocolVersion` envelope is
 served by the revision's own backward-compatible leg: `initialize` (echoing
 a supported 2025-era revision), `ping` (answering `{}`), `tools/list` and
-`tools/call`, the same twelve tools, one fresh server per request. That leg
+`tools/call`, the same thirteen tools, one fresh server per request. That leg
 also keeps the old framing: each response is a single SSE `event: message`
 frame, behind the Accept header the 2025 protocol required (it must name
 both `application/json` and `text/event-stream`, or the answer is `406`);
@@ -454,8 +485,10 @@ credential or OAuth grant and 100 per organization, including disabled
 subscriptions retained for inspection.
 Delete unwanted subscriptions to release that capacity. Registration automatically
 removes expired registrations and reclaims capacity held by subscriptions whose
-credential was revoked or deleted, or whose account was removed. Temporary
-deactivation and lost project access do not remove subscriptions.
+credential was revoked, expired or deleted, or whose account was removed. Temporary
+deactivation and lost project access do not remove subscriptions. A personal
+token's subscriptions stop delivering when the token expires, and the next
+registration in the organization removes them.
 
 Each delivery contains one event:
 
@@ -585,8 +618,14 @@ owning grant with REST `GET /v1/webhooks` to inspect health. MCP `events/list`
 lists event definitions, not subscriptions. Organization administrators can use
 REST `GET /v1/webhooks/organization` and `DELETE /v1/webhooks/organization/{id}`
 to inspect and reclaim shared quota with a personal token or OAuth connection.
-OAuth administrator deletion requires `qivo:write`; ordinary ownership-based
-subscription management needs only `qivo:read`.
+Deleting another owner's subscription needs a credential that can make
+changes: a personal token created with change access, or an OAuth connection
+with `qivo:write`. A read-only personal token gets HTTP 403 with
+`this credential can only read` there, and a read-only OAuth connection gets
+HTTP 403 with `OAuth connection does not have the required scope`. Managing
+your own subscriptions, and
+listing the organization's, works with a read-only credential too, so OAuth
+needs only `qivo:read` for them.
 
 For `events/unsubscribe`, send the original event name, arguments and
 `delivery: { "url": "<original callback URL>" }`. The optional `mode` field may
@@ -610,6 +649,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
 |---|---|
+| `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id` and `name` — teams group users for project sharing and administration. MCP does not list team grants; `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status`, `priority`, `assignee_id`, `search` (all word fragments across task ID, title and description, case-insensitive and in any order; `*` stays literal), `limit`; every result includes reporter, assignee and reviewer. `assignee_id` matches the stored assignee, also while a reviewer owns the task. Active tasks only by default — `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106) — a different axis, and the one without a flag |
@@ -622,6 +662,56 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters. The result's `updated` lists the fields you sent (and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
 | `delete_task` | Delete a task (attachment bytes are reaped) |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
+
+### Who am I
+
+`get_me` takes no arguments and answers four objects:
+
+```json
+{
+  "user": {
+    "id": "…uuid…", "name": "Priya Patel", "org_role": "user", "kind": "person",
+    "active": true, "plannable_hours": 31, "email": "priya@example.com"
+  },
+  "organization": {
+    "id": "…uuid…", "name": "Northstar Labs", "slug": "northstar-labs",
+    "date_format": "YYYY-MM-DD", "week_start": 1, "week_one_rule": "first4day",
+    "default_plannable_hours": 32, "max_attachment_mb": 20,
+    "project_creators": "users", "can_create_projects": true
+  },
+  "billing": { "read_only": false, "reason": null },
+  "credential": {
+    "kind": "personal_token", "access": "write",
+    "expires_at": "2027-01-31T00:00:00.000Z", "name": "Laptop"
+  }
+}
+```
+
+- `organization.week_start` is the **Workdays start on** setting, `0`
+  (Sunday) through `6` (Saturday), the first day of every planning week.
+  `week_one_rule` is **Week 1 of the year** (`first4day`, `jan1` or
+  `firstfull`), and `date_format` is how the app displays dates; tools always
+  use `YYYY-MM-DD`. `default_plannable_hours` is the capacity a new person
+  starts with, `max_attachment_mb` the upload limit per file in MiB, and
+  `slug` the organization's part of app links.
+- `project_creators` is the **Who can create new projects?** setting
+  (`admins`, `users`, the default, or `selected`). `can_create_projects` says
+  whether this user may create a top-level project under it, by the same
+  rule as the app's **New project** button.
+- `billing.read_only` is `true` while organization billing pauses editing,
+  and `reason` is then the sentence every writing tool is refused with. No
+  plan, price or usage is included.
+- `credential.kind` is `personal_token`, `oauth` or `agent_key`. `access` is
+  `write` when the credential may make changes and `read` when it can only
+  read, from the same rule that refuses writing tools (see
+  **Read-only credentials** above). A change still needs the user's project
+  permission and an organization that billing does not pause. `name` is the
+  token's or key's name, or the connected app's name for OAuth. `expires_at`
+  is a personal token's expiry, and `null` for a token without one, an OAuth
+  connection or an agent key.
+
+The answer never contains a secret, a hash or a display prefix. A read-only
+OAuth connection may call `get_me`, because it only reads.
 
 ### Import attribution
 
@@ -767,10 +857,12 @@ layer looks like the object not existing, matching the app.
 - Hand-rolled stateless JSON-RPC over one POST route — a Convex HTTP action
   (`convex/machine/mcp.ts`), no MCP SDK. The credential is resolved before
   dispatch; OAuth additionally rechecks the live grant and scopes before each
-  tool, including every call in a batch. Every tool is one internal Convex function that
-  takes the resolved user explicitly and re-asserts it — ref resolution, the
-  rules a write must satisfy, the write and its activity trail, all in one
-  transaction. What the surface file itself holds is the MCP grammar: the
+  tool, including every call in a batch. Every tool is one internal Convex
+  function that takes the resolved user and the credential's access
+  explicitly and re-asserts them, and a writing tool refuses a read-only
+  credential first. `get_me` also takes the credential row that authenticated
+  the request, and shares its read with REST's `GET /v1/me`. Ref resolution, the rules a write must satisfy, the write
+  and its activity trail all run in one transaction. What the surface file itself holds is the MCP grammar: the
   two protocol legs, the header rules, tool names, schemas and transport.
   The verbs and the sentences a refusal is phrased in live in the shared
   model layer the REST API and the app run on too, so the surfaces cannot
@@ -782,11 +874,11 @@ layer looks like the object not existing, matching the app.
   key; the HTTP action is the authenticator. A `401` carries
   `WWW-Authenticate: Bearer` with protected-resource metadata and
   `qivo:read qivo:write offline_access` scope guidance. Existing manual
-  credentials retain their three refusal sentences —
-  `missing credential (Authorization: Bearer qvt_… or
-  qva_…)`, or per credential kind `unknown, revoked or deactivated agent
-  key` / `unknown or revoked MCP token` — the credential's exact state is
-  deliberately not disclosed.
+  credentials keep three refusal sentences:
+  `missing credential (Authorization: Bearer qvt_… or qva_…)`,
+  `unknown, revoked or deactivated agent key` and
+  `unknown, expired or revoked MCP token`. They deliberately do not disclose
+  the credential's exact state.
 - Any verb but POST and the CORS preflight answers `405` with `Allow: POST,
   OPTIONS` and the body `stateless MCP server — POST JSON-RPC only`, before
   any authentication or work: an old client probing for the removed GET

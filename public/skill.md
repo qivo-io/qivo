@@ -18,8 +18,26 @@ the person sign in to Qivo and approve the displayed organization and access.
 The client receives and manages its credentials; no manual token is needed.
 Use a personal token as a fallback when the client lacks compatible OAuth
 support, or when the user explicitly requests it. An agent key is for
-automation acting as a named agent user and for REST access. Use an existing
-working connection for the requested task.
+automation acting as a named agent user. REST accepts personal tokens and
+agent keys. Use an existing working connection for the requested task.
+
+## Learn who you are first
+
+Call `get_me` over MCP, or `GET /v1/me` over REST, before other work. It
+returns your user and organization role, the organization's calendar
+settings, its upload limit per file, whether you may create projects,
+whether billing has paused changes, and what this credential may do:
+
+- `credential.access` is `write` when the credential can make changes and
+  `read` when it can only read. Do not plan changes with a read-only
+  credential.
+- `billing.read_only: true` means every change is refused until an
+  organization admin restores billing; `billing.reason` says so.
+- `organization.week_start` is the first day of every planning week, `0`
+  (Sunday) through `6` (Saturday). `organization.slug` is the organization's
+  part of browser links.
+
+A write also needs Edit access on the project, as described below.
 
 ## Choose the interface
 
@@ -28,9 +46,12 @@ working connection for the requested task.
   client's discovered tools and current `tools/list` schemas for arguments.
   `list_tasks` defaults to 50 results, allows at most 200, and has no offset.
   Narrow the query; a full result limit does not prove you found every task.
-- **REST:** Use `https://api.qivo.io/v1` with an agent key for paginated reads
-  or scheduled weeks. OAuth and personal MCP tokens work only on the REST webhook
-  management routes, not these task and project routes.
+- **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
+  token for paginated reads, scheduled weeks or setting someone's plannable
+  hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
+  token). A personal token acts as its person and its writes appear under
+  their name. OAuth tokens work only on the REST webhook management routes,
+  not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
   `PATCH /v1/tasks/{ref}` accepts `start_week` and `end_week` as
@@ -41,9 +62,8 @@ working connection for the requested task.
   These fields are not MCP write arguments; `due_date` is a separate deadline.
   Both dates name the first day of a week, and the end week is included. For
   a Monday-based calendar, `2026-09-21` through `2026-09-28` is two weeks.
-  Confirm the organization's **Workdays start on** setting in **Settings →
-  Organization → General**, or ask the user if that setting is unavailable;
-  do not assume Monday for every organization.
+  Read the first day of the week from `organization.week_start` in `get_me`
+  or `GET /v1/me`; do not assume Monday for every organization.
 - **Browser:** Use it for task moves, project creation/sharing, project
   archive/restore, attachment uploads, and other actions absent from the machine
   interfaces. Enter at `https://qivo.io/app` and use the user's signed-in
@@ -238,7 +258,9 @@ success, failure and HTTP-status history. Pending retries survive a verified
 refresh before expiry. Registering after expiry or deletion starts fresh and
 cannot revive old queued events. There is no replay of failed events or changes
 missed while disabled. Registration reclaims quota held
-by expired registrations, revoked/deleted credentials and removed accounts.
+by expired registrations, by revoked, expired or deleted credentials and by
+removed accounts. A personal token's subscriptions stop delivering when it
+expires.
 OAuth subscriptions belong to the connection grant. Access-token expiry,
 rotation or revocation of an individual access token does not cancel them.
 Disconnect the connected app or unsubscribe to stop them. Unsubscribe through REST
@@ -249,8 +271,10 @@ mode is `"webhook"`; no signing key is needed to unsubscribe.
 A person who administers the organization can inspect subscriptions across
 owners with `GET /v1/webhooks/organization` and remove one with
 `DELETE /v1/webhooks/organization/{id}`. Use that person's token or OAuth
-connection. OAuth administrator deletion requires `qivo:write`. Use these
-routes to reclaim shared quota when the original owner cannot remove a callback.
+connection. Removing another owner's subscription needs a credential that can
+make changes: a personal token with change access, or an OAuth connection with
+`qivo:write`. Use these routes to reclaim shared quota when the original owner
+cannot remove a callback.
 
 ## Archives, access, and browser links
 
@@ -263,8 +287,14 @@ Archived projects are separate: use `list_projects` with `archived: true` to
 find them, then explicitly name one in the task query. They refuse new tasks;
 restore a project in the browser when that is part of the requested work.
 A viewer can read but cannot write. A not-found response can also mean the
-credential cannot see the object. A read-only OAuth approval also prevents
-writes. If the user's task needs additional access, use the client's OAuth
+credential cannot see the object. A read-only credential also prevents writes,
+and Qivo refuses its changes before looking up what you named. A read-only
+OAuth approval gets HTTP 403 `insufficient_scope`. A personal token without
+change access gets `this credential can only read` on MCP and REST, and the
+key of an agent whose organization role is Viewer gets `this agent is a
+Viewer and can only read`. Reading and managing its own event subscriptions
+still work. If the
+user's task needs additional access, use the client's OAuth
 approval flow to request it; approval still cannot exceed the person's
 current project permissions.
 

@@ -4063,12 +4063,15 @@ export const PLANNER = {
     const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
     const id = crypto.randomUUID()
     try {
+      // Until the token form offers a choice, every token it creates can make
+      // changes and never expires.
       await write(api.tokens.createMcpToken, {
         id,
         profile_id: CURRENT_USER,
         name,
         token_prefix: secret.slice(0, 11),
         token_hash: hash,
+        access: 'write',
       })
     } catch (e) {
       console.error('[qivo] mcp token create failed:', e)

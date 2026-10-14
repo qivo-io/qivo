@@ -8,8 +8,8 @@
  * Layering: the surface files (convex/machine/{rest,mcp}.ts) own the wire —
  * routes, status codes, per-surface refusal sentences, JSON key subsets — and
  * compose these helpers inside ONE internal fn per endpoint (resolve + rules
- * + write + activity in one transaction). Each agent-key REST route and MCP
- * tool is declared once as a registry entry (machine/registry.ts) with a
+ * + write + activity in one transaction). Each organization REST route and
+ * MCP tool is declared once as a registry entry (machine/registry.ts) with a
  * required read/write `access` flag; a read entry can only run queries, so
  * its internal fn is a query. The /v1/webhooks routes and the MCP events/*
  * methods are served outside it. Shared RULES live in model/issues.ts
@@ -29,21 +29,39 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { hasSubtasks, subtaskParentIds } from '../model/issues'
-import { canSeeProject, hasProjectLevel } from './access'
-import { assertBillingWritable } from './billingAccess'
+import { attachmentLimitMb } from '../model/orgs'
+import {
+  canSeeProject,
+  hasProjectLevel,
+  liveCredentialRow,
+  machineAccess,
+  readOnlyRefusal,
+} from './access'
+import { assertBillingWritable, BILLING_READ_ONLY, billingReadOnly } from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
-import type { IssuePriority, IssueStatus, OrgRole, ProfileKind, ProjectType } from './enums'
+import type {
+  CredentialAccess,
+  IssuePriority,
+  IssueStatus,
+  OrgRole,
+  ProfileKind,
+  ProjectType,
+} from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
+import { canCreateProjects } from './projectCreators'
 import { allWordsMatcher } from './search'
+import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
 
 export { machineDetail }
 
 /* ------------------------------------------------------------------ caller
  * Uuid convention: machine internal fns take `callerId: v.string()` (the
- * profile uuid the auth query resolved) and start with asMachineCaller. The
- * model layer takes the loaded doc everywhere, so the Caller IS the doc. */
+ * profile uuid the auth query resolved) and `access: vCredentialAccess` (what
+ * that credential may do, from lib/access.ts credentialAccess), and start
+ * with asMachineCaller. The model layer takes the loaded doc everywhere, so
+ * the Caller IS the doc. */
 
 export type Caller = Doc<'profiles'>
 
@@ -51,22 +69,31 @@ export type Caller = Doc<'profiles'>
  * SEPARATE query, so the profile can flip between lookup and dispatch — the
  * Deno single-transaction never had the window; re-asserting closes it).
  * The surface HTTP action maps these back to its own 401 sentence: REST
- * 'unknown agent key' / 'this agent has been deactivated'; MCP its per-leg
- * sentence (machine/auth.ts mcpAuth401). The messages here are REST's, as
+ * the caller's (machine/rest.ts CALLER, 'unknown agent key' / 'this agent
+ * has been deactivated' for an agent key); MCP its per-leg sentence
+ * (machine/auth.ts mcpAuth401). The messages here are REST's agent ones, as
  * the fallback if a surface skips the mapping. */
 export const CALLER_GONE = 'caller_gone'
 export const CALLER_DEACTIVATED = 'caller_deactivated'
 
-export async function asMachineCaller(ctx: QueryCtx, callerId: string): Promise<Caller> {
+/* The refusal for a caller, or its credential, that is gone by dispatch. */
+const callerGone = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({ code: 'forbidden', message: 'unknown agent key', reason: CALLER_GONE })
+
+/**
+ * The live caller profile. In a mutation it also refuses a credential that
+ * can only read, before any ref resolves, so a read-only caller learns
+ * nothing about what exists. An agent's access follows its live role, which
+ * can change between auth and dispatch. Then the billing pause applies.
+ */
+export async function asMachineCaller(
+  ctx: QueryCtx,
+  callerId: string,
+  access: CredentialAccess,
+): Promise<Caller> {
   refuseDemoFeature()
   const me = await byId(ctx, 'profiles', callerId)
-  if (me === null) {
-    throw new ConvexError<Refusal>({
-      code: 'forbidden',
-      message: 'unknown agent key',
-      reason: CALLER_GONE,
-    })
-  }
+  if (me === null) throw callerGone()
   if (!me.active) {
     throw new ConvexError<Refusal>({
       code: 'forbidden',
@@ -74,7 +101,10 @@ export async function asMachineCaller(ctx: QueryCtx, callerId: string): Promise<
       reason: CALLER_DEACTIVATED,
     })
   }
-  if ('insert' in ctx.db) await assertBillingWritable(ctx, me.org_id)
+  if ('insert' in ctx.db) {
+    if (machineAccess(me, access) !== 'write') throw readOnlyRefusal(me)
+    await assertBillingWritable(ctx, me.org_id)
+  }
   return me
 }
 
@@ -199,11 +229,13 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
 
 /* ------------------------------------------------------------ access flags
  * What the caller holds on each named project (core.ts:307-318's successor):
- * read = canSeeProject, write = hasProjectLevel 'user'. hasProjectLevel
- * already applies the viewer ceiling (cappedLevel) — the 0102 "viewer agent
- * writes nothing" rule comes for free on BOTH the grant-viewer and the
- * org-role-viewer agent. Here code sees everything and CHOOSES what to
- * disclose; these flags are that choice's only input. */
+ * read = canSeeProject, write = hasProjectLevel 'user' through a credential
+ * that may write (machineAccess). hasProjectLevel already applies the viewer
+ * ceiling (cappedLevel), so an org-role-viewer agent and a grant-viewer agent
+ * both get `write: false`, and so does every project seen through a
+ * read-only credential. (asMachineCaller refuses those writes before they get
+ * this far.) Here code sees everything and CHOOSES what to disclose; these
+ * flags are that choice's only input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 
@@ -211,12 +243,14 @@ export async function accessFlags(
   ctx: QueryCtx,
   me: Caller,
   projects: Doc<'projects'>[],
+  access: CredentialAccess,
 ): Promise<Map<string, AccessFlag>> {
+  const writes = machineAccess(me, access) === 'write'
   const out = new Map<string, AccessFlag>()
   for (const p of projects) {
     out.set(p.id, {
       read: await canSeeProject(ctx, me, p),
-      write: await hasProjectLevel(ctx, me, p.id, 'user'),
+      write: writes && (await hasProjectLevel(ctx, me, p.id, 'user')),
     })
   }
   return out
@@ -809,3 +843,65 @@ export async function commentOut(
     edited_by_name,
   }
 }
+
+/* --------------------------------------------------------------- who am I
+ * get_me (MCP) and GET /v1/me (REST) answer with the caller's own seat, the
+ * settings of its organization that shape every request (the calendar, the
+ * upload cap, who may create projects), whether billing pauses editing, and
+ * the credential the request came with. One read and one projection serve both
+ * surfaces; each surface only encodes it. Nothing here grants anything, and
+ * no secret, hash or display prefix leaves it. */
+
+/* The wire name of each credential table. */
+const CREDENTIAL_KIND = {
+  agent_keys: 'agent_key',
+  mcp_tokens: 'personal_token',
+  oauth_connections: 'oauth',
+} as const satisfies Record<EventOwner['credential_table'], string>
+
+/**
+ * Who the caller is acting as, through which credential, with what access.
+ * `credential` names the exact row that authenticated the request, in the
+ * shape webhook ownership uses; the HTTP action passes it to get_me alone.
+ * `access` is what asMachineCaller enforces (machineAccess), so a client can
+ * learn whether it may write before it tries. A credential that has stopped
+ * authorizing (lib/access.ts liveCredentialRow) or belongs to another profile
+ * answers like a caller gone between lookup and dispatch.
+ */
+export async function meCore(
+  ctx: QueryCtx,
+  me: Caller,
+  access: CredentialAccess,
+  credential: EventOwner,
+) {
+  const row = await liveCredentialRow(ctx, credential, Date.now())
+  if (row === null || row.profile_id !== me.id) throw callerGone()
+  const org = await byId(ctx, 'organizations', me.org_id)
+  if (org === null) throw callerGone()
+  const readOnly = await billingReadOnly(ctx, org.id)
+  return {
+    user: { ...userJson(me), email: me.kind === 'person' ? (me.email ?? null) : null },
+    organization: {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      date_format: org.date_format,
+      week_start: org.week_start,
+      week_one_rule: org.week_one_rule,
+      default_plannable_hours: org.default_plannable_hours,
+      max_attachment_mb: attachmentLimitMb(org),
+      project_creators: org.project_creators ?? 'users',
+      can_create_projects: canCreateProjects(me, org.project_creators),
+    },
+    billing: { read_only: readOnly, reason: readOnly ? BILLING_READ_ONLY : null },
+    credential: {
+      kind: CREDENTIAL_KIND[credential.credential_table],
+      access: machineAccess(me, access),
+      expires_at: 'token_hash' in row ? (row.expires_at ?? null) : null,
+      name: 'client_name' in row ? row.client_name : row.name,
+    },
+  }
+}
+
+/** What get_me and GET /v1/me answer. */
+export type MeJson = Awaited<ReturnType<typeof meCore>>

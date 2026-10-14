@@ -195,6 +195,11 @@ export const newOrgDefaults = (now: string) => ({
   max_attachment_mb: 20,
 })
 
+/* The organization's upload cap in MiB. Older org rows without one default
+ * to the gateway's 20 MiB serving ceiling, which also caps every value. */
+export const attachmentLimitMb = (org: Pick<Doc<'organizations'>, 'max_attachment_mb'> | null) =>
+  Math.min(org?.max_attachment_mb ?? 20, 20)
+
 /* The standard auto-archive threshold in days for Done tasks. Projects without
  * a legacy team setting use it (jobs.ts), and new teams store it. */
 export const DEFAULT_ARCHIVE_DAYS = 30
@@ -285,18 +290,22 @@ export async function assertNotLastAdmin(
 
 /* ---------------------------------------------------- plannable hours (0103)
  * set_plannable_hours' rule body (0094→0095→0099→0103), ONE copy shared by
- * the browser mutation (profiles.setPlannableHours) and MCP's update_user.
+ * the browser mutation (profiles.setPlannableHours), MCP's update_user and
+ * REST's PATCH /v1/users/{id}.
  * Order matters — rights first with ONE sentence for unknown/foreign/
  * unauthorized (0049), the agent check AFTER it so probing uuids learns
  * nothing, then the whole-hours range. Deliberately not self-service (0094).
- * No narration. Returns the fresh row (MCP answers with it). */
+ * No narration. Returns the fresh row (MCP and REST answer with it). */
+
+/* The rights refusal. REST answers it 403; the app and MCP show the rule. */
+export const PLANNABLE_HOURS_RIGHTS =
+  "only an organization admin or a leader of one of this person's teams can set their plannable hours"
+
 export async function setPlannableHoursCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; profile_id: string; hours: number },
 ): Promise<Doc<'profiles'>> {
-  const rights = rule(
-    "only an organization admin or a leader of one of this person's teams can set their plannable hours",
-  )
+  const rights = rule(PLANNABLE_HOURS_RIGHTS)
   const target = await byId(ctx, 'profiles', a.profile_id)
   if (target === null || target.org_id !== a.me.org_id) throw rights
   if (a.me.org_role !== 'admin') {

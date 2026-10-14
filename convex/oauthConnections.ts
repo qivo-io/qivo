@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { components } from './_generated/api'
 import { internalMutation, internalQuery } from './_generated/server'
 import { createAuth } from './auth'
+import { credentialAccess } from './lib/access'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { authedMutation, authedQuery, badRequest, notFound } from './lib/functions'
@@ -290,6 +291,8 @@ export const revokeReplay = internalMutation({
   },
 })
 
+/* The live grant behind an OAuth access token, or null. `access` is what the
+ * token's own scopes allow (lib/access.ts credentialAccess). */
 export const lookupAccess = internalQuery({
   args: { tokenHash: v.string(), resource: v.string() },
   handler: async (ctx, args) => {
@@ -341,6 +344,7 @@ export const lookupAccess = internalQuery({
       connectionRowId: row._id,
       profileId: row.profile_id,
       scopes: token.scopes,
+      access: credentialAccess({ table: 'oauth_connections', scopes: token.scopes }, profile),
     }
   },
 })

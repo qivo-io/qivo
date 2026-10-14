@@ -13,6 +13,12 @@
  * agent key create/revoke narrate against the AGENT profile ("what happened
  * to this user"); MCP tokens never narrate (private credential management).
  *
+ * A personal token also carries its access ('read' or 'write', chosen at
+ * creation; a row without one can only read) and an optional expiry, after
+ * which machine auth refuses it like a revoked one (lib/access.ts
+ * credentialAccess). Agent keys have neither, because the agent's role
+ * decides.
+ *
  * last_used_at is written only by phase 8's machine auth; revoked keys stay
  * listed. A key row whose plaintext is gone is still a real row (its holder
  * can still revoke it by fingerprint); never "clean up" such rows. */
@@ -20,8 +26,10 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
+import { cleanTokenExpiry } from './lib/access'
 import { byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
+import { vCredentialAccess } from './lib/enums'
 import {
   accessRemovalMutation,
   authedMutation,
@@ -55,7 +63,10 @@ const pubToken = (t: Doc<'mcp_tokens'>) => ({
   id: t.id,
   name: t.name,
   prefix: t.token_prefix,
+  // a token minted before access existed can only read
+  access: t.access ?? 'read',
   createdAt: t.created_at,
+  expiresAt: t.expires_at ?? null,
   lastUsedAt: t.last_used_at ?? null,
   revokedAt: t.revoked_at ?? null,
 })
@@ -214,7 +225,9 @@ export const listMcpTokens = authedQuery({
 })
 
 /* P.createMcpToken (awaited). The old client always minted for CURRENT_USER
- * (the home seat); any own seat is accepted. */
+ * (the home seat); any own seat is accepted. `access` is required, so no
+ * caller gets write access by leaving it out; `expires_at` is optional and
+ * must lie in the future. */
 export const createMcpToken = authedMutation({
   args: {
     id: v.string(),
@@ -222,13 +235,17 @@ export const createMcpToken = authedMutation({
     name: v.string(),
     token_prefix: v.string(),
     token_hash: v.string(),
+    access: vCredentialAccess,
+    expires_at: v.optional(v.string()),
   },
-  handler: async (ctx, { id, profile_id, name, token_prefix, token_hash }) => {
+  handler: async (ctx, { id, profile_id, name, token_prefix, token_hash, access, expires_at }) => {
     refuseDemoFeature()
     const now = new Date().toISOString()
     if (!isMine(ctx.myProfiles, profile_id)) throw notFound('profile not found')
     if (name.trim() === '') throw badRequest('a token needs a name')
     if (!HASH_RE.test(token_hash)) throw badRequest('a token hash is 64 lowercase hex characters')
+    const expiry = expires_at === undefined ? undefined : cleanTokenExpiry(expires_at)
+    if (expiry !== undefined && expiry <= now) throw badRequest('expires_at must be in the future')
     if ((await byId(ctx, 'mcp_tokens', id)) !== null) {
       throw badRequest('a token with this id already exists')
     }
@@ -237,7 +254,16 @@ export const createMcpToken = authedMutation({
       'mcp_tokens',
       'by_hash',
       { token_hash },
-      { id, profile_id, name, token_prefix, token_hash, created_at: now },
+      {
+        id,
+        profile_id,
+        name,
+        token_prefix,
+        token_hash,
+        access,
+        expires_at: expiry,
+        created_at: now,
+      },
       rule('that token already exists'),
     )
     return { id }

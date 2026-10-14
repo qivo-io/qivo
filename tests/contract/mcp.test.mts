@@ -91,7 +91,7 @@ const legacyBody = (method: string, params: unknown, id?: number): string =>
 /* ------------- expected bytes, as transcribed in convex/tests/mcp.test.ts */
 
 const E401_MISSING = '{"error":"missing credential (Authorization: Bearer qvt_… or qva_…)"}'
-const E401_PERSON = '{"error":"unknown or revoked MCP token"}'
+const E401_PERSON = '{"error":"unknown, expired or revoked MCP token"}'
 const E401_AGENT = '{"error":"unknown, revoked or deactivated agent key"}'
 const E405 = '{"error":"stateless MCP server — POST JSON-RPC only"}'
 const E32700 =

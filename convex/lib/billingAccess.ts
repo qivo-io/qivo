@@ -32,13 +32,22 @@ export function subscriptionWritable(sub: Doc<'billing_subscriptions'> | null, n
   return false
 }
 
+/* The refusal every write gets while billing pauses editing, and the reason
+ * get_me reports for it. */
+export const BILLING_READ_ONLY =
+  'This organization is read-only. An organization admin can subscribe or update payment details in Billing.'
+
+/** Whether the organization's billing currently pauses editing. */
+export async function billingReadOnly(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  return billingEnabled() && !subscriptionWritable(await subscriptionFor(ctx, orgId))
+}
+
 export async function assertBillingWritable(ctx: QueryCtx, orgId: string): Promise<void> {
-  if (!billingEnabled() || subscriptionWritable(await subscriptionFor(ctx, orgId))) return
+  if (!(await billingReadOnly(ctx, orgId))) return
   throw new ConvexError({
     code: 'forbidden',
     reason: 'billing_required',
-    message:
-      'This organization is read-only. An organization admin can subscribe or update payment details in Billing.',
+    message: BILLING_READ_ONLY,
   })
 }
 

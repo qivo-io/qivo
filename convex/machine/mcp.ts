@@ -67,13 +67,24 @@ import {
   listUsersCore,
   loadCatalogue,
   mcpProjectOut,
+  meCore,
   userJson,
 } from '../lib/core'
 import { byId } from '../lib/db'
-import { vIssuePriority, vIssueStatus } from '../lib/enums'
+import {
+  type CredentialAccess,
+  vCredentialAccess,
+  vIssuePriority,
+  vIssueStatus,
+} from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
-import { type EventReply, WEBHOOK_MAX_TTL_MS } from '../lib/taskEvents'
+import {
+  type EventOwner,
+  type EventReply,
+  vEventOwner,
+  WEBHOOK_MAX_TTL_MS,
+} from '../lib/taskEvents'
 import { logActivity } from '../model/activity'
 import { deleteIssueDeep } from '../model/cascade'
 import {
@@ -93,9 +104,9 @@ import {
 import { notifyCommentInsert } from '../model/messages'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
-import { type MachineEntry, needsWrite, runEntry } from './registry'
+import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 
-/* ------------------------------------------------------------ the 12 tools
+/* ------------------------------------------------------------ the 13 tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
  * read/write `access` flag, its `def` and the `run` that calls its internal
  * fn. tools/list answers the defs in this order. Titles, descriptions and
@@ -129,13 +140,30 @@ type ToolDef = {
   }
 }
 
-/** What a tool's `run` receives: the resolved profile uuid and the arguments. */
-type ToolInput = { callerId: string; args: Record<string, unknown> }
+/** The principal, the credential row that authenticated the request (for
+ *  get_me) and the arguments a tool's `run` receives. */
+type ToolInput = Principal & { credential: EventOwner; args: Record<string, unknown> }
 
 /** One MCP tool. `run` answers the already pretty-printed result text. */
 type McpTool = MachineEntry<ToolInput, string> & { def: ToolDef }
 
 export const TOOLS: McpTool[] = [
+  {
+    access: 'read',
+    def: {
+      name: 'get_me',
+      title: 'Who am I',
+      description:
+        "Your own user, your organization's settings (calendar, upload limit, who may create projects), whether billing has paused changes, and this credential's kind and access (`read` or `write`). Call it first to learn who you act as and whether you can make changes.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {},
+      },
+    },
+    run: (r, { callerId, access, credential }) =>
+      r.runQuery(internal.machine.mcp.getMe, { callerId, access, credential }),
+  },
   {
     access: 'read',
     def: {
@@ -149,7 +177,8 @@ export const TOOLS: McpTool[] = [
         properties: {},
       },
     },
-    run: (r, { callerId }) => r.runQuery(internal.machine.mcp.listTeams, { callerId }),
+    run: (r, { callerId, access }) =>
+      r.runQuery(internal.machine.mcp.listTeams, { callerId, access }),
   },
   {
     access: 'read',
@@ -168,9 +197,10 @@ export const TOOLS: McpTool[] = [
         },
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runQuery(internal.machine.mcp.listProjects, {
         callerId,
+        access,
         ...(args as { archived?: boolean }),
       }),
   },
@@ -187,7 +217,8 @@ export const TOOLS: McpTool[] = [
         properties: {},
       },
     },
-    run: (r, { callerId }) => r.runQuery(internal.machine.mcp.listUsers, { callerId }),
+    run: (r, { callerId, access }) =>
+      r.runQuery(internal.machine.mcp.listUsers, { callerId, access }),
   },
   {
     access: 'read',
@@ -207,9 +238,10 @@ export const TOOLS: McpTool[] = [
         required: ['project'],
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runQuery(internal.machine.mcp.listProjectUsers, {
         callerId,
+        access,
         ...(args as { project: string }),
       }),
   },
@@ -239,9 +271,10 @@ export const TOOLS: McpTool[] = [
         required: ['user_id', 'plannable_hours'],
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runMutation(internal.machine.mcp.updateUser, {
         callerId,
+        access,
         ...(args as { user_id: string; plannable_hours: number }),
       }),
   },
@@ -287,9 +320,10 @@ export const TOOLS: McpTool[] = [
         },
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runQuery(internal.machine.mcp.listIssues, {
         callerId,
+        access,
         ...(args as {
           project?: string
           status?: Doc<'issues'>['status']
@@ -319,8 +353,8 @@ export const TOOLS: McpTool[] = [
         required: ['ref'],
       },
     },
-    run: (r, { callerId, args }) =>
-      r.runQuery(internal.machine.mcp.getIssue, { callerId, ...(args as { ref: string }) }),
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.mcp.getIssue, { callerId, access, ...(args as { ref: string }) }),
   },
   {
     access: 'read',
@@ -340,8 +374,12 @@ export const TOOLS: McpTool[] = [
         required: ['ref'],
       },
     },
-    run: (r, { callerId, args }) =>
-      r.runQuery(internal.machine.mcp.listComments, { callerId, ...(args as { ref: string }) }),
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.mcp.listComments, {
+        callerId,
+        access,
+        ...(args as { ref: string }),
+      }),
   },
   {
     access: 'write',
@@ -365,9 +403,10 @@ export const TOOLS: McpTool[] = [
         required: ['ref', 'body'],
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runMutation(internal.machine.mcp.addComment, {
         callerId,
+        access,
         ...(args as { ref: string; body: string }),
       }),
   },
@@ -468,9 +507,10 @@ export const TOOLS: McpTool[] = [
         required: ['project', 'title'],
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runMutation(internal.machine.mcp.createIssue, {
         callerId,
+        access,
         ...(args as {
           project: string
           sub_project?: string
@@ -576,9 +616,10 @@ export const TOOLS: McpTool[] = [
         required: ['ref'],
       },
     },
-    run: (r, { callerId, args }) =>
+    run: (r, { callerId, access, args }) =>
       r.runMutation(internal.machine.mcp.updateIssue, {
         callerId,
+        access,
         ...(args as {
           ref: string
           title?: string
@@ -612,8 +653,12 @@ export const TOOLS: McpTool[] = [
         required: ['ref'],
       },
     },
-    run: (r, { callerId, args }) =>
-      r.runMutation(internal.machine.mcp.deleteIssue, { callerId, ...(args as { ref: string }) }),
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.mcp.deleteIssue, {
+        callerId,
+        access,
+        ...(args as { ref: string }),
+      }),
   },
 ]
 
@@ -1117,10 +1162,11 @@ async function mustFindIssue(ctx: QueryCtx, me: Caller, ref: string): Promise<Do
 }
 
 /* The caller's readable/writable predicates over the whole org catalogue —
- * one by_org scan + the access predicates, shared by every scoped read. */
-async function catalogueFlags(ctx: QueryCtx, me: Caller) {
+ * one by_org scan + the access predicates, shared by every scoped read.
+ * Writable also needs a credential that may write. */
+async function catalogueFlags(ctx: QueryCtx, me: Caller, access: CredentialAccess) {
   const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat.projects)
+  const flags = await accessFlags(ctx, me, cat.projects, access)
   return {
     cat,
     readable: (id: string) => flags.get(id)?.read === true,
@@ -1149,16 +1195,28 @@ const mustWrite = async (ctx: QueryCtx, me: Caller, projectId: string): Promise<
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
 
 /* --------------------------------------------------- the tool internal fns
- * One per tool, `callerId` first (the profile uuid the auth query resolved) —
- * asMachineCaller re-asserts the profile, closing the auth-to-dispatch race.
+ * One per tool, `callerId` and `access` first (the profile uuid the auth
+ * query resolved and what its credential may do). asMachineCaller
+ * re-asserts the profile, closing the auth-to-dispatch race, and refuses a
+ * write from a read-only credential before any ref resolves.
  * Refusal sentences are MCP's: the uniform not-found, the
  * `your account has no write access to that project` write refusal, the
  * machine wordings of the shared rules. */
 
+/* get_me runs lib/core.ts meCore, shared with REST's GET /v1/me. Only this
+ * function takes the credential row. */
+export const getMe = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, credential: vEventOwner },
+  handler: async (ctx, { callerId, access, credential }): Promise<string> => {
+    const me = await asMachineCaller(ctx, callerId, access)
+    return pretty(await meCore(ctx, me, access, credential))
+  },
+})
+
 export const listTeams = internalQuery({
-  args: { callerId: v.string() },
-  handler: async (ctx, { callerId }): Promise<string> => {
-    const me = await asMachineCaller(ctx, callerId)
+  args: { callerId: v.string(), access: vCredentialAccess },
+  handler: async (ctx, { callerId, access }): Promise<string> => {
+    const me = await asMachineCaller(ctx, callerId, access)
     const rows = await ctx.db
       .query('teams')
       .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
@@ -1172,27 +1230,27 @@ export const listTeams = internalQuery({
 })
 
 export const listProjects = internalQuery({
-  args: { callerId: v.string(), archived: v.optional(v.boolean()) },
-  handler: async (ctx, { callerId, archived }) => {
-    const me = await asMachineCaller(ctx, callerId)
-    const { readable } = await catalogueFlags(ctx, me)
+  args: { callerId: v.string(), access: vCredentialAccess, archived: v.optional(v.boolean()) },
+  handler: async (ctx, { callerId, access, archived }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
+    const { readable } = await catalogueFlags(ctx, me, access)
     return pretty((await listProjectsCore(ctx, me, archived === true, readable)).map(mcpProjectOut))
   },
 })
 
 export const listUsers = internalQuery({
-  args: { callerId: v.string() },
-  handler: async (ctx, { callerId }) => {
-    const me = await asMachineCaller(ctx, callerId)
+  args: { callerId: v.string(), access: vCredentialAccess },
+  handler: async (ctx, { callerId, access }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
     return pretty((await listUsersCore(ctx, me)).map(userJson))
   },
 })
 
 export const listProjectUsers = internalQuery({
-  args: { callerId: v.string(), project: v.string() },
-  handler: async (ctx, { callerId, project }) => {
-    const me = await asMachineCaller(ctx, callerId)
-    const { cat, readable } = await catalogueFlags(ctx, me)
+  args: { callerId: v.string(), access: vCredentialAccess, project: v.string() },
+  handler: async (ctx, { callerId, access, project }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
+    const { cat, readable } = await catalogueFlags(ctx, me, access)
     const target = findProjectRef(cat, project)
     if (target === undefined || !readable(target.id)) {
       throw notFound(`project "${project}" not found (or not visible to you)`)
@@ -1212,9 +1270,14 @@ export const listProjectUsers = internalQuery({
 })
 
 export const updateUser = internalMutation({
-  args: { callerId: v.string(), user_id: v.string(), plannable_hours: v.number() },
-  handler: async (ctx, { callerId, user_id, plannable_hours }) => {
-    const me = await asMachineCaller(ctx, callerId)
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    user_id: v.string(),
+    plannable_hours: v.number(),
+  },
+  handler: async (ctx, { callerId, access, user_id, plannable_hours }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
     const target = await assertOwnUser(ctx, me, user_id)
     // the core refuses an agent too — this is the readable version, and it
     // keeps the "not found" answer for a uuid outside the organization
@@ -1235,6 +1298,7 @@ export const updateUser = internalMutation({
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
+    access: vCredentialAccess,
     project: v.optional(v.string()),
     status: v.optional(vIssueStatus),
     priority: v.optional(vIssuePriority),
@@ -1244,8 +1308,8 @@ export const listIssues = internalQuery({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, a) => {
-    const me = await asMachineCaller(ctx, a.callerId)
-    const { cat, readable } = await catalogueFlags(ctx, me)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const { cat, readable } = await catalogueFlags(ctx, me, a.access)
     let scope: string[] | null = null
     if (a.project !== undefined && a.project !== '') {
       const p = findProjectRef(cat, a.project)
@@ -1298,18 +1362,18 @@ export const listIssues = internalQuery({
 })
 
 export const getIssue = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
-  handler: async (ctx, { callerId, ref }) => {
-    const me = await asMachineCaller(ctx, callerId)
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  handler: async (ctx, { callerId, access, ref }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
     return pretty(await issueOut(ctx, issue, { surface: 'mcp' }))
   },
 })
 
 export const listComments = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
-  handler: async (ctx, { callerId, ref }) => {
-    const me = await asMachineCaller(ctx, callerId)
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  handler: async (ctx, { callerId, access, ref }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
     const rows = await listCommentsCore(ctx, issue.id)
     const names = await orgNames(ctx, me)
@@ -1320,10 +1384,10 @@ export const listComments = internalQuery({
 })
 
 export const addComment = internalMutation({
-  args: { callerId: v.string(), ref: v.string(), body: v.string() },
-  handler: async (ctx, { callerId, ref, body }) => {
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
+  handler: async (ctx, { callerId, access, ref, body }) => {
     const now = new Date().toISOString()
-    const me = await asMachineCaller(ctx, callerId)
+    const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
     const text = body.trim()
     if (text === '') throw badRequest('comment body must not be blank')
@@ -1348,6 +1412,7 @@ export const addComment = internalMutation({
 export const createIssue = internalMutation({
   args: {
     callerId: v.string(),
+    access: vCredentialAccess,
     project: v.string(),
     sub_project: v.optional(v.string()),
     title: v.string(),
@@ -1363,14 +1428,14 @@ export const createIssue = internalMutation({
   },
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     // declared in the schema so clients can't have it silently stripped;
     // never accepted — and refused FIRST, before any other validation
     if (a.archived !== undefined) {
       throw badRequest('tasks are created active — archive with update_task after creating')
     }
     const title = cleanTitle(a.title)
-    const { cat, readable, writable } = await catalogueFlags(ctx, me)
+    const { cat, readable, writable } = await catalogueFlags(ctx, me, a.access)
     const p = findProjectRef(cat, a.project)
     if (p === undefined || !readable(p.id)) {
       throw notFound(`project "${a.project}" not found (or not visible to you)`)
@@ -1428,6 +1493,7 @@ export const createIssue = internalMutation({
 export const updateIssue = internalMutation({
   args: {
     callerId: v.string(),
+    access: vCredentialAccess,
     ref: v.string(),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
@@ -1442,7 +1508,7 @@ export const updateIssue = internalMutation({
   },
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await mustFindIssue(ctx, me, a.ref)
     // collect the whitelist, in the deployed order — `updated` echoes it.
     // Requested keys only: the review time the core sets on entering Review
@@ -1521,10 +1587,10 @@ export const updateIssue = internalMutation({
 })
 
 export const deleteIssue = internalMutation({
-  args: { callerId: v.string(), ref: v.string() },
-  handler: async (ctx, { callerId, ref }) => {
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  handler: async (ctx, { callerId, access, ref }) => {
     const now = new Date().toISOString()
-    const me = await asMachineCaller(ctx, callerId)
+    const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
     await mustWrite(ctx, me, issue.project_id)
     await deleteIssueDeep(ctx, { issue, actor: me, now })
@@ -1549,14 +1615,15 @@ export const deleteIssue = internalMutation({
 
 async function runTool(
   ctx: ActionCtx,
-  callerId: string,
+  principal: Principal,
+  credential: EventOwner,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
   const tool = TOOL_INDEX.get(name)
   // Unreachable, because callTool resolves names against TOOL_INDEX first.
   if (tool === undefined) throw new Error(`unknown tool ${name}`)
-  return await runEntry(ctx, tool, { callerId, args })
+  return await runEntry(ctx, tool, { ...principal, credential, args })
 }
 
 /* Whether the named tool needs qivo:write. A known tool does unless its flag
@@ -1640,6 +1707,18 @@ const preflight = httpAction(async () => {
   })
 })
 
+/* The OAuth connection a request runs as, in webhook ownership's shape. */
+const oauthOwner = (live: {
+  profileId: string
+  connectionId: string
+  connectionRowId: string
+}): EventOwner => ({
+  profile_id: live.profileId,
+  credential_table: 'oauth_connections',
+  credential_id: live.connectionId,
+  credential_row_id: live.connectionRowId,
+})
+
 const mcpPost = httpAction(async (ctx, request) => {
   if (!(await ctx.runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
   // Bearer only — no X-Api-Key on MCP; the 'Bearer ' prefix match is
@@ -1684,19 +1763,15 @@ const mcpPost = httpAction(async (ctx, request) => {
               },
             }
           return ctx.runAction(internal.webhookActions.manage, {
-            owner: {
-              profile_id: live.profileId,
-              credential_table: 'oauth_connections',
-              credential_id: live.connectionId,
-              credential_row_id: live.connectionRowId,
-            },
+            owner: oauthOwner(live),
             method,
             params_json: JSON.stringify(params),
           })
         },
         runTool: async (name, args) => {
           // Both protocol versions enter this same gate. Recheck the live grant
-          // on every tool in a batch, alongside the existing permission checks.
+          // on every tool in a batch, alongside the existing permission checks,
+          // and pass its live access, so scopes narrowed mid-session apply.
           const live = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
             tokenHash,
             resource,
@@ -1705,7 +1780,13 @@ const mcpPost = httpAction(async (ctx, request) => {
           const scope = toolWrites(name) ? 'qivo:write' : 'qivo:read'
           if (!live.scopes.includes(scope))
             throw forbidden(`This connection does not have the ${scope} scope.`)
-          return runTool(ctx, live.profileId, name, args)
+          return runTool(
+            ctx,
+            { callerId: live.profileId, access: live.access },
+            oauthOwner(live),
+            name,
+            args,
+          )
         },
       })
     } catch (error) {
@@ -1717,7 +1798,7 @@ const mcpPost = httpAction(async (ctx, request) => {
       return jsonRes(500, { error: String(error) })
     }
   }
-  const res = await authenticateSecret(ctx, secret, { person: true })
+  const res = await authenticateSecret(ctx, secret)
   // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
   // _generated/api.d.ts under strict:false, where truthiness narrowing of the
   // discriminant does not apply
@@ -1735,19 +1816,22 @@ const mcpPost = httpAction(async (ctx, request) => {
   if (allowed === null) return unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
   const bodyText = await (request as unknown as { text(): Promise<string> }).text()
+  // the exact credential row this request runs as, for get_me and events/*
+  const owner: EventOwner = {
+    profile_id: cred.profileId,
+    credential_table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
+    credential_id: cred.tokenId,
+    credential_row_id: cred.rowId,
+  }
   try {
     return await dispatchMcp({
       headers: request.headers,
       bodyText,
-      runTool: (name, args) => runTool(ctx, cred.profileId, name, args),
+      runTool: (name, args) =>
+        runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args),
       runEvent: (method, params) =>
         ctx.runAction(internal.webhookActions.manage, {
-          owner: {
-            profile_id: cred.profileId,
-            credential_table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
-            credential_id: cred.tokenId,
-            credential_row_id: cred.rowId,
-          },
+          owner,
           method,
           params_json: JSON.stringify(params),
         }),

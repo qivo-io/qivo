@@ -22,7 +22,7 @@ import {
 import * as rest from '../machine/rest'
 
 type Kind = 'query' | 'mutation' | 'action'
-type Call = { via: Kind; name: string }
+type Call = { via: Kind; name: string; args: unknown }
 type Ctx = Pick<ActionCtx, 'runQuery' | 'runMutation' | 'runAction'>
 
 /* A raw ctx that records what each run tries to call, and resolves. */
@@ -32,9 +32,9 @@ function recorder(): { runner: Ctx; calls: Call[] } {
     (via: Kind) =>
     async (
       ref: FunctionReference<Kind, 'public' | 'internal'>,
-      ..._args: unknown[]
+      ...args: unknown[]
     ): Promise<never> => {
-      calls.push({ via, name: getFunctionName(ref) })
+      calls.push({ via, name: getFunctionName(ref), args: args[0] })
       return undefined as never
     }
   return {
@@ -60,6 +60,16 @@ function registeredKinds(module: string, exports: Record<string, unknown>): Map<
   return kinds
 }
 
+/* The principal every entry below runs as, and its credential row (only
+ * get_me reads it). */
+const PRINCIPAL = { callerId: 'caller', access: 'read' } as const
+const CREDENTIAL = {
+  profile_id: 'caller',
+  credential_table: 'agent_keys',
+  credential_id: 'key',
+  credential_row_id: 'row',
+} as const
+
 /* One entry of a surface, run through runEntry like its dispatcher does. */
 type Entry = { label: string; access: MachineAccess; run: (ctx: Ctx) => Promise<unknown> }
 
@@ -72,7 +82,7 @@ const SURFACES: Surface[] = [
     entries: mcp.TOOLS.map((tool) => ({
       label: tool.def.name,
       access: tool.access,
-      run: (ctx) => runEntry(ctx, tool, { callerId: 'caller', args: {} }),
+      run: (ctx) => runEntry(ctx, tool, { ...PRINCIPAL, credential: CREDENTIAL, args: {} }),
     })),
   },
   {
@@ -83,7 +93,8 @@ const SURFACES: Surface[] = [
       access: route.access,
       run: (ctx) =>
         runEntry(ctx, route, {
-          callerId: 'caller',
+          ...PRINCIPAL,
+          credential: CREDENTIAL,
           keyName: 'key',
           // a param the path does not declare would reach the internal fn
           // as undefined, so it fails here
@@ -147,6 +158,16 @@ describe('the machine action registry', () => {
     }
   })
 
+  it('every entry passes its principal through to the internal function', async () => {
+    for (const surface of SURFACES) {
+      for (const { label, calls } of await callsOf(surface)) {
+        for (const call of calls) {
+          expect(call.args, label).toMatchObject(PRINCIPAL)
+        }
+      }
+    }
+  })
+
   it('every internal function of a surface is reached by exactly one entry', async () => {
     for (const surface of SURFACES) {
       const reached = (await callsOf(surface)).flatMap(({ calls }) => calls.map((c) => c.name))
@@ -163,11 +184,21 @@ describe('the machine action registry', () => {
       'runQuery',
     ])
     const cast = (r: unknown) =>
-      (r as WriteRunner).runMutation(internal.machine.mcp.deleteIssue, { callerId: 'c', ref: 'r' })
+      (r as WriteRunner).runMutation(internal.machine.mcp.deleteIssue, {
+        callerId: 'c',
+        access: 'write',
+        ref: 'r',
+      })
     await expect(runEntry(runner, { access: 'read', run: cast }, null)).rejects.toThrow(TypeError)
     expect(calls).toEqual([])
     await runEntry(runner, { access: 'write', run: cast }, null)
-    expect(calls).toEqual([{ via: 'mutation', name: 'machine/mcp:deleteIssue' }])
+    expect(calls).toEqual([
+      {
+        via: 'mutation',
+        name: 'machine/mcp:deleteIssue',
+        args: { callerId: 'c', access: 'write', ref: 'r' },
+      },
+    ])
   })
 
   it('a flag that slipped past the types gets the read runner and needs write', async () => {
@@ -187,8 +218,13 @@ describe('the machine action registry', () => {
   it('the compiler refuses a read entry that writes and an entry without a flag', () => {
     const writes: MachineEntry<null, unknown> = {
       access: 'read',
-      // @ts-expect-error a read entry's runner has no runMutation
-      run: (r) => r.runMutation(internal.machine.mcp.deleteIssue, { callerId: 'c', ref: 'r' }),
+      run: (r) =>
+        // @ts-expect-error a read entry's runner has no runMutation
+        r.runMutation(internal.machine.mcp.deleteIssue, {
+          callerId: 'c',
+          access: 'write',
+          ref: 'r',
+        }),
     }
     // @ts-expect-error every entry names its access, there is no default
     const unflagged: MachineEntry<null, unknown> = { run: async () => null }
@@ -198,8 +234,9 @@ describe('the machine action registry', () => {
   it('the compiler refuses a raw ctx in place of a runner', () => {
     const { runner } = recorder()
     // never called, the closure only has to compile or not
+    const input = { ...PRINCIPAL, credential: CREDENTIAL, args: {} }
     // @ts-expect-error only runEntry turns a ctx into the runner an entry takes
-    const bypass = () => mcp.TOOLS[0].run(runner, { callerId: 'c', args: {} })
+    const bypass = () => mcp.TOOLS[0].run(runner, input)
     expect(typeof bypass).toBe('function')
   })
 
@@ -209,9 +246,9 @@ describe('the machine action registry', () => {
       path: 'tasks/:ref',
       access: 'read',
       status: 200,
-      run: (r, { callerId, param }) =>
+      run: (r, { callerId, access, param }) =>
         // @ts-expect-error the path declares :ref, not :key
-        r.runQuery(internal.machine.rest.getIssue, { callerId, ref: param('key') }),
+        r.runQuery(internal.machine.rest.getIssue, { callerId, access, ref: param('key') }),
     })
     expect(route.path).toBe('tasks/:ref')
   })

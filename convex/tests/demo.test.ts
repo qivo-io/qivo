@@ -372,6 +372,7 @@ describe('demo lifetime and capabilities', () => {
         name: 'Escape',
         token_prefix: 'qvt_test',
         token_hash: 'a'.repeat(64),
+        access: 'write',
       }),
       'forbidden',
       /regular workspace/,

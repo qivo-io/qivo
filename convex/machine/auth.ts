@@ -24,8 +24,10 @@ import { v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
+import { credentialAccess, liveCredentialRow, tokenExpired } from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
+import type { CredentialAccess } from '../lib/enums'
 import { recordApiCall } from '../model/billingUsage'
 
 /* Web Crypto + TextEncoder exist in the Convex isolate; convex/tsconfig's lib
@@ -46,7 +48,8 @@ export const sha256hex = async (text: string): Promise<string> => {
  * deactivated agent answers "revoked"):
  *   missing     bad/absent prefix — decided in the action, pre-hash
  *   unknown     no row for the hash
- *   revoked     revoked_at set
+ *   revoked     revoked_at set, or a personal token past its expires_at (an
+ *               expired token answers exactly like a revoked one)
  *   wrong_kind  profile missing; agent leg: kind !== 'agent'; person leg:
  *               auth_user_id absent — a person's token is only good once the
  *               seat is actually claimed (an unclaimed profile has no login
@@ -62,8 +65,12 @@ export type MachineCredential = {
   rowId: string
   isAgent: boolean
   /** the agent key's own name for qva_ (feeds the REST provenance string
-   *  `via the REST API (<keyName>)`); null for qvt_ */
+   *  `via the REST API (<keyName>)`); null for qvt_, whose REST writes read
+   *  `via the REST API` with no name */
   keyName: string | null
+  /** what this credential may do (lib/access.ts credentialAccess), passed to
+   *  every machine internal fn */
+  access: CredentialAccess
 }
 
 export type AuthResult =
@@ -71,36 +78,41 @@ export type AuthResult =
   | { ok: false; why: AuthFail; isAgent: boolean }
 
 /* Prefix routing (core.ts:171-173): `qva_` → agent leg; `qvt_` → person leg
- * ONLY where the surface allows persons (REST passes {person:false}, so a
- * qvt_ on REST is the `missing` failure, not wrong_kind); anything else →
- * missing. Secret extraction stays in each surface's action: REST honors
- * `Authorization` when it starts with exactly 'Bearer ' (case-sensitive, one
- * space) else falls back to X-Api-Key; MCP is Bearer-only. */
-export const classifySecret = (
-  secret: string,
-  allow: { person: boolean },
-): { isAgent: boolean } | null =>
+ * (REST and MCP both take persons); anything else → missing. Secret
+ * extraction stays in each surface's action: REST honors `Authorization` when
+ * it starts with exactly 'Bearer ' (case-sensitive, one space) else falls back
+ * to X-Api-Key, for both prefixes; MCP is Bearer-only. */
+export const classifySecret = (secret: string): { isAgent: boolean } | null =>
   secret.startsWith('qva_')
     ? { isAgent: true }
-    : allow.person && secret.startsWith('qvt_')
+    : secret.startsWith('qvt_')
       ? { isAgent: false }
       : null
 
+/* `now` (ISO) comes from the action, so the query never reads the clock. */
 export const lookupCredential = internalQuery({
-  args: { hash: v.string(), isAgent: v.boolean() },
-  handler: async (ctx, { hash, isAgent }): Promise<AuthResult> => {
+  args: { hash: v.string(), isAgent: v.boolean(), now: v.string() },
+  handler: async (ctx, { hash, isAgent, now }): Promise<AuthResult> => {
     if (isDemoDeployment()) return { ok: false, why: 'unknown', isAgent }
-    const token = isAgent
+    const agentKey = isAgent
       ? await ctx.db
           .query('agent_keys')
           .withIndex('by_hash', (q) => q.eq('key_hash', hash))
           .first()
+      : null
+    const personal = isAgent
+      ? null
       : await ctx.db
           .query('mcp_tokens')
           .withIndex('by_hash', (q) => q.eq('token_hash', hash))
           .first()
+    const token = agentKey ?? personal
     if (token === null) return { ok: false, why: 'unknown', isAgent }
     if (token.revoked_at !== undefined) return { ok: false, why: 'revoked', isAgent }
+    const nowMs = Date.parse(now)
+    if (personal !== null && tokenExpired(personal, nowMs)) {
+      return { ok: false, why: 'revoked', isAgent }
+    }
     const profile = await byId(ctx, 'profiles', token.profile_id)
     const shapeOk =
       profile !== null && (isAgent ? profile.kind === 'agent' : profile.auth_user_id !== undefined)
@@ -115,6 +127,10 @@ export const lookupCredential = internalQuery({
         rowId: token._id,
         isAgent,
         keyName: isAgent ? token.name : null,
+        access:
+          personal !== null
+            ? credentialAccess({ table: 'mcp_tokens', token: personal, now: nowMs }, profile)
+            : credentialAccess({ table: 'agent_keys' }, profile),
       },
     }
   },
@@ -125,17 +141,22 @@ export const lookupCredential = internalQuery({
 export async function authenticateSecret(
   ctx: Pick<ActionCtx, 'runQuery'>,
   secret: string,
-  allow: { person: boolean },
 ): Promise<AuthResult> {
-  const leg = classifySecret(secret, allow)
+  const leg = classifySecret(secret)
   if (leg === null) return { ok: false, why: 'missing', isAgent: false }
   const hash = await sha256hex(secret)
-  return await ctx.runQuery(internal.machine.auth.lookupCredential, { hash, isAgent: leg.isAgent })
+  return await ctx.runQuery(internal.machine.auth.lookupCredential, {
+    hash,
+    isAgent: leg.isAgent,
+    now: new Date().toISOString(),
+  })
 }
 
 /* PER-CALL stamp and usage accounting. A query cannot write, hence the
  * separate internalMutation. False means the profile's request rate is full;
- * the HTTP action returns 429 without dispatching or charging that request. */
+ * the HTTP action returns 429 without dispatching or charging that request.
+ * Null means the credential stopped being valid after lookup (revoked,
+ * replaced or expired). */
 export const touchCredential = internalMutation({
   args: {
     table: v.union(v.literal('agent_keys'), v.literal('mcp_tokens')),
@@ -145,19 +166,19 @@ export const touchCredential = internalMutation({
     now: v.string(),
   },
   handler: async (ctx, { table, tokenId, rowId, profileId, now }): Promise<boolean | null> => {
-    const row =
-      table === 'agent_keys'
-        ? await byId(ctx, 'agent_keys', tokenId)
-        : await byId(ctx, 'mcp_tokens', tokenId)
-    // App UUIDs may be reused after deletion. Bind to the exact DB record
-    // authenticated by lookup so a replacement cannot inherit or pay for it.
-    if (
-      row === null ||
-      row._id !== rowId ||
-      row.profile_id !== profileId ||
-      row.revoked_at !== undefined
+    // Bind to the exact DB record authenticated by lookup, so a replacement
+    // that reuses its uuid cannot inherit or pay for it.
+    const row = await liveCredentialRow(
+      ctx,
+      {
+        profile_id: profileId,
+        credential_table: table,
+        credential_id: tokenId,
+        credential_row_id: rowId,
+      },
+      Date.parse(now),
     )
-      return null
+    if (row === null) return null
     await ctx.db.patch(row._id, { last_used_at: now })
     return await recordApiCall(ctx, {
       profile_id: row.profile_id,
@@ -172,7 +193,9 @@ export const touchCredential = internalMutation({
  * {"error": <sentence>} with CORS + Content-Type: application/json; MCP 401s
  * additionally carry `WWW-Authenticate: Bearer`. */
 
-/* REST. */
+/* REST, agent leg, and the sentence for a missing credential, whose leg is
+ * unknown. These are pinned agent bytes, so the missing sentence still names
+ * only the agent key prefix even though REST also takes personal tokens. */
 export const REST_AUTH_401: Record<AuthFail, string> = {
   missing: 'missing agent key (Authorization: Bearer qva_…)',
   unknown: 'unknown agent key',
@@ -181,12 +204,26 @@ export const REST_AUTH_401: Record<AuthFail, string> = {
   wrong_kind: 'unknown agent key', // deliberately identical to unknown
 }
 
+/* REST, person leg (a qvt_ personal access token). Like the agent table it
+ * names the state, except that an expired token reads as a revoked one
+ * (lookupCredential does not tell them apart). */
+export const REST_PERSON_AUTH_401: Record<Exclude<AuthFail, 'missing'>, string> = {
+  unknown: 'unknown personal access token',
+  revoked: 'this personal access token has been revoked or has expired',
+  inactive: 'this account has been deactivated',
+  wrong_kind: 'unknown personal access token', // deliberately identical to unknown
+}
+
+/** The REST 401 sentence for a failed lookup, by its leg. */
+export const restAuth401 = (fail: { why: AuthFail; isAgent: boolean }): string =>
+  fail.why === 'missing' || fail.isAgent ? REST_AUTH_401[fail.why] : REST_PERSON_AUTH_401[fail.why]
+
 /* MCP: missing is its own sentence; every other failure collapses per
  * LEG — the credential's state is not disclosed. */
 export const MCP_AUTH_401 = {
   missing: 'missing credential (Authorization: Bearer qvt_… or qva_…)',
   agent: 'unknown, revoked or deactivated agent key',
-  person: 'unknown or revoked MCP token',
+  person: 'unknown, expired or revoked MCP token',
 } as const
 
 export const mcpAuth401 = (fail: { why: AuthFail; isAgent: boolean }): string =>
