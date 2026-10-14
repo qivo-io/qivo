@@ -55,6 +55,7 @@ import {
   assertLinkableIssues,
   createIssueCore,
   hasSubtasks,
+  linkAccess,
   moveIssueCore,
   unarchiveIssueCore,
   updateIssueCore,
@@ -358,12 +359,13 @@ export const deleteDeep = orgMutation({
 
 /* ------------------------------------------------------------------ links
  * Canonical storage stays client-side (blocks directed source→target;
- * relates ordered by uuid — old planner.ts:2234-2238): the wire carries the
- * stored enum, never 'blocked_by'. pair_key enforces at-most-one-link-per-
- * pair (the (least, greatest) unique index's successor). Access (0008:12-21):
- * insert needs member level on EITHER endpoint plus sight of the other;
- * delete needs member level on either endpoint. A foreign, missing or hidden
- * endpoint reads the trigger's own org sentence — never an existence oracle. */
+ * relates ordered by uuid, see old planner.ts:2234-2238). The wire carries
+ * the stored enum, never 'blocked_by'. pair_key enforces at-most-one-link-per-
+ * pair (the (least, greatest) unique index's successor). Insert and delete
+ * share model/issues linkAccess (0008:12-21), which needs sight of both ends
+ * plus member level on EITHER endpoint. A foreign, missing or hidden endpoint
+ * answers like a missing task (addLink reads the trigger's own org sentence,
+ * removeLink 'task not found'), so neither is an existence oracle. */
 
 const pairKey = (a: string, b: string): string => (a < b ? `${a}:${b}` : `${b}:${a}`)
 
@@ -373,19 +375,11 @@ export const addLink = orgMutation({
     const now = new Date().toISOString()
     if (source_id === target_id) throw badRequest('a task cannot be linked to itself')
     const { source, target } = await assertLinkableIssues(ctx, source_id, target_id)
-    if (source.org_id !== ctx.me.org_id) {
-      // a pair in someone else's org answers exactly like a mismatched pair
-      throw rule('linked tasks must belong to the same organization')
-    }
-    const sourceProject = await byId(ctx, 'projects', source.project_id)
-    const targetProject = await byId(ctx, 'projects', target.project_id)
-    const writeSource = await hasProjectLevel(ctx, ctx.me, source.project_id, 'user')
-    const writeTarget = await hasProjectLevel(ctx, ctx.me, target.project_id, 'user')
-    const seeSource = sourceProject !== null && (await canSeeProject(ctx, ctx.me, sourceProject))
-    const seeTarget = targetProject !== null && (await canSeeProject(ctx, ctx.me, targetProject))
-    // an endpoint the caller cannot see answers like a missing one
-    if (!seeSource || !seeTarget) throw rule('linked tasks must belong to the same organization')
-    if (!writeSource && !writeTarget) throw forbidden('no write access to these tasks')
+    // a pair in someone else's org, or an end the caller cannot see, answers
+    // exactly like a mismatched pair
+    const access = await linkAccess(ctx, ctx.me, source, target)
+    if (access === 'hidden') throw rule('linked tasks must belong to the same organization')
+    if (access === 'read') throw forbidden('no write access to these tasks')
     await insertUnique(
       ctx,
       'issue_links',
@@ -418,23 +412,20 @@ export const addLink = orgMutation({
 })
 
 /* Pair delete; a pair with no row is a no-op (the client already guards the
- * asked-for state). Logs nothing — the old client wrote no activity here. */
+ * asked-for state). Logs nothing, since the old client wrote no activity here.
+ * Either end being missing, foreign or hidden reads 'task not found', so no
+ * answer tells whether a task the caller cannot see exists. */
 export const removeLink = orgMutation({
   args: { a: v.string(), b: v.string() },
   handler: async (ctx, { a, b }) => {
-    const source = await byId(ctx, 'issues', a)
-    const target = await byId(ctx, 'issues', b)
-    if (
-      source === null ||
-      target === null ||
-      source.org_id !== ctx.me.org_id ||
-      target.org_id !== ctx.me.org_id
-    ) {
-      throw notFound('task not found')
-    }
-    const writeSource = await hasProjectLevel(ctx, ctx.me, source.project_id, 'user')
-    const writeTarget = await hasProjectLevel(ctx, ctx.me, target.project_id, 'user')
-    if (!(writeSource || writeTarget)) throw forbidden('no write access to these tasks')
+    const access = await linkAccess(
+      ctx,
+      ctx.me,
+      await byId(ctx, 'issues', a),
+      await byId(ctx, 'issues', b),
+    )
+    if (access === 'hidden') throw notFound('task not found')
+    if (access === 'read') throw forbidden('no write access to these tasks')
     const links = ctx.db
       .query('issue_links')
       .withIndex('by_pair', (q) => q.eq('pair_key', pairKey(a, b)))

@@ -86,8 +86,9 @@ reviewing the task or its subtasks must be able to see the new parent and
 every task above it; otherwise Qivo refuses the parent and names the person
 and the subtask to reassign. The assignee and
 reviewer pickers on a subtask offer only people who can see every task above
-it. Removing a parent needs edit access to the subtask only. Linking needs edit access to one of the two
-tasks and access to the other. If a task's parent is in an archived project or
+it. Removing a parent needs edit access to the subtask only. Adding or
+removing a link needs edit access to one of the two tasks and access to the
+other. If a task's parent is in an archived project or
 a project you cannot access, **Parent** says the parent task is outside this
 view. Choosing another parent replaces it; the task window cannot remove such
 a parent directly.
