@@ -9,7 +9,8 @@
  * exactly like the real minting paths (convex/tokens.ts). A personal token
  * names its access ('read' or 'write') like convex/tokens.ts requires, and
  * may carry an expiry, a past one included, so suites can mint an expired
- * token. Agent keys take neither: the agent's role decides their access. */
+ * token. Agent keys take neither, because the agent's role decides their
+ * access. */
 
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -46,7 +47,7 @@ export const mintCredential = internalMutation({
       throw badRequest('a personal token needs access: "read" or "write"')
     }
     if (a.kind === 'agent_key' && (a.access !== undefined || a.expires_at !== undefined)) {
-      throw badRequest("an agent key takes no access or expiry, the agent's role decides")
+      throw badRequest("an agent key takes no access or expiry because the agent's role decides")
     }
     const expiry = a.expires_at === undefined ? undefined : cleanTokenExpiry(a.expires_at)
     const email = a.email?.toLowerCase()

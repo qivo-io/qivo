@@ -54,8 +54,8 @@ Use these steps for a personal-token fallback or a named agent's key:
    Users**, creates an **Agent**, and copies its key. Existing agents can
    receive another key from their row. Grant the agent the necessary project
    access directly or through a team using the project's **Project access**
-   list. Set its organization role to **Viewer** for read-only automation:
-   its keys can then only read.
+   list. Set its organization role to **Viewer** for read-only automation.
+   Its keys can then only read.
 4. Store the full secret in the client's credential settings or secret store.
    It is shown once; Qivo retains only its hash and a display identifier.
 

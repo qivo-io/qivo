@@ -12,8 +12,8 @@
  * (convex/tests/registry.test.ts) and drive every write entry with a
  * read-only credential (convex/tests/credentialAccess.test.ts).
  *
- * Every entry receives the Principal: the caller's profile uuid and what its
- * credential may do. `run` passes both to the internal function, whose
+ * Every entry receives the Principal, which is the caller's profile uuid and
+ * what its credential may do. `run` passes both to the internal function, whose
  * asMachineCaller refuses a write from a credential that can only read.
  *
  * A read entry receives a runner that can only run queries, by type AND at
@@ -32,7 +32,7 @@ import type { CredentialAccess } from '../lib/enums'
 export type MachineAccess = 'read' | 'write'
 
 /**
- * Who runs a machine action: the profile uuid the auth step resolved and
+ * Who runs a machine action, as the profile uuid the auth step resolved and
  * what its credential may do (lib/access.ts credentialAccess).
  */
 export type Principal = { callerId: string; access: CredentialAccess }

@@ -847,7 +847,7 @@ export default defineSchema({
     token_prefix: v.string(), // first chars of the qvt_ secret, display only
     token_hash: v.string(), // sha256 hex, unique-checked on by_hash; secret never stored
     // What the token may do (lib/access.ts credentialAccess). A missing value
-    // means read, so the rule fails closed: tokens minted before this field
+    // means read, so the rule fails closed and tokens minted before this field
     // existed can only read. Optional only so those rows still validate.
     access: v.optional(vCredentialAccess),
     // ISO-8601 UTC. Absent means the token never expires; after it, the token

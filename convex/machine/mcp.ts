@@ -129,7 +129,7 @@ type ToolDef = {
   }
 }
 
-/** What a tool's `run` receives: the principal and the arguments. */
+/** The principal and the arguments a tool's `run` receives. */
 type ToolInput = Principal & { args: Record<string, unknown> }
 
 /** One MCP tool. `run` answers the already pretty-printed result text. */
@@ -1167,7 +1167,7 @@ const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
 
 /* --------------------------------------------------- the tool internal fns
  * One per tool, `callerId` and `access` first (the profile uuid the auth
- * query resolved and what its credential may do) — asMachineCaller
+ * query resolved and what its credential may do). asMachineCaller
  * re-asserts the profile, closing the auth-to-dispatch race, and refuses a
  * write from a read-only credential before any ref resolves.
  * Refusal sentences are MCP's: the uniform not-found, the

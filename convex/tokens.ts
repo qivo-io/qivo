@@ -16,7 +16,8 @@
  * A personal token also carries its access ('read' or 'write', chosen at
  * creation; a row without one can only read) and an optional expiry, after
  * which machine auth refuses it like a revoked one (lib/access.ts
- * credentialAccess). Agent keys have neither: the agent's role decides.
+ * credentialAccess). Agent keys have neither, because the agent's role
+ * decides.
  *
  * last_used_at is written only by phase 8's machine auth; revoked keys stay
  * listed. A key row whose plaintext is gone is still a real row (its holder

@@ -129,7 +129,7 @@ with the same "your account has no write access to that project" a missing
 grant produces, and they are never handed a task. It is a ceiling, not a
 grant. It opens no project and only stops any other path (an individual or
 team grant, a project-lead title, a team leadership) from exceeding read. An
-**agent** can be a viewer too, which is how a read-only key is made: one
+**agent** can be a viewer too, which is how a read-only key is made, with one
 setting on the Users page instead of a grant list audited project by project.
 That key's agent is then refused as a Viewer agent, as described above. The
 cap lives in the shared access layer (`cappedLevel` and `credentialAccess` in
@@ -799,11 +799,11 @@ layer looks like the object not existing, matching the app.
 - Hand-rolled stateless JSON-RPC over one POST route — a Convex HTTP action
   (`convex/machine/mcp.ts`), no MCP SDK. The credential is resolved before
   dispatch; OAuth additionally rechecks the live grant and scopes before each
-  tool, including every call in a batch. Every tool is one internal Convex function that
-  takes the resolved user and the credential's access explicitly and re-asserts
-  them (a writing tool refuses a read-only credential first) — ref resolution, the
-  rules a write must satisfy, the write and its activity trail, all in one
-  transaction. What the surface file itself holds is the MCP grammar: the
+  tool, including every call in a batch. Every tool is one internal Convex
+  function that takes the resolved user and the credential's access
+  explicitly and re-asserts them, and a writing tool refuses a read-only
+  credential first. Ref resolution, the rules a write must satisfy, the write
+  and its activity trail all run in one transaction. What the surface file itself holds is the MCP grammar: the
   two protocol legs, the header rules, tool names, schemas and transport.
   The verbs and the sentences a refusal is phrased in live in the shared
   model layer the REST API and the app run on too, so the surfaces cannot

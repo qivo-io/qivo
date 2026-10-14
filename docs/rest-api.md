@@ -90,13 +90,13 @@ grant, a team grant, a project-lead title, a team leadership — exceed read.
 They share a word because they are the same idea one altitude apart. An agent whose
 `org_role` is `viewer` therefore comes back with
 `"access": { "read": …, "write": false }` on **every** project, whatever it
-holds there. Its key is a read-only credential: every `POST`, `PATCH` and
+holds there. Its key is a read-only credential, so every `POST`, `PATCH` and
 `DELETE` task or comment request returns `403` with
 `{"error": "this agent is a Viewer and can only read"}`. Qivo refuses the
 request before it resolves any project or task reference, so the answer is
 the same whether or not the reference exists. Managing that key's own
-webhooks remains allowed. That is how a read-only key is made: one setting on
-the Users page, not a grant list audited project by project. Nothing in this
+webhooks remains allowed. That is how a read-only key is made, with one
+setting on the Users page rather than a grant list audited project by project. Nothing in this
 surface implements it. The rule lives in the shared access layer
 (`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`), which REST,
 MCP and webhook management all call, so the same agent is read-only here,

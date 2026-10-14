@@ -15,7 +15,8 @@ import { expandWebhookEventsRef } from './webhookQueue'
  * Bind subscriptions to the exact credential record and its live
  * authorization. Answers the owner's profile and what the credential may do
  * (lib/access.ts credentialAccess), or null once the credential stops
- * authorizing anything: revoked, expired, replaced or its account gone.
+ * authorizing anything because it was revoked, expired or replaced, or its
+ * account is gone.
  */
 export async function eventOwner(
   ctx: QueryCtx,

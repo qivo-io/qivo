@@ -224,10 +224,10 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
  * What the caller holds on each named project (core.ts:307-318's successor):
  * read = canSeeProject, write = hasProjectLevel 'user'. hasProjectLevel
  * already applies the viewer ceiling (cappedLevel), so an org-role-viewer
- * agent and a grant-viewer agent both read write: false. (A Viewer agent's
- * writes never get this far: asMachineCaller refuses them first.) Here code
- * sees everything and CHOOSES what to disclose; these flags are that
- * choice's only input. */
+ * agent and a grant-viewer agent both get `write: false`. (asMachineCaller
+ * refuses a Viewer agent's writes before they get this far.) Here code sees
+ * everything and CHOOSES what to disclose; these flags are that choice's only
+ * input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 

@@ -351,8 +351,8 @@ export function canManageOrgLabels(me: Doc<'profiles'>): boolean {
 
 /* -------------------------------------------------------- credential access
  * What a machine credential lets its holder do, 'read' or 'write'. It is the
- * credential's own ceiling: a person still needs their role's project rules
- * to write anything. REST, MCP and webhooks all ask credentialAccess, and
+ * credential's own ceiling, and a person still needs their role's project
+ * rules to write anything. REST, MCP and webhooks all ask credentialAccess, and
  * every branch names the writing case positively, so a missing field, an
  * unknown role or a new credential kind can only read. */
 
