@@ -43,6 +43,7 @@ import {
   vMessageKind,
   vOrgRole,
   vProfileKind,
+  vProjectCreators,
   vProjectType,
 } from './lib/enums'
 import { vPanoramaStatus } from './lib/panorama'
@@ -384,6 +385,9 @@ export default defineSchema({
     max_attachment_mb: v.optional(v.number()),
     // Missing values retain the default strict policy for existing orgs.
     only_team_leads_manage_project_users: v.optional(v.boolean()),
+    // Who may create top-level projects besides org admins, who always can.
+    // Missing means 'users' (lib/projectCreators.ts).
+    project_creators: v.optional(vProjectCreators),
     // organization_billing merged in; absent until billing exists. seats > 0
     // is a mutation check; redacted for non-admins in the snapshot query.
     billing: v.optional(
@@ -457,6 +461,9 @@ export default defineSchema({
     // sitting the day the page read from (YYYY-MM-DD); absent = the default.
     sync_at: v.optional(v.string()),
     sync_since: v.optional(v.string()),
+    // The per-person project-creation right. It only counts for a standard
+    // user who is a person while project_creators is 'selected'; absent = off.
+    can_create_projects: v.optional(v.boolean()),
     created_at: v.string(),
     // uniqueness (mutation-checked): (org_id, email), (org_id, auth_user_id),
     // and at most one accepted non-guest seat per login across all orgs

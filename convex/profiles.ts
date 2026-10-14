@@ -52,6 +52,7 @@ import {
   require,
   rule,
 } from './lib/functions'
+import { projectRightAfterUpdate } from './lib/projectCreators'
 import { logActivity } from './model/activity'
 import { removeProfile } from './model/cascade'
 import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model/orgs'
@@ -201,11 +202,13 @@ export const create = adminMutation({
 
 /* ----------------------------------------------------------------- update
  * P.updateUser minus plannableHours (its own fn below) — admin only. Guard
- * order: agent shape → last-admin → viewer-leads-nothing →
- * name → email → teams fences; then the writes. Becoming a guest, or
- * changing a guest's teams, must leave no team, and leaving the guest role
- * drops memberships kept from before. Role, active,
- * email and the teams diff narrate NOTHING; a real name change writes the
+ * order: agent shape → project-creation right → last-admin →
+ * viewer-leads-nothing → name → email → teams fences; then the writes.
+ * Becoming a guest, or changing a guest's teams, must leave no team, and
+ * leaving the guest role drops memberships kept from before. A role change
+ * clears can_create_projects unless the same patch keeps a standard user
+ * and turns it on. Role, active, email, the project-creation right and the
+ * teams diff narrate NOTHING; a real name change writes the
  * profiles_name_narrate row (ONE row — the admin's authority stops here). */
 export const update = adminMutation({
   args: {
@@ -216,6 +219,7 @@ export const update = adminMutation({
       name: v.optional(v.string()),
       email: v.optional(v.union(v.string(), v.null())),
       teams: v.optional(v.array(v.string())),
+      can_create_projects: v.optional(v.boolean()),
     }),
   },
   handler: async (ctx, { id, patch }) => {
@@ -234,6 +238,12 @@ export const update = adminMutation({
     }
     if (row.kind === 'agent' && newRole === 'guest') {
       throw badRequest('an agent is user or viewer — never a guest')
+    }
+    // The project-creation right belongs to a standard user who is a person
+    // (lib/projectCreators.ts). Turning it off is always accepted.
+    if (patch.can_create_projects === true) {
+      if (row.kind !== 'person') throw rule('an agent cannot be allowed to create projects')
+      if (newRole !== 'user') throw rule('only a standard user can be allowed to create projects')
     }
 
     const upd: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}
@@ -265,6 +275,10 @@ export const update = adminMutation({
     if (patch.org_role !== undefined && patch.org_role !== row.org_role)
       upd.org_role = patch.org_role
     if (patch.active !== undefined && patch.active !== row.active) upd.active = patch.active
+    // A role change clears the right unless this patch turns it on for a
+    // standard user, so a stale value never returns (lib/projectCreators.ts).
+    const right = projectRightAfterUpdate(row, patch)
+    if (right !== row.can_create_projects) upd.can_create_projects = right
 
     if (patch.email !== undefined) {
       refuseDemoFeature()

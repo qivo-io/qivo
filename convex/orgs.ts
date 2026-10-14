@@ -11,6 +11,7 @@ import { v } from 'convex/values'
 import { literals } from 'convex-helpers/validators'
 import type { Doc } from './_generated/dataModel'
 import { byId } from './lib/db'
+import { vProjectCreators } from './lib/enums'
 import { adminMutation, badRequest, notFound, require } from './lib/functions'
 import { assertSlugAvailable, narrateSlugChange } from './model/orgs'
 
@@ -41,6 +42,7 @@ export const update = adminMutation({
       gravatar_avatars: v.optional(v.boolean()),
       max_attachment_mb: v.optional(v.number()),
       only_team_leads_manage_project_users: v.optional(v.boolean()),
+      project_creators: v.optional(vProjectCreators),
     }),
   },
   handler: async (ctx, { patch }) => {
@@ -57,6 +59,7 @@ export const update = adminMutation({
         | 'gravatar_avatars'
         | 'max_attachment_mb'
         | 'only_team_leads_manage_project_users'
+        | 'project_creators'
       >
     > = {}
     if (patch.name !== undefined) {
@@ -83,6 +86,7 @@ export const update = adminMutation({
     if (patch.only_team_leads_manage_project_users !== undefined) {
       fields.only_team_leads_manage_project_users = patch.only_team_leads_manage_project_users
     }
+    if (patch.project_creators !== undefined) fields.project_creators = patch.project_creators
     if (patch.max_attachment_mb !== undefined) {
       const n = patch.max_attachment_mb
       if (!Number.isFinite(n)) throw badRequest('max_attachment_mb must be a number')

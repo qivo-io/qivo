@@ -35,13 +35,13 @@ import {
   canManageProjectTeams,
   canManageProjectUsers,
   hasProjectLevel,
-  isOrgStaff,
 } from './lib/access'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { type GrantLevel, vGrantLevel, vProjectType } from './lib/enums'
 import { badRequest, forbidden, notFound, orgMutation, require, rule } from './lib/functions'
+import { canCreateProjects, projectCreationRefusal } from './lib/projectCreators'
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from './lib/projectKeys'
 import { logActivity } from './model/activity'
 import { deleteProjectDeep } from './model/cascade'
@@ -209,12 +209,14 @@ export const create = orgMutation({
     if (team_id !== undefined) {
       throw badRequest('projects cannot belong to a team; use team access instead')
     }
+    const org = await byId(ctx, 'organizations', ctx.me.org_id)
+    require(org !== null, notFound('organization not found'))
     if (args.type === 'meta') {
       if (parent_id !== undefined) throw badRequest('a project cannot have a parent')
-      // Without a managing team there is no team-leader gate. Organization
-      // staff can create a product; its lead controls it afterwards.
-      if (!isOrgStaff(ctx.me)) {
-        throw forbidden('no permission to create a project')
+      // The organization's project_creators setting decides who may create a
+      // product (lib/projectCreators.ts); its lead controls it afterwards.
+      if (!canCreateProjects(ctx.me, org.project_creators)) {
+        throw forbidden(projectCreationRefusal(org.project_creators))
       }
     } else {
       if (parent_id === undefined) {
@@ -246,8 +248,6 @@ export const create = orgMutation({
     const key = await allocateKey(ctx, ctx.me.org_id, cleanKey(args.key), args.name)
     const description = projectDescription(args.description)
     if (lead_id !== undefined) await assertLeadAllowed(ctx, lead_id)
-    const org = await byId(ctx, 'organizations', ctx.me.org_id)
-    require(org !== null, notFound('organization not found'))
     const num = await nextProjectNum(ctx, org)
     await insertUnique(
       ctx,

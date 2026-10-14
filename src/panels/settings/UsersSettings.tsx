@@ -11,7 +11,14 @@ import type { NewUserInput, UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { BackLink, DemoCapabilityNotice } from './controls'
 import { AvatarPicker } from './ProfileControls'
-import { PlannableHoursInput, UserEmail, UserName, UserRoleSelect } from './UserControls'
+import {
+  PlannableHoursInput,
+  ProjectRightCell,
+  ProjectRightHeader,
+  UserEmail,
+  UserName,
+  UserRoleSelect,
+} from './UserControls'
 
 const agentKeyFingerprint = (stored: string) =>
   stored.includes('...') || stored.includes('…') ? stored : `${stored}…`
@@ -209,6 +216,8 @@ export function OrgUsersPage({
   const guests = P.homeGuests()
   // "the last admin" is the last one who can still sign in and fix things
   const admins = roster.filter((u) => u.orgRole === 'admin' && u.active)
+  // the per-person project-creation right only counts under Selected users
+  const rightColumn = P.org.projectCreators === 'selected'
 
   const reloadKeys = () => {
     if (DEMO_MODE) {
@@ -302,6 +311,7 @@ export function OrgUsersPage({
 
       <SettingsSection title={narrow ? undefined : 'Users'}>
         <div className="[display:flex] [flex-direction:column] [gap:6px]">
+          {rightColumn && !narrow && <ProjectRightHeader />}
           {(mobileUser ? [mobileUser] : roster).map((u) => {
             if (narrow && !mobileUser) {
               return (
@@ -385,6 +395,7 @@ export function OrgUsersPage({
                       <Icon name="zap" size={16} />
                     </Button>
                   )}
+                  {rightColumn && <ProjectRightCell user={u} labelled={!!mobileUser} />}
                   <UserRoleSelect user={u} isSelf={isSelf} lastAdmin={lastAdmin} />
                   <Button
                     type="button"

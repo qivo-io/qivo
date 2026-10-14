@@ -12,6 +12,11 @@ import { type FunctionArgs, type FunctionReturnType, getFunctionName } from 'con
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import {
+  canCreateProjects,
+  isProjectCreators,
+  projectRightAfterUpdate,
+} from '../../convex/lib/projectCreators'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
@@ -653,17 +658,24 @@ function restoreErrorText(e: unknown): string {
 }
 
 /* A refused project create names what disappeared, followed by the reason
-   when a rule or billing refusal carries one; every other refusal would read
+   when a rule, billing or permission refusal carries one (a forbidden create
+   says who can create projects); every other refusal would read
    "Couldn't save", which does not say a project is gone. */
 function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
-  if ((d.code === 'rule' || d.reason === 'billing_required') && d.message) {
-    const m = String(d.message)
-    const reason = m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+  const m = d.message ? String(d.message) : ''
+  const reason = m && m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+  if ((d.code === 'rule' || d.reason === 'billing_required') && reason) {
     toast(`Couldn't create ${label}. ${reason}`)
     return
   }
-  toast(d.code === 'forbidden' ? `No permission to create ${label}` : `Couldn't create ${label}`)
+  if (d.code === 'forbidden') {
+    toast(
+      reason ? `No permission to create ${label}. ${reason}` : `No permission to create ${label}`,
+    )
+    return
+  }
+  toast(`Couldn't create ${label}`)
 }
 
 /* The avatar mutators return an error SENTENCE (Settings toasts it verbatim).
@@ -1095,7 +1107,10 @@ const higherLevel = (a: string | null, b: string | null): string | null => {
     level === 'lead' ? 3 : level === 'user' ? 2 : level === 'viewer' ? 1 : 0
   return rank(a) >= rank(b) ? a : b
 }
-const grantOnProject = (p: ProjectVM, user: UserVM): string | null => {
+/* The parts of a project its levels are read from, so a draft that does not
+   exist yet can be asked too (P.seesNewProject). */
+type ProjectGrants = Pick<ProjectVM, 'org' | 'parent' | 'lead' | 'access' | 'teamAccess'>
+const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
   let level = p.access?.[user.id] || null
   if (user.orgRole === 'admin' || user.orgRole === 'user' || user.orgRole === 'viewer') {
     for (const teamId of user.teams) {
@@ -1107,7 +1122,7 @@ const grantOnProject = (p: ProjectVM, user: UserVM): string | null => {
   return level
 }
 const levelOnProject = (
-  p: ProjectVM | null | undefined,
+  p: ProjectGrants | null | undefined,
   uid?: string,
   projectById: (id: string) => ProjectVM | undefined = (id) => PLANNER.project(id),
 ): string | null => {
@@ -1797,7 +1812,8 @@ export type ProjectPatch = Partial<{
   teamAccess: Record<string, TeamAccessLevel>
 }>
 /* dateFormat / weekOneRule derive from the WIRE validator: the stored column
-   is a plain string, the update validator is the narrowed union. */
+   is a plain string, the update validator is the narrowed union.
+   projectCreators follows the same validator. */
 export type OrgPatch = Partial<{
   name: string
   dateFormat: FunctionArgs<typeof api.orgs.update>['patch']['date_format']
@@ -1806,6 +1822,7 @@ export type OrgPatch = Partial<{
   defaultPlannableHours: number | string
   maxAttachmentMb: number | string
   onlyTeamLeadsManageProjectUsers: boolean
+  projectCreators: FunctionArgs<typeof api.orgs.update>['patch']['project_creators']
   gravatarAvatars: boolean
 }>
 export type TeamPatch = Partial<{
@@ -1830,6 +1847,7 @@ export type UserPatch = Partial<{
   active: boolean
   teams: string[]
   plannableHours: number | string
+  canCreateProjects: boolean
 }>
 
 /* The toolbar filter row's state — one shape for every view that renders it
@@ -2044,6 +2062,25 @@ export const PLANNER = {
     return l === 'lead' || l === 'user'
   },
   canSee: (pid: string, uid?: string) => PLANNER.levelOn(pid, uid) !== null,
+  /* Would this user (me by default) see a top-level project created in the
+     home organization with this lead and access? The New project dialog asks
+     before saving. The draft goes through the same level rules P.canSee
+     applies once addProject has painted the project, so the dialog's warning
+     and the outcome agree: org admins, the lead, an individual grant at any
+     level or a share with one of the user's teams can see it. */
+  seesNewProject: (
+    draft: Pick<NewProjectInput, 'lead' | 'access' | 'teamAccess'>,
+    uid?: string,
+  ): boolean => {
+    // addProject makes the creator the lead when none is named
+    const lead = draft.lead || profileIn(HOME_ORG) || undefined
+    const access: Record<string, string> = { ...draft.access }
+    if (lead) access[lead] = 'lead'
+    const teamAccess = draft.teamAccess || {}
+    return (
+      levelOnProject({ org: HOME_ORG, parent: undefined, lead, access, teamAccess }, uid) !== null
+    )
+  },
   /* Milestones sit on the meta project (addMilestone folds a sub-project up
      to it), so adding one needs edit access there. A sub-project grant alone
      shows its parent read-only. */
@@ -2576,10 +2613,17 @@ export const PLANNER = {
     }
     return true
   },
-  /* Project creation is an organization staff right, independent of teams. */
+  /* Who may create a top-level project follows the home org's setting, by
+     the rule projects.create enforces (convex/lib/projectCreators.ts). It
+     gates every New project button; sub-projects need lead access on the
+     parent instead. */
   canCreateProject: (uid?: string) => {
     const actor = actorIn(HOME_ORG, uid)
-    return !!actor?.active && (actor.orgRole === 'admin' || actor.orgRole === 'user')
+    if (!actor?.active) return false
+    return canCreateProjects(
+      { org_role: actor.orgRole, kind: actor.kind, can_create_projects: actor.canCreateProjects },
+      homeRow()?.project_creators,
+    )
   },
   canSeeActivity: (e: ActivityVM, uid?: string) => {
     // no CURRENT_USER default: canSee/isTeamLeader resolve me to the seat I
@@ -4335,6 +4379,10 @@ export const PLANNER = {
       org.only_team_leads_manage_project_users = on
       wire.only_team_leads_manage_project_users = on
     }
+    if ('projectCreators' in patch && isProjectCreators(patch.projectCreators)) {
+      org.project_creators = patch.projectCreators
+      wire.project_creators = patch.projectCreators
+    }
     if ('gravatarAvatars' in patch) {
       // turning it ON has to prime the hashes rebuild() skipped while it was
       // off — rebuild below does exactly that
@@ -4678,6 +4726,12 @@ export const PLANNER = {
     }
     const db: Partial<Row<'profiles'>> = {}
     const wire: FunctionArgs<typeof api.profiles.update>['patch'] = {}
+    // computed before the role lands; the role select sends orgRole even when
+    // it is unchanged, and only a real change clears the right
+    const right = projectRightAfterUpdate(row, {
+      org_role: patch.orgRole,
+      can_create_projects: 'canCreateProjects' in patch ? !!patch.canCreateProjects : undefined,
+    })
     if ('orgRole' in patch) {
       db.org_role = patch.orgRole
       wire.org_role = patch.orgRole
@@ -4687,6 +4741,9 @@ export const PLANNER = {
       db.active = !!patch.active
       wire.active = !!patch.active
     }
+    // the server stores the same value (projectRightAfterUpdate)
+    if ('canCreateProjects' in patch) wire.can_create_projects = !!patch.canCreateProjects
+    if (right !== row.can_create_projects) db.can_create_projects = right
     /* The admin door onto the name pair (deviation #93): writes ONE row —
        an admin's authority stops at their organization; set_display_name's
        every-seat fan-out is the other door, and they are different rules. */

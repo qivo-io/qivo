@@ -76,7 +76,7 @@
       "slug": "organization-and-team-settings",
       "title": "Organization and team settings",
       "order": 10,
-      "description": "Open Settings → Organization → General to change the organization's name, address, attachment limit, calendar and default planning hours."
+      "description": "Open Settings → Organization → General to change the organization's name, address, attachment limit, calendar, who can create projects and default planning hours."
     },
     {
       "file": "working-together.md",

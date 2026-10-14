@@ -8,6 +8,12 @@
 :not(.settings-page-title) + .settings-section {
   margin-top: 24px;
 }
+/* The page title takes focus only to carry the keyboard into a page that a
+   link on the previous page opened (Settings.tsx). It is not a control, so
+   it draws no focus ring; the next Tab lands on the page's first control. */
+.settings-page-title h1:focus {
+  outline: none;
+}
 .archive-shell {
   --workspace-content-max: 920px;
 }

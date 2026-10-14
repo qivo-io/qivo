@@ -1,5 +1,6 @@
 Open **Settings → Organization → General** to change the organization's name,
-address, attachment limit, calendar and default planning hours.
+address, attachment limit, calendar, who can create projects and default
+planning hours.
 
 - **Date format** offers six formats with a preview.
 - **Workdays start on** sets the first day of each roadmap week.
@@ -10,6 +11,32 @@ address, attachment limit, calendar and default planning hours.
 to **1–20 MiB**, with a default of **20 MiB**. The task's organization sets the
 limit, including for guest uploads. Lowering it leaves existing files intact.
 It does not set a combined storage quota. Only organization admins can change it.
+
+## Who can create projects
+
+**Who can create new projects?** in **Settings → Organization → General →
+People** decides who can create top-level projects. Only organization admins
+can change it.
+
+- **Org admins**. Only organization admins.
+- **Standard users**. Organization admins and every standard user. This is
+  the default.
+- **Selected users**. Organization admins and the standard users with **Can
+  create projects** turned on in **Organization → Users**
+  ([Four ways to be a user](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)).
+
+Viewers, guests and agents never create projects, whatever the choice.
+Changing it leaves existing projects as they are, and project leads still
+create sub-projects under every choice
+([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
+
+The line under the setting names who can create projects now, such as
+**Nora Berg, Leo Martins and 2 more can create projects.** It lists up to
+three names, organization admins first. With more, it shows two names and a
+count. Pending invitations count. Inactive people, agents, viewers and guests
+do not. With **Org admins**, it adds **Project leads still create
+sub-projects.** With **Selected users**, it adds **Choose people in Users.**
+The **Users** link opens **Organization → Users**.
 
 ## Export data
 

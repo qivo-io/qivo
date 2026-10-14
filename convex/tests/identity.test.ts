@@ -201,6 +201,32 @@ describe('claimSeatsForLogin — the claim loop', () => {
     expect(await membershipsOf(t, f.user.id)).toHaveLength(1)
   })
 
+  it('a claim that demotes a seat to guest clears its project-creation right; a home claim keeps it', async () => {
+    await plantSeat(t, {
+      org_id: f.org.id,
+      email: 'home@example.test',
+      auth_user_id: LOGIN,
+      accepted_at: NOW,
+    })
+    const waiting = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      email: EMAIL,
+      can_create_projects: true,
+    })
+    expect(await claim(t)).toBe(1)
+    const demoted = await reload(t, waiting)
+    expect(demoted.org_role).toBe('guest')
+    expect(demoted.can_create_projects).toBeUndefined()
+    // f.admin holds a login, so this home claim is neither demoted nor promoted
+    const home = await plantSeat(t, {
+      org_id: f.org.id,
+      email: 'second@example.test',
+      can_create_projects: true,
+    })
+    expect(await claim(t, { userId: 'ba_login_2', email: 'second@example.test' })).toBe(1)
+    expect(await reload(t, home)).toMatchObject({ org_role: 'user', can_create_projects: true })
+  })
+
   it('a home claim keeps its teams', async () => {
     const org_id = uuid()
     const waiting = await plantSeat(t, { org_id, email: EMAIL })
@@ -254,6 +280,14 @@ describe('bootstrap (0002): an org with no admin makes its first login an admin'
     expect(adopted.org_role).toBe('admin')
     expect(adopted.auth_user_id).toBe(LOGIN)
     expect(adopted.accepted_at).toBeDefined()
+  })
+
+  it('a promotion at the first claim clears the project-creation right', async () => {
+    const seat = await plantSeat(t, { org_id: uuid(), email: EMAIL, can_create_projects: true })
+    expect(await claim(t)).toBe(1)
+    const adopted = await reload(t, seat)
+    expect(adopted.org_role).toBe('admin')
+    expect(adopted.can_create_projects).toBeUndefined()
   })
 
   it('an org whose admin already holds a login does not promote', async () => {
@@ -314,10 +348,14 @@ describe('bootstrap (0002): an org with no admin makes its first login an admin'
       auth_user_id: 'early-login',
       accepted_at: NOW,
       created_at: DAY2,
+      can_create_projects: true,
     })
     expect(await claim(t)).toBe(1)
     expect((await reload(t, invited)).org_role).toBe('guest')
-    expect((await reload(t, early)).org_role).toBe('admin')
+    // the promotion clears the right, like every role change
+    const promoted = await reload(t, early)
+    expect(promoted.org_role).toBe('admin')
+    expect(promoted.can_create_projects).toBeUndefined()
   })
 
   it('a guest seat adopted by a home-less login can bootstrap to admin', async () => {
@@ -445,12 +483,15 @@ describe('acceptInvitation (0118)', () => {
       org_id: f.otherOrg.id,
       email: 'mine@example.test',
       auth_user_id: 'ba_accepting',
+      can_create_projects: true,
     })
     await plantMembership(t, f.otherOrg.id, pending.id)
     await caller().mutation(api.identity.acceptInvitation, { profile_id: pending.id })
     const accepted = await reload(t, pending)
     expect(accepted.accepted_at).toBeDefined()
     expect(accepted.org_role).toBe('guest')
+    // leaving the standard user role clears the project-creation right
+    expect(accepted.can_create_projects).toBeUndefined()
     // a guest is never a team member
     expect(await membershipsOf(t, pending.id)).toEqual([])
   })

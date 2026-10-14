@@ -240,6 +240,8 @@ describe('identity.createOrganization — the whole door', () => {
     expect(org!.gravatar_avatars).toBe(true)
     expect(org!.max_attachment_mb).toBe(20)
     expect(org!.only_team_leads_manage_project_users).toBe(true)
+    // absent means every standard user can create projects
+    expect(org!.project_creators).toBeUndefined()
     expect(org!.billing).toBeUndefined()
 
     const seats = await t.run((ctx) =>

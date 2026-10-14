@@ -66,6 +66,28 @@
     min-height: 44px;
     max-width: 100%;
   }
+  /* A segmented control spans its field on one row of 44px segments. Its
+     labels would need more width than a phone gives ("Who can create new
+     projects?" needs about 330px), so a segment shares the row by its
+     label's width and wraps the label inside itself rather than pushing the
+     last segment onto a second row. */
+  .settings-content-scroll [data-slot="toggle-group"] {
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+  .settings-content-scroll [data-slot="toggle-group-item"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-inline: 6px;
+    line-height: 1.25;
+    white-space: normal;
+    text-align: center;
+  }
+  /* A link that is a word in a sentence keeps the sentence's line height.
+     Inline links are exempt from the 44px target rule above. */
+  .settings-content-scroll [data-project-creators-users] {
+    min-height: 0;
+  }
   .settings-content-scroll button[data-size^="icon"],
   .settings-content-scroll button:has(> svg:only-child),
   .settings-content-scroll .avatarpick {
@@ -232,6 +254,10 @@
   .settings-content-scroll [data-settings-user-detail] [data-user-role] {
     flex: 1;
     min-width: 132px;
+  }
+  /* the labelled "Can create projects" checkbox: a full touch target */
+  .settings-content-scroll [data-settings-user-detail] [data-project-right-cell] label {
+    min-height: 44px;
   }
   .settings-content-scroll :is([data-agent-keys], [data-fresh-agent]) {
     margin-left: 0;

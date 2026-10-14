@@ -72,6 +72,12 @@ describe('settings edits through the client store', () => {
     snap.profiles.push(
       invited('u-ana', 'Ana', 'ana@example.test'),
       invited('u-ben', 'Ben', 'ben@example.test'),
+      // a viewer still holding the project-creation right from before
+      {
+        ...invited('u-cat', 'Cat', 'cat@example.test'),
+        org_role: 'viewer' as const,
+        can_create_projects: true,
+      },
     )
     requests = []
     network.query.mockResolvedValue(null)
@@ -165,6 +171,57 @@ describe('settings edits through the client store', () => {
           args: { id: 'u-ben', patch: { email: 'ben.new@example.test' } },
         },
       ])
+    })
+
+    it('turns the project-creation right on and off', () => {
+      expect(P.user('u-ana')?.canCreateProjects).toBe(false)
+      expect(P.updateUser('u-ana', { canCreateProjects: true })).toBe(true)
+      expect(P.user('u-ana')?.canCreateProjects).toBe(true)
+      expect(P.updateUser('u-ana', { canCreateProjects: false })).toBe(true)
+      expect(P.user('u-ana')?.canCreateProjects).toBe(false)
+      expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
+        ['profiles:update', { can_create_projects: true }],
+        ['profiles:update', { can_create_projects: false }],
+      ])
+    })
+
+    it('clears the right on a role change but keeps it on deactivation or an unchanged role', () => {
+      P.updateUser('u-ana', { canCreateProjects: true })
+      P.updateUser('u-ana', { active: false })
+      expect(P.user('u-ana')?.canCreateProjects).toBe(true)
+      // the role select sends the role it shows, changed or not
+      P.updateUser('u-ana', { orgRole: 'user', active: true })
+      expect(P.user('u-ana')?.canCreateProjects).toBe(true)
+      P.updateUser('u-ana', { orgRole: 'viewer', active: true })
+      expect(P.user('u-ana')?.canCreateProjects).toBe(false)
+      expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'viewer', active: true })
+    })
+
+    it('sets the right with the standard user role only when the same patch turns it on', () => {
+      // a stale right on a viewer never comes back with the role
+      P.updateUser('u-cat', { orgRole: 'user', active: true })
+      expect(P.user('u-cat')?.canCreateProjects).toBe(false)
+      P.updateUser('u-cat', { orgRole: 'viewer', active: true })
+      P.updateUser('u-cat', { orgRole: 'user', canCreateProjects: true })
+      expect(P.user('u-cat')).toMatchObject({ orgRole: 'user', canCreateProjects: true })
+      expect(requests.at(-1)?.args.patch).toEqual({ org_role: 'user', can_create_projects: true })
+    })
+  })
+
+  describe('setOrg', () => {
+    it('writes who can create projects locally and on the wire', () => {
+      expect(P.org.projectCreators).toBe('users')
+      P.setOrg({ projectCreators: 'selected' })
+      expect(P.org.projectCreators).toBe('selected')
+      expect(requests).toMatchObject([
+        { name: 'orgs:update', args: { patch: { project_creators: 'selected' } } },
+      ])
+    })
+
+    it('ignores a value that is not a setting', () => {
+      P.setOrg({ projectCreators: 'everyone' as unknown as 'users' })
+      expect(P.org.projectCreators).toBe('users')
+      expect(requests).toEqual([])
     })
   })
 })

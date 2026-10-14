@@ -51,9 +51,6 @@ A stronger grant on the sub-project takes precedence. Access granted only to
 a sub-project makes its parent visible for read-only navigation, without
 opening sibling projects or the parent's change history.
 
-**New project** asks for a name, lead and optional team or individual shares.
-**New sub-project** asks for a lead; add optional shares in its settings.
-
 An organization-level **Viewer** role ([User roles](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)) limits all project access to
 reading, even if the person has a stronger project role. It does not make
 unshared projects visible. Viewers can open tasks and roadmap
@@ -82,6 +79,42 @@ Organization admins add people through **Organization → Users**. There is no
 purchased-seat limit on adding or reactivating users. Billing counts active
 users at renewal, including pending invitations ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)). Signing up does not
 let someone join your organization without an invitation.
+
+## Creating projects and sub-projects
+
+**New project** asks for a name, lead, optional description and optional team
+or individual shares. Organization admins can always use it. For everyone
+else, [Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
+decides. The lead starts as you.
+
+If you are not an organization admin and pick someone else as lead, Qivo adds
+you to **Project access** as **User**. The field then names you, such as
+**Aisha Rahman (you)**, or **You, 1 team** when there are other shares. You
+can change that level or remove the entry. If you make yourself lead again,
+Qivo removes the entry unless you changed it. A changed entry stays alongside
+the lead role, and the higher access wins. Once the project exists, its
+settings show you only as **Lead**. If someone else later becomes lead, you
+keep **User** access.
+
+If you are not an organization admin, the dialog footer warns you before you
+create the project:
+
+- When someone else leads, it names them, such as **Only Leo Martins and org
+  admins can manage it.** Only the lead and organization admins can change
+  the project's settings and access, archive it or delete it.
+- When you would have no access, it says **You won't see this project.**
+  instead. That happens when you are not the lead, have no individual entry
+  in **Project access** and are in no team it is shared with.
+
+Qivo normally opens the new project. If you cannot see it, you stay where you
+are, and a message confirms the project was created, such as **Project “Luma
+Mount” created. You don't have access to it.**
+
+**New sub-project** asks for a name, parent project and lead; add optional
+shares in its settings. It requires Lead access to the parent project, and
+**Who can create new projects?** does not affect it. When someone else leads
+and you are not an organization admin, the footer names them with the same
+note. As the parent's lead, you keep **User** access to the sub-project.
 
 ## People outside your organization
 

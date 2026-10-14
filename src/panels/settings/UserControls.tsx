@@ -3,7 +3,9 @@ import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { offersProjectRight } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { UserPatch, UserVM } from '../../store/planner'
@@ -248,6 +250,71 @@ export function PlannableHoursInput({
         h/wk
       </label>
     </HoverTooltip>
+  )
+}
+
+/* The roster's "Can create projects" column, shown only while the org's
+   setting is Selected users. Every desktop row gets a cell of the same width
+   right before the role select, so the column lines up under its one header
+   label; only an active standard user who is a person gets a checkbox in it.
+   The phone's user page shows a single row without the header, so there the
+   checkbox carries a visible label and the empty cell is left out. */
+export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: boolean }) {
+  const offered = offersProjectRight(user, P.org.projectCreators)
+  if (labelled && !offered) return null
+  const inputId = `can-create-projects-${user.id}`
+  return (
+    <div
+      data-project-right-cell={user.id}
+      className={cn('flex shrink-0 justify-center', !labelled && 'w-[112px]')}
+    >
+      {offered && (
+        <label
+          htmlFor={inputId}
+          className="flex cursor-pointer items-center gap-1.5 text-sm text-text-2"
+        >
+          <Input
+            id={inputId}
+            type="checkbox"
+            data-can-create-projects={user.id}
+            aria-label={`${user.name} can create projects`}
+            checked={user.canCreateProjects}
+            onChange={(e) => {
+              const on = e.target.checked
+              P.updateUser(user.id, { canCreateProjects: on })
+              window.showToast?.(
+                on
+                  ? `${user.name} can create projects`
+                  : `${user.name} can no longer create projects`,
+              )
+            }}
+            className="cursor-pointer [accent-color:var(--primary)]"
+          />
+          {labelled && 'Can create projects'}
+        </label>
+      )}
+    </div>
+  )
+}
+
+/* The column's label, one row above the roster. It repeats a row's frame,
+   padding and gap and the fixed widths right of the column (the role select
+   and the remove button), so the label sits over every row's cell. Each
+   checkbox names itself, so the label is hidden from assistive tech. */
+export function ProjectRightHeader() {
+  return (
+    <div
+      data-project-creators-header
+      aria-hidden="true"
+      className="-mb-0.5 flex items-end gap-2 px-[9px]"
+    >
+      <div className="min-w-0 flex-1" />
+      <div className="w-[112px] shrink-0 text-center text-xs leading-none font-semibold text-text-2">
+        Can create projects
+      </div>
+      <div className="w-[132px] shrink-0" />
+      <div className="w-control-sm shrink-0" />
+    </div>
   )
 }
 

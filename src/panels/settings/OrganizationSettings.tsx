@@ -3,10 +3,12 @@ import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
+import { namePhrase, projectCreatorsIn } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
-import type { OrgPatch } from '../../store/planner'
+import type { OrgPatch, OrgVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { OrganizationExport } from '../OrganizationExport'
 import { TextField, Toggle } from './controls'
@@ -93,7 +95,76 @@ function OrgAddressField() {
   )
 }
 
-export function OrgGeneralPage() {
+/* The segments of "Who can create new projects?" and the toast after
+   choosing each, keyed by the setting so a new value needs both. */
+const CREATOR_SETTINGS: Record<OrgVM['projectCreators'], { label: string; toast: string }> = {
+  admins: { label: 'Org admins', toast: 'Only org admins can create projects' },
+  users: { label: 'Standard users', toast: 'All standard users can create projects' },
+  selected: { label: 'Selected users', toast: 'Selected users can create projects' },
+}
+
+// Who may create top-level projects besides org admins. The line under the
+// control names who can right now, by the rule projects.create enforces, so
+// an admin never has to work out who a setting covers.
+function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) {
+  const setting = P.org.projectCreators
+  const question = 'Who can create new projects?'
+  const names = namePhrase(projectCreatorsIn(P.homeUsers(), setting).map((user) => user.name))
+  return (
+    <SettingsField
+      label={question}
+      width={560}
+      hint={
+        <span data-project-creators-summary>
+          {names.map((part, i) =>
+            part.name ? (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the phrase is re-derived each render and two people may share a name; position is a part's only identity
+              <span key={i} className="text-text-1">
+                {part.text}
+              </span>
+            ) : (
+              part.text
+            ),
+          )}{' '}
+          can create projects.
+          {setting === 'admins' && ' Project leads still create sub-projects.'}
+          {setting === 'selected' && (
+            <>
+              {' '}
+              Choose people in{' '}
+              <Button
+                type="button"
+                variant="unstyled"
+                data-project-creators-users
+                onClick={() => setPage('org-users')}
+                className="align-baseline font-normal text-text-1 underline underline-offset-4"
+              >
+                Users
+              </Button>
+              .
+            </>
+          )}
+        </span>
+      }
+    >
+      <fieldset data-project-creators className="m-0 min-w-0 border-0 p-0" aria-label={question}>
+        <Seg
+          value={setting}
+          onChange={(next) => {
+            P.setOrg({ projectCreators: next })
+            window.showToast?.(CREATOR_SETTINGS[next].toast)
+          }}
+          options={Object.entries(CREATOR_SETTINGS).map(([value, { label }]) => ({
+            value,
+            label,
+          }))}
+        />
+      </fieldset>
+    </SettingsField>
+  )
+}
+
+export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
   const canManage = P.isAdmin()
   return (
     <>
@@ -209,6 +280,7 @@ export function OrgGeneralPage() {
         </SettingsField>
       </SettingsSection>
       <SettingsSection title="People">
+        <ProjectCreatorsField setPage={setPage} />
         <SettingsField label="Default plannable hours per week" width={400}>
           <div className="[display:flex] [align-items:center] [gap:8px]">
             <Input

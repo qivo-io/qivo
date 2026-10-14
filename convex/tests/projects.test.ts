@@ -11,10 +11,12 @@ import {
   activityFor,
   as,
   expectRefusal,
+  NOW,
   newT,
   type OrgFixture,
   plantIssue,
   plantProject,
+  plantSeat,
   type T,
   tick,
   uuid,
@@ -153,19 +155,91 @@ describe('projects.create', () => {
     expect(row?.icon_color).toBeUndefined()
   })
 
-  it('organization staff may create products; viewer and guest may not', async () => {
+  /* Who may create a product follows organizations.project_creators
+   * (lib/projectCreators.ts); missing means 'users'. `selected` is a standard
+   * user with can_create_projects on, `user` one without it. The viewer and
+   * guest carry the right too, raw-patched, and still never qualify. The
+   * schema refuses an unknown stored value even raw, so projectCreators.test.ts
+   * covers that case on the shared rule. */
+  const creatorsFixture = async (setting?: Doc<'organizations'>['project_creators']) => {
     const t = newT()
     const f = await withOrg(t)
-    const ok = await as(t, f.user).mutation(api.projects.create, createArgs(f, { key: 'LEAD1' }))
-    expect(ok.num).toBe(6)
-    await expectRefusal(
-      as(t, f.viewer).mutation(api.projects.create, createArgs(f, { key: 'VW1' })),
-      'forbidden',
-    )
-    await expectRefusal(
-      as(t, f.guest).mutation(api.projects.create, createArgs(f, { key: 'GU1' })),
-      'forbidden',
-    )
+    if (setting !== undefined) {
+      await as(t, f.admin).mutation(api.orgs.update, {
+        org_id: f.org.id,
+        patch: { project_creators: setting },
+      })
+    }
+    const selected = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'Selected',
+      email: 'selected@testbed.test',
+      auth_user_id: `auth_selected_${f.org.id}`,
+      accepted_at: NOW,
+      can_create_projects: true,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.viewer._id, { can_create_projects: true })
+      await ctx.db.patch(f.guest._id, { can_create_projects: true })
+    })
+    const callers = { admin: f.admin, user: f.user, selected, viewer: f.viewer, guest: f.guest }
+    return { t, f, selected, callers }
+  }
+
+  for (const { setting, allowed, refusal } of [
+    {
+      setting: undefined,
+      allowed: ['admin', 'user', 'selected'],
+      refusal: /^only org admins and standard users can create projects$/,
+    },
+    {
+      setting: 'users' as const,
+      allowed: ['admin', 'user', 'selected'],
+      refusal: /^only org admins and standard users can create projects$/,
+    },
+    {
+      setting: 'selected' as const,
+      allowed: ['admin', 'selected'],
+      refusal: /^only org admins and selected standard users can create projects$/,
+    },
+    {
+      setting: 'admins' as const,
+      allowed: ['admin'],
+      refusal: /^only org admins can create projects$/,
+    },
+  ]) {
+    it(`under project_creators ${setting ?? 'missing'}, only ${allowed.join(', ')} create a product`, async () => {
+      const { t, f, callers } = await creatorsFixture(setting)
+      for (const [who, caller] of Object.entries(callers)) {
+        const call = as(t, caller).mutation(
+          api.projects.create,
+          createArgs(f, { key: who.slice(0, 5).toUpperCase(), name: `By ${who}` }),
+        )
+        if (allowed.includes(who)) {
+          const { id } = await call
+          expect((await projectRow(t, id))?.name).toBe(`By ${who}`)
+        } else {
+          await expectRefusal(call, 'forbidden', refusal)
+        }
+      }
+    })
+  }
+
+  it('the parent lead still creates sub-projects when the setting limits products', async () => {
+    for (const setting of ['admins', 'selected'] as const) {
+      const { t, f, selected } = await creatorsFixture(setting)
+      // f.user leads f.meta and does not have can_create_projects
+      const subArgs = (key: string) =>
+        createArgs(f, { type: 'project' as const, parent_id: f.meta.id, key })
+      const { id } = await as(t, f.user).mutation(api.projects.create, subArgs('SUB1'))
+      expect((await projectRow(t, id))?.parent_id).toBe(f.meta.id)
+      // the right to create products gives no lead standing on a parent
+      await expectRefusal(
+        as(t, selected).mutation(api.projects.create, subArgs('SUB2')),
+        'forbidden',
+        /^requires lead access to this project$/,
+      )
+    }
   })
 
   it('sub creation: lead standing required; parent fenced with the hierarchy sentences', async () => {

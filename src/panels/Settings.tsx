@@ -1,8 +1,9 @@
 /* Settings navigation, access redirects and page composition. */
-import { useEffect as useEffectS } from 'react'
+import { useEffect as useEffectS, useRef as useRefS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Icon } from '../components/qivo'
 import { WorkspacePageHeader, WorkspaceShell } from '../components/WorkspaceShell'
+import { restoreFocus } from '../lib/focusVisibility'
 import { useMobile } from '../lib/useMobile'
 import { P } from '../store/planner'
 import { BillingSettings } from './BillingSettings'
@@ -53,6 +54,22 @@ function SettingsScreen({
   useEffectS(() => {
     if (!narrow && page === 'menu') setPage('account')
   }, [narrow, page, setPage])
+
+  // Each page mounts fresh (the content is keyed by page), so a control inside
+  // a page that opens another one, such as the Users link under "Who can
+  // create new projects?", a user row or a phone menu row, leaves with its
+  // page and focus falls to <body>. Hand focus to the new page's title so
+  // the keyboard carries on in the page that opened. The desktop rail stays
+  // mounted and keeps focus on its own.
+  const contentRef = useRefS<HTMLDivElement>(null)
+  const shownPage = useRefS(page)
+  useEffectS(() => {
+    if (shownPage.current === page) return
+    shownPage.current = page
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    restoreFocus(contentRef.current?.querySelector<HTMLElement>('h1'))
+  }, [page])
 
   // keep the page valid for the current user
   useEffectS(() => {
@@ -129,7 +146,7 @@ function SettingsScreen({
       />
     )
   else if (page === 'projects-archived') content = <ArchivedProjectsPage />
-  else if (page === 'org-general') content = <OrgGeneralPage />
+  else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
   else if (page === 'org-billing') content = <BillingSettings />
   else if (page === 'org-users' || page.startsWith('user:'))
     content = (
@@ -258,7 +275,12 @@ function SettingsScreen({
       {!narrow && navigation}
       <main data-screen-label="Settings" className="settings-main">
         <div className="settings-content-frame">
-          <div key={page} data-settings-page={page} className="settings-content-scroll">
+          <div
+            key={page}
+            ref={contentRef}
+            data-settings-page={page}
+            className="settings-content-scroll"
+          >
             {isMenu ? navigation : content}
           </div>
         </div>

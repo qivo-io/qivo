@@ -468,7 +468,8 @@ export const setMemberRole = platformMutation({
       const home = await homeElsewhere(ctx, row.email, row.org_id, row)
       if (home !== null) throw adminElsewhere(row.email, home)
     }
-    await ctx.db.patch(row._id, { org_role: role })
+    // A role change clears the project-creation right (profiles.update).
+    await ctx.db.patch(row._id, { org_role: role, can_create_projects: undefined })
     await audit(ctx, {
       actor_auth_id: ctx.authUserId,
       actor_email: await operatorEmail(ctx, ctx.authUserId),
