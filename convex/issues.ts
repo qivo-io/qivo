@@ -31,7 +31,7 @@
  * NOT here. The archive reason-comment is the
  * one comment this file posts (the old client posted it gated on the
  * archive landing); it shares the archive's `now` and goes through
- * model/comments.ts postComment, as comments.create does.
+ * model/comments.ts postArchiveReason, as the machine archive does.
  *
  * Each write checks Edit here first with the app's own sentence; the model
  * cores repeat that check as defense in depth (model/issues.ts
@@ -41,31 +41,21 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel } from './lib/access'
-import { byId, insertUnique } from './lib/db'
+import { byId } from './lib/db'
 import { vIssuePriority, vIssueStatus, vLinkType } from './lib/enums'
-import {
-  authedQuery,
-  badRequest,
-  forbidden,
-  notFound,
-  orgMutation,
-  orgQuery,
-  rule,
-} from './lib/functions'
-import { logActivity } from './model/activity'
-import { postComment } from './model/comments'
+import { authedQuery, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
+import { postArchiveReason } from './model/comments'
 import {
   archiveIssueCore,
   assertCanEdit,
-  assertLinkableIssues,
   createIssueCore,
   deleteIssueCore,
   hasSubtasks,
-  linkAccess,
   moveIssueCore,
   unarchiveIssueCore,
   updateIssueCore,
 } from './model/issues'
+import { addLinkCore, removeLinkCore } from './model/links'
 import { subscribeToIssue } from './model/messages'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
@@ -242,7 +232,7 @@ export const update = orgMutation({
 })
 
 /* ------------------------------------------------------------------- move
- * P.moveIssue: browser-only (the machine surfaces deliberately refuse moves).
+ * P.moveIssue. REST and MCP move through the same moveIssueCore.
  * 'member' on BOTH ends, checked before moveIssueCore's guards as create
  * checks its project. A destination the caller cannot write answers 'no
  * write access to this project' whether it is missing, hidden, read-only or
@@ -273,10 +263,7 @@ export const archive = orgMutation({
     await assertWritable(ctx, issue.project_id)
     const wasActive = issue.archived_at === undefined
     const after = await archiveIssueCore(ctx, { me: ctx.me, issue, now })
-    const text = (reason ?? '').trim()
-    if (wasActive && text !== '') {
-      await postComment(ctx, { issue: after, author: ctx.me, body: text, now })
-    }
+    if (wasActive) await postArchiveReason(ctx, { issue: after, author: ctx.me, reason, now })
     return { issue: await pubFor(ctx, ctx.me, after) }
   },
 })
@@ -347,52 +334,18 @@ export const deleteDeep = orgMutation({
  * Canonical storage stays client-side (blocks directed source→target;
  * relates ordered by uuid, see old planner.ts:2234-2238). The wire carries
  * the stored enum, never 'blocked_by'. pair_key enforces at-most-one-link-per-
- * pair (the (least, greatest) unique index's successor). Insert and delete
- * share model/issues linkAccess (0008:12-21), which needs sight of both ends
- * plus member level on EITHER endpoint. A foreign, missing or hidden endpoint
- * answers like a missing task (addLink reads the trigger's own org sentence,
- * removeLink 'task not found'), so neither is an existence oracle. */
-
-const pairKey = (a: string, b: string): string => (a < b ? `${a}:${b}` : `${b}:${a}`)
+ * pair (the (least, greatest) unique index's successor). Both run the shared
+ * cores in model/links.ts, which REST and MCP run too: sight of both ends
+ * plus member level on EITHER endpoint (model/issues linkAccess, 0008:12-21).
+ * A foreign, missing or hidden endpoint answers like a missing task (addLink
+ * reads the trigger's own org sentence, removeLink 'task not found'), so
+ * neither is an existence oracle. Sending the same link again is a no-op. */
 
 export const addLink = orgMutation({
   args: { id: v.string(), source_id: v.string(), target_id: v.string(), type: vLinkType },
   handler: async (ctx, { id, source_id, target_id, type }) => {
     const now = new Date().toISOString()
-    if (source_id === target_id) throw badRequest('a task cannot be linked to itself')
-    const { source, target } = await assertLinkableIssues(ctx, source_id, target_id)
-    // a pair in someone else's org, or an end the caller cannot see, answers
-    // exactly like a mismatched pair
-    const access = await linkAccess(ctx, ctx.me, source, target)
-    if (access === 'hidden') throw rule('linked tasks must belong to the same organization')
-    if (access === 'read') throw forbidden('no write access to these tasks')
-    await insertUnique(
-      ctx,
-      'issue_links',
-      'by_pair',
-      { pair_key: pairKey(source_id, target_id) },
-      {
-        id,
-        org_id: source.org_id,
-        source_id,
-        target_id,
-        type,
-        pair_key: pairKey(source_id, target_id),
-        created_at: now,
-      },
-      badRequest('these tasks are already linked'),
-    )
-    await logActivity(ctx, {
-      org_id: source.org_id,
-      actor_id: ctx.me.id,
-      verb: 'linked',
-      target_type: 'issue',
-      target_id: source.id,
-      label: source.title,
-      detail: `${type === 'blocks' ? '— blocks' : '— relates to'} QN-${target.num}`,
-      project_id: source.project_id,
-      ts: now,
-    })
+    await addLinkCore(ctx, { me: ctx.me, id, source_id, target_id, type, now })
     return null
   },
 })
@@ -404,18 +357,11 @@ export const addLink = orgMutation({
 export const removeLink = orgMutation({
   args: { a: v.string(), b: v.string() },
   handler: async (ctx, { a, b }) => {
-    const access = await linkAccess(
-      ctx,
-      ctx.me,
-      await byId(ctx, 'issues', a),
-      await byId(ctx, 'issues', b),
-    )
-    if (access === 'hidden') throw notFound('task not found')
-    if (access === 'read') throw forbidden('no write access to these tasks')
-    const links = ctx.db
-      .query('issue_links')
-      .withIndex('by_pair', (q) => q.eq('pair_key', pairKey(a, b)))
-    for await (const l of links) await ctx.db.delete(l._id)
+    await removeLinkCore(ctx, {
+      me: ctx.me,
+      a: await byId(ctx, 'issues', a),
+      b: await byId(ctx, 'issues', b),
+    })
     return null
   },
 })

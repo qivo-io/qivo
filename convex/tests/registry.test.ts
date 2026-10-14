@@ -82,7 +82,8 @@ const SURFACES: Surface[] = [
     entries: mcp.TOOLS.map((tool) => ({
       label: tool.def.name,
       access: tool.access,
-      run: (ctx) => runEntry(ctx, tool, { ...PRINCIPAL, credential: CREDENTIAL, args: {} }),
+      run: (ctx) =>
+        runEntry(ctx, tool, { ...PRINCIPAL, credential: CREDENTIAL, args: {}, ignored: [] }),
     })),
   },
   {

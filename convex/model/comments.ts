@@ -41,3 +41,18 @@ export async function postComment(
   await notifyCommentInsert(ctx, { comment, issue, actor: author, now })
   return comment
 }
+
+/**
+ * Posts the reason given for archiving `issue` as a normal comment by
+ * `author`, trimmed and sharing the archive's `now`. The app's archive and
+ * the machine archive call it only when their write archived the task; a
+ * blank or missing reason posts nothing.
+ */
+export async function postArchiveReason(
+  ctx: MutationCtx,
+  a: { issue: Doc<'issues'>; author: Doc<'profiles'>; reason: string | undefined; now: string },
+): Promise<Doc<'comments'> | null> {
+  const body = (a.reason ?? '').trim()
+  if (body === '') return null
+  return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
+}

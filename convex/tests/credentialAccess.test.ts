@@ -527,7 +527,8 @@ const MISSING_UUID = '00000000-0000-4000-8000-000000000000'
 
 type ToolDef = (typeof TOOLS)[number]['def']
 
-/* Arguments that pass a tool's schema and name nothing that exists. */
+/* Arguments that pass a tool's schema and name nothing that exists. An
+ * enum takes its first member, and every other string a ref to nothing. */
 function missingRefArgs(def: ToolDef): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const key of def.inputSchema.required ?? []) {
@@ -536,13 +537,15 @@ function missingRefArgs(def: ToolDef): Record<string, unknown> {
     out[key] =
       p.format === 'uuid'
         ? MISSING_UUID
-        : p.type === 'integer' || p.type === 'number'
-          ? (p.minimum ?? 1)
-          : p.type === 'boolean'
-            ? true
-            : key === 'ref'
-              ? MISSING_TASK
-              : 'NOPE'
+        : p.enum !== undefined
+          ? p.enum[0]
+          : p.type === 'integer' || p.type === 'number'
+            ? (p.minimum ?? 1)
+            : p.type === 'boolean'
+              ? true
+              : key === 'ref' || key === 'other'
+                ? MISSING_TASK
+                : 'NOPE'
   }
   return out
 }
@@ -819,10 +822,13 @@ describe('read-only credentials over HTTP', () => {
       }
       // OAuth reaches only the webhook routes, read-only or not
       expect((await restCall(c.t, readGrant, route.method, path, body)).status, label).toBe(401)
-      // write credentials get past the gate and find nothing
+      // write credentials get past the gate and find nothing, or meet a rule
+      // of the action itself (only organization admins edit labels)
       for (const secret of [c.writeToken, c.agentKey]) {
         const writer = await restCall(c.t, secret, route.method, path, body)
-        expect([400, 404], label).toContain(writer.status)
+        expect([400, 403, 404], label).toContain(writer.status)
+        const { error } = JSON.parse(writer.text) as { error: string }
+        expect([CREDENTIAL_READS_ONLY, VIEWER_AGENT_READS_ONLY], label).not.toContain(error)
       }
     }
     expect(await c.counts()).toEqual(before)

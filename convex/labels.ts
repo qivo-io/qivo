@@ -17,10 +17,10 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { hasProjectLevel } from './lib/access'
-import { byId, insertUnique } from './lib/db'
-import { badRequest, forbidden, notFound, orgMutation, rule } from './lib/functions'
+import { byId } from './lib/db'
+import { forbidden, notFound, orgMutation, rule } from './lib/functions'
 import { logActivity } from './model/activity'
-import { assertLabelCreator, assertLabelManager, labelColor, labelName } from './model/labels'
+import { assertLabelManager, createLabelCore, setTaskLabel, updateLabelCore } from './model/labels'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
@@ -32,49 +32,22 @@ async function myLabel(ctx: MeCtx, id: string): Promise<Doc<'labels'>> {
 
 /* ----------------------------------------------------------------- create
  * P.addLabel. The client's predictive dup toast stays client-side; the
- * server refusal below is what the REST/MCP surfaces will read too. */
+ * server refusal in model/labels.ts createLabelCore is what REST and MCP
+ * read too. */
 export const create = orgMutation({
   args: { id: v.string(), name: v.string(), color: v.string() },
   handler: async (ctx, { id, name, color }) => {
     const now = new Date().toISOString()
-    await assertLabelCreator(ctx, ctx.me)
-    const clean = labelName(name)
-    const cleanColor = labelColor(color)
-    if ((await byId(ctx, 'labels', id)) !== null) {
-      throw badRequest('a label with this id already exists')
-    }
-    await insertUnique(
-      ctx,
-      'labels',
-      'by_org_name_lower',
-      { org_id: ctx.me.org_id, name_lower: clean.toLowerCase() },
-      {
-        id,
-        org_id: ctx.me.org_id,
-        name: clean,
-        name_lower: clean.toLowerCase(),
-        color: cleanColor,
-        created_at: now,
-      },
-      rule('a label with that name already exists'),
-    )
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'created label',
-      target_type: 'org',
-      target_id: id,
-      label: clean,
-      ts: now,
-    })
+    await createLabelCore(ctx, { me: ctx.me, id, name, color, now })
     return null
   },
 })
 
 /* ----------------------------------------------------------------- update
- * P.updateLabel, for org admins only. It narrates NOTHING (T8). name_lower
- * stays in step; the uniqueness probe excludes the row itself, so a
- * case-only rename passes. */
+ * P.updateLabel, for org admins only, checked before the lookup so a
+ * refusal says nothing about which ids exist. It narrates NOTHING (T8).
+ * name_lower stays in step; the uniqueness probe excludes the row itself, so
+ * a case-only rename passes (model/labels.ts updateLabelCore). */
 export const update = orgMutation({
   args: {
     id: v.string(),
@@ -83,28 +56,7 @@ export const update = orgMutation({
   handler: async (ctx, { id, patch }) => {
     assertLabelManager(ctx.me)
     const label = await myLabel(ctx, id)
-    const fields: Partial<Pick<Doc<'labels'>, 'name' | 'name_lower' | 'color'>> = {}
-    if (patch.name !== undefined) {
-      const clean = labelName(patch.name)
-      if (clean !== label.name) {
-        const holder = await ctx.db
-          .query('labels')
-          .withIndex('by_org_name_lower', (q) =>
-            q.eq('org_id', ctx.me.org_id).eq('name_lower', clean.toLowerCase()),
-          )
-          .first()
-        if (holder !== null && holder.id !== label.id) {
-          throw rule('a label with that name already exists')
-        }
-        fields.name = clean
-        fields.name_lower = clean.toLowerCase()
-      }
-    }
-    if (patch.color !== undefined) {
-      const color = labelColor(patch.color)
-      if (color !== label.color) fields.color = color
-    }
-    if (Object.keys(fields).length > 0) await ctx.db.patch(label._id, fields)
+    await updateLabelCore(ctx, { me: ctx.me, label, name: patch.name, color: patch.color })
     return null
   },
 })
@@ -143,7 +95,8 @@ export const remove = orgMutation({
  * it; the server decides on ITS state, so a replay nets out. Predicate is
  * has_project_level(project, 'user') (0010:65-69, member→user); the org
  * guard is issue_labels_check_org's sentence VERBATIM (0078:117) — in the
- * SQL a missing label read the same sentence as a foreign one, kept here. */
+ * SQL a missing label read the same sentence as a foreign one, kept here.
+ * The write is model/labels.ts setTaskLabel, which REST and MCP run too. */
 export const toggle = orgMutation({
   args: { issue_id: v.string(), label_id: v.string() },
   handler: async (ctx, { issue_id, label_id }) => {
@@ -161,24 +114,7 @@ export const toggle = orgMutation({
       .query('issue_labels')
       .withIndex('by_issue_label', (q) => q.eq('issue_id', issue.id).eq('label_id', label.id))
       .unique()
-    if (pair !== null) await ctx.db.delete(pair._id)
-    else
-      await ctx.db.insert('issue_labels', {
-        org_id: issue.org_id,
-        issue_id: issue.id,
-        label_id: label.id,
-      })
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: ctx.me.id,
-      verb: pair !== null ? 'removed a label from' : 'labeled',
-      target_type: 'issue',
-      target_id: issue.id,
-      label: issue.title,
-      detail: `— ${label.name}`,
-      project_id: issue.project_id,
-      ts: now,
-    })
+    await setTaskLabel(ctx, { me: ctx.me, issue, label, on: pair === null, now })
     return null
   },
 })

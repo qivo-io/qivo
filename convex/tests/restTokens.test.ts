@@ -117,10 +117,25 @@ async function fixture() {
       }),
     )
   }
+  // a task every link request points at, and a label to edit
+  const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+  const label = uuid()
+  await t.run((ctx) =>
+    ctx.db.insert('labels', {
+      id: label,
+      org_id: f.org.id,
+      name: 'Edited',
+      name_lower: 'edited',
+      color: '#000000',
+      created_at: NOW,
+    }),
+  )
   return {
     t,
     f,
     viewerAgent,
+    other: `QN-${other.num}`,
+    label,
     writer: await plantToken(t, f.admin, { access: 'write' }),
     reader: await plantToken(t, f.admin, { access: 'read' }),
     viewer: await plantToken(t, f.viewer, { access: 'write' }),
@@ -134,6 +149,7 @@ const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'
 const PERSON_NO_WRITE = 'your account has no write access to that project'
 const RIGHTS =
   "only an organization admin or a leader of one of this person's teams can set their plannable hours"
+const LABEL_ADMINS = 'only organization admins can rename, recolor or delete labels'
 
 /* ------------------------------------------------------- 1. every route */
 
@@ -161,6 +177,19 @@ const REQUESTS: Record<string, (fx: Fx, task: string) => { path: string; body?: 
     path: `/v1/tasks/${task}/comments`,
     body: { body: 'From a token' },
   }),
+  'POST tasks/:ref/links': (fx, task) => ({
+    path: `/v1/tasks/${task}/links`,
+    body: { task: fx.other, kind: 'relates' },
+  }),
+  'DELETE tasks/:ref/links/:kind/:other': (fx, task) => ({
+    path: `/v1/tasks/${task}/links/relates/${fx.other}`,
+  }),
+  'GET labels': () => ({ path: '/v1/labels' }),
+  'POST labels': () => ({
+    path: '/v1/labels',
+    body: { name: `Token ${uuid().slice(0, 8)}`, color: '#123456' },
+  }),
+  'PATCH labels/:ref': (fx) => ({ path: `/v1/labels/${fx.label}`, body: { color: '#654321' } }),
 }
 
 const label = (route: { method: string; path: string }) => `${route.method} ${route.path}`
@@ -169,9 +198,14 @@ const label = (route: { method: string; path: string }) => `${route.method} ${ro
 type Outcome = 'ok' | { status: number; error: string }
 
 /* A Viewer person may not write any project; a Standard user agent may, but
- * neither may set someone's plannable hours. */
+ * neither may set someone's plannable hours or edit a label (organization
+ * admins only), and a Viewer person may not add a label either. */
 const refusedWrite = (route: { path: string }, kind: 'viewer' | 'agent'): Outcome => {
   if (route.path === 'users/:ref') return { status: 403, error: RIGHTS }
+  if (route.path === 'labels/:ref') return { status: 403, error: LABEL_ADMINS }
+  if (route.path === 'labels' && kind === 'viewer') {
+    return { status: 403, error: 'no label access in this organization' }
+  }
   return kind === 'viewer' ? { status: 403, error: PERSON_NO_WRITE } : 'ok'
 }
 

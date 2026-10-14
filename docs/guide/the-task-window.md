@@ -130,8 +130,9 @@ an active subtask is in a project you cannot edit, Qivo refuses the archive,
 and an organization admin can archive it instead. If all descendant work is
 Done, it archives
 immediately. Otherwise, the dialog lists the affected tasks and requires a
-reason, which becomes a task comment. REST and MCP archiving do not collect
-a reason ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
+reason, which becomes a task comment. REST and MCP archiving accept the same
+optional reason, which also becomes a comment, but do not require one
+([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 
 Open **Archived tasks** from a project or sub-project's **…** menu. The Archive
 page works with one project at a time, optionally narrowed to a sub-project.

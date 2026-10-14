@@ -31,7 +31,16 @@ import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
-import { hasSubtasks, subtaskParentIds } from '../model/issues'
+import {
+  assertLive,
+  hasSubtasks,
+  metaNeedsSub,
+  pairRule,
+  SUB_MUST_NAME,
+  subtaskParentIds,
+} from '../model/issues'
+import { labelJson } from '../model/labels'
+import { linkKindFrom, linksOf, type TaskLinkKind } from '../model/links'
 import { attachmentLimitMb } from '../model/orgs'
 import {
   canAccessProject,
@@ -55,9 +64,11 @@ import type {
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
 import { canCreateProjects } from './projectCreators'
+import { taskOwnerId } from './review'
 import { allWordsMatcher, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
+import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
 
@@ -291,10 +302,13 @@ export type ListIssueOpts = {
    *  archived (0106's two archive axes: naming the project is what asks) */
   scope: string[] | null
   archived: boolean
-  status?: IssueStatus
+  /** any of these statuses; status filters leave groups out */
+  statuses?: readonly IssueStatus[]
   priority?: IssuePriority
   /** profile uuid, already lowercased by the surface */
   assignee?: string
+  /** profile uuid of the owner (lib/review.ts taskOwnerId), lowercased */
+  owner?: string
   search?: string
   /** REST lets `*` widen; MCP does not — a literal `*` must stay literal */
   stars: boolean
@@ -374,7 +388,8 @@ export async function listIssuesCore(
   const match = o.search
     ? await searchMatcher(ctx, me, { term: o.search, stars: o.stars, children })
     : null
-  const groupIds = o.status ? subtaskParentIds(rows, o.archived) : null
+  const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
+  const groupIds = statuses !== null ? subtaskParentIds(rows, o.archived) : null
   for (const i of rows) {
     if ((i.archived_at !== undefined) !== o.archived) continue
     if (!readable(i.project_id)) continue // RLS's successor — always, scope or not
@@ -383,9 +398,11 @@ export async function listIssuesCore(
     } else if (cat.byUuid.get(i.project_id)?.archived_at !== undefined) {
       continue // an archived project's tasks are not the working set (0106)
     }
-    if (o.status && (groupIds?.has(i.id) || i.status !== o.status)) continue
+    if (statuses !== null && (groupIds?.has(i.id) || !statuses.includes(i.status))) continue
     if (o.priority && i.priority !== o.priority) continue
     if (o.assignee && i.assignee_id !== o.assignee) continue
+    // a group stays with its assignee, as in the app
+    if (o.owner && taskOwnerId(i, hasSubtasksIn(children, i)) !== o.owner) continue
     if (match !== null && !match(i)) continue
     out.push(i)
   }
@@ -511,11 +528,18 @@ type IssueOutCommon = {
   assignee_name: string | null
   reviewer_id: string | null
   reviewer_name: string | null
+  /** whose work it is: the reviewer while In Review, else the assignee */
+  owner_id: string | null
   reporter_id: string | null
   reporter_name: string | null
   project_id: string
   project_key: string
   project_num: number
+  /** null unless the caller can read the parent (has_hidden_parent) */
+  parent_id: string | null
+  has_hidden_parent: boolean
+  start_week: string | null
+  end_week: string | null
   due_date: string | null
   remaining_hours: number | null
   remaining_set_at: string | null
@@ -523,21 +547,17 @@ type IssueOutCommon = {
   archived_at: string | null
   created_at: string
   updated_at: string
+  /** the app's Copy link address, null when SITE_URL is unset */
+  url: string | null
 }
 
-/* REST issueJson (rest:240-254): superset minus project_name; the plan weeks,
- * the parent link (null unless the caller can read the parent) and the
- * `archived` boolean are REST-only. A group's plan weeks are calculated
- * (groupWeeks), never its dormant stored pair. */
-export type RestIssueJson = IssueOutCommon & {
-  parent_id: string | null
-  start_week: string | null
-  end_week: string | null
-  archived: boolean
-}
+/* REST issueJson (rest:240-254): superset minus project_name, plus the
+ * `archived` boolean. A group's plan weeks are calculated (groupWeeks) on
+ * both surfaces, never its dormant stored pair. */
+export type RestIssueJson = IssueOutCommon & { archived: boolean }
 
-/* MCP issueOut (mcp:93-102): superset minus start_week/end_week/parent_id and
- * minus the boolean (archived_at only); names the project. */
+/* MCP issueOut (mcp:93-102): superset minus the boolean (archived_at only);
+ * names the project. */
 export type McpIssueOut = IssueOutCommon & { project_name: string }
 
 /* A people field's display name: from the caller's roster map on list calls,
@@ -559,6 +579,8 @@ export type IssueOutPre = {
   names?: ReadonlyMap<string, string>
   /** the organization's tasks by parent, for list calls (group dates) */
   children?: ChildIndex
+  /** the organization's slug, for list calls (task links) */
+  orgSlug?: string
 }
 
 /** An organization's tasks, archived ones included, keyed by parent id. */
@@ -581,22 +603,76 @@ const hasSubtasksIn = (index: ChildIndex, task: Doc<'issues'>): boolean =>
     (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
   )
 
-/* REST's parent link: the parent's uuid only when this caller could read the
- * parent (findIssue's rule), else null, which reads like a top-level task.
- * `readable` is the caller's project flags when the surface already holds
- * them, which saves the visibility walk per row. */
-async function parentIdFor(
+/* --------------------------------------------- what a read says of others
+ * A machine read is shown the tasks whose project the caller can read
+ * (findIssue's rule), archived ones included. Every task a read names
+ * besides the one asked for (parent, subtasks, links, group totals) passes
+ * lib/workingSet.ts with this Shown, as the app's snapshot passes its
+ * working set. */
+
+/** The caller's project read access, from the surface's flags when it holds
+ * them, else canSeeProject, read once per project. */
+function projectReader(
+  ctx: QueryCtx,
+  me: Caller,
+  readable?: (projectId: string) => boolean,
+): (projectId: string) => Promise<boolean> {
+  const known = new Map<string, Promise<boolean>>()
+  return (projectId) => {
+    let result = known.get(projectId)
+    if (result === undefined) {
+      result =
+        readable !== undefined
+          ? Promise.resolve(readable(projectId))
+          : byId(ctx, 'projects', projectId).then(
+              async (p) => p !== null && (await canSeeProject(ctx, me, p)),
+            )
+      known.set(projectId, result)
+    }
+    return result
+  }
+}
+
+/** The Shown of a machine read over these tasks: the ones in the caller's
+ * organization whose project it can read. */
+async function machineShown(
+  tasks: Iterable<Doc<'issues'>>,
+  me: Caller,
+  reads: (projectId: string) => Promise<boolean>,
+): Promise<Shown> {
+  const ids = new Set<string>()
+  for (const task of tasks) {
+    if (task.org_id === me.org_id && (await reads(task.project_id))) ids.add(task.id)
+  }
+  return (taskId) => ids.has(taskId)
+}
+
+/* The parent link on both surfaces (lib/workingSet.ts parentLink): the
+ * parent's uuid only when this caller can read the parent, else only that a
+ * parent exists. `readable` is the caller's project flags when the surface
+ * already holds them, which saves the visibility walk per row. */
+async function parentOut(
   ctx: QueryCtx,
   me: Caller,
   issue: Doc<'issues'>,
   readable?: (projectId: string) => boolean,
-): Promise<string | null> {
-  if (issue.parent_id === undefined) return null
-  if (readable === undefined) return (await findIssue(ctx, me, issue.parent_id))?.id ?? null
-  const parent = await byId(ctx, 'issues', issue.parent_id)
-  return parent !== null && parent.org_id === me.org_id && readable(parent.project_id)
-    ? parent.id
-    : null
+): Promise<{ parent_id: string | null; has_hidden_parent: boolean }> {
+  const parent = issue.parent_id === undefined ? null : await byId(ctx, 'issues', issue.parent_id)
+  const shown = await machineShown(
+    parent === null ? [] : [parent],
+    me,
+    projectReader(ctx, me, readable),
+  )
+  const link = parentLink(issue, shown)
+  return { parent_id: link.parent_id ?? null, has_hidden_parent: link.has_hidden_parent }
+}
+
+/** The app's Copy link address of a task (src/lib/router.ts issueLink), or
+ * null when the deployment names no SITE_URL. */
+export function taskUrl(orgSlug: string, num: number): string | null {
+  const site = process.env.SITE_URL?.trim().replace(/\/+$/, '')
+  if (!site) return null
+  return `${site}/app/${orgSlug}/tasks/${encodeURIComponent(issueKey(num).toLowerCase())}`
 }
 
 /* How many tasks a single group read walks one by_parent read at a time
@@ -706,22 +782,28 @@ export async function groupWeeks(
   return await fromIndex(childIndexOf(rows))
 }
 
-type RestOut = { surface: 'rest'; me: Caller; readable?: (projectId: string) => boolean }
+/** Who reads a task, and through which surface's shape. `readable` is the
+ * caller's project flags when the surface already holds them. */
+type Reader = {
+  surface: 'rest' | 'mcp'
+  me: Caller
+  readable?: (projectId: string) => boolean
+}
 
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & RestOut,
+  opts: IssueOutPre & Reader & { surface: 'rest' },
 ): Promise<RestIssueJson>
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & { surface: 'mcp' },
+  opts: IssueOutPre & Reader & { surface: 'mcp' },
 ): Promise<McpIssueOut>
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & (RestOut | { surface: 'mcp' }),
+  opts: IssueOutPre & Reader,
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
@@ -732,10 +814,14 @@ export async function issueOut(
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
+  const weeks = is_group
+    ? await groupWeeks(ctx, issue, project, opts.me, opts.readable, opts.children)
+    : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
+  const parent = await parentOut(ctx, opts.me, issue, opts.readable)
+  const owner_id = taskOwnerId(issue, is_group) ?? null
+  const orgSlug = opts.orgSlug ?? (await byId(ctx, 'organizations', issue.org_id))?.slug ?? '~'
+  const url = taskUrl(orgSlug, issue.num)
   if (opts.surface === 'rest') {
-    const weeks = is_group
-      ? await groupWeeks(ctx, issue, project, opts.me, opts.readable, opts.children)
-      : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
     return {
       id: issue.id,
       key: issueKey(issue.num),
@@ -752,9 +838,11 @@ export async function issueOut(
       assignee_name,
       reviewer_id: issue.reviewer_id ?? null,
       reviewer_name,
+      owner_id,
       reporter_id: issue.reporter_id ?? null,
       reporter_name,
-      parent_id: await parentIdFor(ctx, opts.me, issue, opts.readable),
+      parent_id: parent.parent_id,
+      has_hidden_parent: parent.has_hidden_parent,
       start_week: weeks.start_week,
       end_week: weeks.end_week,
       due_date: issue.due_date ?? null,
@@ -765,6 +853,7 @@ export async function issueOut(
       archived_at: issue.archived_at ?? null,
       created_at: issue.created_at,
       updated_at: issue.updated_at,
+      url,
     }
   }
   return {
@@ -780,12 +869,17 @@ export async function issueOut(
     assignee_name,
     reviewer_id: issue.reviewer_id ?? null,
     reviewer_name,
+    owner_id,
     reporter_id: issue.reporter_id ?? null,
     reporter_name,
     project_id: issue.project_id,
     project_key: project.key,
     project_num: project.num,
     project_name: project.name,
+    parent_id: parent.parent_id,
+    has_hidden_parent: parent.has_hidden_parent,
+    start_week: weeks.start_week,
+    end_week: weeks.end_week,
     due_date: issue.due_date ?? null,
     remaining_hours: issue.remaining_hours ?? null,
     remaining_set_at: issue.remaining_set_at ?? null,
@@ -793,7 +887,217 @@ export async function issueOut(
     archived_at: issue.archived_at ?? null,
     created_at: issue.created_at,
     updated_at: issue.updated_at,
+    url,
   }
+}
+
+/* --------------------------------------------------- the single-task read
+ * GET /v1/tasks/{ref} (and the REST create and update answers) and MCP
+ * get_task add what a list row leaves out: the task's labels, its subtasks,
+ * its links and, for a group, its remaining hours. Each names other tasks
+ * only through lib/workingSet.ts with the machine Shown. */
+
+/** Another task as a read names it. */
+export type TaskRefJson = { id: string; key: string; title: string; status: IssueStatus }
+
+export type TaskDetailJson = {
+  /** a group's remaining hours as the app shows them, null for a leaf */
+  group_remaining_hours: number | null
+  labels: ReturnType<typeof labelJson>[]
+  /** the subtasks the caller can read, active ones for an active task */
+  subtasks: TaskRefJson[]
+  /** the links whose other task the caller can read, as seen from this one */
+  links: (TaskRefJson & { kind: TaskLinkKind })[]
+}
+
+/** Another task as a read names it: id, key, title and status. */
+export const taskRefOf = (t: Doc<'issues'>): TaskRefJson => ({
+  id: t.id,
+  key: issueKey(t.num),
+  title: t.title,
+  status: t.status,
+})
+
+const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
+
+/* `root` and the tasks under it, indexed by parent. It reads one level at a
+ * time and stops at the depth assertParentChain allows; past
+ * SUBTREE_WALK_BUDGET tasks it reads the organization's tasks once instead. */
+async function subtreeIndex(ctx: QueryCtx, root: Doc<'issues'>): Promise<ChildIndex> {
+  const index = new Map<string, Doc<'issues'>[]>()
+  const seen = new Set<string>([root.id])
+  let frontier = [root.id]
+  let reads = 0
+  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+    const next: string[] = []
+    for (const id of frontier) {
+      if (++reads > SUBTREE_WALK_BUDGET) {
+        const rows = await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
+          .collect()
+        return childIndexOf(rows)
+      }
+      const kids = await ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', id))
+        .collect()
+      index.set(id, kids)
+      for (const kid of kids) {
+        if (seen.has(kid.id)) continue
+        seen.add(kid.id)
+        next.push(kid.id)
+      }
+    }
+    frontier = next
+  }
+  return index
+}
+
+/**
+ * The single-task read's extra fields for `issue`, read by `me`. `isGroup`
+ * and `project` are what issueOut already worked out. The group total
+ * follows groupWeeks' counting rules: an active group counts its active
+ * subtasks outside archived projects, an archived one its whole subtree, and
+ * neither counts a task the caller cannot read or anything under it.
+ */
+export async function taskDetail(
+  ctx: QueryCtx,
+  me: Caller,
+  issue: Doc<'issues'>,
+  o: { project: Doc<'projects'>; isGroup: boolean; readable?: (projectId: string) => boolean },
+): Promise<TaskDetailJson> {
+  const reads = projectReader(ctx, me, o.readable)
+  const allArchived = issue.archived_at !== undefined
+  const children = o.isGroup
+    ? await subtreeIndex(ctx, issue)
+    : new Map([
+        [
+          issue.id,
+          await ctx.db
+            .query('issues')
+            .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
+            .collect(),
+        ],
+      ])
+  const childrenOf = (id: string): readonly Doc<'issues'>[] => children.get(id) ?? []
+  const below = [...children.values()].flat()
+  const shown = await machineShown(below, me, reads)
+  const subtasks = childrenOf(issue.id)
+    .filter((kid) => (allArchived || kid.archived_at === undefined) && shown(kid.id))
+    .sort(byNum)
+    .map(taskRefOf)
+  let group_remaining_hours: number | null = null
+  if (o.isGroup) {
+    // a subtask in an archived project counts only under a group in one
+    const liveProject = o.project.archived_at === undefined
+    const archivedProjects = new Set<string>()
+    for (const projectId of new Set(below.map((t) => t.project_id))) {
+      if ((await byId(ctx, 'projects', projectId))?.archived_at !== undefined) {
+        archivedProjects.add(projectId)
+      }
+    }
+    const byTaskId = new Map(below.map((t) => [t.id, t]))
+    const counts: Shown = (taskId) => {
+      const task = byTaskId.get(taskId)
+      return (
+        task !== undefined &&
+        shown(taskId) &&
+        (allArchived || task.archived_at === undefined) &&
+        !(liveProject && archivedProjects.has(task.project_id))
+      )
+    }
+    group_remaining_hours = groupRemainingHours(issue, childrenOf, counts)
+  }
+  const links: TaskDetailJson['links'] = []
+  const linked: { link: Doc<'issue_links'>; other: Doc<'issues'> }[] = []
+  for (const link of await linksOf(ctx, issue.id)) {
+    const other = await byId(
+      ctx,
+      'issues',
+      link.source_id === issue.id ? link.target_id : link.source_id,
+    )
+    if (other !== null) linked.push({ link, other })
+  }
+  const linkSees = await machineShown([issue, ...linked.map((l) => l.other)], me, reads)
+  for (const { link, other } of linked.sort((a, b) => byNum(a.other, b.other))) {
+    if (!linkShown(link, linkSees)) continue
+    links.push({ kind: linkKindFrom(link, issue.id), ...taskRefOf(other) })
+  }
+  const labels: Doc<'labels'>[] = []
+  const attached = ctx.db
+    .query('issue_labels')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+  for await (const row of attached) {
+    const label = await byId(ctx, 'labels', row.label_id)
+    if (label !== null && label.org_id === issue.org_id) labels.push(label)
+  }
+  labels.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
+  return { group_remaining_hours, labels: labels.map(labelJson), subtasks, links }
+}
+
+/** issueOut plus taskDetail, the shape of every single-task read. */
+export async function taskOut(
+  ctx: QueryCtx,
+  issue: Doc<'issues'>,
+  opts: IssueOutPre & Reader & { surface: 'rest' },
+): Promise<RestIssueJson & TaskDetailJson>
+export async function taskOut(
+  ctx: QueryCtx,
+  issue: Doc<'issues'>,
+  opts: IssueOutPre & Reader & { surface: 'mcp' },
+): Promise<McpIssueOut & TaskDetailJson>
+export async function taskOut(
+  ctx: QueryCtx,
+  issue: Doc<'issues'>,
+  opts: IssueOutPre & Reader,
+): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson> {
+  const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
+  if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
+  const row =
+    opts.surface === 'rest'
+      ? await issueOut(ctx, issue, { ...opts, surface: 'rest', project })
+      : await issueOut(ctx, issue, { ...opts, surface: 'mcp', project })
+  const detail = await taskDetail(ctx, opts.me, issue, {
+    project,
+    isGroup: row.is_group,
+    readable: opts.readable,
+  })
+  return { ...row, ...detail }
+}
+
+/* ------------------------------------------------------------ destinations
+ * Where a REST or MCP move sends a task, named with create's grammar:
+ * `project` names a sub-project, or a project whose sub-project
+ * `sub_project` names. A project or sub-project the caller cannot read
+ * answers like an unknown one; an archived one takes no tasks; a project
+ * named without its sub-project lists the ones the caller can write. The
+ * caller checks write access to the answer with its own sentence. */
+export function destinationOf(
+  cat: Catalogue,
+  can: { readable: (id: string) => boolean; writable: (id: string) => boolean },
+  ref: { project: string; sub_project?: string },
+  unknownProject: (ref: string) => ConvexError<Refusal>,
+): Doc<'projects'> {
+  const project = findProjectRef(cat, ref.project)
+  if (project === undefined || !can.readable(project.id)) throw unknownProject(ref.project)
+  assertLive(project)
+  let target = project
+  if (ref.sub_project !== undefined) {
+    const sub = ref.sub_project.trim() !== '' ? findProjectRef(cat, ref.sub_project) : undefined
+    if (sub === undefined || !can.readable(sub.id)) throw badRequest(SUB_MUST_NAME)
+    pairRule(project, sub)
+    target = sub
+  } else if (project.type === 'meta') {
+    metaNeedsSub(
+      project,
+      cat.projects.filter((c) => c.parent_id === project.id && c.archived_at === undefined),
+      can,
+    )
+  }
+  // a sub can be archived on its own
+  assertLive(target)
+  return target
 }
 
 /* REST projectJson (rest:215-220) — the caller's flags ride along. */

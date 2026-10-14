@@ -41,31 +41,23 @@ A write also needs Edit access on the project, as described below.
 
 ## Choose the interface
 
-- **Connected MCP:** Prefer it for routine task discovery, edits, comments,
-  and archive/restore. The endpoint is `https://api.qivo.io/mcp`. Use the
-  client's discovered tools and current `tools/list` schemas for arguments.
-  `list_tasks` defaults to 50 results, allows at most 200, and has no offset.
-  Narrow the query; a full result limit does not prove you found every task.
+- **Connected MCP:** Prefer it for routine task discovery, edits, moves,
+  subtasks, links, labels, comments, and archive/restore. The endpoint is
+  `https://api.qivo.io/mcp`. Use the client's discovered tools and current
+  `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
+  allows at most 200; page with `offset` until a shorter page arrives. If
+  `create_task` or `update_task` answers with `ignored_arguments`, those
+  arguments did nothing. Refresh the tool list and retry with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
-  token for paginated reads, scheduled weeks or setting someone's plannable
+  token for scripts, large paginated reads or setting someone's plannable
   hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
   token). A personal token acts as its person and its writes appear under
   their name. OAuth tokens work only on the REST webhook management routes,
   not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
-  `PATCH /v1/tasks/{ref}` accepts `start_week` and `end_week` as
-  `YYYY-MM-DD`: send both to schedule, or both as `null` to clear. After a
-  patch, both dates must exist or both be absent, with start no later than end.
-  On a task with `is_group: true`, both dates are calculated from the subtasks
-  you can read and cannot be patched; schedule its subtasks instead.
-  These fields are not MCP write arguments; `due_date` is a separate deadline.
-  Both dates name the first day of a week, and the end week is included. For
-  a Monday-based calendar, `2026-09-21` through `2026-09-28` is two weeks.
-  Read the first day of the week from `organization.week_start` in `get_me`
-  or `GET /v1/me`; do not assume Monday for every organization.
-- **Browser:** Use it for task moves, project creation/sharing, project
-  archive/restore, attachment uploads, and other actions absent from the machine
+- **Browser:** Use it for project creation/sharing, project archive/restore,
+  attachment uploads, and other actions absent from the machine
   interfaces. Enter at `https://qivo.io/app` and use the user's signed-in
   session. Follow an explicitly requested interface when it supports the work.
 
@@ -76,8 +68,12 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | List tasks | `list_tasks` | `GET /v1/tasks` |
 | Read a task | `get_task` | `GET /v1/tasks/{ref}` |
 | Create a task | `create_task` | `POST /v1/tasks` |
-| Update a task | `update_task` | `PATCH /v1/tasks/{ref}` |
+| Update, move or label a task | `update_task` | `PATCH /v1/tasks/{ref}` |
 | Delete a task | `delete_task` | `DELETE /v1/tasks/{ref}` |
+| Link two tasks | `set_task_link` | `POST /v1/tasks/{ref}/links` |
+| Remove a link | `set_task_link` with `linked: false` | `DELETE /v1/tasks/{ref}/links/{kind}/{other}` |
+| List labels | `list_labels` | `GET /v1/labels` |
+| Create or edit a label | `set_label` | `POST /v1/labels`, `PATCH /v1/labels/{id}` |
 
 Use the current task names; former endpoint and tool names are not aliases.
 Refresh cached MCP discovery or reconnect if the client still has an older
@@ -117,7 +113,7 @@ the credential's user as the actor. Comments are authored by that user too.
 
 For an existing task, use `list_tasks` with the resolved `project` and useful
 filters, then `get_task` with the returned task reference. Read
-`list_comments` with the `task` argument when the discussion matters. REST
+`list_comments` with the same `ref` when the discussion matters. REST
 reads and posts comments at `/v1/tasks/{ref}/comments`; its comment records
 identify the task by `task_id`. Search matches every
 whitespace-separated fragment across task ID, title, description, status,
@@ -151,8 +147,45 @@ Useful field rules:
   `paused: true` is refused, as is clearing its dates; `remaining_hours: null`
   and `paused: false` pass, so a stored value can be cleared. Inspect the
   subtasks to determine which changes match the user's request.
+- `start_week` and `end_week` plan a task, as `YYYY-MM-DD` on both
+  interfaces. Send both to schedule, or both as `null` to clear. After a
+  change, both dates must exist or both be absent, with start no later than
+  end. On a task with `is_group: true`, both dates are calculated from the
+  subtasks you can read and cannot be changed; schedule its subtasks
+  instead. `due_date` is a separate deadline. Both dates name the first day
+  of a week, and the end week is included. For a Monday-based calendar,
+  `2026-09-21` through `2026-09-28` is two weeks. Read the first day of the
+  week from `organization.week_start` in `get_me` or `GET /v1/me`; do not
+  assume Monday for every organization.
 - An agent's `plannable_hours: null` means no weekly capacity limit in Qivo,
   not zero capacity. Human capacity is shared across projects.
+- `owner_id` names whose work a task is. Filter with `owner_id` (MCP) or
+  `owner` (REST) to find someone's work including their reviews. `status`
+  takes a list on MCP and comma-separated values on REST.
+
+## Subtasks, moves, links and labels
+
+- **Subtask:** create the task with `parent` set to the parent's task
+  reference. You need Edit access on the parent's project, because the
+  parent becomes a group and loses its own remaining hours. Change the
+  parent later with `parent` on `update_task` or PATCH, or detach it with
+  `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list `subtasks`; a
+  `parent_id` of `null` with `has_hidden_parent: true` means the parent
+  exists but you cannot read it.
+- **Move:** send `project`, and `sub_project` when `project` names a
+  meta-project, on `update_task` or PATCH. You need Edit access on both
+  sub-projects, and the task's assignee and reviewer must be able to work in
+  the destination; reassign first if they cannot. The task keeps its key.
+- **Link:** `set_task_link` with `ref`, `other`, `kind` (`blocks`,
+  `blocked_by` or `relates`, as seen from `ref`) and `linked`, or the REST
+  links routes. Two tasks share at most one link; remove a link before
+  adding another kind. `get_task` lists `links`.
+- **Label:** find label ids or names with `list_labels` or `GET /v1/labels`,
+  then send `add_labels` and `remove_labels` on `update_task` or PATCH.
+  `set_label` or `POST /v1/labels` creates a label (`#rrggbb` color); only
+  organization admins rename or recolor one.
+- **Archive with a reason:** send `archived: true` with `archive_reason`; the
+  reason becomes a comment, as in the app's archive dialog.
 
 ## Receive task events
 
