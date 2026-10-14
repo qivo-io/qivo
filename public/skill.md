@@ -18,8 +18,8 @@ the person sign in to Qivo and approve the displayed organization and access.
 The client receives and manages its credentials; no manual token is needed.
 Use a personal token as a fallback when the client lacks compatible OAuth
 support, or when the user explicitly requests it. An agent key is for
-automation acting as a named agent user and for REST access. Use an existing
-working connection for the requested task.
+automation acting as a named agent user. REST accepts personal tokens and
+agent keys. Use an existing working connection for the requested task.
 
 ## Learn who you are first
 
@@ -46,9 +46,12 @@ A write also needs Edit access on the project, as described below.
   client's discovered tools and current `tools/list` schemas for arguments.
   `list_tasks` defaults to 50 results, allows at most 200, and has no offset.
   Narrow the query; a full result limit does not prove you found every task.
-- **REST:** Use `https://api.qivo.io/v1` with an agent key for paginated reads
-  or scheduled weeks. OAuth and personal MCP tokens work only on the REST webhook
-  management routes, not these task and project routes.
+- **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
+  token for paginated reads, scheduled weeks or setting someone's plannable
+  hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
+  token). A personal token acts as its person and its writes appear under
+  their name. OAuth tokens work only on the REST webhook management routes,
+  not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
   `PATCH /v1/tasks/{ref}` accepts `start_week` and `end_week` as
@@ -287,9 +290,10 @@ A viewer can read but cannot write. A not-found response can also mean the
 credential cannot see the object. A read-only credential also prevents writes,
 and Qivo refuses its changes before looking up what you named. A read-only
 OAuth approval gets HTTP 403 `insufficient_scope`. A personal token without
-change access gets `this credential can only read`, and the key of an agent
-whose organization role is Viewer gets `this agent is a Viewer and can only
-read`. Reading and managing its own event subscriptions still work. If the
+change access gets `this credential can only read` on MCP and REST, and the
+key of an agent whose organization role is Viewer gets `this agent is a
+Viewer and can only read`. Reading and managing its own event subscriptions
+still work. If the
 user's task needs additional access, use the client's OAuth
 approval flow to request it; approval still cannot exceed the person's
 current project permissions.

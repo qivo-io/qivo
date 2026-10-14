@@ -8,8 +8,8 @@
  * Layering: the surface files (convex/machine/{rest,mcp}.ts) own the wire —
  * routes, status codes, per-surface refusal sentences, JSON key subsets — and
  * compose these helpers inside ONE internal fn per endpoint (resolve + rules
- * + write + activity in one transaction). Each agent-key REST route and MCP
- * tool is declared once as a registry entry (machine/registry.ts) with a
+ * + write + activity in one transaction). Each organization REST route and
+ * MCP tool is declared once as a registry entry (machine/registry.ts) with a
  * required read/write `access` flag; a read entry can only run queries, so
  * its internal fn is a query. The /v1/webhooks routes and the MCP events/*
  * methods are served outside it. Shared RULES live in model/issues.ts
@@ -69,8 +69,9 @@ export type Caller = Doc<'profiles'>
  * SEPARATE query, so the profile can flip between lookup and dispatch — the
  * Deno single-transaction never had the window; re-asserting closes it).
  * The surface HTTP action maps these back to its own 401 sentence: REST
- * 'unknown agent key' / 'this agent has been deactivated'; MCP its per-leg
- * sentence (machine/auth.ts mcpAuth401). The messages here are REST's, as
+ * the caller's (machine/rest.ts CALLER, 'unknown agent key' / 'this agent
+ * has been deactivated' for an agent key); MCP its per-leg sentence
+ * (machine/auth.ts mcpAuth401). The messages here are REST's agent ones, as
  * the fallback if a surface skips the mapping. */
 export const CALLER_GONE = 'caller_gone'
 export const CALLER_DEACTIVATED = 'caller_deactivated'
@@ -228,12 +229,13 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
 
 /* ------------------------------------------------------------ access flags
  * What the caller holds on each named project (core.ts:307-318's successor):
- * read = canSeeProject, write = hasProjectLevel 'user'. hasProjectLevel
- * already applies the viewer ceiling (cappedLevel), so an org-role-viewer
- * agent and a grant-viewer agent both get `write: false`. (asMachineCaller
- * refuses a Viewer agent's writes before they get this far.) Here code sees
- * everything and CHOOSES what to disclose; these flags are that choice's only
- * input. */
+ * read = canSeeProject, write = hasProjectLevel 'user' through a credential
+ * that may write (machineAccess). hasProjectLevel already applies the viewer
+ * ceiling (cappedLevel), so an org-role-viewer agent and a grant-viewer agent
+ * both get `write: false`, and so does every project seen through a
+ * read-only credential. (asMachineCaller refuses those writes before they get
+ * this far.) Here code sees everything and CHOOSES what to disclose; these
+ * flags are that choice's only input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 
@@ -241,12 +243,14 @@ export async function accessFlags(
   ctx: QueryCtx,
   me: Caller,
   projects: Doc<'projects'>[],
+  access: CredentialAccess,
 ): Promise<Map<string, AccessFlag>> {
+  const writes = machineAccess(me, access) === 'write'
   const out = new Map<string, AccessFlag>()
   for (const p of projects) {
     out.set(p.id, {
       read: await canSeeProject(ctx, me, p),
-      write: await hasProjectLevel(ctx, me, p.id, 'user'),
+      write: writes && (await hasProjectLevel(ctx, me, p.id, 'user')),
     })
   }
   return out

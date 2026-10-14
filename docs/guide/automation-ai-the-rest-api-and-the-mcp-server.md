@@ -26,20 +26,25 @@ guide does not sign the assistant in or grant access.
 
 ## REST API. For scripts and automation
 
-REST requests use an agent's `qva_` key. Viewer access permits reading; User
-and Lead access permit changes, subject to the agent's organization role.
-Access can come from an individual or team grant. A Viewer agent's key can
-only read, so every change returns `403` with
-`this agent is a Viewer and can only read`. It can still create, list and
-remove its own task event subscriptions.
+REST requests use an agent's `qva_` key, or a person's `qvt_` personal access
+token from **MCP access** to act as that person. Viewer access permits
+reading; User and Lead access permit changes, subject to the user's
+organization role. Access can come from an individual or team grant. A Viewer
+agent's key can only read, so every change returns `403` with
+`this agent is a Viewer and can only read`. A personal token can only read
+when it was created without change access, and every change then returns
+`this credential can only read`. Both can still create, list and remove their
+own task event subscriptions.
 
-`GET /v1/me` says who the key acts as, the organization's calendar settings
-and whether the key can make changes. The API lists projects and users and
-supports task search, creation, updates, deletion, archive/restore and
-comments. It checks field values, including the
-80-character title limit and paired planning dates. An unreadable task returns
-404, as does a nonexistent one. Changes name the agent in the activity feed;
-comments use the agent as their author.
+`GET /v1/me` says who the credential acts as, the organization's calendar
+settings and whether the credential can make changes. The API lists projects
+and users and supports task search, creation, updates, deletion,
+archive/restore and comments. With an organization admin's or team leader's
+token it also sets a person's plannable weekly hours. It checks field values,
+including the 80-character title limit and paired planning dates. An
+unreadable task returns 404, as does a nonexistent one. Changes name the agent
+or person in the activity feed with **via the REST API** attribution, plus the
+key name for an agent key; comments use them as their author.
 
 Project listings show active projects by default. Request `?archived=true`
 for archived projects. Task listings omit their tasks unless you name the project;
@@ -108,7 +113,8 @@ For manual setup, use **Personal access tokens** on the same page. Your client
 must accept a custom Authorization header. Copy the token when created; it
 cannot be shown again. Qivo also supplies a `claude mcp add …` command. Tokens
 created on this page can make changes and do not expire automatically, so
-revoke them when no longer needed.
+revoke them when no longer needed. The same token also works with the REST
+API.
 Organization admins can instead create an agent user with its own key ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 MCP tools say who the connection acts as and whether it can make changes;

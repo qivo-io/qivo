@@ -1,19 +1,29 @@
 /* The /v1/* REST surface. Contracts are BYTE-PRESERVED: every
  * refusal sentence, the response field lists (explicit nulls, never omitted
- * keys) and the provenance string `via the REST API (<keyName>)`. No route is
- * an existence oracle. A project, sub-project or task the key cannot read
- * answers exactly like an unknown ref (404 on GETs, the 400 ref sentence on
- * POST /v1/tasks). A readable project the key cannot write answers 403.
+ * keys) and the provenance string `via the REST API (<keyName>)` of an agent
+ * key's writes. No route is an existence oracle. A project, sub-project or
+ * task the caller cannot read answers exactly like an unknown ref (404 on
+ * GETs, the 400 ref sentence on POST /v1/tasks). A readable project the
+ * caller cannot write answers 403.
  *
- * Layering: the httpAction shell owns auth (ordinary routes accept agent keys;
- * webhook management also accepts personal and OAuth credentials), the per-call last_used_at stamp,
- * CORS, routing and the code→status map. Routing is the ROUTES table, where
- * each agent-key route is ONE registry entry (machine/registry.ts) declaring its
- * method, path, required read/write `access` flag and success status, and a
- * read route can only run queries. Each endpoint is ONE internal fn —
+ * Two credentials reach the organization routes: a `qva_` agent key, acting
+ * as its agent, and a `qvt_` personal access token, acting as its person.
+ * Every sentence that names the caller has an agent and a person form
+ * (CALLER below and the 401 tables in machine/auth.ts); the agent forms are
+ * the pinned bytes. A person's writes narrate `via the REST API` with no
+ * token name.
+ *
+ * Layering: the httpAction shell owns auth (ordinary routes accept agent keys
+ * and personal tokens; webhook management also accepts OAuth credentials),
+ * the per-call last_used_at stamp, CORS, routing and the code→status map.
+ * Routing is the ROUTES table, where each organization route is ONE registry
+ * entry (machine/registry.ts) declaring its method, path, required read/write
+ * `access` flag and success status, and a read route can only run queries.
+ * Each endpoint is ONE internal fn —
  * resolve + rules + write + activity in one transaction — starting from
  * asMachineCaller(ctx, callerId, access), which first refuses a write from a
- * read-only credential (a Viewer agent), and composing lib/core.ts + the
+ * read-only credential (a Viewer agent or a read-only personal token), and
+ * composing lib/core.ts + the
  * model layer with the trusted machine-narration override (model/issues.ts
  * `machine` arg): verbs created/changed/archived/restored/deleted, the
  * multi-field issueChanges diff, the provenance suffix. A PATCH carrying fields AND an
@@ -22,8 +32,8 @@
  *
  * Refusal mapping: ConvexError e.data.code → {not_found:404, forbidden:403,
  * bad_request:400, rule:400}, body {"error": message}; the CALLER_GONE /
- * CALLER_DEACTIVATED race reasons map back to their 401 sentences BEFORE the
- * code map; anything else → 500 {"error": String(e)}. */
+ * CALLER_DEACTIVATED race reasons map back to the caller's own 401 sentences
+ * BEFORE the code map; anything else → 500 {"error": String(e)}. */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
@@ -63,6 +73,7 @@ import {
   ISSUE_STATUSES,
   type IssuePriority,
   type IssueStatus,
+  type ProfileKind,
   vCredentialAccess,
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
@@ -88,16 +99,58 @@ import {
   updateIssueCore,
 } from '../model/issues'
 import { notifyCommentInsert } from '../model/messages'
-import { newUuid } from '../model/orgs'
+import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
-import { authenticateSecret, REST_AUTH_401, sha256hex } from './auth'
+import {
+  authenticateSecret,
+  REST_AUTH_401,
+  REST_PERSON_AUTH_401,
+  restAuth401,
+  sha256hex,
+} from './auth'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = RestUserJson & { assignable: boolean }
 
-const provenanceOf = (keyName: string): string => `via the REST API (${keyName})`
+/* An agent key's writes name the key; a personal token's writes name no
+ * token, because the person is the actor and their tokens are private. */
+const provenanceOf = (keyName: string | null): string =>
+  keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
+
+/* Every REST sentence that names the caller, keyed by who the credential acts
+ * as: an agent key acts as its agent and a personal token as its person
+ * (machine/auth.ts lookupCredential holds them to that). The agent column is
+ * the pinned contract; the person column follows MCP's wording. The 401
+ * sentences of a failed lookup are machine/auth.ts REST_AUTH_401 and
+ * REST_PERSON_AUTH_401. */
+const CALLER = {
+  agent: {
+    gone: REST_AUTH_401.unknown,
+    deactivated: REST_AUTH_401.inactive,
+    noWrite: 'this agent has no write access to that project',
+    commentAuthor:
+      'comments cannot be attributed over the API — a comment is always authored by the agent posting it',
+  },
+  person: {
+    gone: REST_PERSON_AUTH_401.unknown,
+    deactivated: REST_PERSON_AUTH_401.inactive,
+    noWrite: 'your account has no write access to that project',
+    commentAuthor:
+      'comments cannot be attributed over the API; a comment is always authored by the person posting it',
+  },
+} as const satisfies Record<
+  ProfileKind,
+  { gone: string; deactivated: string; noWrite: string; commentAuthor: string }
+>
+
+/* The agent key's name for its writes' provenance, or null for a personal
+ * token. */
+const vKeyName = v.union(v.string(), v.null())
+
+/** The 403 for a readable project the caller cannot write. */
+const noWrite = (me: Caller): ConvexError<Refusal> => forbidden(CALLER[me.kind].noWrite)
 
 /* --------------------------------------------------------- shared plumbing */
 
@@ -119,7 +172,7 @@ async function withAccess(
 ): Promise<Access> {
   const me = await asMachineCaller(ctx, callerId, access)
   const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat.projects)
+  const flags = await accessFlags(ctx, me, cat.projects, access)
   return {
     me,
     cat,
@@ -315,9 +368,9 @@ export const listProjectUsers = internalQuery({
 
 /* ------------------------------------------------------------------- me -- */
 
-/* GET /v1/me answers who this key acts as, its organization's settings, the
- * billing pause and the key itself (lib/core.ts meCore, shared with MCP's
- * get_me). Only this function takes the credential row. */
+/* GET /v1/me answers who this credential acts as, its organization's
+ * settings, the billing pause and the credential itself (lib/core.ts meCore,
+ * shared with MCP's get_me). Only this function takes the credential row. */
 export const getMe = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, credential: vEventOwner },
   handler: async (ctx, a): Promise<MeJson> => {
@@ -347,6 +400,39 @@ export const getUser = internalQuery({
     const one = rows.find((m) => m.id === a.ref.toLowerCase())
     if (one === undefined) throw notFound('user not found')
     return userJson(one)
+  },
+})
+
+/* PATCH /v1/users/{id} sets plannable_hours, the one user field the API
+ * changes, through setPlannableHoursCore (the rule of the app and of MCP's
+ * update_user): an organization admin, or a leader of one of that person's
+ * teams, and never an agent's hours. The core's rights refusal is a rule
+ * sentence for the app's toast; REST answers it 403 like any missing right.
+ * No activity row, as in the app. */
+export const updateUser = internalMutation({
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
+  handler: async (ctx, a): Promise<RestUserJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const target = (await listUsersCore(ctx, me)).find((m) => m.id === a.ref.toLowerCase())
+    if (target === undefined) throw notFound('user not found')
+    const b = needJson(a.body)
+    if (!('plannable_hours' in b)) throw badRequest('no recognized fields to update')
+    if (typeof b.plannable_hours !== 'number' || !Number.isInteger(b.plannable_hours)) {
+      throw badRequest('plannable hours must be a whole number of hours from 1 to 168')
+    }
+    try {
+      const fresh = await setPlannableHoursCore(ctx, {
+        me,
+        profile_id: target.id,
+        hours: b.plannable_hours,
+      })
+      return userJson(fresh)
+    } catch (e) {
+      if (e instanceof ConvexError && (e.data as Refusal).message === PLANNABLE_HOURS_RIGHTS) {
+        throw forbidden(PLANNABLE_HOURS_RIGHTS)
+      }
+      throw e
+    }
   },
 })
 
@@ -453,7 +539,7 @@ export const getIssue = internalQuery({
  * sub_project the key cannot read answers exactly like an unknown ref, so no
  * answer reveals that a hidden project exists. */
 export const createIssue = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, keyName: v.string(), body: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, body: v.string() },
   handler: async (ctx, a): Promise<RestIssueJson> => {
     const { me, cat, readable, writable } = await withAccess(ctx, a.callerId, a.access)
     const b = needJson(a.body)
@@ -485,7 +571,7 @@ export const createIssue = internalMutation({
     }
     // a sub can be archived alone, so proj being live proves nothing
     assertLive(target)
-    if (!writable(target.id)) throw forbidden('this agent has no write access to that project')
+    if (!writable(target.id)) throw noWrite(me)
     const fields = issueFields(b, true)
     assertEffectiveWeekPair(fields)
     await applyPerson(ctx, target, b, fields, 'assignee_id')
@@ -529,7 +615,7 @@ export const updateIssue = internalMutation({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
-    keyName: v.string(),
+    keyName: vKeyName,
     ref: v.string(),
     body: v.string(),
   },
@@ -537,9 +623,7 @@ export const updateIssue = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) {
-      throw forbidden('this agent has no write access to that project')
-    }
+    if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const b = needJson(a.body)
     if ('reporter_id' in b) throw badRequest(REPORTER_IMMUTABLE_SENTENCE)
     // a move attempt with other fields alongside is rejected whole, never a
@@ -584,14 +668,12 @@ export const updateIssue = internalMutation({
  * are touched AND notified; attachment bytes die in the same transaction) +
  * the 'deleted' narration whose detail is exactly the provenance. */
 export const deleteIssue = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, keyName: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, ref: v.string() },
   handler: async (ctx, a): Promise<{ deleted: boolean; id: string; key: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) {
-      throw forbidden('this agent has no write access to that project')
-    }
+    if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const now = new Date().toISOString()
     await deleteIssueDeep(ctx, { issue, actor: me, now })
     await logActivity(ctx, {
@@ -626,26 +708,21 @@ export const listComments = internalQuery({
   },
 })
 
-/* POST /v1/tasks/{ref}/comments (rest:425-437) — authored by the AGENT;
- * attribution cannot be forged; the id is server-generated (§5); deliberately
- * NO activity row (the comment IS its own feed entry). An issue outside this
- * agent's reach is not found BEFORE the write gate is consulted — never a
- * 403 that would confirm it exists. */
+/* POST /v1/tasks/{ref}/comments (rest:425-437), authored by the CALLER (the
+ * agent or the person the credential acts as). Attribution cannot be forged,
+ * the id is server-generated (§5), and there is deliberately NO activity row
+ * (the comment IS its own feed entry). An issue outside the caller's reach is
+ * not found BEFORE the write gate is consulted, never a 403 that would
+ * confirm it exists. */
 export const addComment = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<RestCommentJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) {
-      throw forbidden('this agent has no write access to that project')
-    }
+    if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const b = needJson(a.body)
-    if ('author' in b || 'author_id' in b) {
-      throw badRequest(
-        'comments cannot be attributed over the API — a comment is always authored by the agent posting it',
-      )
-    }
+    if ('author' in b || 'author_id' in b) throw badRequest(CALLER[me.kind].commentAuthor)
     if (typeof b.body !== 'string') throw badRequest('body must be a non-empty string')
     const trimmed = b.body.trim()
     if (trimmed === '') throw badRequest('comment body must not be blank')
@@ -696,15 +773,16 @@ function safeDecode(s: string): string {
 }
 
 /* ----------------------------------------------------------- route table --
- * Every agent-key route is ONE registry entry (machine/registry.ts): method,
+ * Every organization route is ONE registry entry (machine/registry.ts): method,
  * path, the required read/write `access` flag, the success status and the
  * `run` that calls its internal fn. `path` lists the segments after /v1.
  * `:name` captures one decoded segment, which `run` reads with `param(name)`,
  * and every other segment must match the raw request segment exactly.
  * Declaring a route through route() types `param` from its own path, so a
  * `run` that asks for a name its path does not declare does not compile.
- * Webhook routes are not here, because they accept more credential kinds and
- * are served before agent-key auth (webhookResponse). */
+ * Webhook routes are not here, because they also accept OAuth credentials
+ * and are served before the agent key and personal token auth
+ * (webhookResponse). */
 
 /** The `:name` placeholders of a route path, as a union of names. */
 type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${infer Rest}`
@@ -717,7 +795,8 @@ type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${in
 type RouteInput<Name extends string> = Principal & {
   /** the credential row that authenticated the request, for GET /v1/me */
   credential: EventOwner
-  keyName: string
+  /** the agent key's name, or null for a personal token */
+  keyName: string | null
   /** One decoded `:name` segment of the request path. */
   param: (name: Name) => string
   query: (name: string) => string | undefined
@@ -793,6 +872,19 @@ export const ROUTES: RestRoute[] = [
     status: 200,
     run: (r, { callerId, access, param }) =>
       r.runQuery(internal.machine.rest.getUser, { callerId, access, ref: param('ref') }),
+  }),
+  route({
+    method: 'PATCH',
+    path: 'users/:ref',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, param, body }) =>
+      r.runMutation(internal.machine.rest.updateUser, {
+        callerId,
+        access,
+        ref: param('ref'),
+        body,
+      }),
   }),
   route({
     method: 'GET',
@@ -909,20 +1001,21 @@ const STATUS_OF: Partial<Record<string, number>> = {
   rule: 400, // readable beats a 500; machine pre-checks fire first in practice
 }
 
-function refusalResponse(e: unknown): Response {
+function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>
     // the auth-to-dispatch race: the profile flipped between lookup and
-    // dispatch — answer the surface's own 401 sentence, BEFORE the code map
-    if (data.reason === CALLER_GONE) return err('unknown agent key', 401)
-    if (data.reason === CALLER_DEACTIVATED) return err('this agent has been deactivated', 401)
+    // dispatch, so answer the caller's own 401 sentence BEFORE the code map
+    if (data.reason === CALLER_GONE) return err(CALLER[kind].gone, 401)
+    if (data.reason === CALLER_DEACTIVATED) return err(CALLER[kind].deactivated, 401)
     const status = data.code !== undefined ? STATUS_OF[data.code] : undefined
     if (status !== undefined && data.message !== undefined) return err(data.message, status)
   }
   return err(String(e), 500)
 }
 
-/** Broader credential support is confined to webhook lifecycle and inspection. */
+/** Webhook lifecycle and inspection, the only REST routes that also accept
+ *  OAuth credentials. */
 async function webhookResponse(
   ctx: ActionCtx,
   req: Request,
@@ -1019,9 +1112,11 @@ async function webhookResponse(
 
 const restHandler = httpAction(async (ctx, req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  // who the credential acts as, once it is known; the race sentences use it
+  let kind: ProfileKind = 'agent'
   try {
     if (!(await ctx.runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
-    // ---- authenticate the agent key (qva_ only — a qvt_ here is `missing`) --
+    // ---- authenticate the agent key (qva_) or personal token (qvt_) --------
     const auth = req.headers.get('Authorization') ?? ''
     const secret = auth.startsWith('Bearer ')
       ? auth.slice(7).trim()
@@ -1031,25 +1126,28 @@ const restHandler = httpAction(async (ctx, req) => {
     const seg = path.split('/').filter(Boolean)
     if (seg[0] === 'v1' && seg[1] === 'webhooks')
       return await webhookResponse(ctx, req, seg, secret)
-    const res = await authenticateSecret(ctx, secret, { person: false })
+    const res = await authenticateSecret(ctx, secret, { person: true })
     // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
     // _generated/api.d.ts under strict:false, where truthiness narrowing of
     // the discriminant does not apply
-    if (res.ok === false) return err(REST_AUTH_401[res.why], 401)
+    if (res.ok === false) return err(restAuth401(res), 401)
+    kind = res.cred.isAgent ? 'agent' : 'person'
+    const table = res.cred.isAgent ? 'agent_keys' : 'mcp_tokens'
     // per-call last_used_at stamp — before any routing/work, even requests
     // that then 404 or 400 (the published contract; no throttle)
     const allowed = await ctx.runMutation(internal.machine.auth.touchCredential, {
-      table: 'agent_keys',
+      table,
       tokenId: res.cred.tokenId,
       rowId: res.cred.rowId,
       profileId: res.cred.profileId,
       now: new Date().toISOString(),
     })
-    if (allowed === null) return err('unknown agent key', 401)
+    if (allowed === null) return err(CALLER[kind].gone, 401)
     if (!allowed) return rateLimited()
     const callerId = res.cred.profileId
     const access = res.cred.access
-    const keyName = res.cred.keyName ?? ''
+    // null for a personal token, whose writes name no token
+    const keyName = res.cred.isAgent ? res.cred.keyName : null
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
     const body = req.method === 'POST' || req.method === 'PATCH' ? await req.text() : ''
@@ -1062,7 +1160,7 @@ const restHandler = httpAction(async (ctx, req) => {
       access,
       credential: {
         profile_id: callerId,
-        credential_table: 'agent_keys',
+        credential_table: table,
         credential_id: res.cred.tokenId,
         credential_row_id: res.cred.rowId,
       },
@@ -1073,7 +1171,7 @@ const restHandler = httpAction(async (ctx, req) => {
     })
     return json(result, found.route.status)
   } catch (e) {
-    return refusalResponse(e)
+    return refusalResponse(e, kind)
   }
 })
 

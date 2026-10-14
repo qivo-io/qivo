@@ -15,7 +15,13 @@ import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { classifySecret, REST_AUTH_401, sha256hex } from '../machine/auth'
+import {
+  classifySecret,
+  REST_AUTH_401,
+  REST_PERSON_AUTH_401,
+  restAuth401,
+  sha256hex,
+} from '../machine/auth'
 import { GROUP_DATES_MACHINE } from '../model/issues'
 import {
   activityFor,
@@ -197,12 +203,26 @@ describe('REST auth surface', () => {
     })
   })
 
-  it('prefix routing: qva_ only — a qvt_ on REST is the missing failure, pre-hash', () => {
-    expect(classifySecret('qva_abc', { person: false })).toEqual({ isAgent: true })
-    expect(classifySecret('qvt_abc', { person: false })).toBeNull() // → REST_AUTH_401.missing
+  it('the person leg names the token state; a missing credential keeps the agent sentence', () => {
+    expect(REST_PERSON_AUTH_401).toEqual({
+      unknown: 'unknown personal access token',
+      revoked: 'this personal access token has been revoked or has expired',
+      inactive: 'this account has been deactivated',
+      wrong_kind: 'unknown personal access token',
+    })
+    expect(restAuth401({ why: 'missing', isAgent: false })).toBe(REST_AUTH_401.missing)
+    expect(restAuth401({ why: 'revoked', isAgent: true })).toBe(REST_AUTH_401.revoked)
+    expect(restAuth401({ why: 'revoked', isAgent: false })).toBe(REST_PERSON_AUTH_401.revoked)
+  })
+
+  it('prefix routing: qva_ is the agent leg, qvt_ the person leg, anything else missing, pre-hash', () => {
+    // REST, like MCP, takes persons; a qvt_ here once read as missing
+    expect(classifySecret('qva_abc', { person: true })).toEqual({ isAgent: true })
     expect(classifySecret('qvt_abc', { person: true })).toEqual({ isAgent: false })
-    expect(classifySecret('sk-something', { person: false })).toBeNull()
-    expect(classifySecret('', { person: false })).toBeNull()
+    expect(classifySecret('qvo_abc', { person: true })).toBeNull() // OAuth: webhook routes only
+    expect(classifySecret('sk-something', { person: true })).toBeNull()
+    expect(classifySecret('', { person: true })).toBeNull()
+    expect(classifySecret('qvt_abc', { person: false })).toBeNull()
   })
 
   it('lookupCredential walks unknown → revoked → wrong_kind → inactive in order', async () => {
@@ -303,9 +323,10 @@ describe('GET /v1/projects', () => {
   it('lists readable projects with access flags, key-sorted; archived= flips the axis', async () => {
     const t = newT()
     const f = await machineOrg(t)
+    // a Standard user agent's key resolves to write access
     const rows = await t.query(internal.machine.rest.listProjects, {
       callerId: f.agent.id,
-      access: 'read',
+      access: 'write',
     })
     expect(rows.map((p) => p.key)).toEqual(['FW', 'PCB', 'TBED']) // SKNK invisible
     expect(rows[2]).toEqual({

@@ -65,7 +65,8 @@ export type MachineCredential = {
   rowId: string
   isAgent: boolean
   /** the agent key's own name for qva_ (feeds the REST provenance string
-   *  `via the REST API (<keyName>)`); null for qvt_ */
+   *  `via the REST API (<keyName>)`); null for qvt_, whose REST writes read
+   *  `via the REST API` with no name */
   keyName: string | null
   /** what this credential may do (lib/access.ts credentialAccess), passed to
    *  every machine internal fn */
@@ -77,11 +78,12 @@ export type AuthResult =
   | { ok: false; why: AuthFail; isAgent: boolean }
 
 /* Prefix routing (core.ts:171-173): `qva_` → agent leg; `qvt_` → person leg
- * ONLY where the surface allows persons (REST passes {person:false}, so a
- * qvt_ on REST is the `missing` failure, not wrong_kind); anything else →
- * missing. Secret extraction stays in each surface's action: REST honors
- * `Authorization` when it starts with exactly 'Bearer ' (case-sensitive, one
- * space) else falls back to X-Api-Key; MCP is Bearer-only. */
+ * ONLY where the surface allows persons (REST and MCP both do; a surface
+ * passing {person:false} would read a qvt_ as the `missing` failure, not
+ * wrong_kind); anything else → missing. Secret extraction stays in each
+ * surface's action: REST honors `Authorization` when it starts with exactly
+ * 'Bearer ' (case-sensitive, one space) else falls back to X-Api-Key, for
+ * both prefixes; MCP is Bearer-only. */
 export const classifySecret = (
   secret: string,
   allow: { person: boolean },
@@ -197,7 +199,9 @@ export const touchCredential = internalMutation({
  * {"error": <sentence>} with CORS + Content-Type: application/json; MCP 401s
  * additionally carry `WWW-Authenticate: Bearer`. */
 
-/* REST. */
+/* REST, agent leg, and the sentence for a missing credential, whose leg is
+ * unknown. These are pinned agent bytes, so the missing sentence still names
+ * only the agent key prefix even though REST also takes personal tokens. */
 export const REST_AUTH_401: Record<AuthFail, string> = {
   missing: 'missing agent key (Authorization: Bearer qva_…)',
   unknown: 'unknown agent key',
@@ -205,6 +209,20 @@ export const REST_AUTH_401: Record<AuthFail, string> = {
   inactive: 'this agent has been deactivated',
   wrong_kind: 'unknown agent key', // deliberately identical to unknown
 }
+
+/* REST, person leg (a qvt_ personal access token). Like the agent table it
+ * names the state, except that an expired token reads as a revoked one
+ * (lookupCredential does not tell them apart). */
+export const REST_PERSON_AUTH_401: Record<Exclude<AuthFail, 'missing'>, string> = {
+  unknown: 'unknown personal access token',
+  revoked: 'this personal access token has been revoked or has expired',
+  inactive: 'this account has been deactivated',
+  wrong_kind: 'unknown personal access token', // deliberately identical to unknown
+}
+
+/** The REST 401 sentence for a failed lookup, by its leg. */
+export const restAuth401 = (fail: { why: AuthFail; isAgent: boolean }): string =>
+  fail.why === 'missing' || fail.isAgent ? REST_AUTH_401[fail.why] : REST_PERSON_AUTH_401[fail.why]
 
 /* MCP: missing is its own sentence; every other failure collapses per
  * LEG — the credential's state is not disclosed. */

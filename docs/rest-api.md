@@ -5,16 +5,19 @@ accept external agent credentials or OAuth connections. Use a regular Qivo
 workspace for this interface.
 
 A small JSON API over the planner's projects and tasks, served by a
-Convex HTTP action. Task and project requests authenticate as an **agent
-user** — a user of the organization that is not a person, with no email and
-no password, whose login is an **agent key**. Agents are created by org
-admins in **Settings → Organization → Users**, and what one may reach is
-the projects it can access directly or through a team, exactly like a person: a
-`lead` or `user` **project role** reads and writes, a `viewer` project role
-reads, and a role on a meta-project covers its sub-projects. Over all of that
-sits the agent's **organization role**, which since migration 0102 can itself
-be `viewer` — a read-only key, made with one setting rather than an audited
-grant list (see below). Both project types have a named lead and no owning
+Convex HTTP action. Task and project requests authenticate as one user of the
+organization, in one of two ways. An **agent key** (`qva_`) acts as an
+**agent user**, a user of the organization that is not a person, with no
+email and no password. Agents are created by org admins in **Settings →
+Organization → Users**. A **personal access token** (`qvt_`) acts as the
+person who created it under **Settings → User account → MCP access**. Either
+way, what the caller may reach is the projects that user can access directly
+or through a team: a `lead` or `user` **project role** reads and writes, a
+`viewer` project role reads, and a role on a meta-project covers its
+sub-projects. Over all of that sits the user's **organization role**, which
+can itself be `viewer` (for an agent since migration 0102), a read-only seat
+made with one setting rather than an audited grant list (see below). The
+credential itself can also be read-only. Both project types have a named lead and no owning
 team. Projects and sub-projects may be shared with several teams and users
 through explicit access grants. Team shares grant `user` or `viewer` to
 current members; the strongest direct or team grant wins under the
@@ -26,9 +29,10 @@ creates tasks, and `/v1/tasks/{ref}` addresses one task. Related records use
 `task_id`. This pre-launch rename replaces the former route and field names;
 legacy task endpoint names are not aliases.
 
-The organization API below uses `qva_` agent keys. Only the
-[webhook management routes](#generic-webhooks) also accept personal tokens and
-OAuth access tokens, allowing MCP subscribers to inspect their callbacks. The separate
+The organization API below takes `qva_` agent keys and `qvt_` personal access
+tokens. OAuth access tokens are bound to the MCP server, so only the
+[webhook management routes](#generic-webhooks) also accept them, allowing MCP
+subscribers to inspect their callbacks. The separate
 [background curation API](#background-curation-api) at `/v1/curation/` uses
 operator-issued `qvc_` keys for the global image library and agent prechecks.
 
@@ -51,57 +55,102 @@ the authenticated APIs below.
 
 ## Authentication
 
-OAuth access tokens and personal `qvt_` tokens authenticate [MCP](mcp.md) and
-the webhook management routes below. Other organization REST routes require
-`qva_` agent keys. Background curation uses its separate `qvc_` credentials.
+Every organization route takes either credential:
 
-Agent-key requests carry the key as a bearer token or in `X-Api-Key`:
+- A `qva_` **agent key** acts as its agent. Use it for automation that should
+  have its own identity, project access and name in the activity feed.
+- A `qvt_` **personal access token** acts as the person who created it, with
+  that person's permissions. Use it for actions only a person may take, such
+  as setting someone's plannable hours, or for scripts a person runs as
+  themselves. The same token also authenticates [MCP](mcp.md).
+
+OAuth access tokens authenticate MCP and, here, only the webhook management
+routes below. Background curation uses its separate `qvc_` credentials.
+
+Requests carry the credential as a bearer token or in `X-Api-Key`:
 
 ```
 Authorization: Bearer qva_0123…
+Authorization: Bearer qvt_0123…
 ```
 
 The secret is shown exactly once, at creation. Only its SHA-256 digest and a
-safe display fingerprint (the first 7 and last 5 characters, such as
-`qva_012...abcde`) are stored; a revoked key
-stops working immediately, and so does **every** key of an agent switched to
-Inactive. `401` means the key is missing, unknown, revoked or deactivated;
-`403` means the key is valid but the agent lacks the required role or
-organization editing is paused for billing;
-unreadable objects come back as `404`.
+safe display identifier (for an agent key the first 7 and last 5 characters,
+such as `qva_012...abcde`) are stored. A revoked key or token stops working
+immediately, and so does **every** credential of a user switched to Inactive.
+A personal token may also carry an expiry date, after which it is refused like
+a revoked one. `GET /v1/me` reports which credential a request used and what it
+may do.
 
-An agent may hold several keys at once, which is how one is rotated without
-the agent going dark: mint the new key, move the client over, revoke the old.
+`401` means the credential is missing, unknown, revoked, expired or belongs to
+a deactivated user. The sentence depends on the credential:
 
-Access follows the agent's effective project roles, including team grants:
+| Failure | Agent key | Personal access token |
+|---|---|---|
+| missing or unrecognized | `missing agent key (Authorization: Bearer qva_…)` | the same |
+| unknown | `unknown agent key` | `unknown personal access token` |
+| revoked or expired | `this agent key has been revoked` | `this personal access token has been revoked or has expired` |
+| user deactivated | `this agent has been deactivated` | `this account has been deactivated` |
 
-- **read** — any role: list/fetch the project, its tasks and their comment
-  threads.
-- **write** — `user` or `lead`: create, edit and delete tasks in the project,
-  and post comments on them. A writing role reads too — the agent model has
-  no write-without-read grant.
+A request without a recognizable credential cannot be told apart, so it keeps
+the agent key's sentence. A `qvo_` OAuth token on these routes gets that
+sentence too. `403` means the credential is valid but the user lacks the
+required role, the credential can only read, or organization editing is
+paused for billing. Unreadable objects come back as `404`.
+
+An agent may hold several keys at once, and a person several tokens, which is
+how one is rotated without going dark: mint the new one, move the client over,
+revoke the old.
+
+Access follows the user's effective project roles, including team grants:
+
+- **read**: any role, to list and fetch the project, its tasks and their
+  comment threads.
+- **write**: `user` or `lead`, to create, edit and delete tasks in the
+  project and post comments on them. A writing role reads too; the access
+  model has no write-without-read grant.
+
+A readable project the user cannot write answers `403` with
+`this agent has no write access to that project` for an agent key and
+`your account has no write access to that project` for a personal token.
+
+**Read-only credentials.** Every credential either can make changes or can
+only read, by the same rule as on MCP (`credentialAccess` in
+`convex/lib/access.ts`). A personal token can make changes only when it was
+created with change access and has not expired; a token stored without an
+access setting can only read. An agent key can make changes only when its
+agent's organization role is `user`. A read-only credential still reads
+everything its user can, and every project comes back
+`"access": { "read": …, "write": false }`. Every `POST`, `PATCH` and `DELETE`
+request returns `403` with `{"error": "this credential can only read"}` for a
+personal token and `{"error": "this agent is a Viewer and can only read"}` for
+a Viewer agent's key, before Qivo resolves any reference, so the answer is
+the same whether or not the reference exists. Managing the credential's own
+webhooks remains allowed.
 
 **Two different things are spelled `viewer`.** The one above is a **project
 role** — a grant on one project, reported in that project's `access` flags.
-The other is the agent's **organization role** (migration 0102; the `org_role`
-field in `GET /v1/users`), and it is a *ceiling* rather than a grant: it never
+The other is the user's **organization role** (the `org_role` field in
+`GET /v1/users`; agents can be `viewer` since migration 0102), and it is a
+*ceiling* rather than a grant: it never
 opens a project, it only refuses to let any other path — a `user` or `lead`
 grant, a team grant, a project-lead title, a team leadership — exceed read.
-They share a word because they are the same idea one altitude apart. An agent whose
+They share a word because they are the same idea one altitude apart. A user whose
 `org_role` is `viewer` therefore comes back with
 `"access": { "read": …, "write": false }` on **every** project, whatever it
-holds there. Its key is a read-only credential, so every `POST`, `PATCH` and
-`DELETE` task or comment request returns `403` with
-`{"error": "this agent is a Viewer and can only read"}`. Qivo refuses the
-request before it resolves any project or task reference, so the answer is
-the same whether or not the reference exists. Managing that key's own
-webhooks remains allowed. That is how a read-only key is made, with one
-setting on the Users page rather than a grant list audited project by project. Nothing in this
-surface implements it. The rule lives in the shared access layer
-(`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`), which REST,
-MCP and webhook management all call, so the same agent is read-only here,
-over MCP and in the browser alike. A Standard user agent (`org_role` `user`)
-that holds only a `viewer` project role gets
+holds there. For an agent that makes its key a read-only credential, so every
+`POST`, `PATCH` and `DELETE` request returns `403` with
+`{"error": "this agent is a Viewer and can only read"}` before Qivo resolves
+any project or task reference. That is how a read-only key is made, with one
+setting on the Users page rather than a grant list audited project by project.
+A Viewer person's token may be able to make changes, but every write still
+refuses with `your account has no write access to that project` (or the
+plannable hours rule's own sentence), the refusal a missing grant produces.
+Nothing in this surface implements either rule. They live in the shared
+access layer (`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`),
+which REST, MCP and webhook management all call, so the same user is
+read-only here, over MCP and in the browser alike. A Standard user agent
+(`org_role` `user`) that holds only a `viewer` project role gets
 `this agent has no write access to that project` on that project instead.
 
 > **Migration note.** Org-level `qv_` keys, with their own per-project
@@ -164,6 +213,10 @@ GET /v1/me   → who this credential acts as, its organization's settings,
 }
 ```
 
+A personal token answers its person, with `email` set, and for example
+`"credential": { "kind": "personal_token", "access": "read",
+"expires_at": "2027-01-31T00:00:00.000Z", "name": "Reporting script" }`.
+
 Call it first. It tells a client who it is, how the organization's calendar
 works and whether it can make changes, before it plans a request that would
 be refused.
@@ -187,13 +240,16 @@ be refused.
   `reason` is then the sentence every write is refused with, otherwise
   `null`. No plan, price or usage is included.
 - `credential.access` is `write` when this credential may make changes and
-  `read` when it can only read, such as a Viewer agent's key. It is the same
-  rule that refuses writes (see Authentication). A write still needs Edit
-  access on the project and an organization that billing does not pause.
-  `kind` is `agent_key`, `name` is the key's name and `expires_at` is `null`,
-  because agent keys do not expire.
+  `read` when it can only read, such as a read-only personal token or a
+  Viewer agent's key. It is the same rule that refuses writes (see
+  Authentication). A write still needs Edit access on the project and an
+  organization that billing does not pause.
+- `credential.kind` is `agent_key` or `personal_token`, and `name` is the
+  key's or token's name. `expires_at` is a personal token's expiry, and
+  `null` for a token without one or an agent key, because agent keys do not
+  expire.
 
-The response never contains a secret, a hash or a key fingerprint.
+The response never contains a secret, a hash or a display identifier.
 
 ### Projects
 
@@ -234,7 +290,7 @@ that can see the named project. Any row may be used as `reporter_id`;
 profile is active and has effective Edit (`user`) or Lead access to the
 project, under the organization Viewer ceiling). A user with only View access
 remains a valid reporter, but cannot be selected as assignee or reviewer.
-Unknown projects and projects the agent cannot read both return `404`. Use
+Unknown projects and projects the caller cannot read both return `404`. Use
 this route when mapping identities for an import instead of guessing from the
 organization-wide roster.
 
@@ -242,7 +298,7 @@ On a parent project the rows are the people with access to the parent
 itself: organization admins, its lead and its individual or team grants. These
 are the people its **Project access** list shows in the app. Someone who
 reaches the parent only through one of its sub-projects is listed under that
-sub-project, not under the parent. An agent that sees the parent only through
+sub-project, not under the parent. A caller that sees the parent only through
 one of its sub-projects may still call this route for the parent.
 
 **Archived projects** (migration 0106) are projects that have been put away
@@ -256,8 +312,9 @@ is the same fact as a boolean.
 ### Users
 
 ```
-GET /v1/users       → the organization's users, people and agents alike
-GET /v1/users/{id}  → one of them
+GET   /v1/users       → the organization's users, people and agents alike
+GET   /v1/users/{id}  → one of them
+PATCH /v1/users/{id}  → set that person's plannable_hours (write)
 ```
 
 Two rows of that list — a person, and an agent:
@@ -351,17 +408,27 @@ roles say — useful for general identity lookup, but not proof that a user may
 be written onto a task. `GET /v1/projects/{ref}/users` is the project-scoped
 subset and the authoritative reporter, assignee and reviewer picker.
 
-**Read only.** Setting someone's capacity takes an organization admin or a
-leader of a team they belong to (migration 0094). An agent is neither. It is
-**never an organization admin**, because an admin reaches every project
-without a grant, the one thing a key must not be able to do if it leaks. The
-profile shape refuses it (0100, widened by 0102 to admit `viewer` and nothing
-else). It never leads a team either, because only people lead teams. A leaked
-agent key therefore cannot set anyone's capacity. And since 0103 an agent has
-no plannable week of its own to set either; the setter refuses one outright.
-Change a person's hours in the app, or over MCP, where `update_user` runs as
-whoever holds the credential and answers to the same rule. `POST`/`PATCH` on
-these routes are 404.
+**Setting plannable hours.** `PATCH /v1/users/{id}` with
+`{ "plannable_hours": 32 }` sets that person's weekly capacity and answers
+their updated row. It is the one user field the API changes; other fields are
+ignored, and a body without `plannable_hours` is a `400` (`no recognized
+fields to update`). The value is a whole number from 1 to 168, otherwise a
+`400` with `plannable hours must be a whole number of hours from 1 to 168`.
+Like the app and MCP's `update_user`, it takes an organization admin or a
+leader of a team the person belongs to (migration 0094), and nobody else,
+yourself included: anyone else gets `403` with `only an organization admin
+or a leader of one of this person's teams can set their plannable hours`,
+whoever the target is. An unknown or foreign id is `404` `user not found`.
+An agent has no plannable week (0103), so naming one is a `400` with `an
+agent has no plannable week — its capacity is unbounded`. The change writes
+no activity row, as in the app.
+
+In practice this route needs a person's token. An agent is **never an
+organization admin**, because an admin reaches every project without a
+grant, the one thing a key must not be able to do if it leaks. The profile
+shape refuses it (0100, widened by 0102 to admit `viewer` and nothing else).
+It never leads a team either, because only people lead teams. A leaked agent
+key therefore cannot set anyone's capacity. `POST` on these routes is 404.
 
 ### Tasks
 
@@ -407,16 +474,16 @@ literal.
 POST body — `project` (uuid, number or key) and `title` are required. Tasks live in
 sub-projects: name the sub-project directly as `project`, or name the project
 as `project` and one of **its** sub-projects as `sub_project`. Naming a
-project without a `sub_project` is a `400` listing the sub-projects the key
+project without a `sub_project` is a `400` listing the sub-projects the caller
 can write to; a `sub_project` that belongs to a different project is a `400`
 — a task is never created under another project's sub-project (moving one
 later is the app's Move dialog, not the API). A `project` or `sub_project`
-the agent cannot read answers exactly like an unknown one, with `400`
+the caller cannot read answers exactly like an unknown one, with `400`
 `project must name a project by uuid, number or key` or `sub_project must name
 a sub-project by key, number or uuid`. This includes the other sub-projects of
-a parent the agent sees only because it can access one of its sub-projects,
+a parent the caller sees only because it can access one of its sub-projects,
 and the `400` for a project named without `sub_project` lists and counts only
-sub-projects the agent can read:
+sub-projects the caller can read:
 
 ```json
 {
@@ -513,14 +580,14 @@ they have attached subtasks. Child visibility does not change grouping;
 this flag reveals no child identities.
 
 **Group dates.** A group's `start_week` and `end_week` are calculated from
-the subtasks the key can read, at any depth. `start_week` is the earliest
+the subtasks the caller can read, at any depth. `start_week` is the earliest
 start and `end_week` the latest end of the scheduled ones, including `done`
 subtasks. Both are `null` when none is scheduled. A nested group counts only
-through its own subtasks, and the calculation stops at a subtask the key
+through its own subtasks, and the calculation stops at a subtask the caller
 cannot read, so the tasks below it do not count. Like `is_group`, an active
 group counts only active subtasks, while an archived group counts its whole
 subtree. Subtasks in archived projects do not count while the group's own
-project is active. Two keys with different access can therefore get
+project is active. Two credentials with different access can therefore get
 different dates for the same group. The group's own stored dates are not
 used while it is a group, and subtask changes never write them. They apply
 again when its last active subtask is detached, deleted or archived. A PATCH
@@ -590,9 +657,9 @@ Task shape returned by all task endpoints:
 }
 ```
 
-`parent_id` is the parent task's uuid when the agent can read the parent, and
+`parent_id` is the parent task's uuid when the caller can read the parent, and
 `null` otherwise, the same as for a top-level task. `is_group` still reports
-subtasks the agent cannot read, without identifying them. Their dates do not
+subtasks the caller cannot read, without identifying them. Their dates do not
 count toward the group's `start_week` and `end_week`.
 
 `DELETE` returns `{ "deleted": true, "id": "…", "key": "QN-3" }`.
@@ -616,11 +683,15 @@ POST /v1/tasks/{ref}/comments   { "body": "Markdown text" }      (write)
 }
 ```
 
-A comment created here is authored by **the agent itself** — it is a user,
-so it speaks under its own name instead of landing as the anonymous
-"Someone" an org-level key used to produce. Attribution is still
-server-stamped precisely so it cannot be forged: passing `author`/`author_id`
-is rejected with `400`. You are only ever yourself. `POST` returns `201`
+A comment created here is authored by **the caller**: the agent itself for
+an agent key, the person for a personal token. An agent is a user, so it
+speaks under its own name instead of landing as the anonymous "Someone" an
+org-level key used to produce. Attribution is still server-stamped precisely
+so it cannot be forged: passing `author`/`author_id` is rejected with `400`
+(`comments cannot be attributed over the API — a comment is always authored
+by the agent posting it`, or for a personal token `comments cannot be
+attributed over the API; a comment is always authored by the person posting
+it`). You are only ever yourself. `POST` returns `201`
 with the created comment; a blank `body` is a `400`. Editing or deleting
 comments is not supported over the API (in the app that is the author or a
 project lead). Comments are deleted with their task.
@@ -652,23 +723,25 @@ it needs nothing from the caller; unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
 project — a subscription never outlives the project access that justified it.
 
-Every write here is the agent's, and the server is what says so. Each
+Every write here is the caller's, and the server is what says so. Each
 endpoint is one internal function — resolve the ref, check the rules, make
 the write and record the trail, in one transaction — and that function takes
 the authenticated caller explicitly, so there is no anonymous path for a
 write to arrive on. (Before 0115 this surface wrote with elevated
 credentials and no session identity, so a task INSERT or PATCH was
 **actor-less** and everyone subscribed to the task was told "Someone" had
-changed it.) The subscriber sees the agent's name, and the activity trail
-records that agent as the actor even when task creation selects a different
-`reporter_id`. Selecting a reporter never rewrites who performed the
-operation. Task responses expose reporter, assignee and reviewer, with no
-separate creator fields. The agent is not notified of its own changes.
+changed it.) The subscriber sees the caller's name, and the activity trail
+records that agent or person as the actor even when task creation selects a
+different `reporter_id`. Selecting a reporter never rewrites who performed
+the operation. Task responses expose reporter, assignee and reviewer, with no
+separate creator fields. The caller is not notified of its own changes.
 
 ## Examples
 
+`$QIVO_KEY` is an agent key or a personal access token.
+
 ```sh
-# who this key acts as, the calendar settings and whether it can write
+# who this credential acts as, the calendar settings and whether it can write
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/me"
 
 # readable projects
@@ -696,17 +769,24 @@ curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application
 # hand it to a reviewer (a row with assignable: true), or clear with null
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"reviewer_id":"<profile uuid>"}' "$BASE/tasks/QN-26"
+
+# as an organization admin's token: give someone 30 plannable hours a week
+curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
 ```
 
 ## Side effects and audit trail
 
 Organization API writes leave the same trail the app leaves, and they are **signed**: an
-`activity_events` feed row whose actor is **the agent itself**, with detail
-`via the REST API (<key name>)`. The org-level `qv_` keys this replaced left a
-null actor and that footnote, which read as "someone, somehow" in a feed whose
-whole job is saying who did what; an agent is a user, so it signs its own work.
-The key is still named beside it, because an agent may hold several and "which
-key did this" is the question you ask when one has to be rotated. An update's feed
+`activity_events` feed row whose actor is **the caller's user**. For an agent
+key the detail is `via the REST API (<key name>)`. The org-level `qv_` keys
+this replaced left a null actor and that footnote, which read as "someone,
+somehow" in a feed whose whole job is saying who did what; an agent is a user,
+so it signs its own work. The key is still named beside it, because an agent
+may hold several and "which key did this" is the question you ask when one has
+to be rotated. A personal token's writes read `via the REST API` with no
+token name: the person is the actor, and their token names are their own
+business, as with MCP's `via MCP`. An update's feed
 row names both sides of every changed field before the provenance suffix —
 e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
 (<key name>)`; description edits quote both sides as ~80-char excerpts
@@ -717,7 +797,7 @@ Comments are the deliberate exception — no activity row is written,
 matching the app, where the comment itself is the feed entry on the
 discussion spine. Task numbers come from the same
 per-organization counter the app uses (0050), so API- and app-created
-tasks share one sequence. `last_used_at` on the key updates on every
+tasks share one sequence. `last_used_at` on the key or token updates on every
 authenticated request.
 
 ## Storage
@@ -729,22 +809,28 @@ authenticated request.
   table is indexed by hash (`by_hash`), which is how a bearer secret finds
   its row. An agent may hold several, and deleting the agent takes its keys
   with it.
-- What a key may reach is **not** stored beside it. Direct grants live in
+- `mcp_tokens` holds one row per personal access token, hanging off the
+  person's profile: name, `token_prefix` (display only), `token_hash` (SHA-256),
+  `access` (`read` or `write`; absent reads as `read`), an optional
+  `expires_at` and created/last-used/revoked timestamps. The same row serves
+  MCP and REST.
+- What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through
   `canSeeProject` and `hasProjectLevel`
   (`convex/lib/access.ts`), the predicates every surface calls, which apply
   the whole access model (org admin, project and sub-project leads, direct or
   explicit team grant) under the organization-role ceiling. They are asked *as the
-  agent*, inside the request's own transaction, so the answer this API gives, the
+  caller's user*, inside the request's own transaction, so the answer this API gives, the
   answer MCP gives and the answer the app gives are one computation rather
   than three kept in step.
 
 Authentication is the one step that cannot run as the caller — you need the
 row to learn who you are — so credential lookup is its own internal query
 (`convex/machine/auth.ts`), run before dispatch; the endpoint function then
-re-asserts the profile it was handed, so an agent deleted or deactivated
-between lookup and dispatch still answers `401`. The old `api_keys` and
+re-asserts the profile it was handed, so a user deleted or deactivated
+between lookup and dispatch still answers `401`, in that credential's own
+sentence. The old `api_keys` and
 `api_key_project_access` tables — the `qv_` keys and their separate
 per-project grant list — were dropped by migration 0100.
 
@@ -949,7 +1035,9 @@ the private operational notes.
 
 The surface is pinned twice. `convex/tests/rest.test.ts` (part of
 `npx vitest run`) byte-asserts every refusal sentence, the response shapes
-and the activity grammar against the in-repo endpoint functions;
+and the activity grammar against the in-repo endpoint functions, and
+`convex/tests/restTokens.test.ts` drives every route over HTTP with personal
+tokens that can write, only read or belong to a Viewer;
 `tests/contract/rest.test.mts` (`npm run test:contract`) replays the
 contract over the real wire — status codes, headers and bodies against a
 running deployment.

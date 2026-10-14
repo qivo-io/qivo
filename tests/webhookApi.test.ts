@@ -574,7 +574,8 @@ describe('MCP Events and generic REST webhooks', () => {
     expect(await listed.json()).toMatchObject([{ id, status: 'disabled', last_status: 503 }])
     expect(await (await f.rest('/v1/webhooks', 'GET')).json()).toEqual([])
     expect((await f.rest(`/v1/webhooks/${id}`, 'DELETE')).status).toBe(404)
-    expect((await f.rest('/v1/projects', 'GET', undefined, f.qvt)).status).toBe(401)
+    // the organization routes take personal tokens too
+    expect((await f.rest('/v1/projects', 'GET', undefined, f.qvt)).status).toBe(200)
     expect((await f.rest(`/v1/webhooks/${id}`, 'DELETE', undefined, f.qvt)).status).toBe(204)
     expect(await (await f.rest('/v1/webhooks', 'GET', undefined, f.qvt)).json()).toEqual([])
     expect(await f.t.run((ctx) => ctx.db.query('webhook_health').collect())).toEqual([])

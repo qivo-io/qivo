@@ -1,5 +1,5 @@
 /* The machine action registry, the shape both machine surfaces use to declare
- * what they serve. Every agent-key REST route (machine/rest.ts ROUTES) and
+ * what they serve. Every organization REST route (machine/rest.ts ROUTES) and
  * every MCP tool (machine/mcp.ts TOOLS) is ONE entry with a required `access`
  * flag and a `run` that calls the endpoint's internal function. There is no
  * default, so an entry without the flag does not compile. The /v1/webhooks
