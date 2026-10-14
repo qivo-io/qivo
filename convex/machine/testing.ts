@@ -3,16 +3,21 @@
  * authenticate a test anyway, so the contract scripts mint their own pair:
  * node mints `qva_…`/`qvt_…` + sha256 locally, then
  *   npx convex run machine/testing:mintCredential '{"profile_id":…, "kind":…,
- *     "key_prefix":…, "key_hash":…, "name":…}'
+ *     "key_prefix":…, "key_hash":…, "name":…, "access":…}'
  * and drives <deployment>.convex.site. internalMutation = deploy-key-gated;
  * no public wrapper may ever reach this. Only the hash crosses the wire,
- * exactly like the real minting paths (convex/tokens.ts). */
+ * exactly like the real minting paths (convex/tokens.ts). A personal token
+ * names its access ('read' or 'write') like convex/tokens.ts requires, and
+ * may carry an expiry, a past one included, so suites can mint an expired
+ * token. Agent keys take neither: the agent's role decides their access. */
 
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import { internalMutation } from '../_generated/server'
+import { cleanTokenExpiry } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
+import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound } from '../lib/functions'
 import { newUuid } from '../model/orgs'
 
@@ -28,11 +33,22 @@ export const mintCredential = internalMutation({
     key_prefix: v.string(),
     key_hash: v.string(),
     name: v.string(),
+    /** required for mcp_token, refused for agent_key */
+    access: v.optional(vCredentialAccess),
+    /** mcp_token only; any UTC date-time, so a test can mint an expired token */
+    expires_at: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<{ id: string; profile_id: string }> => {
     refuseProduction('machine/testing')
     const now = new Date().toISOString()
     if (!HASH_RE.test(a.key_hash)) throw badRequest('a key hash is 64 lowercase hex characters')
+    if (a.kind === 'mcp_token' && a.access === undefined) {
+      throw badRequest('a personal token needs access: "read" or "write"')
+    }
+    if (a.kind === 'agent_key' && (a.access !== undefined || a.expires_at !== undefined)) {
+      throw badRequest("an agent key takes no access or expiry, the agent's role decides")
+    }
+    const expiry = a.expires_at === undefined ? undefined : cleanTokenExpiry(a.expires_at)
     const email = a.email?.toLowerCase()
     let profile: Doc<'profiles'> | null = null
     if (a.profile_id !== undefined) {
@@ -98,6 +114,8 @@ export const mintCredential = internalMutation({
           name: a.name,
           token_prefix: a.key_prefix,
           token_hash: a.key_hash,
+          access: a.access,
+          expires_at: expiry,
           created_at: now,
         },
         badRequest('that token already exists'),

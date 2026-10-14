@@ -12,10 +12,11 @@
  * method, path, required read/write `access` flag and success status, and a
  * read route can only run queries. Each endpoint is ONE internal fn —
  * resolve + rules + write + activity in one transaction — starting from
- * asMachineCaller(ctx, callerId) and composing lib/core.ts + the model layer
- * with the trusted machine-narration override (model/issues.ts `machine` arg):
- * verbs created/changed/archived/restored/deleted, the multi-field
- * issueChanges diff, the provenance suffix. A PATCH carrying fields AND an
+ * asMachineCaller(ctx, callerId, access), which first refuses a write from a
+ * read-only credential (a Viewer agent), and composing lib/core.ts + the
+ * model layer with the trusted machine-narration override (model/issues.ts
+ * `machine` arg): verbs created/changed/archived/restored/deleted, the
+ * multi-field issueChanges diff, the provenance suffix. A PATCH carrying fields AND an
  * archived toggle folds into ONE row write, ONE notify fan-out, ONE activity
  * row plus the cascade (updateIssueCore owns the fold).
  *
@@ -55,10 +56,12 @@ import {
   userJson,
 } from '../lib/core'
 import {
+  type CredentialAccess,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
   type IssuePriority,
   type IssueStatus,
+  vCredentialAccess,
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
@@ -86,7 +89,7 @@ import { notifyCommentInsert } from '../model/messages'
 import { newUuid } from '../model/orgs'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, REST_AUTH_401, sha256hex } from './auth'
-import { type MachineEntry, runEntry } from './registry'
+import { type MachineEntry, type Principal, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
@@ -107,8 +110,12 @@ type Access = {
   writable: (projectId: string) => boolean
 }
 
-async function withAccess(ctx: QueryCtx, callerId: string): Promise<Access> {
-  const me = await asMachineCaller(ctx, callerId)
+async function withAccess(
+  ctx: QueryCtx,
+  callerId: string,
+  access: CredentialAccess,
+): Promise<Access> {
+  const me = await asMachineCaller(ctx, callerId, access)
   const cat = await loadCatalogue(ctx, me)
   const flags = await accessFlags(ctx, me, cat.projects)
   return {
@@ -255,9 +262,9 @@ function patchFrom(fields: Record<string, unknown>): IssuePatch {
 /* GET /v1/projects?archived= — readable projects on ONE side of the archived
  * axis, sorted by key, with the caller's access flags (rest:330-339). */
 export const listProjects = internalQuery({
-  args: { callerId: v.string(), archived: v.optional(v.string()) },
+  args: { callerId: v.string(), access: vCredentialAccess, archived: v.optional(v.string()) },
   handler: async (ctx, a): Promise<RestProjectJson[]> => {
-    const { cat, flags, readable } = await withAccess(ctx, a.callerId)
+    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     if (a.archived !== undefined && a.archived !== 'true' && a.archived !== 'false') {
       throw badRequest('archived must be true or false')
     }
@@ -271,9 +278,9 @@ export const listProjects = internalQuery({
 /* GET /v1/projects/{ref} — an explicit ref resolves an archived project too;
  * unknown OR unreadable answer the one 404 (NO oracle on GET, rest:341-347). */
 export const getProject = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectJson> => {
-    const { cat, flags, readable } = await withAccess(ctx, a.callerId)
+    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
     if (p === undefined || !readable(p.id)) throw notFound('project not found')
     return restProjectJson(p, flags.get(p.id) ?? { read: false, write: false })
@@ -285,9 +292,9 @@ export const getProject = internalQuery({
  * itself read. Reporter eligibility is membership in this result; assignee
  * eligibility additionally requires `assignable`. */
 export const listProjectUsers = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectUserJson[]> => {
-    const { me, cat, readable } = await withAccess(ctx, a.callerId)
+    const { me, cat, readable } = await withAccess(ctx, a.callerId, a.access)
     const project = findProjectRef(cat, a.ref)
     if (project === undefined || !readable(project.id)) throw notFound('project not found')
     const out: RestProjectUserJson[] = []
@@ -309,18 +316,18 @@ export const listProjectUsers = internalQuery({
 /* GET /v1/users — the org's roster, people and agents alike, ordered by name.
  * Not gated on a project grant (rest:350-360). */
 export const listUsers = internalQuery({
-  args: { callerId: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess },
   handler: async (ctx, a): Promise<RestUserJson[]> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     return (await listUsersCore(ctx, me)).map(userJson)
   },
 })
 
 /* GET /v1/users/{id} — exact match on the lowercased id (rest:361-364). */
 export const getUser = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestUserJson> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const rows = await listUsersCore(ctx, me)
     const one = rows.find((m) => m.id === a.ref.toLowerCase())
     if (one === undefined) throw notFound('user not found')
@@ -336,6 +343,7 @@ export const getUser = internalQuery({
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
+    access: vCredentialAccess,
     project: v.optional(v.string()),
     status: v.optional(v.string()),
     priority: v.optional(v.string()),
@@ -346,7 +354,7 @@ export const listIssues = internalQuery({
     offset: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<RestIssueJson[]> => {
-    const { me, cat, readable } = await withAccess(ctx, a.callerId)
+    const { me, cat, readable } = await withAccess(ctx, a.callerId, a.access)
     /* Naming a LIVE meta asks for the project as it stands, so a sub-project
      * archived out of it stays out; naming an ARCHIVED one asks for it as it
      * was put away, and everything under it comes (rest:374-386). */
@@ -417,9 +425,9 @@ export const listIssues = internalQuery({
 
 /* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. */
 export const getIssue = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestIssueJson> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     return await issueOut(ctx, issue, { surface: 'rest', me })
@@ -430,9 +438,9 @@ export const getIssue = internalQuery({
  * sub_project the key cannot read answers exactly like an unknown ref, so no
  * answer reveals that a hidden project exists. */
 export const createIssue = internalMutation({
-  args: { callerId: v.string(), keyName: v.string(), body: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, keyName: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<RestIssueJson> => {
-    const { me, cat, readable, writable } = await withAccess(ctx, a.callerId)
+    const { me, cat, readable, writable } = await withAccess(ctx, a.callerId, a.access)
     const b = needJson(a.body)
     const proj = findProjectRef(cat, typeof b.project === 'string' ? b.project : '')
     // A project the key cannot read reads like an unknown one (writable
@@ -503,9 +511,15 @@ export const createIssue = internalMutation({
  * activity row (updateIssueCore's machine seam); `archived` matching the
  * current state is a clean no-op 200 with the full row. */
 export const updateIssue = internalMutation({
-  args: { callerId: v.string(), keyName: v.string(), ref: v.string(), body: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    keyName: v.string(),
+    ref: v.string(),
+    body: v.string(),
+  },
   handler: async (ctx, a): Promise<RestIssueJson> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) {
@@ -555,9 +569,9 @@ export const updateIssue = internalMutation({
  * are touched AND notified; attachment bytes die in the same transaction) +
  * the 'deleted' narration whose detail is exactly the provenance. */
 export const deleteIssue = internalMutation({
-  args: { callerId: v.string(), keyName: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, keyName: v.string(), ref: v.string() },
   handler: async (ctx, a): Promise<{ deleted: boolean; id: string; key: string }> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) {
@@ -584,9 +598,9 @@ export const deleteIssue = internalMutation({
 
 /* GET /v1/tasks/{ref}/comments — the discussion thread, oldest first. */
 export const listComments = internalQuery({
-  args: { callerId: v.string(), ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestCommentJson[]> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     const rows = await listCommentsCore(ctx, issue.id)
@@ -603,9 +617,9 @@ export const listComments = internalQuery({
  * agent's reach is not found BEFORE the write gate is consulted — never a
  * 403 that would confirm it exists. */
 export const addComment = internalMutation({
-  args: { callerId: v.string(), ref: v.string(), body: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<RestCommentJson> => {
-    const me = await asMachineCaller(ctx, a.callerId)
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) {
@@ -685,8 +699,7 @@ type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${in
     : never
 
 /** What a route's `run` receives once auth and routing are done. */
-type RouteInput<Name extends string> = {
-  callerId: string
+type RouteInput<Name extends string> = Principal & {
   keyName: string
   /** One decoded `:name` segment of the request path. */
   param: (name: Name) => string
@@ -717,48 +730,54 @@ export const ROUTES: RestRoute[] = [
     path: 'projects',
     access: 'read',
     status: 200,
-    run: (r, { callerId, query }) =>
-      r.runQuery(internal.machine.rest.listProjects, { callerId, archived: query('archived') }),
+    run: (r, { callerId, access, query }) =>
+      r.runQuery(internal.machine.rest.listProjects, {
+        callerId,
+        access,
+        archived: query('archived'),
+      }),
   }),
   route({
     method: 'GET',
     path: 'projects/:ref',
     access: 'read',
     status: 200,
-    run: (r, { callerId, param }) =>
-      r.runQuery(internal.machine.rest.getProject, { callerId, ref: param('ref') }),
+    run: (r, { callerId, access, param }) =>
+      r.runQuery(internal.machine.rest.getProject, { callerId, access, ref: param('ref') }),
   }),
   route({
     method: 'GET',
     path: 'projects/:ref/users',
     access: 'read',
     status: 200,
-    run: (r, { callerId, param }) =>
-      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, ref: param('ref') }),
+    run: (r, { callerId, access, param }) =>
+      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, access, ref: param('ref') }),
   }),
   route({
     method: 'GET',
     path: 'users',
     access: 'read',
     status: 200,
-    run: (r, { callerId }) => r.runQuery(internal.machine.rest.listUsers, { callerId }),
+    run: (r, { callerId, access }) =>
+      r.runQuery(internal.machine.rest.listUsers, { callerId, access }),
   }),
   route({
     method: 'GET',
     path: 'users/:ref',
     access: 'read',
     status: 200,
-    run: (r, { callerId, param }) =>
-      r.runQuery(internal.machine.rest.getUser, { callerId, ref: param('ref') }),
+    run: (r, { callerId, access, param }) =>
+      r.runQuery(internal.machine.rest.getUser, { callerId, access, ref: param('ref') }),
   }),
   route({
     method: 'GET',
     path: 'tasks',
     access: 'read',
     status: 200,
-    run: (r, { callerId, query }) =>
+    run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.rest.listIssues, {
         callerId,
+        access,
         project: query('project'),
         status: query('status'),
         priority: query('priority'),
@@ -774,25 +793,26 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks',
     access: 'write',
     status: 201,
-    run: (r, { callerId, keyName, body }) =>
-      r.runMutation(internal.machine.rest.createIssue, { callerId, keyName, body }),
+    run: (r, { callerId, access, keyName, body }) =>
+      r.runMutation(internal.machine.rest.createIssue, { callerId, access, keyName, body }),
   }),
   route({
     method: 'GET',
     path: 'tasks/:ref',
     access: 'read',
     status: 200,
-    run: (r, { callerId, param }) =>
-      r.runQuery(internal.machine.rest.getIssue, { callerId, ref: param('ref') }),
+    run: (r, { callerId, access, param }) =>
+      r.runQuery(internal.machine.rest.getIssue, { callerId, access, ref: param('ref') }),
   }),
   route({
     method: 'PATCH',
     path: 'tasks/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, keyName, param, body }) =>
+    run: (r, { callerId, access, keyName, param, body }) =>
       r.runMutation(internal.machine.rest.updateIssue, {
         callerId,
+        access,
         keyName,
         ref: param('ref'),
         body,
@@ -803,24 +823,34 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, keyName, param }) =>
-      r.runMutation(internal.machine.rest.deleteIssue, { callerId, keyName, ref: param('ref') }),
+    run: (r, { callerId, access, keyName, param }) =>
+      r.runMutation(internal.machine.rest.deleteIssue, {
+        callerId,
+        access,
+        keyName,
+        ref: param('ref'),
+      }),
   }),
   route({
     method: 'GET',
     path: 'tasks/:ref/comments',
     access: 'read',
     status: 200,
-    run: (r, { callerId, param }) =>
-      r.runQuery(internal.machine.rest.listComments, { callerId, ref: param('ref') }),
+    run: (r, { callerId, access, param }) =>
+      r.runQuery(internal.machine.rest.listComments, { callerId, access, ref: param('ref') }),
   }),
   route({
     method: 'POST',
     path: 'tasks/:ref/comments',
     access: 'write',
     status: 201,
-    run: (r, { callerId, param, body }) =>
-      r.runMutation(internal.machine.rest.addComment, { callerId, ref: param('ref'), body }),
+    run: (r, { callerId, access, param, body }) =>
+      r.runMutation(internal.machine.rest.addComment, {
+        callerId,
+        access,
+        ref: param('ref'),
+        body,
+      }),
   }),
 ]
 
@@ -993,6 +1023,7 @@ const restHandler = httpAction(async (ctx, req) => {
     if (allowed === null) return err('unknown agent key', 401)
     if (!allowed) return rateLimited()
     const callerId = res.cred.profileId
+    const access = res.cred.access
     const keyName = res.cred.keyName ?? ''
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
@@ -1003,6 +1034,7 @@ const restHandler = httpAction(async (ctx, req) => {
     if (found === null) return err('unknown route', 404)
     const result = await runEntry(ctx, found.route, {
       callerId,
+      access,
       keyName,
       param: (name) => found.params[name],
       query: (name) => url.searchParams.get(name) ?? undefined,

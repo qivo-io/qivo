@@ -48,12 +48,14 @@ Use these steps for a personal-token fallback or a named agent's key:
 
 1. Have the user sign in at [Qivo](https://qivo.io/app).
 2. For a personal token, open **Settings → User account → MCP access →
-   Personal access tokens**, enter a name and choose **New token**.
+   Personal access tokens**, enter a name and choose **New token**. Tokens
+   created there can make changes and do not expire automatically.
 3. For an agent key, an organization admin opens **Settings → Organization →
    Users**, creates an **Agent**, and copies its key. Existing agents can
    receive another key from their row. Grant the agent the necessary project
    access directly or through a team using the project's **Project access**
-   list. Set its organization role to **Viewer** for read-only automation.
+   list. Set its organization role to **Viewer** for read-only automation:
+   its keys can then only read.
 4. Store the full secret in the client's credential settings or secret store.
    It is shown once; Qivo retains only its hash and a display identifier.
 
@@ -141,8 +143,11 @@ Inspect your own subscriptions with `GET /v1/webhooks` using the same personal
 token, agent key or a current access token from the owning OAuth grant.
 Organization administrators can inspect and remove organization subscriptions
 through `/v1/webhooks/organization` with a personal token or OAuth connection.
-OAuth administrator deletion requires `qivo:write`; managing your own
-subscriptions requires only `qivo:read`. No listing exposes signing keys.
+Removing another owner's subscription needs a credential that can make
+changes: a personal token with change access, or an OAuth connection with
+`qivo:write`. Managing your own subscriptions works with a read-only
+credential and, for OAuth, requires only `qivo:read`. No listing exposes
+signing keys.
 
 ## Scope and permissions
 
@@ -156,6 +161,17 @@ approval: the person's home account, or the first active guest account for a
 guest-only login. It does not follow later changes to the home account.
 OAuth read access permits discovery and readable MCP tools; write access is
 an additional ceiling and never overrides the person's current permissions.
+
+Each credential either can make changes or can only read. An OAuth
+connection can make changes only with `qivo:write`. A personal token can make
+changes only if it was created with change access and has not expired; a
+token stored without an access setting can only read. An agent key can make
+changes only for an agent whose organization role is **User**; a **Viewer**
+agent's key is read-only. A read-only credential still reads everything its
+user can and manages its own task event subscriptions, but every change is
+refused before Qivo looks up the task or project you named:
+`this agent is a Viewer and can only read` for an agent key, and
+`this credential can only read` for a personal token.
 
 Project access follows the user's direct grants, current team memberships
 and applicable leadership rights. Sub-projects inherit access from their
@@ -176,9 +192,11 @@ refresh token revokes that connection, so clients must serialize refreshes.
 
 Personal tokens are revoked on **MCP access**; admins revoke agent keys from
 the agent's **Users** row. Revocation takes effect on subsequent requests.
-Switching a user to **Inactive** disables all their credentials. These
-manual credentials have no automatic expiration or refresh-token flow. To rotate,
-create a replacement, update and verify the client, then revoke the old one.
+Switching a user to **Inactive** disables all their credentials. Agent keys,
+and personal tokens created without an expiry date, have no automatic
+expiration or refresh-token flow. A personal token with an expiry date is
+refused after it, like a revoked one. To rotate, create a replacement, update
+and verify the client, then revoke the old one.
 
 - **HTTP 401:** An initial unauthenticated MCP request starts OAuth discovery;
   let the client follow its authorization flow. For an existing connection,
@@ -186,7 +204,9 @@ create a replacement, update and verify the client, then revoke the old one.
   unavailable. Let the OAuth client renew access or reconnect with the
   person's approval. For manual credentials, check configuration and ask the
   owner/admin to restore access or create a replacement.
-- **REST 403:** Authentication succeeded, but the operation is forbidden.
+- **REST 403:** Authentication succeeded, but the operation is forbidden. A
+  Viewer agent's key answers `this agent is a Viewer and can only read` for
+  every change.
 - **MCP 403 with `insufficient_scope`:** The OAuth connection lacks the
   requested read or write access. Start a new approval for the required access.
 - **REST 404:** The route or resource is absent, or the resource is unreadable.

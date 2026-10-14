@@ -4,7 +4,7 @@
 
 The website is https://qivo.io; the signed-in planner is at https://qivo.io/app. Qivo calls work items tasks. REST uses `/v1/tasks` and `/v1/tasks/{ref}`. MCP provides `list_tasks`, `get_task`, `create_task`, `update_task` and `delete_task`. Shared task links use `/app/<org-slug>/tasks/qn-<number>`.
 
-Task numbers are permanent within an organization. Credentials identify one user in one organization and do not grant access to every project.
+Task numbers are permanent within an organization. Credentials identify one user in one organization and do not grant access to every project. A credential either can make changes or can only read: a Viewer agent's key, an OAuth approval without write access and a personal token without change access can only read, and Qivo refuses their changes before looking up the task or project.
 
 When a person connects their assistant, OAuth is the preferred way to connect to `https://api.qivo.io/mcp`: add the remote MCP server in the assistant and complete Qivo's browser sign-in and approval. Personal tokens are a fallback for clients without compatible OAuth support; agent keys serve automation with its own identity and REST access.
 

@@ -73,6 +73,7 @@ async function fixture() {
       name: 'Events',
       token_prefix: 'qvt_test',
       token_hash: tokenHash,
+      access: 'write',
       created_at: new Date().toISOString(),
     })
     await ctx.db.insert('agent_keys', {
@@ -693,6 +694,116 @@ describe('MCP Events and generic REST webhooks', () => {
       (await f.rest(`/v1/webhooks/organization/${id}`, 'DELETE', undefined, f.qvt)).status,
     ).toBe(204)
     expect(await (await f.rest('/v1/webhooks', 'GET')).json()).toEqual([])
+  })
+
+  it("lets a read-only token manage its own subscriptions but not delete another owner's", async () => {
+    const f = await fixture()
+    const mint = async (
+      secret: string,
+      profileId: string,
+      access: 'read' | 'write',
+      expires_at?: string,
+    ) => {
+      const token_hash = await sha256hex(secret)
+      await f.t.run((ctx) =>
+        ctx.db.insert('mcp_tokens', {
+          id: uuid(),
+          profile_id: profileId,
+          name: `${access} events`,
+          token_prefix: secret.slice(0, 11),
+          token_hash,
+          access,
+          expires_at,
+          created_at: new Date().toISOString(),
+        }),
+      )
+    }
+    const readQvt = `qvt_${'33'.repeat(24)}`
+    await mint(readQvt, f.fx.user.id, 'read')
+    const own = await f.rest('/v1/webhooks', 'POST', f.params, readQvt)
+    expect(own.status).toBe(201)
+    const { id: ownId } = (await own.json()) as { id: string }
+    expect(await (await f.rest('/v1/webhooks', 'GET', undefined, readQvt)).json()).toMatchObject([
+      { id: ownId },
+    ])
+    expect(
+      (await f.mcp('events/subscribe', { ...f.params, ttlMs: null }, readQvt)).body.error,
+    ).toBe(undefined)
+    expect((await f.rest(`/v1/webhooks/${ownId}`, 'DELETE', undefined, readQvt)).status).toBe(204)
+
+    // another owner's subscription, seen by an administrator
+    const created = await f.rest('/v1/webhooks', 'POST', f.params)
+    const { id } = (await created.json()) as { id: string }
+    await f.t.run((ctx) => ctx.db.patch(f.fx.user._id, { org_role: 'admin' }))
+    expect((await f.rest('/v1/webhooks/organization', 'GET', undefined, readQvt)).status).toBe(200)
+    const refused = await f.rest(`/v1/webhooks/organization/${id}`, 'DELETE', undefined, readQvt)
+    expect(refused.status).toBe(403)
+    expect(await refused.json()).toEqual({ error: 'this credential can only read' })
+
+    // a Viewer agent is refused for its role on the same route
+    const viewerQva = `qva_${'44'.repeat(24)}`
+    const viewerHash = await sha256hex(viewerQva)
+    await f.t.run(async (ctx) => {
+      const _id = await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: f.fx.org.id,
+        name: 'Ledger',
+        initials: 'LE',
+        color: '#444444',
+        org_role: 'viewer',
+        active: true,
+        kind: 'agent',
+        created_at: new Date().toISOString(),
+      })
+      const agent = (await ctx.db.get(_id))!
+      await ctx.db.insert('agent_keys', {
+        id: uuid(),
+        profile_id: agent.id,
+        name: 'Viewer events',
+        key_prefix: 'qva_viewer0',
+        key_hash: viewerHash,
+        created_at: new Date().toISOString(),
+      })
+    })
+    const viewer = await f.rest(`/v1/webhooks/organization/${id}`, 'DELETE', undefined, viewerQva)
+    expect(viewer.status).toBe(403)
+    expect(await viewer.json()).toEqual({ error: 'this agent is a Viewer and can only read' })
+    expect(await (await f.rest('/v1/webhooks', 'GET')).json()).toMatchObject([{ id }])
+
+    // the write token of the same administrator may
+    expect(
+      (await f.rest(`/v1/webhooks/organization/${id}`, 'DELETE', undefined, f.qvt)).status,
+    ).toBe(204)
+  })
+
+  it('refuses an expired token and stops delivering its subscriptions', async () => {
+    const f = await fixture()
+    const expiring = `qvt_${'55'.repeat(24)}`
+    const token_hash = await sha256hex(expiring)
+    const expiresAt = Date.now() + 60_000
+    await f.t.run((ctx) =>
+      ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: f.fx.user.id,
+        name: 'Expiring events',
+        token_prefix: expiring.slice(0, 11),
+        token_hash,
+        access: 'write',
+        expires_at: new Date(expiresAt).toISOString(),
+        created_at: new Date().toISOString(),
+      }),
+    )
+    expect((await f.rest('/v1/webhooks', 'POST', f.params, expiring)).status).toBe(201)
+    await f.update('Before expiry')
+    expect(await f.t.run((ctx) => ctx.db.query('webhook_deliveries').collect())).toHaveLength(1)
+    vi.setSystemTime(expiresAt)
+    const refused = await f.rest('/v1/webhooks', 'GET', undefined, expiring)
+    expect(refused.status).toBe(401)
+    expect(await refused.json()).toEqual({ error: 'Webhook credential is invalid or inactive' })
+    const mcp = await f.mcp('events/list', {}, expiring)
+    expect(mcp.status).toBe(401)
+    await f.update('After expiry')
+    expect(await f.t.run((ctx) => ctx.db.query('webhook_deliveries').collect())).toHaveLength(1)
   })
 
   it.each([301, 400, 401, 403, 404, 413])(

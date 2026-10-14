@@ -3,8 +3,9 @@ import { ConvexError, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
-import { profileCanSeeProject } from './lib/access'
+import { profileCanSeeProject, readOnlyRefusal } from './lib/access'
 import { byId } from './lib/db'
+import type { CredentialAccess } from './lib/enums'
 import { badRequest, forbidden, notFound } from './lib/functions'
 import {
   type EventFilters,
@@ -20,7 +21,7 @@ import {
   WEBHOOK_ORG_CONCURRENCY,
   WEBHOOK_RETRY_BASE_MS,
 } from './lib/taskEvents'
-import { eventOwnerProfile } from './model/taskEvents'
+import { eventOwner, eventOwnerProfile } from './model/taskEvents'
 import {
   readWebhookHealth,
   removeWebhookSubscription,
@@ -37,10 +38,16 @@ const MAX_ORG_SUBSCRIPTIONS = 100
 const MAX_OWNER_SUBSCRIPTIONS = 20
 const FAILURE_WINDOW = WEBHOOK_MAX_TTL_MS
 
-async function requireOwner(ctx: QueryCtx, owner: EventOwner): Promise<Doc<'profiles'>> {
-  const profile = await eventOwnerProfile(ctx, owner)
-  if (!profile) throw forbidden('Credential is no longer valid')
-  return profile
+/* The owner's live profile and what its credential may do. Subscribing,
+ * listing and removing one's own subscriptions only need a valid credential,
+ * so a read-only one may manage its own. */
+async function requireOwner(
+  ctx: QueryCtx,
+  owner: EventOwner,
+): Promise<{ profile: Doc<'profiles'>; access: CredentialAccess }> {
+  const resolved = await eventOwner(ctx, owner)
+  if (!resolved) throw forbidden('Credential is no longer valid')
+  return resolved
 }
 
 async function authorizeFilters(
@@ -76,7 +83,7 @@ async function authorizeFilters(
 export const authorize = internalQuery({
   args: { owner: vEventOwner, filters: vEventFilters },
   handler: async (ctx, { owner, filters }): Promise<null> => {
-    await authorizeFilters(ctx, await requireOwner(ctx, owner), filters)
+    await authorizeFilters(ctx, (await requireOwner(ctx, owner)).profile, filters)
     return null
   },
 })
@@ -98,7 +105,7 @@ export const save = internalMutation({
     a,
   ): Promise<{ id: string; refreshBefore: string | null; cursor: null; truncated: false }> => {
     const { legacy_secret_hash, ...registration } = a
-    const profile = await requireOwner(ctx, a.owner)
+    const { profile } = await requireOwner(ctx, a.owner)
     await authorizeFilters(ctx, profile, a.filters)
     const existing = await byId(ctx, 'webhook_subscriptions', a.id)
     const expired = existing?.expires_at !== undefined && existing.expires_at <= Date.now()
@@ -211,7 +218,7 @@ async function subscriptionStatus(ctx: QueryCtx, row: Doc<'webhook_subscriptions
 export const list = internalQuery({
   args: { owner: vEventOwner },
   handler: async (ctx, { owner }) => {
-    const profile = await requireOwner(ctx, owner)
+    const { profile } = await requireOwner(ctx, owner)
     return Promise.all(
       (await liveSubscriptions(ctx, profile.org_id))
         .filter((row) => row.owner.credential_row_id === owner.credential_row_id)
@@ -220,17 +227,16 @@ export const list = internalQuery({
   },
 })
 
-async function requireAdministrator(ctx: QueryCtx, owner: EventOwner) {
-  const profile = await requireOwner(ctx, owner)
+function assertAdministrator(profile: Doc<'profiles'>): void {
   if (profile.kind !== 'person' || profile.org_role !== 'admin')
     throw forbidden('Organization administrator access is required')
-  return profile
 }
 
 export const listOrganization = internalQuery({
   args: { owner: vEventOwner },
   handler: async (ctx, { owner }) => {
-    const profile = await requireAdministrator(ctx, owner)
+    const { profile } = await requireOwner(ctx, owner)
+    assertAdministrator(profile)
     return Promise.all(
       (await liveSubscriptions(ctx, profile.org_id)).map(async (row) => ({
         ...(await subscriptionStatus(ctx, row)),
@@ -247,7 +253,11 @@ export const listOrganization = internalQuery({
 export const removeOrganization = internalMutation({
   args: { owner: vEventOwner, id: v.string() },
   handler: async (ctx, { owner, id }): Promise<null> => {
-    const profile = await requireAdministrator(ctx, owner)
+    const { profile, access } = await requireOwner(ctx, owner)
+    // Deleting another owner's subscription changes shared state, so it needs
+    // a credential that may write, whatever its kind.
+    if (access !== 'write') throw readOnlyRefusal(profile)
+    assertAdministrator(profile)
     const row = await byId(ctx, 'webhook_subscriptions', id)
     if (!row) return null
     if (row.org_id !== profile.org_id) throw notFound('webhook subscription not found')

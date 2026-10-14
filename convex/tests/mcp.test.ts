@@ -39,7 +39,12 @@ const bodyOf = (r: Response): Promise<string> =>
 const QVT = `qvt_${'a1b2c3d4'.repeat(6)}`
 const QVA = `qva_${'f9e8d7c6'.repeat(6)}`
 
-async function mintToken(t: T, profile: Doc<'profiles'>, secret: string): Promise<void> {
+async function mintToken(
+  t: T,
+  profile: Doc<'profiles'>,
+  secret: string,
+  access: Doc<'mcp_tokens'>['access'] = 'write',
+): Promise<void> {
   const token_hash = await sha256hex(secret)
   await t.run(async (ctx) => {
     await ctx.db.insert('mcp_tokens', {
@@ -48,6 +53,7 @@ async function mintToken(t: T, profile: Doc<'profiles'>, secret: string): Promis
       name: 'capture token',
       token_prefix: secret.slice(0, 11),
       token_hash,
+      access,
       created_at: NOW,
     })
   })
@@ -99,7 +105,7 @@ const legacyBody = (method: string, params: unknown, id?: number): string =>
 /* -------------------------------- expected bytes, transcribed from capture */
 
 const E401_MISSING = '{"error":"missing credential (Authorization: Bearer qvt_… or qva_…)"}'
-const E401_PERSON = '{"error":"unknown or revoked MCP token"}'
+const E401_PERSON = '{"error":"unknown, expired or revoked MCP token"}'
 const E401_AGENT = '{"error":"unknown, revoked or deactivated agent key"}'
 const E405 = '{"error":"stateless MCP server — POST JSON-RPC only"}'
 const E32700 =
@@ -870,13 +876,16 @@ describe('read tools', () => {
   test('list_teams / list_projects / list_users shapes and key order', async () => {
     const fx = await machineOrg()
     const teams = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.admin.id }),
+      await fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.admin.id, access: 'read' }),
     )
     expect(teams).toEqual([{ id: fx.team.id, name: 'Hardware' }])
 
     // guest reads only the granted meta tree; admin reads all four
     const guestProjects = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listProjects, { callerId: fx.guest.id }),
+      await fx.t.query(internal.machine.mcp.listProjects, {
+        callerId: fx.guest.id,
+        access: 'read',
+      }),
     ) as Record<string, unknown>[]
     expect(guestProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'TBED'])
     expect(Object.keys(guestProjects[0])).toEqual([
@@ -892,12 +901,15 @@ describe('read tools', () => {
     ])
     expect(guestProjects[0].archived_at).toBeNull() // explicit null, never omitted
     const adminProjects = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listProjects, { callerId: fx.admin.id }),
+      await fx.t.query(internal.machine.mcp.listProjects, {
+        callerId: fx.admin.id,
+        access: 'read',
+      }),
     ) as Record<string, unknown>[]
     expect(adminProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
 
     const users = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listUsers, { callerId: fx.agent.id }),
+      await fx.t.query(internal.machine.mcp.listUsers, { callerId: fx.agent.id, access: 'read' }),
     ) as Record<string, unknown>[]
     const agentRow = users.find((u) => u.id === fx.agent.id)
     expect(agentRow).toBeDefined()
@@ -926,6 +938,7 @@ describe('read tools', () => {
     const rows = JSON.parse(
       await fx.t.query(internal.machine.mcp.listProjectUsers, {
         callerId: fx.agent.id,
+        access: 'read',
         project: 'FW',
       }),
     ) as Record<string, unknown>[]
@@ -954,6 +967,7 @@ describe('read tools', () => {
     await expectRefusal(
       fx.t.query(internal.machine.mcp.listProjectUsers, {
         callerId: fx.agent.id,
+        access: 'read',
         project: 'SKNK',
       }),
       'not_found',
@@ -987,7 +1001,11 @@ describe('read tools', () => {
       'roll*back',
     ]) {
       const rows = JSON.parse(
-        await fx.t.query(internal.machine.mcp.listIssues, { callerId: fx.guest.id, search }),
+        await fx.t.query(internal.machine.mcp.listIssues, {
+          callerId: fx.guest.id,
+          access: 'read',
+          search,
+        }),
       ) as { id: string }[]
       expect(
         rows.map((row) => row.id),
@@ -1025,7 +1043,7 @@ describe('read tools', () => {
     })
     const list = async (callerId: string, args: Record<string, unknown> = {}) =>
       JSON.parse(
-        await fx.t.query(internal.machine.mcp.listIssues, { callerId, ...args }),
+        await fx.t.query(internal.machine.mcp.listIssues, { callerId, access: 'read', ...args }),
       ) as Record<string, unknown>[]
     // no scope: everything readable, active only — order by project key then num
     expect((await list(fx.admin.id)).map((i) => i.title)).toEqual([
@@ -1060,7 +1078,11 @@ describe('read tools', () => {
       [fx.guest.id, 'OTH'],
     ] as const) {
       await expectRefusal(
-        fx.t.query(internal.machine.mcp.listIssues, { callerId: caller, project: ref }),
+        fx.t.query(internal.machine.mcp.listIssues, {
+          callerId: caller,
+          access: 'read',
+          project: ref,
+        }),
         'not_found',
         new RegExp(`^project "${ref}" not found \\(or not visible to you\\)$`),
       )
@@ -1131,10 +1153,9 @@ describe('read tools', () => {
       title: 'Foreign',
     })
     const get = async (callerId: string, ref: string) =>
-      JSON.parse(await fx.t.query(internal.machine.mcp.getIssue, { callerId, ref })) as Record<
-        string,
-        unknown
-      >
+      JSON.parse(
+        await fx.t.query(internal.machine.mcp.getIssue, { callerId, access: 'read', ref }),
+      ) as Record<string, unknown>
     for (const ref of [
       `QN-${i1.num}`,
       `qn-${i1.num}`,
@@ -1147,7 +1168,7 @@ describe('read tools', () => {
     expect((await get(fx.guest.id, String(archived.num))).archived_at).toBe(NOW)
     for (const ref of [`QN-999999`, String(hiddenIssue.num), foreign.id, 'QN-3000000000', 'xyz']) {
       await expectRefusal(
-        fx.t.query(internal.machine.mcp.getIssue, { callerId: fx.guest.id, ref }),
+        fx.t.query(internal.machine.mcp.getIssue, { callerId: fx.guest.id, access: 'read', ref }),
         'not_found',
         new RegExp(
           `^task "${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" not found \\(or not visible to you\\)$`,
@@ -1182,6 +1203,7 @@ describe('read tools', () => {
     const rows = JSON.parse(
       await fx.t.query(internal.machine.mcp.listComments, {
         callerId: fx.guest.id,
+        access: 'read',
         ref: `QN-${i1.num}`,
       }),
     ) as Record<string, unknown>[]
@@ -1199,7 +1221,11 @@ describe('read tools', () => {
     ])
     expect('issue_id' in (rows[0] as object)).toBe(false)
     await expectRefusal(
-      fx.t.query(internal.machine.mcp.listComments, { callerId: fx.guest.id, ref: 'QN-999999' }),
+      fx.t.query(internal.machine.mcp.listComments, {
+        callerId: fx.guest.id,
+        access: 'read',
+        ref: 'QN-999999',
+      }),
       'not_found',
       /^task "QN-999999" not found \(or not visible to you\)$/,
     )
@@ -1216,6 +1242,7 @@ describe('write tools', () => {
     const out = JSON.parse(
       await fx.t.mutation(internal.machine.mcp.addComment, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
         body: '  hello from the machine  ',
       }),
@@ -1252,6 +1279,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.addComment, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
         body: '   ',
       }),
@@ -1264,6 +1292,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.addComment, {
         callerId: viewerAgent.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
         body: 'hi',
       }),
@@ -1279,6 +1308,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.addComment, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: hiddenIssue.id,
         body: 'hi',
       }),
@@ -1298,7 +1328,12 @@ describe('write tools', () => {
       archived?: boolean
     }
     const create = (callerId: string, args: CreateWire) =>
-      fx.t.mutation(internal.machine.mcp.createIssue, { callerId, title: 'Machine task', ...args })
+      fx.t.mutation(internal.machine.mcp.createIssue, {
+        callerId,
+        access: 'write',
+        title: 'Machine task',
+        ...args,
+      })
     // happy: meta + sub_project
     const out = JSON.parse(await create(fx.agent.id, { project: 'TBED', sub_project: 'FW' })) as {
       id: string
@@ -1375,6 +1410,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.createIssue, {
         callerId: fx.admin.id,
+        access: 'write',
         title: 'Cross pair',
         project: 'TBED',
         sub_project: 'XSUB',
@@ -1393,6 +1429,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.createIssue, {
         callerId: fx.admin.id,
+        access: 'write',
         title: 'X',
         project: 'ARCM',
       }),
@@ -1413,18 +1450,22 @@ describe('write tools', () => {
       new RegExp(`^user "${fx.otherAdmin.id}" not found in your organization$`),
     )
     // the 0102 pair: a grant-viewer agent AND an org-role-viewer agent holding
-    // a user grant both write nothing
+    // a user grant both write nothing. The Viewer agent is refused for its
+    // role before any ref resolves; the other meets the project rule.
     const grantViewer = await plantAgent(fx.t, fx.org.id)
     await grant(fx.t, fx.meta.id, grantViewer.id, 'viewer')
     const roleViewer = await plantAgent(fx.t, fx.org.id, { org_role: 'viewer' })
     await grant(fx.t, fx.meta.id, roleViewer.id, 'user')
-    for (const caller of [grantViewer, roleViewer]) {
-      await expectRefusal(
-        create(caller.id, { project: 'FW' }),
-        'forbidden',
-        /^your account has no write access to that project$/,
-      )
-    }
+    await expectRefusal(
+      create(grantViewer.id, { project: 'FW' }),
+      'forbidden',
+      /^your account has no write access to that project$/,
+    )
+    await expectRefusal(
+      create(roleViewer.id, { project: 'FW' }),
+      'forbidden',
+      /^this agent is a Viewer and can only read$/,
+    )
   })
 
   test('reporter attribution is chosen only at creation and requires project access', async () => {
@@ -1434,6 +1475,7 @@ describe('write tools', () => {
       JSON.parse(
         await fx.t.mutation(internal.machine.mcp.createIssue, {
           callerId: fx.agent.id,
+          access: 'write',
           project: 'FW',
           title: 'Imported task',
           ...(reporter_id === undefined ? {} : { reporter_id }),
@@ -1441,7 +1483,11 @@ describe('write tools', () => {
       ) as { id: string; key: string }
     const get = async (ref: string) =>
       JSON.parse(
-        await fx.t.query(internal.machine.mcp.getIssue, { callerId: fx.agent.id, ref }),
+        await fx.t.query(internal.machine.mcp.getIssue, {
+          callerId: fx.agent.id,
+          access: 'read',
+          ref,
+        }),
       ) as Record<string, unknown>
 
     const defaulted = await create()
@@ -1472,6 +1518,7 @@ describe('write tools', () => {
       await expectRefusal(
         fx.t.mutation(internal.machine.mcp.createIssue, {
           callerId: fx.agent.id,
+          access: 'write',
           project: 'FW',
           title: 'Refused import',
           reporter_id: reporter,
@@ -1536,7 +1583,7 @@ describe('write tools', () => {
     expect(await activityFor(fx.t, fx.org.id)).toEqual(activity)
     expect(await messagesFor(fx.t, fx.user.id, selected.id)).toEqual([])
     const rows = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listIssues, { callerId: fx.agent.id }),
+      await fx.t.query(internal.machine.mcp.listIssues, { callerId: fx.agent.id, access: 'read' }),
     ) as unknown[]
     expect(rows).toHaveLength(2)
   })
@@ -1561,6 +1608,7 @@ describe('write tools', () => {
     const out = JSON.parse(
       await fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${p1.num}`,
         priority: 'high',
         archived: true,
@@ -1592,6 +1640,7 @@ describe('write tools', () => {
     const restored = JSON.parse(
       await fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: String(c1.num),
         archived: false,
       }),
@@ -1626,6 +1675,7 @@ describe('write tools', () => {
         JSON.parse(
           await fx.t.mutation(internal.machine.mcp.updateIssue, {
             callerId: fx.agent.id,
+            access: 'write',
             ref: task.id,
             ...args,
           }),
@@ -1633,7 +1683,11 @@ describe('write tools', () => {
       ).updated
     const get = async () =>
       JSON.parse(
-        await fx.t.query(internal.machine.mcp.getIssue, { callerId: fx.agent.id, ref: task.id }),
+        await fx.t.query(internal.machine.mcp.getIssue, {
+          callerId: fx.agent.id,
+          access: 'read',
+          ref: task.id,
+        }),
       ) as Record<string, unknown>
     expect(await update({ reviewer_id: fx.guest.id.toUpperCase() })).toEqual(['reviewer_id'])
     expect(await get()).toMatchObject({ reviewer_id: fx.guest.id, reviewer_name: 'guest' })
@@ -1653,6 +1707,7 @@ describe('write tools', () => {
       await expectRefusal(
         fx.t.mutation(internal.machine.mcp.createIssue, {
           callerId: caller.id,
+          access: 'write',
           project: 'FW',
           title: 'Refused review',
           reviewer_id: viewOnly.id,
@@ -1684,6 +1739,7 @@ describe('write tools', () => {
     const noop = JSON.parse(
       await fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
         archived: false,
       }),
@@ -1694,6 +1750,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
       }),
       'bad_request',
@@ -1703,6 +1760,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${parent.num}`,
         remaining_hours: 4,
       }),
@@ -1713,6 +1771,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
         assignee_id: fx.viewer.id,
       }),
@@ -1725,6 +1784,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: grantViewer.id,
+        access: 'write',
         ref: `QN-${i1.num}`,
         title: 'New',
       }),
@@ -1735,6 +1795,7 @@ describe('write tools', () => {
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.updateIssue, {
         callerId: fx.agent.id,
+        access: 'write',
         ref: 'QN-424242',
         title: 'X',
       }),
@@ -1757,7 +1818,11 @@ describe('write tools', () => {
     })
     await drainActivity(fx.t)
     const out = JSON.parse(
-      await fx.t.mutation(internal.machine.mcp.deleteIssue, { callerId: fx.agent.id, ref: i1.id }),
+      await fx.t.mutation(internal.machine.mcp.deleteIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: i1.id,
+      }),
     ) as { deleted: boolean; key: string }
     expect(out).toEqual({ deleted: true, key: `QN-${i1.num}` })
     const remains = await fx.t.run(async (ctx) => ({
@@ -1782,12 +1847,20 @@ describe('write tools', () => {
     await grant(fx.t, fx.meta.id, grantViewer.id, 'viewer')
     const i2 = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'Safe' })
     await expectRefusal(
-      fx.t.mutation(internal.machine.mcp.deleteIssue, { callerId: grantViewer.id, ref: i2.id }),
+      fx.t.mutation(internal.machine.mcp.deleteIssue, {
+        callerId: grantViewer.id,
+        access: 'write',
+        ref: i2.id,
+      }),
       'forbidden',
       /^your account has no write access to that project$/,
     )
     await expectRefusal(
-      fx.t.mutation(internal.machine.mcp.deleteIssue, { callerId: fx.agent.id, ref: 'QN-999999' }),
+      fx.t.mutation(internal.machine.mcp.deleteIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: 'QN-999999',
+      }),
       'not_found',
       /^task "QN-999999" not found \(or not visible to you\)$/,
     )
@@ -1796,7 +1869,12 @@ describe('write tools', () => {
   test('update_user: rights, agent fence, range, roster answer', async () => {
     const fx = await machineOrg()
     const set = (callerId: string, user_id: string, plannable_hours: number) =>
-      fx.t.mutation(internal.machine.mcp.updateUser, { callerId, user_id, plannable_hours })
+      fx.t.mutation(internal.machine.mcp.updateUser, {
+        callerId,
+        access: 'write',
+        user_id,
+        plannable_hours,
+      })
     // an org admin may set anyone's hours; the fresh row comes back, a NUMBER
     const out = JSON.parse(await set(fx.admin.id, fx.user.id, 35)) as Record<string, unknown>
     expect(out).toEqual({
@@ -1871,7 +1949,7 @@ describe('write tools', () => {
       await ctx.db.patch(rows[0]._id, { active: false })
     })
     const err = await expectRefusal(
-      fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.agent.id }),
+      fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.agent.id, access: 'read' }),
       'forbidden',
       /^this agent has been deactivated$/,
     )

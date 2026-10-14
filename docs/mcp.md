@@ -58,9 +58,14 @@ requested manual setup; agent keys give automation its own identity.
 - **A person's token.** Each person mints their own under **Settings → User
   account → MCP access → Personal access tokens**; the secret (`qvt_…`, shown once,
   stored as SHA-256 + display prefix, migration 0030) maps to that account,
-  and the client then acts as them. These permanent tokens do not expire
-  automatically and remain a secondary option below the OAuth
-  setup and its copyable MCP server address.
+  and the client then acts as them. Personal tokens remain a secondary option
+  below the OAuth setup and its copyable MCP server address. Each token
+  records whether it can make changes or only read, and may record an expiry
+  date, both fixed when it is created. Today every token the settings page
+  creates can make changes and never expires; a choice of read-only access
+  and an expiry date is planned for that page. A token stored without an
+  access setting, created before tokens had one, can only read. After its
+  expiry date a token is refused exactly like a revoked one.
 - **An agent's key.** An agent is a user of the organization that is not a
   person — no email, no password — created by an org admin under **Settings →
   Organization → Users**, where it is given a name and a key (`qva_…`,
@@ -95,19 +100,41 @@ user to **Inactive**, which stops every key or token they hold at once
 without anything having to be revoked one by one: both the credential row
 and the profile behind it are read fresh on every request.
 
-**A read-only credential.** A user whose **organization role** is `viewer`
+**Read-only credentials.** Every credential either can make changes or can
+only read. One shared rule decides it (`credentialAccess` in
+`convex/lib/access.ts`), and MCP, the REST API and webhook management all use
+it:
+
+- A personal token can make changes only when it was created with change
+  access and has not expired.
+- An OAuth connection can make changes only with both `qivo:read` and
+  `qivo:write`.
+- An agent key can make changes only when its agent's organization role is
+  `user` (Standard user). A **Viewer agent** is fully read-only.
+
+Qivo refuses every writing tool called with a read-only credential before it
+resolves any reference, so the refusal reveals nothing about what exists. An
+agent key gets `this agent is a Viewer and can only read` and a personal
+token gets `this credential can only read`, both as the tool's error result.
+A read-only OAuth connection gets the HTTP 403 `insufficient_scope` challenge
+described under [OAuth protocol and deployment](#oauth-protocol-and-deployment).
+A read-only credential still reads everything its user can, and it can still
+create, list and remove its own [webhook subscriptions](#task-events-and-webhook-delivery).
+
+**The Viewer role.** A user whose **organization role** is `viewer`
 (migration 0102) holds a seat and signs in, reads exactly the projects they
-can access directly or through a team, and writes nothing: every writing tool
-is refused with the same
-"your account has no write access to that project" a missing grant produces,
-and they are never handed a task. It is a ceiling, not a grant — it opens no
-project, it only refuses to let any other path (an individual or team grant, a
-project-lead title, a team leadership) exceed read. An **agent** can be a
-viewer too, which is how a read-only key is made: one setting on the Users
-page instead of a grant list audited project by project. Nothing here
-implements any of it — the cap lives in the shared access layer
-(`cappedLevel` in `convex/lib/access.ts`), so the same profile is read-only
-over MCP, over the REST API and in the browser alike.
+can access directly or through a team, and writes nothing. A Viewer person's
+credential may be able to make changes, but every writing tool still refuses
+with the same "your account has no write access to that project" a missing
+grant produces, and they are never handed a task. It is a ceiling, not a
+grant. It opens no project and only stops any other path (an individual or
+team grant, a project-lead title, a team leadership) from exceeding read. An
+**agent** can be a viewer too, which is how a read-only key is made: one
+setting on the Users page instead of a grant list audited project by project.
+That key's agent is then refused as a Viewer agent, as described above. The
+cap lives in the shared access layer (`cappedLevel` and `credentialAccess` in
+`convex/lib/access.ts`), so the same profile is read-only over MCP, over the
+REST API and in the browser alike.
 
 Note that `viewer` is also the name of the lowest **project** role — a grant on
 one project. The two are the same idea one altitude apart, which is why they
@@ -455,7 +482,8 @@ subscriptions retained for inspection.
 Delete unwanted subscriptions to release that capacity. Registration automatically
 removes expired registrations and reclaims capacity held by subscriptions whose
 credential was revoked or deleted, or whose account was removed. Temporary
-deactivation and lost project access do not remove subscriptions.
+deactivation and lost project access do not remove subscriptions. A personal
+token's subscriptions stop delivering when the token expires.
 
 Each delivery contains one event:
 
@@ -585,8 +613,12 @@ owning grant with REST `GET /v1/webhooks` to inspect health. MCP `events/list`
 lists event definitions, not subscriptions. Organization administrators can use
 REST `GET /v1/webhooks/organization` and `DELETE /v1/webhooks/organization/{id}`
 to inspect and reclaim shared quota with a personal token or OAuth connection.
-OAuth administrator deletion requires `qivo:write`; ordinary ownership-based
-subscription management needs only `qivo:read`.
+Deleting another owner's subscription needs a credential that can make
+changes: a personal token created with change access, or an OAuth connection
+with `qivo:write`. A read-only credential gets HTTP 403 with
+`this credential can only read` there. Managing your own subscriptions, and
+listing the organization's, works with a read-only credential too, so OAuth
+needs only `qivo:read` for them.
 
 For `events/unsubscribe`, send the original event name, arguments and
 `delivery: { "url": "<original callback URL>" }`. The optional `mode` field may
@@ -768,7 +800,8 @@ layer looks like the object not existing, matching the app.
   (`convex/machine/mcp.ts`), no MCP SDK. The credential is resolved before
   dispatch; OAuth additionally rechecks the live grant and scopes before each
   tool, including every call in a batch. Every tool is one internal Convex function that
-  takes the resolved user explicitly and re-asserts it — ref resolution, the
+  takes the resolved user and the credential's access explicitly and re-asserts
+  them (a writing tool refuses a read-only credential first) — ref resolution, the
   rules a write must satisfy, the write and its activity trail, all in one
   transaction. What the surface file itself holds is the MCP grammar: the
   two protocol legs, the header rules, tool names, schemas and transport.
@@ -785,7 +818,7 @@ layer looks like the object not existing, matching the app.
   credentials retain their three refusal sentences —
   `missing credential (Authorization: Bearer qvt_… or
   qva_…)`, or per credential kind `unknown, revoked or deactivated agent
-  key` / `unknown or revoked MCP token` — the credential's exact state is
+  key` / `unknown, expired or revoked MCP token` — the credential's exact state is
   deliberately not disclosed.
 - Any verb but POST and the CORS preflight answers `405` with `Allow: POST,
   OPTIONS` and the body `stateless MCP server — POST JSON-RPC only`, before

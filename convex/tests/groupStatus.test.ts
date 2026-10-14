@@ -32,7 +32,11 @@ describe('parent task status', () => {
         title: 'Subtask',
       })
       const getParent = () =>
-        t.query(internal.machine.rest.getIssue, { callerId: f.admin.id, ref: parent.id })
+        t.query(internal.machine.rest.getIssue, {
+          callerId: f.admin.id,
+          access: 'read',
+          ref: parent.id,
+        })
       expect(await getParent()).toMatchObject({ status: 'review', is_group: true })
       await expectRefusal(
         client.mutation(api.issues.update, {
@@ -80,21 +84,31 @@ describe('parent task status', () => {
     const leaf = await plantIssue(t, { ...base, parent_id: middle.id })
     const rest = await t.query(internal.machine.rest.listIssues, {
       callerId: f.admin.id,
+      access: 'read',
       status: 'review',
     })
     const mcp = JSON.parse(
-      await t.query(internal.machine.mcp.listIssues, { callerId: f.admin.id, status: 'review' }),
+      await t.query(internal.machine.mcp.listIssues, {
+        callerId: f.admin.id,
+        access: 'read',
+        status: 'review',
+      }),
     ) as McpIssueOut[]
     expect(rest.map((i) => i.id)).toEqual([leaf.id])
     expect(mcp.map((i) => i.id)).toEqual([leaf.id])
     expect(
       JSON.parse(
-        await t.query(internal.machine.mcp.getIssue, { callerId: f.admin.id, ref: root.id }),
+        await t.query(internal.machine.mcp.getIssue, {
+          callerId: f.admin.id,
+          access: 'read',
+          ref: root.id,
+        }),
       ),
     ).toMatchObject({ is_group: true, status: 'review' })
     await expectRefusal(
       t.mutation(internal.machine.rest.updateIssue, {
         callerId: f.admin.id,
+        access: 'write',
         keyName: 'test',
         ref: root.id,
         body: JSON.stringify({ status: 'done', archived: true }),
@@ -105,6 +119,7 @@ describe('parent task status', () => {
     await expectRefusal(
       t.mutation(internal.machine.mcp.updateIssue, {
         callerId: f.admin.id,
+        access: 'write',
         ref: middle.id,
         status: 'todo',
       }),
@@ -139,7 +154,11 @@ describe('parent task status', () => {
     expect(snapshot?.issues.map((i) => i.id)).toContain(visibleChild.id)
     expect(snapshot?.issues.map((i) => i.id)).not.toContain(hiddenChild.id)
     expect(
-      await t.query(internal.machine.rest.getIssue, { callerId: f.guest.id, ref: parent.id }),
+      await t.query(internal.machine.rest.getIssue, {
+        callerId: f.guest.id,
+        access: 'read',
+        ref: parent.id,
+      }),
     ).toMatchObject({ is_group: true, status: 'done' })
     await expectRefusal(
       as(t, f.guest).mutation(api.issues.update, {
@@ -198,7 +217,11 @@ describe('parent task status', () => {
     expect(archived.find((i) => i.id === parent.id)?.is_group).toBe(true)
     expect(archived.find((i) => i.id !== parent.id)?.is_group).toBe(false)
     expect(
-      await t.query(internal.machine.rest.getIssue, { callerId: f.admin.id, ref: parent.id }),
+      await t.query(internal.machine.rest.getIssue, {
+        callerId: f.admin.id,
+        access: 'read',
+        ref: parent.id,
+      }),
     ).toMatchObject({ is_group: true })
     await expectRefusal(
       as(t, f.admin).mutation(api.issues.update, {

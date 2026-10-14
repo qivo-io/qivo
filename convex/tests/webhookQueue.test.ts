@@ -30,6 +30,7 @@ async function fixture() {
       name: 'Queue tests',
       token_prefix: 'qvt_test',
       token_hash: 'test',
+      access: 'read',
       created_at: new Date().toISOString(),
     })
     return {

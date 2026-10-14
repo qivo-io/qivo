@@ -248,11 +248,13 @@ describe('assignee project permission', () => {
         surface === 'REST'
           ? await t.query(internal.machine.rest.listProjectUsers, {
               callerId: f.agent.id,
+              access: 'read',
               ref: f.sub.id,
             })
           : JSON.parse(
               await t.query(internal.machine.mcp.listProjectUsers, {
                 callerId: f.agent.id,
+                access: 'read',
                 project: f.sub.id,
               }),
             )
@@ -269,11 +271,13 @@ describe('assignee project permission', () => {
         surface === 'REST'
           ? t.mutation(internal.machine.rest.createIssue, {
               callerId: f.agent.id,
+              access: 'write',
               keyName: 'assignee test',
               body: JSON.stringify(createArgs),
             })
           : t.mutation(internal.machine.mcp.createIssue, {
               callerId: f.agent.id,
+              access: 'write',
               ...createArgs,
             }),
         'bad_request',
@@ -284,12 +288,14 @@ describe('assignee project permission', () => {
         surface === 'REST'
           ? t.mutation(internal.machine.rest.updateIssue, {
               callerId: f.agent.id,
+              access: 'write',
               keyName: 'assignee test',
               ref: task.id,
               body: JSON.stringify({ assignee_id: recipient.id }),
             })
           : t.mutation(internal.machine.mcp.updateIssue, {
               callerId: f.agent.id,
+              access: 'write',
               ref: task.id,
               assignee_id: recipient.id,
             }),
@@ -307,12 +313,14 @@ describe('assignee project permission', () => {
         surface === 'REST'
           ? await t.mutation(internal.machine.rest.createIssue, {
               callerId: f.agent.id,
+              access: 'write',
               keyName: 'assignee test',
               body: JSON.stringify(reporterArgs),
             })
           : JSON.parse(
               await t.mutation(internal.machine.mcp.createIssue, {
                 callerId: f.agent.id,
+                access: 'write',
                 ...reporterArgs,
               }),
             )
@@ -330,11 +338,13 @@ describe('assignee project permission', () => {
         surface === 'REST'
           ? t.mutation(internal.machine.rest.createIssue, {
               callerId: f.agent.id,
+              access: 'write',
               keyName: 'assignee test',
               body: JSON.stringify(reviewArgs),
             })
           : t.mutation(internal.machine.mcp.createIssue, {
               callerId: f.agent.id,
+              access: 'write',
               ...reviewArgs,
             }),
         'bad_request',
@@ -344,12 +354,14 @@ describe('assignee project permission', () => {
         surface === 'REST'
           ? t.mutation(internal.machine.rest.updateIssue, {
               callerId: f.agent.id,
+              access: 'write',
               keyName: 'assignee test',
               ref: task.id,
               body: JSON.stringify({ reviewer_id }),
             })
           : t.mutation(internal.machine.mcp.updateIssue, {
               callerId: f.agent.id,
+              access: 'write',
               ref: task.id,
               reviewer_id,
             })

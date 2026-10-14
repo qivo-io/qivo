@@ -1182,6 +1182,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
         name: 'Claude',
         token_prefix: 'qvt_0123456',
         token_hash: HEX64,
+        access: 'write',
       }),
     ).toEqual({ id })
     await expectRefusal(
@@ -1191,6 +1192,7 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
         name: 'Sneak',
         token_prefix: 'qvt_0123456',
         token_hash: 'cd'.repeat(32),
+        access: 'write',
       }),
       'not_found',
     )

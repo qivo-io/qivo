@@ -43,8 +43,9 @@ your client, then revoke the old key.
 
 Agents use the same project roles as people. They cannot be organization
 admins or lead a team. Set the organization role to **Viewer** for read-only
-automation.
-Changes and comments name the agent. Active agents count toward billing;
+automation. A Viewer agent's keys can only read. REST and MCP refuse every
+change with `this agent is a Viewer and can only read`, whatever project roles
+the agent holds. Changes and comments name the agent. Active agents count toward billing;
 setting one to **Inactive** disables all its keys.
 
 Agents have **no weekly limit**. The Team strip shows their planned hours

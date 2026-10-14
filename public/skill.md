@@ -249,8 +249,10 @@ mode is `"webhook"`; no signing key is needed to unsubscribe.
 A person who administers the organization can inspect subscriptions across
 owners with `GET /v1/webhooks/organization` and remove one with
 `DELETE /v1/webhooks/organization/{id}`. Use that person's token or OAuth
-connection. OAuth administrator deletion requires `qivo:write`. Use these
-routes to reclaim shared quota when the original owner cannot remove a callback.
+connection. Removing another owner's subscription needs a credential that can
+make changes: a personal token with change access, or an OAuth connection with
+`qivo:write`. Use these routes to reclaim shared quota when the original owner
+cannot remove a callback.
 
 ## Archives, access, and browser links
 
@@ -263,8 +265,12 @@ Archived projects are separate: use `list_projects` with `archived: true` to
 find them, then explicitly name one in the task query. They refuse new tasks;
 restore a project in the browser when that is part of the requested work.
 A viewer can read but cannot write. A not-found response can also mean the
-credential cannot see the object. A read-only OAuth approval also prevents
-writes. If the user's task needs additional access, use the client's OAuth
+credential cannot see the object. A read-only credential also prevents writes:
+a read-only OAuth approval, a personal token without change access, or the key
+of an agent whose organization role is Viewer. Qivo refuses its changes before
+looking up what you named, with `this agent is a Viewer and can only read` or
+`this credential can only read`; reading and managing its own event
+subscriptions still work. If the user's task needs additional access, use the client's OAuth
 approval flow to request it; approval still cannot exceed the person's
 current project permissions.
 
