@@ -155,7 +155,7 @@ const APP_SHARED = [
   'panorama_library',
   'panorama_refills',
   'platform_admins',
-  'platform_audit_log',
+  'platform_audit_log', // operator and maintenance-job records; demo sessions add none
   // Billing and machine metering never run in APP_MODE=demo. Their production
   // plan catalog, financial ledger and request windows are independent of a
   // public demo session and must not be purged with anonymous workspace data.

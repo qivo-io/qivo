@@ -376,6 +376,22 @@ describe('invitations from the app', () => {
     ])
   })
 
+  it('sends and records nothing on a public demo deployment', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const seat = await plantSeat(t, { org_id: f.org.id, email: 'anna@example.se' })
+    const send = () =>
+      t.action(internal.invites.sendFromApp, { invites: [{ profile_id: seat.id }] })
+    vi.stubEnv('APP_MODE', 'demo')
+    await send()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await inviteRows(t)).toEqual([])
+    vi.stubEnv('APP_MODE', '')
+    await send()
+    expect(letters().map((l) => l.to[0])).toEqual(['anna@example.se'])
+    expect(await inviteRows(t)).toHaveLength(1)
+  })
+
   it('records an unsent letter when mail is not configured', async () => {
     vi.stubEnv('AGENTMAIL_API_KEY', '')
     const t = newAuthT()
