@@ -8,6 +8,7 @@ import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
+import { TOOLS } from '../machine/mcp'
 import { expectRefusal, newT, plantIssue, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 declare class URLSearchParams {
@@ -469,13 +470,22 @@ describe('OAuth provider and MCP integration', () => {
       title: 'Unchanged',
     })
     const c = await connect(f, READ)
-    const writes: [string, Json][] = [
-      ['create_task', { project: f.sub.id, title: 'Forbidden' }],
-      ['update_task', { ref: task.id, title: 'Forbidden' }],
-      ['delete_task', { ref: task.id }],
-      ['add_comment', { ref: task.id, body: 'Forbidden' }],
-      ['update_user', { user_id: f.profile.id, plannable_hours: 1 }],
-    ]
+    // Every tool whose flag is not exactly 'read', so this list and the read
+    // tools of the next test together cover every tool. Valid arguments make
+    // a missed challenge visible in the unchanged task below. The challenge
+    // comes before argument checks, so a tool missing here is called with none.
+    const valid: Record<string, Json> = {
+      create_task: { project: f.sub.id, title: 'Forbidden' },
+      update_task: { ref: task.id, title: 'Forbidden' },
+      delete_task: { ref: task.id },
+      add_comment: { ref: task.id, body: 'Forbidden' },
+      update_user: { user_id: f.profile.id, plannable_hours: 1 },
+    }
+    const writes: [string, Json][] = TOOLS.filter((tool) => tool.access !== 'read').map((tool) => [
+      tool.def.name,
+      valid[tool.def.name] ?? {},
+    ])
+    expect(writes.length).toBeGreaterThan(0)
     for (const modern of [false, true]) {
       expect(
         (
@@ -499,6 +509,31 @@ describe('OAuth provider and MCP integration', () => {
     })
     expect(rest.status).toBe(401)
     expect((await json(rest)).error).toMatch(/missing agent key/)
+  })
+
+  it('lets a read-only grant call every read tool on both MCP protocols', async () => {
+    const f = await fixture()
+    const task = await plantIssue(f.t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Readable',
+    })
+    const c = await connect(f, READ)
+    const args: Record<string, Json> = {
+      list_project_users: { project: f.sub.id },
+      get_task: { ref: task.id },
+      list_comments: { ref: task.id },
+    }
+    const reads = TOOLS.filter((tool) => tool.access === 'read')
+    expect(reads.length).toBeGreaterThan(0)
+    for (const modern of [false, true]) {
+      for (const tool of reads) {
+        // toolData fails on the 403 challenge and on an isError scope refusal
+        await toolData(
+          await mcp(f, c.access_token, tool.def.name, args[tool.def.name] ?? {}, modern),
+        )
+      }
+    }
   })
 
   it('requests read scope for MCP discovery and catches write calls inside batches', async () => {

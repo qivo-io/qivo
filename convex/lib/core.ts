@@ -8,7 +8,11 @@
  * Layering: the surface files (convex/machine/{rest,mcp}.ts) own the wire —
  * routes, status codes, per-surface refusal sentences, JSON key subsets — and
  * compose these helpers inside ONE internal fn per endpoint (resolve + rules
- * + write + activity in one transaction). Shared RULES live in model/issues.ts
+ * + write + activity in one transaction). Each agent-key REST route and MCP
+ * tool is declared once as a registry entry (machine/registry.ts) with a
+ * required read/write `access` flag; a read entry can only run queries, so
+ * its internal fn is a query. The /v1/webhooks routes and the MCP events/*
+ * methods are served outside it. Shared RULES live in model/issues.ts
  * (cleanTitle, pairRule, metaNeedsSub, assertLive, assertAssignable,
  * assertNoSubtasks, assertNoGroupDates, assertWeekPair, SUB_MUST_NAME) and
  * model/orgs.ts (setPlannableHoursCore); this file adds only what the model

@@ -86,6 +86,7 @@ import type * as lib_webhookTransport from "../lib/webhookTransport.js";
 import type * as machine_auth from "../machine/auth.js";
 import type * as machine_curation from "../machine/curation.js";
 import type * as machine_mcp from "../machine/mcp.js";
+import type * as machine_registry from "../machine/registry.js";
 import type * as machine_rest from "../machine/rest.js";
 import type * as machine_testing from "../machine/testing.js";
 import type * as mail from "../mail.js";
@@ -213,6 +214,7 @@ declare const fullApi: ApiFromModules<{
   "machine/auth": typeof machine_auth;
   "machine/curation": typeof machine_curation;
   "machine/mcp": typeof machine_mcp;
+  "machine/registry": typeof machine_registry;
   "machine/rest": typeof machine_rest;
   "machine/testing": typeof machine_testing;
   mail: typeof mail;

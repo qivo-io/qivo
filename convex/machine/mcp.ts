@@ -30,10 +30,13 @@
  * admits nothing about what the caller cannot read. PROVENANCE 'via MCP' signs every write's activity
  * row through the trusted machine-narration seam (model/issues.ts).
  *
- * The TOOLS literal below began as the captured tools/list response and is
- * byte-pinned after every deliberate surface change
- * (convex/tests/mcp.test.ts). It keeps JSON double-quote style on purpose —
- * do not reformat.
+ * Layering: this file owns the MCP grammar and the transport. TOOLS below is
+ * the registry (machine/registry.ts). Each tool is declared once with its
+ * required read/write `access` flag, its wire `def` and the `run` that calls
+ * its ONE internal fn. tools/list answers the defs; the OAuth scope checks
+ * derive from the flag (a write tool needs qivo:write). The defs began as the
+ * captured tools/list response and are byte-pinned after every deliberate
+ * surface change (convex/tests/mcp.test.ts), so keep their key order and text.
  *
  * http.ts calls registerMcpRoutes(http) once at its bolt-on seam and is
  * never edited from here. */
@@ -90,11 +93,16 @@ import {
 import { notifyCommentInsert } from '../model/messages'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
+import { type MachineEntry, needsWrite, runEntry } from './registry'
 
 /* ------------------------------------------------------------ the 12 tools
- * Titles, descriptions and JSON-Schema literals are wire bytes (LLM-facing
- * prose is behavior-load-bearing), with key order preserved and hashes
- * pinned by the transport tests. */
+ * Each tool is ONE registry entry (machine/registry.ts): its required
+ * read/write `access` flag, its `def` and the `run` that calls its internal
+ * fn. tools/list answers the defs in this order. Titles, descriptions and
+ * JSON-Schema literals are wire bytes (LLM-facing prose is
+ * behavior-load-bearing), with key order preserved and hashes pinned by the
+ * transport tests. `run` receives validated, stripped wire arguments, so its
+ * casts are honest. validateArgs and pickArgs already enforced the shapes. */
 
 type SchemaProp = {
   type?: string
@@ -121,377 +129,496 @@ type ToolDef = {
   }
 }
 
-const TOOLS: ToolDef[] = [
+/** What a tool's `run` receives: the resolved profile uuid and the arguments. */
+type ToolInput = { callerId: string; args: Record<string, unknown> }
+
+/** One MCP tool. `run` answers the already pretty-printed result text. */
+type McpTool = MachineEntry<ToolInput, string> & { def: ToolDef }
+
+export const TOOLS: McpTool[] = [
   {
-    name: 'list_teams',
-    title: 'List teams',
-    description:
-      'Teams in your organization, as id and name. Teams group users for sharing and administration. Projects have no owning team; membership grants access only when a team is explicitly assigned permission.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {},
+    access: 'read',
+    def: {
+      name: 'list_teams',
+      title: 'List teams',
+      description:
+        'Teams in your organization, as id and name. Teams group users for sharing and administration. Projects have no owning team; membership grants access only when a team is explicitly assigned permission.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {},
+      },
     },
+    run: (r, { callerId }) => r.runQuery(internal.machine.mcp.listTeams, { callerId }),
   },
   {
-    name: 'list_projects',
-    title: 'List projects',
-    description:
-      'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). Active projects only by default; `archived: true` lists the archived ones instead — an archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        archived: {
-          type: 'boolean',
+    access: 'read',
+    def: {
+      name: 'list_projects',
+      title: 'List projects',
+      description:
+        'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). Active projects only by default; `archived: true` lists the archived ones instead — an archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          archived: {
+            type: 'boolean',
+          },
         },
       },
     },
+    run: (r, { callerId, args }) =>
+      r.runQuery(internal.machine.mcp.listProjects, {
+        callerId,
+        ...(args as { archived?: boolean }),
+      }),
   },
   {
-    name: 'list_users',
-    title: 'List users',
-    description:
-      'Users of the organization (use their id as assignee_id, reviewer_id or reporter_id). A roster entry is not proof of assignment eligibility: use `list_project_users` for the destination project and select an assignee or reviewer only from rows with `assignable: true`. `kind` is "person" or "agent" — an agent is a user like you, reachable through the API rather than a login. An assignee must be active and have effective Edit or Lead permission on the destination project; View-only users cannot be assigned work, including when their organization role is "user" or "guest". Reporters may be inactive or viewers when they can see the project. `plannable_hours` is that user\'s own capacity: the whole hours per week they have for planned project work, the work week minus meetings and other overhead (0092). It is what the planner divides by — plan someone at most that many hours in a week, and remember the week is shared across every project they work on, not just yours. It is null for an agent, which has no weekly capacity at all: an agent\'s work is never stretched to fit a calendar and an agent is never over capacity, so do not treat null as zero.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {},
-    },
-  },
-  {
-    name: 'list_project_users',
-    title: 'List project users',
-    description:
-      'Users who can see a destination project, for safe reporter_id, assignee_id and reviewer_id mapping. `project` accepts a project number, a key like ENC, or a uuid and must be visible to your account. Every row is a real Qivo profile; `assignable` is true only when that user is active and has effective Edit or Lead permission on the project. Any returned id may be a reporter_id, including an inactive user or viewer, while only rows with `assignable: true` may be an assignee_id or reviewer_id.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        project: {
-          type: 'string',
-        },
-      },
-      required: ['project'],
-    },
-  },
-  {
-    name: 'update_user',
-    title: 'Update user',
-    description:
-      'Set how many hours a week someone can be planned for — a WHOLE number of hours, 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to — nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        user_id: {
-          type: 'string',
-          format: 'uuid',
-          pattern:
-            '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-        },
-        plannable_hours: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 168,
-        },
-      },
-      required: ['user_id', 'plannable_hours'],
-    },
-  },
-  {
-    name: 'list_tasks',
-    title: 'List tasks',
-    description:
-      "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `search` matches every whitespace-separated fragment across task ID, title and description, case-insensitively and in any order. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project — archiving a project and archiving a task are separate things, and only the second has a flag here.",
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        project: {
-          type: 'string',
-        },
-        status: {
-          type: 'string',
-          enum: ['backlog', 'todo', 'progress', 'review', 'done'],
-        },
-        priority: {
-          type: 'string',
-          enum: ['urgent', 'high', 'medium', 'low'],
-        },
-        assignee_id: {
-          type: 'string',
-          format: 'uuid',
-          pattern:
-            '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-        },
-        search: {
-          type: 'string',
-        },
-        archived: {
-          type: 'boolean',
-        },
-        limit: {
-          type: 'integer',
-          minimum: 1,
-          maximum: 200,
-        },
+    access: 'read',
+    def: {
+      name: 'list_users',
+      title: 'List users',
+      description:
+        'Users of the organization (use their id as assignee_id, reviewer_id or reporter_id). A roster entry is not proof of assignment eligibility: use `list_project_users` for the destination project and select an assignee or reviewer only from rows with `assignable: true`. `kind` is "person" or "agent" — an agent is a user like you, reachable through the API rather than a login. An assignee must be active and have effective Edit or Lead permission on the destination project; View-only users cannot be assigned work, including when their organization role is "user" or "guest". Reporters may be inactive or viewers when they can see the project. `plannable_hours` is that user\'s own capacity: the whole hours per week they have for planned project work, the work week minus meetings and other overhead (0092). It is what the planner divides by — plan someone at most that many hours in a week, and remember the week is shared across every project they work on, not just yours. It is null for an agent, which has no weekly capacity at all: an agent\'s work is never stretched to fit a calendar and an agent is never over capacity, so do not treat null as zero.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {},
       },
     },
+    run: (r, { callerId }) => r.runQuery(internal.machine.mcp.listUsers, { callerId }),
   },
   {
-    name: 'get_task',
-    title: 'Get task',
-    description:
-      "One task with its full description. `is_group: true` identifies a parent whose stored status is dormant. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid — task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them).",
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        ref: {
-          type: 'string',
+    access: 'read',
+    def: {
+      name: 'list_project_users',
+      title: 'List project users',
+      description:
+        'Users who can see a destination project, for safe reporter_id, assignee_id and reviewer_id mapping. `project` accepts a project number, a key like ENC, or a uuid and must be visible to your account. Every row is a real Qivo profile; `assignable` is true only when that user is active and has effective Edit or Lead permission on the project. Any returned id may be a reporter_id, including an inactive user or viewer, while only rows with `assignable: true` may be an assignee_id or reviewer_id.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          project: {
+            type: 'string',
+          },
         },
+        required: ['project'],
       },
-      required: ['ref'],
     },
+    run: (r, { callerId, args }) =>
+      r.runQuery(internal.machine.mcp.listProjectUsers, {
+        callerId,
+        ...(args as { project: string }),
+      }),
   },
   {
-    name: 'list_comments',
-    title: 'List comments',
-    description:
-      'The discussion thread on a task, oldest first. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        ref: {
-          type: 'string',
+    access: 'write',
+    def: {
+      name: 'update_user',
+      title: 'Update user',
+      description:
+        'Set how many hours a week someone can be planned for — a WHOLE number of hours, 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to — nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          user_id: {
+            type: 'string',
+            format: 'uuid',
+            pattern:
+              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+          },
+          plannable_hours: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 168,
+          },
         },
+        required: ['user_id', 'plannable_hours'],
       },
-      required: ['ref'],
     },
+    run: (r, { callerId, args }) =>
+      r.runMutation(internal.machine.mcp.updateUser, {
+        callerId,
+        ...(args as { user_id: string; plannable_hours: number }),
+      }),
   },
   {
-    name: 'add_comment',
-    title: 'Add comment',
-    description:
-      "Comment on a task's discussion thread, as yourself. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid; `body` is markdown. Commenting does not change the task itself.",
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        ref: {
-          type: 'string',
-        },
-        body: {
-          type: 'string',
-          minLength: 1,
+    access: 'read',
+    def: {
+      name: 'list_tasks',
+      title: 'List tasks',
+      description:
+        "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `search` matches every whitespace-separated fragment across task ID, title and description, case-insensitively and in any order. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project — archiving a project and archiving a task are separate things, and only the second has a flag here.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          project: {
+            type: 'string',
+          },
+          status: {
+            type: 'string',
+            enum: ['backlog', 'todo', 'progress', 'review', 'done'],
+          },
+          priority: {
+            type: 'string',
+            enum: ['urgent', 'high', 'medium', 'low'],
+          },
+          assignee_id: {
+            type: 'string',
+            format: 'uuid',
+            pattern:
+              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+          },
+          search: {
+            type: 'string',
+          },
+          archived: {
+            type: 'boolean',
+          },
+          limit: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 200,
+          },
         },
       },
-      required: ['ref', 'body'],
     },
+    run: (r, { callerId, args }) =>
+      r.runQuery(internal.machine.mcp.listIssues, {
+        callerId,
+        ...(args as {
+          project?: string
+          status?: Doc<'issues'>['status']
+          priority?: Doc<'issues'>['priority']
+          assignee_id?: string
+          search?: string
+          archived?: boolean
+          limit?: number
+        }),
+      }),
   },
   {
-    name: 'create_task',
-    title: 'Create task',
-    description:
-      'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects — a task is never created under another project\'s sub-project (create it in the right project, or move it later in the app). Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        project: {
-          type: 'string',
+    access: 'read',
+    def: {
+      name: 'get_task',
+      title: 'Get task',
+      description:
+        "One task with its full description. `is_group: true` identifies a parent whose stored status is dormant. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid — task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them).",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
         },
-        sub_project: {
-          type: 'string',
-        },
-        title: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 80,
-        },
-        description: {
-          type: 'string',
-        },
-        status: {
-          type: 'string',
-          enum: ['backlog', 'todo', 'progress', 'review', 'done'],
-        },
-        priority: {
-          type: 'string',
-          enum: ['urgent', 'high', 'medium', 'low'],
-        },
-        assignee_id: {
-          anyOf: [
-            {
-              type: 'string',
-              format: 'uuid',
-              pattern:
-                '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        reviewer_id: {
-          anyOf: [
-            {
-              type: 'string',
-              format: 'uuid',
-              pattern:
-                '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        reporter_id: {
-          description:
-            'Real Qivo user who can see the destination project; omit to use the authenticated caller. Cannot be changed after creation.',
-          type: 'string',
-          format: 'uuid',
-          pattern:
-            '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-        },
-        due_date: {
-          anyOf: [
-            {
-              type: 'string',
-              pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        remaining_hours: {
-          anyOf: [
-            {
-              type: 'number',
-              minimum: 0,
-              maximum: 99999.9,
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        archived: {
-          type: 'boolean',
-        },
+        required: ['ref'],
       },
-      required: ['project', 'title'],
     },
+    run: (r, { callerId, args }) =>
+      r.runQuery(internal.machine.mcp.getIssue, { callerId, ...(args as { ref: string }) }),
   },
   {
-    name: 'update_task',
-    title: 'Update task',
-    description:
-      "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group: its stored status is dormant and `status` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents). `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.",
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        ref: {
-          type: 'string',
+    access: 'read',
+    def: {
+      name: 'list_comments',
+      title: 'List comments',
+      description:
+        'The discussion thread on a task, oldest first. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
         },
-        title: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 80,
-        },
-        description: {
-          type: 'string',
-        },
-        status: {
-          type: 'string',
-          enum: ['backlog', 'todo', 'progress', 'review', 'done'],
-        },
-        priority: {
-          type: 'string',
-          enum: ['urgent', 'high', 'medium', 'low'],
-        },
-        assignee_id: {
-          anyOf: [
-            {
-              type: 'string',
-              format: 'uuid',
-              pattern:
-                '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        reviewer_id: {
-          anyOf: [
-            {
-              type: 'string',
-              format: 'uuid',
-              pattern:
-                '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        due_date: {
-          anyOf: [
-            {
-              type: 'string',
-              pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        remaining_hours: {
-          anyOf: [
-            {
-              type: 'number',
-              minimum: 0,
-              maximum: 99999.9,
-            },
-            {
-              type: 'null',
-            },
-          ],
-        },
-        paused: {
-          type: 'boolean',
-        },
-        archived: {
-          type: 'boolean',
-        },
+        required: ['ref'],
       },
-      required: ['ref'],
     },
+    run: (r, { callerId, args }) =>
+      r.runQuery(internal.machine.mcp.listComments, { callerId, ...(args as { ref: string }) }),
   },
   {
-    name: 'delete_task',
-    title: 'Delete task',
-    description:
-      'Delete a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
-    inputSchema: {
-      type: 'object',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      properties: {
-        ref: {
-          type: 'string',
+    access: 'write',
+    def: {
+      name: 'add_comment',
+      title: 'Add comment',
+      description:
+        "Comment on a task's discussion thread, as yourself. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid; `body` is markdown. Commenting does not change the task itself.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+          body: {
+            type: 'string',
+            minLength: 1,
+          },
         },
+        required: ['ref', 'body'],
       },
-      required: ['ref'],
     },
+    run: (r, { callerId, args }) =>
+      r.runMutation(internal.machine.mcp.addComment, {
+        callerId,
+        ...(args as { ref: string; body: string }),
+      }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'create_task',
+      title: 'Create task',
+      description:
+        'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects — a task is never created under another project\'s sub-project (create it in the right project, or move it later in the app). Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          project: {
+            type: 'string',
+          },
+          sub_project: {
+            type: 'string',
+          },
+          title: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 80,
+          },
+          description: {
+            type: 'string',
+          },
+          status: {
+            type: 'string',
+            enum: ['backlog', 'todo', 'progress', 'review', 'done'],
+          },
+          priority: {
+            type: 'string',
+            enum: ['urgent', 'high', 'medium', 'low'],
+          },
+          assignee_id: {
+            anyOf: [
+              {
+                type: 'string',
+                format: 'uuid',
+                pattern:
+                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          reviewer_id: {
+            anyOf: [
+              {
+                type: 'string',
+                format: 'uuid',
+                pattern:
+                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          reporter_id: {
+            description:
+              'Real Qivo user who can see the destination project; omit to use the authenticated caller. Cannot be changed after creation.',
+            type: 'string',
+            format: 'uuid',
+            pattern:
+              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+          },
+          due_date: {
+            anyOf: [
+              {
+                type: 'string',
+                pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          remaining_hours: {
+            anyOf: [
+              {
+                type: 'number',
+                minimum: 0,
+                maximum: 99999.9,
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          archived: {
+            type: 'boolean',
+          },
+        },
+        required: ['project', 'title'],
+      },
+    },
+    run: (r, { callerId, args }) =>
+      r.runMutation(internal.machine.mcp.createIssue, {
+        callerId,
+        ...(args as {
+          project: string
+          sub_project?: string
+          title: string
+          description?: string
+          status?: Doc<'issues'>['status']
+          priority?: Doc<'issues'>['priority']
+          assignee_id?: string | null
+          reviewer_id?: string | null
+          reporter_id?: string
+          due_date?: string | null
+          remaining_hours?: number | null
+          archived?: boolean
+        }),
+      }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'update_task',
+      title: 'Update task',
+      description:
+        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group: its stored status is dormant and `status` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents). `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+          title: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 80,
+          },
+          description: {
+            type: 'string',
+          },
+          status: {
+            type: 'string',
+            enum: ['backlog', 'todo', 'progress', 'review', 'done'],
+          },
+          priority: {
+            type: 'string',
+            enum: ['urgent', 'high', 'medium', 'low'],
+          },
+          assignee_id: {
+            anyOf: [
+              {
+                type: 'string',
+                format: 'uuid',
+                pattern:
+                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          reviewer_id: {
+            anyOf: [
+              {
+                type: 'string',
+                format: 'uuid',
+                pattern:
+                  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          due_date: {
+            anyOf: [
+              {
+                type: 'string',
+                pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          remaining_hours: {
+            anyOf: [
+              {
+                type: 'number',
+                minimum: 0,
+                maximum: 99999.9,
+              },
+              {
+                type: 'null',
+              },
+            ],
+          },
+          paused: {
+            type: 'boolean',
+          },
+          archived: {
+            type: 'boolean',
+          },
+        },
+        required: ['ref'],
+      },
+    },
+    run: (r, { callerId, args }) =>
+      r.runMutation(internal.machine.mcp.updateIssue, {
+        callerId,
+        ...(args as {
+          ref: string
+          title?: string
+          description?: string
+          status?: Doc<'issues'>['status']
+          priority?: Doc<'issues'>['priority']
+          assignee_id?: string | null
+          reviewer_id?: string | null
+          due_date?: string | null
+          remaining_hours?: number | null
+          paused?: boolean
+          archived?: boolean
+        }),
+      }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'delete_task',
+      title: 'Delete task',
+      description:
+        'Delete a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+        },
+        required: ['ref'],
+      },
+    },
+    run: (r, { callerId, args }) =>
+      r.runMutation(internal.machine.mcp.deleteIssue, { callerId, ...(args as { ref: string }) }),
   },
 ]
 
-const TOOL_INDEX = new Map(TOOLS.map((t) => [t.name, t]))
+const TOOL_DEFS: ToolDef[] = TOOLS.map((t) => t.def)
+const TOOL_INDEX = new Map(TOOLS.map((t) => [t.def.name, t]))
 
 /* ------------------------------------------------------------ wire shells */
 
@@ -688,7 +815,7 @@ async function callTool(
   run: ToolRunner,
 ): Promise<ToolOutcome> {
   const name = params?.name
-  const tool = typeof name === 'string' ? TOOL_INDEX.get(name) : undefined
+  const tool = typeof name === 'string' ? TOOL_INDEX.get(name)?.def : undefined
   if (tool === undefined) {
     return { kind: 'protocol', error: { code: -32602, message: `Tool ${String(name)} not found` } }
   }
@@ -844,7 +971,9 @@ async function legacyLeg(a: {
     })
   }
   if (method === 'ping') return sseRes(200, { result: {}, jsonrpc: '2.0', id })
-  if (method === 'tools/list') return sseRes(200, { result: { tools: TOOLS }, jsonrpc: '2.0', id })
+  if (method === 'tools/list') {
+    return sseRes(200, { result: { tools: TOOL_DEFS }, jsonrpc: '2.0', id })
+  }
   if (method === 'tools/call') {
     const out = await callTool(params, a.runTool)
     if (out.kind === 'protocol') return sseRes(200, { jsonrpc: '2.0', id, error: out.error })
@@ -943,7 +1072,7 @@ async function modernLeg(a: {
   }
   if (method === 'tools/list') {
     return jsonRes(200, {
-      result: { tools: TOOLS, resultType: 'complete', ...CACHE_HINTS, _meta: SERVER_META },
+      result: { tools: TOOL_DEFS, resultType: 'complete', ...CACHE_HINTS, _meta: SERVER_META },
       jsonrpc: '2.0',
       id,
     })
@@ -1415,8 +1544,8 @@ export const deleteIssue = internalMutation({
 })
 
 /* --------------------------------------------------------- tool dispatcher
- * Validated, stripped wire arguments → the internal fn for the tool. The
- * casts are honest: validateArgs/pickArgs already enforced the shapes. */
+ * Validated, stripped wire arguments → the tool's registry entry, run with
+ * the narrowest runner its access flag allows. */
 
 async function runTool(
   ctx: ActionCtx,
@@ -1424,98 +1553,19 @@ async function runTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
-  switch (name) {
-    case 'list_teams':
-      return await ctx.runQuery(internal.machine.mcp.listTeams, { callerId })
-    case 'list_projects':
-      return await ctx.runQuery(internal.machine.mcp.listProjects, {
-        callerId,
-        ...(args as { archived?: boolean }),
-      })
-    case 'list_users':
-      return await ctx.runQuery(internal.machine.mcp.listUsers, { callerId })
-    case 'list_project_users':
-      return await ctx.runQuery(internal.machine.mcp.listProjectUsers, {
-        callerId,
-        ...(args as { project: string }),
-      })
-    case 'update_user':
-      return await ctx.runMutation(internal.machine.mcp.updateUser, {
-        callerId,
-        ...(args as { user_id: string; plannable_hours: number }),
-      })
-    case 'list_tasks':
-      return await ctx.runQuery(internal.machine.mcp.listIssues, {
-        callerId,
-        ...(args as {
-          project?: string
-          status?: Doc<'issues'>['status']
-          priority?: Doc<'issues'>['priority']
-          assignee_id?: string
-          search?: string
-          archived?: boolean
-          limit?: number
-        }),
-      })
-    case 'get_task':
-      return await ctx.runQuery(internal.machine.mcp.getIssue, {
-        callerId,
-        ...(args as { ref: string }),
-      })
-    case 'list_comments':
-      return await ctx.runQuery(internal.machine.mcp.listComments, {
-        callerId,
-        ...(args as { ref: string }),
-      })
-    case 'add_comment':
-      return await ctx.runMutation(internal.machine.mcp.addComment, {
-        callerId,
-        ...(args as { ref: string; body: string }),
-      })
-    case 'create_task':
-      return await ctx.runMutation(internal.machine.mcp.createIssue, {
-        callerId,
-        ...(args as {
-          project: string
-          sub_project?: string
-          title: string
-          description?: string
-          status?: Doc<'issues'>['status']
-          priority?: Doc<'issues'>['priority']
-          assignee_id?: string | null
-          reviewer_id?: string | null
-          reporter_id?: string
-          due_date?: string | null
-          remaining_hours?: number | null
-          archived?: boolean
-        }),
-      })
-    case 'update_task':
-      return await ctx.runMutation(internal.machine.mcp.updateIssue, {
-        callerId,
-        ...(args as {
-          ref: string
-          title?: string
-          description?: string
-          status?: Doc<'issues'>['status']
-          priority?: Doc<'issues'>['priority']
-          assignee_id?: string | null
-          reviewer_id?: string | null
-          due_date?: string | null
-          remaining_hours?: number | null
-          paused?: boolean
-          archived?: boolean
-        }),
-      })
-    case 'delete_task':
-      return await ctx.runMutation(internal.machine.mcp.deleteIssue, {
-        callerId,
-        ...(args as { ref: string }),
-      })
-    default:
-      // unreachable: callTool resolves names against TOOL_INDEX first
-      throw new Error(`unknown tool ${name}`)
-  }
+  const tool = TOOL_INDEX.get(name)
+  // Unreachable, because callTool resolves names against TOOL_INDEX first.
+  if (tool === undefined) throw new Error(`unknown tool ${name}`)
+  return await runEntry(ctx, tool, { callerId, args })
+}
+
+/* Whether the named tool needs qivo:write. A known tool does unless its flag
+ * is exactly 'read' (needsWrite fails closed). An unknown name needs no write
+ * scope, because the dispatcher answers it with -32602 before any runner
+ * exists. */
+const toolWrites = (name: string): boolean => {
+  const tool = TOOL_INDEX.get(name)
+  return tool !== undefined && needsWrite(tool)
 }
 
 /* ------------------------------------------------------------ the transport */
@@ -1537,13 +1587,9 @@ const rateLimited = (): Response =>
     headers: withCors({ 'Content-Type': 'application/json', 'Retry-After': '60' }),
   })
 
-const OAUTH_WRITE_TOOLS = new Set([
-  'update_user',
-  'add_comment',
-  'create_task',
-  'update_task',
-  'delete_task',
-])
+/* The OAuth step-up before dispatch. It answers HTTP 403 insufficient_scope
+ * when the grant lacks qivo:read, or lacks qivo:write while any call in the
+ * body names a tool whose registry entry is a write; null lets it through. */
 const scopeChallenge = (bodyText: string, scopes: string[]): Response | null => {
   let needsWrite = false
   try {
@@ -1555,7 +1601,7 @@ const scopeChallenge = (bodyText: string, scopes: string[]): Response | null => 
       return (
         rpc.method === 'tools/call' &&
         typeof rpc.params?.name === 'string' &&
-        OAUTH_WRITE_TOOLS.has(rpc.params.name)
+        toolWrites(rpc.params.name)
       )
     })
   } catch {
@@ -1656,8 +1702,7 @@ const mcpPost = httpAction(async (ctx, request) => {
             resource,
           })
           if (!live) throw forbidden('OAuth connection is invalid, expired or disconnected')
-          const write = OAUTH_WRITE_TOOLS.has(name)
-          const scope = write ? 'qivo:write' : 'qivo:read'
+          const scope = toolWrites(name) ? 'qivo:write' : 'qivo:read'
           if (!live.scopes.includes(scope))
             throw forbidden(`This connection does not have the ${scope} scope.`)
           return runTool(ctx, live.profileId, name, args)
