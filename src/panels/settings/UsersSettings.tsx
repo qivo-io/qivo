@@ -3,6 +3,7 @@ import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { CopyValue } from '../../components/CopyValue'
 import { Avatar, Icon } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
@@ -38,7 +39,6 @@ function AgentKeyPanel({
 }) {
   const [name, setName] = useStateS('')
   const [fresh, setFresh] = useStateS<{ secret: string } | null>(null)
-  const [copied, setCopied] = useStateS(false)
   const [busy, setBusy] = useStateS(false)
   const [confirm, setConfirm] = useStateS<string | null>(null)
   useUpdateBlocker(!!name || !!fresh || busy)
@@ -53,7 +53,6 @@ function AgentKeyPanel({
       return
     }
     setFresh({ secret: res.secret })
-    setCopied(false)
     setName('')
     reload()
   }
@@ -67,25 +66,11 @@ function AgentKeyPanel({
           <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [margin-bottom:8px]">
             Copy this key now. It cannot be shown again.
           </div>
-          <div className="[display:flex] [gap:8px] [align-items:center]">
-            <code
-              data-fresh-key
-              className="[flex:1] !font-mono [font-size:var(--fs-sm)] [padding:7px_9px] [background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-sm)] [overflow-x:auto] [white-space:nowrap]"
-            >
-              {fresh.secret}
-            </code>
-            <Button
-              type="button"
-              onClick={() =>
-                navigator.clipboard.writeText(fresh.secret).then(
-                  () => setCopied(true),
-                  () => {},
-                )
-              }
-            >
-              <Icon name={copied ? 'check' : 'copy'} size={16} />
-              {copied ? 'Copied' : 'Copy'}
-            </Button>
+          <div className="flex items-center gap-2">
+            {/* on a phone, mobile-settings.css gives [data-fresh-key] its own row */}
+            <div data-fresh-key className="min-w-0 flex-1">
+              <CopyValue value={fresh.secret} label="Copy key" />
+            </div>
             <Button type="button" variant="ghost" onClick={() => setFresh(null)}>
               Done
             </Button>
@@ -207,7 +192,6 @@ export function OrgUsersPage({
   const [openKeys, setOpenKeys] = useStateS<string | null>(null)
   const [freshAgent, setFreshAgent] = useStateS<{ name: string; secret: string } | null>(null)
   useUpdateBlocker(!!addName || !!addEmail || addRole !== 'user' || !!freshAgent)
-  const [copied, setCopied] = useStateS(false)
   // the roster is the HOME organization's users; the blended snapshot also
   // holds foreign profiles (mine, in orgs that shared a project with me) and
   // this organization's own guests, both listed elsewhere
@@ -264,7 +248,6 @@ export function OrgUsersPage({
       return
     }
     setFreshAgent({ name, secret: res.secret })
-    setCopied(false)
   }
   return (
     <div data-settings-user-detail={mobileUser?.id}>
@@ -282,25 +265,11 @@ export function OrgUsersPage({
           <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [margin-bottom:8px]">
             Copy the agent's sign-in key now. It cannot be shown again.
           </div>
-          <div className="[display:flex] [gap:8px] [align-items:center]">
-            <code
-              data-fresh-key
-              className="[flex:1] !font-mono [font-size:var(--fs-sm)] [padding:7px_9px] [background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-sm)] [overflow-x:auto] [white-space:nowrap]"
-            >
-              {freshAgent.secret}
-            </code>
-            <Button
-              type="button"
-              onClick={() =>
-                navigator.clipboard.writeText(freshAgent.secret).then(
-                  () => setCopied(true),
-                  () => {},
-                )
-              }
-            >
-              <Icon name={copied ? 'check' : 'copy'} size={16} />
-              {copied ? 'Copied' : 'Copy'}
-            </Button>
+          <div className="flex items-center gap-2">
+            {/* on a phone, mobile-settings.css gives [data-fresh-key] its own row */}
+            <div data-fresh-key className="min-w-0 flex-1">
+              <CopyValue value={freshAgent.secret} label="Copy key" />
+            </div>
             <Button type="button" variant="ghost" onClick={() => setFreshAgent(null)}>
               Done
             </Button>

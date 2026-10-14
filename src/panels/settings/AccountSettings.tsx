@@ -3,6 +3,7 @@ import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { CopyValue } from '../../components/CopyValue'
 import { Avatar, Icon } from '../../components/qivo'
 import {
   PageTitle,
@@ -196,7 +197,6 @@ function McpAccessSection() {
   const [fresh, setFresh] = useStateS<{ name: string; secret: string } | null>(null)
   const [busy, setBusy] = useStateS(false)
   const [confirm, setConfirm] = useStateS<string | null>(null)
-  const [copied, setCopied] = useStateS<'server' | 'secret' | 'cmd' | null>(null)
   // Newly minted credentials only exist here until explicitly dismissed.
   useUpdateBlocker(!!name || !!fresh || busy)
 
@@ -214,12 +214,6 @@ function McpAccessSection() {
     '" --header "Authorization: Bearer ' +
     secret +
     '"'
-  const copy = (what: 'server' | 'secret' | 'cmd', textToCopy: string) => {
-    navigator.clipboard.writeText(textToCopy).then(
-      () => setCopied(what),
-      () => {},
-    )
-  }
   const create = async () => {
     if (!name.trim() || busy) return
     setBusy(true)
@@ -231,7 +225,6 @@ function McpAccessSection() {
     }
     setFresh({ name: name.trim(), secret: res.secret })
     setName('')
-    setCopied(null)
     reload()
   }
 
@@ -241,19 +234,8 @@ function McpAccessSection() {
         <ol className="list-decimal space-y-3 pl-5 text-sm text-text-2">
           <li>
             Add this server address in your assistant’s MCP settings.
-            <div className="mt-2 flex flex-col items-stretch gap-2 min-[761px]:flex-row min-[761px]:items-center">
-              <code className="min-w-0 flex-1 break-all rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-xs text-text-1">
-                {mcpUrl}
-              </code>
-              <Button
-                type="button"
-                size="sm"
-                aria-label="Copy MCP server address"
-                onClick={() => copy('server', mcpUrl)}
-              >
-                <Icon name={copied === 'server' ? 'check' : 'copy'} size={16} />
-                {copied === 'server' ? 'Copied' : 'Copy address'}
-              </Button>
+            <div className="mt-1">
+              <CopyValue value={mcpUrl} label="Copy address" data-mcp-server-address="" />
             </div>
           </li>
           <li>
@@ -273,30 +255,17 @@ function McpAccessSection() {
             <div className="[font-size:var(--fs-base)] [font-weight:600] [margin-bottom:8px]">
               “{fresh.name}” created
             </div>
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [margin-bottom:8px]">
-              Copy the token now. It cannot be shown again.
+            <div className="text-sm text-text-2">Copy the token now. It cannot be shown again.</div>
+            <div className="mt-1">
+              <CopyValue value={fresh.secret} label="Copy token" data-fresh-token="" />
             </div>
-            <div className="[display:flex] [gap:8px] [align-items:center] [margin-bottom:8px]">
-              <code className="[flex:1] !font-mono [font-size:var(--fs-sm)] [padding:7px_9px] [background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-sm)] [overflow-x:auto] [white-space:nowrap]">
-                {fresh.secret}
-              </code>
-              <Button type="button" onClick={() => copy('secret', fresh.secret)}>
-                <Icon name={copied === 'secret' ? 'check' : 'copy'} size={16} />
-                {copied === 'secret' ? 'Copied' : 'Copy'}
-              </Button>
-            </div>
-            <div className="[display:flex] [gap:8px] [align-items:center]">
-              <code className="[flex:1] !font-mono [font-size:var(--fs-xs)] [padding:7px_9px] [background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-sm)] [overflow-x:auto] [white-space:nowrap] [color:var(--text-1)]">
-                {claudeCmd(fresh.secret)}
-              </code>
-              <Button
-                type="button"
-                title="Copy Claude Code setup command"
-                onClick={() => copy('cmd', claudeCmd(fresh.secret))}
-              >
-                <Icon name={copied === 'cmd' ? 'check' : 'copy'} size={16} />
-                {copied === 'cmd' ? 'Copied' : 'Claude'}
-              </Button>
+            <div className="mt-3 text-sm text-text-2">Claude Code setup command</div>
+            <div className="mt-1">
+              <CopyValue
+                value={claudeCmd(fresh.secret)}
+                label="Copy Claude Code setup command"
+                data-fresh-token-command=""
+              />
             </div>
             <Button
               type="button"
