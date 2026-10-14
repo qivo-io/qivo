@@ -37,9 +37,13 @@ import {
   Loading,
 } from '../ui'
 
+/* The organization whose page is open. A just-created organization may not
+   be in the list yet, and then its size is unknown. */
+type OpenOrg = Pick<OrgRow, 'id' | 'name' | 'created_at'> & { approx_bytes: number | null }
+
 export function Orgs() {
   const [orgs, setOrgs] = useState<OrgRow[] | null>(null)
-  const [openOrg, setOpenOrg] = useState<OrgRow | null>(null)
+  const [openOrg, setOpenOrg] = useState<OpenOrg | null>(null)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [plan, setPlan] = useState('all')
@@ -67,14 +71,22 @@ export function Orgs() {
     }
   }, [attempt])
 
-  /* Reloads the list after New organization, then opens the new page. */
-  async function openCreated(orgId: string) {
+  /* Reloads the list after New organization, then opens the new page. The
+     organization exists even if the reload fails, and its page loads its own
+     data, so it opens either way. */
+  async function openCreated(created: { org_id: string; name: string }) {
+    const fallback: OpenOrg = {
+      id: created.org_id,
+      name: created.name,
+      created_at: new Date().toISOString(),
+      approx_bytes: null,
+    }
     try {
       const result = await listOrgs()
       setOrgs(result)
-      setOpenOrg(result.find((org) => org.id === orgId) ?? null)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setOpenOrg(result.find((org) => org.id === created.org_id) ?? fallback)
+    } catch {
+      setOpenOrg(fallback)
     }
     setCreating(false)
   }
@@ -242,7 +254,7 @@ export function Orgs() {
   )
 }
 
-function OrgDetailView({ org, onBack }: { org: OrgRow; onBack: () => void }) {
+function OrgDetailView({ org, onBack }: { org: OpenOrg; onBack: () => void }) {
   const [detail, setDetail] = useState<OrgDetail | null>(null)
   const [error, setError] = useState('')
   const [link, setLink] = useState('')
@@ -300,7 +312,11 @@ function OrgDetailView({ org, onBack }: { org: OrgRow; onBack: () => void }) {
       <AdminPageHeader
         title={org.name}
         headingRef={heading}
-        description={`Created ${fmtWhen(org.created_at)}, ~${fmtBytes(org.approx_bytes)} of data`}
+        description={
+          org.approx_bytes === null
+            ? `Created ${fmtWhen(org.created_at)}`
+            : `Created ${fmtWhen(org.created_at)}, ~${fmtBytes(org.approx_bytes)} of data`
+        }
         actions={
           <Button type="button" variant="ghost" onClick={onBack}>
             ← All organizations

@@ -6,7 +6,7 @@
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, components } from '../_generated/api'
+import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
 import { as, NOW, newT, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
@@ -243,6 +243,47 @@ describe('invitations from the app', () => {
     expect(letters().map((l) => l.to[0])).toEqual(['fiftieth@example.se', 'later@example.se'])
   })
 
+  it('reserves the last slot under the cap for only one of two simultaneous sends', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 49; i++) {
+        await ctx.db.insert('platform_audit_log', {
+          ts: new Date().toISOString(),
+          actor_email: 'system',
+          action: 'invite_email',
+          target_org_id: f.org.id,
+          channel: 'app',
+          detail: { email: 'earlier@example.se', sent: true, resend: false },
+        })
+      }
+    })
+    const reserve = (email: string) =>
+      t.mutation(internal.invites.reserve, {
+        profile_id: f.user.id,
+        org_id: f.org.id,
+        email,
+        resend: false,
+        actor: { email: 'system' },
+        app: true,
+      })
+    const outcomes = await Promise.all([reserve('a@example.se'), reserve('b@example.se')])
+    expect(outcomes.map((o) => o.allowed).sort()).toEqual([false, true])
+  })
+
+  it('skips a seat claimed since it was saved, unless the request is strict', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const targets = (strict: boolean) =>
+      t.query(internal.invites.targets, {
+        invites: [{ profile_id: f.user.id }],
+        operator: true,
+        strict,
+      })
+    expect(await targets(false)).toEqual([])
+    await expect(targets(true)).rejects.toThrow(/invitation not found/)
+  })
+
   it('shows app sends in the organization detail but not in the operator audit listing', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
@@ -273,6 +314,29 @@ describe('invitations from the app', () => {
     expect((await op.query(api.admin.auditLog, {})).map((r) => r.action)).not.toContain(
       'invite_email',
     )
+    // many newer app emails never push an operator action out of the listing
+    await t.run(async (ctx) => {
+      await ctx.db.insert('platform_audit_log', {
+        ts: new Date(Date.now() - 60_000).toISOString(),
+        actor_email: 'op@platform.test',
+        action: 'create_org',
+        target_org_id: f.org.id,
+        detail: {},
+      })
+      for (let i = 0; i < 300; i++) {
+        await ctx.db.insert('platform_audit_log', {
+          ts: new Date().toISOString(),
+          actor_email: 'system',
+          action: 'invite_email',
+          target_org_id: f.org.id,
+          channel: 'app',
+          detail: { email: `x${i}@example.se`, sent: true, resend: false },
+        })
+      }
+    })
+    expect((await op.query(api.admin.auditLog, { limit: 5 })).map((r) => r.action)).toEqual([
+      'create_org',
+    ])
   })
 
   it('records an unsent letter when mail is not configured', async () => {

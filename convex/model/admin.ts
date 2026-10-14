@@ -8,6 +8,7 @@
  * operatorEmail below resolves it for an operator's mutation. */
 
 import { components } from '../_generated/api'
+import type { Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 
 export type AuditEntry = {
@@ -16,14 +17,21 @@ export type AuditEntry = {
   action: string
   target_org_id?: string
   target_profile_id?: string
+  /* 'app' marks the app's own invitation emails (invites.ts), which the
+   * operator's audit listing leaves out. */
+  channel?: 'app'
   detail?: Record<string, unknown>
 }
 
-export async function audit(ctx: MutationCtx, entry: AuditEntry): Promise<void> {
-  await ctx.db.insert('platform_audit_log', {
+export async function audit(
+  ctx: MutationCtx,
+  entry: AuditEntry,
+): Promise<Id<'platform_audit_log'>> {
+  return await ctx.db.insert('platform_audit_log', {
     ts: new Date().toISOString(),
     actor_email: entry.actor_email,
     action: entry.action,
+    ...(entry.channel !== undefined ? { channel: entry.channel } : {}),
     ...(entry.actor_auth_id !== undefined ? { actor_auth_id: entry.actor_auth_id } : {}),
     ...(entry.target_org_id !== undefined ? { target_org_id: entry.target_org_id } : {}),
     ...(entry.target_profile_id !== undefined

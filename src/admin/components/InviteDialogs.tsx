@@ -515,7 +515,7 @@ export function NewOrganizationDialog({
 }: {
   onClose: () => void
   /* Resolves once the new organization's page is ready to open. */
-  onCreated: (orgId: string) => Promise<void>
+  onCreated: (created: { org_id: string; name: string }) => Promise<void>
 }) {
   const ids = useId()
   const [name, setName] = useState('')
@@ -575,7 +575,7 @@ export function NewOrganizationDialog({
         ...(plan && free ? { complimentary_months: FREE_MONTHS } : {}),
         people: review.people,
       })
-      await onCreated(created.org_id)
+      await onCreated({ org_id: created.org_id, name: name.trim() })
     } catch (cause) {
       setError(errorText(cause))
     } finally {

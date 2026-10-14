@@ -152,7 +152,7 @@ nobody else is in the organization. An account belongs to one home
 organization, so an address that already belongs to another organization can
 only join as a guest. Qivo Admin does not invite guests. Org admins and
 project leads invite them from project settings. The operator audit log
-records every invitation, email attempt and role change.
+records the invitations, email attempts and role changes made in Qivo Admin.
 
 ## Demo usage. Platform operators
 

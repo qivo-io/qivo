@@ -34,7 +34,9 @@
  * invites.sendInvites (From is the deployment's AgentMail inbox,
  * no-reply@qivo.io in production), which records every attempt. A failed or
  * unconfigured send keeps the seat, and the console offers the sign-up link
- * instead. Every write is audited as the operator. */
+ * instead. A seat claimed between saving and sending is skipped rather than
+ * failing a request whose writes already committed. Every write is audited as
+ * the operator. */
 
 import { ConvexError, type Infer, v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -321,6 +323,7 @@ export const resendInvite = platformAction({
     const [result] = await sendInvites(ctx, [{ profile_id }], {
       resend: true,
       operator: ctx.operator,
+      strict: true,
     })
     return result
   },
@@ -393,11 +396,12 @@ export const editInvite = platformAction({
       actor: { auth_user_id: ctx.operator.auth_user_id, email: ctx.operator.email },
     })
     if (!email_changed) return { sent: null }
+    // The edit is saved. A seat claimed since then needs no email.
     const [result] = await sendInvites(ctx, [{ profile_id: args.profile_id }], {
       resend: false,
       operator: ctx.operator,
     })
-    return { sent: result.sent }
+    return { sent: result?.sent ?? false }
   },
 })
 

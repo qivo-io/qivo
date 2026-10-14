@@ -602,24 +602,18 @@ export type AdminAuditRow = {
 /* admin_audit_log (0015:231-245): newest first, limit clamped to 1..1000
  * (default 200). The table has no app uuid — _id serves as the row key the
  * console's list needs. */
-/* The app's own invitation emails (actor 'system', invites.ts) are left out.
- * They are per-customer delivery records, shown through orgDetail, and would
- * push operator actions out of the window. The scan stops after this many
- * rows. */
-const AUDIT_SCAN_MAX = 8000
-
 export const auditLog = platformQuery({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }): Promise<AdminAuditRow[]> => {
     const clamped = Math.min(Math.max(limit ?? 200, 1), 1000)
-    const rows: Doc<'platform_audit_log'>[] = []
-    let scanned = 0
-    for await (const r of ctx.db.query('platform_audit_log').withIndex('by_ts').order('desc')) {
-      if (++scanned > AUDIT_SCAN_MAX) break
-      if (r.action === 'invite_email' && r.actor_email === 'system') continue
-      rows.push(r)
-      if (rows.length >= clamped) break
-    }
+    // The app's own invitation emails carry channel 'app' (invites.ts). They
+    // are delivery records, shown through orgDetail, so the listing reads only
+    // the rows without a channel.
+    const rows = await ctx.db
+      .query('platform_audit_log')
+      .withIndex('by_channel_ts', (q) => q.eq('channel', undefined))
+      .order('desc')
+      .take(clamped)
     return rows.map((r) => ({
       id: r._id,
       ts: r.ts,

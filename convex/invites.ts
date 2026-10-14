@@ -12,8 +12,9 @@
  * and account creation otherwise. Either way the verified address claims the
  * seat (identity.claimSeatsForLogin).
  *
- * Every attempt is recorded as an 'invite_email' platform audit row, with
- * the operator as actor for console sends and 'system' for the app's.
+ * Every attempt is recorded as an 'invite_email' platform audit row before it
+ * is sent, with the operator as actor for console sends and 'system' for the
+ * app's, whose rows carry channel 'app'.
  * admin.orgDetail shows the newest one for the seat's current address. The
  * app's sends are capped per organization, because any org admin can trigger
  * them and they leave from the shared no-reply inbox. Past the cap, people
@@ -21,6 +22,7 @@
 
 import { type Infer, v } from 'convex/values'
 import { components, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import type { ActionCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
 import { byId } from './lib/db'
@@ -46,7 +48,7 @@ const vActor = v.object({ auth_user_id: v.optional(v.string()), email: v.string(
 type Actor = Infer<typeof vActor>
 
 /* App sends allowed per organization per hour, counting console sends too.
- * Attempts over the cap are recorded as not sent and do not count. */
+ * Attempts over the cap are recorded as held back and do not count. */
 const APP_SENDS_PER_ORG_HOUR = 50
 
 type InviteTarget = {
@@ -56,15 +58,16 @@ type InviteTarget = {
   email: string
   has_account: boolean
   as_guest: boolean
-  limited: boolean
 }
+
+type SendRow = { detail: { email?: unknown; sent?: unknown; limited?: unknown } }
 
 /* invite_email rows since `since` for one organization or one seat. */
 async function recentSends(
   ctx: QueryCtx,
   by: { org_id: string } | { profile_id: string },
   since: string,
-): Promise<Array<{ detail: { email?: unknown; sent?: unknown; limited?: unknown } }>> {
+): Promise<SendRow[]> {
   const rows =
     'org_id' in by
       ? ctx.db
@@ -75,22 +78,23 @@ async function recentSends(
           .withIndex('by_target_profile', (q) =>
             q.eq('target_profile_id', by.profile_id).gt('ts', since),
           )
-  const out: Array<{ detail: { email?: unknown; sent?: unknown; limited?: unknown } }> = []
+  const out: SendRow[] = []
   for await (const row of rows) {
-    if (row.action === 'invite_email') out.push(row as { detail: { email?: unknown } })
+    if (row.action === 'invite_email') out.push(row as SendRow)
   }
   return out
 }
 
 /* The seats to email. An invitation is an active person seat with an address
- * and no login yet. For the operator, anything else is uniformly not found,
- * and guest seats are too, because org admins and project leads invite
- * guests, not the operator. For the app, a seat claimed, removed, deactivated
- * or readdressed before its scheduled send is skipped. */
+ * and no login yet. The operator never emails a guest seat, because org
+ * admins and project leads invite guests. With `strict` (an explicit resend
+ * or edit) anything else is uniformly not found. Otherwise a seat that stopped
+ * being an invitation since it was saved, for example one claimed at once, is
+ * skipped. For the app, a seat readdressed before its scheduled send is
+ * skipped too. */
 export const targets = internalQuery({
-  args: { invites: v.array(vInvite), operator: v.boolean() },
-  handler: async (ctx, { invites, operator }): Promise<InviteTarget[]> => {
-    const now = Date.now()
+  args: { invites: v.array(vInvite), operator: v.boolean(), strict: v.boolean() },
+  handler: async (ctx, { invites, operator, strict }): Promise<InviteTarget[]> => {
     const out: InviteTarget[] = []
     for (const invite of invites) {
       const seat = await byId(ctx, 'profiles', invite.profile_id)
@@ -103,28 +107,20 @@ export const targets = internalQuery({
         !seat.active ||
         (operator && seat.org_role === 'guest')
       ) {
-        if (operator) throw notFound('invitation not found')
+        if (strict) throw notFound('invitation not found')
         continue
       }
       const org = await byId(ctx, 'organizations', seat.org_id)
       if (org === null) {
-        if (operator) throw notFound('organization not found')
+        if (strict) throw notFound('organization not found')
         continue
       }
-      let limited = false
       if (!operator) {
         if (invite.email !== undefined && invite.email !== email) continue
         if (invite.unless_sent) {
           const ever = await recentSends(ctx, { profile_id: seat.id }, '')
           if (ever.some((r) => r.detail.email === email && r.detail.sent === true)) continue
         }
-        const hourSends = await recentSends(
-          ctx,
-          { org_id: org.id },
-          new Date(now - 3_600_000).toISOString(),
-        )
-        limited =
-          hourSends.filter((r) => r.detail.limited !== true).length >= APP_SENDS_PER_ORG_HOUR
       }
       const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
         model: 'user',
@@ -139,37 +135,59 @@ export const targets = internalQuery({
         as_guest:
           seat.org_role === 'guest' ||
           (await homeElsewhere(ctx, email, seat.org_id, seat)) !== null,
-        limited,
       })
     }
     return out
   },
 })
 
-export const record = internalMutation({
+/* Records one send before it happens, as not sent yet, and settle() records
+ * the outcome. For the app, the count and the new row commit in one
+ * transaction, so concurrent sends cannot both take the last slot under the
+ * cap. An app send over the cap is recorded as held back, and allowed is
+ * false. App rows carry channel 'app', which keeps them out of the operator's
+ * audit listing. */
+export const reserve = internalMutation({
   args: {
     profile_id: v.string(),
     org_id: v.string(),
     email: v.string(),
-    sent: v.boolean(),
     resend: v.boolean(),
-    limited: v.boolean(),
     actor: vActor,
+    app: v.boolean(),
   },
-  handler: async (ctx, a) => {
-    await audit(ctx, {
+  handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'>; allowed: boolean }> => {
+    let allowed = true
+    if (a.app) {
+      const since = new Date(Date.now() - 3_600_000).toISOString()
+      const recent = await recentSends(ctx, { org_id: a.org_id }, since)
+      allowed = recent.filter((r) => r.detail.limited !== true).length < APP_SENDS_PER_ORG_HOUR
+    }
+    const row = await audit(ctx, {
       ...(a.actor.auth_user_id !== undefined ? { actor_auth_id: a.actor.auth_user_id } : {}),
       actor_email: a.actor.email,
       action: 'invite_email',
       target_org_id: a.org_id,
       target_profile_id: a.profile_id,
+      ...(a.app ? { channel: 'app' as const } : {}),
       detail: {
         email: a.email,
-        sent: a.sent,
+        sent: false,
         resend: a.resend,
-        ...(a.limited ? { limited: true } : {}),
+        ...(allowed ? {} : { limited: true }),
       },
     })
+    return { row, allowed }
+  },
+})
+
+/* Records whether a reserved send went out. */
+export const settle = internalMutation({
+  args: { row: v.id('platform_audit_log'), sent: v.boolean() },
+  handler: async (ctx, { row, sent }) => {
+    const entry = await ctx.db.get(row)
+    if (entry === null) return
+    await ctx.db.patch(row, { detail: { ...(entry.detail as object), sent } })
   },
 })
 
@@ -185,24 +203,38 @@ const SEND_CONCURRENCY = 5
 /* One email per seat, a few at a time, results in input order. Mail never
  * fails the caller. The seats exist already, so an unsent invitation is
  * reported and recorded, not thrown. Without an operator the actor is
- * 'system', seats that are no longer invitations are skipped, and the app's
- * caps apply. */
+ * 'system', the app's cap applies, and seats that are no longer invitations
+ * are skipped. With an operator, `strict` refuses them instead. */
 export async function sendInvites(
   ctx: ActionCtx,
   invites: ScheduledInvite[],
-  opts: { resend: boolean; operator?: { auth_user_id: string; email: string } },
+  opts: {
+    resend: boolean
+    operator?: { auth_user_id: string; email: string }
+    strict?: boolean
+  },
 ): Promise<InviteResult[]> {
   if (invites.length === 0) return []
+  const app = opts.operator === undefined
   const list = await ctx.runQuery(internal.invites.targets, {
     invites,
-    operator: opts.operator !== undefined,
+    operator: !app,
+    strict: opts.strict === true,
   })
   const deadline = Date.now() + SEND_BUDGET_MS
   const actor: Actor = opts.operator ?? { email: 'system' }
   const results: InviteResult[] = []
   const sendOne = async (target: InviteTarget, i: number) => {
+    const { row, allowed } = await ctx.runMutation(internal.invites.reserve, {
+      profile_id: target.profile_id,
+      org_id: target.org_id,
+      email: target.email,
+      resend: opts.resend,
+      actor,
+      app,
+    })
     const sent =
-      !target.limited &&
+      allowed &&
       (await sendInviteEmail({
         to: target.email,
         org_name: target.org_name,
@@ -211,15 +243,7 @@ export async function sendInvites(
         send_key: `invite:${target.profile_id}:${newUuid()}`,
         deadline,
       }))
-    await ctx.runMutation(internal.invites.record, {
-      profile_id: target.profile_id,
-      org_id: target.org_id,
-      email: target.email,
-      sent,
-      resend: opts.resend,
-      limited: target.limited,
-      actor,
-    })
+    if (sent) await ctx.runMutation(internal.invites.settle, { row, sent })
     results[i] = { profile_id: target.profile_id, email: target.email, sent }
   }
   let next = 0
