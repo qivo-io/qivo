@@ -40,7 +40,6 @@ import {
   CALLER_GONE,
   type Caller,
   type Catalogue,
-  type CredentialRef,
   commentOut,
   findIssue,
   findProjectRef,
@@ -57,7 +56,6 @@ import {
   restProjectJson,
   UUID,
   userJson,
-  vCredentialRef,
 } from '../lib/core'
 import {
   type CredentialAccess,
@@ -69,7 +67,7 @@ import {
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
-import type { EventOwner } from '../lib/taskEvents'
+import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { logActivity } from '../model/activity'
 import { deleteIssueDeep } from '../model/cascade'
 import {
@@ -321,7 +319,7 @@ export const listProjectUsers = internalQuery({
  * billing pause and the key itself (lib/core.ts meCore, shared with MCP's
  * get_me). Only this function takes the credential row. */
 export const getMe = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, credential: vCredentialRef },
+  args: { callerId: v.string(), access: vCredentialAccess, credential: vEventOwner },
   handler: async (ctx, a): Promise<MeJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     return await meCore(ctx, me, a.access, a.credential)
@@ -718,7 +716,7 @@ type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${in
 /** What a route's `run` receives once auth and routing are done. */
 type RouteInput<Name extends string> = Principal & {
   /** the credential row that authenticated the request, for GET /v1/me */
-  credential: CredentialRef
+  credential: EventOwner
   keyName: string
   /** One decoded `:name` segment of the request path. */
   param: (name: Name) => string
@@ -1062,7 +1060,12 @@ const restHandler = httpAction(async (ctx, req) => {
     const result = await runEntry(ctx, found.route, {
       callerId,
       access,
-      credential: { table: 'agent_keys', id: res.cred.tokenId, rowId: res.cred.rowId },
+      credential: {
+        profile_id: callerId,
+        credential_table: 'agent_keys',
+        credential_id: res.cred.tokenId,
+        credential_row_id: res.cred.rowId,
+      },
       keyName,
       param: (name) => found.params[name],
       query: (name) => url.searchParams.get(name) ?? undefined,

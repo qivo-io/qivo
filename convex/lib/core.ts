@@ -24,13 +24,19 @@
  * forbidden 403, bad_request 400, rule 400 — readable beats a 500); MCP
  * collapses every refusal into the one isError sentence. */
 
-import { ConvexError, type Infer, v } from 'convex/values'
+import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { hasSubtasks, subtaskParentIds } from '../model/issues'
 import { attachmentLimitMb } from '../model/orgs'
-import { canSeeProject, hasProjectLevel, machineAccess, readOnlyRefusal } from './access'
+import {
+  canSeeProject,
+  hasProjectLevel,
+  liveCredentialRow,
+  machineAccess,
+  readOnlyRefusal,
+} from './access'
 import { assertBillingWritable, BILLING_READ_ONLY, billingReadOnly } from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
@@ -45,6 +51,7 @@ import type {
 import { badRequest, notFound, type Refusal } from './functions'
 import { canCreateProjects } from './projectCreators'
 import { allWordsMatcher } from './search'
+import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
 
 export { machineDetail }
@@ -841,50 +848,30 @@ export async function commentOut(
  * surfaces; each surface only encodes it. Nothing here grants anything, and
  * no secret, hash or display prefix leaves it. */
 
-/** The credential row that authenticated a machine request, which the HTTP
- *  action passes to get_me alone. `rowId` binds it to the exact row the
- *  lookup found, because app uuids may be reused after deletion. */
-export const vCredentialRef = v.object({
-  table: v.union(v.literal('agent_keys'), v.literal('mcp_tokens'), v.literal('oauth_connections')),
-  id: v.string(),
-  rowId: v.string(),
-})
-export type CredentialRef = Infer<typeof vCredentialRef>
-
 /* The wire name of each credential table. */
 const CREDENTIAL_KIND = {
   agent_keys: 'agent_key',
   mcp_tokens: 'personal_token',
   oauth_connections: 'oauth',
-} as const satisfies Record<CredentialRef['table'], string>
+} as const satisfies Record<EventOwner['credential_table'], string>
 
 /**
  * Who the caller is acting as, through which credential, with what access.
+ * `credential` names the exact row that authenticated the request, in the
+ * shape webhook ownership uses; the HTTP action passes it to get_me alone.
  * `access` is what asMachineCaller enforces (machineAccess), so a client can
- * learn whether it may write before it tries. A credential row that is gone,
- * revoked or bound to another profile by now answers like a caller gone
- * between lookup and dispatch.
+ * learn whether it may write before it tries. A credential that has stopped
+ * authorizing (lib/access.ts liveCredentialRow) or belongs to another profile
+ * answers like a caller gone between lookup and dispatch.
  */
 export async function meCore(
   ctx: QueryCtx,
   me: Caller,
   access: CredentialAccess,
-  ref: CredentialRef,
+  credential: EventOwner,
 ) {
-  const row =
-    ref.table === 'agent_keys'
-      ? await byId(ctx, 'agent_keys', ref.id)
-      : ref.table === 'mcp_tokens'
-        ? await byId(ctx, 'mcp_tokens', ref.id)
-        : await byId(ctx, 'oauth_connections', ref.id)
-  if (
-    row === null ||
-    row._id !== ref.rowId ||
-    row.profile_id !== me.id ||
-    row.revoked_at !== undefined
-  ) {
-    throw callerGone()
-  }
+  const row = await liveCredentialRow(ctx, credential, Date.now())
+  if (row === null || row.profile_id !== me.id) throw callerGone()
   const org = await byId(ctx, 'organizations', me.org_id)
   if (org === null) throw callerGone()
   const readOnly = await billingReadOnly(ctx, org.id)
@@ -904,7 +891,7 @@ export async function meCore(
     },
     billing: { read_only: readOnly, reason: readOnly ? BILLING_READ_ONLY : null },
     credential: {
-      kind: CREDENTIAL_KIND[ref.table],
+      kind: CREDENTIAL_KIND[credential.credential_table],
       access: machineAccess(me, access),
       expires_at: 'token_hash' in row ? (row.expires_at ?? null) : null,
       name: 'client_name' in row ? row.client_name : row.name,

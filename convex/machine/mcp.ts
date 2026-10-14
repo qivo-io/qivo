@@ -55,7 +55,6 @@ import {
   CALLER_DEACTIVATED,
   CALLER_GONE,
   type Caller,
-  type CredentialRef,
   childProjectsCore,
   commentOut,
   findIssue,
@@ -70,13 +69,17 @@ import {
   mcpProjectOut,
   meCore,
   userJson,
-  vCredentialRef,
 } from '../lib/core'
 import { byId } from '../lib/db'
 import { vCredentialAccess, vIssuePriority, vIssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
-import { type EventReply, WEBHOOK_MAX_TTL_MS } from '../lib/taskEvents'
+import {
+  type EventOwner,
+  type EventReply,
+  vEventOwner,
+  WEBHOOK_MAX_TTL_MS,
+} from '../lib/taskEvents'
 import { logActivity } from '../model/activity'
 import { deleteIssueDeep } from '../model/cascade'
 import {
@@ -134,7 +137,7 @@ type ToolDef = {
 
 /** The principal, the credential row that authenticated the request (for
  *  get_me) and the arguments a tool's `run` receives. */
-type ToolInput = Principal & { credential: CredentialRef; args: Record<string, unknown> }
+type ToolInput = Principal & { credential: EventOwner; args: Record<string, unknown> }
 
 /** One MCP tool. `run` answers the already pretty-printed result text. */
 type McpTool = MachineEntry<ToolInput, string> & { def: ToolDef }
@@ -1197,7 +1200,7 @@ const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
 /* get_me runs lib/core.ts meCore, shared with REST's GET /v1/me. Only this
  * function takes the credential row. */
 export const getMe = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, credential: vCredentialRef },
+  args: { callerId: v.string(), access: vCredentialAccess, credential: vEventOwner },
   handler: async (ctx, { callerId, access, credential }): Promise<string> => {
     const me = await asMachineCaller(ctx, callerId, access)
     return pretty(await meCore(ctx, me, access, credential))
@@ -1607,7 +1610,7 @@ export const deleteIssue = internalMutation({
 async function runTool(
   ctx: ActionCtx,
   principal: Principal,
-  credential: CredentialRef,
+  credential: EventOwner,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
@@ -1698,6 +1701,18 @@ const preflight = httpAction(async () => {
   })
 })
 
+/* The OAuth connection a request runs as, in webhook ownership's shape. */
+const oauthOwner = (live: {
+  profileId: string
+  connectionId: string
+  connectionRowId: string
+}): EventOwner => ({
+  profile_id: live.profileId,
+  credential_table: 'oauth_connections',
+  credential_id: live.connectionId,
+  credential_row_id: live.connectionRowId,
+})
+
 const mcpPost = httpAction(async (ctx, request) => {
   if (!(await ctx.runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
   // Bearer only — no X-Api-Key on MCP; the 'Bearer ' prefix match is
@@ -1742,12 +1757,7 @@ const mcpPost = httpAction(async (ctx, request) => {
               },
             }
           return ctx.runAction(internal.webhookActions.manage, {
-            owner: {
-              profile_id: live.profileId,
-              credential_table: 'oauth_connections',
-              credential_id: live.connectionId,
-              credential_row_id: live.connectionRowId,
-            },
+            owner: oauthOwner(live),
             method,
             params_json: JSON.stringify(params),
           })
@@ -1767,7 +1777,7 @@ const mcpPost = httpAction(async (ctx, request) => {
           return runTool(
             ctx,
             { callerId: live.profileId, access: live.access },
-            { table: 'oauth_connections', id: live.connectionId, rowId: live.connectionRowId },
+            oauthOwner(live),
             name,
             args,
           )
@@ -1800,30 +1810,22 @@ const mcpPost = httpAction(async (ctx, request) => {
   if (allowed === null) return unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
   const bodyText = await (request as unknown as { text(): Promise<string> }).text()
+  // the exact credential row this request runs as, for get_me and events/*
+  const owner: EventOwner = {
+    profile_id: cred.profileId,
+    credential_table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
+    credential_id: cred.tokenId,
+    credential_row_id: cred.rowId,
+  }
   try {
     return await dispatchMcp({
       headers: request.headers,
       bodyText,
       runTool: (name, args) =>
-        runTool(
-          ctx,
-          { callerId: cred.profileId, access: cred.access },
-          {
-            table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
-            id: cred.tokenId,
-            rowId: cred.rowId,
-          },
-          name,
-          args,
-        ),
+        runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args),
       runEvent: (method, params) =>
         ctx.runAction(internal.webhookActions.manage, {
-          owner: {
-            profile_id: cred.profileId,
-            credential_table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
-            credential_id: cred.tokenId,
-            credential_row_id: cred.rowId,
-          },
+          owner,
           method,
           params_json: JSON.stringify(params),
         }),

@@ -15,6 +15,7 @@ import authSchema from '../betterAuth/schema'
 import { BILLING_READ_ONLY } from '../lib/billingAccess'
 import type { CredentialAccess, ProjectCreators } from '../lib/enums'
 import { mcpResource } from '../lib/oauth'
+import type { EventOwner } from '../lib/taskEvents'
 import { sha256hex } from '../machine/auth'
 import { expectRefusal, NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
@@ -332,7 +333,12 @@ describe('get_me and GET /v1/me', () => {
     const demoted = await t.query(internal.machine.rest.getMe, {
       callerId: viewerAgent.id,
       access: 'write',
-      credential: { table: 'agent_keys', id: row.id, rowId: row._id },
+      credential: {
+        profile_id: viewerAgent.id,
+        credential_table: 'agent_keys',
+        credential_id: row.id,
+        credential_row_id: row._id,
+      },
     })
     expect(demoted.credential.access).toBe('read')
   })
@@ -415,26 +421,52 @@ describe('get_me and GET /v1/me', () => {
     expect(JSON.parse((await restMe(t, key)).text).organization.max_attachment_mb).toBe(20)
   })
 
-  it('a credential row that is gone, revoked or not the caller answers like a gone caller', async () => {
+  it('a credential row that is gone, revoked, expired or not the caller answers like a gone caller', async () => {
     const { t, f } = await fixture()
     await plantKey(t, f.agent, 'k')
     const key = (await t.run((ctx) => ctx.db.query('agent_keys').first()))!
-    const ref = { table: 'agent_keys', id: key.id, rowId: key._id } as const
-    const call = (
-      credential: { table: 'agent_keys'; id: string; rowId: string },
-      callerId = f.agent.id,
-    ) => t.query(internal.machine.rest.getMe, { callerId, access: 'write', credential })
-    expect((await call(ref)).credential.name).toBe('k')
-    for (const [label, credential, callerId] of [
-      ['unknown id', { ...ref, id: uuid() }, f.agent.id],
-      ['another row with the id', { ...ref, rowId: 'other' }, f.agent.id],
-      ['another caller', ref, f.user.id],
-    ] as const) {
+    const owner: EventOwner = {
+      profile_id: f.agent.id,
+      credential_table: 'agent_keys',
+      credential_id: key.id,
+      credential_row_id: key._id,
+    }
+    const call = (credential: EventOwner, callerId = f.agent.id) =>
+      t.query(internal.machine.rest.getMe, { callerId, access: 'write', credential })
+    const gone = async (label: string, credential: EventOwner, callerId = f.agent.id) => {
       const e = await expectRefusal(call(credential, callerId), 'forbidden')
       expect((e.data as { reason?: string }).reason, label).toBe('caller_gone')
     }
+    expect((await call(owner)).credential.name).toBe('k')
+    await gone('unknown id', { ...owner, credential_id: uuid() })
+    await gone('another row with the id', { ...owner, credential_row_id: 'other' })
+    await gone('owned by another profile', { ...owner, profile_id: f.user.id })
+    await gone('another caller', owner, f.user.id)
     await t.run((ctx) => ctx.db.patch(key._id, { revoked_at: NOW }))
-    const revoked = await expectRefusal(call(ref), 'forbidden')
-    expect((revoked.data as { reason?: string }).reason).toBe('caller_gone')
+    await gone('revoked', owner)
+    // a personal token that expires between its lookup and dispatch reads as
+    // gone, like touchCredential and webhook ownership treat it
+    const expired = await plantToken(t, f.user, {
+      name: 'Old',
+      access: 'write',
+      expires_at: '2020-01-01T00:00:00.000Z',
+    })
+    const token_hash = await sha256hex(expired)
+    const token = (await t.run((ctx) =>
+      ctx.db
+        .query('mcp_tokens')
+        .withIndex('by_hash', (q) => q.eq('token_hash', token_hash))
+        .unique(),
+    ))!
+    await gone(
+      'expired',
+      {
+        profile_id: f.user.id,
+        credential_table: 'mcp_tokens',
+        credential_id: token.id,
+        credential_row_id: token._id,
+      },
+      f.user.id,
+    )
   })
 })

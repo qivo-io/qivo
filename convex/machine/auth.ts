@@ -24,7 +24,7 @@ import { v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
-import { credentialAccess, tokenExpired } from '../lib/access'
+import { credentialAccess, liveCredentialRow, tokenExpired } from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import type { CredentialAccess } from '../lib/enums'
@@ -170,20 +170,19 @@ export const touchCredential = internalMutation({
     now: v.string(),
   },
   handler: async (ctx, { table, tokenId, rowId, profileId, now }): Promise<boolean | null> => {
-    const row =
-      table === 'agent_keys'
-        ? await byId(ctx, 'agent_keys', tokenId)
-        : await byId(ctx, 'mcp_tokens', tokenId)
-    // App UUIDs may be reused after deletion. Bind to the exact DB record
-    // authenticated by lookup so a replacement cannot inherit or pay for it.
-    if (
-      row === null ||
-      row._id !== rowId ||
-      row.profile_id !== profileId ||
-      row.revoked_at !== undefined ||
-      ('token_hash' in row && tokenExpired(row, Date.parse(now)))
+    // Bind to the exact DB record authenticated by lookup, so a replacement
+    // that reuses its uuid cannot inherit or pay for it.
+    const row = await liveCredentialRow(
+      ctx,
+      {
+        profile_id: profileId,
+        credential_table: table,
+        credential_id: tokenId,
+        credential_row_id: rowId,
+      },
+      Date.parse(now),
     )
-      return null
+    if (row === null) return null
     await ctx.db.patch(row._id, { last_used_at: now })
     return await recordApiCall(ctx, {
       profile_id: row.profile_id,

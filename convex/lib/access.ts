@@ -1,12 +1,15 @@
 // Indexed permission predicates over an already-resolved profile, plus the
-// credential access rule the machine surfaces share (end of file).
+// credential access rule and live credential check the machine surfaces
+// share (end of file).
 // Identity and active-seat checks belong to lib/functions.ts.
 
 import type { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { byId } from './db'
 import { type AccessLevel, type CredentialAccess, LEVEL_RANK, type OrgRole } from './enums'
 import { badRequest, forbidden, notFound, type Refusal } from './functions'
+import type { EventOwner } from './taskEvents'
 
 export function levelRank(l: AccessLevel | null): number {
   // No grant ranks below every permission level.
@@ -418,6 +421,36 @@ export function machineAccess(
 export function tokenExpired(token: Pick<Doc<'mcp_tokens'>, 'expires_at'>, now: number): boolean {
   if (token.expires_at === undefined) return false
   return !(Date.parse(token.expires_at) > now)
+}
+
+/**
+ * The credential row a machine request or webhook subscription is bound to,
+ * while it still authorizes. It must be the exact record the lookup found
+ * (app uuids may be reused after deletion), still belong to the same
+ * profile, not be revoked and, for a personal token, not have expired at
+ * `now` (epoch milliseconds). Null otherwise. touchCredential, get_me and
+ * webhook ownership all use this one check.
+ */
+export function liveCredentialRow<T extends EventOwner['credential_table']>(
+  ctx: QueryCtx,
+  owner: EventOwner & { credential_table: T },
+  now: number,
+): Promise<Doc<T> | null>
+export async function liveCredentialRow(
+  ctx: QueryCtx,
+  owner: EventOwner,
+  now: number,
+): Promise<Doc<EventOwner['credential_table']> | null> {
+  const row = await byId(ctx, owner.credential_table, owner.credential_id)
+  if (
+    row === null ||
+    row._id !== owner.credential_row_id ||
+    row.profile_id !== owner.profile_id ||
+    row.revoked_at !== undefined ||
+    ('token_hash' in row && tokenExpired(row, now))
+  )
+    return null
+  return row
 }
 
 export const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'

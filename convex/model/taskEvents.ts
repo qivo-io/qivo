@@ -1,7 +1,7 @@
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { credentialAccess, profileCanSeeProject, tokenExpired } from '../lib/access'
+import { credentialAccess, liveCredentialRow, profileCanSeeProject } from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import type { CredentialAccess } from '../lib/enums'
@@ -25,16 +25,9 @@ export async function eventOwner(
   if (isDemoDeployment()) return null
   const profile = await byId(ctx, 'profiles', owner.profile_id)
   if (!profile?.active) return null
-  const credential = await byId(ctx, owner.credential_table, owner.credential_id)
   const now = Date.now()
-  if (
-    !credential ||
-    credential._id !== owner.credential_row_id ||
-    credential.profile_id !== profile.id ||
-    credential.revoked_at !== undefined ||
-    ('token_hash' in credential && tokenExpired(credential, now))
-  )
-    return null
+  const credential = await liveCredentialRow(ctx, owner, now)
+  if (!credential) return null
   if (owner.credential_table === 'agent_keys' && profile.kind !== 'agent') return null
   if (
     owner.credential_table !== 'agent_keys' &&

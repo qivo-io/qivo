@@ -63,7 +63,12 @@ function registeredKinds(module: string, exports: Record<string, unknown>): Map<
 /* The principal every entry below runs as, and its credential row (only
  * get_me reads it). */
 const PRINCIPAL = { callerId: 'caller', access: 'read' } as const
-const CREDENTIAL = { table: 'agent_keys', id: 'key', rowId: 'row' } as const
+const CREDENTIAL = {
+  profile_id: 'caller',
+  credential_table: 'agent_keys',
+  credential_id: 'key',
+  credential_row_id: 'row',
+} as const
 
 /* One entry of a surface, run through runEntry like its dispatcher does. */
 type Entry = { label: string; access: MachineAccess; run: (ctx: Ctx) => Promise<unknown> }
