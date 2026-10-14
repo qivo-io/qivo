@@ -13,6 +13,7 @@ import {
   marketingWeek,
 } from '../internal/marketingDemoData'
 import { taskOwnerId } from '../lib/review'
+import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
 
 const { people, teams, projects, issues, labels, links, milestones, comments } = MARKETING_DEMO
@@ -203,6 +204,8 @@ describe('the versioned Northstar marketing scenario', () => {
     const projectByKey = new Map(projects.map((project) => [project.key, project]))
     const issueByKey = new Map(issues.map((issue) => [issue.key, issue]))
     const labelKeys = new Set(labels.map((label) => label.key))
+    // the seed writes straight to the table, so it must keep the stored color rule
+    expect(labels.filter((label) => !isLabelColor(label.color))).toEqual([])
     const parents = new Set(issues.map((issue) => issue.parent).filter(Boolean))
     // Edit access to the task's project: admin, the root's lead or its team.
     const canHoldWork = (personKey: string, issue: (typeof issues)[number]) => {

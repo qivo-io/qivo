@@ -327,8 +327,9 @@ export async function projectLevelsForOrg(
   }
 }
 
-/* Staff may curate organization labels when any meta grants user standing,
- * including explicit team sharing. */
+/* Staff may add organization labels when any meta grants user standing,
+ * including explicit team sharing. Renaming, recoloring and deleting follow
+ * canManageOrgLabels. */
 export async function canWriteOrgLabels(ctx: QueryCtx, me: Doc<'profiles'>): Promise<boolean> {
   if (!isOrgStaff(me)) return false
   if (me.org_role === 'admin') return true
@@ -338,4 +339,10 @@ export async function canWriteOrgLabels(ctx: QueryCtx, me: Doc<'profiles'>): Pro
     if (p.type === 'meta' && levelRank(levelForRoot(p)) >= LEVEL_RANK.user) return true
   }
   return false
+}
+
+/* Only organization admins rename, recolor or delete labels, as on the app's
+ * admin-only Labels settings page. */
+export function canManageOrgLabels(me: Doc<'profiles'>): boolean {
+  return me.active && me.org_role === 'admin'
 }

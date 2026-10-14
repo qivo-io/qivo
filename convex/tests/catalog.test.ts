@@ -819,6 +819,132 @@ describe('labels — vocabulary + toggle', () => {
     })
   })
 
+  it('stores only #rrggbb colors, on create and on update', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const colorOf = (id: string) =>
+      t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query('labels')
+              .withIndex('by_uuid', (q) => q.eq('id', id))
+              .unique()
+          )?.color,
+      )
+    const id = uuid()
+    await as(t, f.admin).mutation(api.labels.create, {
+      org_id: f.org.id,
+      id,
+      name: 'Bug',
+      color: '#a1b2c3',
+    })
+    expect(await colorOf(id)).toBe('#a1b2c3')
+    const invalid = [
+      'url(https://example.test/p.png)',
+      'red',
+      'var(--danger)',
+      '#fff',
+      '#12345g',
+      '#1234567',
+      ' #123456',
+      '#123456\n',
+      '',
+    ]
+    for (const color of invalid) {
+      await expectRefusal(
+        as(t, f.admin).mutation(api.labels.create, {
+          org_id: f.org.id,
+          id: uuid(),
+          name: `Bad ${invalid.indexOf(color)}`,
+          color,
+        }),
+        'bad_request',
+        /a label color must be # followed by six hex digits/,
+      )
+      await expectRefusal(
+        as(t, f.admin).mutation(api.labels.update, {
+          org_id: f.org.id,
+          id,
+          patch: { name: 'Renamed', color },
+        }),
+        'bad_request',
+      )
+    }
+    const orgLabels = await t.run((ctx) =>
+      ctx.db
+        .query('labels')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect(),
+    )
+    expect(orgLabels.map((l) => l.id)).toEqual([id])
+    expect(await colorOf(id)).toBe('#a1b2c3')
+    await as(t, f.admin).mutation(api.labels.update, {
+      org_id: f.org.id,
+      id,
+      patch: { color: '#F0555D' },
+    })
+    expect(await colorOf(id)).toBe('#F0555D')
+  })
+
+  it('only org admins rename, recolor or delete; curators still create and apply', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const label = await plantLabel(t, f.org.id, 'Bug')
+    const stored = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('labels')
+          .withIndex('by_uuid', (q) => q.eq('id', label.id))
+          .unique(),
+      )
+    // `user` leads a meta, so it may add labels and apply them to tasks
+    const created = uuid()
+    await as(t, f.user).mutation(api.labels.create, {
+      org_id: f.org.id,
+      id: created,
+      name: 'Hardware',
+      color: '#2FBE7A',
+    })
+    await as(t, f.user).mutation(api.labels.toggle, {
+      org_id: f.org.id,
+      issue_id: issue.id,
+      label_id: label.id,
+    })
+    const managerOnly = /only organization admins can rename, recolor or delete labels/
+    for (const patch of [{ name: 'Defect' }, { color: '#111111' }]) {
+      await expectRefusal(
+        as(t, f.user).mutation(api.labels.update, { org_id: f.org.id, id: label.id, patch }),
+        'forbidden',
+        managerOnly,
+      )
+    }
+    await expectRefusal(
+      as(t, f.user).mutation(api.labels.remove, { org_id: f.org.id, id: label.id }),
+      'forbidden',
+      managerOnly,
+    )
+    // the refusal comes before the lookup, so it reveals nothing about ids
+    await expectRefusal(
+      as(t, f.user).mutation(api.labels.update, {
+        org_id: f.org.id,
+        id: uuid(),
+        patch: { name: 'Ghost' },
+      }),
+      'forbidden',
+      managerOnly,
+    )
+    expect(await stored()).toMatchObject({ name: 'Bug', color: label.color })
+    await as(t, f.admin).mutation(api.labels.update, {
+      org_id: f.org.id,
+      id: created,
+      patch: { name: 'Mechanical', color: '#111111' },
+    })
+    await as(t, f.admin).mutation(api.labels.remove, { org_id: f.org.id, id: label.id })
+    expect(await stored()).toBeNull()
+  })
+
   it('toggle attaches then detaches, narrating against the issue', async () => {
     const t = newT()
     const f = await withOrg(t)

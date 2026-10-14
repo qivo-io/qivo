@@ -8,6 +8,7 @@ import type { Doc } from '../_generated/dataModel'
 import {
   canAccessProject,
   canLeadTeams,
+  canManageOrgLabels,
   canSeeProject,
   canWriteOrgLabels,
   cappedLevel,
@@ -444,5 +445,20 @@ describe('canWriteOrgLabels', () => {
       await ctx.db.patch(grant!._id, { level: 'user' })
     })
     expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.agent))).toBe(true)
+  })
+})
+
+describe('canManageOrgLabels', () => {
+  it('an active org admin yes', () => {
+    expect(canManageOrgLabels(f.admin)).toBe(true)
+  })
+
+  it('everyone else no, including a label creator and an inactive admin', async () => {
+    // `user` leads a meta, so it may add labels but not rename or delete them
+    expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.user))).toBe(true)
+    for (const me of [f.user, f.agent, f.guest, f.viewer]) {
+      expect(canManageOrgLabels(me)).toBe(false)
+    }
+    expect(canManageOrgLabels({ ...f.admin, active: false })).toBe(false)
   })
 })

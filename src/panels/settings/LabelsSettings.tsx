@@ -5,26 +5,10 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { Icon, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
+import { LABEL_COLORS } from '../../lib/labelColors'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { LabelVM } from '../../store/planner'
 import { P } from '../../store/planner'
-
-// Hex on purpose, not tokens — the same list, and the same reason, as the one
-// in planner.ts: this is DATA. A swatch picked here is written to labels.color
-// and read back by every client, so a var() would be stored as a string no
-// other client could resolve. Do not "migrate" these to tokens.
-const LABEL_COLORS = [
-  { color: '#6D7BF2', name: 'Indigo' },
-  { color: '#F0555D', name: 'Red' },
-  { color: '#2FBE7A', name: 'Green' },
-  { color: '#F2994A', name: 'Orange' },
-  { color: '#A78BFA', name: 'Purple' },
-  { color: '#4C9AFF', name: 'Blue' },
-  { color: '#E3C55A', name: 'Yellow' },
-  { color: '#0891B2', name: 'Teal' },
-  { color: '#BE123C', name: 'Rose' },
-  { color: '#8A8F98', name: 'Gray' },
-]
 
 function LabelRow({
   label,
@@ -162,11 +146,12 @@ function LabelRow({
   )
 }
 
-/* Labels survive task moves within the organization. Vocabulary edits follow
-   canWriteOrgLabels; picking existing labels follows task access. */
+/* Labels survive task moves within the organization. Settings opens this page
+   for organization admins only, the same people the server lets rename,
+   recolor and delete labels. Picking existing labels follows task access. */
 export function OrgLabelsPage() {
   const labels = P.orgLabels()
-  const canEdit = P.canWriteOrgLabels()
+  const canEdit = P.isAdmin()
   const [newLabel, setNewLabel] = useStateS('')
   useUpdateBlocker(!!newLabel)
   const [confirm, setConfirm] = useStateS<string | null>(null)
@@ -224,9 +209,7 @@ export function OrgLabelsPage() {
             </div>
           </SettingsGroup>
         )}
-        {!canEdit && (
-          <FieldHint>Organization admins and project editors can manage labels.</FieldHint>
-        )}
+        {!canEdit && <FieldHint>Only organization admins can manage labels.</FieldHint>}
       </SettingsSection>
     </>
   )
