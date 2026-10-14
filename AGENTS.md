@@ -57,10 +57,7 @@ Do not create or modify GitHub issues; Qivo work items are tasks.
 
 ## Deployment and version control
 
-Work on implementation branches, commit verified changes and push those
-branches. Do not merge, open a pull request or publish a release unless asked.
-Apply the same strategy to the private companion repository and preserve
-unrelated work there.
+Work on implementation branches.
 
 Production Vercel projects accept REST API deployment requests only. Git pushes
 and deploy hooks cannot start production builds. Successful main CI updates the
