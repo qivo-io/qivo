@@ -1318,6 +1318,70 @@ describe('milestones', () => {
     expect(await milestoneRow(t, id)).toBeNull()
   })
 
+  it('reads projects and milestones the caller cannot see as not found', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const subOnly = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'sub only',
+      auth_user_id: 'auth_sub_only',
+      accepted_at: NOW,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subOnly.id,
+        level: 'user',
+      }),
+    )
+    // an unseen sibling sub-project, a hidden project and another organization's
+    for (const project_id of [f.sub2.id, f.hidden.id, f.otherProject.id, uuid()]) {
+      const id = uuid()
+      await expectRefusal(
+        as(t, subOnly).mutation(api.projects.addMilestone, {
+          org_id: f.org.id,
+          id,
+          project_id,
+          name: 'Beta',
+          week: '2026-05-11',
+        }),
+        'not_found',
+        /^project not found$/,
+      )
+      expect(await milestoneRow(t, id)).toBeNull()
+    }
+    // the hidden project's lead adds one there; the viewer can see the
+    // top-level project but cannot write to it
+    const hidden = uuid()
+    const shown = uuid()
+    for (const [id, project_id] of [
+      [hidden, f.hidden.id],
+      [shown, f.meta.id],
+    ])
+      await as(t, f.user).mutation(api.projects.addMilestone, {
+        org_id: f.org.id,
+        id,
+        project_id,
+        name: 'Beta',
+        week: '2026-05-11',
+      })
+    const viewer = as(t, f.viewer)
+    const update = (id: string) =>
+      viewer.mutation(api.projects.updateMilestone, {
+        org_id: f.org.id,
+        id,
+        patch: { name: 'Renamed' },
+      })
+    const remove = (id: string) =>
+      viewer.mutation(api.projects.removeMilestone, { org_id: f.org.id, id })
+    await expectRefusal(update(hidden), 'not_found', /^milestone not found$/)
+    await expectRefusal(remove(hidden), 'not_found', /^milestone not found$/)
+    await expectRefusal(update(shown), 'forbidden', /^no write access to this project$/)
+    await expectRefusal(remove(shown), 'forbidden', /^no write access to this project$/)
+    for (const id of [hidden, shown])
+      expect(await milestoneRow(t, id)).toMatchObject({ name: 'Beta' })
+  })
+
   it('refuses a milestone named against an archived sub-project of an active project', async () => {
     const t = newT()
     const f = await withOrg(t)

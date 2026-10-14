@@ -354,13 +354,27 @@ describe('roadmap visit undo', () => {
       'forbidden',
       /^no write access to this project$/,
     )
-    // a sibling the seat cannot see stays not found
-    await expectRefusal(
-      as(t, subOnly).mutation(api.roadmap.change, { session_id, operations: [create(f.sub2.id)] }),
-      'not_found',
-      /^project not found$/,
-    )
+    // a sibling the seat cannot see and another organization's project stay not found
+    for (const project_id of [f.sub2.id, f.otherProject.id])
+      await expectRefusal(
+        as(t, subOnly).mutation(api.roadmap.change, {
+          session_id,
+          operations: [create(project_id)],
+        }),
+        'not_found',
+        /^project not found$/,
+      )
     const user = as(t, f.user)
+    // an archived sub-project, or an active one under an archived top-level project
+    for (const archived of [f.sub, f.meta]) {
+      await t.run((ctx) => ctx.db.patch(archived._id, { archived_at: '2026-01-02T00:00:00.000Z' }))
+      await expectRefusal(
+        user.mutation(api.roadmap.change, { session_id, operations: [create(f.sub.id)] }),
+        'rule',
+        /^that project is archived — restore it first$/,
+      )
+      await t.run((ctx) => ctx.db.patch(archived._id, { archived_at: undefined }))
+    }
     for (const week of ['2026-02-31', '2026-13-01'])
       await expectRefusal(
         user.mutation(api.roadmap.change, { session_id, operations: [create(f.meta.id, week)] }),
@@ -387,6 +401,48 @@ describe('roadmap visit undo', () => {
     )
     expect(await milestone(t, id)).toMatchObject({ week: '2026-01-05' })
     expect(await t.run((ctx) => ctx.db.query('milestones').collect())).toHaveLength(1)
+  })
+
+  it('reads milestones the caller cannot see as not found on update and remove', async () => {
+    const t = newT(),
+      f = await withOrg(t),
+      session_id = uuid()
+    const plant = async (project_id: string) => {
+      const id = uuid()
+      await t.run((ctx) =>
+        ctx.db.insert('milestones', {
+          id,
+          project_id,
+          name: 'Launch',
+          week: '2026-01-05',
+          created_at: NOW,
+        }),
+      )
+      return id
+    }
+    const hidden = await plant(f.hidden.id)
+    const foreign = await plant(f.otherProject.id)
+    const shown = await plant(f.meta.id)
+    const viewer = as(t, f.viewer)
+    const ops = (id: string) => [
+      { kind: 'milestone_update' as const, id, patch: { name: 'Renamed' } },
+      { kind: 'milestone_remove' as const, id },
+    ]
+    for (const id of [hidden, foreign, uuid()])
+      for (const op of ops(id))
+        await expectRefusal(
+          viewer.mutation(api.roadmap.change, { session_id, operations: [op] }),
+          'not_found',
+          /^milestone not found$/,
+        )
+    for (const op of ops(shown))
+      await expectRefusal(
+        viewer.mutation(api.roadmap.change, { session_id, operations: [op] }),
+        'forbidden',
+        /^no write access to this project$/,
+      )
+    for (const id of [hidden, foreign, shown])
+      expect(await milestone(t, id)).toMatchObject({ name: 'Launch' })
   })
 
   it('isolates journal ownership and rechecks current access on undo', async () => {

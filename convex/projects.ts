@@ -9,7 +9,9 @@
  *   ('project not found' / 'milestone not found') — never an existence reveal;
  * - insufficient level on the plain RLS surfaces (update/archive/unarchive,
  *   milestones, grant writes) reads `forbidden` — the silent-0-row successor,
- *   the client shows its fixed permission toast;
+ *   the client shows its fixed permission toast. Milestones follow the shared
+ *   rule in model/milestones.ts, so a project or milestone the caller cannot
+ *   see reads `not_found` there, as in the roadmap batch;
  * - deleteDeep keeps its P0001 sentence as `rule`, verbatim; inviteGuest
  *   uses the project's explicit user-management permission refusal;
  * - the hierarchy/archive trigger sentences are `rule`, verbatim per surface:
@@ -45,7 +47,7 @@ import { canCreateProjects, projectCreationRefusal } from './lib/projectCreators
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from './lib/projectKeys'
 import { logActivity } from './model/activity'
 import { deleteProjectDeep } from './model/cascade'
-import { assertMilestoneArrival, cleanMilestoneWeek, milestoneHome } from './model/milestones'
+import { changeableMilestone, cleanMilestoneWeek, milestoneTarget } from './model/milestones'
 import { ICON_COLOR_SHAPE, newUuid, nextProjectNum, weekLabel } from './model/orgs'
 import { cleanReviewHours, projectDescription } from './model/projects'
 
@@ -698,31 +700,13 @@ export const inviteGuest = orgMutation({
 })
 
 /* -------------------------------------------------------------- milestones
- * P.addMilestone / P.updateMilestone / P.removeMilestone. Level is 'user'
- * (0078:497's milestone policies, member→user) on the project that stores
- * the milestone. A new milestone named against a sub-project is stored on its
- * top-level project, as the client already does (model/milestones.ts). week
- * is a real calendar day, YYYY-MM-DD (the client converts its week index).
- * Narration details embed weekLabel computed against the SUBJECT org's
- * settings, frozen at write time (trap T1). */
-
-async function myMilestone(
-  ctx: MeCtx,
-  id: string,
-): Promise<{ milestone: Doc<'milestones'>; project: Doc<'projects'> }> {
-  const milestone = await byId(ctx, 'milestones', id)
-  if (milestone !== null) {
-    const project = await byId(ctx, 'projects', milestone.project_id)
-    if (project !== null && project.org_id === ctx.me.org_id) return { milestone, project }
-  }
-  throw notFound('milestone not found')
-}
-
-async function assertMilestoneWriter(ctx: MeCtx, projectId: string): Promise<void> {
-  if (!(await hasProjectLevel(ctx, ctx.me, projectId, 'user'))) {
-    throw forbidden('no write access to this project')
-  }
-}
+ * P.addMilestone / P.updateMilestone / P.removeMilestone. Visibility, the
+ * top-level fold, User level on the project that stores the milestone and
+ * the archive guard are the shared rules in model/milestones.ts, which the
+ * roadmap batch also uses. week is a real calendar day, YYYY-MM-DD (the
+ * client converts its week index). Narration details embed weekLabel
+ * computed against the SUBJECT org's settings, frozen at write time (trap
+ * T1). */
 
 async function orgSettings(ctx: MeCtx): Promise<Doc<'organizations'>> {
   const org = await byId(ctx, 'organizations', ctx.me.org_id)
@@ -734,11 +718,7 @@ export const addMilestone = orgMutation({
   args: { id: v.string(), project_id: v.string(), name: v.string(), week: v.string() },
   handler: async (ctx, { id, project_id, name, week }) => {
     const now = new Date().toISOString()
-    const named = await myProject(ctx, project_id)
-    // write access and the archive guard apply where the milestone is stored
-    const home = await milestoneHome(ctx, named)
-    await assertMilestoneWriter(ctx, home.id)
-    assertMilestoneArrival(named, home)
+    const home = await milestoneTarget(ctx, ctx.me, project_id)
     const iso = cleanMilestoneWeek(week)
     await insertUnique(
       ctx,
@@ -774,8 +754,7 @@ export const updateMilestone = orgMutation({
   },
   handler: async (ctx, { id, patch }) => {
     const now = new Date().toISOString()
-    const { milestone, project } = await myMilestone(ctx, id)
-    await assertMilestoneWriter(ctx, project.id)
+    const { milestone } = await changeableMilestone(ctx, ctx.me, id)
     const db: Partial<Doc<'milestones'>> = {}
     if (patch.name !== undefined) db.name = patch.name
     if (patch.week !== undefined) db.week = cleanMilestoneWeek(patch.week)
@@ -808,8 +787,7 @@ export const removeMilestone = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const now = new Date().toISOString()
-    const { milestone, project } = await myMilestone(ctx, id)
-    await assertMilestoneWriter(ctx, project.id)
+    const { milestone } = await changeableMilestone(ctx, ctx.me, id)
     await ctx.db.delete(milestone._id)
     await logActivity(ctx, {
       org_id: ctx.me.org_id,

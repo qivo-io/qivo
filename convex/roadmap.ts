@@ -21,7 +21,7 @@ import {
   updateIssueCore,
 } from './model/issues'
 import { notifyIssueUpdate } from './model/messages'
-import { assertMilestoneArrival, cleanMilestoneWeek, milestoneHome } from './model/milestones'
+import { changeableMilestone, cleanMilestoneWeek, milestoneTarget } from './model/milestones'
 import { weekLabel } from './model/orgs'
 
 type Context = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
@@ -61,22 +61,22 @@ const taskValues = (row: Doc<'issues'>): TaskValues => ({
 })
 const milestoneValues = ({ _id, _creationTime, ...row }: Doc<'milestones'>): Milestone => row
 
-/* A project the caller can see through one of their seats; anything else
- * reads as not found. */
-async function visible(ctx: Context, projectId: string) {
+async function writer(ctx: Context, projectId: string) {
   const project = await byId(ctx, 'projects', projectId)
   const me = project && ctx.myProfiles.get(project.org_id)
   if (!project || !me || !(await canSeeProject(ctx, me, project)))
     throw notFound('project not found')
-  return { project, me }
-}
-
-async function writer(ctx: Context, projectId: string) {
-  const { project, me } = await visible(ctx, projectId)
   if (!(await hasProjectLevel(ctx, me, projectId, 'user')))
     throw forbidden('no write access to this project')
   await assertBillingWritable(ctx, project.org_id)
   return { project, me }
+}
+
+/* The caller's seat in the organization that holds `projectId`, if any.
+ * The shared milestone rules (model/milestones.ts) then decide for it. */
+async function seatFor(ctx: Context, projectId: string | undefined) {
+  const project = projectId === undefined ? null : await byId(ctx, 'projects', projectId)
+  return project ? ctx.myProfiles.get(project.org_id) : undefined
 }
 
 async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> {
@@ -244,9 +244,10 @@ export const change = authedMutation({
           beforeMilestones.set(op.id, existing ? milestoneValues(existing) : undefined)
         if (op.kind === 'milestone_create') {
           // A sub-project folds up to the top-level project that stores it.
-          const named = (await visible(ctx, op.project_id)).project
-          const { project } = await writer(ctx, (await milestoneHome(ctx, named)).id)
-          assertMilestoneArrival(named, project)
+          const me = await seatFor(ctx, op.project_id)
+          if (!me) throw notFound('project not found')
+          const project = await milestoneTarget(ctx, me, op.project_id)
+          await assertBillingWritable(ctx, project.org_id)
           const after = {
             id: op.id,
             project_id: project.id,
@@ -264,8 +265,10 @@ export const change = authedMutation({
           )
           await logMilestone(ctx, undefined, after, now)
         } else {
-          if (!existing) throw notFound('milestone not found')
-          await writer(ctx, existing.project_id)
+          const me = await seatFor(ctx, existing?.project_id)
+          if (!existing || !me) throw notFound('milestone not found')
+          await changeableMilestone(ctx, me, op.id)
+          await assertBillingWritable(ctx, me.org_id)
           const before = milestoneValues(existing)
           if (op.kind === 'milestone_remove') {
             await ctx.db.delete(existing._id)
