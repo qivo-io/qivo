@@ -22,8 +22,8 @@ export function assertLabelManager(me: Doc<'profiles'>): void {
   }
 }
 
-/** The trimmed name: non-blank and at most 40 codepoints (0010's CHECK,
- * Postgres char_length semantics). */
+/** Trims the name and refuses it when blank or longer than 40 codepoints
+ * (0010's CHECK, Postgres char_length semantics). */
 export function labelName(raw: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a label name cannot be blank')
