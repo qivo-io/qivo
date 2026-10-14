@@ -60,8 +60,15 @@ function registeredKinds(module: string, exports: Record<string, unknown>): Map<
   return kinds
 }
 
-/* The principal every entry below runs as. */
+/* The principal every entry below runs as, and its credential row (only
+ * get_me reads it). */
 const PRINCIPAL = { callerId: 'caller', access: 'read' } as const
+const CREDENTIAL = {
+  profile_id: 'caller',
+  credential_table: 'agent_keys',
+  credential_id: 'key',
+  credential_row_id: 'row',
+} as const
 
 /* One entry of a surface, run through runEntry like its dispatcher does. */
 type Entry = { label: string; access: MachineAccess; run: (ctx: Ctx) => Promise<unknown> }
@@ -75,7 +82,7 @@ const SURFACES: Surface[] = [
     entries: mcp.TOOLS.map((tool) => ({
       label: tool.def.name,
       access: tool.access,
-      run: (ctx) => runEntry(ctx, tool, { ...PRINCIPAL, args: {} }),
+      run: (ctx) => runEntry(ctx, tool, { ...PRINCIPAL, credential: CREDENTIAL, args: {} }),
     })),
   },
   {
@@ -87,6 +94,7 @@ const SURFACES: Surface[] = [
       run: (ctx) =>
         runEntry(ctx, route, {
           ...PRINCIPAL,
+          credential: CREDENTIAL,
           keyName: 'key',
           // a param the path does not declare would reach the internal fn
           // as undefined, so it fails here
@@ -226,8 +234,9 @@ describe('the machine action registry', () => {
   it('the compiler refuses a raw ctx in place of a runner', () => {
     const { runner } = recorder()
     // never called, the closure only has to compile or not
+    const input = { ...PRINCIPAL, credential: CREDENTIAL, args: {} }
     // @ts-expect-error only runEntry turns a ctx into the runner an entry takes
-    const bypass = () => mcp.TOOLS[0].run(runner, { ...PRINCIPAL, args: {} })
+    const bypass = () => mcp.TOOLS[0].run(runner, input)
     expect(typeof bypass).toBe('function')
   })
 

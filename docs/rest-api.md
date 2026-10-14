@@ -138,6 +138,63 @@ reads.
 
 ## Endpoints
 
+### Me
+
+```
+GET /v1/me   → who this credential acts as, its organization's settings,
+               the billing pause and the credential itself
+```
+
+```json
+{
+  "user": {
+    "id": "…uuid…", "name": "Release Bot", "org_role": "user", "kind": "agent",
+    "active": true, "plannable_hours": null, "email": null
+  },
+  "organization": {
+    "id": "…uuid…", "name": "Northstar Labs", "slug": "northstar-labs",
+    "date_format": "YYYY-MM-DD", "week_start": 1, "week_one_rule": "first4day",
+    "default_plannable_hours": 32, "max_attachment_mb": 20,
+    "project_creators": "users", "can_create_projects": false
+  },
+  "billing": { "read_only": false, "reason": null },
+  "credential": {
+    "kind": "agent_key", "access": "write", "expires_at": null, "name": "CI key"
+  }
+}
+```
+
+Call it first. It tells a client who it is, how the organization's calendar
+works and whether it can make changes, before it plans a request that would
+be refused.
+
+- `user` is the caller's own `GET /v1/users` row plus `email`, which is
+  `null` for an agent.
+- `organization` holds the settings that shape requests. `week_start` is the
+  **Workdays start on** setting, `0` (Sunday) through `6` (Saturday). It is
+  the first day of every planning week, so compute `start_week` and
+  `end_week` from it. `week_one_rule` is **Week 1 of the year** (`first4day`, `jan1` or
+  `firstfull`), `date_format` is how the app displays dates (the API always
+  uses `YYYY-MM-DD`), `default_plannable_hours` is the weekly capacity a new
+  person starts with, and `max_attachment_mb` is the upload limit per file
+  in MiB. `slug` is the organization's part of app links such as
+  `https://qivo.io/app/<slug>/tasks/qn-26`.
+- `project_creators` is the **Who can create new projects?** setting:
+  `admins`, `users` (the default) or `selected`. `can_create_projects` says
+  whether this user may create a top-level project under it, by the same
+  rule as the app's **New project** button.
+- `billing.read_only` is `true` while organization billing pauses editing.
+  `reason` is then the sentence every write is refused with, otherwise
+  `null`. No plan, price or usage is included.
+- `credential.access` is `write` when this credential may make changes and
+  `read` when it can only read, such as a Viewer agent's key. It is the same
+  rule that refuses writes (see Authentication). A write still needs Edit
+  access on the project and an organization that billing does not pause.
+  `kind` is `agent_key`, `name` is the key's name and `expires_at` is `null`,
+  because agent keys do not expire.
+
+The response never contains a secret, a hash or a key fingerprint.
+
 ### Projects
 
 ```
@@ -215,7 +272,7 @@ Two rows of that list — a person, and an agent:
 ```
 
 `kind` is `"person"` or `"agent"`; an agent finds *itself* in this list,
-which is how it learns its own uuid. `org_role` is the **organization** role —
+and `GET /v1/me` answers its own row directly. `org_role` is the **organization** role —
 `"admin"` · `"user"` · `"viewer"` · `"guest"` — never a project role; what
 someone holds on a given project is that project's `access` flags.
 
@@ -437,9 +494,8 @@ fine when the other is already set. A group calculates both dates from its
 subtasks and refuses them on PATCH (see **Group dates** below). Both dates
 denote week starts and the end week is included: on a Monday-based calendar,
 `2026-09-21` through `2026-09-28` is a two-week plan. Use the organization's **Workdays start on**
-setting (Settings → Organization → General); the organization REST API does
-not expose that setting, so obtain it from the user or signed-in browser
-before calculating week dates. `remaining_hours` accepts finite nonnegative
+setting, `organization.week_start` in `GET /v1/me`, before calculating week
+dates. `remaining_hours` accepts finite nonnegative
 numbers, rounded to one decimal place, or `null` to clear. Numeric overflow
 (for example `1e309`) is refused. `remaining_hours` was named
 `estimate_hours` until 2026-07-17 (0063 — the field now means hours of work
@@ -612,6 +668,9 @@ separate creator fields. The agent is not notified of its own changes.
 ## Examples
 
 ```sh
+# who this key acts as, the calendar settings and whether it can write
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/me"
+
 # readable projects
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects"
 

@@ -195,6 +195,11 @@ export const newOrgDefaults = (now: string) => ({
   max_attachment_mb: 20,
 })
 
+/* The organization's upload cap in MiB. Older org rows without one default
+ * to the gateway's 20 MiB serving ceiling, which also caps every value. */
+export const attachmentLimitMb = (org: Pick<Doc<'organizations'>, 'max_attachment_mb'> | null) =>
+  Math.min(org?.max_attachment_mb ?? 20, 20)
+
 /* The standard auto-archive threshold in days for Done tasks. Projects without
  * a legacy team setting use it (jobs.ts), and new teams store it. */
 export const DEFAULT_ARCHIVE_DAYS = 30

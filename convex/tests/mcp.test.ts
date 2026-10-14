@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '4a07a0ca52f39a77dd2e4c9402c47155b853c96a8d60b7661adcf91bcb5d6f76'
-const SHA_TOOLS_MODERN = '25652d8eb445bd65ea9042fcd3a21080b1a623d5c0afc915cb9eff987dcbdb97'
+const SHA_TOOLS_LEGACY = '203d9fa75784357d9a06341b23dcee071eb6a6c4a5770e9da406226bb568c3fa'
+const SHA_TOOLS_MODERN = '11ac232f6ae4a538b75c0a86a52049c26762c5923ebcd4e06ff35777bf6011d6'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -461,6 +461,7 @@ describe('body shape and leg selection', () => {
     const dataJson = body.slice('event: message\ndata: '.length, -2)
     const catalogue = JSON.parse(dataJson) as { result: { tools: { name: string }[] } }
     expect(catalogue.result.tools.map((tool) => tool.name)).toEqual([
+      'get_me',
       'list_teams',
       'list_projects',
       'list_users',

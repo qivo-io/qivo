@@ -69,6 +69,7 @@ import {
   demoFileExpiry,
   reserveDemoUpload,
 } from './model/demoUploads'
+import { attachmentLimitMb } from './model/orgs'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 type AuthedCtx = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
@@ -142,11 +143,10 @@ export async function storageIdInUse(ctx: QueryCtx, storageId: Id<'_storage'>): 
 }
 
 /* The issue's owning organization controls all attachments, including inline
- * images and projects without a team. Older org rows default to the gateway's
- * 20 MiB serving ceiling; legacy team caps have no effect. */
+ * images and projects without a team (attachmentLimitMb); legacy team caps
+ * have no effect. */
 async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
-  const org = await byId(ctx, 'organizations', orgId)
-  return Math.min(org?.max_attachment_mb ?? 20, 20)
+  return attachmentLimitMb(await byId(ctx, 'organizations', orgId))
 }
 
 /* ---------------------------------------------------------------- uploads

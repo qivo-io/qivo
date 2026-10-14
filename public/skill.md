@@ -21,6 +21,24 @@ support, or when the user explicitly requests it. An agent key is for
 automation acting as a named agent user and for REST access. Use an existing
 working connection for the requested task.
 
+## Learn who you are first
+
+Call `get_me` over MCP, or `GET /v1/me` over REST, before other work. It
+returns your user and organization role, the organization's calendar
+settings, its upload limit per file, whether you may create projects,
+whether billing has paused changes, and what this credential may do:
+
+- `credential.access` is `write` when the credential can make changes and
+  `read` when it can only read. Do not plan changes with a read-only
+  credential.
+- `billing.read_only: true` means every change is refused until an
+  organization admin restores billing; `billing.reason` says so.
+- `organization.week_start` is the first day of every planning week, `0`
+  (Sunday) through `6` (Saturday). `organization.slug` is the organization's
+  part of browser links.
+
+A write also needs Edit access on the project, as described below.
+
 ## Choose the interface
 
 - **Connected MCP:** Prefer it for routine task discovery, edits, comments,
@@ -41,9 +59,8 @@ working connection for the requested task.
   These fields are not MCP write arguments; `due_date` is a separate deadline.
   Both dates name the first day of a week, and the end week is included. For
   a Monday-based calendar, `2026-09-21` through `2026-09-28` is two weeks.
-  Confirm the organization's **Workdays start on** setting in **Settings →
-  Organization → General**, or ask the user if that setting is unavailable;
-  do not assume Monday for every organization.
+  Read the first day of the week from `organization.week_start` in `get_me`
+  or `GET /v1/me`; do not assume Monday for every organization.
 - **Browser:** Use it for task moves, project creation/sharing, project
   archive/restore, attachment uploads, and other actions absent from the machine
   interfaces. Enter at `https://qivo.io/app` and use the user's signed-in
