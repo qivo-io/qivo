@@ -23,7 +23,13 @@ crons.interval(
 )
 
 // was '30 2 * * *' (0070:265)
-crons.daily('archive-done-issues', { hourUTC: 2, minuteUTC: 30 }, internal.jobs.archiveDoneIssues)
+// The empty arguments start a run; each leg schedules the next (jobs.ts).
+crons.daily(
+  'archive-done-issues',
+  { hourUTC: 2, minuteUTC: 30 },
+  internal.jobs.archiveDoneIssues,
+  {},
+)
 
 // was '15 3 * * *' (0110:124) — just after the archive sweep
 crons.daily('sweep-read-messages', { hourUTC: 3, minuteUTC: 15 }, internal.jobs.sweepReadMessages)

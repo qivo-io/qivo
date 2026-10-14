@@ -1,7 +1,9 @@
 /* The nightly jobs (jobs.ts) — the archive sweep's SQL semantics (single
- * snapshot, the team-less-root and archived-project drops, the leaf guard)
- * and the read-message retention sweep (per-profile period, absent = Never),
- * plus the counts-only platform_audit_log row each run writes in-transaction.
+ * snapshot, the archived-project drop, the leaf guard), its thresholds (the
+ * standard default for teamless projects, a legacy team's saved value where
+ * one remains) and its bounded legs, and the read-message retention sweep
+ * (per-profile period, absent = Never), plus the counts-only
+ * platform_audit_log row each run writes in-transaction.
  * The weekly reap-orphan-files cron targets files.reapOrphans directly
  * (crons.ts — it audits itself); its sweep is tested here with the others.
  *
@@ -11,9 +13,14 @@
  * night, a behavior change. */
 /// <reference types="vite/client" />
 
+import type { WithoutSystemFields } from 'convex/server'
+import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import { ARCHIVE_BATCH } from '../jobs'
+import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
+import schema from '../schema'
 import {
   NOW,
   newT,
@@ -49,41 +56,128 @@ const auditRows = (t: T, action: string): Promise<Doc<'platform_audit_log'>[]> =
     return rows.filter((r) => r.action === action)
   })
 
+/* One nightly run: the cron's first leg and every leg it schedules. `now`
+ * pins the run's clock; without it the first leg reads the current time. */
+async function runLegs(t: T, now?: string): Promise<void> {
+  vi.useFakeTimers()
+  try {
+    await t.mutation(internal.jobs.archiveDoneIssues, now === undefined ? {} : { now })
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
+/* One nightly run that must succeed. Returns the archived count from the
+ * run's audit row. */
+async function runArchive(t: T, now?: string): Promise<number> {
+  await runLegs(t, now)
+  const last = (await auditRows(t, 'archive_done_issues')).at(-1)
+  if (last === undefined) throw new Error('the archive run wrote no audit row')
+  return (last.detail as { archived: number }).archived
+}
+
+/* A test deployment that enforces tighter transaction limits than Convex. */
+const limitedT = (transactionLimits: { documentsRead?: number; documentsWritten?: number }): T =>
+  convexTest({ schema, modules: import.meta.glob('../**/*.*s'), transactionLimits })
+
+/* Inserts `count` tasks of one shape in a single transaction. */
+let bulkNum = 10_000
+const plantTasks = (
+  t: T,
+  count: number,
+  issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
+): Promise<void> =>
+  t.run(async (ctx) => {
+    for (let n = 0; n < count; n++) {
+      await ctx.db.insert('issues', {
+        id: uuid(),
+        num: bulkNum++,
+        title: 'Bulk task',
+        description: '',
+        status: 'todo',
+        priority: 'medium',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        ...issue,
+      })
+    }
+  })
+
 describe('archiveDoneIssues — the 0106 predicate', () => {
-  it('archives an old done leaf; leaves fresh done and done-without-done_at alone', async () => {
+  it('archives Done tasks in a teamless project from the standard threshold on; younger and unstamped ones stay', async () => {
     const t = newT()
-    const f = await withOrg(t) // team archive_days = 30
-    // Archive thresholds remain a legacy team setting; new projects are
-    // teamless, so attach this fixture row explicitly for the compatibility
-    // path under test.
-    await t.run((ctx) => ctx.db.patch(f.sub._id, { team_id: f.team.id }))
-    const oldDone = await plantIssue(t, {
+    const f = await withOrg(t) // f.sub and its root f.meta have no team
+    // The run's clock is pinned to NOW, so the boundary holds to the millisecond.
+    const cutoff = Date.parse(NOW) - DEFAULT_ARCHIVE_DAYS * DAY
+    const due = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'done',
-      done_at: ago(40),
+      done_at: new Date(cutoff).toISOString(),
     })
-    const freshDone = await plantIssue(t, {
+    const fresh = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
       status: 'done',
-      done_at: ago(5),
+      done_at: new Date(cutoff + 1).toISOString(),
     })
     // the demo-seed fact: done_at never given ⇒ the sweep never takes it
     const noStamp = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
+    const open = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'todo',
+      updated_at: ago(400),
+    })
 
-    const { archived } = await t.mutation(internal.jobs.archiveDoneIssues, {})
-
-    expect(archived).toBe(1)
-    expect((await issueRow(t, oldDone.id))?.archived_at).toBeDefined()
-    expect((await issueRow(t, freshDone.id))?.archived_at).toBeUndefined()
+    expect(DEFAULT_ARCHIVE_DAYS).toBe(30)
+    expect(await runArchive(t, NOW)).toBe(1)
+    expect((await issueRow(t, due.id))?.archived_at).toBe(NOW)
+    expect((await issueRow(t, fresh.id))?.archived_at).toBeUndefined()
     expect((await issueRow(t, noStamp.id))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, open.id))?.archived_at).toBeUndefined()
+  })
+
+  it('a legacy team keeps its saved threshold, from the sub-project first, else its root', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      // the root keeps a legacy team saved at 90 days; f.sub2 has its own at 10
+      await ctx.db.patch(f.team._id, { archive_days: 90 })
+      await ctx.db.patch(f.meta._id, { team_id: f.team.id })
+      const quick = uuid()
+      await ctx.db.insert('teams', {
+        id: quick,
+        org_id: f.org.id,
+        name: 'Quick',
+        stale_days: 120,
+        archive_days: 10,
+        track_delay_default: true,
+        created_at: NOW,
+      })
+      await ctx.db.patch(f.sub2._id, { team_id: quick })
+    })
+    const done = (project_id: string, days: number) =>
+      plantIssue(t, { org_id: f.org.id, project_id, status: 'done', done_at: ago(days) })
+    // f.sub has no team of its own, so its root's 90 days apply
+    const rootKept = await done(f.sub.id, 40)
+    const rootDue = await done(f.sub.id, 91)
+    // f.sub2's own team (10 days) wins over the root's
+    const ownKept = await done(f.sub2.id, 9)
+    const ownDue = await done(f.sub2.id, 11)
+
+    expect(await runArchive(t)).toBe(2)
+    expect((await issueRow(t, rootKept.id))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, rootDue.id))?.archived_at).toBeDefined()
+    expect((await issueRow(t, ownKept.id))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, ownDue.id))?.archived_at).toBeDefined()
   })
 
   it('single snapshot: a done parent whose done child is archived this run waits until the next', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await t.run((ctx) => ctx.db.patch(f.sub._id, { team_id: f.team.id }))
     const parent = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -98,36 +192,13 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       done_at: ago(40),
     })
 
-    const first = await t.mutation(internal.jobs.archiveDoneIssues, {})
-    expect(first.archived).toBe(1)
+    expect(await runArchive(t)).toBe(1)
     expect((await issueRow(t, child.id))?.archived_at).toBeDefined()
     // the child was unarchived AS OF the snapshot, so the parent waits
     expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
 
-    const second = await t.mutation(internal.jobs.archiveDoneIssues, {})
-    expect(second.archived).toBe(1)
+    expect(await runArchive(t)).toBe(1)
     expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
-  })
-
-  it('a team-less root is never swept (the SQL inner join on teams)', async () => {
-    const t = newT()
-    const f = await withOrg(t) // f.hidden is a meta with no team
-    const orphanSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const done = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: orphanSub.id,
-      status: 'done',
-      done_at: ago(400),
-    })
-
-    const { archived } = await t.mutation(internal.jobs.archiveDoneIssues, {})
-
-    expect(archived).toBe(0)
-    expect((await issueRow(t, done.id))?.archived_at).toBeUndefined()
   })
 
   it('an archived project is left alone — its done tasks stay as the restore left them', async () => {
@@ -146,16 +217,13 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       done_at: ago(400),
     })
 
-    const { archived } = await t.mutation(internal.jobs.archiveDoneIssues, {})
-
-    expect(archived).toBe(0)
+    expect(await runArchive(t)).toBe(0)
     expect((await issueRow(t, done.id))?.archived_at).toBeUndefined()
   })
 
   it('every run writes one counts-only audit row in the same transaction, zero-count runs included', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await t.run((ctx) => ctx.db.patch(f.sub._id, { team_id: f.team.id }))
     await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -163,8 +231,8 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       done_at: ago(40),
     })
 
-    await t.mutation(internal.jobs.archiveDoneIssues, {})
-    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await runArchive(t)
+    await runArchive(t)
 
     const rows = await auditRows(t, 'archive_done_issues')
     expect(rows).toHaveLength(2)
@@ -174,6 +242,113 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       expect(r.actor_auth_id).toBeUndefined()
       expect(r.ts).toBeDefined()
     }
+  })
+})
+
+describe('archiveDoneIssues — bounded legs', () => {
+  it('reads one organization per leg', async () => {
+    // Both organizations' tasks together exceed this read budget; either
+    // organization alone fits.
+    const t = limitedT({ documentsRead: 1000 })
+    const f = await withOrg(t)
+    const otherSub = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    const here = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(40),
+    })
+    const there = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: otherSub.id,
+      status: 'done',
+      done_at: ago(40),
+    })
+    await plantTasks(t, 600, { org_id: f.org.id, project_id: f.sub.id })
+    await plantTasks(t, 600, { org_id: f.otherOrg.id, project_id: otherSub.id })
+
+    expect(await runArchive(t)).toBe(2)
+    expect((await issueRow(t, here.id))?.archived_at).toBeDefined()
+    expect((await issueRow(t, there.id))?.archived_at).toBeDefined()
+  })
+
+  it('drains a larger backlog in the same run, and a parent whose child went in an earlier leg still waits', async () => {
+    // One leg's writes fit this budget; the whole backlog in one transaction would not.
+    const t = limitedT({ documentsWritten: ARCHIVE_BATCH + 10 })
+    const f = await withOrg(t)
+    const due = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done' as const,
+      done_at: ago(40),
+    }
+    const parentId = uuid()
+    // The child is the oldest row, so the first leg archives it.
+    await plantTasks(t, 1, { ...due, parent_id: parentId })
+    await plantTasks(t, ARCHIVE_BATCH, due)
+    await plantTasks(t, ARCHIVE_BATCH - 1, due)
+    await plantTasks(t, 1, { ...due, id: parentId })
+
+    expect(await runArchive(t)).toBe(2 * ARCHIVE_BATCH)
+    expect((await issueRow(t, parentId))?.archived_at).toBeUndefined()
+
+    expect(await runArchive(t)).toBe(1)
+    expect((await issueRow(t, parentId))?.archived_at).toBeDefined()
+  })
+
+  it('a failing leg keeps earlier legs, writes no audit row and stops the organizations after it', async () => {
+    // The middle organization's tasks exceed this read budget on every
+    // attempt; the other two fit.
+    const t = limitedT({ documentsRead: 1000 })
+    const [first, middle, last] = [uuid(), uuid(), uuid()].sort()
+    const due = new Map<string, string>()
+    for (const org_id of [first, middle, last]) {
+      await t.run(async (ctx) => {
+        await ctx.db.insert('organizations', {
+          id: org_id,
+          name: 'Sweep',
+          slug: `sweep-${org_id}`,
+          created_at: NOW,
+          next_issue_num: 1,
+          next_project_num: 1,
+          date_format: 'iso',
+          week_start: 1,
+          week_one_rule: 'first4day',
+          default_plannable_hours: 40,
+          gravatar_avatars: false,
+        })
+      })
+      const project = await plantProject(t, { org_id })
+      const task = await plantIssue(t, {
+        org_id,
+        project_id: project.id,
+        status: 'done',
+        done_at: ago(40),
+      })
+      due.set(org_id, task.id)
+      if (org_id === middle) await plantTasks(t, 1000, { org_id, project_id: project.id })
+    }
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await runLegs(t)
+      expect(logged).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ message: expect.stringContaining('Scanned too many documents') }),
+      )
+    } finally {
+      logged.mockRestore()
+    }
+
+    expect((await issueRow(t, due.get(first) ?? ''))?.archived_at).toBeDefined()
+    expect((await issueRow(t, due.get(middle) ?? ''))?.archived_at).toBeUndefined()
+    // The known limit (jobs.ts header): nothing schedules the later legs.
+    expect((await issueRow(t, due.get(last) ?? ''))?.archived_at).toBeUndefined()
+    expect(await auditRows(t, 'archive_done_issues')).toEqual([])
   })
 })
 
