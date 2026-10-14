@@ -18,6 +18,8 @@ import {
   signingSecretHash,
 } from '../convex/lib/webhookTransport'
 
+import { testCertificate, testKey } from './fixtures/local-tls.mjs'
+
 const receiver = vi.hoisted(() => ({
   port: 0,
   ca: '',
@@ -87,57 +89,6 @@ vi.mock('node:https', async (importOriginal) => {
     }) as typeof actual.request,
   }
 })
-
-// Public test-only identity for the local receiver. No runtime certificate tool
-// or filesystem writes are needed; this self-signed fixture expires in 2126.
-const testKey = `-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCLouCXum63glHb
-tOJ2GhtAU98yfnngm2IH0WmyYOYTjgXubCPKO7YfX/zbjEIdDa+zgZMNOzzKzzl4
-9iXrWqfvb4WhZMZyfqzhZjzKVCaVmUzaazIc/zRzVKFjGqVpFENWhbB0+z6W5xWk
-a+I2qlKK9ODRTGrgqH1yZZ/dGChI9X+36ZbN5PNB6d/KsibWczT8JsrKogsW4Rfq
-yKB1vVjohvyB9+WeG1jegqc3X2hYaj3US9hyvJyR7cPJ+BpY4A1sIXIuYFxfK0uk
-MQgaqcu3hoRhyPuS68jd1W7kuHx6dPa30JIFqsG5A5t4lXZuo3I8u4WNyN3qHdks
-e2FFXZSxAgMBAAECggEACYTHYaB0Vq8cDGmWvG1IKUjuYJ9NiJmfA6BrX50KYg/e
-6KNXhzwtzJK7Bm5XvWpG7WoqT48XtE2PAedpq1MJOqG0Ds3zVy+6cj0JbNNys+T4
-37TJ/D8LYMdGnx5cYz7d3kKLxlWwLRJAn+44w/g1W0KZJrtaV8k0j/1MegJhEKQN
-0vfyEifQoxhb/rQ45YrMuJllz6y8c+u+iNbrTQjhadFcOHJeYZyIyo//FX1OmuqY
-RxVSnmaaiMBO3r8FZUR1bck4kClGGmx7prH3oj4cX+iiO4Ys0cooV0TMcIQr9xGF
-l/V2+/SVhnROzlMJnYNEEInoXsCq+DZSKyeLkRBFyQKBgQC/HMCxabt1+S6nuCQR
-fv67I9uIiy1aotgfJyW9U2h3A2aMfDJnprWAhY9R7zYRI8Ga2LYNmCVqaIAMESJ/
-2ykEsc6zBVvsE6yHwGa5cUnguBB8Ytb3PD/hA5Tvyrbo6TA/9O00zDharEqEBNCg
-c6q86Uwaag4M2hez/mJfS+jrnQKBgQC7C+MvXQF5rd7xL3OpOY9zUXQtlgmcnhV+
-tF4lAZnvaDg+o3388042mtxf/5CuQ7Byheh/UOh0eCvtWrE1RyR4mO+QdxoG0WDK
-pC1sExWPmVGFc4Ejtr2pe5Ru3er4uMAxKTo9BluKM+YlMoKRli7MM27oc5Q15MW+
-aLTFxYxzJQKBgG8LheuQRByIbVOG624/HEQg0a7FL9U6SdnQJV2c2VZN44g9ogwY
-Ed5bvKsfE4th+1y+DwpXHWZ20fAxBJrF/U99AV2D/6VsyRMX+JhH+2VXjjy4Ma/2
-kidsrV2nrCApXp/K8Ql8oEIPWjzbj12r18lsxYuTlBZjouIzLXWx5eUBAoGASD3v
-IPvq9fQRh1Wsdk+k+AUduf2Y+MSVyLohImnb6nt2Pbsnjerq6mwlcW5jkurR22mc
-wo+dOF6xmJrOlqVDkNCAtmtJwhhcKef/Ix671RqCQei6l/CckDkKu0c62ZWBpXsm
-4yrxcA9bdEJt64z1xiiXTXBWbfpN5ZzLNRd3h4ECgYBZMljVIcVn0wOdJ86jiA9+
-Ze74bhHVOkQtEKpSYyK/nx98VZulqWSab++lfmU3ROOG3EQgEOvkXwfWe9cPioah
-V7Y2D+DNK+atT9Mo1xpVxux/t7cpCsRfYYVMoR7/LiqRiOhu0zKoBDdKuoxLvfDG
-SjX/nq1qMZFFzx+qIElDtA==
------END PRIVATE KEY-----`
-const testCertificate = `-----BEGIN CERTIFICATE-----
-MIIDNjCCAh6gAwIBAgIUOjfTWYdtbZyHuiCm1pNG6XhFJz8wDQYJKoZIhvcNAQEL
-BQAwGzEZMBcGA1UEAwwQcmVjZWl2ZXIuZXhhbXBsZTAgFw0yNjEwMDUwNTU4MjNa
-GA8yMTI2MDkxMTA1NTgyM1owGzEZMBcGA1UEAwwQcmVjZWl2ZXIuZXhhbXBsZTCC
-ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAIui4Je6breCUdu04nYaG0BT
-3zJ+eeCbYgfRabJg5hOOBe5sI8o7th9f/NuMQh0Nr7OBkw07PMrPOXj2Jetap+9v
-haFkxnJ+rOFmPMpUJpWZTNprMhz/NHNUoWMapWkUQ1aFsHT7PpbnFaRr4jaqUor0
-4NFMauCofXJln90YKEj1f7fpls3k80Hp38qyJtZzNPwmysqiCxbhF+rIoHW9WOiG
-/IH35Z4bWN6CpzdfaFhqPdRL2HK8nJHtw8n4GljgDWwhci5gXF8rS6QxCBqpy7eG
-hGHI+5LryN3VbuS4fHp09rfQkgWqwbkDm3iVdm6jcjy7hY3I3eod2Sx7YUVdlLEC
-AwEAAaNwMG4wHQYDVR0OBBYEFDoZ429U8HWIS+XrhD3YWfmT6YWSMB8GA1UdIwQY
-MBaAFDoZ429U8HWIS+XrhD3YWfmT6YWSMA8GA1UdEwEB/wQFMAMBAf8wGwYDVR0R
-BBQwEoIQcmVjZWl2ZXIuZXhhbXBsZTANBgkqhkiG9w0BAQsFAAOCAQEAS8WHWoVc
-O+DmgEvxwERdRmE2Rgn5uL0xRUGCLpiOC2z4olY1eMAkCltME2byNvOCxZuyu2oj
-bAeOq7FMOiYfryi92MHHYl31GQ3PNZqEbdKfTz6pxUaKV+Gei6CewFz2tgOBaZQf
-sziP82txXIt1xTw+IepLlK6ei2p6Mlg6ceEME7b9+FQqCDyVApwYFuEnFEv37QIB
-SeqmzaDzTHrqa5EGYMflzqP6RfrX8ESD2RxgvMhXXNz0YVsYFzxHdIu+lWrecmkr
-9zSaZH0t5s0x3HhQJUuFwgaIfs/D60XkEfEo4mfVDtuG/ke7YHJksTAwvhLudjI1
-AhP4Q/460Dxc8Q==
------END CERTIFICATE-----`
 
 const secret = `whsec_${Buffer.alloc(32, 7).toString('base64')}`
 let server: Server

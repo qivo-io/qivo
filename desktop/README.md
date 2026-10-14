@@ -123,6 +123,27 @@ with `--appimage-extract-and-run` for diagnostics.
 
 The Linux package command is intentionally build-only.
 
+## Build dependency security
+
+The root package overrides `roarr` to `6.0.0` only for `global-agent@3.0.0`,
+which `app-builder-lib` uses through `@electron/get` for packaging downloads.
+That logger uses `fast-printf` instead of the unpatched `sprintf-js`, addressing
+[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c).
+Version 6 retains the default logger export and child logger methods used by
+the proxy library. Its optional diagnostic logs use string sequence IDs.
+Version 7 changes the logger export. Upgrading `global-agent` to `4.1.3`
+instead failed HTTPS certificate hostname validation with this downloader.
+
+The `scripts/electron-download.test.mjs` tests exercise proxy downloads,
+`NO_PROXY` and rejection of corrupt downloads with diagnostic logging enabled.
+Local HTTPS proxy tests also verify trusted certificates and reject untrusted
+certificates and hostname mismatches without disabling TLS verification.
+Remove the override once electron-builder's dependency tree no longer needs it.
+
+This affects build tooling, not the installed desktop runtime. The separate
+[Better Auth security upgrade](../docs/better-auth-upgrade.md) remains blocked
+by the Convex adapter's peer dependency range.
+
 ## Test builds and release plan
 
 Desktop installers are not published yet. Run **Desktop test build** in GitHub

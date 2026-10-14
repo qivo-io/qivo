@@ -92,6 +92,9 @@
     "wait-on": "^9.0.3"
   },
   "overrides": {
+    "global-agent@3.0.0": {
+      "roarr": "6.0.0"
+    },
     "shell-quote": "1.11.0"
   },
   "engines": {

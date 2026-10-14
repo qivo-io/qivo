@@ -25,6 +25,7 @@ regexes = ['''^launch-webinar-discussion-[12]$''']
 id = "private-key"
 [[rules.allowlists]]
 condition = "AND"
-paths = ['''^tests/webhookTransport\.test\.ts$''']
+# Keep the original test path for history scans after extracting the fixture.
+paths = ['''^tests/(webhookTransport\.test\.ts|fixtures/local-tls\.mjs)$''']
 regexTarget = "match"
 regexes = ['''MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCLouCXum63glHb''']
