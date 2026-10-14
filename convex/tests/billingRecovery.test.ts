@@ -554,4 +554,43 @@ describe('admin actions that take access away during read-only access', () => {
     expect(after.viewer).toMatchObject({ active: true })
     expect(after.keys.map((k) => k.revoked_at)).toEqual([undefined, undefined])
   })
+
+  it('lets an admin remove team members but refuses a team leader who is not an admin', async () => {
+    const { t, f } = await fixture()
+    const org_id = f.org.id
+    const team_id = f.team.id
+    // The fixture's user leads the team; the viewer and the agent join it raw.
+    await t.run(async (ctx) => {
+      for (const profile_id of [f.viewer.id, f.agent.id]) {
+        await ctx.db.insert('team_members', { team_id, profile_id, is_leader: false })
+      }
+    })
+    await expect(
+      as(t, f.admin).mutation(api.teams.removeMember, {
+        org_id,
+        team_id,
+        profile_id: f.viewer.id,
+      }),
+    ).resolves.toBeNull()
+    await expectRefusal(
+      as(t, f.user).mutation(api.teams.removeMember, { org_id, team_id, profile_id: f.agent.id }),
+      'forbidden',
+      /read-only/,
+    )
+    // adding a member back stays behind the billing gate, even for an admin
+    await expectRefusal(
+      as(t, f.admin).mutation(api.teams.addMember, { org_id, team_id, profile_id: f.viewer.id }),
+      'forbidden',
+      /read-only/,
+    )
+    const members = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('team_members')
+          .withIndex('by_team', (q) => q.eq('team_id', team_id))
+          .collect()
+      ).map((m) => m.profile_id),
+    )
+    expect(members.sort()).toEqual([f.user.id, f.admin.id, f.agent.id].sort())
+  })
 })

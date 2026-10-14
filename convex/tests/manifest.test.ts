@@ -621,12 +621,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
   teamSync: { lastComments: 'orgQuery', stamp: 'orgMutation' },
+  // Removing a member stays open to org admins during a billing pause;
+  // adding one does not.
   teams: {
     create: 'adminMutation',
     update: 'orgMutation',
     deleteDeep: 'orgMutation',
     addMember: 'orgMutation',
-    removeMember: 'orgMutation',
+    removeMember: 'accessRemovalMutation',
     setLeader: 'orgMutation',
   },
   // Revoking and deleting an agent key stay open to org admins during a

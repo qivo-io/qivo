@@ -1,7 +1,7 @@
 /* The profile domain's public surface: the org-seat
  * invitation door (create), the admin update door, deactivation, removal,
- * and the three self/near-self setters. The OTHER invitation door —
- * inviteGuest, the cross-org project grant — lives in projects.ts.
+ * and the three self/near-self setters. The OTHER invitation door,
+ * inviteGuest (the cross-org project grant), lives in projects.ts.
  *
  * Deactivation and removal only take access away, so an organization admin
  * can still run them while billing has made the organization read-only
@@ -231,10 +231,11 @@ export const update = adminMutation({
 })
 
 /* ------------------------------------------------------------- deactivate
- * The Users page's Inactive choice: update's {active: false} alone, with the
- * same guards (last admin included). It has its own door so an admin can
- * still shut a person or agent out while billing has made the organization
- * read-only. Reactivation goes through update and stays behind the gate. */
+ * The Users page's Inactive choice. It applies update's {active: false}
+ * alone, with the same guards (last admin included). It has its own door so
+ * an admin can still shut a person or agent out while billing has made the
+ * organization read-only. Reactivation goes through update and stays behind
+ * the gate. */
 export const deactivate = accessRemovalMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
@@ -409,12 +410,12 @@ async function updateProfile(
 }
 
 /* ----------------------------------------------------------------- remove
- * P.removeUser → rpc remove_member (0100). accessRemovalMutation, NOT
- * adminMutation: the SQL folded "no such row", "not your org" and "not an
- * admin" into ONE raised sentence — a stranger probing uuids learns nothing.
- * The wrapper also lets an admin remove a seat while billing has made the
- * organization read-only. The cascade (model/cascade.removeProfile) owns
- * every FK edge incl. the avatar bytes; the 'removed' narration is the
+ * P.removeUser → rpc remove_member (0100). It uses accessRemovalMutation, NOT
+ * adminMutation, because the SQL folded "no such row", "not your org" and
+ * "not an admin" into ONE raised sentence. A stranger probing uuids learns
+ * nothing. The wrapper also lets an admin remove a seat while billing has
+ * made the organization read-only. The cascade (model/cascade.removeProfile)
+ * owns every FK edge incl. the avatar bytes; the 'removed' narration is the
  * caller's, after the cascade. */
 export const remove = accessRemovalMutation({
   args: { id: v.string() },
