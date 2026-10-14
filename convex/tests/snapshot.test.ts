@@ -115,6 +115,32 @@ describe('forMe scoping', () => {
     expect(snap.profiles.find((p) => p.id === f.user.id)?.auth_user_id).toBe(f.user.auth_user_id)
   })
 
+  it('a stored label color that is not #rrggbb goes out as gray; valid colors pass unchanged', async () => {
+    const valid = await plantLabel('Bug')
+    const unsafe = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (const color of ['url(https://example.test/p.png)', 'red', '#fff']) {
+        const id = uuid()
+        await ctx.db.insert('labels', {
+          id,
+          org_id: f.org.id,
+          name: `Old ${ids.length}`,
+          name_lower: `old ${ids.length}`,
+          color,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    const colorById = new Map((await snapFor(f.guest)).labels.map((l) => [l.id, l.color]))
+    expect(colorById.get(valid.id)).toBe('#F0555D')
+    expect(unsafe.map((id) => colorById.get(id))).toEqual(['#8A8F98', '#8A8F98', '#8A8F98'])
+    // the read does not rewrite the row; an admin recolor replaces it
+    const stored = await t.run(async (ctx) => ctx.db.query('labels').collect())
+    expect(stored.find((l) => l.id === unsafe[0])?.color).toBe('url(https://example.test/p.png)')
+  })
+
   it('viewer reaches the family via the grant only — dropping the grant drops everything', async () => {
     const snap = await snapFor(f.viewer)
     expect(snap.projects.map((p) => p.id).sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())

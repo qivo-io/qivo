@@ -9,6 +9,7 @@ import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { namedTaskNums } from './model/activity'
+import { shownLabelColor } from './model/labels'
 import { type OrgLoadRow, orgLoadRows } from './planning'
 
 type AppRow<T extends TableNames> = Omit<Doc<T>, '_id' | '_creationTime'>
@@ -329,12 +330,13 @@ export const forMe = authedQuery({
         for (const a of atts) attachments.push(relationRow(a))
       }
 
-      // Guests also see the host org's label vocabulary.
+      // Guests also see the host org's label vocabulary. Clients paint the
+      // color as a CSS background, so an older non-hex value goes out as gray.
       const orgLabels = await ctx.db
         .query('labels')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect()
-      for (const l of orgLabels) labels.push(rowOf(l))
+      for (const l of orgLabels) labels.push({ ...rowOf(l), color: shownLabelColor(l.color) })
 
       // Only the caller's subscriptions, across all seats, and only for tasks
       // in this working set. A subscription outlives access so a manager can

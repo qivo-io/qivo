@@ -44,3 +44,13 @@ export function labelColor(raw: string): string {
   }
   return raw
 }
+
+/** The palette's gray, sent in place of a stored color that breaks the rule. */
+const FALLBACK_LABEL_COLOR = '#8A8F98'
+
+/** The color to send a client. Rows saved before the `#rrggbb` rule may hold
+ * any text, so every read that hands a label to a client uses this and sends
+ * gray instead. The stored value stays until an admin recolors the label. */
+export function shownLabelColor(stored: string): string {
+  return isLabelColor(stored) ? stored : FALLBACK_LABEL_COLOR
+}
