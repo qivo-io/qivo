@@ -961,14 +961,17 @@ of a disabled subscription clears the streak and re-enables delivery, while
 retaining previous success, failure and HTTP-status history. Quiet callbacks
 are not probed. Finite subscriptions must be renewed before expiry to remain
 active through the health window. Registration removes expired registrations
-and reclaims quota held by revoked/deleted credentials and removed accounts.
+and reclaims quota held by revoked, expired or deleted credentials and removed
+accounts. A personal token's subscriptions stop delivering when the token
+expires.
 Deleting then registering again cannot revive the deleted registration's
 queued events. Registering after expiry also starts fresh.
 DELETE is idempotent for absent subscriptions. Another credential's existing
 subscription answers `404`, even when both credentials belong to the same person
-or agent. OAuth access tokens from the same grant share ownership. Token expiry,
-rotation or individual access-token revocation does not cancel its subscriptions;
-disconnect the connected app or unsubscribe. A new OAuth connection is a new owner.
+or agent. OAuth access tokens from the same grant share ownership. Access-token
+expiry, rotation or individual access-token revocation does not cancel the
+grant's subscriptions; disconnect the connected app or unsubscribe. A new OAuth
+connection is a new owner.
 
 Organization routes require a personal token or OAuth connection belonging to an
 active person with the organization administrator role. Agent keys cannot use

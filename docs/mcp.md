@@ -481,9 +481,10 @@ credential or OAuth grant and 100 per organization, including disabled
 subscriptions retained for inspection.
 Delete unwanted subscriptions to release that capacity. Registration automatically
 removes expired registrations and reclaims capacity held by subscriptions whose
-credential was revoked or deleted, or whose account was removed. Temporary
+credential was revoked, expired or deleted, or whose account was removed. Temporary
 deactivation and lost project access do not remove subscriptions. A personal
-token's subscriptions stop delivering when the token expires.
+token's subscriptions stop delivering when the token expires, and the next
+registration in the organization removes them.
 
 Each delivery contains one event:
 

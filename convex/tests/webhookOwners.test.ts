@@ -22,6 +22,7 @@ async function fixture() {
     table: EventOwner['credential_table'] = 'mcp_tokens',
     profile: Doc<'profiles'> = table === 'agent_keys' ? fx.agent : fx.user,
     id = uuid(),
+    expires_at?: string,
   ): Promise<EventOwner> =>
     t.run(async (ctx) => {
       const common = { id, profile_id: profile.id, created_at: new Date().toISOString() }
@@ -39,6 +40,8 @@ async function fixture() {
                 name: 'Webhook test token',
                 token_prefix: 'qvt_test',
                 token_hash: id,
+                access: 'read',
+                expires_at,
               })
             : await ctx.db.insert(table, {
                 ...common,
@@ -151,6 +154,22 @@ describe('webhook owner quota cleanup', () => {
     await f.seed(owner, 20, true)
     await expectRefusal(f.save(owner), 'bad_request', /Webhook subscription limit reached/)
     expect(await f.rows()).toHaveLength(20)
+  })
+
+  it('reclaims an expired personal token and keeps one whose expiry is still ahead', async () => {
+    const f = await fixture()
+    // the fixture clock is 2026-10-04T12:00:00Z; the instant itself has expired
+    const expired = await f.credential('mcp_tokens', f.fx.user, uuid(), '2026-10-04T12:00:00.000Z')
+    const current = await f.credential('mcp_tokens', f.fx.user, uuid(), '2026-10-04T12:00:00.001Z')
+    for (const owner of [expired, current]) await f.seed(owner, 20)
+
+    const fresh = await f.credential()
+    await f.save(fresh)
+    const rows = await f.rows()
+    expect(rows).toHaveLength(21)
+    expect(rows.filter((row) => row.owner.credential_id === expired.credential_id)).toEqual([])
+    expect(rows.filter((row) => row.owner.credential_id === current.credential_id)).toHaveLength(20)
+    expect(await f.t.run((ctx) => ctx.db.query('webhook_health').collect())).toHaveLength(20)
   })
 
   it('removes subscriptions whose credential profile or OAuth identity no longer matches', async () => {

@@ -1,8 +1,13 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { tokenExpired } from '../lib/access'
 import { byId } from '../lib/db'
 import { removeWebhookSubscription } from './webhookHealth'
 
+/* Whether the subscription's owner can never authorize it again. The profile
+ * is gone or moved, or the credential was deleted, replaced, revoked or, for a
+ * personal token, expired. Nothing extends a token's expiry, so an expired
+ * token is as dead as a revoked one. Deactivation is temporary and keeps it. */
 async function ownerWasRemoved(
   ctx: QueryCtx,
   subscription: Doc<'webhook_subscriptions'>,
@@ -15,7 +20,8 @@ async function ownerWasRemoved(
     !credential ||
     credential._id !== owner.credential_row_id ||
     credential.profile_id !== owner.profile_id ||
-    credential.revoked_at !== undefined
+    credential.revoked_at !== undefined ||
+    ('token_hash' in credential && tokenExpired(credential, Date.now()))
   )
     return true
   return (

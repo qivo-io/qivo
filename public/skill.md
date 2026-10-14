@@ -238,7 +238,9 @@ success, failure and HTTP-status history. Pending retries survive a verified
 refresh before expiry. Registering after expiry or deletion starts fresh and
 cannot revive old queued events. There is no replay of failed events or changes
 missed while disabled. Registration reclaims quota held
-by expired registrations, revoked/deleted credentials and removed accounts.
+by expired registrations, by revoked, expired or deleted credentials and by
+removed accounts. A personal token's subscriptions stop delivering when it
+expires.
 OAuth subscriptions belong to the connection grant. Access-token expiry,
 rotation or revocation of an individual access token does not cancel them.
 Disconnect the connected app or unsubscribe to stop them. Unsubscribe through REST

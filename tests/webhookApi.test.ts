@@ -776,7 +776,7 @@ describe('MCP Events and generic REST webhooks', () => {
     ).toBe(204)
   })
 
-  it('refuses an expired token and stops delivering its subscriptions', async () => {
+  it('refuses an expired token, stops delivering its subscriptions and reclaims their quota', async () => {
     const f = await fixture()
     const expiring = `qvt_${'55'.repeat(24)}`
     const token_hash = await sha256hex(expiring)
@@ -804,6 +804,14 @@ describe('MCP Events and generic REST webhooks', () => {
     expect(mcp.status).toBe(401)
     await f.update('After expiry')
     expect(await f.t.run((ctx) => ctx.db.query('webhook_deliveries').collect())).toHaveLength(1)
+
+    // expiry is final, so the next registration in the organization removes them
+    const subscriptions = () => f.t.run((ctx) => ctx.db.query('webhook_subscriptions').collect())
+    expect(await subscriptions()).toHaveLength(1)
+    const other = await f.rest('/v1/webhooks', 'POST', f.params)
+    expect(other.status).toBe(201)
+    const { id } = (await other.json()) as { id: string }
+    expect((await subscriptions()).map((row) => row.id)).toEqual([id])
   })
 
   it.each([301, 400, 401, 403, 404, 413])(
