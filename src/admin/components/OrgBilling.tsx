@@ -19,7 +19,10 @@ import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
 import type { BillingPlan, BillingSummary } from '../../../convex/lib/billingTypes'
 
-export function OrgBilling({ orgId }: { orgId: string }) {
+/* `seatsVersion` changes when the page reloads its people. The summary then
+   reloads in place, so the billable counts follow invitations and cancels
+   while a plan picked but not yet assigned stays picked. */
+export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVersion?: number }) {
   const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [plans, setPlans] = useState<BillingPlan[]>([])
   const [planId, setPlanId] = useState('')
@@ -41,6 +44,23 @@ export function OrgBilling({ orgId }: { orgId: string }) {
   useEffect(() => {
     void reload().catch((cause: unknown) => setError(billingError(cause)))
   }, [reload])
+  const countedVersion = useRef(seatsVersion)
+  useEffect(() => {
+    if (seatsVersion === countedVersion.current) return
+    countedVersion.current = seatsVersion
+    let active = true
+    convex
+      .query(api.adminBilling.orgBilling, { org_id: orgId })
+      .then((billing) => {
+        if (active) setSummary(billing)
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(billingError(cause))
+      })
+    return () => {
+      active = false
+    }
+  }, [orgId, seatsVersion])
 
   async function write(work: () => Promise<void>) {
     if (activeWrite.current) return

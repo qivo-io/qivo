@@ -1,6 +1,8 @@
-/* Organizations: the fleet table, and a per-org drill-down with members,
-   teams, billing, member rescue actions, and break-glass admin access. */
-import { useCallback, useEffect, useState } from 'react'
+/* The Organizations view. It shows the fleet table with New organization,
+   and a per-org drill-down with billing, people and their invitations,
+   teams, and break-glass admin access. */
+import { Plus } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -14,23 +16,22 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
-import { UserActions } from '../actions'
 import {
   authAction,
   fmtBytes,
   fmtWhen,
-  isBanned,
   listOrgs,
   type OrgDetail,
   type OrgRow,
   orgDetail,
 } from '../api'
+import { NewOrganizationDialog } from '../components/InviteDialogs'
 import { OrgBilling } from '../components/OrgBilling'
+import { OrgPeople } from '../components/OrgPeople'
 import {
   AdminEmptyState,
   AdminPageHeader,
   AdminToolbar,
-  Badge,
   ErrorNote,
   LinkReveal,
   Loading,
@@ -45,6 +46,7 @@ export function Orgs() {
   const [sort, setSort] = useState('name')
   const [attempt, setAttempt] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -64,6 +66,18 @@ export function Orgs() {
       active = false
     }
   }, [attempt])
+
+  /* Reloads the list after New organization, then opens the new page. */
+  async function openCreated(orgId: string) {
+    try {
+      const result = await listOrgs()
+      setOrgs(result)
+      setOpenOrg(result.find((org) => org.id === orgId) ?? null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    setCreating(false)
+  }
 
   if (openOrg) return <OrgDetailView org={openOrg} onBack={() => setOpenOrg(null)} />
 
@@ -94,16 +108,25 @@ export function Orgs() {
         title="Organizations"
         description="Review workspace health, membership and billing one organization at a time."
         actions={
-          <Button
-            type="button"
-            variant="outline"
-            disabled={loading}
-            onClick={() => setAttempt((value) => value + 1)}
-          >
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              {loading ? 'Refreshing…' : 'Refresh'}
+            </Button>
+            <Button type="button" variant="primary" onClick={() => setCreating(true)}>
+              <Plus />
+              New organization
+            </Button>
+          </>
         }
       />
+      {creating && (
+        <NewOrganizationDialog onClose={() => setCreating(false)} onCreated={openCreated} />
+      )}
       <AdminToolbar>
         <Input
           value={search}
@@ -155,7 +178,7 @@ export function Orgs() {
                 description={
                   hasFilters
                     ? 'Try another search or clear the plan filter.'
-                    : 'Organizations will appear here when they are created.'
+                    : 'Create one with New organization.'
                 }
                 action={
                   hasFilters ? (
@@ -225,16 +248,34 @@ function OrgDetailView({ org, onBack }: { org: OrgRow; onBack: () => void }) {
   const [link, setLink] = useState('')
   const [bgEmail, setBgEmail] = useState('')
   const [bgBusy, setBgBusy] = useState(false)
+  /* Counts the reloads, so the billing card recounts seats after people
+     are invited, cancelled or added for break-glass access. */
+  const [loads, setLoads] = useState(0)
+  const heading = useRef<HTMLHeadingElement>(null)
   useUpdateBlocker(!!bgEmail || bgBusy || !!link)
 
-  const refresh = useCallback(() => {
-    orgDetail(org.id)
-      .then(setDetail)
-      .catch((e: Error) => setError(e.message))
-  }, [org.id])
+  /* Resolves once the page shows the reload, so a row's write stays busy
+     until its result is on screen. */
+  const refresh = useCallback(
+    () =>
+      orgDetail(org.id)
+        .then((result) => {
+          setDetail(result)
+          setError('')
+          setLoads((n) => n + 1)
+        })
+        .catch((e: Error) => setError(e.message)),
+    [org.id],
+  )
   useEffect(() => {
     refresh()
   }, [refresh])
+  /* Opened from a row click or a dialog that has closed, focus is nowhere,
+     so it starts at the page title. */
+  useEffect(() => {
+    if (document.activeElement === null || document.activeElement === document.body)
+      heading.current?.focus()
+  }, [])
 
   function createBreakGlass(e: React.FormEvent) {
     e.preventDefault()
@@ -258,6 +299,7 @@ function OrgDetailView({ org, onBack }: { org: OrgRow; onBack: () => void }) {
     <div className="min-w-0 space-y-6">
       <AdminPageHeader
         title={org.name}
+        headingRef={heading}
         description={`Created ${fmtWhen(org.created_at)}, ~${fmtBytes(org.approx_bytes)} of data`}
         actions={
           <Button type="button" variant="ghost" onClick={onBack}>
@@ -280,76 +322,14 @@ function OrgDetailView({ org, onBack }: { org: OrgRow; onBack: () => void }) {
         )
       ) : (
         <>
-          <OrgBilling orgId={org.id} />
-          <Card className="mb-6 min-w-0 overflow-hidden py-0 shadow-card">
-            <Table className="min-w-[760px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Member</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Last sign-in</TableHead>
-                  <TableHead>
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {detail.members.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={5} className="py-8 text-center text-sm text-text-2">
-                      No members in this organization yet.
-                    </TableCell>
-                  </TableRow>
-                )}
-                {detail.members.map((m) => {
-                  const banned = isBanned(m.banned_until)
-                  return (
-                    <TableRow key={m.profile_id}>
-                      <TableCell className="font-semibold">{m.name}</TableCell>
-                      <TableCell className="text-sm text-text-1">{m.email ?? '—'}</TableCell>
-                      <TableCell>
-                        {m.org_role === 'admin' ? (
-                          <Badge kind="accent">org admin</Badge>
-                        ) : m.org_role === 'guest' ? (
-                          <Badge kind="muted">guest</Badge>
-                        ) : m.org_role === 'viewer' ? (
-                          <Badge kind="muted">viewer</Badge>
-                        ) : (
-                          <Badge kind="muted">user</Badge>
-                        )}
-                        {!m.has_login && (
-                          <span className="ml-1.5">
-                            <Badge kind="muted">no login</Badge>
-                          </span>
-                        )}
-                        {banned && (
-                          <span className="ml-1.5">
-                            <Badge kind="danger">banned</Badge>
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-text-2">
-                        {fmtWhen(m.last_sign_in_at)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <UserActions
-                          email={m.email}
-                          profileId={m.profile_id}
-                          orgRole={m.org_role}
-                          hasLogin={m.has_login}
-                          banned={banned}
-                          onLink={setLink}
-                          onChanged={refresh}
-                          onError={setError}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </Card>
+          <OrgBilling orgId={org.id} seatsVersion={loads} />
+          <OrgPeople
+            orgId={org.id}
+            orgName={detail.org.name}
+            members={detail.members}
+            onChanged={refresh}
+            onLink={setLink}
+          />
           <div className="grid grid-cols-1 items-start lg:grid-cols-2 gap-6">
             <Card className="gap-0 p-5 shadow-card">
               <div className="mb-2 text-md font-semibold">Teams</div>
