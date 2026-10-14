@@ -55,7 +55,7 @@ the authenticated APIs below.
 
 ## Authentication
 
-Every organization route takes either credential:
+Every route under [Endpoints](#endpoints) takes either credential:
 
 - A `qva_` **agent key** acts as its agent. Use it for automation that should
   have its own identity, project access and name in the activity feed.
@@ -65,7 +65,8 @@ Every organization route takes either credential:
   themselves. The same token also authenticates [MCP](mcp.md).
 
 OAuth access tokens authenticate MCP and, here, only the webhook management
-routes below. Background curation uses its separate `qvc_` credentials.
+routes, whose credential rules are under [Generic webhooks](#generic-webhooks).
+Background curation uses its separate `qvc_` credentials.
 
 Requests carry the credential as a bearer token or in `X-Api-Key`:
 
@@ -387,10 +388,10 @@ meetings, email and other overhead already taken out. It is an `integer`
 column (migration 0095): a plannable week is never a fraction, whichever way it
 was set. It is the number the planner divides by: plan
 someone at most that many hours in a week, and remember the week is shared
-across every project they work on, not only the ones this key can see. It
-belongs to the person, not to their team (migration 0092); a newly added
-user starts on the organization's default and carries their own value from
-then on.
+across every project they work on, not only the ones this credential can
+see. It belongs to the person, not to their team (migration 0092); a newly
+added user starts on the organization's default and carries their own value
+from then on.
 
 It is **`null` for an agent** (migration 0103), which has no plannable week at
 all: an agent is not in the meetings, does not sleep, and can be given a second
@@ -402,8 +403,8 @@ there are rate limits, a budget, a queue — but none of those is a weekly hour
 count, and the invented number was worse: an agent handed the org default was
 shown at 150% loaded and its work spread over weeks it did not need.
 
-The `/v1/users` roster is **organization-scoped, not project-scoped**: an
-agent sees every user of the organization it belongs to, whatever its project
+The `/v1/users` roster is **organization-scoped, not project-scoped**: a
+caller sees every user of the organization it belongs to, whatever its project
 roles say — useful for general identity lookup, but not proof that a user may
 be written onto a task. `GET /v1/projects/{ref}/users` is the project-scoped
 subset and the authoritative reporter, assignee and reviewer picker.
@@ -416,7 +417,7 @@ fields to update`). The value is a whole number from 1 to 168, otherwise a
 `400` with `plannable hours must be a whole number of hours from 1 to 168`.
 Like the app and MCP's `update_user`, it takes an organization admin or a
 leader of a team the person belongs to (migration 0094), and nobody else,
-yourself included: anyone else gets `403` with `only an organization admin
+yourself included. Anyone else gets `403` with `only an organization admin
 or a leader of one of this person's teams can set their plannable hours`,
 whoever the target is. An unknown or foreign id is `404` `user not found`.
 An agent has no plannable week (0103), so naming one is a `400` with `an
@@ -622,9 +623,9 @@ so it never gets one. The review time is not exposed on the project routes.
 PATCH also accepts `archived: true | false` (0070 — the Active/Archived axis,
 orthogonal to `status`). Archiving a task archives its subtasks with it;
 restoring one also restores its parent chain (both server-side cascades).
-Both reach subtasks and parents in other projects, so the agent needs User
-access on every project they change. Otherwise the PATCH is a `400` with
-`archiving this task would change a subtask in a project you cannot edit; an
+Both reach subtasks and parents in other projects, so the caller needs User
+access on every project the cascade changes. Otherwise the PATCH is a `400`
+with `archiving this task would change a subtask in a project you cannot edit; an
 organization admin can archive it` or `restoring this task would change a
 parent task in a project you cannot edit; an organization admin can restore
 it`, and nothing changes. Archived tasks disappear from the default list (`?archived=true` finds
@@ -770,7 +771,7 @@ curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"reviewer_id":"<profile uuid>"}' "$BASE/tasks/QN-26"
 
-# as an organization admin's token: give someone 30 plannable hours a week
+# give someone 30 plannable hours a week (needs an organization admin's token)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
 ```
@@ -785,7 +786,7 @@ somehow" in a feed whose whole job is saying who did what; an agent is a user,
 so it signs its own work. The key is still named beside it, because an agent
 may hold several and "which key did this" is the question you ask when one has
 to be rotated. A personal token's writes read `via the REST API` with no
-token name: the person is the actor, and their token names are their own
+token name. The person is the actor, and their token names are their own
 business, as with MCP's `via MCP`. An update's feed
 row names both sides of every changed field before the provenance suffix —
 e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
@@ -1120,11 +1121,12 @@ expiry, rotation or individual access-token revocation does not cancel the
 grant's subscriptions; disconnect the connected app or unsubscribe. A new OAuth
 connection is a new owner.
 
-Organization routes require a personal token or OAuth connection belonging to an
-active person with the organization administrator role. Agent keys cannot use
-these routes. Deleting another owner's subscription changes shared state, so
-it also needs a credential that can make changes: a personal token created
-with change access, or an OAuth connection with `qivo:write`. A read-only
+The `/v1/webhooks/organization` routes require a personal token or OAuth
+connection belonging to an active person with the organization administrator
+role. Agent keys cannot use these routes. Deleting another owner's
+subscription changes shared state, so it also needs a credential that can
+make changes: a personal token created with change access, or an OAuth
+connection with `qivo:write`. A read-only
 personal token gets `403` with `{"error": "this credential can only read"}`
 and a read-only OAuth connection gets
 `OAuth connection does not have the required scope`. Listing works with a

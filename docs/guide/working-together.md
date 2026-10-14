@@ -44,9 +44,9 @@ error.
 A task's **Activity** lists comments and changes from oldest to newest.
 Changes name the person or agent responsible and show old and new field
 values. Description changes include short excerpts. Departed members appear
-as **Someone**. Automated task changes identify **via the REST API (key name)**
-or **via MCP**. Comments carry the author or agent's name without a separate
-API label.
+as **Someone**. Automated task changes identify **via MCP** or **via the REST
+API**, with the key name in parentheses for an agent key. Comments carry the
+author or agent's name without a separate API label.
 
 ## Appearance preferences. Themes and the Canvas background
 

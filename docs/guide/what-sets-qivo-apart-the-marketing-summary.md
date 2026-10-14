@@ -9,9 +9,10 @@ Its main features are:
 - **Permanent task IDs.** Moving a task keeps its number and links ([Permanent task IDs](./how-work-is-organized.md#permanent-task-ids)).
 - **Private workload.** For organization admins and standard users, hidden
   projects contribute anonymous load without revealing their tasks ([The Team strip](./planning-against-real-capacity.md#the-team-strip)).
-- **Assistants and agents.** MCP acts with a person's or agent's permissions
-  within one organization. REST uses named agent accounts. Task changes record
-  the actor and connection type ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
+- **Assistants and agents.** MCP and REST act with a person's or agent's
+  permissions within one organization. REST takes a person's personal access
+  token or a named agent's key. Task changes record the actor and connection
+  type ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 - **Weekly calendars.** The organization sets its first workday and
   week-numbering rule ([Calendar weeks](./the-roadmap.md#weeks-that-match-your-calendar)).
 - **Grouped task cards.** The Board keeps subtasks with their parent within
