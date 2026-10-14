@@ -126,6 +126,9 @@ with a readable HTTP `403` billing refusal. Reading remains subject to the
 existing access rules. An organization admin can subscribe or update payment
 details under **Settings → Organization → Billing**; machine credentials
 cannot manage subscriptions. Billing also shows usage by account and key.
+While writes are paused, an organization admin can still revoke or delete an
+agent's keys or make the agent Inactive in the app, which also stops its
+reads.
 
 ## Endpoints
 

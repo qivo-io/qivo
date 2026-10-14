@@ -611,6 +611,26 @@ describe('profiles.update and the project-creation right', () => {
   })
 })
 
+describe('profiles.deactivate', () => {
+  it("switches a seat off with update's guards and refuses a non-admin", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await expectRefusal(
+      as(t, f.user).mutation(api.profiles.deactivate, { org_id: f.org.id, id: f.viewer.id }),
+      'forbidden',
+      /^admin only$/,
+    )
+    await expectRefusal(
+      as(t, f.admin).mutation(api.profiles.deactivate, { org_id: f.org.id, id: f.admin.id }),
+      'rule',
+      /^cannot demote the last admin$/,
+    )
+    await as(t, f.admin).mutation(api.profiles.deactivate, { org_id: f.org.id, id: f.user.id })
+    expect(await profileById(t, f.user.id)).toMatchObject({ active: false, org_role: 'user' })
+    expect(await profileById(t, f.viewer.id)).toMatchObject({ active: true })
+  })
+})
+
 describe('profiles.remove', () => {
   it('folds no-row/foreign/non-admin into ONE sentence; self refused; cascade + removed narration', async () => {
     const t = newT()

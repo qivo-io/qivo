@@ -518,6 +518,13 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
           is_leader: true,
         }),
     },
+    {
+      name: 'profiles.deactivate',
+      ref: () => f.otherAdmin.id,
+      call: (ref) =>
+        as(t, f.admin).mutation(api.profiles.deactivate, { org_id: f.org.id, id: ref }),
+      answer: { code: 'not_found', message: 'user not found' },
+    },
     // remove_member's folded sentence (0100): no-row, foreign and non-admin
     // all read alike
     {

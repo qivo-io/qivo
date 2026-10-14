@@ -102,7 +102,9 @@ payment activates access automatically.
 When billing is disabled, the page says so and the organization remains
 usable. When enabled, editing requires a paid subscription or complimentary
 access. Paused editing leaves existing readable work and personal settings
-available.
+available. Admins can still take access away while editing is paused. They
+can revoke or delete agent keys, make users **Inactive** and remove users.
+Reactivating users and every other change wait until billing is active again.
 
 Each organization keeps its assigned plan version. New plans do not change
 existing prices or allowances. The published plan costs $1 per active billable

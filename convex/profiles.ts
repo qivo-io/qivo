@@ -1,7 +1,12 @@
 /* The profile domain's public surface: the org-seat
- * invitation door (create), the admin update door, removal, and the three
- * self/near-self setters. The OTHER invitation door — inviteGuest, the
- * cross-org project grant — lives in projects.ts.
+ * invitation door (create), the admin update door, deactivation, removal,
+ * and the three self/near-self setters. The OTHER invitation door —
+ * inviteGuest, the cross-org project grant — lives in projects.ts.
+ *
+ * Deactivation and removal only take access away, so an organization admin
+ * can still run them while billing has made the organization read-only
+ * (accessRemovalMutation). Every other door here, reactivation included,
+ * stays behind the billing gate.
  *
  * Ported bodies (final SQL state):
  *   profiles_insert / _update   is_org_admin (0081:124-126)
@@ -34,15 +39,16 @@
  * org — and only when the value actually changed. */
 
 import type { WithoutSystemFields } from 'convex/server'
-import { v } from 'convex/values'
+import { type Infer, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
-import type { QueryCtx } from './_generated/server'
+import type { MutationCtx, QueryCtx } from './_generated/server'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId, insertUnique } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature, requireActiveDemo } from './lib/demo'
 import { vOrgRole, vProfileKind } from './lib/enums'
 import {
+  accessRemovalMutation,
   adminMutation,
   authedMutation,
   badRequest,
@@ -210,186 +216,207 @@ export const create = adminMutation({
  * and turns it on. Role, active, email, the project-creation right and the
  * teams diff narrate NOTHING; a real name change writes the
  * profiles_name_narrate row (ONE row — the admin's authority stops here). */
+const vProfilePatch = v.object({
+  org_role: v.optional(vOrgRole),
+  active: v.optional(v.boolean()),
+  name: v.optional(v.string()),
+  email: v.optional(v.union(v.string(), v.null())),
+  teams: v.optional(v.array(v.string())),
+  can_create_projects: v.optional(v.boolean()),
+})
+
 export const update = adminMutation({
-  args: {
-    id: v.string(),
-    patch: v.object({
-      org_role: v.optional(vOrgRole),
-      active: v.optional(v.boolean()),
-      name: v.optional(v.string()),
-      email: v.optional(v.union(v.string(), v.null())),
-      teams: v.optional(v.array(v.string())),
-      can_create_projects: v.optional(v.boolean()),
-    }),
-  },
-  handler: async (ctx, { id, patch }) => {
-    const now = new Date().toISOString()
-    const row = await byId(ctx, 'profiles', id)
-    if (row === null || row.org_id !== ctx.me.org_id) throw notFound('user not found')
-    const org = await byId(ctx, 'organizations', ctx.me.org_id)
-    require(org !== null, notFound('organization not found'))
-    const newRole = patch.org_role ?? row.org_role
-    const newActive = patch.active ?? row.active
+  args: { id: v.string(), patch: vProfilePatch },
+  handler: (ctx, { id, patch }) => updateProfile(ctx, id, patch),
+})
 
-    if (row.kind === 'agent' && newRole === 'admin') {
-      throw rule(
-        'an agent cannot be an organization admin — it reaches only the projects it is added to',
-      )
-    }
-    if (row.kind === 'agent' && newRole === 'guest') {
-      throw badRequest('an agent is user or viewer — never a guest')
-    }
-    // The project-creation right belongs to a standard user who is a person
-    // (lib/projectCreators.ts). Turning it off is always accepted.
-    if (patch.can_create_projects === true) {
-      if (row.kind !== 'person') throw rule('an agent cannot be allowed to create projects')
-      if (newRole !== 'user') throw rule('only a standard user can be allowed to create projects')
-    }
-
-    const upd: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}
-    let renamedFrom: string | undefined
-    if (patch.name !== undefined) {
-      const name = cleanName(patch.name)
-      assertNameShape(name)
-      if (name !== row.name) {
-        upd.name = name
-        upd.initials = nameInitials(name)
-        renamedFrom = row.name
-      }
-    }
-    // the viewer-leads sentence names the person — by their post-patch name,
-    // as the BEFORE trigger's new.name did
-    const effectiveName = upd.name ?? row.name
-
-    // last admin: fires when (old admin AND active) stops being (new admin AND
-    // active) — demotion and deactivation share the sentence (0099)
-    if (row.org_role === 'admin' && row.active && !(newRole === 'admin' && newActive)) {
-      await assertNotLastAdmin(ctx, row, 'demote')
-    }
-
-    // viewer-leads-nothing (0102:391-411), agents included
-    if (newRole === 'viewer' && row.org_role !== 'viewer') {
-      await assertViewerLeadsNothing(ctx, row, effectiveName)
-    }
-
-    if (patch.org_role !== undefined && patch.org_role !== row.org_role)
-      upd.org_role = patch.org_role
-    if (patch.active !== undefined && patch.active !== row.active) upd.active = patch.active
-    // A role change clears the right unless this patch turns it on for a
-    // standard user, so a stale value never returns (lib/projectCreators.ts).
-    const right = projectRightAfterUpdate(row, patch)
-    if (right !== row.can_create_projects) upd.can_create_projects = right
-
-    if (patch.email !== undefined) {
-      refuseDemoFeature()
-      // only while the seat is UNCLAIMED; corrected, never emptied (0104).
-      // Client sentences, now server-owned
-      if (row.kind === 'agent') throw rule('An agent has no email address — its login is a key')
-      if (row.auth_user_id !== undefined) {
-        throw rule('This seat has been claimed — its address is the one they signed in with')
-      }
-      const email = normalizeEmail(patch.email)
-      if (email === undefined || !EMAIL_SHAPE.test(email)) {
-        throw rule('A person needs an email address — it is what they sign in with')
-      }
-      if (email !== row.email) {
-        const dup = await ctx.db
-          .query('profiles')
-          .withIndex('by_org_email', (q) => q.eq('org_id', row.org_id).eq('email', email))
-          .first()
-        if (dup !== null) throw rule(`${email} already has a seat in this organization`)
-        upd.email = email
-      }
-    }
-
-    // teams diff — untouched memberships keep their is_leader; adds arrive
-    // as plain members; removals drop leadership with the row. No narration
-    // (the old updateUser wrote none — unlike teams.addMember; keep the
-    // asymmetry)
-    let dels: Doc<'team_members'>[] = []
-    const adds: Doc<'teams'>[] = []
-    const becomesGuest = newRole === 'guest' && row.org_role !== 'guest'
-    const leavesGuest = row.org_role === 'guest' && newRole !== 'guest'
-    // An unrelated edit to a guest that still has a stale membership skips
-    // this block, so it is never refused.
-    if (patch.teams !== undefined || becomesGuest || leavesGuest) {
-      const mine = await ctx.db
-        .query('team_members')
-        .withIndex('by_profile', (q) => q.eq('profile_id', row.id))
-        .collect()
-      // A guest's memberships are stale, so they never carry over: leaving
-      // the guest role starts from no team, and listed teams arrive as plain
-      // members.
-      const kept = leavesGuest ? [] : mine
-      const held = new Set(kept.map((m) => m.team_id))
-      const next = patch.teams === undefined ? held : new Set(patch.teams)
-      dels = mine.filter((m) => !held.has(m.team_id) || !next.has(m.team_id))
-      for (const tid of next) {
-        if (held.has(tid)) continue
-        const team = await byId(ctx, 'teams', tid)
-        if (team === null || team.org_id !== row.org_id) throw notFound('team not found')
-        adds.push(team)
-      }
-      // A guest is never a team member. Sending teams: [] with the role
-      // change drops them.
-      if (newRole === 'guest' && next.size > 0) throw forbidden('a guest is never a team member')
-    }
-
-    if (Object.keys(upd).length > 0) await ctx.db.patch(row._id, upd)
-    if (renamedFrom !== undefined) {
-      await logActivity(ctx, {
-        org_id: row.org_id,
-        actor_id: ctx.me.id,
-        verb: 'renamed',
-        target_type: 'user',
-        target_id: row.id,
-        label: upd.name as string,
-        detail: `from “${renamedFrom}”`,
-        ts: now,
-      })
-    }
-    for (const m of dels) await ctx.db.delete(m._id)
-    for (const team of adds) {
-      await ctx.db.insert('team_members', {
-        team_id: team.id,
-        profile_id: row.id,
-        is_leader: false,
-      })
-    }
-    if (upd.active !== undefined || upd.org_role !== undefined || upd.email !== undefined) {
-      await markBillingMembershipChanged(
-        ctx,
-        row.org_id,
-        [row.email, upd.email].filter((email): email is string => email !== undefined),
-      )
-    }
-    // A corrected address on a pending seat gets the invitation the old one
-    // did. A reactivated pending person is emailed if that address never was.
-    if (upd.email !== undefined) {
-      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-        invites: [{ profile_id: row.id, email: upd.email }],
-      })
-    } else if (
-      upd.active === true &&
-      row.kind === 'person' &&
-      row.auth_user_id === undefined &&
-      row.email !== undefined
-    ) {
-      await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
-        invites: [{ profile_id: row.id, email: row.email, unless_sent: true }],
-      })
-    }
-    return null
+/* ------------------------------------------------------------- deactivate
+ * The Users page's Inactive choice: update's {active: false} alone, with the
+ * same guards (last admin included). It has its own door so an admin can
+ * still shut a person or agent out while billing has made the organization
+ * read-only. Reactivation goes through update and stays behind the gate. */
+export const deactivate = accessRemovalMutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    if (ctx.me.org_role !== 'admin') throw forbidden('admin only')
+    return await updateProfile(ctx, id, { active: false })
   },
 })
 
+/* The body of update and deactivate. The caller has checked that ctx.me is
+ * an organization admin. */
+async function updateProfile(
+  ctx: MutationCtx & { me: Doc<'profiles'> },
+  id: string,
+  patch: Infer<typeof vProfilePatch>,
+): Promise<null> {
+  const now = new Date().toISOString()
+  const row = await byId(ctx, 'profiles', id)
+  if (row === null || row.org_id !== ctx.me.org_id) throw notFound('user not found')
+  const org = await byId(ctx, 'organizations', ctx.me.org_id)
+  require(org !== null, notFound('organization not found'))
+  const newRole = patch.org_role ?? row.org_role
+  const newActive = patch.active ?? row.active
+
+  if (row.kind === 'agent' && newRole === 'admin') {
+    throw rule(
+      'an agent cannot be an organization admin — it reaches only the projects it is added to',
+    )
+  }
+  if (row.kind === 'agent' && newRole === 'guest') {
+    throw badRequest('an agent is user or viewer — never a guest')
+  }
+  // The project-creation right belongs to a standard user who is a person
+  // (lib/projectCreators.ts). Turning it off is always accepted.
+  if (patch.can_create_projects === true) {
+    if (row.kind !== 'person') throw rule('an agent cannot be allowed to create projects')
+    if (newRole !== 'user') throw rule('only a standard user can be allowed to create projects')
+  }
+
+  const upd: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}
+  let renamedFrom: string | undefined
+  if (patch.name !== undefined) {
+    const name = cleanName(patch.name)
+    assertNameShape(name)
+    if (name !== row.name) {
+      upd.name = name
+      upd.initials = nameInitials(name)
+      renamedFrom = row.name
+    }
+  }
+  // the viewer-leads sentence names the person — by their post-patch name,
+  // as the BEFORE trigger's new.name did
+  const effectiveName = upd.name ?? row.name
+
+  // last admin: fires when (old admin AND active) stops being (new admin AND
+  // active) — demotion and deactivation share the sentence (0099)
+  if (row.org_role === 'admin' && row.active && !(newRole === 'admin' && newActive)) {
+    await assertNotLastAdmin(ctx, row, 'demote')
+  }
+
+  // viewer-leads-nothing (0102:391-411), agents included
+  if (newRole === 'viewer' && row.org_role !== 'viewer') {
+    await assertViewerLeadsNothing(ctx, row, effectiveName)
+  }
+
+  if (patch.org_role !== undefined && patch.org_role !== row.org_role) upd.org_role = patch.org_role
+  if (patch.active !== undefined && patch.active !== row.active) upd.active = patch.active
+  // A role change clears the right unless this patch turns it on for a
+  // standard user, so a stale value never returns (lib/projectCreators.ts).
+  const right = projectRightAfterUpdate(row, patch)
+  if (right !== row.can_create_projects) upd.can_create_projects = right
+
+  if (patch.email !== undefined) {
+    refuseDemoFeature()
+    // only while the seat is UNCLAIMED; corrected, never emptied (0104).
+    // Client sentences, now server-owned
+    if (row.kind === 'agent') throw rule('An agent has no email address — its login is a key')
+    if (row.auth_user_id !== undefined) {
+      throw rule('This seat has been claimed — its address is the one they signed in with')
+    }
+    const email = normalizeEmail(patch.email)
+    if (email === undefined || !EMAIL_SHAPE.test(email)) {
+      throw rule('A person needs an email address — it is what they sign in with')
+    }
+    if (email !== row.email) {
+      const dup = await ctx.db
+        .query('profiles')
+        .withIndex('by_org_email', (q) => q.eq('org_id', row.org_id).eq('email', email))
+        .first()
+      if (dup !== null) throw rule(`${email} already has a seat in this organization`)
+      upd.email = email
+    }
+  }
+
+  // teams diff — untouched memberships keep their is_leader; adds arrive
+  // as plain members; removals drop leadership with the row. No narration
+  // (the old updateUser wrote none — unlike teams.addMember; keep the
+  // asymmetry)
+  let dels: Doc<'team_members'>[] = []
+  const adds: Doc<'teams'>[] = []
+  const becomesGuest = newRole === 'guest' && row.org_role !== 'guest'
+  const leavesGuest = row.org_role === 'guest' && newRole !== 'guest'
+  // An unrelated edit to a guest that still has a stale membership skips
+  // this block, so it is never refused.
+  if (patch.teams !== undefined || becomesGuest || leavesGuest) {
+    const mine = await ctx.db
+      .query('team_members')
+      .withIndex('by_profile', (q) => q.eq('profile_id', row.id))
+      .collect()
+    // A guest's memberships are stale, so they never carry over: leaving
+    // the guest role starts from no team, and listed teams arrive as plain
+    // members.
+    const kept = leavesGuest ? [] : mine
+    const held = new Set(kept.map((m) => m.team_id))
+    const next = patch.teams === undefined ? held : new Set(patch.teams)
+    dels = mine.filter((m) => !held.has(m.team_id) || !next.has(m.team_id))
+    for (const tid of next) {
+      if (held.has(tid)) continue
+      const team = await byId(ctx, 'teams', tid)
+      if (team === null || team.org_id !== row.org_id) throw notFound('team not found')
+      adds.push(team)
+    }
+    // A guest is never a team member. Sending teams: [] with the role
+    // change drops them.
+    if (newRole === 'guest' && next.size > 0) throw forbidden('a guest is never a team member')
+  }
+
+  if (Object.keys(upd).length > 0) await ctx.db.patch(row._id, upd)
+  if (renamedFrom !== undefined) {
+    await logActivity(ctx, {
+      org_id: row.org_id,
+      actor_id: ctx.me.id,
+      verb: 'renamed',
+      target_type: 'user',
+      target_id: row.id,
+      label: upd.name as string,
+      detail: `from “${renamedFrom}”`,
+      ts: now,
+    })
+  }
+  for (const m of dels) await ctx.db.delete(m._id)
+  for (const team of adds) {
+    await ctx.db.insert('team_members', {
+      team_id: team.id,
+      profile_id: row.id,
+      is_leader: false,
+    })
+  }
+  if (upd.active !== undefined || upd.org_role !== undefined || upd.email !== undefined) {
+    await markBillingMembershipChanged(
+      ctx,
+      row.org_id,
+      [row.email, upd.email].filter((email): email is string => email !== undefined),
+    )
+  }
+  // A corrected address on a pending seat gets the invitation the old one
+  // did. A reactivated pending person is emailed if that address never was.
+  if (upd.email !== undefined) {
+    await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+      invites: [{ profile_id: row.id, email: upd.email }],
+    })
+  } else if (
+    upd.active === true &&
+    row.kind === 'person' &&
+    row.auth_user_id === undefined &&
+    row.email !== undefined
+  ) {
+    await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
+      invites: [{ profile_id: row.id, email: row.email, unless_sent: true }],
+    })
+  }
+  return null
+}
+
 /* ----------------------------------------------------------------- remove
- * P.removeUser → rpc remove_member (0100). orgMutation, NOT adminMutation:
- * the SQL folded "no such row", "not your org" and "not an admin" into ONE
- * raised sentence — a stranger probing uuids learns nothing. The cascade
- * (model/cascade.removeProfile) owns every FK edge incl. the avatar bytes;
- * the 'removed' narration is the caller's, after the cascade. */
-export const remove = orgMutation({
+ * P.removeUser → rpc remove_member (0100). accessRemovalMutation, NOT
+ * adminMutation: the SQL folded "no such row", "not your org" and "not an
+ * admin" into ONE raised sentence — a stranger probing uuids learns nothing.
+ * The wrapper also lets an admin remove a seat while billing has made the
+ * organization read-only. The cascade (model/cascade.removeProfile) owns
+ * every FK edge incl. the avatar bytes; the 'removed' narration is the
+ * caller's, after the cascade. */
+export const remove = accessRemovalMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const now = new Date().toISOString()

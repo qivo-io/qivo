@@ -163,7 +163,10 @@ return a readable billing refusal while reading keeps its normal access rules.
 An organization admin restores editing through **Settings → Organization →
 Billing**, where they can subscribe, open the customer portal and inspect
 usage by account and key or OAuth connection. MCP does not expose billing subscription
-management tools.
+management tools. While writes are paused, an organization admin can still
+revoke or delete agent keys and make users Inactive in the app, and people can
+still revoke their own personal tokens and OAuth connections. Each of these
+also stops reads with the affected credentials.
 
 ## Connecting Claude
 

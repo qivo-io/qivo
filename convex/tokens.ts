@@ -23,6 +23,7 @@ import type { MutationCtx } from './_generated/server'
 import { byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import {
+  accessRemovalMutation,
   authedMutation,
   authedQuery,
   badRequest,
@@ -161,8 +162,10 @@ export const createAgentKey = orgMutation({
   },
 })
 
-/* P.revokeAgentKey — the stamp, plus the 'revoked' line against the agent. */
-export const revokeAgentKey = orgMutation({
+/* P.revokeAgentKey — the stamp, plus the 'revoked' line against the agent.
+ * Revoke and delete only take access away, so an admin can still run them
+ * while billing has made the organization read-only (accessRemovalMutation). */
+export const revokeAgentKey = accessRemovalMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const now = new Date().toISOString()
@@ -183,7 +186,7 @@ export const revokeAgentKey = orgMutation({
 })
 
 /* P.deleteAgentKey — row gone, no narration. */
-export const deleteAgentKey = orgMutation({
+export const deleteAgentKey = accessRemovalMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const { key } = await myAgentKey(ctx, id)

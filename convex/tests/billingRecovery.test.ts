@@ -1,6 +1,6 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import { subscriptionFor } from '../lib/billingAccess'
 import { billingSummary, enrollOrganization } from '../model/billing'
 import { deleteOrgDeep, removeProfile } from '../model/cascade'
@@ -435,5 +435,123 @@ describe('billing recovery', () => {
     await expect(
       as(t, f.user).mutation(api.files.clearAvatar, { profile_id: f.user.id }),
     ).resolves.toBeNull()
+  })
+})
+
+describe('admin actions that take access away during read-only access', () => {
+  const REVOKED_HASH = 'a1'.repeat(32)
+  const DELETED_HASH = 'b2'.repeat(32)
+
+  /* Two keys for the fixture's agent and a personal token for the user,
+   * planted raw because creating them is refused while read-only. */
+  async function pausedFixture() {
+    const { t, f } = await fixture()
+    const ids = { revoked: uuid(), deleted: uuid(), token: uuid() }
+    await t.run(async (ctx) => {
+      for (const [id, key_hash] of [
+        [ids.revoked, REVOKED_HASH],
+        [ids.deleted, DELETED_HASH],
+      ]) {
+        await ctx.db.insert('agent_keys', {
+          id,
+          profile_id: f.agent.id,
+          name: 'Relay key',
+          key_prefix: 'qva_0...00000',
+          key_hash,
+          created_at: NOW,
+        })
+      }
+      await ctx.db.insert('mcp_tokens', {
+        id: ids.token,
+        profile_id: f.user.id,
+        name: 'Laptop',
+        token_prefix: 'qvt_0123456',
+        token_hash: 'c3'.repeat(32),
+        created_at: NOW,
+      })
+    })
+    const lookup = (hash: string) =>
+      t.query(internal.machine.auth.lookupCredential, { hash, isAgent: true })
+    return { t, f, ids, lookup }
+  }
+
+  it('lets an admin revoke and delete agent keys, deactivate and remove users', async () => {
+    const { t, f, ids, lookup } = await pausedFixture()
+    const admin = as(t, f.admin)
+    const org_id = f.org.id
+    // Reading with the key still works until the admin acts.
+    expect(await lookup(REVOKED_HASH)).toMatchObject({ ok: true })
+    expect(await admin.mutation(api.tokens.revokeAgentKey, { org_id, id: ids.revoked })).toBe(true)
+    expect(await lookup(REVOKED_HASH)).toMatchObject({ ok: false, why: 'revoked' })
+    expect(await admin.mutation(api.tokens.deleteAgentKey, { org_id, id: ids.deleted })).toBe(true)
+    expect(await lookup(DELETED_HASH)).toMatchObject({ ok: false, why: 'unknown' })
+    await admin.mutation(api.profiles.deactivate, { org_id, id: f.agent.id })
+    await admin.mutation(api.profiles.remove, { org_id, id: f.viewer.id })
+    // A person revokes their own token through a door the pause never gated.
+    expect(await as(t, f.user).mutation(api.tokens.revokeMcpToken, { id: ids.token })).toBe(true)
+    const after = await t.run(async (ctx) => ({
+      agent: await ctx.db.get(f.agent._id),
+      viewer: await ctx.db.get(f.viewer._id),
+      token: await ctx.db.query('mcp_tokens').first(),
+    }))
+    expect(after.agent).toMatchObject({ active: false })
+    expect(after.viewer).toBeNull()
+    expect(after.token?.revoked_at).toBeDefined()
+  })
+
+  it('keeps reactivation, other user changes and new keys refused', async () => {
+    const { t, f, ids } = await pausedFixture()
+    const admin = as(t, f.admin)
+    const user = as(t, f.user)
+    const org_id = f.org.id
+    await admin.mutation(api.profiles.deactivate, { org_id, id: f.agent.id })
+    const refused: (() => Promise<unknown>)[] = [
+      () =>
+        admin.mutation(api.profiles.update, { org_id, id: f.agent.id, patch: { active: true } }),
+      () =>
+        admin.mutation(api.profiles.update, {
+          org_id,
+          id: f.user.id,
+          patch: { org_role: 'viewer' },
+        }),
+      // the update door stays gated even for a deactivation
+      () =>
+        admin.mutation(api.profiles.update, { org_id, id: f.user.id, patch: { active: false } }),
+      () =>
+        admin.mutation(api.profiles.create, {
+          org_id,
+          id: uuid(),
+          name: 'New Person',
+          email: 'new.person@testbed.test',
+          org_role: 'user',
+          kind: 'person',
+          color: '#335577',
+        }),
+      () =>
+        admin.mutation(api.tokens.createAgentKey, {
+          org_id,
+          id: uuid(),
+          agent_id: f.agent.id,
+          name: 'Another key',
+          key_prefix: 'qva_1...11111',
+          key_hash: 'd4'.repeat(32),
+        }),
+      // a non-admin still meets the billing gate on the protective doors
+      () => user.mutation(api.tokens.revokeAgentKey, { org_id, id: ids.revoked }),
+      () => user.mutation(api.tokens.deleteAgentKey, { org_id, id: ids.revoked }),
+      () => user.mutation(api.profiles.deactivate, { org_id, id: f.viewer.id }),
+      () => user.mutation(api.profiles.remove, { org_id, id: f.viewer.id }),
+    ]
+    for (const call of refused) await expectRefusal(call(), 'forbidden', /read-only/)
+    const after = await t.run(async (ctx) => ({
+      agent: await ctx.db.get(f.agent._id),
+      user: await ctx.db.get(f.user._id),
+      viewer: await ctx.db.get(f.viewer._id),
+      keys: await ctx.db.query('agent_keys').collect(),
+    }))
+    expect(after.agent).toMatchObject({ active: false })
+    expect(after.user).toMatchObject({ active: true, org_role: 'user' })
+    expect(after.viewer).toMatchObject({ active: true })
+    expect(after.keys.map((k) => k.revoked_at)).toEqual([undefined, undefined])
   })
 })
