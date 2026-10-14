@@ -7,7 +7,10 @@
  *
  * Layering: the httpAction shell owns auth (ordinary routes accept agent keys;
  * webhook management also accepts personal and OAuth credentials), the per-call last_used_at stamp,
- * CORS, routing and the code→status map. Each endpoint is ONE internal fn —
+ * CORS, routing and the code→status map. Routing is the ROUTES table, where
+ * each agent-key route is ONE registry entry (machine/registry.ts) declaring its
+ * method, path, required read/write `access` flag and success status, and a
+ * read route can only run queries. Each endpoint is ONE internal fn —
  * resolve + rules + write + activity in one transaction — starting from
  * asMachineCaller(ctx, callerId) and composing lib/core.ts + the model layer
  * with the trusted machine-narration override (model/issues.ts `machine` arg):
@@ -83,6 +86,7 @@ import { notifyCommentInsert } from '../model/messages'
 import { newUuid } from '../model/orgs'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, REST_AUTH_401, sha256hex } from './auth'
+import { type MachineEntry, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
@@ -662,6 +666,167 @@ function safeDecode(s: string): string {
   }
 }
 
+/* ----------------------------------------------------------- route table --
+ * Every agent-key route is ONE registry entry (machine/registry.ts): method,
+ * path, the required read/write `access` flag, the success status and the
+ * `run` that calls its internal fn. `path` lists the segments after /v1;
+ * `:name` captures one decoded segment into `params`, every other segment
+ * must match the raw request segment exactly. Webhook routes are not here,
+ * because they accept more credential kinds and are served before agent-key
+ * auth (webhookResponse). */
+
+/** What a route's `run` receives once auth and routing are done. */
+type RouteInput = {
+  callerId: string
+  keyName: string
+  params: Record<string, string>
+  query: (name: string) => string | undefined
+  body: string
+}
+
+/** One REST route. `run` answers the JSON body sent with `status`. */
+type RestRoute = MachineEntry<RouteInput, unknown> & {
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  path: string
+  status: 200 | 201
+}
+
+export const ROUTES: RestRoute[] = [
+  {
+    method: 'GET',
+    path: 'projects',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, query }) =>
+      r.runQuery(internal.machine.rest.listProjects, { callerId, archived: query('archived') }),
+  },
+  {
+    method: 'GET',
+    path: 'projects/:ref',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, params }) =>
+      r.runQuery(internal.machine.rest.getProject, { callerId, ref: params.ref }),
+  },
+  {
+    method: 'GET',
+    path: 'projects/:ref/users',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, params }) =>
+      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, ref: params.ref }),
+  },
+  {
+    method: 'GET',
+    path: 'users',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId }) => r.runQuery(internal.machine.rest.listUsers, { callerId }),
+  },
+  {
+    method: 'GET',
+    path: 'users/:ref',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, params }) =>
+      r.runQuery(internal.machine.rest.getUser, { callerId, ref: params.ref }),
+  },
+  {
+    method: 'GET',
+    path: 'tasks',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, query }) =>
+      r.runQuery(internal.machine.rest.listIssues, {
+        callerId,
+        project: query('project'),
+        status: query('status'),
+        priority: query('priority'),
+        assignee: query('assignee'),
+        search: query('search'),
+        archived: query('archived'),
+        limit: query('limit'),
+        offset: query('offset'),
+      }),
+  },
+  {
+    method: 'POST',
+    path: 'tasks',
+    access: 'write',
+    status: 201,
+    run: (r, { callerId, keyName, body }) =>
+      r.runMutation(internal.machine.rest.createIssue, { callerId, keyName, body }),
+  },
+  {
+    method: 'GET',
+    path: 'tasks/:ref',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, params }) =>
+      r.runQuery(internal.machine.rest.getIssue, { callerId, ref: params.ref }),
+  },
+  {
+    method: 'PATCH',
+    path: 'tasks/:ref',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, keyName, params, body }) =>
+      r.runMutation(internal.machine.rest.updateIssue, {
+        callerId,
+        keyName,
+        ref: params.ref,
+        body,
+      }),
+  },
+  {
+    method: 'DELETE',
+    path: 'tasks/:ref',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, keyName, params }) =>
+      r.runMutation(internal.machine.rest.deleteIssue, { callerId, keyName, ref: params.ref }),
+  },
+  {
+    method: 'GET',
+    path: 'tasks/:ref/comments',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, params }) =>
+      r.runQuery(internal.machine.rest.listComments, { callerId, ref: params.ref }),
+  },
+  {
+    method: 'POST',
+    path: 'tasks/:ref/comments',
+    access: 'write',
+    status: 201,
+    run: (r, { callerId, params, body }) =>
+      r.runMutation(internal.machine.rest.addComment, { callerId, ref: params.ref, body }),
+  },
+]
+
+/**
+ * The route for a method and the path segments after /v1, with its decoded
+ * `:name` params, or null when nothing matches (the unknown-route 404).
+ */
+export function findRoute(
+  method: string,
+  segments: string[],
+): { route: RestRoute; params: Record<string, string> } | null {
+  for (const route of ROUTES) {
+    if (route.method !== method) continue
+    const pattern = route.path.split('/')
+    if (pattern.length !== segments.length) continue
+    const params: Record<string, string> = {}
+    const matches = pattern.every((part, i) => {
+      if (!part.startsWith(':')) return part === segments[i]
+      params[part.slice(1)] = safeDecode(segments[i])
+      return true
+    })
+    if (matches) return { route, params }
+  }
+  return null
+}
+
 const STATUS_OF: Partial<Record<string, number>> = {
   not_found: 404,
   forbidden: 403,
@@ -811,126 +976,19 @@ const restHandler = httpAction(async (ctx, req) => {
     const keyName = res.cred.keyName ?? ''
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
-    const q = (name: string): string | undefined => {
-      const raw = url.searchParams.get(name)
-      return raw === null ? undefined : raw
-    }
     const body = req.method === 'POST' || req.method === 'PATCH' ? await req.text() : ''
-
-    // -- projects --
-    if (seg[1] === 'projects' && req.method === 'GET') {
-      if (seg.length === 2) {
-        return json(
-          await ctx.runQuery(internal.machine.rest.listProjects, {
-            callerId,
-            archived: q('archived'),
-          }),
-          200,
-        )
-      }
-      if (seg.length === 3) {
-        return json(
-          await ctx.runQuery(internal.machine.rest.getProject, {
-            callerId,
-            ref: safeDecode(seg[2]),
-          }),
-          200,
-        )
-      }
-      if (seg.length === 4 && seg[3] === 'users') {
-        return json(
-          await ctx.runQuery(internal.machine.rest.listProjectUsers, {
-            callerId,
-            ref: safeDecode(seg[2]),
-          }),
-          200,
-        )
-      }
-    }
-
-    // -- users (read only: REST has no user write route) --
-    if (seg[1] === 'users' && req.method === 'GET' && seg.length <= 3) {
-      if (seg.length === 2)
-        return json(await ctx.runQuery(internal.machine.rest.listUsers, { callerId }), 200)
-      return json(
-        await ctx.runQuery(internal.machine.rest.getUser, { callerId, ref: safeDecode(seg[2]) }),
-        200,
-      )
-    }
-
-    // -- tasks --
-    if (seg[1] === 'tasks' && seg.length === 2 && req.method === 'GET') {
-      return json(
-        await ctx.runQuery(internal.machine.rest.listIssues, {
-          callerId,
-          project: q('project'),
-          status: q('status'),
-          priority: q('priority'),
-          assignee: q('assignee'),
-          search: q('search'),
-          archived: q('archived'),
-          limit: q('limit'),
-          offset: q('offset'),
-        }),
-        200,
-      )
-    }
-    if (seg[1] === 'tasks' && seg.length === 3 && req.method === 'GET') {
-      return json(
-        await ctx.runQuery(internal.machine.rest.getIssue, { callerId, ref: safeDecode(seg[2]) }),
-        200,
-      )
-    }
-
-    // -- comments --
-    if (seg[1] === 'tasks' && seg.length === 4 && seg[3] === 'comments') {
-      if (req.method === 'GET') {
-        return json(
-          await ctx.runQuery(internal.machine.rest.listComments, {
-            callerId,
-            ref: safeDecode(seg[2]),
-          }),
-          200,
-        )
-      }
-      if (req.method === 'POST') {
-        return json(
-          await ctx.runMutation(internal.machine.rest.addComment, {
-            callerId,
-            ref: safeDecode(seg[2]),
-            body,
-          }),
-          201,
-        )
-      }
-      // other methods fall through to the unknown-route 404, as deployed
-    }
-
-    if (seg[1] === 'tasks' && seg.length === 2 && req.method === 'POST') {
-      return json(
-        await ctx.runMutation(internal.machine.rest.createIssue, { callerId, keyName, body }),
-        201,
-      )
-    }
-    if (
-      seg[1] === 'tasks' &&
-      seg.length === 3 &&
-      (req.method === 'PATCH' || req.method === 'DELETE')
-    ) {
-      const ref = safeDecode(seg[2])
-      if (req.method === 'DELETE') {
-        return json(
-          await ctx.runMutation(internal.machine.rest.deleteIssue, { callerId, keyName, ref }),
-          200,
-        )
-      }
-      return json(
-        await ctx.runMutation(internal.machine.rest.updateIssue, { callerId, keyName, ref, body }),
-        200,
-      )
-    }
-
-    return err('unknown route', 404)
+    // other methods on a known path (PATCH …/comments, PUT anything) fall to
+    // the unknown-route 404, as deployed
+    const found = findRoute(req.method, seg.slice(1))
+    if (found === null) return err('unknown route', 404)
+    const result = await runEntry(ctx, found.route, {
+      callerId,
+      keyName,
+      params: found.params,
+      query: (name) => url.searchParams.get(name) ?? undefined,
+      body,
+    })
+    return json(result, found.route.status)
   } catch (e) {
     return refusalResponse(e)
   }
