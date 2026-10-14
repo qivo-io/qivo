@@ -217,12 +217,11 @@ describe('REST auth surface', () => {
 
   it('prefix routing: qva_ is the agent leg, qvt_ the person leg, anything else missing, pre-hash', () => {
     // REST, like MCP, takes persons; a qvt_ here once read as missing
-    expect(classifySecret('qva_abc', { person: true })).toEqual({ isAgent: true })
-    expect(classifySecret('qvt_abc', { person: true })).toEqual({ isAgent: false })
-    expect(classifySecret('qvo_abc', { person: true })).toBeNull() // OAuth: webhook routes only
-    expect(classifySecret('sk-something', { person: true })).toBeNull()
-    expect(classifySecret('', { person: true })).toBeNull()
-    expect(classifySecret('qvt_abc', { person: false })).toBeNull()
+    expect(classifySecret('qva_abc')).toEqual({ isAgent: true })
+    expect(classifySecret('qvt_abc')).toEqual({ isAgent: false })
+    expect(classifySecret('qvo_abc')).toBeNull() // OAuth: webhook routes only
+    expect(classifySecret('sk-something')).toBeNull()
+    expect(classifySecret('')).toBeNull()
   })
 
   it('lookupCredential walks unknown → revoked → wrong_kind → inactive in order', async () => {

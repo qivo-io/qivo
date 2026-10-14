@@ -1053,7 +1053,7 @@ async function webhookResponse(
       credential_row_id: credential.connectionRowId,
     }
   } else {
-    const authenticated = await authenticateSecret(ctx, secret, { person: true })
+    const authenticated = await authenticateSecret(ctx, secret)
     if (authenticated.ok === false) return err('Webhook credential is invalid or inactive', 401)
     const credential = authenticated.cred
     const table = credential.isAgent ? 'agent_keys' : 'mcp_tokens'
@@ -1126,7 +1126,7 @@ const restHandler = httpAction(async (ctx, req) => {
     const seg = path.split('/').filter(Boolean)
     if (seg[0] === 'v1' && seg[1] === 'webhooks')
       return await webhookResponse(ctx, req, seg, secret)
-    const res = await authenticateSecret(ctx, secret, { person: true })
+    const res = await authenticateSecret(ctx, secret)
     // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
     // _generated/api.d.ts under strict:false, where truthiness narrowing of
     // the discriminant does not apply

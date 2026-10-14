@@ -78,19 +78,14 @@ export type AuthResult =
   | { ok: false; why: AuthFail; isAgent: boolean }
 
 /* Prefix routing (core.ts:171-173): `qva_` → agent leg; `qvt_` → person leg
- * ONLY where the surface allows persons (REST and MCP both do; a surface
- * passing {person:false} would read a qvt_ as the `missing` failure, not
- * wrong_kind); anything else → missing. Secret extraction stays in each
- * surface's action: REST honors `Authorization` when it starts with exactly
- * 'Bearer ' (case-sensitive, one space) else falls back to X-Api-Key, for
- * both prefixes; MCP is Bearer-only. */
-export const classifySecret = (
-  secret: string,
-  allow: { person: boolean },
-): { isAgent: boolean } | null =>
+ * (REST and MCP both take persons); anything else → missing. Secret
+ * extraction stays in each surface's action: REST honors `Authorization` when
+ * it starts with exactly 'Bearer ' (case-sensitive, one space) else falls back
+ * to X-Api-Key, for both prefixes; MCP is Bearer-only. */
+export const classifySecret = (secret: string): { isAgent: boolean } | null =>
   secret.startsWith('qva_')
     ? { isAgent: true }
-    : allow.person && secret.startsWith('qvt_')
+    : secret.startsWith('qvt_')
       ? { isAgent: false }
       : null
 
@@ -146,9 +141,8 @@ export const lookupCredential = internalQuery({
 export async function authenticateSecret(
   ctx: Pick<ActionCtx, 'runQuery'>,
   secret: string,
-  allow: { person: boolean },
 ): Promise<AuthResult> {
-  const leg = classifySecret(secret, allow)
+  const leg = classifySecret(secret)
   if (leg === null) return { ok: false, why: 'missing', isAgent: false }
   const hash = await sha256hex(secret)
   return await ctx.runQuery(internal.machine.auth.lookupCredential, {

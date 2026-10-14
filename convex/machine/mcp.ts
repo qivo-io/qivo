@@ -1798,7 +1798,7 @@ const mcpPost = httpAction(async (ctx, request) => {
       return jsonRes(500, { error: String(error) })
     }
   }
-  const res = await authenticateSecret(ctx, secret, { person: true })
+  const res = await authenticateSecret(ctx, secret)
   // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
   // _generated/api.d.ts under strict:false, where truthiness narrowing of the
   // discriminant does not apply
