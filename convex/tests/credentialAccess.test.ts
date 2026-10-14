@@ -3,33 +3,32 @@
  *
  *   1. The mapping per credential kind, with its fail-closed cases.
  *   2. Personal tokens: creation and the test seam store an explicit access
- *      and a checked expiry, lookup refuses an expired token like a revoked
- *      one, and those two are the only paths that insert mcp_tokens rows.
+ *      and a checked expiry, lookup and the per-request stamp refuse an
+ *      expired token like a revoked one, and those two are the only paths
+ *      that insert mcp_tokens rows.
  *   3. A static walk: every exported internal mutation and action of the
  *      machine surfaces and webhooks, plus every one the machine HTTP actions
  *      call, takes the required `access` argument or is a named exemption
- *      with its reason.
+ *      with its reason. A call the walk cannot resolve fails it.
  *   4. Over HTTP: every write entry of the registry refuses a read-only
  *      personal token, a read-only OAuth grant and a Viewer agent key. The
  *      refs do not exist, so answering "not found" instead would be an
- *      existence oracle. Read-only credentials still read, and write
- *      credentials still write.
+ *      existence oracle. Read-only credentials still read, write credentials
+ *      still write, and an OAuth tool runs with the grant's live access.
  *
  * Webhook management with read-only and expired tokens is driven over HTTP
  * in tests/webhookApi.test.ts, where the callback receiver is mocked. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import {
   type AccessCredential,
-  CREDENTIAL_READS_ONLY,
   cleanTokenExpiry,
   credentialAccess,
   tokenExpired,
-  VIEWER_AGENT_READS_ONLY,
 } from '../lib/access'
 import type { CredentialAccess } from '../lib/enums'
 import { mcpResource } from '../lib/oauth'
@@ -37,6 +36,11 @@ import { MCP_AUTH_401, sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { ROUTES } from '../machine/rest'
 import { as, expectRefusal, NOW, newT, type T, uuid, withOrg } from './helpers.setup'
+
+/* The two read-only refusal sentences, pinned byte for byte here rather than
+ * imported, so an edit to the source constants fails the HTTP sweep. */
+const CREDENTIAL_READS_ONLY = 'this credential can only read'
+const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'
 
 /* ------------------------------------------------------------ 1. mapping */
 
@@ -282,6 +286,40 @@ describe('personal tokens', () => {
     }
   })
 
+  it('the per-request stamp refuses a token that expired after lookup', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const expiresAt = '2026-10-14T12:00:00.000Z'
+    const token = await t.run(async (ctx) => {
+      const _id = await ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: f.user.id,
+        name: 'Stamp',
+        token_prefix: 'qvt_stamp00',
+        token_hash: hex(),
+        access: 'write',
+        expires_at: expiresAt,
+        created_at: NOW,
+      })
+      return (await ctx.db.get(_id)) as Doc<'mcp_tokens'>
+    })
+    const touch = (now: string) =>
+      t.mutation(internal.machine.auth.touchCredential, {
+        table: 'mcp_tokens',
+        tokenId: token.id,
+        rowId: token._id,
+        profileId: f.user.id,
+        now,
+      })
+    expect(await touch('2026-10-14T11:59:59.999Z')).toBe(true)
+    expect(await touch(expiresAt)).toBeNull()
+    expect(await touch('2026-10-15T00:00:00.000Z')).toBeNull()
+    // only the request before expiry was stamped
+    expect((await t.run((ctx) => ctx.db.get(token._id)))?.last_used_at).toBe(
+      '2026-10-14T11:59:59.999Z',
+    )
+  })
+
   it('only convex/tokens.ts and the test seam insert mcp_tokens rows', () => {
     // Both paths are driven above and store an explicit access, so this scan
     // is enough: a new insert path fails here until it is covered too.
@@ -309,8 +347,18 @@ type Registered = {
   exportArgs?: () => string
 }
 
+/* Every module that can register a function, so an `internal.…` reference
+ * resolves wherever its target lives. */
 const modules = import.meta.glob(
-  ['../*.ts', '../machine/*.ts', '!../convex.config.ts', '!../auth.config.ts', '!../env.d.ts'],
+  [
+    '../**/*.ts',
+    '!../_generated/**',
+    '!../betterAuth/**',
+    '!../tests/**',
+    '!../convex.config.ts',
+    '!../auth.config.ts',
+    '!../env.d.ts',
+  ],
   { eager: true },
 ) as Record<string, Record<string, unknown>>
 
@@ -330,9 +378,23 @@ function registered(name: string): Registered | undefined {
 const writes = (fn: Registered | undefined): boolean =>
   fn?.isInternal === true && (fn.isMutation === true || fn.isAction === true)
 
+/* Every `internal.…` reference in the machine sources, as "module:export". */
+function machineRefs(): string[] {
+  const names = new Set<string>()
+  for (const src of Object.values(machineSources)) {
+    for (const [, ref] of src.matchAll(/\binternal\.((?:\w+\.)+\w+)/g)) {
+      const parts = ref.split('.')
+      names.add(`${parts.slice(0, -1).join('/')}:${parts.at(-1)}`)
+    }
+  }
+  return [...names].sort()
+}
+
 /* What the walk covers: every exported internal mutation and action of the
  * machine modules and the webhook modules, plus every one the machine HTTP
- * actions call by `internal.…` reference, wherever it lives. */
+ * actions call by `internal.…` reference, wherever it lives. A reference the
+ * walk cannot resolve throws, so a call it cannot follow fails every test
+ * that uses the walk instead of dropping out of it. */
 function guarded(): string[] {
   const names = new Set<string>()
   for (const [path, mod] of Object.entries(modules)) {
@@ -343,12 +405,11 @@ function guarded(): string[] {
       if (writes(registered(`${module}:${fn}`))) names.add(`${module}:${fn}`)
     }
   }
-  for (const src of Object.values(machineSources)) {
-    for (const [, ref] of src.matchAll(/\binternal\.((?:\w+\.)+\w+)/g)) {
-      const parts = ref.split('.')
-      const name = `${parts.slice(0, -1).join('/')}:${parts.at(-1)}`
-      if (writes(registered(name))) names.add(name)
-    }
+  for (const name of machineRefs()) {
+    const fn = registered(name)
+    if (fn === undefined)
+      throw new Error(`machine source calls internal ${name}, which is not registered`)
+    if (writes(fn)) names.add(name)
   }
   return [...names].sort()
 }
@@ -403,6 +464,20 @@ describe('every machine write takes the credential access', () => {
     expect(names).toContain('machine/rest:addComment')
     expect(names).toContain('billingMetering:ingress')
     expect(names).toContain('oauthConnections:touch')
+  })
+
+  it('every function call in the machine sources is an internal reference the walk resolves', () => {
+    // A runner given anything else (a variable, makeFunctionReference, a
+    // public api reference) hides its target from the walk.
+    const indirect = Object.entries(machineSources).flatMap(([path, src]) =>
+      [...src.matchAll(/\brun(?:Query|Mutation|Action)\(\s*(?!internal\.)([^,)]*)/g)].map(
+        ([, arg]) => `${path}: ${arg.trim()}`,
+      ),
+    )
+    expect(indirect).toEqual([])
+    expect(machineRefs().filter((name) => registered(name) === undefined)).toEqual([])
+    // the resolver reaches a module outside the two directories the walk owns
+    expect(registered('internal/operator:provisionOperator')?.isInternal).toBe(true)
   })
 
   it('each one takes the required access argument or is a named exemption', () => {
@@ -667,6 +742,18 @@ async function credentials() {
   }
 }
 
+/* Narrow every access token of an OAuth client to these scopes. */
+async function narrowGrant(t: T, clientId: string, scopes: string[]): Promise<void> {
+  await t.mutation(components.betterAuth.adapter.updateMany, {
+    input: {
+      model: 'oauthAccessToken',
+      where: [{ field: 'clientId', value: clientId }],
+      update: { scopes },
+    },
+    paginationOpts: { numItems: 100, cursor: null },
+  })
+}
+
 const WRITE_TOOLS = TOOLS.filter((tool) => tool.access !== 'read')
 const READ_TOOLS = TOOLS.filter((tool) => tool.access === 'read')
 const WRITE_ROUTES = ROUTES.filter((route) => route.access !== 'read')
@@ -777,7 +864,7 @@ describe('read-only credentials over HTTP', () => {
     expect((await c.counts()).issues).toBe(before.issues + 4)
   })
 
-  it('an OAuth grant narrowed to read mid-session resolves as read', async () => {
+  it('an OAuth grant narrowed to read looks up as read and is challenged before dispatch', async () => {
     const c = await credentials()
     const grant = await c.oauth(['qivo:read', 'qivo:write'])
     const lookup = () =>
@@ -786,20 +873,43 @@ describe('read-only credentials over HTTP', () => {
         resource: mcpResource(),
       })
     expect((await lookup())?.access).toBe('write')
-    await c.t.mutation(components.betterAuth.adapter.updateMany, {
-      input: {
-        model: 'oauthAccessToken',
-        where: [{ field: 'clientId', value: grant.clientId }],
-        update: { scopes: ['qivo:read'] },
-      },
-      paginationOpts: { numItems: 100, cursor: null },
-    })
+    await narrowGrant(c.t, grant.clientId, ['qivo:read'])
     expect((await lookup())?.access).toBe('read')
     const res = await callTool(c.t, grant.token, 'create_task', {
       project: c.f.sub.key,
       title: 'x',
     })
     expect(res.status).toBe(403)
+    expect(res.body.error).toBe('insufficient_scope')
+  })
+
+  it('a write tool runs with the live grant access, so narrowing mid-request writes nothing', async () => {
+    const c = await credentials()
+    const grant = await c.oauth(['qivo:read', 'qivo:write'])
+    const before = await c.counts()
+    // The request authenticates and passes the step-up with both scopes, then
+    // the grant narrows to qivo:write alone before the tool runs. That still
+    // passes the per-call qivo:write check, so only the live access handed to
+    // the tool, read without qivo:read, keeps it from writing.
+    const readText = Request.prototype.text
+    const spy = vi.spyOn(Request.prototype, 'text').mockImplementationOnce(async function (
+      this: Request,
+    ) {
+      await narrowGrant(c.t, grant.clientId, ['qivo:write'])
+      return readText.call(this)
+    })
+    try {
+      const res = await callTool(c.t, grant.token, 'create_task', {
+        project: c.f.sub.key,
+        title: 'Narrowed',
+      })
+      expect(spy).toHaveBeenCalled()
+      expect(res.status).toBe(200)
+      expect(toolText(res.body)).toEqual({ text: CREDENTIAL_READS_ONLY, isError: true })
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await c.counts()).toEqual(before)
   })
 
   it('an expired personal token gets the MCP 401 for unknown, expired or revoked tokens', async () => {

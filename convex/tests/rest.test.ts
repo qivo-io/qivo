@@ -14,7 +14,6 @@
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { VIEWER_AGENT_READS_ONLY } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { classifySecret, REST_AUTH_401, sha256hex } from '../machine/auth'
 import { GROUP_DATES_MACHINE } from '../model/issues'
@@ -38,6 +37,7 @@ import {
 const KEY = 'drive'
 const VIA = 'via the REST API (drive)'
 const NO_WRITE = 'this agent has no write access to that project'
+const VIEWER_READS_ONLY = 'this agent is a Viewer and can only read'
 
 /* Byte-exact refusal assertion. */
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<Refusal> {
@@ -1191,7 +1191,7 @@ describe('POST /v1/tasks', () => {
     // A Viewer agent is fully read-only: its live role refuses the write even
     // if the credential was resolved as write before the role changed.
     for (const access of ['read', 'write'] as const) {
-      await refused(post(roleViewer, access), 'forbidden', VIEWER_AGENT_READS_ONLY)
+      await refused(post(roleViewer, access), 'forbidden', VIEWER_READS_ONLY)
     }
     // A Standard user agent with only View on the project meets the project rule.
     await refused(post(grantViewer, 'write'), 'forbidden', NO_WRITE)

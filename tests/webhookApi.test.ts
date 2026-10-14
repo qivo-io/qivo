@@ -5,7 +5,14 @@ import { mcpResource } from '../convex/lib/oauth'
 import { CallbackError, decryptSecret } from '../convex/lib/webhookTransport'
 import { sha256hex } from '../convex/machine/auth'
 import { notifyIssueUpdate } from '../convex/model/messages'
-import { flushWebhookEvents, newT, plantIssue, uuid, withOrg } from '../convex/tests/helpers.setup'
+import {
+  expectRefusal,
+  flushWebhookEvents,
+  newT,
+  plantIssue,
+  uuid,
+  withOrg,
+} from '../convex/tests/helpers.setup'
 
 const receiver = vi.hoisted(() => ({
   valid: true,
@@ -774,6 +781,50 @@ describe('MCP Events and generic REST webhooks', () => {
     expect(
       (await f.rest(`/v1/webhooks/organization/${id}`, 'DELETE', undefined, f.qvt)).status,
     ).toBe(204)
+  })
+
+  it("decides an OAuth administrator's deletion from the connection's approved scopes", async () => {
+    const f = await fixture()
+    const subscribe = async () =>
+      ((await (await f.rest('/v1/webhooks', 'POST', f.params)).json()) as { id: string }).id
+    const first = await subscribe()
+    await f.t.run((ctx) => ctx.db.patch(f.fx.user._id, { org_role: 'admin' }))
+    const oauth = await f.oauth(['qivo:read'])
+    const connection = (await f.t.run((ctx) => ctx.db.get(oauth.connectionRowId)))!
+    const owner = {
+      profile_id: f.fx.user.id,
+      credential_table: 'oauth_connections' as const,
+      credential_id: connection.id,
+      credential_row_id: connection._id,
+    }
+    // straight to the mutation, past the REST check on the access token's scopes
+    await expectRefusal(
+      f.t.mutation(internal.webhooks.removeOrganization, { owner, id: first }),
+      'forbidden',
+      /^this credential can only read$/,
+    )
+    expect(await (await f.rest('/v1/webhooks', 'GET')).json()).toMatchObject([{ id: first }])
+
+    // once the connection approves qivo:write, the administrator may delete
+    const scopes = ['qivo:read', 'qivo:write']
+    await f.t.run((ctx) => ctx.db.patch(connection._id, { scopes, requested_scopes: scopes }))
+    expect(await f.t.mutation(internal.webhooks.removeOrganization, { owner, id: first })).toBe(
+      null,
+    )
+    await f.t.mutation(components.betterAuth.adapter.updateMany, {
+      input: {
+        model: 'oauthAccessToken',
+        where: [{ field: 'clientId', value: connection.client_id }],
+        update: { scopes },
+      },
+      paginationOpts: { numItems: 100, cursor: null },
+    })
+    const second = await subscribe()
+    expect(
+      (await f.rest(`/v1/webhooks/organization/${second}`, 'DELETE', undefined, oauth.token))
+        .status,
+    ).toBe(204)
+    expect(await (await f.rest('/v1/webhooks', 'GET')).json()).toEqual([])
   })
 
   it('refuses an expired token, stops delivering its subscriptions and reclaims their quota', async () => {
