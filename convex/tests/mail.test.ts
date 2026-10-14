@@ -108,7 +108,7 @@ describe('invitation mail', () => {
   it('reports not sent, without calling the provider, once the batch deadline has passed', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
-    expect(await invite(Date.now() - 1)).toBe(false)
+    expect(await invite(Date.now() - 1)).toBe('unsent')
     expect(fetch).not.toHaveBeenCalled()
   })
 
@@ -120,14 +120,14 @@ describe('invitation mail', () => {
       json: async () => ({}),
     })
     vi.stubGlobal('fetch', fetch)
-    expect(await invite(Date.now() + 5_000)).toBe(false)
+    expect(await invite(Date.now() + 5_000)).toBe('uncertain')
     expect(fetch).toHaveBeenCalledOnce()
   })
 
   it('folds a long or multi-line organization name into one capped line', async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
     vi.stubGlobal('fetch', fetch)
-    await sendInviteEmail({
+    const outcome = await sendInviteEmail({
       to: letter.to,
       org_name: `Acme\n\nVisit   example.test ${'x'.repeat(100)}`,
       as_guest: true,
@@ -135,6 +135,7 @@ describe('invitation mail', () => {
       send_key: 'test-only-invite',
       deadline: Date.now() + 60_000,
     })
+    expect(outcome).toBe('sent')
     const { text } = JSON.parse(fetch.mock.calls[0][1].body)
     expect(text.split('\n')[2]).toMatch(
       /^Acme Visit example\.test x{56}… has invited you to join their organization as a guest\. /,
@@ -145,7 +146,7 @@ describe('invitation mail', () => {
     vi.stubEnv('AGENTMAIL_API_KEY', '')
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
-    expect(await invite(Date.now() + 60_000)).toBe(false)
+    expect(await invite(Date.now() + 60_000)).toBe('unsent')
     expect(fetch).not.toHaveBeenCalled()
   })
 })

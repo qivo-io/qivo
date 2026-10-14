@@ -48,8 +48,9 @@ const vActor = v.object({ auth_user_id: v.optional(v.string()), email: v.string(
 type Actor = Infer<typeof vActor>
 
 /* App sends allowed per organization per hour, counting console sends too.
- * Pending and delivered sends count. Attempts held back by the cap and sends
- * that failed do not, because no email went out. */
+ * Sends in flight, delivered or uncertain count. Attempts held back by the
+ * cap and sends that never reached the provider do not, because no email
+ * went out. */
 const APP_SENDS_PER_ORG_HOUR = 50
 
 type InviteTarget = {
@@ -62,13 +63,21 @@ type InviteTarget = {
 }
 
 type SendRow = {
-  detail: { email?: unknown; sent?: unknown; limited?: unknown; settled?: unknown }
+  detail: {
+    email?: unknown
+    sent?: unknown
+    limited?: unknown
+    settled?: unknown
+    uncertain?: unknown
+  }
 }
 
-/* A send that counts toward the cap: not held back, and delivered or still
- * in flight. */
+/* A send that counts toward the cap. It was not held back, and it is still
+ * in flight, was delivered, or failed after reaching the provider, which may
+ * have delivered it anyway. */
 const countsTowardCap = (r: SendRow) =>
-  r.detail.limited !== true && (r.detail.settled !== true || r.detail.sent === true)
+  r.detail.limited !== true &&
+  (r.detail.settled !== true || r.detail.sent === true || r.detail.uncertain === true)
 
 /* invite_email rows since `since` for one organization or one seat. */
 async function recentSends(
@@ -189,14 +198,21 @@ export const reserve = internalMutation({
   },
 })
 
-/* Records whether a reserved send went out. A settled failure stops counting
- * toward the cap. */
+/* Records how a reserved send ended. A send that never reached the provider
+ * stops counting toward the cap, and an uncertain one keeps counting. */
 export const settle = internalMutation({
-  args: { row: v.id('platform_audit_log'), sent: v.boolean() },
-  handler: async (ctx, { row, sent }) => {
+  args: { row: v.id('platform_audit_log'), sent: v.boolean(), uncertain: v.boolean() },
+  handler: async (ctx, { row, sent, uncertain }) => {
     const entry = await ctx.db.get(row)
     if (entry === null) return
-    await ctx.db.patch(row, { detail: { ...(entry.detail as object), sent, settled: true } })
+    await ctx.db.patch(row, {
+      detail: {
+        ...(entry.detail as object),
+        sent,
+        settled: true,
+        ...(uncertain ? { uncertain: true } : {}),
+      },
+    })
   },
 })
 
@@ -242,17 +258,23 @@ export async function sendInvites(
       actor,
       app,
     })
-    const sent =
-      allowed &&
-      (await sendInviteEmail({
+    let sent = false
+    if (allowed) {
+      const outcome = await sendInviteEmail({
         to: target.email,
         org_name: target.org_name,
         as_guest: target.as_guest,
         url: joinUrl(target.has_account),
         send_key: `invite:${target.profile_id}:${newUuid()}`,
         deadline,
-      }))
-    if (allowed) await ctx.runMutation(internal.invites.settle, { row, sent })
+      })
+      sent = outcome === 'sent'
+      await ctx.runMutation(internal.invites.settle, {
+        row,
+        sent,
+        uncertain: outcome === 'uncertain',
+      })
+    }
     results[i] = { profile_id: target.profile_id, email: target.email, sent }
   }
   let next = 0

@@ -143,7 +143,14 @@ const sha256Hex = async (s: string): Promise<string> =>
 async function postLetter(
   letter: Letter,
   intent: string,
-  cfg: { key: string; inbox: string; idempotencyKey: string; deadline?: number },
+  cfg: {
+    key: string
+    inbox: string
+    idempotencyKey: string
+    deadline?: number
+    /* Called before each request to the provider. */
+    onAttempt?: () => void
+  },
 ): Promise<boolean> {
   if (!letter.text.trim() || !letter.html.trim()) {
     console.error('[mail] refusing an incomplete template', { intent })
@@ -173,6 +180,7 @@ async function postLetter(
       return false
     }
     try {
+      cfg.onAttempt?.()
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -255,14 +263,19 @@ export async function sendBillingReminder(input: {
 /* Longest organization name a letter repeats. */
 const ORG_NAME_MAX = 80
 
+export type InviteOutcome = 'sent' | 'unsent' | 'uncertain'
+
 /** Organization invitations (invites.ts), from the operator console and the
  * app, use the same transport and From inbox. The organization name is stored
  * text, so it appears only in the body, folded to one line, capped and escaped
  * in HTML, never in the subject. A guest invitation ends its sentence with
- * "as a guest". Returns false when mail is not configured, delivery failed or
- * the batch deadline passed. The console then offers the sign-up link, and
- * the app's sends are only recorded. A fresh key per send lets a resend
- * produce a new letter while keeping postLetter's retries idempotent. */
+ * "as a guest". The outcome is 'sent' when the provider accepted the letter,
+ * 'unsent' when no request reached it (mail not configured, demo, or the
+ * batch deadline passed first) and 'uncertain' when requests were made but
+ * none succeeded, since a timed-out request may still have been delivered.
+ * For anything but 'sent' the console offers the sign-up link, and the app's
+ * sends are only recorded. A fresh key per send lets a resend produce a new
+ * letter while keeping postLetter's retries idempotent. */
 export async function sendInviteEmail(input: {
   to: string
   org_name: string
@@ -270,10 +283,10 @@ export async function sendInviteEmail(input: {
   url: string
   send_key: string
   deadline: number
-}): Promise<boolean> {
+}): Promise<InviteOutcome> {
   const key = process.env.AGENTMAIL_API_KEY
   const inbox = process.env.AGENTMAIL_INBOX
-  if (!key || !inbox || process.env.APP_MODE === 'demo') return false
+  if (!key || !inbox || process.env.APP_MODE === 'demo') return 'unsent'
   const folded = input.org_name.replace(/\s+/g, ' ').trim()
   const org =
     [...folded].length > ORG_NAME_MAX ? `${[...folded].slice(0, ORG_NAME_MAX).join('')}…` : folded
@@ -294,12 +307,17 @@ ${input.url}`,
       { href: input.url, label: 'Accept invitation' },
     ),
   }
-  return await postLetter(letter, 'invite', {
+  let attempted = false
+  const ok = await postLetter(letter, 'invite', {
     key,
     inbox,
     idempotencyKey: await sha256Hex(input.send_key),
     deadline: input.deadline,
+    onAttempt: () => {
+      attempted = true
+    },
   })
+  return ok ? 'sent' : attempted ? 'uncertain' : 'unsent'
 }
 
 // ------------------------------------------------------------------- action

@@ -215,7 +215,7 @@ describe('invitations from the app', () => {
     )
   })
 
-  it('caps an organization at 50 letters an hour, not counting held-back or failed ones', async () => {
+  it('caps an organization at 50 letters an hour, not counting held-back or unattempted ones', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
     const plantSends = (n: number, detail: Record<string, unknown>) =>
@@ -230,9 +230,17 @@ describe('invitations from the app', () => {
           })
         }
       })
-    await plantSends(49, { email: 'earlier@example.se', sent: true, resend: false })
+    // 46 delivered and 3 uncertain count; held-back and never-attempted ones do not
+    await plantSends(46, { email: 'earlier@example.se', sent: true, resend: false })
+    await plantSends(3, {
+      email: 'timeout@example.se',
+      sent: false,
+      resend: false,
+      settled: true,
+      uncertain: true,
+    })
     await plantSends(3, { email: 'held@example.se', sent: false, resend: false, limited: true })
-    await plantSends(3, { email: 'failed@example.se', sent: false, resend: false, settled: true })
+    await plantSends(3, { email: 'unsent@example.se', sent: false, resend: false, settled: true })
     await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'fiftieth@example.se'))
     await flush(t)
     await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'over@example.se'))
