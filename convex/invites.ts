@@ -48,7 +48,8 @@ const vActor = v.object({ auth_user_id: v.optional(v.string()), email: v.string(
 type Actor = Infer<typeof vActor>
 
 /* App sends allowed per organization per hour, counting console sends too.
- * Attempts over the cap are recorded as held back and do not count. */
+ * Pending and delivered sends count. Attempts held back by the cap and sends
+ * that failed do not, because no email went out. */
 const APP_SENDS_PER_ORG_HOUR = 50
 
 type InviteTarget = {
@@ -60,7 +61,14 @@ type InviteTarget = {
   as_guest: boolean
 }
 
-type SendRow = { detail: { email?: unknown; sent?: unknown; limited?: unknown } }
+type SendRow = {
+  detail: { email?: unknown; sent?: unknown; limited?: unknown; settled?: unknown }
+}
+
+/* A send that counts toward the cap: not held back, and delivered or still
+ * in flight. */
+const countsTowardCap = (r: SendRow) =>
+  r.detail.limited !== true && (r.detail.settled !== true || r.detail.sent === true)
 
 /* invite_email rows since `since` for one organization or one seat. */
 async function recentSends(
@@ -161,7 +169,7 @@ export const reserve = internalMutation({
     if (a.app) {
       const since = new Date(Date.now() - 3_600_000).toISOString()
       const recent = await recentSends(ctx, { org_id: a.org_id }, since)
-      allowed = recent.filter((r) => r.detail.limited !== true).length < APP_SENDS_PER_ORG_HOUR
+      allowed = recent.filter(countsTowardCap).length < APP_SENDS_PER_ORG_HOUR
     }
     const row = await audit(ctx, {
       ...(a.actor.auth_user_id !== undefined ? { actor_auth_id: a.actor.auth_user_id } : {}),
@@ -181,13 +189,14 @@ export const reserve = internalMutation({
   },
 })
 
-/* Records whether a reserved send went out. */
+/* Records whether a reserved send went out. A settled failure stops counting
+ * toward the cap. */
 export const settle = internalMutation({
   args: { row: v.id('platform_audit_log'), sent: v.boolean() },
   handler: async (ctx, { row, sent }) => {
     const entry = await ctx.db.get(row)
     if (entry === null) return
-    await ctx.db.patch(row, { detail: { ...(entry.detail as object), sent } })
+    await ctx.db.patch(row, { detail: { ...(entry.detail as object), sent, settled: true } })
   },
 })
 
@@ -243,7 +252,7 @@ export async function sendInvites(
         send_key: `invite:${target.profile_id}:${newUuid()}`,
         deadline,
       }))
-    if (sent) await ctx.runMutation(internal.invites.settle, { row, sent })
+    if (allowed) await ctx.runMutation(internal.invites.settle, { row, sent })
     results[i] = { profile_id: target.profile_id, email: target.email, sent }
   }
   let next = 0

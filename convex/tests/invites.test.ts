@@ -70,7 +70,13 @@ describe('invitations from the app', () => {
     expect(letter.text.endsWith(`${process.env.SITE_URL}/app#signup`)).toBe(true)
     expect(
       (await inviteRows(t)).map((r) => [r.actor_email, r.target_profile_id, r.detail]),
-    ).toEqual([['system', added.id, { email: 'anna.l@example.se', sent: true, resend: false }]])
+    ).toEqual([
+      [
+        'system',
+        added.id,
+        { email: 'anna.l@example.se', sent: true, resend: false, settled: true },
+      ],
+    ])
   })
 
   it('says "as a guest" when the address has a home organization elsewhere, and links to sign-in', async () => {
@@ -209,7 +215,7 @@ describe('invitations from the app', () => {
     )
   })
 
-  it('caps an organization at 50 letters an hour, not counting letters it held back', async () => {
+  it('caps an organization at 50 letters an hour, not counting held-back or failed ones', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
     const plantSends = (n: number, detail: Record<string, unknown>) =>
@@ -226,6 +232,7 @@ describe('invitations from the app', () => {
       })
     await plantSends(49, { email: 'earlier@example.se', sent: true, resend: false })
     await plantSends(3, { email: 'held@example.se', sent: false, resend: false, limited: true })
+    await plantSends(3, { email: 'failed@example.se', sent: false, resend: false, settled: true })
     await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'fiftieth@example.se'))
     await flush(t)
     await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'over@example.se'))
@@ -346,6 +353,8 @@ describe('invitations from the app', () => {
     await as(t, f.admin).mutation(api.profiles.create, person(f.org.id, 'anna@example.se'))
     await flush(t)
     expect(fetch).not.toHaveBeenCalled()
-    expect((await inviteRows(t)).map((r) => r.detail.sent)).toEqual([false])
+    expect((await inviteRows(t)).map((r) => [r.detail.sent, r.detail.settled])).toEqual([
+      [false, true],
+    ])
   })
 })
