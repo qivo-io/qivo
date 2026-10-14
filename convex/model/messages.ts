@@ -22,7 +22,7 @@ import { profileCanSeeProject } from '../lib/access'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
-import { PRIORITY_NAMES, STATUS_NAMES } from './activity'
+import { PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 

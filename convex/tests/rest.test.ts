@@ -803,6 +803,62 @@ describe('GET /v1/tasks', () => {
     expect(missing).toEqual([])
   })
 
+  it('search also reads status, priority, assignee and label names, as the app does', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const task = (extra: Partial<Doc<'issues'>>) =>
+      plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...extra })
+    const bracket = await task({
+      title: 'Bracket',
+      status: 'progress',
+      priority: 'urgent',
+      assignee_id: f.guest.id,
+    })
+    const lid = await task({ title: 'Lid', status: 'todo', priority: 'low' })
+    // a group's own status is dormant, so its name is not searched
+    const group = await task({ title: 'Enclosure', status: 'progress' })
+    const gasket = await task({ title: 'Gasket', status: 'done', parent_id: group.id })
+    await t.run(async (ctx) => {
+      const label = async (name: string) => {
+        const id = uuid()
+        const lower = name.toLowerCase()
+        await ctx.db.insert('labels', {
+          id,
+          org_id: f.org.id,
+          name,
+          name_lower: lower,
+          color: '#4C9AFF',
+          created_at: NOW,
+        })
+        return id
+      }
+      await ctx.db.insert('issue_labels', {
+        org_id: f.org.id,
+        issue_id: bracket.id,
+        label_id: await label('Thermal'),
+      })
+      // an assignment stored before rows carried their organization
+      await ctx.db.insert('issue_labels', { issue_id: lid.id, label_id: await label('Legacy') })
+    })
+    const ids = async (search: string) =>
+      (
+        await t.query(internal.machine.rest.listIssues, {
+          callerId: f.agent.id,
+          access: 'read',
+          search,
+        })
+      ).map((row) => row.id)
+    expect(await ids('in progress')).toEqual([bracket.id])
+    expect(await ids('urgent')).toEqual([bracket.id])
+    expect(await ids('guest brack')).toEqual([bracket.id])
+    expect(await ids('thermal')).toEqual([bracket.id])
+    expect(await ids('legacy lid')).toEqual([lid.id])
+    expect(await ids('done gasket')).toEqual([gasket.id])
+    expect(await ids('enclosure progress')).toEqual([])
+    expect(await ids('thermal lid')).toEqual([])
+    expect(await ids('high')).toEqual([])
+  })
+
   it('limit/offset keep the deployed parsing quirks: 0/NaN → 100, negatives clamp', async () => {
     const t = newT()
     const f = await machineOrg(t)

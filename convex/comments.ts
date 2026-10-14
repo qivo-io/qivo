@@ -17,9 +17,11 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
-import { byId, insertUnique } from './lib/db'
+import { byId } from './lib/db'
 import { badRequest, forbidden, notFound, orgMutation } from './lib/functions'
-import { notifyCommentInsert, notifyCommentUpdate } from './model/messages'
+import { postComment } from './model/comments'
+import { assertCanEdit } from './model/issues'
+import { notifyCommentUpdate } from './model/messages'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
@@ -54,26 +56,16 @@ const trimmedBody = (body: string): string => {
  * P.addComment. Author is structurally ctx.me ('comments can only be
  * created as yourself' becomes shape); created_at is server-stamped — a
  * client cannot backdate. Returns nothing: the client pre-generated the id
- * and the thread arrives via the commentsForIssue subscription. */
+ * and the thread arrives via the commentsForIssue subscription. The write
+ * itself is model/comments.ts postComment, shared with REST and MCP. */
 export const create = orgMutation({
   args: { id: v.string(), issue_id: v.string(), body: v.string() },
   handler: async (ctx, { id, issue_id, body }) => {
     const now = new Date().toISOString()
     const issue = await visibleIssue(ctx, issue_id, 'task not found')
-    if (!(await hasProjectLevel(ctx, ctx.me, issue.project_id, 'user'))) {
-      throw forbidden('no write access to this project')
-    }
+    await assertCanEdit(ctx, ctx.me, issue.project_id)
     const text = trimmedBody(body)
-    const doc = await insertUnique(
-      ctx,
-      'comments',
-      'by_uuid',
-      { id },
-      { id, issue_id: issue.id, author: ctx.me.id, body: text, created_at: now },
-      badRequest('a comment with this id already exists'),
-    )
-    const comment = (await ctx.db.get(doc)) as Doc<'comments'>
-    await notifyCommentInsert(ctx, { comment, issue, actor: ctx.me, now })
+    await postComment(ctx, { id, issue, author: ctx.me, body: text, now })
     return null
   },
 })

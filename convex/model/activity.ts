@@ -3,24 +3,8 @@ import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
-import { ISSUE_PREFIX } from '../lib/taskRefs'
+import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { newUuid } from './orgs'
-
-// Shared display names for activity and inbox narration.
-export const STATUS_NAMES: Record<IssueStatus, string> = {
-  backlog: 'Backlog',
-  todo: 'To Do',
-  progress: 'In Progress',
-  review: 'In Review',
-  done: 'Done',
-}
-
-export const PRIORITY_NAMES: Record<IssuePriority, string> = {
-  urgent: 'Urgent',
-  high: 'High',
-  medium: 'Medium',
-  low: 'Low',
-}
 
 // The feed displays 30 rows; snapshot and retention allow 500.
 const ACTIVITY_CAP = 500

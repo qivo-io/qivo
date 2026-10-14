@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '203d9fa75784357d9a06341b23dcee071eb6a6c4a5770e9da406226bb568c3fa'
-const SHA_TOOLS_MODERN = '11ac232f6ae4a538b75c0a86a52049c26762c5923ebcd4e06ff35777bf6011d6'
+const SHA_TOOLS_LEGACY = '8b5f5d0c351e7183c88dab14f425fc9bc5fa05c1837a4885324f086d18ec758d'
+const SHA_TOOLS_MODERN = '1fcfc2dc0962a633441aae73bc8d5b21281c0e199a451480d17989d79b6d9e5b'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1013,6 +1013,47 @@ describe('read tools', () => {
         search,
       ).toEqual(search === 'signed mobile' || search === 'roll*back' ? [] : [task.id])
     }
+  })
+
+  test('list_tasks search also reads status, priority, assignee and label names', async () => {
+    const fx = await machineOrg()
+    const task = (extra: Partial<Doc<'issues'>>) =>
+      plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, ...extra })
+    const bracket = await task({
+      title: 'Bracket',
+      status: 'review',
+      priority: 'high',
+      assignee_id: fx.user.id,
+    })
+    const group = await task({ title: 'Enclosure', status: 'review' })
+    await task({ title: 'Gasket', status: 'todo', parent_id: group.id })
+    await fx.t.run(async (ctx) => {
+      const label_id = uuid()
+      await ctx.db.insert('labels', {
+        id: label_id,
+        org_id: fx.org.id,
+        name: 'Thermal',
+        name_lower: 'thermal',
+        color: '#4C9AFF',
+        created_at: NOW,
+      })
+      await ctx.db.insert('issue_labels', { org_id: fx.org.id, issue_id: bracket.id, label_id })
+    })
+    const ids = async (search: string) =>
+      (
+        JSON.parse(
+          await fx.t.query(internal.machine.mcp.listIssues, {
+            callerId: fx.guest.id,
+            access: 'read',
+            search,
+          }),
+        ) as { id: string }[]
+      ).map((row) => row.id)
+    for (const search of ['in review', 'high', 'user brack', 'thermal']) {
+      expect(await ids(search), search).toEqual([bracket.id])
+    }
+    expect(await ids('enclosure review')).toEqual([])
+    expect(await ids('thermal gasket')).toEqual([])
   })
 
   test('list_tasks: scope expansion, filters, uniform refusal, projection', async () => {

@@ -640,7 +640,8 @@ Task refs are **permanent**: `QN-482` (any case), bare `482`, or the task
 uuid — task numbers are org-scoped (one counter per organization, migration
 0050), assigned at creation, and survive moves between sub-projects and
 project renames. Project refs are a per-org project number, a key like `ENC`
-(renameable — prefer numbers/uuids in anything stored), or a uuid.
+(the app has no screen that changes a key, but prefer numbers/uuids in
+anything stored), or a uuid.
 The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
@@ -652,7 +653,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id` and `name` — teams group users for project sharing and administration. MCP does not list team grants; `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
-| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status`, `priority`, `assignee_id`, `search` (all word fragments across task ID, title and description, case-insensitive and in any order; `*` stays literal), `limit`; every result includes reporter, assignee and reviewer. `assignee_id` matches the stored assignee, also while a reviewer owns the task. Active tasks only by default — `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106) — a different axis, and the one without a flag |
+| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status`, `priority`, `assignee_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit`; every result includes reporter, assignee and reviewer. `assignee_id` matches the stored assignee, also while a reviewer owns the task. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer; `ref` is `QN-482`, `482`, or a uuid — resolves archived tasks too (`archived_at` is non-null on them) |
@@ -732,9 +733,10 @@ refused. The same project-visibility rule applies to `assignee_id`, with the
 additional requirement that its roster row says `assignable: true`: active
 with effective Edit (`user`) or Lead access, including inherited team/parent
 access and the organization Viewer ceiling. Existing assignments survive a
-permission downgrade and updates that omit `assignee_id`. Any explicitly
-supplied non-null `assignee_id`, even the current value, requires current
-eligibility.
+permission downgrade, a switched-off account and updates that omit
+`assignee_id`. Sending the task's current `assignee_id` again is not a change
+and passes even when that person is no longer eligible, as in the app. Any
+other non-null `assignee_id` requires current eligibility.
 `reviewer_id` follows the same rule: only a row with `assignable: true` may be
 a reviewer, and `null` clears it. On a subtask, a new assignee or reviewer
 must also be able to see every task above it, which `assignable` does not
