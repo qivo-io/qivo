@@ -213,11 +213,15 @@ describe('Can create projects in Organization > Users', () => {
     expect(boxes()).toEqual([])
   })
 
-  it('offers the checkbox only to active standard users who are people', async () => {
+  it('offers the checkbox to active standard users who are people, and locks the org admin on', async () => {
     await load('selected')
     await render(() => <pages.users.OrgUsersPage setPage={vi.fn()} />)
     expect(query('[data-project-creators-header]')?.textContent).toBe('Can create projects')
-    expect(boxes()).toEqual(['leo', 'aisha', 'mira'])
+    expect(boxes()).toEqual(['nora', 'leo', 'aisha', 'mira'])
+    const disabled = [...container.querySelectorAll<HTMLInputElement>('[data-can-create-projects]')]
+      .filter((box) => box.disabled)
+      .map((box) => box.dataset.canCreateProjects)
+    expect(disabled).toEqual(['nora'])
     // every desktop row keeps a cell, so the column lines up
     expect(container.querySelectorAll('[data-project-right-cell]')).toHaveLength(
       snap.profiles.length,
@@ -226,6 +230,19 @@ describe('Can create projects in Organization > Users', () => {
     expect(leo?.checked).toBe(true)
     expect(leo?.getAttribute('aria-label')).toBe('Leo Martins can create projects')
     expect(query<HTMLInputElement>('[data-can-create-projects="aisha"]')?.checked).toBe(false)
+  })
+
+  it('keeps the org admin ticked whatever is stored, and a click changes nothing', async () => {
+    await load('selected')
+    await render(() => <pages.users.OrgUsersPage setPage={vi.fn()} />)
+    const nora = query<HTMLInputElement>('[data-can-create-projects="nora"]')
+    expect(P.user('nora')?.canCreateProjects).toBe(false)
+    expect(nora?.checked).toBe(true)
+    expect(nora?.getAttribute('aria-label')).toBe('Nora Berg can create projects')
+    await act(async () => nora?.click())
+    expect(nora?.checked).toBe(true)
+    expect(requests.filter((r) => r.name === 'profiles:update')).toEqual([])
+    expect(window.showToast).not.toHaveBeenCalled()
   })
 
   it('saves the right and says so', async () => {
@@ -254,6 +271,10 @@ describe('Can create projects in Organization > Users', () => {
     expect(query('[data-project-right-cell="leo"]')?.textContent).toBe('Can create projects')
 
     await render(() => <pages.users.OrgUsersPage narrow userId="nora" setPage={vi.fn()} />)
+    expect(query('[data-project-right-cell="nora"]')?.textContent).toBe('Can create projects')
+    expect(query<HTMLInputElement>('[data-can-create-projects="nora"]')?.disabled).toBe(true)
+
+    await render(() => <pages.users.OrgUsersPage narrow userId="ingrid" setPage={vi.fn()} />)
     expect(query('[data-project-right-cell]')).toBeNull()
   })
 })

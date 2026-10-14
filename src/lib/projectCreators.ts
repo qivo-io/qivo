@@ -46,9 +46,13 @@ export function namePhrase(names: string[]): NamePart[] {
   })
 }
 
-/** Does this Users row offer the "Can create projects" checkbox? Only under
- * Selected users, and only for an active standard user who is a person, the
- * one kind of member the right counts for. */
-export function offersProjectRight(user: UserVM, setting: Setting): boolean {
-  return setting === 'selected' && user.active && user.orgRole === 'user' && !user.isAgent
+/** The "Can create projects" checkbox a Users row shows, which happens only
+ * under Selected users: 'editable' for an active standard user who is a
+ * person, the one kind of member the right counts for, and 'locked' (ticked,
+ * unchangeable) for an active org admin, who can always create projects.
+ * Anyone else gets none. */
+export function projectRightBox(user: UserVM, setting: Setting): 'editable' | 'locked' | null {
+  if (setting !== 'selected' || !user.active) return null
+  if (user.orgRole === 'admin') return 'locked'
+  return user.orgRole === 'user' && !user.isAgent ? 'editable' : null
 }

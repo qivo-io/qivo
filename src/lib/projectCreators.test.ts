@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Row } from '../store/rows'
 import { shapeUser } from '../store/viewModels'
-import { namePhrase, offersProjectRight, projectCreatorsIn } from './projectCreators'
+import { namePhrase, projectCreatorsIn, projectRightBox } from './projectCreators'
 
 /* A home-org member as the roster holds it; a standard user who is an active
    person unless `extra` says otherwise. */
@@ -92,26 +92,36 @@ describe('namePhrase', () => {
   })
 })
 
-describe('offersProjectRight', () => {
-  it('offers the checkbox to active standard users who are people under Selected users', () => {
-    expect(offersProjectRight(member('Leo'), 'selected')).toBe(true)
-    expect(offersProjectRight(member('Mira', { auth_user_id: undefined }), 'selected')).toBe(true)
+describe('projectRightBox', () => {
+  it('gives active standard users who are people a checkbox under Selected users', () => {
+    expect(projectRightBox(member('Leo'), 'selected')).toBe('editable')
+    expect(projectRightBox(member('Mira', { auth_user_id: undefined }), 'selected')).toBe(
+      'editable',
+    )
   })
 
-  it('offers it to nobody under the other settings', () => {
-    expect(offersProjectRight(member('Leo'), 'users')).toBe(false)
-    expect(offersProjectRight(member('Leo'), 'admins')).toBe(false)
+  it('gives active org admins a locked one, pending invitations included', () => {
+    expect(projectRightBox(member('Nora', { org_role: 'admin' }), 'selected')).toBe('locked')
+    const invited = member('Elin', { org_role: 'admin', auth_user_id: undefined })
+    expect(projectRightBox(invited, 'selected')).toBe('locked')
   })
 
-  it('offers it to no admin, viewer, guest, agent or inactive member', () => {
+  it('gives nobody one under the other settings', () => {
+    for (const setting of ['users', 'admins', undefined] as const) {
+      expect(projectRightBox(member('Leo'), setting)).toBeNull()
+      expect(projectRightBox(member('Nora', { org_role: 'admin' }), setting)).toBeNull()
+    }
+  })
+
+  it('gives no viewer, guest, agent or inactive member one', () => {
     for (const extra of [
-      { org_role: 'admin' },
       { org_role: 'viewer' },
       { org_role: 'guest' },
       { kind: 'agent' },
       { active: false },
+      { org_role: 'admin', active: false },
     ] as const) {
-      expect(offersProjectRight(member('Leo', extra), 'selected')).toBe(false)
+      expect(projectRightBox(member('Leo', extra), 'selected')).toBeNull()
     }
   })
 })
