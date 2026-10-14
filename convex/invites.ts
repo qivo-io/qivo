@@ -22,7 +22,7 @@
 
 import { type Infer, v } from 'convex/values'
 import { components, internal } from './_generated/api'
-import type { Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import type { ActionCtx, QueryCtx } from './_generated/server'
 import { internalAction, internalMutation, internalQuery } from './_generated/server'
 import { byId } from './lib/db'
@@ -101,6 +101,16 @@ async function recentSends(
   return out
 }
 
+/* An active person seat with an address and no login yet. The operator never
+ * emails a guest seat. */
+const isInvitation = (seat: Doc<'profiles'> | null, operator: boolean): seat is Doc<'profiles'> =>
+  seat !== null &&
+  seat.email !== undefined &&
+  seat.kind === 'person' &&
+  seat.auth_user_id === undefined &&
+  seat.active &&
+  !(operator && seat.org_role === 'guest')
+
 /* The seats to email. An invitation is an active person seat with an address
  * and no login yet. The operator never emails a guest seat, because org
  * admins and project leads invite guests. With `strict` (an explicit resend
@@ -115,14 +125,7 @@ export const targets = internalQuery({
     for (const invite of invites) {
       const seat = await byId(ctx, 'profiles', invite.profile_id)
       const email = seat?.email
-      if (
-        seat === null ||
-        email === undefined ||
-        seat.kind !== 'person' ||
-        seat.auth_user_id !== undefined ||
-        !seat.active ||
-        (operator && seat.org_role === 'guest')
-      ) {
+      if (!isInvitation(seat, operator) || email === undefined) {
         if (strict) throw notFound('invitation not found')
         continue
       }
@@ -161,8 +164,10 @@ export const targets = internalQuery({
  * the outcome. For the app, the count and the new row commit in one
  * transaction, so concurrent sends cannot both take the last slot under the
  * cap. An app send over the cap is recorded as held back, and allowed is
- * false. App rows carry channel 'app', which keeps them out of the operator's
- * audit listing. */
+ * false. The seat is read again first, because an edit or cancellation may
+ * have committed since targets() read it. A seat that is no longer the same
+ * invitation gets no row and no send (row is null). App rows carry channel
+ * 'app', which keeps them out of the operator's audit listing. */
 export const reserve = internalMutation({
   args: {
     profile_id: v.string(),
@@ -172,7 +177,11 @@ export const reserve = internalMutation({
     actor: vActor,
     app: v.boolean(),
   },
-  handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'>; allowed: boolean }> => {
+  handler: async (ctx, a): Promise<{ row: Id<'platform_audit_log'> | null; allowed: boolean }> => {
+    const seat = await byId(ctx, 'profiles', a.profile_id)
+    if (!isInvitation(seat, !a.app) || seat.org_id !== a.org_id || seat.email !== a.email) {
+      return { row: null, allowed: false }
+    }
     let allowed = true
     if (a.app) {
       const since = new Date(Date.now() - 3_600_000).toISOString()
@@ -258,6 +267,10 @@ export async function sendInvites(
       actor,
       app,
     })
+    if (row === null) {
+      if (opts.strict) throw notFound('invitation not found')
+      return
+    }
     let sent = false
     if (allowed) {
       const outcome = await sendInviteEmail({
@@ -285,7 +298,8 @@ export async function sendInvites(
     }
   }
   await Promise.all(Array.from({ length: Math.min(SEND_CONCURRENCY, list.length) }, worker))
-  return results
+  // A seat that changed between targets() and reserve() leaves a gap.
+  return results.filter((r): r is InviteResult => r !== undefined)
 }
 
 /* The app's invitations, scheduled by the mutation that created, corrected

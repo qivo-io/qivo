@@ -273,17 +273,39 @@ describe('invitations from the app', () => {
         })
       }
     })
+    const a = await plantSeat(t, { org_id: f.org.id, email: 'a@example.se' })
+    const b = await plantSeat(t, { org_id: f.org.id, email: 'b@example.se' })
+    const reserve = (seat: { id: string; email?: string }) =>
+      t.mutation(internal.invites.reserve, {
+        profile_id: seat.id,
+        org_id: f.org.id,
+        email: seat.email ?? '',
+        resend: false,
+        actor: { email: 'system' },
+        app: true,
+      })
+    const outcomes = await Promise.all([reserve(a), reserve(b)])
+    expect(outcomes.map((o) => o.allowed).sort()).toEqual([false, true])
+  })
+
+  it('reserves nothing for a seat readdressed or removed since it was read', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const added = person(f.org.id, 'anna@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
     const reserve = (email: string) =>
       t.mutation(internal.invites.reserve, {
-        profile_id: f.user.id,
+        profile_id: added.id,
         org_id: f.org.id,
         email,
         resend: false,
         actor: { email: 'system' },
         app: true,
       })
-    const outcomes = await Promise.all([reserve('a@example.se'), reserve('b@example.se')])
-    expect(outcomes.map((o) => o.allowed).sort()).toEqual([false, true])
+    expect(await reserve('old@example.se')).toEqual({ row: null, allowed: false })
+    expect((await reserve('anna@example.se')).allowed).toBe(true)
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: added.id })
+    expect(await reserve('anna@example.se')).toEqual({ row: null, allowed: false })
   })
 
   it('skips a seat claimed since it was saved, unless the request is strict', async () => {
