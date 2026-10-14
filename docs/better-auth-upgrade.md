@@ -8,10 +8,15 @@ automatic check or authorize a production deployment.
 
 ## Current blocker
 
-Verified on October 7, 2026, Qivo pins `better-auth`, `@better-auth/core` and
+Verified on October 14, 2026, Qivo pins `better-auth`, `@better-auth/core` and
 `@better-auth/oauth-provider` to `1.6.31`. The latest published
 `@convex-dev/better-auth` is `0.12.5`, whose Better Auth peer range is
 `>=1.6.11 <1.7.0`.
+
+The latest stable OAuth provider is `1.7.7` and requires `better-auth` and
+`@better-auth/core` at `^1.7.7`. No newer Convex adapter is published, so the
+coordinated upgrade remains blocked. Keep Dependabot alert #1 open and retain
+the existing resource-binding safeguards.
 
 [PR #3](https://github.com/qivo-io/qivo/pull/3) proposed upgrading only
 `@better-auth/oauth-provider` to `1.7.0`. That version requires `better-auth`
