@@ -11,6 +11,8 @@
  *   tm_insert/update/delete admin-or-leader; grantee same org, never a guest
  *                           (0081:223-251); a leader is never a viewer
  *                           (0102:334-359 — WITH CHECK, no sentence: forbidden)
+ *                           and never an agent (lib/access canLeadTeams,
+ *                           a rule sentence)
  *
  * Narration is asymmetric BY DESIGN: create/update/delete write NO
  * activity; the membership verbs write three ('added'/'removed'/'made'/
@@ -26,7 +28,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { isOrgStaff, isTeamLeader } from './lib/access'
+import { canLeadTeams, isTeamLeader } from './lib/access'
 import { byId, insertUnique } from './lib/db'
 import { adminMutation, badRequest, forbidden, notFound, orgMutation, rule } from './lib/functions'
 import { logActivity } from './model/activity'
@@ -44,7 +46,9 @@ async function myTeam(ctx: MeCtx, id: string): Promise<Doc<'teams'>> {
   return team
 }
 
-/* teams_update / tm_* rights: org admin, or leader of THIS team. */
+/* teams_update / tm_* rights: org admin, or leader of THIS team. Only
+ * people lead teams (lib/access isTeamLeader), so an agent's leader row
+ * grants nothing here. */
 async function assertRunsTeam(ctx: MeCtx, team: Doc<'teams'>): Promise<void> {
   if (ctx.me.org_role === 'admin') return
   if (await isTeamLeader(ctx, ctx.me, team.id)) return
@@ -219,6 +223,9 @@ export const removeMember = orgMutation({
 /* -------------------------------------------------------------- setLeader
  * P.setTeamLeader. Same-value and missing-row calls are silent no-ops (T15 —
  * the old client pre-checked; the SQL update matched 0 changed rows).
+ * Only people lead teams (lib/access canLeadTeams), so promoting an agent is
+ * refused with a rule sentence the app toasts. An agent's older leader row
+ * grants nothing and can still be demoted.
  * Promoting a viewer is refused — "a viewer is never a team leader" (0102's
  * WITH CHECK; no sentence existed, so forbidden). Promoting a guest left
  * with a stale membership is refused too. Demoting stays allowed, so stale
@@ -233,7 +240,10 @@ export const setLeader = orgMutation({
     const row = await membership(ctx, team.id, profile_id)
     if (row === null || row.is_leader === is_leader) return null
     const member = await byId(ctx, 'profiles', profile_id)
-    if (is_leader && member !== null && !isOrgStaff(member)) {
+    if (is_leader && member !== null && !canLeadTeams(member)) {
+      // A rule, so the app shows the sentence verbatim to a stale client
+      // that still offers the Leader box for an agent.
+      if (member.kind === 'agent') throw rule('an agent cannot lead a team')
       throw forbidden(
         member.org_role === 'viewer'
           ? 'a viewer is never a team leader'

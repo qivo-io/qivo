@@ -2050,7 +2050,9 @@ export const PLANNER = {
     // leadership is a WRITE right and never reaches a viewer (0102). The
     // database refuses to record one, so this only mirrors that refusal.
     if (u.orgRole !== 'admin' && u.orgRole !== 'user') return false
-    return u.orgRole === 'admin' || u.teamLeads.includes(teamId)
+    if (u.orgRole === 'admin') return true
+    // Agents never lead a team; the server ignores old agent leader rows.
+    return !u.isAgent && u.teamLeads.includes(teamId)
   },
   /* Effective rights combine this project's explicit grants with inherited
      parent grants. Organization viewers remain read-only. */

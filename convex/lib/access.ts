@@ -82,7 +82,7 @@ async function teamGrantOn(ctx: QueryCtx, me: Doc<'profiles'>, root: Doc<'projec
   return level
 }
 
-// Raw membership predicate; callers enforce their own role restriction.
+// Raw membership predicate; isTeamLeader adds the role and kind restriction.
 async function leadsTeam(
   ctx: QueryCtx,
   profileId: string,
@@ -208,15 +208,21 @@ export async function profileCanBeAssigned(
   )
 }
 
-/* Team leadership requires an org staff role and a same-org membership;
- * corrupt guest/viewer memberships cannot grant leadership. */
+/* Only a person with an org staff role can lead a team. The kind is named
+ * positively, so agents and any future kind never lead one. */
+export function canLeadTeams(me: Doc<'profiles'>): boolean {
+  return isOrgStaff(me) && me.kind === 'person'
+}
+
+/* Team leadership requires canLeadTeams and a same-org leader row; leader
+ * rows held by guests, viewers or agents grant nothing. */
 export async function isTeamLeader(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   teamId: string | null | undefined,
 ): Promise<boolean> {
   if (teamId === null || teamId === undefined) return false
-  if (!isOrgStaff(me)) return false
+  if (!canLeadTeams(me)) return false
   const team = await ctx.db
     .query('teams')
     .withIndex('by_uuid', (q) => q.eq('id', teamId))

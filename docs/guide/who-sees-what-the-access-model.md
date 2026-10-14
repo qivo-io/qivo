@@ -3,8 +3,8 @@ to their tasks and sub-projects.
 
 - **Organization admin** can access all organization projects and settings,
   including users, billing, teams and labels.
-- **Team leader** manages the team and its members. Leadership alone grants
-  no project access.
+- **Team leader** manages the team and its members. Only people can lead a
+  team, never agents. Leadership alone grants no project access.
 - **Project Viewer** reads the project and tasks without editing.
 - **Project User** creates and edits tasks, comments, attaches files and plans work.
 - **Project Lead** manages that project, its settings, sharing and sub-projects.

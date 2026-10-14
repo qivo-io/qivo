@@ -1820,6 +1820,22 @@ describe('write tools', () => {
         /^only an organization admin or a leader of one of this person's teams can set their plannable hours$/,
       )
     }
+    // Only people lead teams, so an agent's leader row on admin's team grants
+    // no right to set admin's hours.
+    await fx.t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: fx.team.id,
+        profile_id: fx.agent.id,
+        is_leader: true,
+      }),
+    )
+    await expectRefusal(
+      set(fx.agent.id, fx.admin.id, 30),
+      'rule',
+      /^only an organization admin or a leader of one of this person's teams can set their plannable hours$/,
+    )
+    const adminRow = await fx.t.run((ctx) => ctx.db.get(fx.admin._id))
+    expect(adminRow?.plannable_hours).toBe(33)
     // a foreign uuid answers "not found", learning nothing
     await expectRefusal(
       set(fx.admin.id, fx.otherAdmin.id, 30),

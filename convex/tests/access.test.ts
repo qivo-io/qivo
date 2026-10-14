@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import {
   canAccessProject,
+  canLeadTeams,
   canSeeProject,
   canWriteOrgLabels,
   cappedLevel,
@@ -375,6 +376,33 @@ describe('isTeamLeader', () => {
       }),
     )
     expect(await t.run((ctx) => isTeamLeader(ctx, f.otherAdmin, f.team.id))).toBe(false)
+  })
+
+  it('a Standard user agent is never a team leader, even with a leader row', async () => {
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.agent.id,
+        is_leader: true,
+      }),
+    )
+    expect(f.agent.org_role).toBe('user')
+    expect(await t.run((ctx) => isTeamLeader(ctx, f.agent, f.team.id))).toBe(false)
+  })
+})
+
+describe('canLeadTeams', () => {
+  it('admits people with a staff role', () => {
+    expect(canLeadTeams(f.admin)).toBe(true)
+    expect(canLeadTeams(f.user)).toBe(true)
+  })
+
+  it('refuses agents, viewers, guests and kinds it does not know', () => {
+    expect(canLeadTeams(f.agent)).toBe(false)
+    expect(canLeadTeams(f.viewer)).toBe(false)
+    expect(canLeadTeams(f.guest)).toBe(false)
+    const unknownKind = { ...f.user, kind: 'robot' } as unknown as Doc<'profiles'>
+    expect(canLeadTeams(unknownKind)).toBe(false)
   })
 })
 

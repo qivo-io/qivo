@@ -41,8 +41,9 @@ Qivo shows it once and stores only its hash and a display fingerprint, such as
 `qva_d9e...58b76`. To rotate a key, create another from the agent's row, update
 your client, then revoke the old key.
 
-Agents use the same project roles as people and cannot be organization
-admins. Set the organization role to **Viewer** for read-only automation.
+Agents use the same project roles as people. They cannot be organization
+admins or lead a team. Set the organization role to **Viewer** for read-only
+automation.
 Changes and comments name the agent. Active agents count toward billing;
 setting one to **Inactive** disables all its keys.
 

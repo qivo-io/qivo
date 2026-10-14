@@ -18,7 +18,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { isOrgStaff } from '../lib/access'
+import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { logActivity } from './activity'
@@ -297,21 +297,17 @@ export async function setPlannableHoursCore(
   const target = await byId(ctx, 'profiles', a.profile_id)
   if (target === null || target.org_id !== a.me.org_id) throw rights
   if (a.me.org_role !== 'admin') {
-    // Team leadership needs an organization staff role (lib/access
-    // isTeamLeader), so a guest or viewer leader row grants nothing. A guest
-    // is never a team member, so a stale row gives no leader rights over
-    // them either. Same sentence, so probing learns nothing.
-    if (!isOrgStaff(a.me) || target.org_role === 'guest') throw rights
+    // Leadership is the shared lib/access isTeamLeader, so leader rows held
+    // by a guest, a viewer or an agent grant nothing. A guest is never a team
+    // member, so a stale row gives no leader rights over them either. Same
+    // sentence, so probing learns nothing.
+    if (target.org_role === 'guest') throw rights
     let leads = false
     const memberships = ctx.db
       .query('team_members')
       .withIndex('by_profile', (q) => q.eq('profile_id', target.id))
     for await (const tm of memberships) {
-      const mine = await ctx.db
-        .query('team_members')
-        .withIndex('by_team_profile', (q) => q.eq('team_id', tm.team_id).eq('profile_id', a.me.id))
-        .unique()
-      if (mine?.is_leader) {
+      if (await isTeamLeader(ctx, a.me, tm.team_id)) {
         leads = true
         break
       }

@@ -104,8 +104,9 @@ Guests have a separate capacity value in each organization that invites them.
 
 Open **Settings → Organization → Teams → the team** to edit its name,
 membership, **Leader** checkboxes and planning hours. Organization admins and
-team leaders can manage the team. A team can have no leader, and organization
-admins still manage it. Members receive access to projects shared
+team leaders can manage the team. Only people can lead a team. An agent can be
+a member, but Qivo refuses to make it a leader. A team can have no leader, and
+organization admins still manage it. Members receive access to projects shared
 with their team ([Project access](./who-sees-what-the-access-model.md)). Team leadership alone does not grant project authority.
 When you can share the team's projects and edit their tasks, removing a member
 or deleting a team first asks whether to keep people as Viewers or reassign
