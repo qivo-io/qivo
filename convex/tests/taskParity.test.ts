@@ -10,15 +10,19 @@
  *   4. REST links and labels.
  *   5. MCP: the new create and update arguments, ignored arguments, the link
  *      and label tools and the argument validation for lists.
- *   6. The shared cores the app now runs too, and the activity reader for
- *      signed rows that name tasks. */
+ *   6. applyTaskUpdate, the write order both surfaces share, the shared
+ *      cores the app now runs too, and the activity reader for signed rows
+ *      that name tasks. */
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { applyTaskUpdate } from '../lib/core'
+import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
+import type { IssuePatch } from '../model/issues'
 import {
   activityFor,
   as,
@@ -779,6 +783,37 @@ describe('MCP task parity', () => {
     )
   })
 
+  it('update_task checks a new assignee where the task ends up, and the current one on a move', async () => {
+    const fx = await setup()
+    const pcbOnly = await withSeat(fx, 'pcb only')
+    await grant(fx.t, fx.sub2.id, pcbOnly.id, 'user')
+    const update = (args: Record<string, unknown>) =>
+      mcpWrite(fx, internal.machine.mcp.updateIssue, args)
+    const noAccess = `user "${pcbOnly.id}" has no access to this project`
+    // the new assignee works only in PCB: fine when the task moves there
+    const t1 = await task(fx, { assignee_id: fx.guest.id })
+    await update({ ref: t1.id, project: 'PCB', assignee_id: pcbOnly.id })
+    expect(await row(fx.t, t1.id)).toMatchObject({
+      project_id: fx.sub2.id,
+      assignee_id: pcbOnly.id,
+    })
+    // without a move, the task's own project decides, in the readable sentence
+    const t2 = await task(fx)
+    await refused(update({ ref: t2.id, assignee_id: pcbOnly.id }), 'bad_request', noAccess)
+    // with one, the destination decides, in the same sentence
+    const t3 = await task(fx, { project_id: fx.sub2.id })
+    await refused(
+      update({ ref: t3.id, project: 'FW', assignee_id: pcbOnly.id }),
+      'bad_request',
+      noAccess,
+    )
+    expect((await row(fx.t, t3.id)).project_id).toBe(fx.sub2.id)
+    // the current assignee must be able to work at the destination, as in the app
+    const t4 = await task(fx, { project_id: fx.sub2.id, assignee_id: pcbOnly.id })
+    await expectRefusal(update({ ref: t4.id, project: 'FW', title: 'Renamed' }), 'rule')
+    expect(await row(fx.t, t4.id)).toMatchObject({ project_id: fx.sub2.id, title: t4.title })
+  })
+
   it('reports arguments the schema does not know instead of dropping them silently', async () => {
     const fx = await setup()
     const t1 = await task(fx, { title: 'Echo' })
@@ -958,6 +993,70 @@ describe('MCP task parity', () => {
 })
 
 /* ------------------------------------------- 6. shared cores and the reader */
+
+describe('applyTaskUpdate, the write order of REST PATCH and MCP update_task', () => {
+  it('moves, reparents, writes fields, labels, then the reason, skipping what does not change', async () => {
+    const fx = await setup()
+    const bug = await plantLabel(fx.t, fx.org.id, 'Bug', '#ff0000')
+    const parent = await task(fx, { title: 'Parent' })
+    const t1 = await task(fx, { title: 'Before', parent_id: parent.id })
+    const apply = (
+      a: Pick<Parameters<typeof applyTaskUpdate>[1], 'destination' | 'parent' | 'reason'> & {
+        patch?: IssuePatch
+        archive?: boolean
+        add?: string[]
+      },
+    ) =>
+      fx.t.run(async (ctx) => {
+        const add: Doc<'labels'>[] = []
+        for (const id of a.add ?? []) add.push((await byId(ctx, 'labels', id)) as Doc<'labels'>)
+        await applyTaskUpdate(ctx, {
+          ...a,
+          me: fx.agent,
+          issue: (await byId(ctx, 'issues', t1.id)) as Doc<'issues'>,
+          patch: a.patch ?? {},
+          labels: { add, remove: [] },
+          now: NOW,
+          provenance: 'via MCP',
+        })
+      })
+    const verbs = async () => (await activityFor(fx.t, fx.org.id)).map((e) => e.verb)
+    const comments = () =>
+      fx.t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('comments')
+            .withIndex('by_issue', (q) => q.eq('issue_id', t1.id))
+            .collect()
+        ).map((c) => c.body),
+      )
+    // the parent it already has is no change and writes no row
+    await apply({
+      destination: fx.sub2,
+      parent: parent.id,
+      patch: { title: 'After' },
+      archive: true,
+      add: [bug],
+      reason: ' Done elsewhere ',
+    })
+    expect(await verbs()).toEqual(['moved', 'archived', 'labeled'])
+    expect(await row(fx.t, t1.id)).toMatchObject({
+      project_id: fx.sub2.id,
+      parent_id: parent.id,
+      title: 'After',
+      archived_at: NOW,
+    })
+    expect(await comments()).toEqual(['Done elsewhere'])
+    // an archive that matches the task's state writes nothing, reason included
+    await drainActivity(fx.t)
+    await apply({ archive: true, reason: 'again' })
+    expect(await verbs()).toEqual([])
+    // a restore never posts the reason
+    await apply({ archive: false, reason: 'back' })
+    expect(await verbs()).toEqual(['restored'])
+    expect(await comments()).toEqual(['Done elsewhere'])
+  })
+})
 
 describe('the shared cores the app runs too', () => {
   it('the app link: the same link again is a no-op, another kind is refused', async () => {

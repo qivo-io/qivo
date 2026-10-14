@@ -19,8 +19,8 @@
  * (postComment) and model/orgs.ts (setPlannableHoursCore); the task search
  * text is lib/search.ts taskSearchText, as in the app. This file adds only
  * what the model does not own: the caller shape, the ref grammar, the
- * catalogue, the access flags, the shared list reads and the wire
- * projections.
+ * catalogue, the access flags, the shared list reads, the wire projections
+ * and applyTaskUpdate, the write order of a task update on both surfaces.
  *
  * Refusal grammar: helpers here throw the shipped ConvexError {code, message,
  * reason?} values (lib/functions.ts). REST maps code → status (not_found 404,
@@ -29,17 +29,20 @@
 
 import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
-import type { QueryCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
+import { postArchiveReason } from '../model/comments'
 import {
   assertLive,
-  hasSubtasks,
+  type IssuePatch,
   metaNeedsSub,
+  moveIssueCore,
   pairRule,
   SUB_MUST_NAME,
   subtaskParentIds,
+  updateIssueCore,
 } from '../model/issues'
-import { labelJson } from '../model/labels'
+import { labelJson, setTaskLabel } from '../model/labels'
 import { linkKindFrom, linksOf, type TaskLinkKind } from '../model/links'
 import { attachmentLimitMb } from '../model/orgs'
 import {
@@ -577,8 +580,6 @@ export type IssueOutPre = {
   project?: Doc<'projects'>
   /** profile uuid → name, for list calls (skips per-row point reads) */
   names?: ReadonlyMap<string, string>
-  /** the organization's tasks by parent, for list calls (group dates) */
-  children?: ChildIndex
   /** the organization's slug, for list calls (task links) */
   orgSlug?: string
 }
@@ -675,111 +676,126 @@ export function taskUrl(orgSlug: string, num: number): string | null {
   return `${site}/app/${orgSlug}/tasks/${encodeURIComponent(issueKey(num).toLowerCase())}`
 }
 
-/* How many tasks a single group read walks one by_parent read at a time
+/* How many tasks a single-task read walks, one by_parent read at a time,
  * before it reads the organization's tasks once instead (the read a REST
- * list makes anyway). It keeps both Convex limits in reach: index ranges
- * stay far below 4,096, and only a very large group pays a full read. */
+ * list makes anyway). The read walks the subtree once (subtreeIndex) and
+ * every group total uses that one index, which keeps both Convex limits in
+ * reach. Index ranges stay far below 4,096, and only a very large group
+ * pays a full read. */
 const SUBTREE_WALK_BUDGET = 1000
 
-/* On REST a group's plan weeks run from the earliest start to the latest
- * end of the scheduled leaves under it that the caller can read, at any
- * depth. A nested group counts only through its own leaves; its stored
- * dates are dormant. The walk passes only through readable tasks, so a
- * subtask under one the caller cannot read never counts. Like is_group, an
- * active group counts only active subtasks and an archived one its whole
- * subtree. Under a group in an active project, subtasks in archived projects
- * do not count. A leaf without an end counts as its start week. Done leaves
- * count. Both weeks are null when no such leaf is scheduled. `readable` is
- * the caller's project flags when the surface already holds them. A list
- * passes `children`, the index built from the rows it already read. A single
- * task walks its own subtree, one by_parent read per task it visits, and
- * reads the organization's tasks once instead when the subtree passes
- * SUBTREE_WALK_BUDGET. */
-export async function groupWeeks(
+/* `root` and the tasks under it, indexed by parent. It reads one level at a
+ * time and stops at the depth assertParentChain allows; past
+ * SUBTREE_WALK_BUDGET tasks it reads the organization's tasks once instead. */
+async function subtreeIndex(ctx: QueryCtx, root: Doc<'issues'>): Promise<ChildIndex> {
+  const index = new Map<string, Doc<'issues'>[]>()
+  const seen = new Set<string>([root.id])
+  let frontier = [root.id]
+  let reads = 0
+  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+    const next: string[] = []
+    for (const id of frontier) {
+      if (++reads > SUBTREE_WALK_BUDGET) {
+        const rows = await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
+          .collect()
+        return childIndexOf(rows)
+      }
+      const kids = await ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', id))
+        .collect()
+      index.set(id, kids)
+      for (const kid of kids) {
+        if (seen.has(kid.id)) continue
+        seen.add(kid.id)
+        next.push(kid.id)
+      }
+    }
+    frontier = next
+  }
+  return index
+}
+
+/** Whether a task under a group counts toward the group's totals. */
+type GroupCounter = (task: Doc<'issues'>) => Promise<boolean>
+
+/**
+ * The one rule for which tasks under `group` count toward its calculated
+ * plan weeks and remaining hours, for `me`. A task counts when the caller
+ * can read its project. Like is_group, an active group counts only active
+ * subtasks and an archived one its whole subtree. Under a group in an active
+ * project, subtasks in archived projects do not count. The totals' walks
+ * never enter a task that does not count, so nothing under it counts either.
+ * `readable` is the caller's project flags when the surface already holds
+ * them. Each project is read once.
+ */
+function groupCounter(
   ctx: QueryCtx,
+  me: Caller,
   group: Doc<'issues'>,
   groupProject: Doc<'projects'>,
-  me: Caller,
   readable?: (projectId: string) => boolean,
-  children?: ChildIndex,
-): Promise<{ start_week: string | null; end_week: string | null }> {
+): GroupCounter {
   const allArchived = group.archived_at !== undefined
   const liveProject = groupProject.archived_at === undefined
-  // whether a subtask in this project may count, read once per project
-  const counted = new Map<string, Promise<boolean>>()
-  const countsIn = (projectId: string): Promise<boolean> => {
-    let known = counted.get(projectId)
+  const byProject = new Map<string, Promise<boolean>>()
+  return async (task) => {
+    if (task.org_id !== me.org_id) return false
+    if (!allArchived && task.archived_at !== undefined) return false
+    let known = byProject.get(task.project_id)
     if (known === undefined) {
       known = (async () => {
-        const p = await byId(ctx, 'projects', projectId)
+        const p = await byId(ctx, 'projects', task.project_id)
         if (p === null || (liveProject && p.archived_at !== undefined)) return false
         return readable !== undefined ? readable(p.id) : await canSeeProject(ctx, me, p)
       })()
-      counted.set(projectId, known)
+      byProject.set(task.project_id, known)
     }
-    return known
+    return await known
   }
-  /* One walk; null when it would read more than `budget` tasks' children.
-   * Each visited task's children are read once: they decide whether it is
-   * a group (hasSubtasks' rule, whoever can read them) and what the walk
-   * enters next. */
-  const walk = async (
-    childrenOf: (id: string) => Promise<readonly Doc<'issues'>[]>,
-    budget: number,
-  ): Promise<{ start_week: string | null; end_week: string | null } | null> => {
-    let start: string | undefined
-    let end: string | undefined
-    let reads = 0
-    const seen = new Set<string>([group.id])
-    let frontier: Doc<'issues'>[] = [group]
-    // assertParentChain bounds chains at 20 tasks, so the walk stops there
-    for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
-      const next: Doc<'issues'>[] = []
-      for (const task of frontier) {
-        if (++reads > budget) return null
-        const kids = await childrenOf(task.id)
-        const isGroup = kids.some(
-          (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
-        )
-        if (task !== group && !isGroup) {
-          if (task.start_week === undefined) continue
-          const leafEnd = task.end_week ?? task.start_week
-          if (start === undefined || task.start_week < start) start = task.start_week
-          if (end === undefined || leafEnd > end) end = leafEnd
-          continue
-        }
-        // a group, the root included, counts only through its subtasks
-        for (const c of kids) {
-          if (seen.has(c.id)) continue
-          if (!allArchived && c.archived_at !== undefined) continue
-          if (!(await countsIn(c.project_id))) continue
-          seen.add(c.id)
-          next.push(c)
-        }
+}
+
+/* On REST and MCP a group's plan weeks run from the earliest start to the
+ * latest end of the scheduled leaves under it that count (groupCounter), at
+ * any depth. A nested group counts only through its own leaves; its stored
+ * dates are dormant. A leaf without an end counts as its start week. Done
+ * leaves count. Both weeks are null when no such leaf is scheduled.
+ * `children` holds the group's subtree by parent. A list passes the index it
+ * built from the rows it already read, and a single-task read passes its
+ * subtreeIndex. Each visited task's children decide whether it is a group
+ * (hasSubtasks' rule, whoever can read them) and what the walk enters next. */
+async function groupWeeks(
+  group: Doc<'issues'>,
+  children: ChildIndex,
+  counts: GroupCounter,
+): Promise<{ start_week: string | null; end_week: string | null }> {
+  let start: string | undefined
+  let end: string | undefined
+  const seen = new Set<string>([group.id])
+  let frontier: Doc<'issues'>[] = [group]
+  // assertParentChain bounds chains at 20 tasks, so the walk stops there
+  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
+    const next: Doc<'issues'>[] = []
+    for (const task of frontier) {
+      if (task !== group && !hasSubtasksIn(children, task)) {
+        if (task.start_week === undefined) continue
+        const leafEnd = task.end_week ?? task.start_week
+        if (start === undefined || task.start_week < start) start = task.start_week
+        if (end === undefined || leafEnd > end) end = leafEnd
+        continue
       }
-      frontier = next
+      // a group, the root included, counts only through its subtasks
+      for (const c of children.get(task.id) ?? []) {
+        if (seen.has(c.id) || !(await counts(c))) continue
+        seen.add(c.id)
+        next.push(c)
+      }
     }
-    return { start_week: start ?? null, end_week: end ?? null }
+    frontier = next
   }
-  const NONE = { start_week: null, end_week: null }
-  // an index walk has no budget, so it always answers
-  const fromIndex = async (index: ChildIndex) =>
-    (await walk(async (id) => index.get(id) ?? [], Infinity)) ?? NONE
-  if (children !== undefined) return await fromIndex(children)
-  const bySubtree = await walk(
-    (id) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', id))
-        .collect(),
-    SUBTREE_WALK_BUDGET,
-  )
-  if (bySubtree !== null) return bySubtree
-  const rows = await ctx.db
-    .query('issues')
-    .withIndex('by_org', (q) => q.eq('org_id', group.org_id))
-    .collect()
-  return await fromIndex(childIndexOf(rows))
+  return { start_week: start ?? null, end_week: end ?? null }
 }
 
 /** Who reads a task, and through which surface's shape. `readable` is the
@@ -790,32 +806,37 @@ type Reader = {
   readable?: (projectId: string) => boolean
 }
 
+/** The tasks by parent that a row's group facts come from. A list passes the
+ * organization's tasks, and a single-task read the task's subtreeIndex. */
+type Subtree = { children: ChildIndex }
+
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & { surface: 'rest' },
+  opts: IssueOutPre & Reader & Subtree & { surface: 'rest' },
 ): Promise<RestIssueJson>
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & { surface: 'mcp' },
+  opts: IssueOutPre & Reader & Subtree & { surface: 'mcp' },
 ): Promise<McpIssueOut>
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader,
+  opts: IssueOutPre & Reader & Subtree,
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
-  const is_group =
-    opts.children !== undefined
-      ? hasSubtasksIn(opts.children, issue)
-      : await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
+  const is_group = hasSubtasksIn(opts.children, issue)
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
   const weeks = is_group
-    ? await groupWeeks(ctx, issue, project, opts.me, opts.readable, opts.children)
+    ? await groupWeeks(
+        issue,
+        opts.children,
+        groupCounter(ctx, opts.me, issue, project, opts.readable),
+      )
     : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
   const parent = await parentOut(ctx, opts.me, issue, opts.readable)
   const owner_id = taskOwnerId(issue, is_group) ?? null
@@ -920,94 +941,40 @@ export const taskRefOf = (t: Doc<'issues'>): TaskRefJson => ({
 
 const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
 
-/* `root` and the tasks under it, indexed by parent. It reads one level at a
- * time and stops at the depth assertParentChain allows; past
- * SUBTREE_WALK_BUDGET tasks it reads the organization's tasks once instead. */
-async function subtreeIndex(ctx: QueryCtx, root: Doc<'issues'>): Promise<ChildIndex> {
-  const index = new Map<string, Doc<'issues'>[]>()
-  const seen = new Set<string>([root.id])
-  let frontier = [root.id]
-  let reads = 0
-  for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
-    const next: string[] = []
-    for (const id of frontier) {
-      if (++reads > SUBTREE_WALK_BUDGET) {
-        const rows = await ctx.db
-          .query('issues')
-          .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
-          .collect()
-        return childIndexOf(rows)
-      }
-      const kids = await ctx.db
-        .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', id))
-        .collect()
-      index.set(id, kids)
-      for (const kid of kids) {
-        if (seen.has(kid.id)) continue
-        seen.add(kid.id)
-        next.push(kid.id)
-      }
-    }
-    frontier = next
-  }
-  return index
-}
-
 /**
- * The single-task read's extra fields for `issue`, read by `me`. `isGroup`
- * and `project` are what issueOut already worked out. The group total
- * follows groupWeeks' counting rules: an active group counts its active
- * subtasks outside archived projects, an archived one its whole subtree, and
- * neither counts a task the caller cannot read or anything under it.
+ * The single-task read's extra fields for `issue`, read by `me`. `isGroup`,
+ * `project` and `children` (its subtreeIndex) are what taskOut already
+ * holds. The group total counts what groupCounter counts, as the plan weeks
+ * do.
  */
 export async function taskDetail(
   ctx: QueryCtx,
   me: Caller,
   issue: Doc<'issues'>,
-  o: { project: Doc<'projects'>; isGroup: boolean; readable?: (projectId: string) => boolean },
+  o: {
+    project: Doc<'projects'>
+    isGroup: boolean
+    children: ChildIndex
+    readable?: (projectId: string) => boolean
+  },
 ): Promise<TaskDetailJson> {
   const reads = projectReader(ctx, me, o.readable)
   const allArchived = issue.archived_at !== undefined
-  const children = o.isGroup
-    ? await subtreeIndex(ctx, issue)
-    : new Map([
-        [
-          issue.id,
-          await ctx.db
-            .query('issues')
-            .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
-            .collect(),
-        ],
-      ])
-  const childrenOf = (id: string): readonly Doc<'issues'>[] => children.get(id) ?? []
-  const below = [...children.values()].flat()
-  const shown = await machineShown(below, me, reads)
-  const subtasks = childrenOf(issue.id)
+  const childrenOf = (id: string): readonly Doc<'issues'>[] => o.children.get(id) ?? []
+  const kids = childrenOf(issue.id)
+  const shown = await machineShown(kids, me, reads)
+  const subtasks = kids
     .filter((kid) => (allArchived || kid.archived_at === undefined) && shown(kid.id))
     .sort(byNum)
     .map(taskRefOf)
   let group_remaining_hours: number | null = null
   if (o.isGroup) {
-    // a subtask in an archived project counts only under a group in one
-    const liveProject = o.project.archived_at === undefined
-    const archivedProjects = new Set<string>()
-    for (const projectId of new Set(below.map((t) => t.project_id))) {
-      if ((await byId(ctx, 'projects', projectId))?.archived_at !== undefined) {
-        archivedProjects.add(projectId)
-      }
+    const counts = groupCounter(ctx, me, issue, o.project, o.readable)
+    const counted = new Set<string>()
+    for (const task of [...o.children.values()].flat()) {
+      if (await counts(task)) counted.add(task.id)
     }
-    const byTaskId = new Map(below.map((t) => [t.id, t]))
-    const counts: Shown = (taskId) => {
-      const task = byTaskId.get(taskId)
-      return (
-        task !== undefined &&
-        shown(taskId) &&
-        (allArchived || task.archived_at === undefined) &&
-        !(liveProject && archivedProjects.has(task.project_id))
-      )
-    }
-    group_remaining_hours = groupRemainingHours(issue, childrenOf, counts)
+    group_remaining_hours = groupRemainingHours(issue, childrenOf, (id) => counted.has(id))
   }
   const links: TaskDetailJson['links'] = []
   const linked: { link: Doc<'issue_links'>; other: Doc<'issues'> }[] = []
@@ -1054,13 +1021,16 @@ export async function taskOut(
 ): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
+  // one walk of the subtree serves the row's group facts and the detail
+  const children = await subtreeIndex(ctx, issue)
   const row =
     opts.surface === 'rest'
-      ? await issueOut(ctx, issue, { ...opts, surface: 'rest', project })
-      : await issueOut(ctx, issue, { ...opts, surface: 'mcp', project })
+      ? await issueOut(ctx, issue, { ...opts, surface: 'rest', project, children })
+      : await issueOut(ctx, issue, { ...opts, surface: 'mcp', project, children })
   const detail = await taskDetail(ctx, opts.me, issue, {
     project,
     isGroup: row.is_group,
+    children,
     readable: opts.readable,
   })
   return { ...row, ...detail }
@@ -1098,6 +1068,84 @@ export function destinationOf(
   // a sub can be archived on its own
   assertLive(target)
   return target
+}
+
+/* ------------------------------------------------------------ task updates
+ * A REST PATCH /v1/tasks/{ref} and an MCP update_task can change several
+ * things about a task at once. Each surface parses the request, runs its
+ * own pre-checks in its pinned order with its own sentences, and then hands
+ * the checked change to applyTaskUpdate, which writes it the same way for
+ * both. */
+
+/**
+ * Writes one machine task update in a fixed order: the move to
+ * `destination`, the new `parent` (null detaches), the field `patch` with
+ * the `archive` toggle folded into the same write, the `labels` to add and
+ * remove, then `reason` as a comment when this update archived the task. A
+ * parent that is already the task's parent and an `archive` that matches
+ * the task's state change nothing. Each step that changes something writes
+ * its own activity row signed with `provenance`, and each runs the model's
+ * own rules and write gate, so a refusal at any step undoes the whole
+ * update. Answers the task as written.
+ */
+export async function applyTaskUpdate(
+  ctx: MutationCtx,
+  a: {
+    me: Caller
+    issue: Doc<'issues'>
+    destination?: Doc<'projects'>
+    parent?: string | null
+    patch: IssuePatch
+    archive?: boolean
+    labels: { add: readonly Doc<'labels'>[]; remove: readonly Doc<'labels'>[] }
+    reason?: string
+    now: string
+    provenance: string
+  },
+): Promise<Doc<'issues'>> {
+  const { me, now, provenance } = a
+  const archives = a.archive === true && a.issue.archived_at === undefined
+  const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)
+  let task = a.issue
+  if (a.destination !== undefined) {
+    task = await moveIssueCore(ctx, {
+      me,
+      issue: task,
+      project_id: a.destination.id,
+      now,
+      machine: { provenance },
+    })
+  }
+  if (a.parent !== undefined && (a.parent ?? undefined) !== task.parent_id) {
+    task = await updateIssueCore(ctx, {
+      me,
+      issue: task,
+      patch: { parent_id: a.parent },
+      now,
+      machine: { provenance, appGrammar: true },
+    })
+  }
+  // one row write, one notify fan-out and one activity row for the fields
+  // and the toggle (updateIssueCore's machine seam)
+  if (Object.keys(a.patch).length > 0 || toggles) {
+    task = await updateIssueCore(ctx, {
+      me,
+      issue: task,
+      patch: a.patch,
+      now,
+      machine: { provenance, archive: a.archive },
+    })
+  }
+  for (const [list, on] of [
+    [a.labels.add, true],
+    [a.labels.remove, false],
+  ] as const) {
+    for (const label of list) {
+      await setTaskLabel(ctx, { me, issue: task, label, on, now, provenance })
+    }
+  }
+  if (archives) await postArchiveReason(ctx, { issue: task, author: me, reason: a.reason, now })
+  return task
 }
 
 /* REST projectJson (rest:215-220) — the caller's flags ride along. */

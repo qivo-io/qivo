@@ -50,6 +50,7 @@ import { httpAction, internalMutation, internalQuery } from '../_generated/serve
 import { hasProjectLevel } from '../lib/access'
 import {
   accessFlags,
+  applyTaskUpdate,
   asMachineCaller,
   assertOwnUser,
   CALLER_DEACTIVATED,
@@ -88,7 +89,7 @@ import {
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
-import { postArchiveReason, postComment } from '../model/comments'
+import { postComment } from '../model/comments'
 import {
   assertAssignable,
   assertAssignableChange,
@@ -102,11 +103,9 @@ import {
   type IssuePatch,
   linkAccess,
   metaNeedsSub,
-  moveIssueCore,
   pairRule,
   REPORTER_IMMUTABLE_SENTENCE,
   SUB_MUST_NAME,
-  updateIssueCore,
 } from '../model/issues'
 import {
   assertLabelCreator,
@@ -116,7 +115,6 @@ import {
   labelChanges,
   labelJson,
   listLabelsCore,
-  setTaskLabel,
   updateLabelCore,
 } from '../model/labels'
 import {
@@ -1667,8 +1665,9 @@ export const createIssue = internalMutation({
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    // declared in the schema so clients can't have it silently stripped;
-    // never accepted — and refused FIRST, before any other validation
+    // declared in the schema so the call is refused outright, FIRST and
+    // before any other validation, rather than only named in
+    // ignored_arguments while an active task is created
     if (a.archived !== undefined) {
       throw badRequest('tasks are created active — archive with update_task after creating')
     }
@@ -1736,12 +1735,11 @@ export const createIssue = internalMutation({
 
 /* update_task. The fields it always had keep their deployed check order
  * (the readable pre-checks before the write gate). A move (`project`,
- * `sub_project`, create's grammar, through the app's moveIssueCore with Edit
- * on both ends), `parent`, the plan weeks and labels are checked after the
- * gate. They apply in this order, all or nothing: the move, the parent, the
- * fields with the archive toggle, the labels, then `archive_reason` as a
- * comment when the task was archived. With a move, a new assignee or
- * reviewer is checked against the destination. */
+ * `sub_project`, create's grammar, with Edit on both ends), `parent`, the
+ * plan weeks and labels are checked after the gate. With a move, a new
+ * assignee or reviewer is checked against the destination. lib/core.ts
+ * applyTaskUpdate then writes the change all or nothing, in the order REST's
+ * PATCH uses too. */
 export const updateIssue = internalMutation({
   args: {
     callerId: v.string(),
@@ -1880,49 +1878,18 @@ export const updateIssue = internalMutation({
       add: a.add_labels ?? [],
       remove: a.remove_labels ?? [],
     })
-    let task = issue
-    if (destination !== undefined) {
-      task = await moveIssueCore(ctx, {
-        me,
-        issue: task,
-        project_id: destination.id,
-        now,
-        machine: { provenance: PROVENANCE },
-      })
-    }
-    // an unchanged parent is no change and writes nothing
-    if (parent !== undefined && (parent ?? undefined) !== task.parent_id) {
-      task = await updateIssueCore(ctx, {
-        me,
-        issue: task,
-        patch: { parent_id: parent },
-        now,
-        machine: { provenance: PROVENANCE, appGrammar: true },
-      })
-    }
-    // ONE row write, ONE notify fan-out (the Archived/Restored line rides
-    // with the field lines), ONE activity row + the cascade — the trusted
-    // machine-narration seam folds the toggle into the same patch
-    if (Object.keys(patch).length > 0 || toggles) {
-      task = await updateIssueCore(ctx, {
-        me,
-        issue: task,
-        patch,
-        now,
-        machine: { provenance: PROVENANCE, archive: a.archived },
-      })
-    }
-    for (const [list, on] of [
-      [labels.add, true],
-      [labels.remove, false],
-    ] as const) {
-      for (const label of list) {
-        await setTaskLabel(ctx, { me, issue: task, label, on, now, provenance: PROVENANCE })
-      }
-    }
-    if (toggles && a.archived === true) {
-      await postArchiveReason(ctx, { issue: task, author: me, reason: a.archive_reason, now })
-    }
+    await applyTaskUpdate(ctx, {
+      me,
+      issue,
+      destination,
+      parent,
+      patch,
+      archive: a.archived,
+      labels,
+      reason: a.archive_reason,
+      now,
+      provenance: PROVENANCE,
+    })
     return pretty({ id: issue.id, key: issueKey(issue.num), updated })
   },
 })

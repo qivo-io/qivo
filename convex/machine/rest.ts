@@ -45,6 +45,7 @@ import { hasProjectLevel } from '../lib/access'
 import {
   type AccessFlag,
   accessFlags,
+  applyTaskUpdate,
   asMachineCaller,
   CALLER_DEACTIVATED,
   CALLER_GONE,
@@ -86,7 +87,7 @@ import {
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
-import { postArchiveReason, postComment } from '../model/comments'
+import { postComment } from '../model/comments'
 import {
   assertAssignable,
   assertAssignableChange,
@@ -100,13 +101,10 @@ import {
   deleteIssueCore,
   type IssuePatch,
   linkAccess,
-  type MachineUpdate,
   metaNeedsSub,
-  moveIssueCore,
   pairRule,
   REPORTER_IMMUTABLE_SENTENCE,
   SUB_MUST_NAME,
-  updateIssueCore,
 } from '../model/issues'
 import {
   assertLabelCreator,
@@ -116,7 +114,6 @@ import {
   labelChanges,
   labelJson,
   listLabelsCore,
-  setTaskLabel,
   updateLabelCore,
 } from '../model/labels'
 import {
@@ -703,12 +700,11 @@ export const createIssue = internalMutation({
  * current state is a clean no-op 200 with the full row.
  *
  * One request may also move the task (`project`, `sub_project`, create's
- * grammar, through the app's moveIssueCore with Edit on both ends), set or
- * clear its parent (`parent`) and add or remove labels. They apply in that
- * order, all or nothing: the move, the parent, the fields with the archive
- * toggle, the labels, then `archive_reason` as a comment when the task was
- * archived. A new assignee or reviewer is checked against the destination.
- * Each step writes its own activity row, signed with the provenance. */
+ * grammar, with Edit on both ends), set or clear its parent (`parent`), add
+ * or remove labels and give an `archive_reason`. This handler parses and
+ * checks them, a new assignee or reviewer against the destination, and
+ * lib/core.ts applyTaskUpdate writes them all or nothing, in the order MCP's
+ * update_task uses too. */
 export const updateIssue = internalMutation({
   args: {
     callerId: v.string(),
@@ -770,8 +766,8 @@ export const updateIssue = internalMutation({
       remove: labelRefs(b, 'remove_labels'),
     })
     const toggles = archive !== undefined && archive !== (issue.archived_at !== undefined)
-    const moves = destination !== undefined
-    const other = moves || parent !== undefined || 'add_labels' in b || 'remove_labels' in b
+    const other =
+      destination !== undefined || parent !== undefined || 'add_labels' in b || 'remove_labels' in b
     if (Object.keys(fields).length === 0 && !toggles && !other) {
       // archived matching the current state is a clean no-op, not an error
       if ('archived' in b) return await taskOut(ctx, issue, { surface: 'rest', me })
@@ -779,44 +775,18 @@ export const updateIssue = internalMutation({
     }
     // machine pre-check twin — fires on any non-null value; null clear passes
     if (fields.remaining_hours != null) await assertNoSubtasks(ctx, issue.id)
-    const now = new Date().toISOString()
-    const provenance = provenanceOf(a.keyName)
-    let task = issue
-    if (destination !== undefined) {
-      task = await moveIssueCore(ctx, {
-        me,
-        issue: task,
-        project_id: destination.id,
-        now,
-        machine: { provenance },
-      })
-    }
-    // an unchanged parent is no change and writes nothing
-    if (parent !== undefined && (parent ?? undefined) !== task.parent_id) {
-      task = await updateIssueCore(ctx, {
-        me,
-        issue: task,
-        patch: { parent_id: parent },
-        now,
-        machine: { provenance, appGrammar: true },
-      })
-    }
-    if (Object.keys(fields).length > 0 || toggles) {
-      const machine: MachineUpdate = { provenance }
-      if (toggles) machine.archive = archive
-      task = await updateIssueCore(ctx, { me, issue: task, patch: patchFrom(fields), now, machine })
-    }
-    for (const [list, on] of [
-      [labels.add, true],
-      [labels.remove, false],
-    ] as const) {
-      for (const label of list) {
-        await setTaskLabel(ctx, { me, issue: task, label, on, now, provenance })
-      }
-    }
-    if (toggles && archive === true) {
-      await postArchiveReason(ctx, { issue: task, author: me, reason, now })
-    }
+    const task = await applyTaskUpdate(ctx, {
+      me,
+      issue,
+      destination,
+      parent,
+      patch: patchFrom(fields),
+      archive,
+      labels,
+      reason,
+      now: new Date().toISOString(),
+      provenance: provenanceOf(a.keyName),
+    })
     return await taskOut(ctx, task, { surface: 'rest', me })
   },
 })
