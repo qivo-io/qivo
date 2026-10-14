@@ -5,7 +5,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { offersProjectRight } from '../../lib/projectCreators'
+import { projectRightBox } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { UserPatch, UserVM } from '../../store/planner'
@@ -256,29 +256,35 @@ export function PlannableHoursInput({
 /* The roster's "Can create projects" column, shown only while the org's
    setting is Selected users. Every desktop row gets a cell of the same width
    right before the role select, so the column lines up under its one header
-   label; only an active standard user who is a person gets a checkbox in it.
+   label. An active standard user who is a person gets a checkbox in it, and
+   an active org admin a ticked one that cannot be changed (projectRightBox).
    The phone's user page shows a single row without the header, so there the
    checkbox carries a visible label and the empty cell is left out. */
 export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: boolean }) {
-  const offered = offersProjectRight(user, P.org.projectCreators)
-  if (labelled && !offered) return null
+  const box = projectRightBox(user, P.org.projectCreators)
+  if (labelled && box === null) return null
   const inputId = `can-create-projects-${user.id}`
+  const locked = box === 'locked'
   return (
     <div
       data-project-right-cell={user.id}
       className={cn('flex shrink-0 justify-center', !labelled && 'w-[112px]')}
     >
-      {offered && (
+      {box && (
         <label
           htmlFor={inputId}
-          className="flex cursor-pointer items-center gap-1.5 text-sm text-text-2"
+          className={cn(
+            'flex items-center gap-1.5 text-sm text-text-2',
+            !locked && 'cursor-pointer',
+          )}
         >
           <Input
             id={inputId}
             type="checkbox"
             data-can-create-projects={user.id}
             aria-label={`${user.name} can create projects`}
-            checked={user.canCreateProjects}
+            checked={locked || user.canCreateProjects}
+            disabled={locked}
             onChange={(e) => {
               const on = e.target.checked
               P.updateUser(user.id, { canCreateProjects: on })
@@ -288,7 +294,7 @@ export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: b
                   : `${user.name} can no longer create projects`,
               )
             }}
-            className="cursor-pointer [accent-color:var(--primary)]"
+            className={cn('[accent-color:var(--primary)]', !locked && 'cursor-pointer')}
           />
           {labelled && 'Can create projects'}
         </label>

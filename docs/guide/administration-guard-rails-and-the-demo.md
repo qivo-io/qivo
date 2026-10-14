@@ -21,10 +21,12 @@ Open **Settings → Organization → Users** to manage account status:
 
 While **Who can create new projects?** is set to **Selected users**, the list
 has a **Can create projects** column. It holds a checkbox for each active
-standard user who is a person, including pending invitations. Org admins,
-agents and viewers have none. The value stays when the organization picks
-another choice, but it counts only under **Selected users**. Changing someone's
-role to **Org admin** or **Viewer** clears it; making them **Inactive** keeps it.
+standard user who is a person, including pending invitations. The value stays
+when the organization picks another choice, but it counts only under
+**Selected users**. Changing someone's role to **Org admin** or **Viewer**
+clears it; making them **Inactive** keeps it. Active org admins show a ticked
+checkbox that cannot be changed, because they can always create projects.
+Agents and viewers have none.
 
 You cannot remove or deactivate yourself, demote or deactivate the last admin,
 or delete the last team. Adding or reactivating a user requires no prepaid
