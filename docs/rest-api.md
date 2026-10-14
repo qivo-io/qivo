@@ -522,9 +522,10 @@ sub-projects the caller can read:
 ```
 
 `parent` makes the new task a subtask of another task, named by key, number
-or uuid. The caller must be able to read the parent and needs Edit access on
-the parent's project, because the parent becomes a group and loses its own
-remaining hours. A parent the caller cannot read answers `400` with `parent
+or uuid. A POST that sends `parent_id` or `project_id` instead is refused
+(see PATCH below). The caller must be able to read the parent and needs Edit
+access on the parent's project, because the parent becomes a group and
+loses its own remaining hours. A parent the caller cannot read answers `400` with `parent
 task not found`; one it can read but not edit answers `403` with `no write
 access to the parent task`. The new task's project still comes from
 `project` and `sub_project`, so a subtask may live in another sub-project
@@ -567,9 +568,10 @@ PATCH accepts the same fields except `reporter_id`. Any PATCH containing
 `reporter_id`, including `null` or the current reporter, returns `400` with
 `reporter_id is set when a task is created and cannot be changed`; other
 fields in that request also remain unchanged. `project_id` and `parent_id`
-are response fields. A body that sends either is refused with `400` (`project_id
-cannot be written; move a task with project and sub_project` or `parent_id
-cannot be written; send parent, or null to detach`) rather than ignored.
+are response fields. POST and PATCH both refuse a body that sends either
+with `400` (`project_id cannot be written; move a task with project and
+sub_project` or `parent_id cannot be written; send parent, or null to
+detach`) rather than ignore it, and nothing is created or changed.
 Other unknown fields are ignored; invalid values are rejected with `400` and
 a message.
 

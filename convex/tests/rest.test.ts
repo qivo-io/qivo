@@ -1116,6 +1116,34 @@ describe('POST /v1/tasks', () => {
     )
   })
 
+  it('refuses the response fields project_id and parent_id rather than ignoring them', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const post = (body: unknown) =>
+      t.mutation(internal.machine.rest.createIssue, {
+        callerId: f.agent.id,
+        access: 'write',
+        keyName: KEY,
+        body: JSON.stringify(body),
+      })
+    await refused(
+      post({ project: 'FW', title: 'x', project_id: f.sub2.id }),
+      'bad_request',
+      'project_id cannot be written; move a task with project and sub_project',
+    )
+    await refused(
+      post({ project: 'FW', title: 'x', parent_id: parent.id }),
+      'bad_request',
+      'parent_id cannot be written; send parent, or null to detach',
+    )
+    const rows = await t.query(internal.machine.rest.listIssues, {
+      callerId: f.agent.id,
+      access: 'read',
+    })
+    expect(rows.map((r) => r.id)).toEqual([parent.id])
+  })
+
   it('unknown and unreadable top-level projects read identically', async () => {
     const t = newT()
     const f = await machineOrg(t)

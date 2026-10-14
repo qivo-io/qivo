@@ -885,9 +885,10 @@ on the Archive page. A nightly sweep archives tasks that have been `done`
 for 30 days, or for a legacy team archive setting's number of days where an
 older project kept one. Restoring a still-`done` task restarts its
 auto-archive clock (0071), so a restore holds for the full threshold.
-`create_task` rejects `archived` outright (tasks are created active) — the
-key is declared in the schema precisely so it can't be silently stripped
-like an unknown argument.
+`create_task` rejects `archived` outright, because tasks are created
+active. The schema declares the key so that the call is refused. An unknown
+argument would only be named in `ignored_arguments`, and the call would
+still create an active task the client did not ask for.
 In the app, archiving unfinished work requires a written reason, stored as a
 comment. `update_task { archived: true }` does not require one, but
 `archive_reason` in the same call posts it the same way, as your comment at
