@@ -500,10 +500,11 @@ organization admin can archive it` or `restoring this task would change a
 parent task in a project you cannot edit; an organization admin can restore
 it`, and nothing changes. Archived tasks disappear from the default list (`?archived=true` finds
 them), stop counting as workload, and in the app leave every normal view for
-the Archive page. Where the legacy per-team setting applies, restoring a
-still-`done` task **restarts its auto-archive clock** (0071), so a restore
-holds for the full threshold rather than being re-swept the next night. New
-teamless projects have no automatic archive threshold yet. `archived` matching the current state is
+the Archive page. A nightly sweep archives tasks that have been `done` for
+30 days, or for a legacy team archive setting's number of days where an older
+project kept one. Restoring a still-`done` task **restarts its auto-archive
+clock** (0071), so a restore holds for the full threshold rather than being
+re-swept the next night. `archived` matching the current state is
 a no-op `200` returning the full task. Sending `archived` on POST is a `400` — tasks
 are created active. In the app, archiving unfinished work requires a written
 reason (stored as a comment); the API does not enforce that — API callers

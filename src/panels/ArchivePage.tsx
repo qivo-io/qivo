@@ -127,8 +127,8 @@ function ArchivePage({
         <div className="archive-content-frame">
           <div className="archive-content-scroll">
             <div className="[font-size:var(--fs-base)] [color:var(--text-3)] [line-height:1.5] [margin-bottom:24px] [max-width:640px]">
-              Done tasks auto-archive after the team's configured period. Restoring a task also
-              restores its archived parent tasks.
+              Done tasks archive automatically after 30 days. Restoring a task also restores its
+              archived parent tasks.
             </div>
 
             <div className="[display:flex] [align-items:center] [gap:8px] [margin-bottom:8px] [flex-wrap:wrap]">

@@ -195,11 +195,15 @@ export const newOrgDefaults = (now: string) => ({
   max_attachment_mb: 20,
 })
 
+/* The standard auto-archive threshold in days for Done tasks. Projects without
+ * a legacy team setting use it (jobs.ts), and new teams store it. */
+export const DEFAULT_ARCHIVE_DAYS = 30
+
 /* New teams mark tasks stale after 120 days and auto-archive after 30 days.
  * Existing configured values are preserved; uploads use the org's cap. */
 export const newTeamDefaults = (now: string) => ({
   stale_days: 120,
-  archive_days: 30,
+  archive_days: DEFAULT_ARCHIVE_DAYS,
   track_delay_default: true,
   created_at: now,
 })

@@ -711,10 +711,10 @@ call that stays in `review` changes nothing. `update_task` does not add
 
 Archived tasks (0070) are a separate axis from `status`: they leave the
 default `list_tasks` result, stop counting as workload, and in the app live
-on the Archive page. Where the legacy per-team setting applies, restoring a
-still-`done` task restarts its auto-archive clock (0071), so a restore holds
-for the full threshold. New teamless projects have no automatic archive
-threshold yet.
+on the Archive page. A nightly sweep archives tasks that have been `done`
+for 30 days, or for a legacy team archive setting's number of days where an
+older project kept one. Restoring a still-`done` task restarts its
+auto-archive clock (0071), so a restore holds for the full threshold.
 `create_task` rejects `archived` outright (tasks are created active) — the
 key is declared in the schema precisely so it can't be silently stripped
 like an unknown argument.

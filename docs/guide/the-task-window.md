@@ -115,9 +115,9 @@ people are not checked.
 Archiving hides tasks from the Board, Roadmap, Overview, filters and workload
 calculations without deleting them or changing their workflow status.
 
-**Automatic archiving** runs nightly for tasks that retain a legacy team
-archive setting. Done tasks archive after that threshold, 30 days by default.
-New projects without a legacy team setting do not auto-archive yet.
+**Automatic archiving** runs nightly. A task archives once it has been Done
+for 30 days. An older project that kept a team archive setting uses that
+setting's number of days instead.
 
 The sweep archives subtasks before their parents. Once a group's active
 subtasks are gone, its saved status applies again. A saved Done task can
@@ -140,9 +140,9 @@ Desktop offers a multi-word search; phones omit it and ignore its text query.
 **Restore** returns a task to its Board and restores archived parents when
 needed. If that would change a parent task in a project you cannot edit, Qivo
 refuses the restore, and an organization admin can restore it instead.
-Restoring a Done task restarts its auto-archive clock where automatic
-archiving applies. Archived tasks do not appear in other views, and shared
-task links work again only after restoration.
+Restoring a Done task restarts its auto-archive clock. Archived tasks do not
+appear in other views, and shared task links work again only after
+restoration.
 
 ## Deleting
 
