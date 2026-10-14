@@ -1,16 +1,19 @@
-/* The machine action registry (machine/registry.ts). Every REST route and MCP
- * tool declares read or write once; these tests hold each flag to the kind of
- * internal function its entry actually calls, prove a read entry cannot reach
- * a mutation at runtime, and pin the REST route matching rules. The OAuth
- * step-up derived from the flag is driven over HTTP in oauth.test.ts. */
+/* The machine action registry (machine/registry.ts). Every agent-key REST
+ * route and MCP tool declares read or write once; these tests hold each flag
+ * to the kind of internal function its entry actually calls, prove a read
+ * entry cannot reach a mutation at runtime, check that a garbled flag fails
+ * closed, and pin the REST route matching rules. The OAuth step-up derived
+ * from the flag is driven over HTTP in oauth.test.ts. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
+import type { ActionCtx } from '../_generated/server'
 import * as mcp from '../machine/mcp'
 import {
   type MachineAccess,
   type MachineEntry,
+  needsWrite,
   readRunner,
   runEntry,
   type WriteRunner,
@@ -20,9 +23,10 @@ import * as rest from '../machine/rest'
 
 type Kind = 'query' | 'mutation' | 'action'
 type Call = { via: Kind; name: string }
+type Ctx = Pick<ActionCtx, 'runQuery' | 'runMutation' | 'runAction'>
 
-/* A WriteRunner that records what each run tries to call, and resolves. */
-function recorder(): { runner: WriteRunner; calls: Call[] } {
+/* A raw ctx that records what each run tries to call, and resolves. */
+function recorder(): { runner: Ctx; calls: Call[] } {
   const calls: Call[] = []
   const record =
     (via: Kind) =>
@@ -56,46 +60,57 @@ function registeredKinds(module: string, exports: Record<string, unknown>): Map<
   return kinds
 }
 
-type Surface = {
-  module: string
-  kinds: Map<string, Kind>
-  entries: { label: string; entry: MachineEntry<never, unknown> }[]
-  input: unknown
-}
+/* One entry of a surface, run through runEntry like its dispatcher does. */
+type Entry = { label: string; access: MachineAccess; run: (ctx: Ctx) => Promise<unknown> }
+
+type Surface = { module: string; kinds: Map<string, Kind>; entries: Entry[] }
 
 const SURFACES: Surface[] = [
   {
     module: 'machine/mcp',
     kinds: registeredKinds('machine/mcp', mcp),
-    entries: mcp.TOOLS.map((tool) => ({ label: tool.def.name, entry: tool })),
-    input: { callerId: 'caller', args: {} },
+    entries: mcp.TOOLS.map((tool) => ({
+      label: tool.def.name,
+      access: tool.access,
+      run: (ctx) => runEntry(ctx, tool, { callerId: 'caller', args: {} }),
+    })),
   },
   {
     module: 'machine/rest',
     kinds: registeredKinds('machine/rest', rest),
     entries: rest.ROUTES.map((route) => ({
       label: `${route.method} /v1/${route.path}`,
-      entry: route,
+      access: route.access,
+      run: (ctx) =>
+        runEntry(ctx, route, {
+          callerId: 'caller',
+          keyName: 'key',
+          // a param the path does not declare would reach the internal fn
+          // as undefined, so it fails here
+          param: (name) => {
+            if (!route.path.split('/').includes(`:${name}`))
+              throw new Error(`${route.path} declares no :${name}`)
+            return 'QN-1'
+          },
+          query: () => undefined,
+          body: '',
+        }),
     })),
-    input: {
-      callerId: 'caller',
-      keyName: 'key',
-      params: { ref: 'QN-1' },
-      query: () => undefined,
-      body: '',
-    },
   },
 ]
 
-/* What each entry calls, run against the recorder. */
+/* What each entry calls, run against the recorder, and what it threw. */
 async function callsOf(
   surface: Surface,
-): Promise<{ label: string; access: MachineAccess; calls: Call[] }[]> {
+): Promise<{ label: string; access: MachineAccess; calls: Call[]; error: unknown }[]> {
   const out = []
-  for (const { label, entry } of surface.entries) {
+  for (const { label, access, run } of surface.entries) {
     const { runner, calls } = recorder()
-    await entry.run(runner, surface.input as never)
-    out.push({ label, access: entry.access, calls })
+    const error = await run(runner).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    out.push({ label, access, calls, error })
   }
   return out
 }
@@ -106,8 +121,8 @@ describe('the machine action registry', () => {
       expect(surface.entries.length).toBeGreaterThan(0)
       const labels = surface.entries.map((e) => e.label)
       expect(new Set(labels).size, `${surface.module} declares an entry twice`).toBe(labels.length)
-      for (const { label, entry } of surface.entries) {
-        expect(['read', 'write'], `${label} access`).toContain(entry.access)
+      for (const { label, access } of surface.entries) {
+        expect(['read', 'write'], `${label} access`).toContain(access)
       }
     }
   })
@@ -115,7 +130,8 @@ describe('the machine action registry', () => {
   it('write entries are exactly the ones whose internal functions are mutations', async () => {
     for (const surface of SURFACES) {
       const mismatches: string[] = []
-      for (const { label, access, calls } of await callsOf(surface)) {
+      for (const { label, access, calls, error } of await callsOf(surface)) {
+        if (error !== null) mismatches.push(`${label} throws ${String(error)}`)
         if (calls.length === 0) mismatches.push(`${label} calls nothing`)
         for (const call of calls) {
           const kind = surface.kinds.get(call.name)
@@ -154,6 +170,20 @@ describe('the machine action registry', () => {
     expect(calls).toEqual([{ via: 'mutation', name: 'machine/mcp:deleteIssue' }])
   })
 
+  it('a flag that slipped past the types gets the read runner and needs write', async () => {
+    const { runner } = recorder()
+    for (const access of [undefined, 'Write', 'admin']) {
+      const garbled = {
+        access,
+        run: async (r: object) => Object.keys(r),
+      } as unknown as MachineEntry<null, string[]>
+      expect(await runEntry(runner, garbled, null), String(access)).toEqual(['runQuery'])
+      expect(needsWrite(garbled), String(access)).toBe(true)
+    }
+    expect(needsWrite({ access: 'read' })).toBe(false)
+    expect(needsWrite({ access: 'write' })).toBe(true)
+  })
+
   it('the compiler refuses a read entry that writes and an entry without a flag', () => {
     const writes: MachineEntry<null, unknown> = {
       access: 'read',
@@ -163,6 +193,27 @@ describe('the machine action registry', () => {
     // @ts-expect-error every entry names its access, there is no default
     const unflagged: MachineEntry<null, unknown> = { run: async () => null }
     expect([writes.access, unflagged.access]).toEqual(['read', undefined])
+  })
+
+  it('the compiler refuses a raw ctx in place of a runner', () => {
+    const { runner } = recorder()
+    // never called, the closure only has to compile or not
+    // @ts-expect-error only runEntry turns a ctx into the runner an entry takes
+    const bypass = () => mcp.TOOLS[0].run(runner, { callerId: 'c', args: {} })
+    expect(typeof bypass).toBe('function')
+  })
+
+  it('the compiler refuses a route param its path does not declare', () => {
+    const route = rest.route({
+      method: 'GET',
+      path: 'tasks/:ref',
+      access: 'read',
+      status: 200,
+      run: (r, { callerId, param }) =>
+        // @ts-expect-error the path declares :ref, not :key
+        r.runQuery(internal.machine.rest.getIssue, { callerId, ref: param('key') }),
+    })
+    expect(route.path).toBe('tasks/:ref')
   })
 })
 

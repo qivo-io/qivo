@@ -669,69 +669,89 @@ function safeDecode(s: string): string {
 /* ----------------------------------------------------------- route table --
  * Every agent-key route is ONE registry entry (machine/registry.ts): method,
  * path, the required read/write `access` flag, the success status and the
- * `run` that calls its internal fn. `path` lists the segments after /v1;
- * `:name` captures one decoded segment into `params`, every other segment
- * must match the raw request segment exactly. Webhook routes are not here,
- * because they accept more credential kinds and are served before agent-key
- * auth (webhookResponse). */
+ * `run` that calls its internal fn. `path` lists the segments after /v1.
+ * `:name` captures one decoded segment, which `run` reads with `param(name)`,
+ * and every other segment must match the raw request segment exactly.
+ * Declaring a route through route() types `param` from its own path, so a
+ * `run` that asks for a name its path does not declare does not compile.
+ * Webhook routes are not here, because they accept more credential kinds and
+ * are served before agent-key auth (webhookResponse). */
+
+/** The `:name` placeholders of a route path, as a union of names. */
+type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${infer Rest}`
+  ? Name | ParamName<Rest>
+  : Path extends `${string}:${infer Name}`
+    ? Name
+    : never
 
 /** What a route's `run` receives once auth and routing are done. */
-type RouteInput = {
+type RouteInput<Name extends string> = {
   callerId: string
   keyName: string
-  params: Record<string, string>
+  /** One decoded `:name` segment of the request path. */
+  param: (name: Name) => string
   query: (name: string) => string | undefined
   body: string
 }
 
-/** One REST route. `run` answers the JSON body sent with `status`. */
-type RestRoute = MachineEntry<RouteInput, unknown> & {
+/** A route's fields besides its registry entry. */
+type RouteFields<Path extends string> = {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
-  path: string
+  path: Path
   status: 200 | 201
 }
 
+/** One REST route. `run` answers the JSON body sent with `status`. */
+type RestRoute = RouteFields<string> & MachineEntry<RouteInput<string>, unknown>
+
+/** Declares a route whose `run` may only read the params its path names. */
+export function route<Path extends string>(
+  declared: RouteFields<Path> & MachineEntry<RouteInput<ParamName<Path>>, unknown>,
+): RestRoute {
+  return declared
+}
+
 export const ROUTES: RestRoute[] = [
-  {
+  route({
     method: 'GET',
     path: 'projects',
     access: 'read',
     status: 200,
     run: (r, { callerId, query }) =>
       r.runQuery(internal.machine.rest.listProjects, { callerId, archived: query('archived') }),
-  },
-  {
+  }),
+  route({
     method: 'GET',
     path: 'projects/:ref',
     access: 'read',
     status: 200,
-    run: (r, { callerId, params }) =>
-      r.runQuery(internal.machine.rest.getProject, { callerId, ref: params.ref }),
-  },
-  {
+    run: (r, { callerId, param }) =>
+      r.runQuery(internal.machine.rest.getProject, { callerId, ref: param('ref') }),
+  }),
+  route({
     method: 'GET',
     path: 'projects/:ref/users',
     access: 'read',
     status: 200,
-    run: (r, { callerId, params }) =>
-      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, ref: params.ref }),
-  },
-  {
+    run: (r, { callerId, param }) =>
+      r.runQuery(internal.machine.rest.listProjectUsers, { callerId, ref: param('ref') }),
+  }),
+  route({
     method: 'GET',
     path: 'users',
     access: 'read',
     status: 200,
     run: (r, { callerId }) => r.runQuery(internal.machine.rest.listUsers, { callerId }),
-  },
-  {
+  }),
+  route({
     method: 'GET',
     path: 'users/:ref',
     access: 'read',
     status: 200,
-    run: (r, { callerId, params }) =>
-      r.runQuery(internal.machine.rest.getUser, { callerId, ref: params.ref }),
-  },
-  {
+    run: (r, { callerId, param }) =>
+      r.runQuery(internal.machine.rest.getUser, { callerId, ref: param('ref') }),
+  }),
+  route({
     method: 'GET',
     path: 'tasks',
     access: 'read',
@@ -748,60 +768,60 @@ export const ROUTES: RestRoute[] = [
         limit: query('limit'),
         offset: query('offset'),
       }),
-  },
-  {
+  }),
+  route({
     method: 'POST',
     path: 'tasks',
     access: 'write',
     status: 201,
     run: (r, { callerId, keyName, body }) =>
       r.runMutation(internal.machine.rest.createIssue, { callerId, keyName, body }),
-  },
-  {
+  }),
+  route({
     method: 'GET',
     path: 'tasks/:ref',
     access: 'read',
     status: 200,
-    run: (r, { callerId, params }) =>
-      r.runQuery(internal.machine.rest.getIssue, { callerId, ref: params.ref }),
-  },
-  {
+    run: (r, { callerId, param }) =>
+      r.runQuery(internal.machine.rest.getIssue, { callerId, ref: param('ref') }),
+  }),
+  route({
     method: 'PATCH',
     path: 'tasks/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, keyName, params, body }) =>
+    run: (r, { callerId, keyName, param, body }) =>
       r.runMutation(internal.machine.rest.updateIssue, {
         callerId,
         keyName,
-        ref: params.ref,
+        ref: param('ref'),
         body,
       }),
-  },
-  {
+  }),
+  route({
     method: 'DELETE',
     path: 'tasks/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, keyName, params }) =>
-      r.runMutation(internal.machine.rest.deleteIssue, { callerId, keyName, ref: params.ref }),
-  },
-  {
+    run: (r, { callerId, keyName, param }) =>
+      r.runMutation(internal.machine.rest.deleteIssue, { callerId, keyName, ref: param('ref') }),
+  }),
+  route({
     method: 'GET',
     path: 'tasks/:ref/comments',
     access: 'read',
     status: 200,
-    run: (r, { callerId, params }) =>
-      r.runQuery(internal.machine.rest.listComments, { callerId, ref: params.ref }),
-  },
-  {
+    run: (r, { callerId, param }) =>
+      r.runQuery(internal.machine.rest.listComments, { callerId, ref: param('ref') }),
+  }),
+  route({
     method: 'POST',
     path: 'tasks/:ref/comments',
     access: 'write',
     status: 201,
-    run: (r, { callerId, params, body }) =>
-      r.runMutation(internal.machine.rest.addComment, { callerId, ref: params.ref, body }),
-  },
+    run: (r, { callerId, param, body }) =>
+      r.runMutation(internal.machine.rest.addComment, { callerId, ref: param('ref'), body }),
+  }),
 ]
 
 /**
@@ -984,7 +1004,7 @@ const restHandler = httpAction(async (ctx, req) => {
     const result = await runEntry(ctx, found.route, {
       callerId,
       keyName,
-      params: found.params,
+      param: (name) => found.params[name],
       query: (name) => url.searchParams.get(name) ?? undefined,
       body,
     })

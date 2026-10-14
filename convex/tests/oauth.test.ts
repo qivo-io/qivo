@@ -470,9 +470,10 @@ describe('OAuth provider and MCP integration', () => {
       title: 'Unchanged',
     })
     const c = await connect(f, READ)
-    // Every write tool in the registry. Valid arguments make a missed
-    // challenge visible in the unchanged task below. The challenge comes
-    // before argument checks, so a tool missing here is called with none.
+    // Every tool whose flag is not exactly 'read', so this list and the read
+    // tools of the next test together cover every tool. Valid arguments make
+    // a missed challenge visible in the unchanged task below. The challenge
+    // comes before argument checks, so a tool missing here is called with none.
     const valid: Record<string, Json> = {
       create_task: { project: f.sub.id, title: 'Forbidden' },
       update_task: { ref: task.id, title: 'Forbidden' },
@@ -480,7 +481,7 @@ describe('OAuth provider and MCP integration', () => {
       add_comment: { ref: task.id, body: 'Forbidden' },
       update_user: { user_id: f.profile.id, plannable_hours: 1 },
     }
-    const writes: [string, Json][] = TOOLS.filter((tool) => tool.access === 'write').map((tool) => [
+    const writes: [string, Json][] = TOOLS.filter((tool) => tool.access !== 'read').map((tool) => [
       tool.def.name,
       valid[tool.def.name] ?? {},
     ])

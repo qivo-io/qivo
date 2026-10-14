@@ -93,7 +93,7 @@ import {
 import { notifyCommentInsert } from '../model/messages'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
-import { type MachineEntry, runEntry } from './registry'
+import { type MachineEntry, needsWrite, runEntry } from './registry'
 
 /* ------------------------------------------------------------ the 12 tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
@@ -102,7 +102,7 @@ import { type MachineEntry, runEntry } from './registry'
  * JSON-Schema literals are wire bytes (LLM-facing prose is
  * behavior-load-bearing), with key order preserved and hashes pinned by the
  * transport tests. `run` receives validated, stripped wire arguments, so its
- * casts are honest: validateArgs/pickArgs already enforced the shapes. */
+ * casts are honest. validateArgs and pickArgs already enforced the shapes. */
 
 type SchemaProp = {
   type?: string
@@ -1554,15 +1554,19 @@ async function runTool(
   args: Record<string, unknown>,
 ): Promise<string> {
   const tool = TOOL_INDEX.get(name)
-  // unreachable: callTool resolves names against TOOL_INDEX first
+  // Unreachable, because callTool resolves names against TOOL_INDEX first.
   if (tool === undefined) throw new Error(`unknown tool ${name}`)
   return await runEntry(ctx, tool, { callerId, args })
 }
 
-/* Whether the named tool's registry entry is a write. An unknown name needs
- * no write scope, because the dispatcher answers it with -32602 before any
- * runner exists. */
-const toolWrites = (name: string): boolean => TOOL_INDEX.get(name)?.access === 'write'
+/* Whether the named tool needs qivo:write. A known tool does unless its flag
+ * is exactly 'read' (needsWrite fails closed). An unknown name needs no write
+ * scope, because the dispatcher answers it with -32602 before any runner
+ * exists. */
+const toolWrites = (name: string): boolean => {
+  const tool = TOOL_INDEX.get(name)
+  return tool !== undefined && needsWrite(tool)
+}
 
 /* ------------------------------------------------------------ the transport */
 
