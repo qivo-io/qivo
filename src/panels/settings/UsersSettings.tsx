@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { CopyValue } from '../../components/CopyValue'
-import { Avatar, Icon } from '../../components/qivo'
+import { Avatar, Icon, Seg } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
@@ -186,7 +186,7 @@ export function OrgUsersPage({
   const [addName, setAddName] = useStateS('')
   const [addEmail, setAddEmail] = useStateS('')
   const [addRole, setAddRole] = useStateS<NewUserInput['orgRole']>('user')
-  const [addKind, setAddKind] = useStateS<NewUserInput['kind']>('person')
+  const [addKind, setAddKind] = useStateS<NonNullable<NewUserInput['kind']>>('person')
   const [confirm, setConfirm] = useStateS<string | null>(null)
   const [keys, setKeys] = useStateS<Awaited<ReturnType<typeof P.listAgentKeys>>>(null)
   const [openKeys, setOpenKeys] = useStateS<string | null>(null)
@@ -428,26 +428,21 @@ export function OrgUsersPage({
             {/* Person or agent is the FIRST choice, because it decides what the rest
           of the form even means: a person is an address to sign in with, an
           agent is a key to hand to a machine. */}
-            <div className="[display:flex] [gap:8px] [align-items:center] [margin-bottom:8px]">
-              {['person', 'agent'].map((k) => (
-                <Button
-                  type="button"
-                  key={k}
-                  variant={addKind === k ? 'default' : 'ghost'}
-                  data-add-kind={k}
-                  // Clear person-only state when switching to an agent: admin
-                  // is forbidden and the hidden email must not affect validation.
-                  onClick={() => {
-                    setAddKind(k === 'agent' ? 'agent' : 'person')
-                    setAddEmail('')
-                    if (k === 'agent' && addRole === 'admin') setAddRole('user')
-                  }}
-                  className="h-control-sm [font-size:var(--fs-sm)]"
-                >
-                  <Icon name={k === 'agent' ? 'zap' : 'user'} size={16} />
-                  {k === 'agent' ? 'Agent' : 'Person'}
-                </Button>
-              ))}
+            <div className="mb-2">
+              <Seg
+                value={addKind}
+                // Clear person-only state when switching to an agent: admin
+                // is forbidden and the hidden email must not affect validation.
+                onChange={(next) => {
+                  setAddKind(next)
+                  setAddEmail('')
+                  if (next === 'agent' && addRole === 'admin') setAddRole('user')
+                }}
+                options={[
+                  { value: 'person', label: 'Person', icon: 'user' },
+                  { value: 'agent', label: 'Agent', icon: 'zap' },
+                ]}
+              />
             </div>
             <div className="settings-add-user-form [display:flex] [gap:8px] [align-items:center]">
               <Input
