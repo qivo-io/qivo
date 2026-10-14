@@ -11,9 +11,9 @@
  *      call, takes the required `access` argument or is a named exemption
  *      with its reason. A call the walk cannot resolve fails it.
  *   4. Over HTTP: every write entry of the registry refuses a read-only
- *      personal token, a read-only OAuth grant and a Viewer agent key. The
- *      refs do not exist, so answering "not found" instead would be an
- *      existence oracle. Read-only credentials still read, write credentials
+ *      personal token, a read-only OAuth grant (MCP; REST takes OAuth on its
+ *      webhook routes only) and a Viewer agent key. The refs do not exist,
+ *      so answering "not found" instead would be an existence oracle. Read-only credentials still read, write credentials
  *      still write, and an OAuth tool runs with the grant's live access.
  *
  * Webhook management with read-only and expired tokens is driven over HTTP
@@ -801,24 +801,29 @@ describe('read-only credentials over HTTP', () => {
     }
   })
 
-  it('every REST write route refuses a Viewer agent key with 403 before any ref resolves', async () => {
+  it('every REST write route refuses a read-only personal token and a Viewer agent first', async () => {
     const c = await credentials()
+    const { token: readGrant } = await c.oauth(['qivo:read'])
     const before = await c.counts()
+    const body = { project: 'NOPE', title: 'x' }
     for (const route of WRITE_ROUTES) {
       const label = `${route.method} ${route.path}`
       const path = missingPath(route.path)
-      const res = await restCall(c.t, c.viewerKey, route.method, path, {
-        project: 'NOPE',
-        title: 'x',
-      })
-      expect(res.status, label).toBe(403)
-      expect(JSON.parse(res.text), label).toEqual({ error: VIEWER_AGENT_READS_ONLY })
-      // a Standard user agent gets past the gate and finds nothing
-      const writer = await restCall(c.t, c.agentKey, route.method, path, {
-        project: 'NOPE',
-        title: 'x',
-      })
-      expect([400, 404], label).toContain(writer.status)
+      for (const [secret, sentence] of [
+        [c.readToken, CREDENTIAL_READS_ONLY],
+        [c.viewerKey, VIEWER_AGENT_READS_ONLY],
+      ] as const) {
+        const res = await restCall(c.t, secret, route.method, path, body)
+        expect(res.status, label).toBe(403)
+        expect(JSON.parse(res.text), label).toEqual({ error: sentence })
+      }
+      // OAuth reaches only the webhook routes, read-only or not
+      expect((await restCall(c.t, readGrant, route.method, path, body)).status, label).toBe(401)
+      // write credentials get past the gate and find nothing
+      for (const secret of [c.writeToken, c.agentKey]) {
+        const writer = await restCall(c.t, secret, route.method, path, body)
+        expect([400, 404], label).toContain(writer.status)
+      }
     }
     expect(await c.counts()).toEqual(before)
   })
@@ -840,8 +845,10 @@ describe('read-only credentials over HTTP', () => {
         expect(text, tool.def.name).not.toBe(VIEWER_AGENT_READS_ONLY)
       }
     }
-    for (const path of ['/v1/projects', '/v1/tasks', '/v1/users']) {
-      expect((await restCall(c.t, c.viewerKey, 'GET', path)).status, path).toBe(200)
+    for (const path of ['/v1/me', '/v1/projects', '/v1/tasks', '/v1/users']) {
+      for (const secret of [c.readToken, c.viewerKey]) {
+        expect((await restCall(c.t, secret, 'GET', path)).status, path).toBe(200)
+      }
     }
   })
 
@@ -856,12 +863,14 @@ describe('read-only credentials over HTTP', () => {
       })
       expect(toolText(res.body).isError).toBe(false)
     }
-    const rest = await restCall(c.t, c.agentKey, 'POST', '/v1/tasks', {
-      project: c.f.sub.key,
-      title: 'Written over REST',
-    })
-    expect(rest.status).toBe(201)
-    expect((await c.counts()).issues).toBe(before.issues + 4)
+    for (const secret of [c.writeToken, c.agentKey]) {
+      const rest = await restCall(c.t, secret, 'POST', '/v1/tasks', {
+        project: c.f.sub.key,
+        title: 'Written over REST',
+      })
+      expect(rest.status).toBe(201)
+    }
+    expect((await c.counts()).issues).toBe(before.issues + 5)
   })
 
   it('an OAuth grant narrowed to read looks up as read and is challenged before dispatch', async () => {

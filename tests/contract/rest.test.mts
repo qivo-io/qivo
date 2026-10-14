@@ -46,9 +46,11 @@ const call = (
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   })
 
-/* App-owned 401 bodies (convex/machine/auth.ts REST_AUTH_401), byte-exact. */
+/* App-owned 401 bodies (convex/machine/auth.ts REST_AUTH_401 and
+ * REST_PERSON_AUTH_401), byte-exact. */
 const E401_MISSING = '{"error":"missing agent key (Authorization: Bearer qva_…)"}'
 const E401_UNKNOWN = '{"error":"unknown agent key"}'
+const E401_PERSON_UNKNOWN = '{"error":"unknown personal access token"}'
 
 /* The full REST issue projection (lib/core.ts issueOut, surface 'rest') as a
  * SET: the value crosses the Convex function boundary before the httpAction
@@ -206,14 +208,16 @@ describe('the 401 surface', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
   })
 
-  test('a qvt_ person token on REST is the missing failure, not wrong-kind', async () => {
-    // classifySecret runs {person:false} here — the VALID minted qvt still
-    // reads as a bad prefix, without a DB hit
+  test('a qvt_ is the person leg: an unknown one answers the person sentence', async () => {
+    // REST takes personal tokens, so a qvt_ is looked up as one. The minted
+    // token is not used here because mcp.test.mts deletes it mid-pass and the
+    // file order is not fixed; convex/tests/restTokens.test.ts drives a live
+    // token through every route.
     const res = await call('GET', '/v1/tasks', {
-      headers: { Authorization: `Bearer ${stash.qvt}` },
+      headers: { Authorization: 'Bearer qvt_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' },
     })
     expect(res.status).toBe(401)
-    expect(await res.text()).toBe(E401_MISSING)
+    expect(await res.text()).toBe(E401_PERSON_UNKNOWN)
   })
 
   test('an unknown qva_ key answers the unknown sentence', async () => {

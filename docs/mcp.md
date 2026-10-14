@@ -65,13 +65,15 @@ requested manual setup; agent keys give automation its own identity.
   creates can make changes and never expires; a choice of read-only access
   and an expiry date is planned for that page. A token stored without an
   access setting, created before tokens had one, can only read. After its
-  expiry date a token is refused exactly like a revoked one.
+  expiry date a token is refused exactly like a revoked one. The same token
+  also authenticates the [organization REST API](rest-api.md) as that person.
 - **An agent's key.** An agent is a user of the organization that is not a
   person — no email, no password — created by an org admin under **Settings →
   Organization → Users**, where it is given a name and a key (`qva_…`,
   migration 0100). The client acts as the agent, which reaches exactly the
-  projects the agent was given a role on. This is also the credential the
-  [organization REST API](rest-api.md) takes, so one key serves both surfaces.
+  projects the agent was given a role on. The
+  [organization REST API](rest-api.md) takes it too, so one key serves both
+  surfaces.
 
 Global background curation uses the separate
 [curation REST API](rest-api.md#background-curation-api) and an operator-issued

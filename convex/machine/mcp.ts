@@ -71,7 +71,12 @@ import {
   userJson,
 } from '../lib/core'
 import { byId } from '../lib/db'
-import { vCredentialAccess, vIssuePriority, vIssueStatus } from '../lib/enums'
+import {
+  type CredentialAccess,
+  vCredentialAccess,
+  vIssuePriority,
+  vIssueStatus,
+} from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
 import {
@@ -1157,10 +1162,11 @@ async function mustFindIssue(ctx: QueryCtx, me: Caller, ref: string): Promise<Do
 }
 
 /* The caller's readable/writable predicates over the whole org catalogue —
- * one by_org scan + the access predicates, shared by every scoped read. */
-async function catalogueFlags(ctx: QueryCtx, me: Caller) {
+ * one by_org scan + the access predicates, shared by every scoped read.
+ * Writable also needs a credential that may write. */
+async function catalogueFlags(ctx: QueryCtx, me: Caller, access: CredentialAccess) {
   const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat.projects)
+  const flags = await accessFlags(ctx, me, cat.projects, access)
   return {
     cat,
     readable: (id: string) => flags.get(id)?.read === true,
@@ -1227,7 +1233,7 @@ export const listProjects = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, archived: v.optional(v.boolean()) },
   handler: async (ctx, { callerId, access, archived }) => {
     const me = await asMachineCaller(ctx, callerId, access)
-    const { readable } = await catalogueFlags(ctx, me)
+    const { readable } = await catalogueFlags(ctx, me, access)
     return pretty((await listProjectsCore(ctx, me, archived === true, readable)).map(mcpProjectOut))
   },
 })
@@ -1244,7 +1250,7 @@ export const listProjectUsers = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, project: v.string() },
   handler: async (ctx, { callerId, access, project }) => {
     const me = await asMachineCaller(ctx, callerId, access)
-    const { cat, readable } = await catalogueFlags(ctx, me)
+    const { cat, readable } = await catalogueFlags(ctx, me, access)
     const target = findProjectRef(cat, project)
     if (target === undefined || !readable(target.id)) {
       throw notFound(`project "${project}" not found (or not visible to you)`)
@@ -1303,7 +1309,7 @@ export const listIssues = internalQuery({
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const { cat, readable } = await catalogueFlags(ctx, me)
+    const { cat, readable } = await catalogueFlags(ctx, me, a.access)
     let scope: string[] | null = null
     if (a.project !== undefined && a.project !== '') {
       const p = findProjectRef(cat, a.project)
@@ -1429,7 +1435,7 @@ export const createIssue = internalMutation({
       throw badRequest('tasks are created active — archive with update_task after creating')
     }
     const title = cleanTitle(a.title)
-    const { cat, readable, writable } = await catalogueFlags(ctx, me)
+    const { cat, readable, writable } = await catalogueFlags(ctx, me, a.access)
     const p = findProjectRef(cat, a.project)
     if (p === undefined || !readable(p.id)) {
       throw notFound(`project "${a.project}" not found (or not visible to you)`)
@@ -1792,7 +1798,7 @@ const mcpPost = httpAction(async (ctx, request) => {
       return jsonRes(500, { error: String(error) })
     }
   }
-  const res = await authenticateSecret(ctx, secret, { person: true })
+  const res = await authenticateSecret(ctx, secret)
   // `=== false` (not `!res.ok`): the root tsconfig typechecks this file via
   // _generated/api.d.ts under strict:false, where truthiness narrowing of the
   // discriminant does not apply
