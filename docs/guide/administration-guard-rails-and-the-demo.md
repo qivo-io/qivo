@@ -5,9 +5,11 @@ Qivo Admin is a separate area for platform operators.
 
 Open **Settings → Organization → Users** to manage account status:
 
-- **Org admin** can access and manage every project.
+- **Org admin** can access and manage every project and can always create
+  projects.
 - **Standard user** can access projects shared with them, directly or through
-  a team.
+  a team. They can create projects when the organization allows it
+  ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
 - **Viewer** can read shared projects and follow tasks, but cannot change
   project work, comment, lead a project or team, or receive new assignments.
   Hand over leadership before changing someone to Viewer. Existing assignments
@@ -16,6 +18,13 @@ Open **Settings → Organization → Users** to manage account status:
   Existing assignments, reviewer roles, comments and history remain. New work
   cannot be assigned until the account is reactivated. Removing an account
   instead clears its assignee and reviewer roles.
+
+While **Who can create new projects?** is set to **Selected users**, the list
+has a **Can create projects** column. It holds a checkbox for each active
+standard user who is a person, including pending invitations. Org admins,
+agents and viewers have none. The value stays when the organization picks
+another choice, but it counts only under **Selected users**. Changing someone's
+role to **Org admin** or **Viewer** clears it; making them **Inactive** keeps it.
 
 You cannot remove or deactivate yourself, demote or deactivate the last admin,
 or delete the last team. Adding or reactivating a user requires no prepaid
@@ -49,8 +58,10 @@ private demo signs you in as Nora and does not support external agent keys ([Pri
 
 **Settings → Projects → All projects** lists accessible projects by
 organization. Expand a project to see its sub-projects, or use its **…** menu
-to open settings. Eligible staff can choose **New project** and set its name,
-lead and optional team/user shares.
+to open settings. Org admins, and standard users the organization allows
+([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)),
+can choose **New project** and set its name, lead and optional team/user
+shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
 
 Project settings includes the name, description, lead, access, delay tracking
 and review time. Descriptions allow up to 500 characters and save when you

@@ -1107,7 +1107,10 @@ const higherLevel = (a: string | null, b: string | null): string | null => {
     level === 'lead' ? 3 : level === 'user' ? 2 : level === 'viewer' ? 1 : 0
   return rank(a) >= rank(b) ? a : b
 }
-const grantOnProject = (p: ProjectVM, user: UserVM): string | null => {
+/* The parts of a project its levels are read from, so a draft that does not
+   exist yet can be asked too (P.seesNewProject). */
+type ProjectGrants = Pick<ProjectVM, 'org' | 'parent' | 'lead' | 'access' | 'teamAccess'>
+const grantOnProject = (p: ProjectGrants, user: UserVM): string | null => {
   let level = p.access?.[user.id] || null
   if (user.orgRole === 'admin' || user.orgRole === 'user' || user.orgRole === 'viewer') {
     for (const teamId of user.teams) {
@@ -1119,7 +1122,7 @@ const grantOnProject = (p: ProjectVM, user: UserVM): string | null => {
   return level
 }
 const levelOnProject = (
-  p: ProjectVM | null | undefined,
+  p: ProjectGrants | null | undefined,
   uid?: string,
   projectById: (id: string) => ProjectVM | undefined = (id) => PLANNER.project(id),
 ): string | null => {
@@ -2059,6 +2062,25 @@ export const PLANNER = {
     return l === 'lead' || l === 'user'
   },
   canSee: (pid: string, uid?: string) => PLANNER.levelOn(pid, uid) !== null,
+  /* Would this user (me by default) see a top-level project created in the
+     home organization with this lead and access? The New project dialog asks
+     before saving. The draft goes through the same level rules P.canSee
+     applies once addProject has painted the project, so the dialog's warning
+     and the outcome agree: org admins, the lead, an individual grant at any
+     level or a share with one of the user's teams can see it. */
+  seesNewProject: (
+    draft: Pick<NewProjectInput, 'lead' | 'access' | 'teamAccess'>,
+    uid?: string,
+  ): boolean => {
+    // addProject makes the creator the lead when none is named
+    const lead = draft.lead || profileIn(HOME_ORG) || undefined
+    const access: Record<string, string> = { ...draft.access }
+    if (lead) access[lead] = 'lead'
+    const teamAccess = draft.teamAccess || {}
+    return (
+      levelOnProject({ org: HOME_ORG, parent: undefined, lead, access, teamAccess }, uid) !== null
+    )
+  },
   /* Milestones sit on the meta project (addMilestone folds a sub-project up
      to it), so adding one needs edit access there. A sub-project grant alone
      shows its parent read-only. */

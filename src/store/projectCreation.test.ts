@@ -197,4 +197,81 @@ describe('project creation through the client store', () => {
       expect(ask('admins').me).toBe(false)
     })
   })
+
+  describe('a project its creator may not see', () => {
+    /* Me as a standard user beside Leo; Crew holds Leo, Mine holds me and
+       Ingrid, an org viewer. */
+    let me: string
+    const NOW = '2026-09-14T08:00:00.000Z'
+
+    beforeEach(() => {
+      const org = snap.orgs[0].id
+      const mine = snap.profiles[0]
+      me = mine.id
+      mine.org_role = 'user'
+      const other = (id: string, org_role: Profile['org_role']): Profile => ({
+        ...mine,
+        id,
+        name: id,
+        org_role,
+        auth_user_id: `account-${id}`,
+      })
+      snap.profiles.push(other('leo', 'user'), other('ingrid', 'viewer'))
+      const team = (id: string) => ({
+        id,
+        org_id: org,
+        name: id,
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      snap.teams.push(team('crew'), team('mine'))
+      snap.teamMembers.push(
+        { team_id: 'crew', profile_id: 'leo', is_leader: false },
+        { team_id: 'mine', profile_id: me, is_leader: false },
+        { team_id: 'mine', profile_id: 'ingrid', is_leader: false },
+      )
+      deliver(structuredClone(snap))
+    })
+
+    it('predicts that the lead, an individual grant or a share with my team lets me see it', () => {
+      expect(P.seesNewProject({ lead: me })).toBe(true)
+      expect(P.seesNewProject({ lead: 'leo', access: { [me]: 'user' } })).toBe(true)
+      expect(P.seesNewProject({ lead: 'leo', access: { [me]: 'viewer' } })).toBe(true)
+      expect(P.seesNewProject({ lead: 'leo', teamAccess: { mine: 'viewer' } })).toBe(true)
+    })
+
+    it('predicts that I lose sight of it otherwise', () => {
+      expect(P.seesNewProject({ lead: 'leo' })).toBe(false)
+      expect(P.seesNewProject({ lead: 'leo', access: { ingrid: 'viewer' } })).toBe(false)
+      expect(P.seesNewProject({ lead: 'leo', teamAccess: { crew: 'user' } })).toBe(false)
+    })
+
+    it('lets an org admin see every project, and a viewer see one shared with their team', () => {
+      expect(P.seesNewProject({ lead: 'leo' }, 'ingrid')).toBe(false)
+      expect(P.seesNewProject({ lead: 'leo', teamAccess: { mine: 'user' } }, 'ingrid')).toBe(true)
+      snap.profiles[0].org_role = 'admin'
+      deliver(structuredClone(snap))
+      expect(P.seesNewProject({ lead: 'leo' })).toBe(true)
+    })
+
+    /* App's toast after a create reads the draft through seesNewProject, so
+       a rollback of another write cannot change it. The draft must therefore
+       give the answer canSee gives for the project addProject paints. */
+    it.each<[string, boolean, (me: string) => Parameters<Planner['seesNewProject']>[0]]>([
+      [
+        'a share with a team I am not in',
+        false,
+        () => ({ lead: 'leo', teamAccess: { crew: 'user' } }),
+      ],
+      ['my own Viewer entry', true, (me) => ({ lead: 'leo', access: { [me]: 'viewer' } })],
+      ['a share with my team', true, () => ({ lead: 'leo', teamAccess: { mine: 'viewer' } })],
+    ])('predicts what addProject paints for %s', (_label, expected, toDraft) => {
+      const draft = toDraft(me)
+      const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New', ...draft })!
+      expect(P.seesNewProject(draft)).toBe(expected)
+      expect(P.canSee(id)).toBe(expected)
+    })
+  })
 })

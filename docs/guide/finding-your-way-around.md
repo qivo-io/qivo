@@ -12,8 +12,10 @@ Settings stay visible.
 
 A project row's **…** menu opens settings, **Archived tasks** and, for leads,
 **New sub-project…**. Sub-project rows have settings and **Archived tasks**.
-Eligible organization staff can create projects with the Projects header's
-**+**.
+The Projects header's **+** creates a project. It appears for organization
+admins, and for standard users when
+[Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
+allows it.
 
 **Settings** opens **Your preferences** ([Your preferences](./working-together.md#who-a-person-is)). Its navigation also contains
 Organization settings, **Projects → All projects** and **Archived projects**.

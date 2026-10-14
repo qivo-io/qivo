@@ -9,13 +9,26 @@ import { matchesAllWords } from '../lib/search'
 import type { AccessLevel, TeamAccessLevel, TeamVM, UserVM } from '../store/planner'
 import { Avatar, Icon } from './qivo'
 
+/* "2 teams, 1 user": how many of each are selected. */
+const countOf = (teams: number, users: number) =>
+  [
+    teams ? `${teams} team${teams === 1 ? '' : 's'}` : '',
+    users ? `${users} user${users === 1 ? '' : 's'}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ')
+
 /** Creation keeps its selection in the draft; opening, searching and closing
- * this picker never changes a grant. Each checkbox applies immediately. */
+ * this picker never changes a grant. Each checkbox applies immediately.
+ * `you` (the signed-in user's id) marks that user's row "(you)" and names
+ * them in the closed field once they are selected: "Aisha Rahman (you)"
+ * alone, "You, 1 team" beside others. */
 export function ProjectAccessSelect({
   teams,
   users,
   teamAccess,
   access,
+  you,
   onTeamChange,
   onUserChange,
 }: {
@@ -23,6 +36,7 @@ export function ProjectAccessSelect({
   users: UserVM[]
   teamAccess: Record<string, TeamAccessLevel>
   access: Record<string, AccessLevel>
+  you?: string
   onTeamChange: (id: string, level: TeamAccessLevel | null) => void
   onUserChange: (id: string, level: AccessLevel | null) => void
 }) {
@@ -37,19 +51,18 @@ export function ProjectAccessSelect({
   const teamIds = Object.keys(teamAccess)
   const userIds = Object.keys(access)
   const selectionCount = teamIds.length + userIds.length
-  const summary =
-    selectionCount === 0
+  const me = you && access[you] ? users.find((user) => user.id === you) : undefined
+  const summary = me
+    ? selectionCount === 1
+      ? `${me.name} (you)`
+      : `You, ${countOf(teamIds.length, userIds.length - 1)}`
+    : selectionCount === 0
       ? 'Select teams and users…'
       : selectionCount === 1
         ? teams.find((team) => team.id === teamIds[0])?.name ||
           users.find((user) => user.id === userIds[0])?.name ||
           '1 selected'
-        : [
-            teamIds.length ? `${teamIds.length} team${teamIds.length === 1 ? '' : 's'}` : '',
-            userIds.length ? `${userIds.length} user${userIds.length === 1 ? '' : 's'}` : '',
-          ]
-            .filter(Boolean)
-            .join(', ')
+        : countOf(teamIds.length, userIds.length)
 
   return (
     <Popover
@@ -182,7 +195,7 @@ export function ProjectAccessSelect({
                     <Checkbox
                       id={id}
                       data-project-access-user-option={user.id}
-                      aria-label={user.name}
+                      aria-label={user.id === you ? `${user.name} (you)` : user.name}
                       checked={selected}
                       disabled={!user.active && !selected}
                       onCheckedChange={(checked) =>
@@ -193,7 +206,10 @@ export function ProjectAccessSelect({
                       }
                     />
                     <Avatar id={user.id} size={28} />
-                    <span className="min-w-0 truncate text-sm">{user.name}</span>
+                    <span className="min-w-0 truncate text-sm">
+                      {user.name}
+                      {user.id === you && <span className="text-text-2"> (you)</span>}
+                    </span>
                   </label>
                   {selected && (
                     <NativeSelect

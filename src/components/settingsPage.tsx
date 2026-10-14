@@ -9,7 +9,9 @@ import { cn } from '@/lib/utils'
 type Probe = { [attr: `data-${string}`]: string | undefined; 'aria-busy'?: boolean }
 
 /* The page's name: 20px semibold, an optional 14px line under it, and an
-   optional control on its right (Projects puts New project there). */
+   optional control on its right (Projects puts New project there). The
+   heading takes focus, outside the Tab order, when a link inside the previous
+   page opened this one (Settings.tsx). */
 export function PageTitle({
   children,
   sub,
@@ -22,7 +24,9 @@ export function PageTitle({
   return (
     <div className="settings-page-title mb-6 flex max-w-[640px] items-start gap-4">
       <div className="min-w-0 flex-1">
-        <h1 className="m-0 text-xl font-semibold">{children}</h1>
+        <h1 tabIndex={-1} className="m-0 text-xl font-semibold">
+          {children}
+        </h1>
         {sub && (
           <div className="mt-2 max-w-[520px] text-base leading-normal text-text-2">{sub}</div>
         )}

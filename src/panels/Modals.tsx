@@ -21,11 +21,16 @@ import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
+import {
+  type AccessDraft,
+  afterAccessChange,
+  afterLeadChange,
+  creatorNote,
+} from '../lib/newProjectAccess'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { exactWeekForDate } from '../lib/weekDrafts'
 import {
-  type AccessLevel,
   type AccessRemoval,
   andList,
   type Holder,
@@ -79,6 +84,9 @@ function ModalShell({
   /** paints the submit button red, for a submit that deletes */
   danger?: boolean
   width?: number
+  /** a status line left of Cancel and the submit button. Its container is a
+   * polite live region from the start, so a line that appears as the form
+   * changes is announced */
   footerLeft?: ReactNodeM
   footer?: ReactNodeM
   focusAfterClose?: () => HTMLElement | null
@@ -173,8 +181,14 @@ function ModalShell({
             footer
           ) : (
             <>
-              {footerLeft}
-              <div className="flex-1" />
+              {/* footerLeft takes the room left of the buttons and wraps
+                  there, so the buttons keep their row */}
+              <div
+                className="min-w-0 flex-1"
+                role={footerLeft === undefined ? undefined : 'status'}
+              >
+                {footerLeft}
+              </div>
               <Button type="button" variant="ghost" onClick={closeLayer} className="text-text-1">
                 Cancel
               </Button>
@@ -365,6 +379,37 @@ const genKey = (name: string) => {
   return base // every visible candidate is taken; the server picks one
 }
 
+/* The one line left of a create dialog's Cancel and submit buttons, beside
+   the place the creator looks just before saving. Muted when someone else
+   will lead the project, warning ink when the creator would not see it. */
+function FooterNote({ tone, children }: { tone: 'muted' | 'warn'; children: ReactNodeM }) {
+  return (
+    <p
+      data-footer-note={tone}
+      className={cn(
+        'flex items-start gap-1.5 pr-3 text-sm leading-snug',
+        tone === 'warn' ? 'text-warning' : 'text-text-2',
+      )}
+    >
+      <Icon name="warning" size={14} className="mt-0.5 shrink-0" />
+      <span>{children}</span>
+    </p>
+  )
+}
+
+/* The footer note for a non-admin creator (see creatorNote). */
+function CreatorNote({ note, lead }: { note: ReturnType<typeof creatorNote>; lead: string }) {
+  if (note === 'hidden') return <FooterNote tone="warn">You won't see this project.</FooterNote>
+  if (note === 'lead') {
+    return (
+      <FooterNote tone="muted">
+        Only {P.user(lead)?.name || 'the lead'} and org admins can manage it.
+      </FooterNote>
+    )
+  }
+  return null
+}
+
 function NameRow({ nameRef, name, setName, submit }) {
   return (
     <MField label="Name">
@@ -384,7 +429,10 @@ function NameRow({ nameRef, name, setName, submit }) {
 
 /* New top-level project (program). A project is an organization-wide
    container, so it has a lead but no owning/managing team. Teams can still be
-   added through the access picker below; sub-projects use the same model. */
+   added through the access picker below; sub-projects use the same model.
+   A creator who is not an org admin and picks someone else as lead is added
+   to Project access as User (lib/newProjectAccess.ts), and the footer says
+   who will manage the project or that the creator would not see it. */
 function NewProjectModal({
   init: _init = {},
   onClose,
@@ -398,19 +446,30 @@ function NewProjectModal({
   const [lead, setLead] = useStateM(P.CURRENT_USER)
   const [desc, setDesc] = useStateM('')
   const [teamAccess, setTeamAccess] = useStateM<Record<string, TeamAccessLevel>>({})
-  const [access, setAccess] = useStateM<Record<string, AccessLevel>>({})
+  const [draft, setDraft] = useStateM<AccessDraft>({ access: {}, self: 'none' })
+  const access = draft.access
   const nameRef = useRefM(null)
   useEffectM(() => {
     nameRef.current?.focus()
   }, [])
 
+  const creator = { id: P.CURRENT_USER, admin: P.isAdmin() }
   const leadCandidates = P.homeAssignees()
   const leadValid = leadCandidates.some((user) => user.id === lead)
+  const changeLead = (next: string) => {
+    setLead(next)
+    setDraft((current) => afterLeadChange(current, next, creator))
+  }
   // A roster update must not submit a hidden or ineligible lead.
   useEffectM(() => {
-    if (!leadValid) setLead(leadCandidates[0]?.id || '')
+    if (!leadValid) changeLead(leadCandidates[0]?.id || '')
   }, [leadValid])
   const canSave = name.trim().length > 0 && leadValid
+  const note = creatorNote({
+    creator,
+    lead,
+    sees: P.seesNewProject({ lead, access, teamAccess }),
+  })
 
   const submit = () => {
     if (!canSave) return
@@ -437,32 +496,25 @@ function NewProjectModal({
       canSubmit={canSave}
       submitLabel="Create project"
       width={480}
+      footerLeft={<CreatorNote note={note} lead={lead} />}
     >
       <NameRow nameRef={nameRef} name={name} setName={setName} submit={submit} />
-      <div className="flex flex-wrap gap-x-2">
-        <MField label="Lead" flex>
-          <NativeSelect
-            aria-label="Lead"
-            value={leadValid ? lead : ''}
-            onChange={(e) => {
-              const next = e.target.value
-              setLead(next)
-              setAccess((current) => {
-                const updated = { ...current }
-                delete updated[next]
-                return updated
-              })
-            }}
-            className={ctlClass}
-          >
-            {leadCandidates.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </NativeSelect>
-        </MField>
-      </div>
+      {/* Alone on its row, it keeps MField's 24px below it. As the last
+          child of a row of its own, last:mb-0 took that gap away. */}
+      <MField label="Lead">
+        <NativeSelect
+          aria-label="Lead"
+          value={leadValid ? lead : ''}
+          onChange={(e) => changeLead(e.target.value)}
+          className={ctlClass}
+        >
+          {leadCandidates.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name}
+            </option>
+          ))}
+        </NativeSelect>
+      </MField>
       <MField label="Description">
         <Input
           aria-label="Description"
@@ -480,6 +532,7 @@ function NewProjectModal({
           )}
           teamAccess={teamAccess}
           access={access}
+          you={P.CURRENT_USER}
           onTeamChange={(teamId, level) => {
             setTeamAccess((current) => {
               const updated = { ...current }
@@ -489,12 +542,7 @@ function NewProjectModal({
             })
           }}
           onUserChange={(userId, level) => {
-            setAccess((current) => {
-              const updated = { ...current }
-              if (level) updated[userId] = level
-              else delete updated[userId]
-              return updated
-            })
+            setDraft((current) => afterAccessChange(current, userId, level, creator))
           }}
         />
         <p className="mt-2 text-sm leading-normal text-text-2">
@@ -506,7 +554,9 @@ function NewProjectModal({
 }
 
 /* New sub-project — needs lead-level on the parent project. It has its own
-   lead and receives any team or user permissions through the access controls. */
+   lead and receives any team or user permissions through the access controls.
+   A creator who is not an org admin and hands it to another lead keeps User
+   access through the parent, and the footer says who will manage it. */
 function NewSubProjectModal({
   init = {},
   onClose,
@@ -560,6 +610,17 @@ function NewSubProjectModal({
       canSubmit={canSave}
       submitLabel="Create sub-project"
       width={480}
+      footerLeft={
+        // the creator leads the parent, so they always see the sub-project
+        <CreatorNote
+          note={creatorNote({
+            creator: { id: P.CURRENT_USER, admin: P.isAdmin() },
+            lead,
+            sees: true,
+          })}
+          lead={lead}
+        />
+      }
     >
       {metas.length === 0 && (
         <div className="mb-6 text-sm leading-normal text-text-3">

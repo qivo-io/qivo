@@ -31,6 +31,7 @@ import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
+import { afterProjectSaved } from './lib/newProjectAccess'
 import {
   buildPath,
   ORG_NONE,
@@ -1371,9 +1372,19 @@ function App() {
           parent: null,
         })
       }
-      window.showToast?.(`${p.type === 'meta' ? 'Project' : 'Sub-project'} “${p.name}” created`)
-      // follow the new project unless the user moved elsewhere while it saved
-      if (placeRef.current !== placeAtCreate) return
+      // Visibility comes from the draft by the rule the dialog's warning used,
+      // not from the painted rows, because another write's rollback can drop
+      // those before the server's delivery of the project is adopted.
+      // Sub-projects ignore it, since their creator leads the parent.
+      const saved = afterProjectSaved({
+        type: p.type,
+        name: p.name,
+        visible: P.seesNewProject(p),
+      })
+      window.showToast?.(saved.message)
+      // stay put when the creator cannot see it, or moved elsewhere while it
+      // saved; otherwise follow the new project
+      if (!saved.open || placeRef.current !== placeAtCreate) return
       setScope(id)
       setProjectsOpen(false)
       setSync(null)
