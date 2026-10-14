@@ -1,7 +1,11 @@
 /* Labels (phase 5): the per-org vocabulary + the issue attach/detach.
- * Curation rights are can_write_org_labels (0102 final, lib/access); the
- * name rules are 0010's CHECK (trimmed non-blank, ≤40 codepoints) with the
- * case-insensitive per-org uniqueness carried by name_lower.
+ * The rules live in model/labels. Staff with User standing on a top-level
+ * project may create labels (canWriteOrgLabels); renaming, recoloring and
+ * deleting are for org admins only (canManageOrgLabels), as on the app's
+ * admin-only Labels settings page. Names follow 0010's CHECK (trimmed
+ * non-blank, ≤40 codepoints) with the case-insensitive per-org uniqueness
+ * carried by name_lower; colors are #rrggbb because clients render them as
+ * CSS backgrounds.
  *
  * Narration is asymmetric on purpose (T8): create and delete write an
  * activity row, update writes NONE. toggle narrates against the ISSUE
@@ -12,27 +16,13 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { canWriteOrgLabels, hasProjectLevel } from './lib/access'
+import { hasProjectLevel } from './lib/access'
 import { byId, insertUnique } from './lib/db'
 import { badRequest, forbidden, notFound, orgMutation, rule } from './lib/functions'
 import { logActivity } from './model/activity'
+import { assertLabelCreator, assertLabelManager, labelColor, labelName } from './model/labels'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
-
-async function assertCurator(ctx: MeCtx): Promise<void> {
-  if (!(await canWriteOrgLabels(ctx, ctx.me))) {
-    throw forbidden('no label access in this organization')
-  }
-}
-
-/* 0010's CHECK: btrim(name) <> '' and char_length(name) <= 40 — codepoints,
- * Postgres char_length semantics. */
-function labelName(raw: string): string {
-  const name = raw.trim()
-  if (name === '') throw badRequest('a label name cannot be blank')
-  if ([...name].length > 40) throw badRequest('a label name is at most 40 characters')
-  return name
-}
 
 async function myLabel(ctx: MeCtx, id: string): Promise<Doc<'labels'>> {
   const label = await byId(ctx, 'labels', id)
@@ -47,8 +37,9 @@ export const create = orgMutation({
   args: { id: v.string(), name: v.string(), color: v.string() },
   handler: async (ctx, { id, name, color }) => {
     const now = new Date().toISOString()
-    await assertCurator(ctx)
+    await assertLabelCreator(ctx, ctx.me)
     const clean = labelName(name)
+    const cleanColor = labelColor(color)
     if ((await byId(ctx, 'labels', id)) !== null) {
       throw badRequest('a label with this id already exists')
     }
@@ -62,7 +53,7 @@ export const create = orgMutation({
         org_id: ctx.me.org_id,
         name: clean,
         name_lower: clean.toLowerCase(),
-        color,
+        color: cleanColor,
         created_at: now,
       },
       rule('a label with that name already exists'),
@@ -81,15 +72,16 @@ export const create = orgMutation({
 })
 
 /* ----------------------------------------------------------------- update
- * P.updateLabel — narrates NOTHING (T8). name_lower stays in step; the
- * uniqueness probe excludes the row itself, so a case-only rename passes. */
+ * P.updateLabel, for org admins only. It narrates NOTHING (T8). name_lower
+ * stays in step; the uniqueness probe excludes the row itself, so a
+ * case-only rename passes. */
 export const update = orgMutation({
   args: {
     id: v.string(),
     patch: v.object({ name: v.optional(v.string()), color: v.optional(v.string()) }),
   },
   handler: async (ctx, { id, patch }) => {
-    await assertCurator(ctx)
+    assertLabelManager(ctx.me)
     const label = await myLabel(ctx, id)
     const fields: Partial<Pick<Doc<'labels'>, 'name' | 'name_lower' | 'color'>> = {}
     if (patch.name !== undefined) {
@@ -108,20 +100,24 @@ export const update = orgMutation({
         fields.name_lower = clean.toLowerCase()
       }
     }
-    if (patch.color !== undefined && patch.color !== label.color) fields.color = patch.color
+    if (patch.color !== undefined) {
+      const color = labelColor(patch.color)
+      if (color !== label.color) fields.color = color
+    }
     if (Object.keys(fields).length > 0) await ctx.db.patch(label._id, fields)
     return null
   },
 })
 
 /* ----------------------------------------------------------------- remove
- * P.removeLabel. The issue_labels FK cascade, spelled out (by_label), then
- * the row; 'deleted label' narrated like the old client's. */
+ * P.removeLabel, for org admins only. The issue_labels FK cascade, spelled
+ * out (by_label), then the row; 'deleted label' narrated like the old
+ * client's. */
 export const remove = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const now = new Date().toISOString()
-    await assertCurator(ctx)
+    assertLabelManager(ctx.me)
     const label = await myLabel(ctx, id)
     const attached = ctx.db
       .query('issue_labels')

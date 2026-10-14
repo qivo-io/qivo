@@ -74,6 +74,7 @@ import { prime as primeGravatar } from '../lib/gravatar'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
+import { LABEL_COLORS } from '../lib/labelColors'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
@@ -2778,7 +2779,8 @@ export const PLANNER = {
   /* mirrors the server's can_write_org_labels: org admin, the lead of any
      project, or a user-level grant somewhere in the org. Permission-based,
      not membership-based — picking a label is open to everyone, curating it
-     isn't. */
+     isn't. It governs adding labels; renaming, recoloring and deleting them
+     is for org admins (isAdmin), as on the server. */
   canWriteOrgLabels: (orgId?: string, uid?: string) => {
     const org = orgId || PLANNER.homeOrg
     const u = actorIn(org, uid)
@@ -5025,21 +5027,8 @@ export const PLANNER = {
       (l) => l.org_id === org.id && l.name.toLowerCase() === name.toLowerCase(),
     )
     if (dup) return dup.id
-    // Hex on purpose, not tokens: this is DATA — written to labels.color and
-    // read back by every client (rec.color may override the pick)
-    const LABEL_COLORS = [
-      '#6D7BF2',
-      '#F0555D',
-      '#2FBE7A',
-      '#F2994A',
-      '#A78BFA',
-      '#4C9AFF',
-      '#E3C55A',
-      '#0891B2',
-      '#BE123C',
-      '#8A8F98',
-    ]
-    const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length]
+    // the shared palette picks the color unless rec.color overrides it
+    const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length].color
     const uuid = crypto.randomUUID()
     rows.labels.set(uuid, {
       id: uuid,
