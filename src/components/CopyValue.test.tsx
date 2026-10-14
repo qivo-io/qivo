@@ -90,6 +90,39 @@ describe('CopyValue', () => {
       "Couldn't copy. Copy the selected text instead.",
       'error',
     )
+
+    // Leaving and coming back by keyboard selects it again.
+    const fallback = text as HTMLElement
+    fallback.blur()
+    window.getSelection()?.removeAllRanges()
+    expect(fallback.tabIndex).toBe(0)
+    // jsdom's focus() clears the selection after the focus handlers run, so
+    // deliver the focus event the handler listens for instead.
+    await act(async () => fallback.dispatchEvent(new FocusEvent('focusin', { bubbles: true })))
+    expect(window.getSelection()?.toString()).toBe('qvt_secret')
+  })
+
+  it('reports only the latest of overlapping copies', async () => {
+    const settle: { resolve: () => void; reject: (e: Error) => void }[] = []
+    writeText.mockImplementation(
+      () => new Promise<void>((resolve, reject) => settle.push({ resolve, reject })),
+    )
+    await render()
+    const button = container.querySelector('button')!
+    await click(button)
+    await click(button)
+    expect(settle).toHaveLength(2)
+
+    // The newer write succeeds first, then the older one fails.
+    await act(async () => settle[1].resolve())
+    await act(async () => settle[0].reject(new Error('denied')))
+    expect(glyph()).toContain('lucide-check')
+    expect(container.querySelector('code')).toBeNull()
+    expect(showToast).not.toHaveBeenCalled()
+
+    // The check still lasts its full two seconds.
+    await act(async () => vi.advanceTimersByTime(COPIED_MS - 1))
+    expect(glyph()).toContain('lucide-check')
   })
 
   it('starts without the old outcome when a new value replaces this one', async () => {

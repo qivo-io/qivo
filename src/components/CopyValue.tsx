@@ -37,6 +37,8 @@ function Wrapped({ value }: { value: string }) {
   })
 }
 
+const selectAll = (node: Node) => window.getSelection()?.selectAllChildren(node)
+
 /** `label` starts the button's accessible name ("Copy address"), followed by
     the value itself, so the visible text stays part of the name. */
 export function CopyValue({
@@ -50,20 +52,25 @@ export function CopyValue({
   const [result, setResult] = useState<{ value: string; outcome: 'copied' | 'failed' }>()
   const outcome = result?.value === value ? result.outcome : undefined
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  // Clicks can overlap while a write is pending; only the latest one reports.
+  const attempt = useRef(0)
   const fallback = useRef<HTMLElement>(null)
   useEffect(() => () => clearTimeout(timer.current), [])
-  // The fallback replaces the button that held focus: move focus to the text
-  // and select it whole, so Ctrl/Cmd+C works from the keyboard at once.
+  // The fallback replaces the button that held focus, so focus moves to the
+  // text and selects it whole: Ctrl/Cmd+C works at once.
   useEffect(() => {
     const text = fallback.current
     if (outcome !== 'failed' || !text) return
     text.focus()
-    window.getSelection()?.selectAllChildren(text)
+    selectAll(text)
   }, [outcome])
 
   const copy = async () => {
+    const mine = ++attempt.current
+    const copiedNow = await copyText(value)
+    if (mine !== attempt.current) return
     clearTimeout(timer.current)
-    if (!(await copyText(value))) {
+    if (!copiedNow) {
       setResult({ value, outcome: 'failed' })
       window.showToast?.("Couldn't copy. Copy the selected text instead.", 'error')
       return
@@ -78,7 +85,9 @@ export function CopyValue({
       <code
         {...probe}
         ref={fallback}
-        tabIndex={-1}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a keyboard user must be able to return to text the browser would not copy
+        tabIndex={0}
+        onFocus={(e) => selectAll(e.currentTarget)}
         translate="no"
         className={cn('block select-all py-1.5 font-mono text-sm text-text-1', className)}
       >
