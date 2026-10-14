@@ -56,9 +56,8 @@ const auditRows = (t: T, action: string): Promise<Doc<'platform_audit_log'>[]> =
     return rows.filter((r) => r.action === action)
   })
 
-/* One nightly run: the cron's first leg and every leg it schedules. Returns
- * the archived count from the run's audit row. */
-async function runArchive(t: T): Promise<number> {
+/* One nightly run: the cron's first leg and every leg it schedules. */
+async function runLegs(t: T): Promise<void> {
   vi.useFakeTimers()
   try {
     await t.mutation(internal.jobs.archiveDoneIssues, {})
@@ -66,6 +65,12 @@ async function runArchive(t: T): Promise<number> {
   } finally {
     vi.useRealTimers()
   }
+}
+
+/* One nightly run that must succeed. Returns the archived count from the
+ * run's audit row. */
+async function runArchive(t: T): Promise<number> {
+  await runLegs(t)
   const last = (await auditRows(t, 'archive_done_issues')).at(-1)
   if (last === undefined) throw new Error('the archive run wrote no audit row')
   return (last.detail as { archived: number }).archived
@@ -290,6 +295,57 @@ describe('archiveDoneIssues — bounded legs', () => {
 
     expect(await runArchive(t)).toBe(1)
     expect((await issueRow(t, parentId))?.archived_at).toBeDefined()
+  })
+
+  it('a failing leg keeps earlier legs, writes no audit row and stops the organizations after it', async () => {
+    // The middle organization's tasks exceed this read budget on every
+    // attempt; the other two fit.
+    const t = limitedT({ documentsRead: 1000 })
+    const [first, middle, last] = [uuid(), uuid(), uuid()].sort()
+    const due = new Map<string, string>()
+    for (const org_id of [first, middle, last]) {
+      await t.run(async (ctx) => {
+        await ctx.db.insert('organizations', {
+          id: org_id,
+          name: 'Sweep',
+          slug: `sweep-${org_id}`,
+          created_at: NOW,
+          next_issue_num: 1,
+          next_project_num: 1,
+          date_format: 'iso',
+          week_start: 1,
+          week_one_rule: 'first4day',
+          default_plannable_hours: 40,
+          gravatar_avatars: false,
+        })
+      })
+      const project = await plantProject(t, { org_id })
+      const task = await plantIssue(t, {
+        org_id,
+        project_id: project.id,
+        status: 'done',
+        done_at: ago(40),
+      })
+      due.set(org_id, task.id)
+      if (org_id === middle) await plantTasks(t, 1000, { org_id, project_id: project.id })
+    }
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await runLegs(t)
+      expect(logged).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ message: expect.stringContaining('Scanned too many documents') }),
+      )
+    } finally {
+      logged.mockRestore()
+    }
+
+    expect((await issueRow(t, due.get(first) ?? ''))?.archived_at).toBeDefined()
+    expect((await issueRow(t, due.get(middle) ?? ''))?.archived_at).toBeUndefined()
+    // The known limit (jobs.ts header): nothing schedules the later legs.
+    expect((await issueRow(t, due.get(last) ?? ''))?.archived_at).toBeUndefined()
+    expect(await auditRows(t, 'archive_done_issues')).toEqual([])
   })
 })
 

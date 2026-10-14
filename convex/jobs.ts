@@ -13,10 +13,16 @@
  * scanned, 16 MiB read, 16k documents written per txn) by running in legs
  * that schedule the next one. Each leg reads one organization's unarchived
  * tasks, the same working set the app's snapshot loads, and archives at most
- * ARCHIVE_BATCH of them. A failed leg ends the run without an audit row;
- * earlier legs stay committed, and the next night picks up what is left. The
- * read-message sweep is still one transaction; its escape hatch is the same
- * self-continuation. */
+ * ARCHIVE_BATCH of them. Convex drops the calls a failed mutation scheduled,
+ * so a failed leg ends the run without an audit row, and earlier legs stay
+ * committed. Every run starts again from the first organization, so the next
+ * night recovers only from a transient failure. A leg that fails every time
+ * stops every organization sorted after it, every night. The likely cause is
+ * an organization whose unarchived tasks outgrow one transaction, which also
+ * breaks that organization's app snapshot. Isolating organizations needs
+ * separately scheduled legs whose counts no longer meet in one audit row, so
+ * build it when an organization nears the caps. The read-message sweep is
+ * still one transaction; its escape hatch is the same self-continuation. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
