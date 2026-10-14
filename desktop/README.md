@@ -136,6 +136,8 @@ instead failed HTTPS certificate hostname validation with this downloader.
 
 The `scripts/electron-download.test.mjs` tests exercise proxy downloads,
 `NO_PROXY` and rejection of corrupt downloads with diagnostic logging enabled.
+Local HTTPS proxy tests also verify trusted certificates and reject untrusted
+certificates and hostname mismatches without disabling TLS verification.
 Remove the override once electron-builder's dependency tree no longer needs it.
 
 This affects build tooling, not the installed desktop runtime. The separate
