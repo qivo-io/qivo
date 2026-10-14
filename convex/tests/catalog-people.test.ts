@@ -1087,6 +1087,87 @@ describe('teams membership — the three verbs', () => {
     await lead(false)
     expect((await membership(t, f.team.id, f.guest.id))?.is_leader).toBe(false)
   })
+
+  it('setLeader: an agent is never promoted, and an older agent leader row can be demoted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lead = (caller: Doc<'profiles'>, is_leader: boolean) =>
+      as(t, caller).mutation(api.teams.setLeader, {
+        org_id: f.org.id,
+        team_id: f.team.id,
+        profile_id: f.agent.id,
+        is_leader,
+      })
+    await as(t, f.admin).mutation(api.teams.addMember, {
+      org_id: f.org.id,
+      team_id: f.team.id,
+      profile_id: f.agent.id,
+    })
+    // Refused for the admin and for the team's own leader alike.
+    for (const caller of [f.admin, f.user]) {
+      await expectRefusal(lead(caller, true), 'forbidden', /^an agent cannot lead a team$/)
+    }
+    expect((await membership(t, f.team.id, f.agent.id))?.is_leader).toBe(false)
+    // A leader row written before this rule grants nothing and can be cleared.
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('team_members')
+        .withIndex('by_team_profile', (q) =>
+          q.eq('team_id', f.team.id).eq('profile_id', f.agent.id),
+        )
+        .unique()
+      await ctx.db.patch(row!._id, { is_leader: true })
+    })
+    await lead(f.admin, false)
+    expect((await membership(t, f.team.id, f.agent.id))?.is_leader).toBe(false)
+    const events = await activityFor(t, f.org.id)
+    expect(events.map((e) => e.verb)).toEqual(['added', 'demoted'])
+  })
+
+  it('an agent with a leader row cannot run the team; a person leader still can', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // Agents have no login. The planted one stands in for any surface that
+    // brings an agent caller to these handlers, next to an agent leader row.
+    const agent = await t.run(async (ctx) => {
+      await ctx.db.patch(f.agent._id, { auth_user_id: 'auth_agent_relay' })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.agent.id,
+        is_leader: true,
+      })
+      return (await ctx.db.get(f.agent._id)) as Doc<'profiles'>
+    })
+    const args = { org_id: f.org.id, team_id: f.team.id, profile_id: f.viewer.id }
+    const promoteAdmin = { ...args, profile_id: f.admin.id, is_leader: true }
+    const RUNS = /^requires an organization admin or a leader of this team$/
+    await expectRefusal(as(t, agent).mutation(api.teams.addMember, args), 'forbidden', RUNS)
+    await expectRefusal(
+      as(t, agent).mutation(api.teams.removeMember, { ...args, profile_id: f.admin.id }),
+      'forbidden',
+      RUNS,
+    )
+    await expectRefusal(as(t, agent).mutation(api.teams.setLeader, promoteAdmin), 'forbidden', RUNS)
+    await expectRefusal(
+      as(t, agent).mutation(api.teams.update, {
+        org_id: f.org.id,
+        id: f.team.id,
+        patch: { name: 'Renamed by agent' },
+      }),
+      'forbidden',
+      RUNS,
+    )
+    expect(await membership(t, f.team.id, f.viewer.id)).toBeNull()
+    expect((await membership(t, f.team.id, f.admin.id))?.is_leader).toBe(false)
+    expect((await teamById(t, f.team.id))?.name).toBe('Hardware')
+    expect(await activityFor(t, f.org.id)).toEqual([])
+    // The person who leads the team still manages its members and leaders.
+    await as(t, f.user).mutation(api.teams.addMember, args)
+    await as(t, f.user).mutation(api.teams.setLeader, promoteAdmin)
+    await as(t, f.user).mutation(api.teams.removeMember, args)
+    expect(await membership(t, f.team.id, f.viewer.id)).toBeNull()
+    expect((await membership(t, f.team.id, f.admin.id))?.is_leader).toBe(true)
+  })
 })
 
 describe('teams.deleteDeep', () => {

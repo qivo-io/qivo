@@ -2,7 +2,7 @@
 // comments load on demand; rows omit Convex system fields and internal counters.
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
-import { canSeeProject, isOrgStaff } from './lib/access'
+import { canLeadTeams, canSeeProject } from './lib/access'
 import { byId } from './lib/db'
 import type { ActivityTarget } from './lib/enums'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
@@ -86,10 +86,10 @@ const isAgentKeyRow = (ev: Doc<'activity_events'>): boolean =>
  * other project and milestone rows reach admins only. A row that names
  * another task by key (a parent change or a link) also needs access to that
  * task where it is now; one naming a deleted task reaches admins only. Team
- * rows reach that team's staff leaders. A deleted team's rows keep its id
- * and reach admins only, as do person rows that may be older team rows whose
- * id was cleared (isUnscopedTeamRow) and agent key rows. The remaining rows
- * reach every member. */
+ * rows reach that team's leaders, who are people (lib/access canLeadTeams).
+ * A deleted team's rows keep its id and reach admins only, as do person rows
+ * that may be older team rows whose id was cleared (isUnscopedTeamRow) and
+ * agent key rows. The remaining rows reach every member. */
 async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
@@ -119,7 +119,7 @@ async function memberSeesActivity(
   if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
   if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
   if (isAgentKeyRow(ev)) return false
-  if (ev.team_id !== undefined) return isOrgStaff(a.me) && a.leaderOf.get(ev.team_id) === true
+  if (ev.team_id !== undefined) return canLeadTeams(a.me) && a.leaderOf.get(ev.team_id) === true
   return !isUnscopedTeamRow(ev)
 }
 
@@ -208,7 +208,7 @@ export const forMe = authedQuery({
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect()
       /* per-team "me leads it" — is_team_leader amortized over the membership
-       * rows already in hand; memberSeesActivity restates the staff fence */
+       * rows already in hand; memberSeesActivity restates canLeadTeams */
       const leaderOf = new Map<string, boolean>()
       for (const team of orgTeams) {
         teams.push(rowOf(team))

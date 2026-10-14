@@ -286,11 +286,13 @@ be written onto a task. `GET /v1/projects/{ref}/users` is the project-scoped
 subset and the authoritative reporter, assignee and reviewer picker.
 
 **Read only.** Setting someone's capacity takes an organization admin or a
-leader of a team they belong to (migration 0094), and an agent is **never an
-organization admin**: the profile shape refuses it (0100, widened by 0102 to
-admit `viewer` and nothing else), because an admin reaches every project
-without a grant — the one thing a key must not be able to do if it leaks. And
-since 0103 an agent has no plannable week of its own to set either; the setter
+leader of a team they belong to (migration 0094). An agent is neither. It is
+**never an organization admin**, because an admin reaches every project
+without a grant, the one thing a key must not be able to do if it leaks. The
+profile shape refuses it (0100, widened by 0102 to admit `viewer` and nothing
+else). It never leads a team either, because only people lead teams. A leaked
+agent key therefore cannot set anyone's capacity. And since 0103 an agent has
+no plannable week of its own to set either; the setter
 refuses one outright. Change a person's hours in the app, or over MCP —
 `update_user` there runs as whoever holds the credential and answers to the
 same rule. `POST`/`PATCH` on these routes are 404.
