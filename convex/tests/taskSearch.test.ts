@@ -65,9 +65,10 @@ const found = (fx: Fx, opts: ListIssueOpts) =>
     return page.map((i) => i.id).sort()
   })
 
-/* The matcher before label reads were narrowed: every label's assignments,
- * read through each label in organization order, joined into each task's
- * search text. The fixture has no subtasks, so no status line is dormant. */
+/* The matcher as it was before label reads were narrowed. It read every
+ * label's assignments through each label in organization order and joined
+ * them into each task's search text. The fixture has no subtasks, so no
+ * status line is dormant. */
 async function oldMatch(ctx: MutationCtx, fx: Fx, opts: ListIssueOpts): Promise<string[]> {
   const labels = new Map<string, string[]>()
   const rows = ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
@@ -192,8 +193,9 @@ describe('task search reads only the labels it can match', () => {
     const missBefore = await reads('zzz')
     const hitBefore = await reads('therm')
     await label(fx, thermal, tasks)
-    // twenty more Thermal assignments: a search that names no label reads
-    // exactly what it read before, one that names Thermal reads all twenty
+    // after twenty more Thermal assignments, a search that names no label
+    // reads exactly what it read before, and one that names Thermal reads
+    // all twenty
     expect(await reads('zzz')).toEqual(missBefore)
     expect(await reads('therm')).toEqual({ ...hitBefore, documents: hitBefore.documents + 20 })
     // Thermal's assignments are one index range and its 22 rows

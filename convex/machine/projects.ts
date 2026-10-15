@@ -173,9 +173,9 @@ async function projectDetail(ctx: QueryCtx, project: Doc<'projects'>): Promise<P
   }
 }
 
-/** The single-project read of both surfaces (REST GET /v1/projects/{ref},
- * MCP get_project): the list row with the caller's `flag`, plus the single
- * read's fields (projectDetail). */
+/** The single-project read of REST GET /v1/projects/{ref} and MCP
+ * get_project, which is the list row with the caller's `flag` plus the
+ * single read's fields (projectDetail). */
 export async function projectDetailJson(
   ctx: QueryCtx,
   project: Doc<'projects'>,

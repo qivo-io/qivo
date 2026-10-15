@@ -6,9 +6,9 @@
 import type { IssuePriority, IssueStatus } from './enums'
 import { PRIORITY_NAMES, STATUS_NAMES } from './taskRefs'
 
-/* Each whitespace-separated fragment of `query`, lowercased, as the pieces
- * that must occur in it in order: split at every `*` with `stars`, else the
- * whole fragment. */
+/* Each whitespace-separated fragment of `query`, lowercased and split into
+ * the pieces that must occur in it in order, at every `*` with `stars` and
+ * nowhere without. */
 function searchFragments(query: string, stars: boolean): string[][] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return words.map((word) => (stars ? word.split('*') : [word]))
