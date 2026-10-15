@@ -1080,6 +1080,27 @@ describe('the shared cores the app runs too', () => {
     await expectRefusal(link(uuid(), 'relates'), 'bad_request', /^these tasks are already linked$/)
   })
 
+  it('the app link: an id another link already has is refused', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const c = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const link = (id: string, target_id: string) =>
+      as(t, f.user).mutation(api.issues.addLink, {
+        org_id: f.org.id,
+        id,
+        source_id: a.id,
+        target_id,
+        type: 'relates',
+      })
+    const id = uuid()
+    await link(id, b.id)
+    await expectRefusal(link(id, c.id), 'bad_request', /^a link with this id already exists$/)
+    await link(uuid(), c.id)
+    expect(await activityFor(t, f.org.id)).toHaveLength(2)
+  })
+
   it('namedTaskNums reads signed rows and still fails closed on other wording', () => {
     const ev = (verb: string, detail: string) =>
       ({ target_type: 'issue', verb, detail }) as Pick<
