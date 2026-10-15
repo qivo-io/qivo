@@ -121,6 +121,12 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'webhook_deliveries.subscription_row_id',
   'webhook_deliveries.project_id',
   'webhook_deliveries.task_id',
+  // Expiring REST upload tickets. Confirming one re-resolves the caller and
+  // the task, so a ticket that outlives either is refused, and reapOrphans
+  // deletes it once expired.
+  'attachment_uploads.org_id',
+  'attachment_uploads.profile_id',
+  'attachment_uploads.issue_id',
   // Historical accounting retains deleted users/credentials, so removing a
   // profile cannot erase usage owed by its organization. Reminder receipts
   // retain their recipient ID too; delivery rechecks the current admin row.

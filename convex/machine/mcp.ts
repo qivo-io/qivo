@@ -126,9 +126,10 @@ import {
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
+import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 
-/* ------------------------------------------------------------ the 16 tools
+/* --------------------------------------------------------------- the tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
  * read/write `access` flag, its `def` and the `run` that calls its internal
  * fn. tools/list answers the defs in this order. Titles, descriptions and
@@ -401,7 +402,7 @@ export const TOOLS: McpTool[] = [
       name: 'get_task',
       title: 'Get task',
       description:
-        "One task with its full description, labels, subtasks and links, and for a group (`is_group: true`, whose stored status is dormant) `group_remaining_hours`. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them).",
+        "One task with its full description, labels, subtasks, links and attachments (with 10-minute download links), and for a group (`is_group: true`, whose stored status is dormant) `group_remaining_hours`. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them).",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -849,6 +850,7 @@ export const TOOLS: McpTool[] = [
         ...(args as { label?: string; name?: string; color?: string }),
       }),
   },
+  ...RECORD_TOOLS,
 ]
 
 const TOOL_DEFS: ToolDef[] = TOOLS.map((t) => t.def)

@@ -67,6 +67,7 @@ import {
   type RestCommentJson,
   type RestIssueJson,
   restProjectJson,
+  type TaskAttachmentsJson,
   type TaskDetailJson,
   type TaskRefJson,
   taskOut,
@@ -134,12 +135,13 @@ import {
   restAuth401,
   sha256hex,
 } from './auth'
+import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
-type RestTaskJson = RestIssueJson & TaskDetailJson
+type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
 type RestLabelJson = ReturnType<typeof labelJson>
 
 /* An agent key's writes name the key; a personal token's writes name no
@@ -1267,6 +1269,7 @@ export const ROUTES: RestRoute[] = [
         body,
       }),
   }),
+  ...RECORD_ROUTES,
 ]
 
 /**

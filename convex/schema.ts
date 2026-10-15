@@ -640,6 +640,24 @@ export default defineSchema({
     .index('by_issue', ['issue_id'])
     .index('by_storage', ['storage_id']),
 
+  // A REST upload in progress (model/attachments.ts): the caller that asked
+  // for the upload URL, the task it attaches to and when it expires. Only
+  // that caller may confirm it, once, for that task. files.ts reapOrphans
+  // deletes expired tickets with the unreferenced bytes.
+  attachment_uploads: defineTable({
+    id: v.string(), // the ticket
+    org_id: v.string(),
+    profile_id: v.string(),
+    issue_id: v.string(),
+    name: v.string(),
+    content_type: v.optional(v.string()),
+    size_bytes: v.number(), // declared by the client, checked against the stored file
+    expires_at: v.number(), // epoch milliseconds
+  })
+    .index('by_uuid', ['id'])
+    .index('by_profile_expiry', ['profile_id', 'expires_at'])
+    .index('by_expiry', ['expires_at']),
+
   milestones: defineTable({
     id: v.string(),
     project_id: v.string(), // writes store a top-level project (model/milestones.ts)

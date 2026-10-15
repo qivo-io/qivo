@@ -24,10 +24,13 @@ import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
+import type { OrgRole, ProfileKind } from './lib/enums'
 import { authedQuery } from './lib/functions'
 import { taskOwnerId } from './lib/review'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
+import { committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
 import { subtaskParentIds } from './model/issues'
+import { roundTenths } from './model/taskValues'
 
 /* rows.orgLoad element, field names verbatim (planner.ts:90): `remaining`,
  * NOT remaining_hours. */
@@ -149,3 +152,119 @@ export const assigneeLoad = authedQuery({
     return await assigneeLoadRows(ctx, me, view, assignee.id)
   },
 })
+
+/** One person's planned hours per week, as REST and MCP read them. */
+export type PersonWorkloadJson = {
+  id: string
+  name: string
+  org_role: OrgRole
+  kind: ProfileKind
+  active: boolean
+  /** null for an agent, whose capacity is unbounded */
+  plannable_hours: number | null
+  /** planned hours in each week of week_starts, tasks the caller cannot see included */
+  hours: number[]
+  /** the part of hours from tasks the caller cannot see, which stay unnamed */
+  hidden_hours: number[]
+}
+
+/** The REST and MCP workload read. */
+export type WorkloadJson = {
+  /** the first day of each week, in order */
+  week_starts: string[]
+  /** the project the hours are limited to, or null for all of them */
+  project: { id: string; key: string; name: string } | null
+  people: PersonWorkloadJson[]
+}
+
+/**
+ * Each person's planned hours for `weeks` weeks from the week holding
+ * `fromDay` (YYYY-MM-DD), as `me` may see them. The rows are orgLoadRows for
+ * `me`: work owned by the reviewer while In Review, else the assignee,
+ * scheduled, not done, not paused, with remaining hours, outside archived
+ * tasks and projects. Staff also receive the rows of projects they cannot
+ * see, counted in hidden_hours without naming them; viewers and guests
+ * receive only rows they can see or own. Each row's remaining hours spread
+ * over its weeks by the app's rule. `project`, a project `me` can see,
+ * limits the hours to it and its visible sub-projects, which leaves no
+ * hidden hours. Lists every active member of the organization and every
+ * inactive one with hours in the window, ordered by name.
+ */
+export async function workloadCore(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  o: { fromDay: string; weeks: number; project: Doc<'projects'> | null },
+): Promise<WorkloadJson> {
+  const org = await byId(ctx, 'organizations', me.org_id)
+  const grid = weekGrid(org?.week_start ?? 1)
+  const profiles = await ctx.db
+    .query('profiles')
+    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
+    .collect()
+  const [view, issues] = await Promise.all([
+    orgProjectView(ctx, me),
+    ctx.db
+      .query('issues')
+      .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
+      .collect(),
+  ])
+  const scope =
+    o.project === null
+      ? null
+      : new Set([
+          o.project.id,
+          ...view.projects
+            .filter((p) => p.parent_id === o.project?.id && view.visible(p.id))
+            .map((p) => p.id),
+        ])
+  const projectOf = new Map(issues.map((i) => [i.id, i.project_id]))
+  const rows = orgLoadRows(me, view, new Set(profiles.map((p) => p.id)), issues).filter(
+    (row) =>
+      scope === null || (row.issue_id !== null && scope.has(projectOf.get(row.issue_id) ?? '')),
+  )
+  const spans = new Map<string, { all: LoadSpan[]; hidden: LoadSpan[] }>()
+  for (const row of rows) {
+    const span: LoadSpan = {
+      issueUuid: row.issue_id,
+      start: grid.ofDay(row.start_week),
+      end: grid.ofDay(row.end_week),
+      remaining: row.remaining,
+      remainingSet: row.remaining_set_at === null ? null : grid.ofInstant(row.remaining_set_at),
+    }
+    const own = spans.get(row.owner_id) ?? { all: [], hidden: [] }
+    own.all.push(span)
+    if (row.issue_id === null) own.hidden.push(span)
+    spans.set(row.owner_id, own)
+  }
+  const first = grid.ofDay(o.fromDay)
+  const window = Array.from({ length: o.weeks }, (_, i) => first + i)
+  const perWeek = (items: LoadSpan[]): number[] => {
+    const byWeek = committedByWeek(items)
+    return window.map((week) => roundTenths(byWeek.get(week) ?? 0))
+  }
+  const people: PersonWorkloadJson[] = []
+  const roster = [...profiles].sort(
+    (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+  )
+  for (const p of roster) {
+    const own = spans.get(p.id)
+    const hours = perWeek(own?.all ?? [])
+    if (!p.active && hours.every((h) => h === 0)) continue
+    people.push({
+      id: p.id,
+      name: p.name,
+      org_role: p.org_role,
+      kind: p.kind,
+      active: p.active,
+      plannable_hours: p.plannable_hours ?? null,
+      hours,
+      hidden_hours: perWeek(own?.hidden ?? []),
+    })
+  }
+  return {
+    week_starts: window.map(grid.firstDay),
+    project:
+      o.project === null ? null : { id: o.project.id, key: o.project.key, name: o.project.name },
+    people,
+  }
+}

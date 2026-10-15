@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '5b8932a1511c74bb1007c2043db4d680068ae967c1f381fd388796890f001f9d'
-const SHA_TOOLS_MODERN = 'b2ffaf8a7a8f14ddd1270a8d91ab7485d7a83e843b41e1a109e659233954d84e'
+const SHA_TOOLS_LEGACY = 'ed9c22dcfa4482ac5605259fd170bc8fa44729c5e8e37ba832c9efc5460b9ce2'
+const SHA_TOOLS_MODERN = 'b4f1832eaaa48a5c21faa5a62bdc473e3b428544985ac882f1ec4158be01aca8'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -477,6 +477,9 @@ describe('body shape and leg selection', () => {
       'set_task_link',
       'list_labels',
       'set_label',
+      'delete_attachment',
+      'list_task_activity',
+      'get_workload',
     ])
     expect(JSON.stringify(catalogue.result.tools)).not.toMatch(/\bissues?\b|_issues?\b/)
     expect(await sha256hex(dataJson)).toBe(SHA_TOOLS_LEGACY)

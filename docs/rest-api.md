@@ -468,7 +468,8 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
        &limit=100 &offset=0                limit ≤ 200
 GET    /v1/tasks/{ref}                     ref: QN-482 | 482 | uuid — resolves
                                            archived tasks too; adds labels,
-                                           subtasks and links (below)
+                                           subtasks, links and attachments
+                                           (below)
 POST   /v1/tasks                           requires write on the target
                                            sub-project (see below)
 PATCH  /v1/tasks/{ref}                     requires write; also moves the
@@ -730,16 +731,20 @@ Task shape of a list row from `GET /v1/tasks`:
 ```
 
 `GET /v1/tasks/{ref}`, `POST /v1/tasks` and `PATCH /v1/tasks/{ref}` answer
-the single-task shape, which adds four fields:
+the single-task shape, which adds five fields:
 
 ```json
 {
   "group_remaining_hours": null,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
-  "links": [{ "kind": "blocked_by", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "progress" }]
+  "links": [{ "kind": "blocked_by", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "progress" }],
+  "attachments": [{ "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213, "…": "…" }]
 }
 ```
+
+`attachments` lists the task's files with download links, in the shape
+[Attachments](#attachments) describes.
 
 `owner_id` is whose work the task is: the reviewer while the task is in
 `review` with a reviewer set, else the assignee, and always the assignee on a
@@ -884,6 +889,157 @@ different `reporter_id`. Selecting a reporter never rewrites who performed
 the operation. Task responses expose reporter, assignee and reviewer, with no
 separate creator fields. The caller is not notified of its own changes.
 
+### Attachments
+
+A task's files, the same ones the task window shows, plus the images inside
+its description:
+
+```
+GET    /v1/tasks/{ref}/attachments                every file, oldest first (read)
+POST   /v1/tasks/{ref}/attachments                start an upload (write)
+POST   /v1/tasks/{ref}/attachments/{ticket}       attach the uploaded file (write)
+DELETE /v1/tasks/{ref}/attachments/{id}           delete a file (write)
+```
+
+```json
+{
+  "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213,
+  "content_type": "application/pdf", "inline": false,
+  "uploaded_by_id": "…uuid…", "uploaded_by_name": "Atlas",
+  "created_at": "…",
+  "url": "https://api.qivo.io/files/…?e=…&m=…&t=…",
+  "url_expires_at": "…"
+}
+```
+
+`size_bytes` is measured from the stored file. `inline` is `true` for an
+image inside the task description, which the description names as
+`![alt](att:<id>)`. `url` is a download link minted for the caller that
+works for 10 minutes (`url_expires_at`); read the task or the list again for
+a fresh one. Each download checks again that the caller's user is active and
+can see the task's project, so a link stops working when that access ends.
+It does not check the credential, so a link fetched before a key or token
+was revoked keeps working until it expires. Images (PNG, JPEG, WebP, GIF,
+AVIF) open in the browser; append `&download=1` to download one. Every other
+type always downloads.
+
+Uploading takes three requests:
+
+1. `POST /v1/tasks/{ref}/attachments` with `{ "name": "wiring.pdf",
+   "content_type": "application/pdf", "size": 48213 }`. `name` is 1 to 255
+   characters after trimming, `content_type` is optional, and `size` is the
+   exact number of bytes. It needs Edit access to the task's project, and a
+   `size` over the organization's per-file limit (`max_attachment_mb` in
+   `GET /v1/me`) is a `400` (`attachment exceeds the organization limit of
+   20 MiB`). It answers `201` with `{ "ticket": "…uuid…", "upload_url":
+   "…", "expires_at": "…" }`.
+2. `POST` the file's bytes to `upload_url`, with the file's type as
+   `Content-Type` and no Authorization header. It answers `{ "storageId":
+   "…" }`.
+3. `POST /v1/tasks/{ref}/attachments/{ticket}` with `{ "storage_id":
+   "…" }`, which answers `201` with the attachment.
+
+The ticket and its upload URL expire after an hour. Only the user that
+started the upload can confirm it, only for the same task, and only once:
+any other ticket, including an expired one, answers `404` (`upload not found
+or expired; start a new upload`). The stored file must have exactly the
+declared number of bytes (`400` otherwise, and the ticket stays usable), and
+it may not exceed the organization's limit, measured from the stored file:
+an oversize file is deleted and answers `400`, and its ticket is spent.
+Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
+Attaching writes an `attached a file to` activity row with the file name and
+the provenance.
+
+`DELETE` needs Edit access to the task's project, as in the app, where
+anyone with Edit may remove any file, not only their own. It deletes the
+file and answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":
+"QN-26" }`, writing a `removed an attachment from` activity row. An id that
+is not a file of that task is a `404` (`attachment not found`). A
+description image (`inline: true`) is a `400` (`this image belongs to the
+task description; remove it by editing the description in the app`).
+
+Description images stay with the app: the API neither uploads nor deletes
+them. When a `PATCH` rewrites a description, keep every `![alt](att:<id>)`
+reference whose image should stay. The app deletes a description image a
+day after no saved description refers to it.
+
+### Task activity
+
+```
+GET /v1/tasks/{ref}/activity   the task's history, oldest first (read)
+```
+
+```json
+[
+  {
+    "id": "…uuid…", "created_at": "…",
+    "actor_id": "…uuid…", "actor_name": "Leo Martins",
+    "verb": "changed", "detail": "(status To Do → In Progress) — via MCP"
+  }
+]
+```
+
+These are the rows the task window's **All** filter shows beside the
+comments, which `GET /v1/tasks/{ref}/comments` lists instead. `actor_id` and
+`actor_name` are `null` once the user who made the change has been removed
+from the organization. The caller receives
+the rows the app's activity feed would give it. Organization admins receive
+every row. Other users do not receive a row that names a project they cannot
+access, such as the project the task was in before a move, or one that names
+another task they cannot read, such as the other end of a link. An
+archived task's history is answered too, by the same rule; the app shows it
+again once the task is restored. The organization keeps its newest 500
+activity rows, so older history is gone.
+See [Side effects and audit trail](#side-effects-and-audit-trail) for the
+wording.
+
+### Workload
+
+```
+GET /v1/workload?from_week=2026-10-12&weeks=8&project=ENC     (read)
+```
+
+Each person's planned hours per week, as the Roadmap's Team strip and the
+planning panel count them. `from_week` is any day of the first week, by
+default the current week; weeks begin on the organization's
+`week_start` (`GET /v1/me`). `weeks` is 1 to 52, 8 by default. `project`
+(uuid, number or key) limits the hours to that project and its sub-projects;
+one the caller cannot see is a `404`.
+
+```json
+{
+  "week_starts": ["2026-10-12", "2026-10-19"],
+  "project": null,
+  "people": [
+    {
+      "id": "…uuid…", "name": "Leo Martins", "org_role": "user", "kind": "person",
+      "active": true, "plannable_hours": 32,
+      "hours": [30, 22], "hidden_hours": [4, 0]
+    }
+  ]
+}
+```
+
+`hours[i]` is the person's planned hours in the week starting
+`week_starts[i]`, rounded to a tenth. A task counts toward its owner (the
+reviewer while it is In Review with one, else the assignee) when it is
+scheduled, not Done, not paused, has remaining hours and is not archived or
+in an archived project. Its remaining hours spread evenly from the week its
+estimate was saved, or its start week if later, through its end week; an
+estimate saved after the end week counts in the week it was saved. Compare
+`hours` with `plannable_hours`, which is `null` for an agent: agents have no
+weekly limit.
+
+Hours from projects the caller cannot see are counted the way the app counts
+them. Organization admins and Standard users receive them, in both `hours`
+and `hidden_hours`, without the task or project. Viewers and guests receive
+only work in projects they can see and their own work. With `project`, only
+that project's tasks count, so `hidden_hours` is all zeros. `people` lists
+every active user and agent of the organization, and any inactive one with
+hours in the window, ordered by name. Weeks are computed in UTC, so an
+estimate saved close to midnight can land one week away from what the app
+shows in another time zone.
+
 ## Examples
 
 `$QIVO_KEY` is an agent key or a personal access token.
@@ -934,6 +1090,18 @@ curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"archived":true,"archive_reason":"Replaced by QN-40"}' "$BASE/tasks/QN-26"
 
+# attach a file to QN-26: start, send the bytes, confirm
+curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"wiring.pdf","content_type":"application/pdf","size":48213}' \
+  "$BASE/tasks/QN-26/attachments"
+curl -X POST -H "Content-Type: application/pdf" --data-binary @wiring.pdf "<upload_url>"
+curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"storage_id":"<storageId>"}' "$BASE/tasks/QN-26/attachments/<ticket>"
+
+# what changed on QN-26, and who has room in the next four weeks
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/activity"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/workload?weeks=4"
+
 # give someone 30 plannable hours a week (needs an organization admin's token)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
@@ -959,8 +1127,10 @@ e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST A
 time it set (`status In Progress → In Review, remaining 6 h → 2 h`).
 A move reads `moved` `to the <sub-project> sub-project (from <sub-project>)`,
 a parent change `moved` `under QN-<n>` or `detached` `from QN-<n>`, a label
-`labeled` or `removed a label from` `— <label>` and a link `linked` `—
-blocks QN-<n>` or `— relates to QN-<n>`, each followed by the provenance.
+`labeled` or `removed a label from` `— <label>`, a link `linked` `—
+blocks QN-<n>` or `— relates to QN-<n>`, and a file `attached a file to` or
+`removed an attachment from` with the file name, each followed by the
+provenance.
 Comments are the deliberate exception — no activity row is written,
 matching the app, where the comment itself is the feed entry on the
 discussion spine. Removing a link writes no row either, as in the app. Task numbers come from the same
@@ -982,6 +1152,10 @@ authenticated request.
   `access` (`read` or `write`; absent reads as `read`), an optional
   `expires_at` and created/last-used/revoked timestamps. The same row serves
   MCP and REST.
+- `attachment_uploads` holds one row per upload in progress: the ticket,
+  the user that started it, the task, the declared name, type and size, and
+  its expiry. Confirming deletes it; the weekly storage sweep deletes
+  expired ones.
 - What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through

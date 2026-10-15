@@ -984,6 +984,7 @@ describe('POST /v1/tasks', () => {
       labels: [],
       subtasks: [],
       links: [],
+      attachments: [],
     })
     expect('project_name' in out).toBe(false)
     expect('created_by' in out).toBe(false)
