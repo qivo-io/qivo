@@ -33,7 +33,10 @@
  * Archived/Restored line is dropped — an ancestor whose remaining_hours the
  * restore cleared still narrates that. Archived-down descendants change
  * nothing else, so their notify is skipped outright; restored-up ancestors
- * pass notifyIssueUpdate's suppressNotify.
+ * pass notifyIssueUpdate's suppressNotify. Both archive writers (the core
+ * and the machine toggle) schedule the background steps that mark every
+ * message about the archived subtree read (model/messages.ts
+ * scheduleArchivedReads).
  *
  * Every core that changes a task (create, update, move on both ends,
  * archive, restore, delete) first runs the write gate, assertCanEdit, which
@@ -63,7 +66,7 @@ import { reviewStamp } from '../lib/review'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { issueChanges, logActivity, machineDetail } from './activity'
 import { deleteIssueDeep } from './cascade'
-import { notifyIssueInsert, notifyIssueUpdate } from './messages'
+import { notifyIssueInsert, notifyIssueUpdate, scheduleArchivedReads } from './messages'
 import { nextIssueNum } from './orgs'
 import { reviewHoursFor } from './projects'
 import { emitTaskEvent } from './taskEvents'
@@ -1142,8 +1145,10 @@ export async function updateIssueCore(
     await restoreAncestors(ctx, { row: after, actor: me, now })
   } else if (toggle === 'archived') {
     // archive branch: descendants stamped, never notified (their only change
-    // is the suppressed Archived line — archiveIssueCore's walk)
-    await archiveSubtree(ctx, issue.id, now, me)
+    // is the suppressed Archived line, archiveIssueCore's walk), and every
+    // message about the subtree marked read in the background
+    const descendants = await archiveSubtree(ctx, issue.id, now, me)
+    await scheduleArchivedReads(ctx, { issues: [issue.id, ...descendants] })
   }
   if ('parent_id' in patch && nextParent !== undefined) {
     await clearParentRemaining(ctx, { parentId: nextParent, actor: me, now })
@@ -1320,14 +1325,15 @@ function editableBy(
 /* The descendant walk, shared with updateIssueCore's folded machine toggle:
  * stamps active descendants (touched, NEVER notified). An active descendant
  * in a project the actor cannot edit refuses the archive, because an active
- * task may never sit under an archived parent. */
+ * task may never sit under an archived parent. Returns the ids it stamped. */
 async function archiveSubtree(
   ctx: MutationCtx,
   rootId: string,
   now: string,
   actor: Doc<'profiles'>,
-): Promise<void> {
+): Promise<string[]> {
   const editable = editableBy(ctx, actor)
+  const stamped: string[] = []
   let frontier = [rootId]
   const seen = new Set<string>([rootId])
   for (let depth = 0; frontier.length > 0; depth++) {
@@ -1343,14 +1349,19 @@ async function archiveSubtree(
         const after = (await ctx.db.get(c._id)) as Doc<'issues'>
         await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: c, actor, now })
         next.push(c.id)
+        stamped.push(c.id)
       }
     }
     frontier = next
   }
+  return stamped
 }
 
 /* The 'archived' row names no subtask count, because subtasks can sit in
- * projects some readers of the root cannot access. */
+ * projects some readers of the root cannot access. The Archived notice is
+ * stored read, and the messages already stored about the root and the
+ * subtree are marked read in the background (model/messages.ts
+ * scheduleArchivedReads). */
 export async function archiveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
@@ -1360,9 +1371,10 @@ export async function archiveIssueCore(
   if (issue.archived_at !== undefined) return issue
   const before = { ...issue }
   await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })
-  await archiveSubtree(ctx, issue.id, now, me)
+  const descendants = await archiveSubtree(ctx, issue.id, now, me)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   await notifyIssueUpdate(ctx, { before, after, actor: me, now }) // the root's own write narrates
+  await scheduleArchivedReads(ctx, { issues: [issue.id, ...descendants] })
   const event = {
     org_id: issue.org_id,
     actor_id: me.id,

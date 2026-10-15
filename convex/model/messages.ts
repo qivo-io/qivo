@@ -16,7 +16,11 @@
  * assignment subscription: the reviewer when the task enters Review or is
  * handed over in Review, the assignee when it leaves Review. A reviewer set
  * in any other status is not subscribed; one who already follows the task
- * reads 'Reviewer set to you'. */
+ * reads 'Reviewer set to you'.
+ *
+ * An archived task's messages are read for every recipient. postMessage
+ * stores news about one already read, and the archive paths schedule
+ * readArchivedTaskMessages and readArchivedProjectMessages for the rest. */
 
 import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -225,6 +229,14 @@ async function recipientCanSee(
  * its unread rows toward ITEM_UNREAD_CAP (trimUnreadMessages). Returns
  * whether a row was inserted.
  *
+ * A message about an archived task, or a task in an archived project, is
+ * stored already read, stamped `now`, because no inbox shows that task and
+ * the archive marks its earlier messages read in the background (see
+ * "archived tasks" below). That covers the Archived notice itself, which the archive
+ * writes after its stamp, the archive reason's comment, and any later
+ * comment, edit or detach notice. The Restored notice is written after the
+ * restore, so it arrives unread.
+ *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
  * are read by uuid. `visibility` is a seed's memo (NotifyPreload), never
  * passed interactively. The issue_title snapshot is the issue's CURRENT
@@ -253,6 +265,7 @@ export async function postMessage(
   const project = m.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) return false
   if (!(await recipientCanSee(ctx, recipient, project, m.visibility))) return false
+  const archived = issue.archived_at !== undefined || project.archived_at !== undefined
   await ctx.db.insert('messages', {
     id: newUuid(),
     org_id: m.org_id,
@@ -263,12 +276,15 @@ export async function postMessage(
     kind: m.kind,
     detail: m.body,
     created_at: m.now,
+    read_at: archived ? m.now : undefined,
   })
   const pair = { recipient_id: m.recipient_id, issue_id: m.issue_id }
   const rows = await pairRows(ctx, pair)
   // News wakes a snoozed item: the arrival is the news, so the older rows
   // only drop the snooze (no woke_at — the new row's created_at floats and
   // announces the item), and the scheduled wake later finds nothing to do.
+  // An arrival stored read drops it too, so every row of the item keeps the
+  // same stamp; the archive's background step would drop it anyway.
   for (const r of rows) {
     if (r.snoozed_until !== undefined) await ctx.db.patch(r._id, { snoozed_until: undefined })
   }
@@ -468,6 +484,43 @@ export async function removeMessages(
  * while hasMore is true. */
 const INBOX_BATCH = 256
 
+/* Keeps 0109's invariant on one item after a bulk write stamped at most
+ * `stamped` of its rows read. The invariant held before that write, so the
+ * item then held at most one read row, and it now holds at most
+ * stamped + 1, which this reads in full. It seeks the item's newest unread
+ * row in the index rather than reading every unread row, so its cost does
+ * not grow with the item. */
+async function pruneStampedItem(
+  ctx: MutationCtx,
+  a: { recipient_id: string; issue_id: string },
+  stamped: number,
+): Promise<void> {
+  const newestUnread = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue_read_order', (q) =>
+      q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id).eq('read_at', undefined),
+    )
+    .order('desc')
+    .first()
+  const read = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue_read_order', (q) =>
+      q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id).gt('read_at', undefined),
+    )
+    .take(stamped + 1)
+  let newest = newestUnread ?? read[0]
+  for (const row of read) {
+    if (
+      row.created_at > newest.created_at ||
+      (row.created_at === newest.created_at && row.id > newest.id)
+    )
+      newest = row
+  }
+  for (const row of read) {
+    if (row._id !== newest._id) await ctx.db.delete(row._id)
+  }
+}
+
 /**
  * Marks up to INBOX_BATCH of `me`'s unread rows read, the ones created no
  * later than `before`. The first call passes no `before`: the cutoff is then
@@ -506,33 +559,7 @@ export async function markAllMessagesRead(
   const batch = rows.slice(0, INBOX_BATCH)
   for (const row of batch) await ctx.db.patch(row._id, { read_at: now })
   for (const issue_id of new Set(batch.map((row) => row.issue_id))) {
-    const newestUnread = await ctx.db
-      .query('messages')
-      .withIndex('by_recipient_issue_read_order', (q) =>
-        q.eq('recipient_id', me.id).eq('issue_id', issue_id).eq('read_at', undefined),
-      )
-      .order('desc')
-      .first()
-    // The shared prune invariant guarantees at most one pre-existing read
-    // row. This batch added at most INBOX_BATCH more, so this bounded read is
-    // complete.
-    const read = await ctx.db
-      .query('messages')
-      .withIndex('by_recipient_issue_read_order', (q) =>
-        q.eq('recipient_id', me.id).eq('issue_id', issue_id).gt('read_at', undefined),
-      )
-      .take(INBOX_BATCH + 1)
-    let newest = newestUnread ?? read[0]
-    for (const row of read) {
-      if (
-        row.created_at > newest.created_at ||
-        (row.created_at === newest.created_at && row.id > newest.id)
-      )
-        newest = row
-    }
-    for (const row of read) {
-      if (row._id !== newest._id) await ctx.db.delete(row._id)
-    }
+    await pruneStampedItem(ctx, { recipient_id: me.id, issue_id }, INBOX_BATCH)
   }
   return { marked: batch, hasMore: rows.length > INBOX_BATCH, before: cutoff }
 }
@@ -610,6 +637,201 @@ export async function snoozeMessages(
     await ctx.scheduler.runAt(Date.parse(at), wakeRef, { ...pair, until: at })
   }
   return changed
+}
+
+/* ---------------------------------------------------------- archived tasks
+ * Archiving a task makes every inbox message about it read, for every
+ * recipient. No inbox shows an archived task or a task in an archived
+ * project (lib/workingSet.ts inWorkingSet), retention never retires an
+ * unread row, and unread rows nobody can see would fill the bounded unread
+ * walk (lib/inbox.ts) until visible messages drop out of it.
+ *
+ * postMessage stores news about such a task already read. For what was
+ * stored before, every archive path schedules background steps
+ * (scheduleArchivedReads). Those paths are archiveIssueCore and the machine
+ * toggle in updateIssueCore with the subtree they stamp, the nightly sweep
+ * (jobs.ts archiveDoneIssues) and archiveProjectCore. The marking happens
+ * in steps because one task can have many followers with up to
+ * ITEM_UNREAD_CAP + 1 rows each, so a big subtree, a project or a nightly
+ * leg could pass the archiving transaction's write limit. Each step marks
+ * at most ARCHIVED_READ_BATCH rows, visits at most ARCHIVED_READ_TASKS tasks
+ * and schedules the rest.
+ *
+ * A step checks each task when it runs and leaves one that is no longer
+ * archived alone, so a restore before the step runs keeps that task's
+ * messages as they were. A snoozed item becomes read and loses its snooze,
+ * so its scheduled wake finds nothing. Every touched item then keeps its
+ * newest message, read (the prune's invariant). A step that runs twice finds
+ * nothing left to mark. A restore changes nothing here. The Restored notice
+ * arrives unread and, being the newest, the prune drops the older read
+ * rows, as it does whenever news reaches a read item. */
+
+/** The most rows one archived-read step marks read. */
+export const ARCHIVED_READ_BATCH = 500
+
+/** The most tasks one archived-read step visits, which is also the most task
+ * ids one scheduled step carries. */
+export const ARCHIVED_READ_TASKS = 500
+
+/* The steps in convex/messages.ts, referenced by name like wakeRef. `batch`
+ * lowers the rows per step in tests. */
+const readArchivedTasksRef = makeFunctionReference<
+  'mutation',
+  { issues: string[]; batch?: number },
+  null
+>('messages:readArchivedTasks')
+const readArchivedProjectRef = makeFunctionReference<
+  'mutation',
+  { project_id: string; from?: number; batch?: number },
+  null
+>('messages:readArchivedProject')
+
+/**
+ * Schedules the background steps that mark every message about the archived
+ * `issues`, and about the active tasks of the archived `projects`, read. The
+ * archive paths call it in the transaction that archives.
+ */
+export async function scheduleArchivedReads(
+  ctx: MutationCtx,
+  a: { issues?: readonly string[]; projects?: readonly string[] },
+): Promise<void> {
+  const issues = a.issues ?? []
+  for (let i = 0; i < issues.length; i += ARCHIVED_READ_TASKS) {
+    await ctx.scheduler.runAfter(0, readArchivedTasksRef, {
+      issues: issues.slice(i, i + ARCHIVED_READ_TASKS),
+    })
+  }
+  for (const project_id of a.projects ?? []) {
+    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
+  }
+}
+
+/* The rows per step a caller asked for, at least one so a step always makes
+ * progress. */
+const stepBatch = (batch: number | undefined): number =>
+  Math.max(1, Math.floor(batch ?? ARCHIVED_READ_BATCH))
+
+/* Marks up to `budget` of the task's unread or snoozed rows read, for every
+ * recipient, and keeps the prune's invariant on each item it touched. A row
+ * already read keeps its stamp and only loses its snooze. A read row that is
+ * not snoozed is skipped in the scan; the invariant keeps those to one per
+ * recipient. `more` says rows remain for the next step. */
+async function readTaskMessages(
+  ctx: MutationCtx,
+  issueId: string,
+  now: string,
+  budget: number,
+): Promise<{ marked: number; more: boolean }> {
+  const rows = await ctx.db
+    .query('messages')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .filter((q) =>
+      q.or(q.eq(q.field('read_at'), undefined), q.neq(q.field('snoozed_until'), undefined)),
+    )
+    .take(budget + 1)
+  const batch = rows.slice(0, budget)
+  for (const row of batch) {
+    await ctx.db.patch(row._id, { read_at: row.read_at ?? now, snoozed_until: undefined })
+  }
+  for (const recipient_id of new Set(batch.map((row) => row.recipient_id))) {
+    await pruneStampedItem(ctx, { recipient_id, issue_id: issueId }, budget)
+  }
+  return { marked: batch.length, more: rows.length > budget }
+}
+
+/**
+ * One background step over archived tasks, then the next one scheduled with
+ * the ids left. Each task in `issues`, in order, whose own archive or
+ * project archive still stands has its unread and snoozed messages marked
+ * read for every recipient. A task that was restored or deleted meanwhile is
+ * skipped. The step stops after `batch` rows (ARCHIVED_READ_BATCH by
+ * default) or ARCHIVED_READ_TASKS tasks, and the next one starts at the
+ * task it did not finish.
+ */
+export async function readArchivedTaskMessages(
+  ctx: MutationCtx,
+  a: { issues: readonly string[]; batch?: number; now: string },
+): Promise<void> {
+  let budget = stepBatch(a.batch)
+  const projects = new Map<string, Promise<Doc<'projects'> | null>>()
+  const projectOf = (id: string) => {
+    let project = projects.get(id)
+    if (project === undefined) {
+      project = byId(ctx, 'projects', id)
+      projects.set(id, project)
+    }
+    return project
+  }
+  let rest: readonly string[] = []
+  for (const [i, issueId] of a.issues.entries()) {
+    if (budget === 0 || i === ARCHIVED_READ_TASKS) {
+      rest = a.issues.slice(i)
+      break
+    }
+    const issue = await byId(ctx, 'issues', issueId)
+    if (issue === null) continue
+    if (
+      issue.archived_at === undefined &&
+      (await projectOf(issue.project_id))?.archived_at === undefined
+    ) {
+      continue
+    }
+    const step = await readTaskMessages(ctx, issue.id, a.now, budget)
+    budget -= step.marked
+    if (step.more) {
+      rest = a.issues.slice(i)
+      break
+    }
+  }
+  if (rest.length > 0) {
+    await ctx.scheduler.runAfter(0, readArchivedTasksRef, { issues: [...rest], batch: a.batch })
+  }
+}
+
+/**
+ * One background step over an archived project's active tasks, in creation
+ * order from `from` (inclusive), then the next one scheduled where it
+ * stopped. A project that was restored or deleted meanwhile ends the walk.
+ * Tasks the project held archived already were handled by their own
+ * archive. A meta-project holds no tasks, so its walk ends at once; its
+ * sub-projects archived with it are walked by their own steps. Limits as in
+ * readArchivedTaskMessages.
+ */
+export async function readArchivedProjectMessages(
+  ctx: MutationCtx,
+  a: { project_id: string; from?: number; batch?: number; now: string },
+): Promise<void> {
+  const project = await byId(ctx, 'projects', a.project_id)
+  if (project === null || project.archived_at === undefined) return
+  let budget = stepBatch(a.batch)
+  let visited = 0
+  let from: number | undefined
+  const tasks = ctx.db.query('issues').withIndex('by_project_archived', (q) =>
+    q
+      .eq('project_id', project.id)
+      .eq('archived_at', undefined)
+      .gte('_creationTime', a.from ?? 0),
+  )
+  for await (const task of tasks) {
+    if (budget === 0 || visited === ARCHIVED_READ_TASKS) {
+      from = task._creationTime
+      break
+    }
+    visited += 1
+    const step = await readTaskMessages(ctx, task.id, a.now, budget)
+    budget -= step.marked
+    if (step.more) {
+      from = task._creationTime
+      break
+    }
+  }
+  if (from !== undefined) {
+    await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
+      project_id: project.id,
+      from,
+      batch: a.batch,
+    })
+  }
 }
 
 /* ---------------------------------------------------------------- mentions
@@ -768,12 +990,14 @@ export async function notifyIssueInsert(
  * group's calculated dates are never stored, so a subtask moving its span
  * sends the group's followers nothing.
  *
- * `suppressNotify` replaces pg_trigger_depth() <= 1: the archive cascade
- * passes it for cascade-written descendant/ancestor rows, and it suppresses
- * ONLY the Archived/Restored narration line — one archive click is one
- * message (the root's) per subscriber. It sits upstream of the fan-out, so
- * it cannot multiply per subscriber, and it does not silence the nightly
- * sweep (each sweep write is its own statement).
+ * `suppressNotify` replaces pg_trigger_depth() <= 1 and drops ONLY the
+ * Archived/Restored narration line. Only the restore cascade passes it, for
+ * the ancestors restoreAncestors brings back, so a cleared remaining still
+ * narrates to their followers. The archive cascade never notifies its
+ * descendants (model/issues.ts archiveSubtree), so one archive click is one
+ * message, the root's, per subscriber. The flag sits upstream of the
+ * fan-out, so it cannot multiply per subscriber. The nightly archive sweep
+ * (jobs.ts archiveDoneIssues) does not call this and posts no message.
  *
  * Ownership (#314): when the task passes to someone else (lib/review.ts's
  * taskOwnerId), the new owner starts following it. A reviewer handed the

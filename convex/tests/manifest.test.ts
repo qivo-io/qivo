@@ -342,6 +342,8 @@ mail:send action internal {"type":"object","value":{"to":{"fieldType":{"type":"s
 messages:markAllRead mutation public {"type":"object","value":{"before":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:markRead mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:markUnread mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+messages:readArchivedProject mutation internal {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"from":{"fieldType":{"type":"number"},"optional":true},"batch":{"fieldType":{"type":"number"},"optional":true}}}
+messages:readArchivedTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"batch":{"fieldType":{"type":"number"},"optional":true}}}
 messages:remove mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:removeRead mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:snooze mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -610,6 +612,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // removeRead clears current read rows in bounded batches beyond the Inbox display limit.
   // markAllRead reaches all own unread rows beyond the display cap and preserves later arrivals.
   // snooze hides an own item until a server-scheduled wake (messages:wake, internal).
+  // Archiving schedules messages:readArchivedTasks and readArchivedProject (internal).
   messages: {
     markAllRead: 'orgMutation',
     markRead: 'orgMutation',

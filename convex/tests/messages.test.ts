@@ -269,14 +269,19 @@ describe('archive cascade + the shared instant', () => {
     expect(comments[0].body).toBe('obsolete')
     expect(comments[0].author).toBe(f.user.id)
 
+    // The Archived notice and the reason's 'New comment' both arrive read,
+    // because the task is already archived, and at the mutation's one now.
+    // The prune keeps one read row per item, the newest, and at one instant
+    // the higher id decides which of the two that is.
     const msgs = await messagesFor(t, f.guest.id, issue.id)
-    expect(msgs.map((m) => m.kind).sort()).toEqual(['change', 'comment'])
-    expect(msgs.find((m) => m.kind === 'change')!.detail).toBe('Archived')
-    expect(msgs.find((m) => m.kind === 'comment')!.detail).toBe('New comment') // Inbox secondLine key
-    for (const m of msgs) {
-      expect(m.created_at).toBe(comments[0].created_at) // ONE now — 0111
-      expect(m.created_at >= comments[0].created_at).toBe(true) // spine.ts's >=
-    }
+    expect(msgs).toHaveLength(1)
+    expect([
+      ['change', 'Archived'],
+      ['comment', 'New comment'], // Inbox secondLine key
+    ]).toContainEqual([msgs[0].kind, msgs[0].detail])
+    expect(msgs[0].read_at).toBe(comments[0].created_at)
+    expect(msgs[0].created_at).toBe(comments[0].created_at) // ONE now (0111)
+    expect(msgs[0].created_at >= comments[0].created_at).toBe(true) // spine.ts's >=
     expect(after.archived_at).toBe(comments[0].created_at)
     // the author was subscribed by their comment but never self-messaged
     expect(await messagesFor(t, f.user.id, issue.id)).toHaveLength(0)
@@ -296,7 +301,7 @@ describe('archive cascade + the shared instant', () => {
           .collect(),
       ),
     ).toHaveLength(1)
-    expect(await messagesFor(t, f.guest.id, issue.id)).toHaveLength(2)
+    expect(await messagesFor(t, f.guest.id, issue.id)).toEqual(msgs)
   })
 
   it('descendant/ancestor cascade echoes are suppressed; the root row itself narrates', async () => {
@@ -312,7 +317,10 @@ describe('archive cascade + the shared instant', () => {
     await subscribe(t, f.admin, child.id)
 
     await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: parent.id })
-    expect((await messagesFor(t, f.admin.id, parent.id)).map((m) => m.detail)).toEqual(['Archived'])
+    // the notice is written after the archive, so it arrives read
+    expect(
+      (await messagesFor(t, f.admin.id, parent.id)).map((m) => [m.detail, m.read_at !== undefined]),
+    ).toEqual([['Archived', true]])
     expect(await messagesFor(t, f.admin.id, child.id)).toHaveLength(0) // descendant echo suppressed
 
     await drainMessages(t)
