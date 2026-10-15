@@ -698,7 +698,7 @@ const readArchivedTasksRef = makeFunctionReference<
 >('messages:readArchivedTasks')
 const readArchivedProjectRef = makeFunctionReference<
   'mutation',
-  { project_id: string; from?: number; skip?: number; batch?: number; tasks?: number },
+  { project_id: string; cursor?: string; batch?: number; tasks?: number },
   null
 >('messages:readArchivedProject')
 
@@ -824,86 +824,63 @@ export async function readArchivedTaskMessages(
   }
 }
 
+/* The most bytes of tasks one project walk step reads. Task descriptions
+ * have no size cap, so the page also ends early on bytes. */
+const ARCHIVED_READ_TASK_BYTES = 8 * 1024 * 1024
+
 /**
- * One background step over an archived project's active tasks, in creation
- * order from `from` (inclusive), then the next one scheduled where it
- * stopped. A project that was restored or deleted meanwhile ends the walk.
- * Tasks the project held archived already were handled by their own
- * archive. A meta-project holds no tasks, so its walk ends at once; its
- * sub-projects archived with it are walked by their own steps. The step
- * stops after `batch` rows, as in readArchivedTaskMessages, or after
- * `tasks` tasks (ARCHIVED_READ_TASKS by default), so a project with
- * thousands of tasks and few messages still spreads over several steps.
- * `skip` counts the tasks created exactly at `from` that an earlier step
- * finished, so a step that stops inside a group of tasks sharing one
- * creation time (possible for imported data) resumes after them instead of
- * repeating the group forever.
+ * One background step over an archived project's active tasks, one page of
+ * them from `cursor` (a Convex pagination cursor, absent for the start),
+ * then the next one scheduled. A project that was restored or deleted
+ * meanwhile ends the walk. Tasks the project held archived already were
+ * handled by their own archive. A meta-project holds no tasks, so its walk
+ * ends at once; its sub-projects archived with it are walked by their own
+ * steps. A page holds at most `tasks` tasks (ARCHIVED_READ_TASKS by
+ * default) and ARCHIVED_READ_TASK_BYTES of them, so a project with
+ * thousands of tasks spreads over several steps. When the row budget
+ * (`batch`, as in readArchivedTaskMessages) runs out inside the page, the
+ * next step reads the same page again: the tasks already finished hold no
+ * row to change and cost two index reads each, and every such step marks
+ * at least one row, so the walk always ends. The cursor survives tasks
+ * that share a creation time or are deleted between steps.
  */
 export async function readArchivedProjectMessages(
   ctx: MutationCtx,
-  a: {
-    project_id: string
-    from?: number
-    skip?: number
-    batch?: number
-    tasks?: number
-    now: string
-  },
+  a: { project_id: string; cursor?: string; batch?: number; tasks?: number; now: string },
 ): Promise<void> {
   const project = await byId(ctx, 'projects', a.project_id)
   if (project === null || project.archived_at === undefined) return
   let budget = stepLimit(a.batch, ARCHIVED_READ_BATCH)
-  const cap = stepLimit(a.tasks, ARCHIVED_READ_TASKS)
-  let visited = 0
-  // the tasks finished at the newest creation time reached, so the next
-  // step can skip them however many share that time
-  let doneAt = a.from ?? 0
-  let doneThere = a.skip ?? 0
-  let toSkip = a.skip ?? 0
-  let next: { from: number; skip: number } | undefined
-  const active = ctx.db.query('issues').withIndex('by_project_archived', (q) =>
-    q
-      .eq('project_id', project.id)
-      .eq('archived_at', undefined)
-      .gte('_creationTime', a.from ?? 0),
-  )
-  for await (const task of active) {
-    if (toSkip > 0 && task._creationTime === a.from) {
-      toSkip -= 1
-      continue
-    }
-    const stopHere = () => {
-      next = {
-        from: task._creationTime,
-        skip: doneAt === task._creationTime ? doneThere : 0,
-      }
-    }
-    if (budget === 0 || visited === cap) {
-      stopHere()
+  const page = await ctx.db
+    .query('issues')
+    .withIndex('by_project_archived', (q) =>
+      q.eq('project_id', project.id).eq('archived_at', undefined),
+    )
+    .paginate({
+      cursor: a.cursor ?? null,
+      numItems: stepLimit(a.tasks, ARCHIVED_READ_TASKS),
+      maximumBytesRead: ARCHIVED_READ_TASK_BYTES,
+    })
+  let unfinished = false
+  for (const task of page.page) {
+    if (budget === 0) {
+      unfinished = true
       break
     }
-    visited += 1
     const step = await readTaskMessages(ctx, task.id, a.now, budget)
     budget -= step.marked
     if (step.more) {
-      stopHere()
+      unfinished = true
       break
     }
-    if (task._creationTime === doneAt) doneThere += 1
-    else {
-      doneAt = task._creationTime
-      doneThere = 1
-    }
   }
-  if (next !== undefined) {
-    await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
-      project_id: project.id,
-      from: next.from,
-      skip: next.skip === 0 ? undefined : next.skip,
-      batch: a.batch,
-      tasks: a.tasks,
-    })
-  }
+  if (!unfinished && page.isDone) return
+  await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
+    project_id: project.id,
+    cursor: unfinished ? a.cursor : page.continueCursor,
+    batch: a.batch,
+    tasks: a.tasks,
+  })
 }
 
 /* ---------------------------------------------------------------- mentions

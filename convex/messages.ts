@@ -125,13 +125,12 @@ export const readArchivedTasks = internalMutation({
   },
 })
 
-/* The same for the active tasks of an archived project, walked from `from`,
- * a task creation time. `tasks` lowers the tasks per step in tests. */
+/* The same for the active tasks of an archived project, one page per step
+ * from `cursor`, a pagination cursor. `tasks` lowers the page size in tests. */
 export const readArchivedProject = internalMutation({
   args: {
     project_id: v.string(),
-    from: v.optional(v.number()),
-    skip: v.optional(v.number()),
+    cursor: v.optional(v.string()),
     batch: v.optional(v.number()),
     tasks: v.optional(v.number()),
   },

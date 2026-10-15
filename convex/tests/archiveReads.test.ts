@@ -512,12 +512,9 @@ describe('the background steps', () => {
 
     expect(await item(t, f.admin, tasks[0].id)).toEqual([{ detail: 'planted', read: true }])
     expect(await item(t, f.admin, tasks[1].id)).toEqual([{ detail: 'planted', read: false }])
+    // the budget ran out inside the page, so the next step reads it again
     const [next] = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    expect(next.args[0]).toEqual({
-      project_id: f.sub.id,
-      from: tasks[1]._creationTime,
-      batch: 1,
-    })
+    expect(next.args[0]).toEqual({ project_id: f.sub.id, batch: 1 })
 
     await runSteps(t)
     for (const task of tasks) {
@@ -525,26 +522,23 @@ describe('the background steps', () => {
     }
   })
 
-  it('skip the tasks an earlier step finished at the creation time it resumes from', async () => {
+  it('continue past a task deleted between steps without skipping another', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const tasks = []
-    for (let n = 0; n < 2; n++) {
+    const tasks: Doc<'issues'>[] = []
+    for (let n = 0; n < 3; n++) {
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
       await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: task.id })
       tasks.push(task)
     }
     await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: 'x' }))
 
-    // resuming at the first task's time with one task already done there
-    await t.mutation(internal.messages.readArchivedProject, {
-      project_id: f.sub.id,
-      from: tasks[0]._creationTime,
-      skip: 1,
-    })
+    await t.mutation(internal.messages.readArchivedProject, { project_id: f.sub.id, tasks: 2 })
+    await t.run((ctx) => ctx.db.delete(tasks[1]._id))
+    await runSteps(t)
 
-    expect(await item(t, f.admin, tasks[0].id)).toEqual([{ detail: 'planted', read: false }])
-    expect(await item(t, f.admin, tasks[1].id)).toEqual([{ detail: 'planted', read: true }])
+    expect(await item(t, f.admin, tasks[0].id)).toEqual([{ detail: 'planted', read: true }])
+    expect(await item(t, f.admin, tasks[2].id)).toEqual([{ detail: 'planted', read: true }])
   })
 
   it('stop a project walk after `tasks` tasks, also when none of them holds a row to mark', async () => {
@@ -565,7 +559,7 @@ describe('the background steps', () => {
     const [next] = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
     expect(next.args[0]).toEqual({
       project_id: f.sub.id,
-      from: tasks[2]._creationTime,
+      cursor: expect.any(String),
       tasks: 2,
     })
 
