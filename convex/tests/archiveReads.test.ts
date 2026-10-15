@@ -3,18 +3,24 @@
  * stored read, and every archive path schedules background steps that mark
  * what was stored before read for every recipient and prune each item to its
  * newest message. The steps run when the test fires the fake timers, so each
- * case can look before and after them. Deleting a task or a project deletes
- * its messages. */
+ * case can look before and after them. While the archive stands, mark
+ * unread and snooze refuse the task in the app, over REST and over MCP, and
+ * mark read and remove still work. Deleting a task or a project deletes its
+ * messages. */
 /// <reference types="vite/client" />
 
 import type { FunctionArgs } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { Refusal, RefusalCode } from '../lib/functions'
+import { sha256hex } from '../machine/auth'
 import {
   allMessages,
   as,
+  expectRefusal,
   messagesFor,
+  NOW,
   newT,
   type OrgFixture,
   plantIssue,
@@ -627,5 +633,321 @@ describe('deleting', () => {
     expect(await messagesFor(t, f.guest.id, task.id)).toEqual([])
     expect(await messagesFor(t, f.guest.id, inSub2.id)).toEqual([])
     expect(await item(t, f.guest, kept.id)).toEqual([{ detail: 'planted', read: false }])
+  })
+})
+
+/* ------------------------------------------------------------ inbox writes */
+
+type InboxAction = 'read' | 'unread' | 'remove' | 'snooze'
+type InboxBody = { tasks: string[]; until?: string | null }
+
+const keyOf = (task: Doc<'issues'>) => `QN-${task.num}`
+
+/* update_inbox for the agent, answering the parsed result. */
+const viaMcp = async (t: T, f: OrgFixture, action: InboxAction, body: InboxBody) =>
+  JSON.parse(
+    await t.mutation(internal.machine.discussion.mcpUpdateInbox, {
+      callerId: f.agent.id,
+      access: 'write',
+      action,
+      ...body,
+    }),
+  ) as { action: string; tasks: string[]; has_more: boolean }
+
+/* Each POST /v1/inbox/{action} route's internal function. */
+const REST_INBOX = {
+  read: internal.machine.discussion.restReadInbox,
+  unread: internal.machine.discussion.restUnreadInbox,
+  remove: internal.machine.discussion.restRemoveInbox,
+  snooze: internal.machine.discussion.restSnoozeInbox,
+}
+
+/* POST /v1/inbox/{action} for the agent. */
+const viaRest = (t: T, f: OrgFixture, action: InboxAction, body: InboxBody) =>
+  t.mutation(REST_INBOX[action], {
+    callerId: f.agent.id,
+    access: 'write',
+    body: JSON.stringify(body),
+  })
+
+/* The app's own inbox writes for `who`, on message ids. */
+const viaApp = (
+  t: T,
+  who: Doc<'profiles'>,
+  action: InboxAction,
+  ids: string[],
+  until?: string | null,
+) => {
+  const args = { org_id: who.org_id, ids }
+  const app = as(t, who)
+  if (action === 'read') return app.mutation(api.messages.markRead, args)
+  if (action === 'unread') return app.mutation(api.messages.markUnread, args)
+  if (action === 'remove') return app.mutation(api.messages.remove, args)
+  return app.mutation(api.messages.snooze, { ...args, until: until ?? null })
+}
+
+/* Asserts a refusal with exactly this code and sentence. */
+async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
+  const e = await expectRefusal(p, code)
+  expect((e.data as Refusal).message).toBe(sentence)
+}
+
+const scheduled = (t: T) => t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+
+/* A snooze an hour ahead of the frozen clock. */
+const anHourAhead = () => new Date(Date.now() + 3_600_000).toISOString()
+
+/* The rule sentences, as the model writes them. */
+const isArchived = (task: Doc<'issues'>) => `${keyOf(task)} is archived; restore it first`
+const inArchivedProject = (task: Doc<'issues'>) =>
+  `${keyOf(task)} is in an archived project; restore the project first`
+const bothArchived = (task: Doc<'issues'>) =>
+  `${keyOf(task)} and its project are archived; restore both first`
+
+/* withOrg with the agent on TBED, an active and an archived task in FW, and
+ * PCB archived with one active and one archived task in it. The agent and
+ * the guest hold one message about each task, as `row` plants it. */
+async function archivedInbox(t: T, row: { read_at?: string; snoozed_until?: string }) {
+  const f = await withOrg(t)
+  await grantAgent(t, f)
+  const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+  const archived = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
+  const shelved = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+  const both = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: NOW })
+  await t.run((ctx) => ctx.db.patch(f.sub2._id, { archived_at: NOW }))
+  const rows = new Map<string, Doc<'messages'>>()
+  for (const who of [f.agent, f.guest]) {
+    for (const task of [active, archived, shelved, both]) {
+      const m = await plantMessage(t, {
+        org_id: f.org.id,
+        recipient_id: who.id,
+        issue_id: task.id,
+        ...row,
+      })
+      rows.set(`${who.id}:${task.id}`, m)
+    }
+  }
+  /* the id of `who`'s message about `task` */
+  const idOf = (who: Doc<'profiles'>, task: Doc<'issues'>) =>
+    rows.get(`${who.id}:${task.id}`)?.id ?? ''
+  return { f, active, archived, shelved, both, idOf }
+}
+
+describe('inbox writes on an archived task', () => {
+  it('unread and snooze, dated or null, refuse an archived task or one in an archived project on every surface, and change nothing', async () => {
+    const t = newT()
+    // read rows that kept a snooze, so mark unread, a new snooze and an
+    // early end would each change them
+    const fx = await archivedInbox(t, { read_at: NOW, snoozed_until: '2099-01-01T00:00:00.000Z' })
+    const { f } = fx
+    const before = await allMessages(t)
+    const until = anHourAhead()
+    for (const [task, sentence] of [
+      [fx.archived, isArchived(fx.archived)],
+      [fx.shelved, inArchivedProject(fx.shelved)],
+      [fx.both, bothArchived(fx.both)],
+    ] as const) {
+      for (const [action, body] of [
+        ['unread', {}],
+        ['snooze', { until }],
+        ['snooze', { until: null }],
+      ] as const) {
+        const tasks = [keyOf(task)]
+        await refused(viaMcp(t, f, action, { tasks, ...body }), 'rule', sentence)
+        await refused(viaRest(t, f, action, { tasks, ...body }), 'rule', sentence)
+        const ids = [fx.idOf(f.guest, task)]
+        const appUntil = 'until' in body ? body.until : undefined
+        await refused(viaApp(t, f.guest, action, ids, appUntil), 'rule', sentence)
+      }
+    }
+    expect(await allMessages(t)).toEqual(before)
+    // no wake was scheduled either
+    expect(await scheduled(t)).toEqual([])
+  })
+
+  it('REST answers the refusal as a 400 with the sentence', async () => {
+    const t = newT()
+    const fx = await archivedInbox(t, { read_at: NOW })
+    const secret = `qva_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
+    const key_hash = await sha256hex(secret)
+    await t.run((ctx) =>
+      ctx.db.insert('agent_keys', {
+        id: uuid(),
+        profile_id: fx.f.agent.id,
+        name: 'Inbox key',
+        key_prefix: secret.slice(0, 11),
+        key_hash,
+        created_at: NOW,
+      }),
+    )
+    const res = await (
+      t as unknown as {
+        fetch(
+          path: string,
+          init: { method: string; headers: Record<string, string>; body: string },
+        ): Promise<{ status: number; text(): Promise<string> }>
+      }
+    ).fetch('/v1/inbox/unread', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks: [keyOf(fx.archived)] }),
+    })
+    expect({ status: res.status, body: JSON.parse(await res.text()) }).toEqual({
+      status: 400,
+      body: { error: isArchived(fx.archived) },
+    })
+  })
+
+  it('read and remove still work there, so the item can be cleaned up', async () => {
+    const t = newT()
+    // unread rows stored before archiving marked them read
+    const fx = await archivedInbox(t, {})
+    const { f } = fx
+    const tasks = [keyOf(fx.archived), keyOf(fx.shelved)]
+
+    expect(await viaMcp(t, f, 'read', { tasks })).toEqual({
+      action: 'read',
+      tasks,
+      has_more: false,
+    })
+    for (const task of [fx.archived, fx.shelved]) {
+      expect(await item(t, f.agent, task.id)).toEqual([{ detail: 'planted', read: true }])
+    }
+    expect(await viaRest(t, f, 'remove', { tasks })).toEqual({
+      action: 'remove',
+      tasks,
+      has_more: false,
+    })
+    for (const task of [fx.archived, fx.shelved]) {
+      expect(await messagesFor(t, f.agent.id, task.id)).toEqual([])
+    }
+
+    const ids = [fx.idOf(f.guest, fx.archived), fx.idOf(f.guest, fx.both)]
+    await viaApp(t, f.guest, 'read', ids)
+    for (const task of [fx.archived, fx.both]) {
+      expect(await item(t, f.guest, task.id)).toEqual([{ detail: 'planted', read: true }])
+    }
+    await viaApp(t, f.guest, 'remove', ids)
+    for (const task of [fx.archived, fx.both]) {
+      expect(await messagesFor(t, f.guest.id, task.id)).toEqual([])
+    }
+  })
+
+  it('one archived task among several refuses the whole request, also when it holds no message', async () => {
+    const t = newT()
+    const fx = await archivedInbox(t, { read_at: NOW })
+    const { f } = fx
+    const before = await allMessages(t)
+    const active = keyOf(fx.active)
+
+    await refused(
+      viaMcp(t, f, 'unread', { tasks: [active, keyOf(fx.archived)] }),
+      'rule',
+      isArchived(fx.archived),
+    )
+    await refused(
+      viaRest(t, f, 'snooze', { tasks: [active, keyOf(fx.shelved)], until: anHourAhead() }),
+      'rule',
+      inArchivedProject(fx.shelved),
+    )
+    await refused(
+      viaApp(t, f.guest, 'unread', [fx.idOf(f.guest, fx.active), fx.idOf(f.guest, fx.archived)]),
+      'rule',
+      isArchived(fx.archived),
+    )
+    // an archived task the agent holds no message about refuses too
+    const quiet = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
+    await refused(
+      viaMcp(t, f, 'snooze', { tasks: [active, keyOf(quiet)], until: null }),
+      'rule',
+      isArchived(quiet),
+    )
+    expect(await allMessages(t)).toEqual(before)
+    expect(await scheduled(t)).toEqual([])
+
+    // the active task alone goes through
+    expect(await viaMcp(t, f, 'unread', { tasks: [active] })).toEqual({
+      action: 'unread',
+      tasks: [active],
+      has_more: false,
+    })
+    expect(await item(t, f.agent, fx.active.id)).toEqual([{ detail: 'planted', read: false }])
+  })
+
+  it('a hidden archived task answers like an unknown one, before any archived task is refused', async () => {
+    const t = newT()
+    const fx = await archivedInbox(t, { read_at: NOW })
+    const { f } = fx
+    // SKNK, which neither the agent nor the guest can see
+    const hidden = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.hidden.id,
+      archived_at: NOW,
+    })
+    const hiddenRows = []
+    for (const who of [f.agent, f.guest]) {
+      hiddenRows.push(
+        await plantMessage(t, {
+          org_id: f.org.id,
+          recipient_id: who.id,
+          issue_id: hidden.id,
+          read_at: NOW,
+        }),
+      )
+    }
+    const before = await allMessages(t)
+
+    for (const ref of [keyOf(hidden), 'QN-999999']) {
+      // the visible archived task comes first and is still not the one named
+      const tasks = [keyOf(fx.archived), ref]
+      for (const [action, body] of [
+        ['unread', {}],
+        ['snooze', { until: null }],
+      ] as const) {
+        await refused(
+          viaMcp(t, f, action, { tasks, ...body }),
+          'not_found',
+          `task "${ref}" not found (or not visible to you)`,
+        )
+        await refused(
+          viaRest(t, f, action, { tasks, ...body }),
+          'bad_request',
+          'tasks must name tasks by key, number or uuid',
+        )
+      }
+    }
+    // the app skips a message about a hidden archived task silently, as it
+    // skips an unknown id, and schedules no wake for it
+    const guestRow = hiddenRows[1].id
+    for (const ids of [[guestRow], [uuid()]]) {
+      expect(await viaApp(t, f.guest, 'unread', ids)).toBeNull()
+      expect(await viaApp(t, f.guest, 'snooze', ids, anHourAhead())).toBeNull()
+      expect(await viaApp(t, f.guest, 'snooze', ids, null)).toBeNull()
+    }
+    expect(await allMessages(t)).toEqual(before)
+    expect(await scheduled(t)).toEqual([])
+  })
+
+  it('after a restore, unread and snooze work again', async () => {
+    const t = newT()
+    const fx = await archivedInbox(t, { read_at: NOW })
+    const { f } = fx
+    await as(t, f.user).mutation(api.issues.unarchive, { org_id: f.org.id, id: fx.archived.id })
+    await as(t, f.user).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub2.id })
+
+    expect((await viaMcp(t, f, 'unread', { tasks: [keyOf(fx.archived)] })).tasks).toEqual([
+      keyOf(fx.archived),
+    ])
+    const until = anHourAhead()
+    expect((await viaRest(t, f, 'snooze', { tasks: [keyOf(fx.shelved)], until })).tasks).toEqual([
+      keyOf(fx.shelved),
+    ])
+    await viaApp(t, f.guest, 'unread', [fx.idOf(f.guest, fx.archived)])
+    expect(await item(t, f.agent, fx.archived.id)).toEqual([{ detail: 'planted', read: false }])
+    expect(await item(t, f.guest, fx.archived.id)).toEqual([{ detail: 'planted', read: false }])
+    const [snoozed] = await messagesFor(t, f.agent.id, fx.shelved.id)
+    expect([snoozed.snoozed_until, snoozed.read_at]).toEqual([until, undefined])
+    // the task archived on its own in PCB stays archived after PCB's restore
+    await refused(viaMcp(t, f, 'unread', { tasks: [keyOf(fx.both)] }), 'rule', isArchived(fx.both))
   })
 })

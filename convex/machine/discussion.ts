@@ -22,7 +22,8 @@
  * only tasks the caller can read (lib/workingSet.ts with the machine Shown,
  * lib/core.ts machineShown). The inbox lists what the app's Inbox lists, the
  * items about tasks in the caller's working set (lib/workingSet.ts
- * inWorkingSet), so an archived task's item leaves it until a restore. It
+ * inWorkingSet), so an archived task's item leaves it until a restore, and
+ * `unread` and `snooze` refuse such a task, so its messages stay read. It
  * shows the live task title and key, never the title stored on the
  * message. */
 
@@ -62,6 +63,7 @@ import {
   markAllMessagesRead,
   markMessagesRead,
   markMessagesUnread,
+  refuseArchivedItems,
   removeMessages,
   removeReadMessages,
   snoozeMessages,
@@ -313,7 +315,11 @@ type InboxChangeJson = { action: InboxAction; tasks: string[]; has_more: boolean
  * read notifications do, one bounded batch per call and rows about tasks the
  * caller cannot read included. The answer names only tasks the caller can
  * read. A ref the caller cannot read refuses the whole change with
- * `unknownTask`.
+ * `unknownTask`. Every ref is resolved before anything else, so that
+ * refusal comes first. Then `unread` and `snooze` refuse the whole change
+ * when a named task is archived or in an archived project, whether or not
+ * the caller holds messages about it (model/messages.ts
+ * refuseArchivedItems). `read` and `remove` still work there.
  */
 async function changeInbox(
   ctx: MutationCtx,
@@ -353,13 +359,20 @@ async function changeInbox(
     if (issue === null) throw unknownTask(ref)
     if (!named.some((n) => n.id === issue.id)) named.push(issue)
   }
+  if (action === 'unread' || action === 'snooze') {
+    await refuseArchivedItems(
+      ctx,
+      me,
+      named.map((issue) => issue.id),
+    )
+  }
   const rows: Doc<'messages'>[] = []
   for (const issue of named) rows.push(...(await itemMessages(ctx, me, issue.id)))
   const changed =
     action === 'read'
       ? await markMessagesRead(ctx, me, rows, now)
       : action === 'unread'
-        ? await markMessagesUnread(ctx, rows)
+        ? await markMessagesUnread(ctx, me, rows)
         : action === 'remove'
           ? await removeMessages(ctx, rows)
           : await snoozeMessages(ctx, me, rows, req.until)

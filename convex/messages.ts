@@ -12,6 +12,7 @@
  * (machine/discussion.ts) runs too. markRead then restores 0109's invariant
  * per DISTINCT (recipient, issue) pair among the rows it marked, as the
  * statement trigger fired once per pair. markUnread prunes nothing.
+ * markUnread and snooze refuse a message about an archived task.
  * markAllRead visits bounded batches beyond the snapshot cap, keeping the
  * first batch's server-selected cutoff. There is no boot
  * sweep_my_read_messages; the nightly sweep is phase 9's cron. The internal
@@ -57,11 +58,13 @@ export const markAllRead = orgMutation({
   },
 })
 
-/* P.markMessagesUnread, the same column the other way. */
+/* P.markMessagesUnread, the same column the other way. A message about an
+ * archived task refuses the whole act (model/messages.ts
+ * refuseArchivedItems), and the client rolls back. */
 export const markUnread = orgMutation({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }) => {
-    await markMessagesUnread(ctx, await ownMessages(ctx, ctx.me, ids))
+    await markMessagesUnread(ctx, ctx.me, await ownMessages(ctx, ctx.me, ids))
     return null
   },
 })
@@ -93,7 +96,7 @@ export const removeRead = orgMutation({
  * snoozeMessages). The return trip is the scheduled wake below, a server
  * event, so the laptop that snoozed and the phone that did not see the row
  * come back at the same instant, and a closed phone finds it back the
- * moment it opens. */
+ * moment it opens. An archived task refuses it like markUnread. */
 export const snooze = orgMutation({
   args: { ids: v.array(v.string()), until: v.union(v.string(), v.null()) },
   handler: async (ctx, { ids, until }) => {
