@@ -84,6 +84,9 @@ export const forMe = authedQuery({
     const activityDocs: Doc<'activity_events'>[] = []
     const unreadDocs: Doc<'messages'>[] = []
     const readDocs: Doc<'messages'>[] = []
+    // whether some seat's bounded inbox read left unread (read) rows unexamined
+    let unreadTruncated = false
+    let readTruncated = false
     const seenLinkIds = new Set<string>()
     /* Active tasks and project rows fill these caches below. Only an admin's
      * activity row about a task outside the active set needs a lookup; never
@@ -304,12 +307,17 @@ export const forMe = authedQuery({
       // within lib/inbox.ts's bounds, so a backlog nobody clears cannot stop
       // the app from loading; the blended cap applies below. The machine
       // inbox reads with the same INBOX_LIMIT, so the rows this seat
-      // delivers are among the ones the API lists for it. Rows about a task
-      // the caller can no longer access stay stored and return if access
-      // does.
+      // delivers are among the ones the API lists for it. Rows about an
+      // archived task, a task in an archived project or a task the caller
+      // can no longer access stay stored and return if the task or access
+      // does. An archive marks the rows about its tasks read in the
+      // background (model/messages.ts), so those come back read once that
+      // has run.
       const inbox = await loadInbox(ctx, me.id, workingSet.shown, INBOX_LIMIT)
       unreadDocs.push(...inbox.unread)
       readDocs.push(...inbox.read)
+      unreadTruncated ||= inbox.unreadTruncated
+      readTruncated ||= inbox.readTruncated
 
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))
@@ -328,8 +336,8 @@ export const forMe = authedQuery({
     // read kept (at most INBOX_LIMIT per seat), before the cut, minus snoozed
     // rows, which messages.removeRead leaves alone. The client only asks
     // whether it is above zero. removeRead also deletes read rows about tasks
-    // the caller can no longer access; they are not counted because the
-    // caller cannot see them.
+    // the caller is not shown, archived ones included; they are not counted
+    // because the caller cannot see them.
     const readMessageCount = readDocs.reduce(
       (count, message) => count + (message.snoozed_until === undefined ? 1 : 0),
       0,
@@ -356,6 +364,13 @@ export const forMe = authedQuery({
       activity,
       messages,
       readMessageCount,
+      // A seat's bounded read can stop before it reaches every row, also when
+      // rows about tasks the caller is not shown fill its examination budget.
+      // Unread (read) rows may then exist that neither `messages` nor the
+      // count includes. While the flag is true, the client keeps Mark all as
+      // read (Remove all read) available, because it reaches every row.
+      unreadTruncated,
+      readTruncated,
       orgLoad,
       // the server time of this delivery, so the client can tell messages
       // created before it from newer ones without trusting its own clock

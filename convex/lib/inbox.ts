@@ -43,7 +43,12 @@ export type InboxLoad = {
   unread: Doc<'messages'>[]
   /** read rows about shown tasks, most recently read first */
   read: Doc<'messages'>[]
-  /** whether some of the recipient's rows were left unexamined */
+  /** whether the unread walk left some of the recipient's unread rows
+   * unexamined, so unread rows may exist that this read did not keep */
+  unreadTruncated: boolean
+  /** the same for the read walk */
+  readTruncated: boolean
+  /** whether some of the recipient's rows were left unexamined (either walk) */
   truncated: boolean
 }
 
@@ -82,10 +87,12 @@ async function keepShown(
  * is the accepted cost of the bound.
  *
  * The walks are bounded separately, so a backlog in one never hides the
- * other. A person with a thousand old unread rows about archived tasks
- * still gets their recent read rows. The cost is that a read row can come
- * back while an older unread row about the same task was not reached, and
- * then both surfaces show that task as read, alike.
+ * other. A person with a thousand old unread rows about tasks they lost
+ * access to still gets their recent read rows. Archiving a task marks its
+ * rows read (model/messages.ts), so those count toward the read walk. The
+ * cost is that a read row can come back while an older unread row about the
+ * same task was not reached, and then both surfaces show that task as read,
+ * alike.
  */
 export async function loadInbox(
   ctx: QueryCtx,
@@ -118,6 +125,8 @@ export async function loadInbox(
   return {
     unread: unread.kept,
     read: read.kept,
+    unreadTruncated: unread.truncated,
+    readTruncated: read.truncated,
     truncated: unread.truncated || read.truncated,
   }
 }

@@ -745,6 +745,9 @@ describe('messages', () => {
     const snap = await snapFor(f.user)
     expect(snap.messages.map((m) => m.id)).toEqual(ids)
     expect(snap.readMessageCount).toBe(1)
+    // both walks reached every row, so the bulk actions need no flag
+    expect(snap.unreadTruncated).toBe(false)
+    expect(snap.readTruncated).toBe(false)
   })
 
   it('answers over a backlog larger than one transaction may read; visible rows past the bound wait', async () => {
@@ -773,6 +776,10 @@ describe('messages', () => {
     expect(snap.messages).toEqual([])
     expect(snap.readMessageCount).toBe(0)
     expect(snap.issues.map((i) => i.id)).toContain(visibleTask.id)
+    // nothing visible was kept, but rows were left unexamined, so the app
+    // keeps Mark all as read and Remove all read available
+    expect(snap.unreadTruncated).toBe(true)
+    expect(snap.readTruncated).toBe(true)
   })
 
   it('lists read rows even while hidden rows leave unread ones unexamined, as the machine inbox does', async () => {
@@ -793,6 +800,8 @@ describe('messages', () => {
     // surface, so both show the task as read
     expect(snap.messages.map((m) => m.id)).toEqual([visible.read.id])
     expect(snap.readMessageCount).toBe(1)
+    expect(snap.unreadTruncated).toBe(true)
+    expect(snap.readTruncated).toBe(false)
     expect(await machineInbox(f.user)).toEqual({
       items: { [issueVis.id]: [visible.read.id] },
       truncated: true,
@@ -811,6 +820,7 @@ describe('messages', () => {
     snap = await snapFor(f.user)
     expect(snap.messages.map((m) => m.id)).toEqual([visible.unread.id, visible.read.id])
     expect(snap.readMessageCount).toBe(1)
+    expect(snap.unreadTruncated).toBe(false)
     // the machine inbox runs an item's messages oldest first, and these
     // share created_at, so their ids order them
     expect(await machineInbox(f.user)).toEqual({

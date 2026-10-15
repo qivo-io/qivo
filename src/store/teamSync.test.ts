@@ -168,6 +168,8 @@ function fixture(myRole: Role) {
     ],
     messages: [],
     readMessageCount: 0,
+    unreadTruncated: false,
+    readTruncated: false,
     delivered_at: '2026-09-15T08:00:00.000Z',
   }
   return { snap, org, me: me.id, aisha: aisha.id, ben: ben.id, done, review, todo }
