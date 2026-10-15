@@ -73,8 +73,9 @@ const archiveLegRef = makeFunctionReference<
  * followers are not told. Keep it that way, because an Archived notice for
  * every follower of every Done task would only add rows that arrive read.
  * The leg schedules the background steps that mark the messages already
- * stored about its tasks read (model/messages.ts scheduleArchivedReads), as
- * every archive path does.
+ * stored about its tasks read, and the tasks' relation rows for the app
+ * snapshot (model/messages.ts scheduleArchivedReads), as every archive path
+ * does.
  *
  * `now` is the run's stamp and clock, shared by every leg. Returns how many
  * tasks this leg archived and whether due tasks remain in the organization. */

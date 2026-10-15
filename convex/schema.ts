@@ -51,6 +51,17 @@ import {
 import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
 
+/* `task_archived` on a task's relation rows (links, label assignments, follows
+ * and attachments) marks a row of an archived task, for a link one with at
+ * least one archived end, so the app snapshot skips it by index
+ * (convex/snapshot.ts, lib/snapshotRelations.ts). Only a background step that
+ * finds the task archived in its own transaction sets it, and every restore
+ * clears it in the restoring transaction (model/archiveMarks.ts), so a marked
+ * row never belongs to an active task. The reverse does not hold. A row written
+ * after the archive, or before marks existed, stays unmarked, and readers
+ * filter it as before. Every other reader sees marked rows like any other. */
+const taskArchived = v.optional(v.literal(true))
+
 export default defineSchema({
   // Durable ownership for public demo copies. This outlives profiles and
   // authentication while a bounded purge drains their remaining files.
@@ -607,8 +618,10 @@ export default defineSchema({
     // unique-checked on by_pair (replaces the (least, greatest) unique index)
     pair_key: v.string(),
     created_at: v.string(),
+    task_archived: taskArchived,
   })
-    .index('by_org', ['org_id'])
+    // the snapshot's org-wide read of unmarked rows, which keeps creation order
+    .index('by_org_task_archived', ['org_id', 'task_archived'])
     .index('by_uuid', ['id'])
     .index('by_source', ['source_id'])
     .index('by_target', ['target_id'])
@@ -630,8 +643,9 @@ export default defineSchema({
     org_id: v.optional(v.string()),
     issue_id: v.string(), // label and issue must share an org
     label_id: v.string(),
+    task_archived: taskArchived,
   })
-    .index('by_org', ['org_id'])
+    .index('by_org_task_archived', ['org_id', 'task_archived'])
     .index('by_issue', ['issue_id'])
     .index('by_label', ['label_id'])
     .index('by_issue_label', ['issue_id', 'label_id']),
@@ -640,9 +654,12 @@ export default defineSchema({
     issue_id: v.string(),
     profile_id: v.string(), // recipient must be able to see the project
     created_at: v.string(),
+    task_archived: taskArchived,
   })
     .index('by_issue', ['issue_id'])
-    .index('by_profile', ['profile_id'])
+    // the snapshot reads one's unmarked follows; profile cleanup takes the
+    // whole profile range
+    .index('by_profile_task_archived', ['profile_id', 'task_archived'])
     .index('by_issue_profile', ['issue_id', 'profile_id']),
 
   issue_attachments: defineTable({
@@ -656,8 +673,9 @@ export default defineSchema({
     inline: v.boolean(),
     uploaded_by: v.optional(v.string()),
     created_at: v.string(),
+    task_archived: taskArchived,
   })
-    .index('by_org', ['org_id'])
+    .index('by_org_task_archived', ['org_id', 'task_archived'])
     .index('by_uuid', ['id'])
     .index('by_issue', ['issue_id'])
     .index('by_storage', ['storage_id'])

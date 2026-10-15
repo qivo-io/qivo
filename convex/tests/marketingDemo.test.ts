@@ -494,6 +494,30 @@ describe('marketing demo rebuild ownership', () => {
     })
   })
 
+  it('marks the labels, links and follows of archived tasks as the archive steps would, and no other row', async () => {
+    const t = newAuthT()
+    await seeded(t)
+    await t.run(async (ctx) => {
+      const archived = new Set(
+        (await ctx.db.query('issues').collect())
+          .filter((task) => task.archived_at !== undefined)
+          .map((task) => task.id),
+      )
+      const labels = await ctx.db.query('issue_labels').collect()
+      const follows = await ctx.db.query('issue_subscriptions').collect()
+      for (const row of [...labels, ...follows]) {
+        expect(row.task_archived === true, row.issue_id).toBe(archived.has(row.issue_id))
+      }
+      for (const link of await ctx.db.query('issue_links').collect()) {
+        expect(link.task_archived === true, link.id).toBe(
+          archived.has(link.source_id) || archived.has(link.target_id),
+        )
+      }
+      expect(labels.filter((row) => row.task_archived).length).toBeGreaterThan(0)
+      expect(follows.filter((row) => row.task_archived).length).toBeGreaterThan(0)
+    })
+  })
+
   it('gives every human and Atlas unread notifications for tasks they can see, using real assignment, review and comment events', async () => {
     const t = newAuthT()
     await seeded(t)

@@ -182,10 +182,12 @@ describe('bounded durable webhook dispatch', () => {
     expect(await f.rows()).toHaveLength(0)
     expect(await f.t.run((ctx) => ctx.db.query('webhook_events').collect())).toHaveLength(51)
     const jobs = await f.t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    // the archive also schedules the step that marks the subtree's messages read
+    // the archive also schedules the steps that mark the subtree's messages
+    // read and its relation rows for the snapshot
     expect(jobs.map((job) => ({ name: job.name, delay: job.scheduledTime - Date.now() }))).toEqual([
       { name: 'webhookQueue:expand', delay: 0 },
       { name: 'messages:readArchivedTasks', delay: 0 },
+      { name: 'archiveMarks:markTasks', delay: 0 },
     ])
 
     await flushWebhookEvents(f.t)

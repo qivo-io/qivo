@@ -167,10 +167,13 @@ describe('organization export', () => {
         color: '#fff',
         created_at: NOW,
       })
+      // the archived task's rows carry the archive mark, which the export
+      // leaves out like the organization id
       await ctx.db.insert('issue_labels', {
         org_id: task.org_id,
         issue_id: task.id,
         label_id: labelId,
+        task_archived: true,
       })
       const attachmentId = uuid()
       await ctx.db.insert('issue_attachments', {
@@ -184,6 +187,7 @@ describe('organization export', () => {
         inline: true,
         uploaded_by: f.admin.id,
         created_at: NOW,
+        task_archived: true,
       })
       await ctx.db.insert('comments', {
         id: uuid(),
@@ -201,6 +205,7 @@ describe('organization export', () => {
         type: 'blocks',
         pair_key: [task.id, target.id].sort().join(':'),
         created_at: NOW,
+        task_archived: true,
       })
       await ctx.db.insert('milestones', {
         id: uuid(),
@@ -256,6 +261,7 @@ describe('organization export', () => {
         expect(row).not.toHaveProperty('auth_user_id')
         expect(row).not.toHaveProperty('message_retention_days')
         expect(row).not.toHaveProperty('key_hash')
+        expect(row).not.toHaveProperty('task_archived')
       }
     }
     expect(exported.organizations).toHaveLength(1)
