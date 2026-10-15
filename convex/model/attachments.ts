@@ -288,8 +288,8 @@ export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload an
  *
  * Convex storage does not record which upload URL stored a file, so this
  * cannot prove that `storage_id` came from the ticket's URL. It binds the
- * file by the ticket's owner, task and expiry, a creation time after the
- * ticket's, the exact declared size and a file nothing uses yet
+ * file by the ticket's owner, task and expiry, a creation time at or after
+ * the ticket's, the exact declared size and a file nothing uses yet
  * (attachFileCore). Another unused file that meets all of these, such as
  * one from the same caller's other upload, can be attached in its place.
  * That is an accepted limit.
