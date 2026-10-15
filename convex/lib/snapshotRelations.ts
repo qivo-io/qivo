@@ -12,18 +12,19 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   return groups
 }
 
-/** The bounds of a view's relation reads. `ranges` is the most index ranges
- * that reads task by task may spend for one view. A view is read wholly task
- * by task when four ranges per task fit and `ratio` times its tasks is under
- * the organization's active tasks. Tests change these to force a read. */
-export const RELATION_READ = { ranges: 2048, ratio: 2 }
+/** When a view's relation reads go task by task. A view of at most `tasks`
+ * tasks that holds under 1 / `ratio` of the organization's active tasks is
+ * read wholly task by task. In any other view, a table over its bulk cap is
+ * read task by task while the reads task by task so far fit `ranges`, which
+ * is Convex's limit per transaction. Tests change these to force a read. */
+export const RELATION_READ = { tasks: 512, ratio: 2, ranges: 4096 }
 
-/* A bulk read of a table that the view could still afford to read task by
- * task stops after this many rows per range that read would cost. Convex
- * allows about 8 documents per index range (32,000 to 4,096), and stopping at
- * half that leaves room for the other tables and the rest of the snapshot.
- * With all three tables at their caps, a view reads at most 16 rows per
- * visible task. */
+/* The rows a bulk read of one table takes, per range its read task by task
+ * would cost (one per task for labels and attachments, two for links),
+ * before it reads that table task by task instead. Convex allows about 8
+ * documents per index range (32,000 to 4,096), and half that leaves room for
+ * the other tables and the rest of the snapshot. With all three tables at
+ * their caps, a view reads at most 16 rows per visible task. */
 const BULK_ROWS_PER_RANGE = 4
 
 /* One task's links as source and as target, label assignments and
@@ -69,42 +70,55 @@ const byCreation = <Row extends { _creationTime: number }>(rows: Row[]): Row[] =
  * creation order. `active` is the number of the organization's tasks that are
  * not archived.
  *
- * A view of at most RELATION_READ.ranges / 4 tasks (512) that holds under
- * half the active tasks is read task by task, four ranges per task. That is
- * the cheapest read for a restricted view in a large organization.
+ * A view of at most RELATION_READ.tasks tasks (512) that holds under half the
+ * active tasks is read task by task, four ranges per task, the cheapest read
+ * for a restricted view in a large organization.
  *
  * Any other view reads each table in bulk, the organization's rows without
  * the archive mark (by_org_task_archived_*). Background steps mark the rows
  * of each task once it is archived (model/archiveMarks.ts), so these reads
  * follow the active tasks, not everything ever archived. The tables go
- * cheapest first: labels and attachments cost one range per task read task
- * by task, links two. While that cost fits what is left of
- * RELATION_READ.ranges, the bulk read stops after BULK_ROWS_PER_RANGE rows per
- * such range, and a table with more is read task by task, spending the
- * budget. Otherwise the table is read in full, as no read with bounded ranges
- * remains. A large view reads the active tasks' rows in bulk this way, and a
- * restricted one in a dense organization reads its own rows task by task.
+ * cheapest first, labels, attachments, then links. A bulk read stops after
+ * BULK_ROWS_PER_RANGE rows per range the table's read task by task would
+ * cost, and a table with more is read task by task while the reads task by
+ * task so far fit RELATION_READ.ranges, else in full. A table kept in bulk is
+ * then probed for rows stored without org_id, which the organization's range
+ * cannot hold. While an unmarked one exists anywhere, that table is read task
+ * by task as before. No writer stores such rows any more, none rewrites
+ * them, and the archive steps never mark one.
  *
  * A task restored from the archive keeps marked rows until background steps
  * clear them, and carries relations_marked meanwhile. Each such visible task
  * is read through its own indexes, which include marked rows, before the
- * tables are, at four ranges each, taken from the budget first. Its links,
- * marked ones included, are also listed for their other end, so every task
- * gets the rows its own indexes would give.
+ * tables are, at four ranges each. Its links, marked ones included, are also
+ * listed for their other end, so every task gets the rows its own indexes
+ * would give.
  *
- * So the reads cost 4 ranges per visible task in the first case. Otherwise
- * they cost 6 ranges plus RELATION_READ.ranges at most, or plus 4 per
- * restored visible task if that is more. A table that falls back first read
- * at most BULK_ROWS_PER_RANGE documents per range it then spends, and a table
- * read in bulk reads at most that many when the budget allowed a fallback,
- * else every unmarked row of the organization's table.
+ * The rule this replaced read a view task by task unless the view held half
+ * the tasks ever created, and otherwise each table in bulk up to 2 rows per
+ * visible task (at most 4,096), task by task past that, after probing all
+ * three tables. Not counting restored tasks, this rule costs at most 3
+ * ranges more than that one did:
+ * - A view it read task by task cost one range per task for labels and
+ *   attachments and two for links. Here it is read the same way, or each
+ *   table costs its capped read plus either its probe or those ranges, which
+ *   is at most one range more per table. In a view of 4 tasks or more, a
+ *   table kept in bulk saves at least what the other two can add.
+ * - A view it read in bulk: these caps are at least its caps and count only
+ *   unmarked rows, so a table read task by task here was read so there too,
+ *   at the same cost, and it probed every table. It costs at most as much.
+ * - A table is read in full only when reading it task by task would take the
+ *   reads task by task past 4,096 ranges. The old read included those
+ *   ranges, so it had passed the limit.
+ * In documents, a table under its cap reads at most its cap, and one over it
+ * reads its cap plus one before the visible tasks' own rows, which the old
+ * rule read too. A table read in full reads every unmarked row of the
+ * organization's table.
  *
- * Rows stored without org_id, from before the field existed, are outside the
- * organization's range. While an unmarked one exists, in any organization,
- * every view is read task by task as before, also one of more than 512 tasks.
- * No writer stores such rows any more, and none rewrites them. The archive
- * steps never mark one (model/archiveMarks.ts), so probing for unmarked rows
- * finds them all.
+ * Both rules fail for a restricted view of about 1,000 tasks whose three
+ * tables are all dense, where these reads alone take about 4,000 ranges. A
+ * larger view fails here only if reading a dense table in full passes 32,000
+ * documents, and the old rule could not read such a view at all.
  */
 export async function snapshotRelations(
   ctx: QueryCtx,
@@ -112,33 +126,12 @@ export async function snapshotRelations(
 ): Promise<(issueId: string) => Promise<TaskRows>> {
   const visible = a.tasks.length
   const perTask = (issueId: string) => readTask(ctx, issueId)
-  if (4 * visible <= RELATION_READ.ranges && RELATION_READ.ratio * visible < a.active) {
+  if (visible <= RELATION_READ.tasks && RELATION_READ.ratio * visible < a.active) {
     return perTask
   }
-  const legacy = await Promise.all([
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_org_task_archived_source', (q) =>
-        q.eq('org_id', undefined).eq('task_archived', undefined),
-      )
-      .first(),
-    ctx.db
-      .query('issue_labels')
-      .withIndex('by_org_task_archived_issue', (q) =>
-        q.eq('org_id', undefined).eq('task_archived', undefined),
-      )
-      .first(),
-    ctx.db
-      .query('issue_attachments')
-      .withIndex('by_org_task_archived_issue', (q) =>
-        q.eq('org_id', undefined).eq('task_archived', undefined),
-      )
-      .first(),
-  ])
-  if (legacy.some((row) => row !== null)) return perTask
 
   // Restored tasks whose marks are not cleared yet, read through their own
-  // indexes before the tables, so the budget left is known.
+  // indexes before the tables, so the ranges spent are known.
   const restored = new Map<string, TaskRows>()
   for (const task of a.tasks) {
     if (task.relations_marked === true) restored.set(task.id, await readTask(ctx, task.id))
@@ -146,26 +139,37 @@ export async function snapshotRelations(
   let budget = RELATION_READ.ranges - 4 * restored.size
   const others = visible - restored.size
   /* One table's unmarked rows in bulk, or null to read it task by task
-   * (`cost` ranges per task) when it holds more than the cap and the budget
-   * allows, or when every visible task was read already. */
+   * (`cost` ranges per task). `legacy` finds a row of the table stored
+   * without org_id, which only a read task by task reaches. */
   const bulk = async <Row>(
     rows: { take(n: number): Promise<Row[]>; collect(): Promise<Row[]> },
+    legacy: { first(): Promise<unknown> },
     cost: number,
   ): Promise<Row[] | null> => {
     if (others === 0) return null
     const ranges = cost * others
-    if (ranges > budget) return await rows.collect()
+    const taskByTask = () => {
+      budget -= ranges
+      return null
+    }
+    if (ranges > budget) {
+      return (await legacy.first()) === null ? await rows.collect() : taskByTask()
+    }
     const cap = BULK_ROWS_PER_RANGE * ranges
-    const read = await rows.take(cap + 1)
-    if (read.length <= cap) return read
-    budget -= ranges
-    return null
+    const capped = await rows.take(cap + 1)
+    if (capped.length > cap || (await legacy.first()) !== null) return taskByTask()
+    return capped
   }
   const labels = await bulk(
     ctx.db
       .query('issue_labels')
       .withIndex('by_org_task_archived_issue', (q) =>
         q.eq('org_id', a.orgId).eq('task_archived', undefined),
+      ),
+    ctx.db
+      .query('issue_labels')
+      .withIndex('by_org_task_archived_issue', (q) =>
+        q.eq('org_id', undefined).eq('task_archived', undefined),
       ),
     1,
   )
@@ -175,6 +179,11 @@ export async function snapshotRelations(
       .withIndex('by_org_task_archived_issue', (q) =>
         q.eq('org_id', a.orgId).eq('task_archived', undefined),
       ),
+    ctx.db
+      .query('issue_attachments')
+      .withIndex('by_org_task_archived_issue', (q) =>
+        q.eq('org_id', undefined).eq('task_archived', undefined),
+      ),
     1,
   )
   const links = await bulk(
@@ -182,6 +191,11 @@ export async function snapshotRelations(
       .query('issue_links')
       .withIndex('by_org_task_archived_source', (q) =>
         q.eq('org_id', a.orgId).eq('task_archived', undefined),
+      ),
+    ctx.db
+      .query('issue_links')
+      .withIndex('by_org_task_archived_source', (q) =>
+        q.eq('org_id', undefined).eq('task_archived', undefined),
       ),
     2,
   )

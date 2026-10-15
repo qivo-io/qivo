@@ -551,7 +551,7 @@ describe('rows of tasks archived before marks existed', () => {
     await plantRelations(t, f, active)
 
     expect(await shown(t, f, old.id)).toEqual(NONE)
-    Object.assign(RELATION_READ, { ranges: Number.POSITIVE_INFINITY, ratio: 0 })
+    Object.assign(RELATION_READ, { tasks: Number.POSITIVE_INFINITY, ratio: 0 })
     expect(await shown(t, f, old.id)).toEqual(NONE)
     expect(await shown(t, f, active.id)).toEqual({ ...ALL, links: 0 })
     Object.assign(RELATION_READ, DEFAULT_READ)

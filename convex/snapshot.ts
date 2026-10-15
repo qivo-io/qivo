@@ -9,23 +9,27 @@
  *   (lib/access.ts projectLevelsForOrg);
  * - up to three per visible project, archived ones included (grants, team
  *   grants, and the milestones of an active one);
- * - the relation rows, at most 2,054 ranges as long as no row stored without
- *   org_id remains (lib/snapshotRelations.ts RELATION_READ);
- * - one per visible task restored so recently that its relation rows still
- *   carry archive marks (model/archiveMarks.ts), for its follow. Its four
- *   relation reads come out of the budget above unless such tasks alone pass
- *   it. Background steps clear the marks moments after the restore;
+ * - the relation rows (lib/snapshotRelations.ts). A view whose tables stay in
+ *   bulk takes six ranges; a restricted or dense one is read task by task, up
+ *   to 4 ranges per visible task, never more than 3 ranges above the rule
+ *   this replaced and only while those reads fit 4,096 ranges;
+ * - five per visible task restored so recently that its relation rows still
+ *   carry archive marks (model/archiveMarks.ts), its own relation reads and
+ *   follow. Background steps clear the marks moments after the restore;
  * - one per task an activity row is about, or names by number, that is not
  *   among the active tasks. The organization keeps 500 rows
  *   (model/activity.ts), so that is at most 500 for an admin, who reads the
  *   task each row is about, and at most 1,000 for a member, who reads up to
  *   two numbered tasks a row names.
- * One seat therefore reads at most about 3,070 ranges plus three per team and
- * per visible project, and a person's seats add up. Teams and projects are
- * few beside tasks. Documents read follow the active tasks and their unmarked
- * relation rows (model/archiveMarks.ts marks the rows of archived tasks), the
- * organization's people, projects, teams and labels, at most 500 activity
- * rows, and at most 3,002 messages per seat (lib/inbox.ts). */
+ * A seat whose relation tables stay in bulk therefore reads at most about
+ * 1,020 ranges plus three per team and per visible project, and a person's
+ * seats add up. Teams and projects are few beside tasks. A view read task by
+ * task adds its 4 ranges per task, as the rule this replaced did, which a
+ * view of about 1,000 tasks or more cannot afford. Documents read follow the
+ * active tasks and their unmarked relation rows (model/archiveMarks.ts marks
+ * the rows of archived tasks), the organization's people, projects, teams and
+ * labels, at most 500 activity rows, and at most 3,002 messages per seat
+ * (lib/inbox.ts). */
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import { canSeeProject } from './lib/access'

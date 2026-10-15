@@ -13,10 +13,11 @@ afterEach(() => {
   Object.assign(RELATION_READ, DEFAULT_READ)
 })
 
-/* No range budget, so every view reads each table in bulk and in full. */
-const ALL_BULK = { ranges: 0, ratio: DEFAULT_READ.ratio }
-/* Every view reads task by task. */
-const ALL_SELECTIVE = { ranges: Number.POSITIVE_INFINITY, ratio: 0 }
+/* Every view reads each table in bulk and in full. */
+const ALL_BULK = { tasks: 0, ratio: DEFAULT_READ.ratio, ranges: 0 }
+/* Every view reads task by task, which is main's read for a view it did not
+ * read in bulk. */
+const ALL_SELECTIVE = { tasks: Number.POSITIVE_INFINITY, ratio: 0, ranges: 0 }
 
 /* The caller's snapshot with the transaction's read counts. */
 const read = (t: T, profile: Doc<'profiles'>) =>
@@ -246,7 +247,7 @@ describe('snapshot bulk relation reads', () => {
     expect(foreignLegacy.metrics.databaseQueries.used).toBe(legacy.metrics.databaseQueries.used)
   })
 
-  it('read a small view of a larger organization task by task, and one whose task-by-task cost passes the budget in bulk', async () => {
+  it('read a small view of a larger organization task by task, and a larger one in bulk', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the guest is shown the four tasks in Firmware, not the 36 in Skunkworks
@@ -257,8 +258,8 @@ describe('snapshot bulk relation reads', () => {
     expect(usual.snapshot!.issues).toHaveLength(4)
     expect(usual.metrics.databaseQueries.used).toBe(selective.metrics.databaseQueries.used)
     expect(usual.metrics.databaseQueries.used).not.toBe(bulk.metrics.databaseQueries.used)
-    // the same view reads in bulk once four ranges per task exceed the budget
-    const large = await readWith(t, f.guest, { ...DEFAULT_READ, ranges: 15 })
+    // the same view reads in bulk once it counts as larger than `tasks`
+    const large = await readWith(t, f.guest, { ...DEFAULT_READ, tasks: 3 })
     expect(large.metrics.databaseQueries.used).toBe(bulk.metrics.databaseQueries.used)
     expect(sameDelivery(large.snapshot)).toEqual(sameDelivery(usual.snapshot))
   })
@@ -280,11 +281,11 @@ describe('snapshot bulk relation reads', () => {
     const labels = Array.from({ length: 300 }, (_, i) => `label-${i}`)
     const small = await read(t, f.admin)
     expect(small.snapshot!.issueLabels.map((row) => row.label_id)).toEqual(labels)
-    // without a range budget the table is read in full, with no cap and no
-    // fallback costing a range per task
+    // without ranges to spend task by task the table is read in full: its
+    // probe and full read replace the capped read and 32 ranges task by task
     const large = await readWith(t, f.admin, ALL_BULK)
     expect(large.snapshot!.issueLabels.map((row) => row.label_id)).toEqual(labels)
-    expect(small.metrics.databaseQueries.used - large.metrics.databaseQueries.used).toBe(32)
+    expect(small.metrics.databaseQueries.used - large.metrics.databaseQueries.used).toBe(31)
   })
 })
 
@@ -490,13 +491,15 @@ describe('the snapshot of an organization with a long archive', () => {
 
 /* `total` active tasks, the first `visible` in Firmware, which the guest
  * sees, the rest in Skunkworks, which they do not. Each task has `labels`
- * labels and, with `links`, a link to the task before it. */
+ * labels, `attachments` attachments, and a link to each of up to `links`
+ * tasks before it. */
 async function plantDense(
   t: T,
-  a: { total: number; visible: number; labels: number; links: boolean },
+  a: { total: number; visible: number; labels: number; links: number; attachments?: number },
 ) {
   const f = await withOrg(t)
-  const chunk = Math.floor(3000 / (a.labels + 2))
+  const storage_id = await t.run((ctx) => ctx.storage.store(new Blob() as never))
+  const chunk = Math.floor(3000 / (a.labels + a.links + (a.attachments ?? 0) + 1))
   for (let from = 0; from < a.total; from += chunk) {
     await t.run(async (ctx) => {
       for (let i = from; i < Math.min(from + chunk, a.total); i++) {
@@ -520,14 +523,25 @@ async function plantDense(
             issue_id: id,
             label_id: `label-${l}`,
           })
-        if (a.links && i > 0)
+        for (let back = 1; back <= Math.min(a.links, i); back++)
           await ctx.db.insert('issue_links', {
-            id: `link-${i}`,
+            id: `link-${i}-${back}`,
             org_id: f.org.id,
             source_id: id,
-            target_id: `task-${i - 1}`,
+            target_id: `task-${i - back}`,
             type: 'blocks',
-            pair_key: `task-${i - 1}:${id}`,
+            pair_key: `task-${i - back}:${id}`,
+            created_at: NOW,
+          })
+        for (let n = 0; n < (a.attachments ?? 0); n++)
+          await ctx.db.insert('issue_attachments', {
+            id: `file-${i}-${n}`,
+            org_id: f.org.id,
+            issue_id: id,
+            name: 'spec.pdf',
+            size_bytes: 1,
+            storage_id,
+            inline: false,
             created_at: NOW,
           })
       }
@@ -540,7 +554,7 @@ async function plantDense(
 describe('the snapshot of a restricted view in a dense organization', () => {
   it('reads 300 of 6,000 active tasks with five labels each task by task, within limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await plantDense(t, { total: 6000, visible: 300, labels: 5, links: false })
+    const f = await plantDense(t, { total: 6000, visible: 300, labels: 5, links: 0 })
     const { snapshot, metrics } = await read(t, f.guest)
     expect(snapshot!.issues).toHaveLength(300)
     expect(snapshot!.issueLabels).toHaveLength(1500)
@@ -552,15 +566,48 @@ describe('the snapshot of a restricted view in a dense organization', () => {
 
   it('reads a dense table task by task and the others in bulk for 600 of 2,000 tasks, within limits', async () => {
     const t = newT({ transactionLimits: true })
-    const f = await plantDense(t, { total: 2000, visible: 600, labels: 15, links: true })
+    const f = await plantDense(t, { total: 2000, visible: 600, labels: 15, links: 1 })
     const { snapshot, metrics } = await read(t, f.guest)
     expect(snapshot!.issues).toHaveLength(600)
     expect(snapshot!.issueLabels).toHaveLength(9000)
     expect(snapshot!.links).toHaveLength(599)
-    // 2,400 ranges task by task would pass the budget, so the labels, over
-    // their cap, take 600 and the links stay in bulk
+    // the labels, over their cap, are read task by task, 600 ranges, and the
+    // links stay in bulk
     expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(600)
     expect(metrics.databaseQueries.used).toBeLessThan(700)
     expect(metrics.documentsRead.used).toBeLessThan(20_000)
+  }, 120_000)
+
+  it('reads all three tables task by task when each is over its cap, at most 3 ranges above main', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await plantDense(t, {
+      total: 2000,
+      visible: 600,
+      labels: 2,
+      attachments: 2,
+      links: 3,
+    })
+    const usual = await read(t, f.guest)
+    // main read this view task by task, as the forced read does
+    const main = await readWith(t, f.guest, ALL_SELECTIVE)
+    expect(sameDelivery(usual.snapshot)).toEqual(sameDelivery(main.snapshot))
+    expect(usual.snapshot!.issueLabels).toHaveLength(1200)
+    expect(usual.snapshot!.attachments).toHaveLength(1200)
+    // each table first tried its capped bulk read, then read like main
+    expect(usual.metrics.databaseQueries.used).toBe(main.metrics.databaseQueries.used + 3)
+    expect(usual.metrics.documentsRead.used).toBeLessThan(20_000)
+  }, 120_000)
+
+  it('reads a dense table task by task for a view of more than 1,024 tasks while those reads fit the range limit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await plantDense(t, { total: 1100, visible: 1100, labels: 5, links: 0 })
+    const { snapshot, metrics } = await read(t, f.guest)
+    expect(snapshot!.issueLabels).toHaveLength(5500)
+    // the labels are over their cap of 4 per task, and 1,100 ranges task by
+    // task still fit, so they are read as main read them, not in full
+    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(1100)
+    expect(metrics.databaseQueries.used).toBeLessThan(1200)
+    const full = await readWith(t, f.guest, { ...DEFAULT_READ, ranges: 0 })
+    expect(full.metrics.databaseQueries.used).toBeLessThan(100)
   }, 120_000)
 })
