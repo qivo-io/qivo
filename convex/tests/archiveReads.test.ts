@@ -457,6 +457,28 @@ describe('the background steps', () => {
     }
   })
 
+  it('skip the tasks an earlier step finished at the creation time it resumes from', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks = []
+    for (let n = 0; n < 2; n++) {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: task.id })
+      tasks.push(task)
+    }
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: 'x' }))
+
+    // resuming at the first task's time with one task already done there
+    await t.mutation(internal.messages.readArchivedProject, {
+      project_id: f.sub.id,
+      from: tasks[0]._creationTime,
+      skip: 1,
+    })
+
+    expect(await item(t, f.admin, tasks[0].id)).toEqual([{ detail: 'planted', read: false }])
+    expect(await item(t, f.admin, tasks[1].id)).toEqual([{ detail: 'planted', read: true }])
+  })
+
   it('stop a project walk after `tasks` tasks, also when none of them holds a row to mark', async () => {
     const t = newT()
     const f = await withOrg(t)

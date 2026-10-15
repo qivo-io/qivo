@@ -685,7 +685,7 @@ const readArchivedTasksRef = makeFunctionReference<
 >('messages:readArchivedTasks')
 const readArchivedProjectRef = makeFunctionReference<
   'mutation',
-  { project_id: string; from?: number; batch?: number; tasks?: number },
+  { project_id: string; from?: number; skip?: number; batch?: number; tasks?: number },
   null
 >('messages:readArchivedProject')
 
@@ -815,17 +815,33 @@ export async function readArchivedTaskMessages(
  * stops after `batch` rows, as in readArchivedTaskMessages, or after
  * `tasks` tasks (ARCHIVED_READ_TASKS by default), so a project with
  * thousands of tasks and few messages still spreads over several steps.
+ * `skip` counts the tasks created exactly at `from` that an earlier step
+ * finished, so a step that stops inside a group of tasks sharing one
+ * creation time (possible for imported data) resumes after them instead of
+ * repeating the group forever.
  */
 export async function readArchivedProjectMessages(
   ctx: MutationCtx,
-  a: { project_id: string; from?: number; batch?: number; tasks?: number; now: string },
+  a: {
+    project_id: string
+    from?: number
+    skip?: number
+    batch?: number
+    tasks?: number
+    now: string
+  },
 ): Promise<void> {
   const project = await byId(ctx, 'projects', a.project_id)
   if (project === null || project.archived_at === undefined) return
   let budget = stepLimit(a.batch, ARCHIVED_READ_BATCH)
   const cap = stepLimit(a.tasks, ARCHIVED_READ_TASKS)
   let visited = 0
-  let from: number | undefined
+  // the tasks finished at the newest creation time reached, so the next
+  // step can skip them however many share that time
+  let doneAt = a.from ?? 0
+  let doneThere = a.skip ?? 0
+  let toSkip = a.skip ?? 0
+  let next: { from: number; skip: number } | undefined
   const active = ctx.db.query('issues').withIndex('by_project_archived', (q) =>
     q
       .eq('project_id', project.id)
@@ -833,22 +849,38 @@ export async function readArchivedProjectMessages(
       .gte('_creationTime', a.from ?? 0),
   )
   for await (const task of active) {
+    if (toSkip > 0 && task._creationTime === a.from) {
+      toSkip -= 1
+      continue
+    }
+    const stopHere = () => {
+      next = {
+        from: task._creationTime,
+        skip: doneAt === task._creationTime ? doneThere : 0,
+      }
+    }
     if (budget === 0 || visited === cap) {
-      from = task._creationTime
+      stopHere()
       break
     }
     visited += 1
     const step = await readTaskMessages(ctx, task.id, a.now, budget)
     budget -= step.marked
     if (step.more) {
-      from = task._creationTime
+      stopHere()
       break
     }
+    if (task._creationTime === doneAt) doneThere += 1
+    else {
+      doneAt = task._creationTime
+      doneThere = 1
+    }
   }
-  if (from !== undefined) {
+  if (next !== undefined) {
     await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
       project_id: project.id,
-      from,
+      from: next.from,
+      skip: next.skip === 0 ? undefined : next.skip,
       batch: a.batch,
       tasks: a.tasks,
     })

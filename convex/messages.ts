@@ -131,6 +131,7 @@ export const readArchivedProject = internalMutation({
   args: {
     project_id: v.string(),
     from: v.optional(v.number()),
+    skip: v.optional(v.number()),
     batch: v.optional(v.number()),
     tasks: v.optional(v.number()),
   },
