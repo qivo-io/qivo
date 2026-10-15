@@ -16,6 +16,7 @@ Use the operating guide to choose between MCP, REST and the browser. Authenticat
 
 - [Qivo operating skill](https://qivo.io/skill.md): Find, create, assign, update, move, link and label tasks, attach files, read task history and check workload, follow tasks and work through the inbox, manage projects, access, milestones and teams; choose an interface and verify the result.
 - [Authentication and connection](https://qivo.io/auth.md): Connect a person's assistant using OAuth (preferred), use a personal token as a compatibility fallback or for REST as that person, or use an administrator-created agent key for automation.
+- [Microsoft sign-in and administrator approval](https://qivo.io/docs/microsoft-sign-in-and-administrator-approval/): Help Microsoft 365 and Entra organizations approve Qivo using its admin consent link when sign-in says "Need admin approval". Microsoft approval is separate from Qivo membership, project access and assistant connection approval.
 - [Qivo in one minute](https://qivo.io/docs/qivo-in-one-minute/): Understand the product and its main views.
 - [How work is organized](https://qivo.io/docs/how-work-is-organized/): Organizations, teams, projects, sub-projects, tasks and groups.
 
