@@ -18,7 +18,13 @@ import { SettingsGroup } from '../../components/settingsPage'
 import { isoFromDate } from '../../lib/dates'
 import { watchLocalDay } from '../../lib/localDay'
 import { connectionScopeLabel } from '../../lib/oauthConnection'
-import { expiryFromDay, expiryLabel, expiryPhrase, isExpired } from '../../lib/tokenExpiry'
+import {
+  expiryFromDay,
+  expiryLabel,
+  expiryPhrase,
+  isExpired,
+  msUntilNextExpiry,
+} from '../../lib/tokenExpiry'
 import { type McpTokenChoice, P } from '../../store/planner'
 import { MField, ModalShell } from '../Modals'
 
@@ -29,9 +35,10 @@ const ACCESS_LABEL: Record<McpTokenChoice['access'], string> = {
   write: 'Can make changes',
 }
 
-/* Column widths, shared by the headings and every row. Below the settings
-   phone breakpoint (styles/mobile-settings.css) the headings and cells hide
-   and each row's summary line says the same. */
+/* Column widths, shared by the headings and every row. The columns need
+   about 520px, so in a narrower token list (a phone, or a tablet beside the
+   settings menu) a container query in styles/mobile-settings.css hides the
+   headings and cells and each row's summary line says the same. */
 const ACCESS_COL = 'w-[126px]'
 const EXPIRES_COL = 'w-[82px]'
 const USED_COL = 'w-[60px]'
@@ -47,10 +54,18 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
   const [tokens, setTokens] = useState<Token[] | false | null>(null)
   const [confirm, setConfirm] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  // Labels such as "Today" and a token that expires at local midnight follow
-  // the calendar day without a reload.
+  // Labels such as "Today" follow the calendar day without a reload.
   const [now, setNow] = useState(() => new Date())
   useEffect(() => watchLocalDay(setNow), [])
+  // A token created in another time zone expires during this viewer's day,
+  // so the clock also moves when the next listed token expires.
+  useEffect(() => {
+    if (!Array.isArray(tokens)) return
+    const delay = msUntilNextExpiry(tokens, now)
+    if (delay === null) return
+    const timer = setTimeout(() => setNow(new Date()), delay)
+    return () => clearTimeout(timer)
+  }, [tokens, now])
 
   const reload = () => {
     P.listMcpTokens().then((ts) => setTokens(ts === null ? false : ts))
@@ -74,7 +89,7 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
         </div>
       )}
       {Array.isArray(tokens) && tokens.length > 0 && (
-        <div className="mb-6 flex flex-col gap-1.5">
+        <div data-mcp-token-list="" className="mb-6 flex flex-col gap-1.5">
           <div
             aria-hidden="true"
             data-mcp-token-columns=""
@@ -93,10 +108,8 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
               now={now}
               armed={confirm === t.id}
               onArm={() => setConfirm(t.id)}
-              onDone={() => {
-                setConfirm(null)
-                reload()
-              }}
+              onDisarm={() => setConfirm(null)}
+              onChanged={reload}
             />
           ))}
         </div>
@@ -123,19 +136,23 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
 }
 
 /* One token. A revoked or expired token is dimmed and offers Delete, an
-   active one Revoke; both take a second click to confirm. */
+   active one Revoke; both take a second click to confirm, which turns the
+   icon red. The button stays icon-sized when armed, so the cells stay under
+   their headings. */
 function TokenRow({
   token: t,
   now,
   armed,
   onArm,
-  onDone,
+  onDisarm,
+  onChanged,
 }: {
   token: Token
   now: Date
   armed: boolean
   onArm: () => void
-  onDone: () => void
+  onDisarm: () => void
+  onChanged: () => void
 }) {
   const revoked = !!t.revokedAt
   const expired = !revoked && isExpired(t.expiresAt, now)
@@ -209,7 +226,7 @@ function TokenRow({
       <Button
         type="button"
         variant="ghost"
-        size={armed && ended ? 'sm' : 'icon-sm'}
+        size="icon-sm"
         className={cn('[flex-shrink:0]', armed && 'text-danger')}
         aria-label={action}
         title={action}
@@ -218,14 +235,16 @@ function TokenRow({
             onArm()
             return
           }
+          // Disarm before the request, so a click while it runs arms the
+          // button again instead of sending it twice.
+          onDisarm()
           const ok = ended ? await P.deleteMcpToken(t.id) : await P.revokeMcpToken(t.id)
           if (ok) window.showToast?.(ended ? 'MCP token deleted' : `“${t.name}” revoked`)
           else window.showToast?.("That didn't go through", 'error')
-          onDone()
+          onChanged()
         }}
       >
         <Icon name={ended ? 'trash' : 'blocked'} size={16} />
-        {armed && ended && 'Delete?'}
       </Button>
     </div>
   )
@@ -339,7 +358,10 @@ export function NewTokenDialog({
             placeholder="e.g. Claude on my laptop"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void create()
+              // The Enter that confirms an IME candidate must not create the
+              // token. Safari clears isComposing first but keeps keyCode 229.
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229)
+                void create()
             }}
             className="h-control w-full bg-surface-1 font-sans text-base"
           />

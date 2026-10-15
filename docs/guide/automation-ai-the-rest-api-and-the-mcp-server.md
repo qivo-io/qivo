@@ -160,10 +160,11 @@ the token when it is created; it cannot be shown again. Qivo also supplies a
 
 The list shows each token's access, expiry and last use. An expired token is
 refused like a revoked one and stays in the list until you delete it. Revoke a
-token when you no longer need it. Tokens created before you could choose keep
-what they had: they never expire, and the list shows their access. The same
-token also works with the REST API. Organization admins can instead create an
-agent user with its own key
+token when you no longer need it. Every personal token also works with the
+REST API. Tokens created before Qivo recorded access never expire and can
+only read, so the list shows them as **Read only**. If such a client needs to
+make changes, create a new token with **Allow changes**. Organization admins
+can instead create an agent user with its own key
 ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 MCP tools say who the connection acts as and whether it can make changes;

@@ -4190,14 +4190,16 @@ export const PLANNER = {
   },
 
   /** Mints a personal token in the browser and stores only its hash. Returns
-      the secret once, or null when the server refused it. */
+      the secret once, or null when it could not be made or the server refused
+      it. It never throws, because the New token dialog recovers only from
+      null. crypto.subtle and randomUUID are missing outside a secure context. */
   createMcpToken: withUpdateBlock(async (name: string, { access, expiresAt }: McpTokenChoice) => {
-    const bytes = crypto.getRandomValues(new Uint8Array(24))
-    const secret = `qvt_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
-    const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
-    const id = crypto.randomUUID()
     try {
+      const bytes = crypto.getRandomValues(new Uint8Array(24))
+      const secret = `qvt_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
+      const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+      const id = crypto.randomUUID()
       await write(api.tokens.createMcpToken, {
         id,
         profile_id: CURRENT_USER,
@@ -4207,11 +4209,11 @@ export const PLANNER = {
         access,
         ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
       })
+      return { id, secret }
     } catch (e) {
       console.error('[qivo] mcp token create failed:', e)
       return null
     }
-    return { id, secret }
   }),
 
   revokeMcpToken: async (id: string) => {

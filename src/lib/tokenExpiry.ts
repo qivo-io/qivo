@@ -50,6 +50,26 @@ export function isExpired(expiresAt: string | null, now: Date): boolean {
   return !(Date.parse(expiresAt) > now.getTime())
 }
 
+/* The longest delay setTimeout honors. It runs a longer one at once. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
+
+/** Milliseconds from `now` until the next of these tokens expires, or null
+    when none of them will. Revoked, already expired and unreadable expiries
+    are skipped. A far expiry gives the longest delay setTimeout accepts, so a
+    timer set to it fires early and the caller schedules again. */
+export function msUntilNextExpiry(
+  tokens: readonly { expiresAt: string | null; revokedAt: string | null }[],
+  now: Date,
+): number | null {
+  let next = Number.POSITIVE_INFINITY
+  for (const t of tokens) {
+    if (t.revokedAt || t.expiresAt === null) continue
+    const at = Date.parse(t.expiresAt)
+    if (at > now.getTime()) next = Math.min(next, at)
+  }
+  return next === Number.POSITIVE_INFINITY ? null : Math.min(next - now.getTime(), MAX_TIMEOUT_MS)
+}
+
 /* Whole local calendar days from `from` to `to`; rounding absorbs the 23 and
    25 hour days of a daylight saving change. */
 function daysBetween(from: Date, to: Date): number {

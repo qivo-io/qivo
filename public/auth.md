@@ -175,9 +175,9 @@ an additional ceiling and never overrides the person's current permissions.
 Each credential either can make changes or can only read. An OAuth
 connection can make changes only with `qivo:write`. A personal token can make
 changes only if it has change access and has not expired; a token stored
-without an access setting can only read. The app sets both when the token is
-created: **Allow changes** gives change access, and a token with a last day
-expires when that day ends. An agent key can make changes only for an
+without an access setting can only read. In the app, **Allow changes** gives
+a new token change access, and a token with a last day expires when that day
+ends. An agent key can make changes only for an
 agent whose organization role is **Standard user**; a **Viewer** agent's key
 is read-only. A read-only credential still reads everything its user can and
 manages its own task event subscriptions, but Qivo refuses every change before

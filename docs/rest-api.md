@@ -125,9 +125,9 @@ A readable project the user cannot write answers `403` with
 only read, by the same rule as on MCP (`credentialAccess` in
 `convex/lib/access.ts`). A personal token can make changes only when it has
 change access and has not expired; a token stored without an access setting
-can only read. The app asks for both when a token is created: **Allow
-changes** (on by default) gives change access, and the expiry is **Never**
-unless the person picks a last day. Neither can be changed later.
+can only read. When a person creates a token in the app, **Allow changes**
+(on by default) gives change access, and the expiry stays **Never** unless
+they pick a last day. Neither can be changed later.
 An agent key can make changes only when its agent's organization role is
 `user`. A read-only credential still reads everything its user can, and every
 project comes back `"access": { "read": …, "write": false }`. Every `POST`,

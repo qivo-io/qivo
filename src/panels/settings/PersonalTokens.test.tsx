@@ -2,7 +2,7 @@
 import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { plannerFixture } from '../../store/plannerFixture.setup'
 
 /* The token list and the New token dialog on the real store. The network
@@ -147,6 +147,7 @@ const button = (text: string) => {
 const dialog = () =>
   document.querySelector('[data-new-mcp-token]')?.getAttribute('data-new-mcp-token')
 const createButton = () => button('Create token')
+const mutations = () => network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))
 const createCalls = () =>
   network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'tokens:createMcpToken')
 
@@ -224,15 +225,49 @@ describe('the token list', () => {
     expect(revoke.getAttribute('aria-label')).toBe(
       'Confirm revocation, connected clients lose access immediately',
     )
-    expect(network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
-      'tokens:revokeMcpToken',
-    )
+    expect(mutations()).not.toContain('tokens:revokeMcpToken')
     // opening New token disarms it, so a later click starts over
     await openDialog()
     await click(button('Cancel'))
-    expect(find('[data-mcp-token="laptop"] button').getAttribute('aria-label')).toBe(
-      'Revoke this token',
-    )
+    expect(revoke.getAttribute('aria-label')).toBe('Revoke this token')
+
+    // the second click revokes once; a click while that runs only arms again
+    await click(revoke)
+    await click(revoke)
+    expect(mutations().filter((n) => n === 'tokens:revokeMcpToken')).toHaveLength(1)
+    expect(revoke.getAttribute('aria-label')).toBe('Revoke this token')
+    await click(revoke)
+    expect(mutations().filter((n) => n === 'tokens:revokeMcpToken')).toHaveLength(1)
+  })
+
+  it('deletes an expired token on the second click, and only once', async () => {
+    tokens = [token('zapier', { access: 'read', expiresAt: ending('2026-09-30') })]
+    await render()
+    const remove = find('[data-mcp-token="zapier"] button')
+    await click(remove)
+    expect(remove.getAttribute('aria-label')).toBe('Confirm token deletion')
+    // armed, it stays an icon, so the cells keep their columns
+    expect(remove.textContent).toBe('')
+    await click(remove)
+    await click(remove)
+    expect(mutations().filter((n) => n === 'tokens:deleteMcpToken')).toHaveLength(1)
+    expect(mutations()).not.toContain('tokens:revokeMcpToken')
+  })
+
+  it('marks a token expired when its expiry passes during the day', async () => {
+    // created in a zone ahead of this one, so it ends mid-afternoon here
+    const ends = new Date(NOW.getTime() + 50)
+    tokens = [token('cursor', { expiresAt: ends.toISOString() })]
+    await render()
+    const row = find('[data-mcp-token="cursor"]')
+    expect(row.textContent).not.toContain('expired')
+    expect(row.querySelector('button')?.getAttribute('aria-label')).toBe('Revoke this token')
+
+    vi.setSystemTime(new Date(ends.getTime() + 10))
+    await act(async () => await new Promise((r) => setTimeout(r, 100)))
+    expect(row.textContent).toContain('cursorexpired')
+    expect(row.className).toContain('opacity-60')
+    expect(row.querySelector('button')?.getAttribute('aria-label')).toBe('Delete expired token')
   })
 })
 
@@ -304,6 +339,27 @@ describe('New token', () => {
     expect(find('[data-new-mcp-token-summary]').textContent).toBe('Read only, expires 12 Jan 2027')
   })
 
+  it('ignores the Enter that confirms an IME candidate', async () => {
+    await render()
+    await openDialog()
+    await type('input[aria-label="Name"]', '日本語')
+    const enter = (init: KeyboardEventInit) =>
+      act(async () => {
+        find('input[aria-label="Name"]').dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, ...init }),
+        )
+      })
+    // Chrome marks it composing; Safari has already ended the composition
+    await enter({ isComposing: true })
+    await enter({ keyCode: 229 })
+    await settle()
+    expect(createCalls()).toHaveLength(0)
+    expect(dialog()).toBe('form')
+    await enter({})
+    await settle()
+    expect(createCalls()).toHaveLength(1)
+  })
+
   it('refuses a day before today', async () => {
     await render()
     await openDialog()
@@ -329,6 +385,28 @@ describe('New token', () => {
     expect(dialog()).toBe('form')
     expect(find<HTMLInputElement>('input[aria-label="Name"]').value).toBe('Raycast')
     expect(createButton().disabled).toBe(false)
+  })
+
+  it('recovers when the browser cannot hash the secret', async () => {
+    // crypto.subtle is missing outside a secure context, such as plain http
+    const digest = vi.spyOn(crypto.subtle, 'digest').mockRejectedValue(new Error('insecure'))
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    onTestFinished(() => {
+      digest.mockRestore()
+      quiet.mockRestore()
+    })
+    await render()
+    await openDialog()
+    await type('input[aria-label="Name"]', 'Raycast')
+    await click(createButton())
+    await settle()
+    expect(createCalls()).toHaveLength(0)
+    expect(window.showToast).toHaveBeenCalledWith("Couldn't create the MCP token", 'error')
+    expect(dialog()).toBe('form')
+    expect(createButton().disabled).toBe(false)
+    await click(button('Cancel'))
+    expect(dialog()).toBeUndefined()
+    expect(safety.isUpdateBlocked()).toBe(false)
   })
 
   it('keeps the secret through a click outside, and Escape or Done close and reset it', async () => {

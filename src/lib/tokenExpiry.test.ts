@@ -7,6 +7,7 @@ import {
   expiryPhrase,
   isExpired,
   lastDay,
+  msUntilNextExpiry,
   parseDayInput,
 } from './tokenExpiry'
 
@@ -21,7 +22,9 @@ afterAll(() => {
   else process.env.TZ = zone
 })
 
-const NOW = new Date(2026, 9, 15, 10, 0)
+// 10:00 on 15 Oct in Stockholm. A fixed instant, because this line runs
+// before beforeAll switches the zone.
+const NOW = new Date('2026-10-15T08:00:00Z')
 /* The stored expiry for a last day, as the dialog would create it. */
 const ending = (day: string, now = NOW) => {
   const at = expiryFromDay(day, now)
@@ -112,6 +115,42 @@ describe('isExpired', () => {
 
   it('counts an unreadable expiry as expired, as the server does', () => {
     expect(isExpired('soon', NOW)).toBe(true)
+  })
+})
+
+describe('msUntilNextExpiry', () => {
+  const at = (ms: number) => new Date(NOW.getTime() + ms).toISOString()
+
+  it('waits for the earliest expiry still ahead', () => {
+    const tokens = [
+      { expiresAt: at(-1), revokedAt: null },
+      { expiresAt: at(90_000), revokedAt: null },
+      { expiresAt: at(30_000), revokedAt: '2026-10-01T00:00:00.000Z' },
+      { expiresAt: at(60_000), revokedAt: null },
+      { expiresAt: null, revokedAt: null },
+    ]
+    expect(msUntilNextExpiry(tokens, NOW)).toBe(60_000)
+  })
+
+  it('caps a far expiry at the longest delay setTimeout accepts', () => {
+    expect(msUntilNextExpiry([{ expiresAt: ending('2027-01-12'), revokedAt: null }], NOW)).toBe(
+      2 ** 31 - 1,
+    )
+  })
+
+  it('is null when nothing listed will expire', () => {
+    expect(msUntilNextExpiry([], NOW)).toBeNull()
+    expect(
+      msUntilNextExpiry(
+        [
+          { expiresAt: null, revokedAt: null },
+          { expiresAt: at(0), revokedAt: null },
+          { expiresAt: 'soon', revokedAt: null },
+          { expiresAt: at(60_000), revokedAt: '2026-10-01T00:00:00.000Z' },
+        ],
+        NOW,
+      ),
+    ).toBeNull()
   })
 })
 
