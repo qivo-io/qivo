@@ -28,7 +28,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
-import { scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
+import { ITEM_UNREAD_CAP, scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
 import { messageRetentionDays } from './model/people'
 import { emitTaskEvent } from './model/taskEvents'
@@ -187,11 +187,18 @@ export const archiveDoneIssues = internalMutation({
   },
 })
 
-/* How many messages one sweep leg deletes or wakes at most, and how many
- * profiles it visits at most. A larger backlog continues in the next leg of
- * the same run. */
+/* How many messages one sweep leg deletes or writes while waking items at
+ * most, and how many profiles it visits at most. A larger backlog continues
+ * in the next leg of the same run. SWEEP_BATCH must be at least WAKE_ROWS,
+ * or a leg could never wake an item. */
 export const SWEEP_BATCH = 500
 export const SWEEP_PROFILES = 100
+
+/* The most rows one wake writes (model/messages.ts wakeSnoozedItem), a full
+ * item. A leg wakes another item only while this much budget is left. An
+ * item that grew past the cap before it existed can write more, a legacy
+ * case decided separately, and the leg then ends over its budget. */
+const WAKE_ROWS = ITEM_UNREAD_CAP + 1
 
 const sweepLegRef = makeFunctionReference<
   'mutation',
@@ -206,9 +213,11 @@ const sweepLegRef = makeFunctionReference<
  * that news stopped mattering because it went unanswered. A snoozed row is
  * a pending reminder and is never swept, however long ago it was read. One
  * whose instant has passed lost its scheduled wake somewhere, and this is
- * the fallback that still brings it back. Both reads are index ranges, so a
- * long unread backlog costs nothing here. `used` counts the rows it deleted
- * or found to wake, and `more` says rows remain for the next leg. */
+ * the fallback that still brings it back. A wake writes every row of its
+ * item, so it starts only while WAKE_ROWS of the budget are left. Both reads
+ * are index ranges, so a long unread backlog costs nothing here. `used`
+ * counts the rows it deleted or wrote while waking, and `more` says rows
+ * remain for the next leg. */
 async function sweepProfileMessages(
   ctx: MutationCtx,
   p: Doc<'profiles'>,
@@ -239,12 +248,15 @@ async function sweepProfileMessages(
       q.eq('recipient_id', p.id).gt('snoozed_until', undefined).lte('snoozed_until', now),
     )
     .take(room + 1)
-  const due = overdue.slice(0, room)
+  let used = deleted
   let woken = 0
-  for (const issue_id of new Set(due.map((m) => m.issue_id))) {
-    if (await wakeSnoozedItem(ctx, { recipient_id: p.id, issue_id }, now)) woken += 1
+  for (const issue_id of new Set(overdue.map((m) => m.issue_id))) {
+    if (budget - used < WAKE_ROWS) return { deleted, woken, used, more: true }
+    const written = await wakeSnoozedItem(ctx, { recipient_id: p.id, issue_id }, now)
+    if (written > 0) woken += 1
+    used += written
   }
-  return { deleted, woken, used: deleted + due.length, more: overdue.length > room }
+  return { deleted, woken, used, more: overdue.length > room }
 }
 
 /* private.sweep_read_messages(null) (0110:88-102), one leg per call, so a
@@ -279,7 +291,8 @@ export const sweepReadMessages = internalMutation({
       .withIndex('by_uuid', (q) => q.gte('id', a.from ?? ''))
       .take(SWEEP_PROFILES + 1)
     for (const [i, p] of profiles.entries()) {
-      if (i === SWEEP_PROFILES || budget === 0) {
+      // below 0 only after an item that outgrew the cap before it existed
+      if (i === SWEEP_PROFILES || budget <= 0) {
         next = p.id
         break
       }
