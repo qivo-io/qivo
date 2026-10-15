@@ -5,7 +5,7 @@
    nothing keeps it after the dialog closes. Access and expiry are fixed at
    creation; the server alone decides whether a token still works. */
 import type { FunctionReturnType } from 'convex/server'
-import { Fragment, useEffect, useId, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -298,6 +298,13 @@ export function NewTokenDialog({
   const close = () => {
     if (!busy) onClose()
   }
+  // Step two replaces the field that held focus, so focus would fall back to
+  // the dialog itself. Hand it to the token's copy button, the next thing to
+  // do, so keyboard and screen reader users land on the secret.
+  const shown = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (created) shown.current?.querySelector<HTMLElement>('[data-fresh-token]')?.focus()
+  }, [created])
 
   if (created) {
     return (
@@ -316,7 +323,7 @@ export function NewTokenDialog({
           </>
         }
       >
-        <div data-new-mcp-token="created">
+        <div ref={shown} data-new-mcp-token="created">
           <div className="text-base font-semibold">{created.name}</div>
           <div data-new-mcp-token-summary="" className="mt-0.5 mb-4 text-sm text-text-1">
             {ACCESS_LABEL[created.choice.access]},{' '}

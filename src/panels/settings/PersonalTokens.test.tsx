@@ -295,6 +295,8 @@ describe('New token', () => {
     expect(args).not.toHaveProperty('expires_at')
     expect(dialog()).toBe('created')
     expect(find('[data-new-mcp-token-summary]').textContent).toBe('Can make changes, never expires')
+    // focus moves from the removed Name field to copying the secret
+    expect(document.activeElement).toBe(find('[data-fresh-token]'))
     const secret = find('[data-fresh-token]').textContent?.replace('Copy token ', '') ?? ''
     expect(secret).toMatch(/^qvt_[0-9a-f]{48}$/)
     expect(args.token_prefix).toBe(secret.slice(0, 11))
