@@ -6,7 +6,7 @@ import { canSeeProject } from './lib/access'
 import { memberSeesActivity, withoutLegacySubtaskCount } from './lib/activityVisibility'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
-import { loadInbox } from './lib/inbox'
+import { INBOX_LIMIT, loadInbox } from './lib/inbox'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
@@ -84,14 +84,6 @@ export const forMe = authedQuery({
     const activityDocs: Doc<'activity_events'>[] = []
     const unreadDocs: Doc<'messages'>[] = []
     const readDocs: Doc<'messages'>[] = []
-    // Cleanup must remain available when unread rows fill the client cap and
-    // hide every read notification. Count the read rows each seat's bounded
-    // read kept (at most CAP per seat), listed or not, minus snoozed rows,
-    // which messages.removeRead leaves alone. The client only asks whether
-    // it is above zero. removeRead also deletes read rows about tasks the
-    // caller can no longer access; they are not counted because the caller
-    // cannot see them.
-    let readMessageCount = 0
     const seenLinkIds = new Set<string>()
     /* Active tasks and project rows fill these caches below. Only an admin's
      * activity row about a task outside the active set needs a lookup; never
@@ -310,16 +302,14 @@ export const forMe = authedQuery({
 
       // The caller's inbox, limited to tasks in this working set and read
       // within lib/inbox.ts's bounds, so a backlog nobody clears cannot stop
-      // the app from loading; the blended cap applies below. Rows about a
-      // task the caller can no longer access stay stored and return if
-      // access does.
-      const inbox = await loadInbox(ctx, me.id, workingSet.shown, CAP)
+      // the app from loading; the blended cap applies below. The machine
+      // inbox reads with the same INBOX_LIMIT, so the rows this seat
+      // delivers are among the ones the API lists for it. Rows about a task
+      // the caller can no longer access stay stored and return if access
+      // does.
+      const inbox = await loadInbox(ctx, me.id, workingSet.shown, INBOX_LIMIT)
       unreadDocs.push(...inbox.unread)
-      // The list puts every unread row first, so read rows wait while some
-      // of this seat's unread rows went unexamined (rows about hidden tasks
-      // used the bound); the machine inbox follows the same rule.
-      if (!inbox.unreadTruncated) readDocs.push(...inbox.read)
-      for (const row of inbox.read) if (row.snoozed_until === undefined) readMessageCount += 1
+      readDocs.push(...inbox.read)
 
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))
@@ -333,6 +323,17 @@ export const forMe = authedQuery({
     // then read rows, most recently read first, as the list shows them.
     unreadDocs.sort(newestFirst)
     readDocs.sort(recentlyReadFirst)
+    // Cleanup must remain available when unread rows fill the client cap and
+    // hide every read notification. Count the read rows each seat's bounded
+    // read kept (at most INBOX_LIMIT per seat), before the cut, minus snoozed
+    // rows, which messages.removeRead leaves alone. The client only asks
+    // whether it is above zero. removeRead also deletes read rows about tasks
+    // the caller can no longer access; they are not counted because the
+    // caller cannot see them.
+    const readMessageCount = readDocs.reduce(
+      (count, message) => count + (message.snoozed_until === undefined ? 1 : 0),
+      0,
+    )
     const messages = [...unreadDocs, ...readDocs].slice(0, CAP).map(rowOf)
 
     return {

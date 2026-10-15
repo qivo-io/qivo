@@ -22,8 +22,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { INBOX_LIMIT } from '../lib/inbox'
 import { sha256hex } from '../machine/auth'
-import { INBOX_SCAN } from '../machine/discussion'
 import schema from '../schema'
 import {
   allMessages,
@@ -612,12 +612,12 @@ describe('reading the inbox', () => {
       convexTest({
         schema,
         modules: import.meta.glob('../**/*.*s'),
-        transactionLimits: { documentsRead: INBOX_SCAN + 100 },
+        transactionLimits: { documentsRead: 2 * INBOX_LIMIT + 100 },
       }),
     )
     const fresh = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     await fx.t.run(async (ctx) => {
-      for (let n = 0; n < INBOX_SCAN + 200; n++) {
+      for (let n = 0; n < 2 * INBOX_LIMIT + 200; n++) {
         await ctx.db.insert('messages', {
           id: uuid(),
           org_id: fx.org.id,
@@ -640,7 +640,7 @@ describe('reading the inbox', () => {
     expect(page.truncated).toBe(true)
     expect(page.items.map((i) => [i.task.key, i.unread_count])).toEqual([
       [key(fresh), 1],
-      [key(fx.task), INBOX_SCAN - 1],
+      [key(fx.task), INBOX_LIMIT - 1],
     ])
     const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
       callerId: fx.agent.id,
@@ -651,7 +651,7 @@ describe('reading the inbox', () => {
     expect(rest).toEqual({ items: [page.items[0]], truncated: true })
   })
 
-  it('reads unread messages first, then the most recently read, as the app does', async () => {
+  it('reads unread messages newest first and read ones most recently read first, as the app does', async () => {
     const fx = await setup()
     const busy = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     // the n-th message, created n ms and read n s after the start of its day
@@ -669,21 +669,25 @@ describe('reading the inbox', () => {
         : {}),
     })
     // three old unread messages, then newer unread ones about a hidden task,
-    // then a full scan of newer read messages about another task
+    // then read messages about another task, three more than the read walk
+    // keeps
     await fx.t.run(async (ctx) => {
       for (let n = 0; n < 3; n++) await ctx.db.insert('messages', row(fx.task, n, false))
       for (let n = 0; n < 5; n++) await ctx.db.insert('messages', row(fx.secret, n, false))
-      for (let n = 0; n < INBOX_SCAN; n++) await ctx.db.insert('messages', row(busy, n, true))
+      for (let n = 0; n < INBOX_LIMIT + 3; n++) {
+        await ctx.db.insert('messages', row(busy, n, true))
+      }
     })
     const counts = (page: Awaited<ReturnType<typeof pageMcp>>) =>
       page.items.map((i) => [i.task.key, i.unread_count, i.messages.length])
     let page = await pageMcp(fx)
-    // the newest read messages fill what the unread ones left
+    // the unread ones all come back, and the most recently read fill the
+    // read walk's own limit
     expect(counts(page)).toEqual([
-      [key(busy), 0, INBOX_SCAN - 3],
+      [key(busy), 0, INBOX_LIMIT],
       [key(fx.task), 3, 3],
     ])
-    expect(page.items[0].messages.at(-1)?.detail).toBe(`n${INBOX_SCAN - 1}`)
+    expect(page.items[0].messages.at(-1)?.detail).toBe(`n${INBOX_LIMIT + 2}`)
     expect(page.items[0].messages.map((m) => m.detail)).not.toContain('n2')
     expect(page.truncated).toBe(true)
     const unread = await listMcp(fx, { unread_only: true })
@@ -702,19 +706,19 @@ describe('reading the inbox', () => {
     })
     page = await pageMcp(fx)
     expect(counts(page)).toEqual([
-      [key(busy), 0, INBOX_SCAN - 3],
+      [key(busy), 0, INBOX_LIMIT],
       [key(fx.task), 3, 3],
     ])
     expect(page.truncated).toBe(false)
   })
 
-  it('unread and read messages share one examination bound, so hidden rows cannot widen the read', async () => {
-    // Examining up to 2 * INBOX_SCAN rows per walk would pass this limit.
+  it('each walk examines at most 2 * INBOX_LIMIT rows, so hidden rows cannot widen the read', async () => {
+    // Examining every row of either walk would pass this limit.
     const fx = await setup(
       convexTest({
         schema,
         modules: import.meta.glob('../**/*.*s'),
-        transactionLimits: { documentsRead: 2 * INBOX_SCAN + 200 },
+        transactionLimits: { documentsRead: 4 * INBOX_LIMIT + 200 },
       }),
     )
     const base = { org_id: fx.org.id, recipient_id: fx.agent.id, issue_title: 'T' }
@@ -736,8 +740,8 @@ describe('reading the inbox', () => {
         await ctx.db.insert('messages', row(fx.secret, read(n)))
       }
     })
-    // 1,500 hidden unread rows leave 500 to examine among the read ones, all
-    // hidden, so the visible one is not reached
+    // each walk examines 2 * INBOX_LIMIT hidden rows and stops, so the
+    // visible read one is not reached, as in the app
     expect(await pageMcp(fx)).toEqual({ items: [], truncated: true })
   })
 

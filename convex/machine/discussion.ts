@@ -53,7 +53,7 @@ import {
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
-import { loadInbox } from '../lib/inbox'
+import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
 import { inWorkingSet } from '../lib/workingSet'
 import { deleteComment, editComment } from '../model/comments'
 import {
@@ -130,19 +130,14 @@ type InboxItemJson = {
 }
 
 /** A page of inbox items, and whether some of the caller's messages were
- * left unexamined, because more than INBOX_SCAN were about listed tasks or
- * a backlog about unlisted ones used the examination bound (lib/inbox.ts). */
+ * left unexamined, because more than INBOX_LIMIT unread or read ones were
+ * about listed tasks, or a backlog about unlisted ones used up a walk's
+ * examination bound (lib/inbox.ts). */
 type InboxPageJson = { items: InboxItemJson[]; truncated: boolean }
 
 /* (created_at, id), the total order the app and the prune use. */
 const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
   a.created_at > b.created_at || (a.created_at === b.created_at && a.id > b.id)
-
-/* The most messages one inbox read folds, unread ones first (lib/inbox.ts
- * loadInbox), so a backlog that nobody clears cannot push the read past
- * Convex's transaction limits. The read examines at most 2 * INBOX_SCAN,
- * counting rows about tasks it does not list. */
-export const INBOX_SCAN = 1000
 
 /**
  * The inbox's Shown for the caller, asked one task id at a time while
@@ -150,7 +145,9 @@ export const INBOX_SCAN = 1000
  * working set (lib/workingSet.ts inWorkingSet), which holds its
  * organization's active tasks in active projects it can see, as the app's
  * snapshot shows them. Each task and project is read once, and `tasks`
- * keeps the shown tasks for the fold.
+ * keeps the shown tasks for the fold. One inbox read asks about at most
+ * 2 * INBOX_LIMIT rows per walk, which bounds these lookups (see
+ * INBOX_LIMIT in lib/inbox.ts).
  */
 function inboxShown(
   ctx: QueryCtx,
@@ -192,14 +189,17 @@ function inboxShown(
  * The caller's inbox items, the latest activity first, as the app folds its
  * messages into items (src/store/viewModels.ts shapeMessageGroup). Like the
  * app, it lists only tasks in the caller's working set (inboxShown). Rows
- * about other tasks stay stored and come back if the task does. It folds at
- * most INBOX_SCAN messages, chosen like the app's (lib/inbox.ts loadInbox),
- * unread ones newest first, then read ones most recently read first, and
- * examines at most 2 * INBOX_SCAN rows, those about unlisted tasks included.
- * It says `truncated` when some messages were not examined. Items whose
- * messages were not examined are then missing, and an item listed may lack
- * older messages. A snoozed item is left out unless `includeSnoozed`, and
- * `unreadOnly` keeps items with an unread message.
+ * about other tasks stay stored and come back if the task does. It reads
+ * with the snapshot's limit (lib/inbox.ts loadInbox, INBOX_LIMIT) and folds
+ * up to INBOX_LIMIT unread messages, newest first, and up to INBOX_LIMIT
+ * read ones, most recently read first. Each walk examines at most
+ * 2 * INBOX_LIMIT rows, those about unlisted tasks included. The app
+ * delivers at most the first 500 of the same selection, so what it lists
+ * for this profile is among what this lists. It says `truncated` when some
+ * messages were not examined. Items whose messages were not examined are
+ * then missing, and an item listed may lack older messages. A snoozed item
+ * is left out unless `includeSnoozed`, and `unreadOnly` keeps items with an
+ * unread message.
  */
 async function inboxItems(
   ctx: QueryCtx,
@@ -207,7 +207,7 @@ async function inboxItems(
   o: { unreadOnly: boolean; includeSnoozed: boolean; limit: number; offset: number },
 ): Promise<InboxPageJson> {
   const { shown, tasks } = inboxShown(ctx, me)
-  const inbox = await loadInbox(ctx, me.id, shown, INBOX_SCAN, { shared: true })
+  const inbox = await loadInbox(ctx, me.id, shown, INBOX_LIMIT)
   const byTask = new Map<string, Doc<'messages'>[]>()
   for (const row of [...inbox.unread, ...inbox.read]) {
     const list = byTask.get(row.issue_id)
@@ -679,7 +679,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call lists up to ${INBOX_SCAN} of your messages, unread ones first (newest first), then read ones (most recently read first), and looks at no more than ${2 * INBOX_SCAN}, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
+      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call lists up to ${INBOX_LIMIT} unread messages (newest first) and ${INBOX_LIMIT} read ones (most recently read first), looking at no more than ${2 * INBOX_LIMIT} of each, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

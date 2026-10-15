@@ -246,12 +246,13 @@ Useful field rules:
 - **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
   per active task you can read, latest activity first, with its unread count
   and messages. Use `unread_only` to see what is new. The task title shown is
-  the current one. One call lists up to 1,000 of your messages, unread ones
-  first (newest first), then read ones (most recently read first), and looks
-  at no more than 2,000, counting messages about tasks it does not list.
+  the current one. One call lists up to 500 unread messages (newest first)
+  and up to 500 read ones (most recently read first), and looks at no more
+  than 1,000 of each, counting messages about tasks it does not list.
   `truncated: true` means some were not looked at, so mark everything read
-  to shrink the inbox. An item keeps at most 50 unread messages, dropping the
-  oldest except its first unread one and the newest of each kind.
+  to shrink the inbox. The app's Inbox loads up to 500 of them, unread
+  first. An item keeps at most 50 unread messages, dropping the oldest
+  except its first unread one and the newest of each kind.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
   `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
   `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with

@@ -13,8 +13,9 @@
 import type { WithoutSystemFields } from 'convex/server'
 import { convexTest } from 'convex-test'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { INBOX_LIMIT } from '../lib/inbox'
 import schema from '../schema'
 import {
   as,
@@ -609,6 +610,21 @@ describe('messages', () => {
     return { profile, task }
   }
 
+  /* The machine inbox (GET /v1/inbox) of `profile`, snoozed items included,
+   * as message ids per task id. */
+  const machineInbox = async (profile: Doc<'profiles'>) => {
+    const page = await t.query(internal.machine.discussion.restListInbox, {
+      callerId: profile.id,
+      access: 'read',
+      include_snoozed: 'true',
+      limit: '200',
+    })
+    return {
+      items: Object.fromEntries(page.items.map((i) => [i.task.id, i.messages.map((m) => m.id)])),
+      truncated: page.truncated,
+    }
+  }
+
   it('own inbox only', async () => {
     const mine = await t.run(async (ctx) => {
       const _id = await ctx.db.insert('messages', msg(f.guest.id, NOW))
@@ -752,30 +768,35 @@ describe('messages', () => {
       }
     })
     const snap = await snapFor(f.user)
-    // each walk examines at most 1,000 rows, all hidden here, so the older
-    // visible rows are not reached: the accepted cost of the bound
+    // each walk examines at most 2 * INBOX_LIMIT rows, all hidden here, so
+    // the older visible rows are not reached, the accepted cost of the bound
     expect(snap.messages).toEqual([])
     expect(snap.readMessageCount).toBe(0)
     expect(snap.issues.map((i) => i.id)).toContain(visibleTask.id)
   })
 
-  it('lists no read rows while hidden rows leave unread ones unexamined, but still counts them', async () => {
+  it('lists read rows even while hidden rows leave unread ones unexamined, as the machine inbox does', async () => {
     const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
     const visible = { unread: msg(f.user.id, NOW), read: msg(f.user.id, NOW, NOW) }
     await t.run(async (ctx) => {
       await ctx.db.insert('messages', visible.unread)
       await ctx.db.insert('messages', visible.read)
       // newer unread rows about a hidden task, more than the unread walk
-      // examines (2 * 500)
-      for (let i = 0; i < 1100; i++) {
+      // examines (2 * INBOX_LIMIT)
+      for (let i = 0; i < 2 * INBOX_LIMIT + 100; i++) {
         await ctx.db.insert('messages', msg(f.user.id, NOW, undefined, hiddenTask.id))
       }
     })
     let snap = await snapFor(f.user)
-    // listing the read row would show the task as read while its unread row
-    // was never reached; the machine inbox lists no read row then either
-    expect(snap.messages).toEqual([])
+    // the read walk is bounded on its own, so the read row is listed; the
+    // older unread row is past the unread walk's bound and listed by neither
+    // surface, so both show the task as read
+    expect(snap.messages.map((m) => m.id)).toEqual([visible.read.id])
     expect(snap.readMessageCount).toBe(1)
+    expect(await machineInbox(f.user)).toEqual({
+      items: { [issueVis.id]: [visible.read.id] },
+      truncated: true,
+    })
 
     // once the walk reaches every unread row, both are listed, unread first
     await t.run(async (ctx) => {
@@ -790,6 +811,56 @@ describe('messages', () => {
     snap = await snapFor(f.user)
     expect(snap.messages.map((m) => m.id)).toEqual([visible.unread.id, visible.read.id])
     expect(snap.readMessageCount).toBe(1)
+    // the machine inbox runs an item's messages oldest first, and these
+    // share created_at, so their ids order them
+    expect(await machineInbox(f.user)).toEqual({
+      items: { [issueVis.id]: [visible.unread.id, visible.read.id].sort() },
+      truncated: false,
+    })
+  })
+
+  it('keeps recent unread and read rows ahead of an old unread backlog about archived tasks', async () => {
+    // Unread rows about an auto-archived task are never deleted, so they pile
+    // up behind a person's current work.
+    const archived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+    })
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const at = (minute: number) => `2026-02-01T00:${String(minute).padStart(2, '0')}:00.000Z`
+    const recent = {
+      unread1: msg(f.user.id, at(1)),
+      unread2: msg(f.user.id, at(2)),
+      // opened in the app, so read, the latest read first
+      read1: msg(f.user.id, at(3), at(10), other.id),
+      read2: msg(f.user.id, at(4), at(11), other.id),
+    }
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 2 * INBOX_LIMIT + 100; i++) {
+        await ctx.db.insert(
+          'messages',
+          msg(f.user.id, '2026-01-01T00:00:00.000Z', undefined, archived.id),
+        )
+      }
+      for (const row of Object.values(recent)) await ctx.db.insert('messages', row)
+    })
+    const snap = await snapFor(f.user)
+    expect(snap.messages.map((m) => m.id)).toEqual([
+      recent.unread2.id,
+      recent.unread1.id,
+      recent.read2.id,
+      recent.read1.id,
+    ])
+    expect(snap.readMessageCount).toBe(2)
+    // the machine inbox lists both items; the backlog was not all examined
+    expect(await machineInbox(f.user)).toEqual({
+      items: {
+        [issueVis.id]: [recent.unread1.id, recent.unread2.id],
+        [other.id]: [recent.read1.id, recent.read2.id],
+      },
+      truncated: true,
+    })
   })
 
   it('counts read messages across own seats even when 500 unread messages hide every read row', async () => {
