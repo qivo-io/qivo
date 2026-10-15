@@ -302,6 +302,22 @@ describe('the Team sync store', () => {
     expect(P.weekLoadOf(f.ben, w14)).toBe(8)
   })
 
+  it('reads a week of a plan that runs to the year 9999 without spreading the rest', () => {
+    const w14 = P.isoToWeek('2026-09-14')
+    const end = '9999-12-27'
+    const span = P.isoToWeek(end) - w14 + 1
+    expect(span).toBeGreaterThan(416_000)
+    // five such plans of an hour a week, which a full spread takes tens of
+    // milliseconds each to expand
+    const long = { ...f.snap.orgLoad[2], issue_id: null, end_week: end, remaining: span }
+    const started = performance.now()
+    deliver({ ...f.snap, orgLoad: [...f.snap.orgLoad, ...Array(5).fill(long)] })
+    expect(P.weekLoadOf(f.ben, w14)).toBe(9)
+    expect(P.weekLoadOf(f.ben, w14 + 1)).toBe(5)
+    expect(P.weekLoadOf(f.ben, P.isoToWeek('9999-12-20'))).toBe(5)
+    expect(performance.now() - started).toBeLessThan(20)
+  })
+
   it('stamps a person optimistically and on the wire, keeping a sitting’s reading point', () => {
     P.syncStamp(f.ben)
     const first = P.user(f.ben)!.sync!

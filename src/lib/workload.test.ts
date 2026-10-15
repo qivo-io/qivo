@@ -4,6 +4,7 @@ import {
   committedByWeek,
   DEFAULT_PLANNABLE_HOURS,
   fitEndWeek,
+  fitEndWeekAgainst,
   fmtHours,
   hasPlannableWeek,
   issueLoadByPerson,
@@ -27,6 +28,27 @@ const item = (o: Partial<LoadItem>): LoadItem => ({
   visible: true,
   ...o,
 })
+
+declare const performance: { now(): number }
+
+/* About as many weeks as a plan from 2026 to the year 9999 runs. */
+const LONG = 416_000
+
+/* Remaining hours from tenths to huge, and owner loads made of them. */
+const hours = fc.oneof(
+  fc.integer({ min: 0, max: 10000 }).map((value) => value / 10),
+  fc.double({ min: 1e-12, max: 1e16, noNaN: true, noDefaultInfinity: true }),
+)
+const loads = fc.array(
+  fc.record({
+    issueUuid: fc.constantFrom('self', 'other', null),
+    start: fc.integer({ min: -10, max: 15 }),
+    end: fc.integer({ min: -10, max: 20 }),
+    remainingSet: fc.option(fc.integer({ min: -10, max: 20 }), { nil: undefined }),
+    remaining: hours,
+  }),
+  { maxLength: 60 },
+)
 
 describe('plannableHoursOf', () => {
   it('reads the person’s own setting', () => {
@@ -121,6 +143,35 @@ describe('committedByWeek', () => {
     const m = committedByWeek([item({ start: 5, end: 4, remaining: 40 }), item({ remaining: 0 })])
     expect(m.size).toBe(0)
   })
+  it('adds up only the weeks in a range, each exactly as without one', () => {
+    fc.assert(
+      fc.property(
+        loads,
+        fc.integer({ min: -15, max: 25 }),
+        fc.integer({ min: 0, max: 20 }),
+        fc.constantFrom(undefined, 'self'),
+        (load, from, length, exclude) => {
+          const range = { from, to: from + length - 1 }
+          const whole = committedByWeek(load, exclude)
+          const inRange = [...whole].filter(([week]) => week >= range.from && week <= range.to)
+          expect([...committedByWeek(load, exclude, range)]).toEqual(inRange)
+        },
+      ),
+      { seed: 20261015, numRuns: 400 },
+    )
+  })
+  it('costs the range, not the plan, when a plan runs to the year 9999', () => {
+    const long = item({ start: 0, end: LONG - 1, remaining: LONG * 2 }) // 2/wk
+    const m = committedByWeek([long, item({ start: 3, end: 3, remaining: 5 })], null, {
+      from: 2,
+      to: 4,
+    })
+    expect([...m]).toEqual([
+      [2, 2],
+      [3, 7],
+      [4, 2],
+    ])
+  })
 })
 
 describe('fitEndWeek', () => {
@@ -148,6 +199,31 @@ describe('fitEndWeek', () => {
     // wk11 fully booked (34), wk12 free → all 20h fit in wk12
     const committed = new Map([[11, 34]])
     expect(fitEndWeek(11, 20, 34, committed)).toBe(12)
+  })
+})
+
+describe('fitEndWeekAgainst', () => {
+  it('fits as fitEndWeek does over the whole load', () => {
+    fc.assert(
+      fc.property(
+        loads,
+        fc.integer({ min: -10, max: 15 }),
+        hours,
+        hours,
+        fc.integer({ min: 1, max: 30 }),
+        (load, start, remaining, capacity, maxWeeks) => {
+          expect(fitEndWeekAgainst(load, 'self', start, remaining, capacity, maxWeeks)).toBe(
+            fitEndWeek(start, remaining, capacity, committedByWeek(load, 'self'), maxWeeks),
+          )
+        },
+      ),
+      { seed: 20261015, numRuns: 400 },
+    )
+  })
+  it('fits against a plan that runs to the year 9999', () => {
+    const load = [item({ issueUuid: 'long', start: 0, end: LONG - 1, remaining: LONG * 30 })]
+    // 30 h a week of the owner's 34 are taken, so 10 h need three weeks
+    expect(fitEndWeekAgainst(load, 'self', 5, 10, 34)).toBe(7)
   })
 })
 
@@ -185,22 +261,9 @@ describe('prepared owner projections', () => {
   })
 
   it('matches ordered sums across randomized windows, magnitudes and completion boundaries', () => {
-    const hours = fc.oneof(
-      fc.integer({ min: 0, max: 10000 }).map((value) => value / 10),
-      fc.double({ min: 1e-12, max: 1e16, noNaN: true, noDefaultInfinity: true }),
-    )
     fc.assert(
       fc.property(
-        fc.array(
-          fc.record({
-            issueUuid: fc.constantFrom('self', 'other', null),
-            start: fc.integer({ min: -10, max: 15 }),
-            end: fc.integer({ min: -10, max: 20 }),
-            remainingSet: fc.option(fc.integer({ min: -10, max: 20 }), { nil: undefined }),
-            remaining: hours,
-          }),
-          { maxLength: 60 },
-        ),
+        loads,
         fc.integer({ min: -10, max: 15 }),
         hours,
         hours,
@@ -217,6 +280,27 @@ describe('prepared owner projections', () => {
       ),
       { seed: 20261001, numRuns: 400 },
     )
+  })
+
+  it('projects against plans that run to the year 9999 at the cost of the weeks it reads', () => {
+    const long = (issueUuid: string, start: number) =>
+      item({ issueUuid, start, end: LONG - 1, remaining: (LONG - start) * 3 }) // 3/wk
+    const own = item({ issueUuid: 'self', start: 0, end: 3, remaining: 40 })
+    const two = [long('a', 0), long('b', 2), own]
+    const project = prepareLoadProjection(two)
+    const whole = committedByWeek(two, 'self')
+    for (const start of [0, 100, LONG - 10]) {
+      expect(project(start, 40, 34, 'self')).toBe(fitEndWeek(start, 40, 34, whole))
+    }
+    expect(project(100, 40, 34, null)).toBe(fitEndWeek(100, 40, 34, committedByWeek(two)))
+    // twenty such plans would be 8.3 million week entries spread in full,
+    // which takes hundreds of milliseconds here; the weeks read take far
+    // less than one
+    const twenty = [...Array.from({ length: 20 }, (_, i) => long(`p${i}`, i)), own]
+    const started = performance.now()
+    // week 0 has 31 of 34 hours free and week 1 has 28
+    expect(prepareLoadProjection(twenty)(0, 40, 34, 'self')).toBe(1)
+    expect(performance.now() - started).toBeLessThan(50)
   })
 })
 
@@ -345,6 +429,33 @@ describe('issueLoadByPerson', () => {
     expect(loads.get('u1').get(1).get('p1')).toBe(10)
     expect(loads.get('u1').get(1).has('p2')).toBe(false)
   })
+  it('spreads only the weeks in a range, at the whole plan’s rate', () => {
+    const issues = [
+      iss({ start: 0, end: LONG - 1, remaining: LONG * 2 }), // 2/wk to the year 9999
+      iss({ project: 'p2', start: 3, end: 6, remaining: 8, remainingSet: 5 }), // 4/wk in 5-6
+      iss({ owner: 'u2', start: 9, end: 12, remaining: 4 }), // outside the range
+    ]
+    const loads = issueLoadByPerson(issues, undefined, { from: 4, to: 6 })
+    expect([...loads.keys()]).toEqual(['u1'])
+    const weeks = [...loads.get('u1')].map(([week, byProject]) => [week, [...byProject]])
+    expect(weeks).toEqual([
+      [4, [['p1', 2]]],
+      [
+        5,
+        [
+          ['p1', 2],
+          ['p2', 4],
+        ],
+      ],
+      [
+        6,
+        [
+          ['p1', 2],
+          ['p2', 4],
+        ],
+      ],
+    ])
+  })
 })
 
 describe('pausedWeeksByPerson', () => {
@@ -375,6 +486,15 @@ describe('pausedWeeksByPerson', () => {
       (pid) => pid === 'p1',
     )
     expect(weeks.size).toBe(0)
+  })
+  it('marks only the weeks in a range', () => {
+    const weeks = pausedWeeksByPerson(
+      [iss({ start: 0, end: LONG - 1 }), iss({ owner: 'u2', start: 9, end: 12 })],
+      undefined,
+      { from: 4, to: 6 },
+    )
+    expect([...weeks.get('u1')]).toEqual([4, 5, 6])
+    expect(weeks.get('u2')?.size).toBe(0)
   })
 })
 

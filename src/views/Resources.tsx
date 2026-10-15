@@ -120,8 +120,10 @@ function ResourceStrip({
     : open
   const inScope = scopeOnly ? (pid: string) => scopeSet.has(pid) : undefined
   // Paused work is not load; its weeks get a fixed dashed mark instead.
-  const loads = issueLoadByPerson(items, inScope)
-  const pausedWeeks = pausedWeeksByPerson(items, inScope)
+  // Only the weeks on screen are spread, however far a plan runs.
+  const shown = { from: w0, to: w1 }
+  const loads = issueLoadByPerson(items, inScope, shown)
+  const pausedWeeks = pausedWeeksByPerson(items, inScope, shown)
   const hoursAt = (id: string, week: number) => {
     let total = 0
     loads

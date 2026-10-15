@@ -37,11 +37,12 @@ import {
   withOrg,
 } from './helpers.setup'
 
-/* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
- * declare it. */
+/* edge-runtime provides Blob and performance; convex/tsconfig's
+ * ESNext-only lib does not declare them. */
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
 }
+declare const performance: { now(): number }
 
 /* fileTokens reads these lazily (attachments.test.ts plants the same). */
 const g = globalThis as unknown as { process?: { env: Record<string, string | undefined> } }
@@ -911,6 +912,37 @@ describe('workload', () => {
     expect(load.week_starts).toEqual(['2026-10-11', '2026-10-18'])
     expect(person(load, gone.id)).toMatchObject({ active: false, hours: [4, 4] })
     expect(load.people.some((p) => p.name === 'Idle')).toBe(false)
+  })
+
+  it('adds up only the requested weeks of a plan that runs to the year 9999', async () => {
+    const fx = await setup()
+    const grid = weekGrid(1)
+    const plan = { start_week: '2026-10-12', end_week: '9999-12-27' }
+    const span = grid.ofDay(plan.end_week) - grid.ofDay(plan.start_week) + 1
+    expect(span).toBeGreaterThan(416_000)
+    // ten such plans of 2.5 hours a week, half in a project the agent cannot
+    // see, which a full spread would expand fifteen times
+    for (let i = 0; i < 10; i++) {
+      await task(fx, {
+        ...plan,
+        project_id: i % 2 === 0 ? fx.sub.id : fx.hiddenSub.id,
+        assignee_id: fx.user.id,
+        remaining_hours: span * 2.5,
+      })
+    }
+    // after a first read warms the test backend up, the asked week takes a
+    // few milliseconds here and a full spread hundreds
+    await restLoad(fx, { weeks: '1' })
+    const started = performance.now()
+    const load = await restLoad(fx, { weeks: '1' })
+    expect(performance.now() - started).toBeLessThan(50)
+    expect(person(load, fx.user.id)).toMatchObject({ hours: [25], hidden_hours: [12.5] })
+    // every week of a later window keeps the whole plan's rate
+    const later = await mcpLoad(fx, { from_week: '2031-03-05', weeks: 52 })
+    expect(person(later, fx.user.id)).toMatchObject({
+      hours: Array(52).fill(25),
+      hidden_hours: Array(52).fill(12.5),
+    })
   })
 
   it('checks the window', async () => {
