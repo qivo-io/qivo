@@ -1182,7 +1182,10 @@ with `all: true` to every item:
 
 - `read` marks the items read and, like opening an item in the app, keeps
   only each item's latest message. With `all`, it marks every item read
-  except snoozed ones.
+  except snoozed ones, and the result adds `before`, a number. Pass it back
+  unchanged as `before` on each later call, so messages that arrive
+  meanwhile stay unread. `before` with `tasks` or another action is
+  refused.
 - `unread` marks the items unread again.
 - `remove` removes the items. With `all`, it removes every read message
   except snoozed ones and leaves unread messages alone.

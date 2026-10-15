@@ -270,11 +270,15 @@ const vInboxAction = v.union(
  * An inbox change's targets, checked alike on both surfaces. `refs` holds
  * task refs, or null for every item (`all: true`, for read and remove only),
  * and `until` the snooze instant, an ISO string or null to end the snooze.
+ * `before` is the cutoff a read of every item answered on its first call
+ * and the caller passes back to later ones, absent on the first call. Any
+ * finite number from 0 up is accepted, since a cutoff only selects the
+ * caller's own unread rows.
  */
 function inboxRequest(
   action: InboxAction,
-  b: { tasks?: unknown; all?: unknown; until?: unknown },
-): { refs: string[] | null; until: string | null } {
+  b: { tasks?: unknown; all?: unknown; until?: unknown; before?: unknown },
+): { refs: string[] | null; until: string | null; before: number | undefined } {
   if (b.all !== undefined && typeof b.all !== 'boolean')
     throw badRequest('all must be true or false')
   const all = b.all === true
@@ -291,21 +295,36 @@ function inboxRequest(
   if (all && action !== 'read' && action !== 'remove') {
     throw badRequest('all applies to read and remove only')
   }
+  let before: number | undefined
+  if (b.before !== undefined) {
+    if (!all || action !== 'read') throw badRequest('before applies to read with all only')
+    if (typeof b.before !== 'number' || !Number.isFinite(b.before) || b.before < 0) {
+      throw badRequest('before must be the number an earlier call returned')
+    }
+    before = b.before
+  }
   if (action !== 'snooze') {
     if (b.until !== undefined) throw badRequest('until applies to snooze only')
-    return { refs, until: null }
+    return { refs, until: null, before }
   }
   const until = b.until
-  if (until === null) return { refs, until: null }
+  if (until === null) return { refs, until: null, before }
   if (typeof until !== 'string') {
     throw badRequest('snooze needs until, an ISO date-time, or null to end the snooze')
   }
-  return { refs, until }
+  return { refs, until, before }
 }
 
 /** What an inbox change did, as the keys of the tasks whose items it
- * changed and whether `all` left rows for another call. */
-type InboxChangeJson = { action: InboxAction; tasks: string[]; has_more: boolean }
+ * changed and whether `all` left rows for another call. A read with `all`
+ * also answers `before`, the cutoff its first call chose, which the caller
+ * passes back to each later call. */
+type InboxChangeJson = {
+  action: InboxAction
+  tasks: string[]
+  has_more: boolean
+  before?: number
+}
 
 /**
  * Applies `action` to the caller's inbox items about the named tasks, or
@@ -319,15 +338,18 @@ async function changeInbox(
   ctx: MutationCtx,
   me: Caller,
   action: InboxAction,
-  req: { refs: string[] | null; until: string | null },
+  req: { refs: string[] | null; until: string | null; before: number | undefined },
   unknownTask: (ref: string) => ConvexError<Refusal>,
 ): Promise<InboxChangeJson> {
   const now = new Date().toISOString()
   if (req.refs === null) {
-    let done: { rows: Doc<'messages'>[]; more: boolean }
+    let done: { rows: Doc<'messages'>[]; more: boolean; before?: number }
     if (action === 'read') {
-      const marked = await markAllMessagesRead(ctx, me, undefined, now)
-      done = { rows: marked.marked, more: marked.hasMore }
+      // Like the app's Mark all as read, the first call chooses the cutoff
+      // and later calls pass it back, so messages that arrive between the
+      // batches stay unread.
+      const marked = await markAllMessagesRead(ctx, me, req.before, now)
+      done = { rows: marked.marked, more: marked.hasMore, before: marked.before }
     } else {
       const removed = await removeReadMessages(ctx, me)
       done = { rows: removed.removed, more: removed.hasMore }
@@ -345,6 +367,7 @@ async function changeInbox(
         .sort((a, b) => a.num - b.num)
         .map((task) => issueKey(task.num)),
       has_more: done.more,
+      ...(done.before === undefined ? {} : { before: done.before }),
     }
   }
   const named: Doc<'issues'>[] = []
@@ -469,6 +492,7 @@ export const mcpUpdateInbox = internalMutation({
     tasks: v.optional(v.array(v.string())),
     all: v.optional(v.boolean()),
     until: v.optional(v.union(v.string(), v.null())),
+    before: v.optional(v.number()),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
@@ -547,10 +571,10 @@ export const restListInbox = internalQuery({
 /* The arguments of each POST /v1/inbox/{action} function. */
 const vRestInboxArgs = { callerId: v.string(), access: vCredentialAccess, body: v.string() }
 
-/* POST /v1/inbox/{read|unread|remove|snooze} {tasks | all, until?}, which
- * each action's own internal function below runs, so every route reaches
- * exactly one function. A body ref the caller cannot read is a 400, like
- * other refs in a REST body. */
+/* POST /v1/inbox/{read|unread|remove|snooze} {tasks | all, until?,
+ * before?}, which each action's own internal function below runs, so every
+ * route reaches exactly one function. A body ref the caller cannot read is a
+ * 400, like other refs in a REST body. */
 async function restChangeInbox(
   ctx: MutationCtx,
   a: ObjectType<typeof vRestInboxArgs>,
@@ -720,7 +744,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
       name: 'update_inbox',
       title: 'Update inbox',
       description:
-        'Apply `action` to your inbox items about `tasks` (task refs): `read`, `unread`, `remove` or `snooze`. With `all: true` instead, `read` marks every item read and `remove` removes every read item; repeat while `has_more` is true. `snooze` needs `until`, an ISO date-time at most a year ahead, or null to bring the items back now; a snoozed item returns unread. The result lists the tasks whose items changed.',
+        'Apply `action` to your inbox items about `tasks` (task refs): `read`, `unread`, `remove` or `snooze`. With `all: true` instead, `read` marks every item read and `remove` removes every read item; repeat while `has_more` is true, and with `read` pass back the `before` each answer returns, so messages that arrive meanwhile stay unread. `snooze` needs `until`, an ISO date-time at most a year ahead, or null to bring the items back now; a snoozed item returns unread. The result lists the tasks whose items changed.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -740,6 +764,10 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           until: {
             anyOf: [{ type: 'string' }, { type: 'null' }],
           },
+          before: {
+            type: 'number',
+            minimum: 0,
+          },
         },
         required: ['action'],
       },
@@ -753,6 +781,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           tasks?: string[]
           all?: boolean
           until?: string | null
+          before?: number
         }),
       }),
   },

@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '8f615df5b3be732e10337f23de714f507812527c3ecbf55d4188c0d25c32a2eb'
-const SHA_TOOLS_MODERN = '13c30ebd5429cdedc6ef6398d1ec1d2e7e37429c030a73ada667c9cbbdc57286'
+const SHA_TOOLS_LEGACY = 'ea5017f37c870a27e0ff60d5711a3b08e28af4e44cdfdbb893b66f7f8d29ddc0'
+const SHA_TOOLS_MODERN = '70b6f38947ef4585026deac0f201ffd5c5ed538cf370928b11521ee4682777a9'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -2034,5 +2034,61 @@ describe('write tools', () => {
       /^this agent has been deactivated$/,
     )
     expect(err.data.reason).toBe('caller_deactivated')
+  })
+
+  test('update_inbox over the transport: the schema checks before, and the answered one goes back', async () => {
+    const fx = await machineOrg()
+    await mintKey(fx.t, fx.agent, QVA)
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await fx.t.run((ctx) =>
+      ctx.db.insert('messages', {
+        id: uuid(),
+        org_id: fx.org.id,
+        recipient_id: fx.agent.id,
+        issue_id: task.id,
+        issue_title: task.title,
+        kind: 'change',
+        detail: 'Status: To Do → In Progress',
+        created_at: NOW,
+      }),
+    )
+    const call = async (args: Record<string, unknown>) => {
+      const response = await post(
+        fx.t,
+        QVA,
+        legacyBody('tools/call', { name: 'update_inbox', arguments: args, _meta: env() }, 61),
+        {
+          'MCP-Protocol-Version': '2026-07-28',
+          'Mcp-Method': 'tools/call',
+          'Mcp-Name': 'update_inbox',
+        },
+      )
+      expect(response.status).toBe(200)
+      return JSON.parse(await bodyOf(response)).result as {
+        content: { text: string }[]
+        isError?: boolean
+      }
+    }
+    const first = await call({ action: 'read', all: true })
+    const answer = JSON.parse(first.content[0].text)
+    expect(answer).toEqual({
+      action: 'read',
+      tasks: [`QN-${task.num}`],
+      has_more: false,
+      before: expect.any(Number),
+    })
+    const again = await call({ action: 'read', all: true, before: answer.before })
+    expect(again.isError).toBeUndefined()
+    expect(JSON.parse(again.content[0].text)).toEqual({ ...answer, tasks: [] })
+    for (const [before, problem] of [
+      ['1', 'Invalid input: expected number, received string'],
+      [-1, 'Too small: expected number to be >=0'],
+    ] as const) {
+      const refused = await call({ action: 'read', all: true, before })
+      expect(refused.isError).toBe(true)
+      expect(refused.content[0].text).toBe(
+        `Input validation error: Invalid arguments for tool update_inbox: before: ${problem}`,
+      )
+    }
   })
 })

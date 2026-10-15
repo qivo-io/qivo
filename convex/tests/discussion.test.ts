@@ -776,7 +776,24 @@ const updateMcp = async (fx: Fx, args: Record<string, unknown>, callerId = fx.ag
       ...W,
       ...(args as { action: 'read' }),
     }),
-  ) as { action: string; tasks: string[]; has_more: boolean }
+  ) as { action: string; tasks: string[]; has_more: boolean; before?: number }
+
+/* `count` unread messages for the agent about fx.task, in one transaction. */
+const plantUnread = (fx: Fx, count: number) =>
+  fx.t.run(async (ctx) => {
+    for (let n = 0; n < count; n++) {
+      await ctx.db.insert('messages', {
+        id: uuid(),
+        org_id: fx.org.id,
+        recipient_id: fx.agent.id,
+        issue_id: fx.task.id,
+        issue_title: 'Bulk',
+        kind: 'change',
+        detail: 'bulk',
+        created_at: NOW,
+      })
+    }
+  })
 
 /* Each POST /v1/inbox/{action} route's internal function. */
 const REST_INBOX = {
@@ -871,6 +888,7 @@ describe('changing the inbox', () => {
       action: 'read',
       tasks: [key(fx.task)],
       has_more: false,
+      before: expect.any(Number),
     })
     const mine = await messagesFor(fx.t, fx.agent.id)
     const unread = mine.filter((m) => m.read_at === undefined).map((m) => m.issue_id)
@@ -885,23 +903,50 @@ describe('changing the inbox', () => {
 
   it('all: one bounded batch per call, with has_more until done', async () => {
     const fx = await setup()
-    await fx.t.run(async (ctx) => {
-      for (let n = 0; n < 300; n++) {
-        await ctx.db.insert('messages', {
-          id: uuid(),
-          org_id: fx.org.id,
-          recipient_id: fx.agent.id,
-          issue_id: fx.task.id,
-          issue_title: 'Bulk',
-          kind: 'change',
-          detail: 'bulk',
-          created_at: NOW,
-        })
-      }
-    })
+    await plantUnread(fx, 300)
     expect((await updateMcp(fx, { action: 'read', all: true })).has_more).toBe(true)
     expect((await updateMcp(fx, { action: 'read', all: true })).has_more).toBe(false)
     expect((await messagesFor(fx.t, fx.agent.id)).every((m) => m.read_at !== undefined)).toBe(true)
+  })
+
+  it('all: read with the before it answered leaves a message arriving between batches unread', async () => {
+    /* Two batches of read with all on one surface, MCP's handler or REST
+     * over HTTP, with a message arriving between them. Returns whether the
+     * arrival ended up read. */
+    const arrivalRead = async (surface: 'mcp' | 'rest', passBack: boolean): Promise<boolean> => {
+      const fx = await setup()
+      const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+      const secret = await plantKey(fx.t, fx.agent)
+      const readAll = async (body: Record<string, unknown>) =>
+        (surface === 'mcp'
+          ? await updateMcp(fx, { action: 'read', ...body })
+          : (await http(fx.t, secret, 'POST', '/v1/inbox/read', body)).body) as Awaited<
+          ReturnType<typeof updateMcp>
+        >
+      await plantUnread(fx, 300)
+      const first = await readAll({ all: true })
+      expect(first).toMatchObject({ tasks: [key(fx.task)], has_more: true })
+      expect(first.before).toEqual(expect.any(Number))
+      const arrival = await plantMessage(fx.t, {
+        org_id: fx.org.id,
+        recipient_id: fx.agent.id,
+        issue_id: other.id,
+      })
+      const second = await readAll(passBack ? { all: true, before: first.before } : { all: true })
+      expect(second.has_more).toBe(false)
+      if (passBack) expect(second).toEqual({ ...first, has_more: false })
+      // the batches read all 300 either way, and the item keeps its newest
+      const task = await messagesFor(fx.t, fx.agent.id, fx.task.id)
+      expect(task.map((m) => m.read_at !== undefined)).toEqual([true])
+      const [row] = await messagesFor(fx.t, fx.agent.id, other.id)
+      expect(row.id).toBe(arrival.id)
+      return row.read_at !== undefined
+    }
+    for (const surface of ['mcp', 'rest'] as const) {
+      expect(await arrivalRead(surface, true), surface).toBe(false)
+      // without it the second batch chooses a later cutoff and reads the arrival
+      expect(await arrivalRead(surface, false), surface).toBe(true)
+    }
   })
 
   it('refuses requests that name nothing, too much or the wrong instant, alike on both surfaces', async () => {
@@ -924,6 +969,10 @@ describe('changing the inbox', () => {
         'snooze: until must be in the future',
       ],
       ['snooze', { tasks: t, until: '2099-01-01T00:00:00Z' }, 'snooze: at most a year ahead'],
+      ['read', { tasks: t, before: 1 }, 'before applies to read with all only'],
+      ['remove', { all: true, before: 1 }, 'before applies to read with all only'],
+      ['snooze', { tasks: t, until: null, before: 1 }, 'before applies to read with all only'],
+      ['read', { all: true, before: -1 }, 'before must be the number an earlier call returned'],
     ] as const) {
       const label = `${action} ${JSON.stringify(body)}`
       const mcp = expectRefusal(updateMcp(fx, { action, ...body }), 'bad_request')
@@ -937,6 +986,11 @@ describe('changing the inbox', () => {
       [{ tasks: 'QN-1' }, 'tasks must be a non-empty list of task refs'],
       [{ tasks: [1] }, 'tasks must be a non-empty list of task refs'],
       [{ all: 'yes' }, 'all must be true or false'],
+      [
+        { all: true, before: '1760000000000' },
+        'before must be the number an earlier call returned',
+      ],
+      [{ all: true, before: null }, 'before must be the number an earlier call returned'],
     ] as const) {
       await refused(updateRest(fx, 'read', body), 'bad_request', sentence)
     }

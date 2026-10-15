@@ -259,7 +259,9 @@ Useful field rules:
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
   `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
   `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
-  `remove` removes every read item; repeat while `has_more` is `true`.
+  `remove` removes every read item; repeat while `has_more` is `true`. With
+  `read`, send back the `before` each answer returns, so messages that
+  arrive meanwhile stay unread.
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
   items back). Mark items read once you have handled them, so new updates
   stand out. Retention never removes unread messages, and an agent's read
