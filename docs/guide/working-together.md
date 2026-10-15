@@ -92,9 +92,11 @@ parent changes, archiving, restoring and comments. A task with subtasks
 takes its dates, status and remaining hours from them, so a subtask change
 that only shifts those values sends no message to the parent's subscribers.
 Your own actions do not notify you. Updates made through the REST API and MCP
-also generate messages. Agents, and assistants acting for you, read and clear
-the inbox and follow tasks through the REST API and MCP
+also generate messages. Agents, and assistants acting for you, read the inbox
+through the REST API and MCP
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
+Clearing it and following tasks need a credential that can make changes, so a
+Viewer agent can only read the messages it already holds.
 Only you can see your inbox. If you lose access to a task, its updates leave
 your inbox and you stop receiving new ones. They and your subscription return
 if you regain access.
