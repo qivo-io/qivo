@@ -14,6 +14,9 @@ and flags projected delays. Other users see saved changes live.
 
 Views and dialogs may show **Loading…** the first time you open them.
 
+If your organization uses Microsoft and sign-in asks for admin approval, see
+[Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).
+
 ## Private demo
 
 The homepage's **Demo** button opens `demo.qivo.io`. Select **Create demo
