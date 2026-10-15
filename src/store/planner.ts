@@ -1730,7 +1730,10 @@ function removeGrant(
       () => resolve(true),
       undefined,
       (error) => {
-        if (typeof held === 'object') {
+        // only a refused reassignment (model/projectAccess.ts
+        // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
+        // pause or a lost connection says so itself
+        if (typeof held === 'object' && errData(error).reason === 'held_tasks') {
           toast(`${stays}, because not every task could be reassigned.`, 'error')
         } else toastWriteError(error)
         resolve(false)
