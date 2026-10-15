@@ -224,8 +224,9 @@ let unexaminedRead = false
 let delayMap = new Map<string, DelayInfo>()
 
 /* plan_org_load grouped by owner (rebuilt with the delay map, which reads
-   the same spans), and each owner's hours per week, filled on first ask by
-   P.weekLoadOf and emptied by every rebuild. */
+   the same spans), and each owner's hours in the weeks P.weekLoadOf was asked
+   about, added up one week at a time on first ask and emptied by every
+   rebuild. */
 let orgLoadByOwner = new Map<string, LoadSpan[]>()
 const committedByOwner = new Map<string, Map<number, number>>()
 
@@ -2912,10 +2913,17 @@ export const PLANNER = {
   weekLoadOf: (profileId: string, week: number): number => {
     let byWeek = committedByOwner.get(profileId)
     if (!byWeek) {
-      byWeek = committedByWeek(orgLoadByOwner.get(profileId) || [])
+      byWeek = new Map()
       committedByOwner.set(profileId, byWeek)
     }
-    return byWeek.get(week) || 0
+    let hours = byWeek.get(week)
+    if (hours === undefined) {
+      // only the asked week, however far the owner's plans run
+      const load = orgLoadByOwner.get(profileId) || []
+      hours = committedByWeek(load, null, { from: week, to: week }).get(week) || 0
+      byWeek.set(week, hours)
+    }
+    return hours
   },
   delayColor: (x: IssueVM | string): string | null => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
