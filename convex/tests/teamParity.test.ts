@@ -642,6 +642,17 @@ describe('removing a member settles their open tasks', () => {
       'forbidden',
       'no permission to manage users on this project',
     )
+    // the app's removal window tells this refusal from one of the removal
+    const keeping = await expectRefusal(
+      as(fx.t, fx.pia).mutation(api.teams.removeMember, {
+        org_id: fx.org.id,
+        team_id: fx.team.id,
+        profile_id: fx.emil.id,
+        on_held_tasks: 'keep_as_viewer',
+      }),
+      'forbidden',
+    )
+    expect((keeping.data as Refusal).reason).toBe('held_tasks')
     expect(await membership(fx.t, fx.team.id, fx.emil.id)).not.toBeNull()
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([])
     // leaving the tasks needs no project authority, as in the app

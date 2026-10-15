@@ -1749,12 +1749,13 @@ function removeAtOnce(
       () => resolve(true),
       undefined,
       (error) => {
-        // only a refused reassignment (model/projectAccess.ts
+        // only a refused reassignment or Viewer grant (model/projectAccess.ts
         // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
         // pause or a lost connection says so itself
-        if (typeof held === 'object' && errData(error).reason === 'held_tasks') {
+        const settling = errData(error).reason === 'held_tasks'
+        if (settling && typeof held === 'object') {
           toast(`${stays}, because not every task could be reassigned.`, 'error')
-        } else if (held === 'keep_as_viewer' && change.kind === 'teamMember') {
+        } else if (settling && held === 'keep_as_viewer' && change.kind === 'teamMember') {
           toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
         } else toastWriteError(error)
         resolve(false)

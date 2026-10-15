@@ -395,6 +395,18 @@ describe('removing someone who has work in the project', () => {
       'Ann Person stays in the Crew team, because not every task could be reassigned.',
       'error',
     )
+    // a billing pause refuses the removal itself, so it names the pause
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. — reverted',
+      'error',
+    )
+    expect(P.user('ann')?.teams).toEqual(['crew'])
   })
 
   it('keeps a deleted team as Viewers without lowering a grant someone keeps', async () => {
