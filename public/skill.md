@@ -268,9 +268,9 @@ Useful field rules:
   `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
   `remove` removes every read item; repeat while `has_more` is `true`.
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
-  items back). `unread` and `snooze` refuse an archived task, or one in an
-  archived project, until it is restored, while `read` and `remove` still
-  work on it. Mark items read once you have handled them, so new updates
+  items back). `unread` and `snooze` refuse an archived task, or a task in
+  an archived project, until whatever is archived (the task, its project or
+  both) is restored, while `read` and `remove` still work on it. Mark items read once you have handled them, so new updates
   stand out. Retention never removes unread messages, and an agent's read
   messages are removed after 7 days. A Viewer agent receives no new messages
   and cannot clear its inbox, but can still read the messages it holds.
