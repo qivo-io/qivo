@@ -15,7 +15,6 @@
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
-import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -23,7 +22,6 @@ import { ARCHIVE_BATCH, SWEEP_BATCH, SWEEP_PROFILES } from '../jobs'
 import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, messageRetentionDays } from '../model/people'
-import schema from '../schema'
 import {
   messagesFor,
   NOW,
@@ -84,7 +82,7 @@ async function runArchive(t: T, now?: string): Promise<number> {
 
 /* A test deployment that enforces tighter transaction limits than Convex. */
 const limitedT = (transactionLimits: { documentsRead?: number; documentsWritten?: number }): T =>
-  convexTest({ schema, modules: import.meta.glob('../**/*.*s'), transactionLimits })
+  newT({ transactionLimits })
 
 /* Inserts `count` tasks of one shape in a single transaction. */
 let bulkNum = 10_000

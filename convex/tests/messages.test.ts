@@ -13,7 +13,6 @@
 /// <reference types="vite/client" />
 
 import type { FunctionArgs } from 'convex/server'
-import { convexTest } from 'convex-test'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -28,7 +27,6 @@ import {
   postMessage,
   pruneReadMessages,
 } from '../model/messages'
-import schema from '../schema'
 import {
   allMessages,
   as,
@@ -947,9 +945,7 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
 
   it('an item that grew past the cap before it existed shrinks by ITEM_TRIM_STEP per arrival, so comments on the task still commit', async () => {
     // Trimming all 351 excess rows inside one comment would pass this limit.
-    const t = convexTest({
-      schema,
-      modules: import.meta.glob('../**/*.*s'),
+    const t = newT({
       transactionLimits: { documentsWritten: 300 },
     })
     const f = await withOrg(t)

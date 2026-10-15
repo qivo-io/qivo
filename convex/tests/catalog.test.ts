@@ -4,12 +4,10 @@
  * verbs/details, curly quotes U+201C/U+201D, the ' → ' arrow). */
 /// <reference types="vite/client" />
 
-import { convexTest } from 'convex-test'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { PROJECT_CREATORS } from '../lib/enums'
-import schema from '../schema'
 import {
   activityFor,
   as,
@@ -515,9 +513,7 @@ describe('messages — markRead / markUnread / remove', () => {
   })
 
   it('bounds pruning reads across large task backlogs and keeps the newest read timestamp on ties', async () => {
-    const t = convexTest({
-      schema,
-      modules: import.meta.glob('../**/*.*s'),
+    const t = newT({
       // A full scan of even two of these four task backlogs would exceed
       // this budget. Indexed pruning must stay under it for the whole act.
       transactionLimits: { documentsRead: 1200 },

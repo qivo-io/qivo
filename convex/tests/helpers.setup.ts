@@ -1,4 +1,4 @@
-/* convex-test fixture builders + refusal assertion.
+/* convex-test fixture builders + scheduled-work settling + refusal assertion.
  *
  * Named helpers.setup.ts, NOT helpers.ts: the Convex CLI deploys every
  * single-dot .ts file under convex/ as an entry point, and this module
@@ -13,6 +13,7 @@
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
+import { onTestFinished, TestRunner } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
@@ -22,13 +23,52 @@ export type T = TestConvex<typeof schema>
 
 /* The glob is passed explicitly (per convex-test docs) so the module map is
  * rooted here rather than guessed from node_modules' location. It must reach
- * _generated for convex-test to find the functions root. */
-export const newT = (options: { transactionLimits?: boolean } = {}): T =>
-  convexTest({
+ * _generated for convex-test to find the functions root.
+ *
+ * Suites build every convex-test instance here. One created in a test or a
+ * beforeEach is settled (settleScheduled) when that test finishes. One
+ * created in a beforeAll is shared by several tests, so its suite settles it
+ * after each of them. */
+export const newT = (
+  options: Pick<Parameters<typeof convexTest>[0], 'transactionLimits'> = {},
+): T => {
+  const t = convexTest({
     schema,
     modules: import.meta.glob('../**/*.*s'),
     ...options,
   })
+  if (TestRunner.getCurrentTest() !== undefined) onTestFinished(() => settleScheduled(t))
+  return t
+}
+
+/** Ensures no scheduled function of `t` runs after the current test.
+ *
+ * convex-test runs each scheduled function from a timer it arms when the
+ * function is scheduled. Without fake timers that is a real timer, so work a
+ * test did not wait for runs after the test ended. Its logs then reach vitest
+ * late, and one sent while the worker closes fails the whole run with
+ * EnvironmentTeardownError. This waits for the functions that are running
+ * and cancels the pending ones, so their timers do nothing. It repeats while
+ * running functions schedule more, as profile removal steps do. Canceled
+ * work never runs. Tests on fake timers already behave this way, because
+ * vi.useRealTimers drops the fake timers that have not fired. A test that
+ * needs scheduled work done drains it with finishAllScheduledFunctions. */
+export async function settleScheduled(t: T): Promise<void> {
+  for (let round = 0; round < 100; round++) {
+    await t.finishInProgressScheduledFunctions()
+    // One transaction, so no function starts between the check and the cancel.
+    const running = await t.run(async (ctx) => {
+      let running = false
+      for (const job of await ctx.db.system.query('_scheduled_functions').collect()) {
+        if (job.state.kind === 'pending') await ctx.scheduler.cancel(job._id)
+        if (job.state.kind === 'inProgress') running = true
+      }
+      return running
+    })
+    if (!running) return
+  }
+  throw new Error('Scheduled functions were still running after 100 rounds')
+}
 
 /** Complete bounded outbox expansion without executing network delivery actions. */
 export async function flushWebhookEvents(t: T): Promise<void> {
