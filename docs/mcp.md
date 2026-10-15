@@ -830,8 +830,10 @@ upload files; scripts upload through the REST API. Description images stay
 with the app, so `delete_attachment` refuses one with `this image belongs to
 the task description; remove it by editing the description in the app`.
 When `update_task` rewrites a description, keep every `![alt](att:<id>)`
-reference whose image should stay. The app deletes a description image a
-day after no saved description refers to it.
+reference whose image should stay. An image the description no longer names
+stays until someone next saves that task's description in the app. That
+save deletes the image at once if it was uploaded more than a day ago, so
+put a dropped reference back before then.
 
 ### Task activity
 
@@ -891,8 +893,9 @@ Roadmap's Team strip and the planning panel count them:
   agents have no weekly limit.
 - Organization admins and Standard users also receive the hours of projects
   they cannot see, in `hours` and `hidden_hours`, without naming the task or
-  project. Viewers and guests receive only work they can see or own. With
-  `project`, `hidden_hours` is all zeros.
+  project. `hidden_hours` is the part of `hours` from those projects, so do
+  not add the two. Viewers and guests receive only work they can see or own.
+  With `project`, `hidden_hours` is all zeros.
 - `people` lists every active user and agent, and any inactive one with hours
   in the window, ordered by name.
 

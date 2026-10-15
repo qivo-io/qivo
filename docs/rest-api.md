@@ -962,10 +962,12 @@ is not a file of that task is a `404` (`attachment not found`). A
 description image (`inline: true`) is a `400` (`this image belongs to the
 task description; remove it by editing the description in the app`).
 
-Description images stay with the app: the API neither uploads nor deletes
+Description images stay with the app. The API neither uploads nor deletes
 them. When a `PATCH` rewrites a description, keep every `![alt](att:<id>)`
-reference whose image should stay. The app deletes a description image a
-day after no saved description refers to it.
+reference whose image should stay. An image the description no longer names
+stays until someone next saves that task's description in the app. That
+save deletes the image at once if it was uploaded more than a day ago, so
+put a dropped reference back before then.
 
 ### Task activity
 
@@ -1031,18 +1033,19 @@ scheduled, not Done, not paused, has remaining hours and is not archived or
 in an archived project. Its remaining hours spread evenly from the week its
 estimate was saved, or its start week if later, through its end week; an
 estimate saved after the end week counts in the week it was saved. Compare
-`hours` with `plannable_hours`, which is `null` for an agent: agents have no
-weekly limit.
+`hours` with `plannable_hours`, which is `null` for an agent, because agents
+have no weekly limit.
 
 Hours from projects the caller cannot see are counted the way the app counts
 them. Organization admins and Standard users receive them, in both `hours`
-and `hidden_hours`, without the task or project. Viewers and guests receive
-only work in projects they can see and their own work. With `project`, only
-that project's tasks count, so `hidden_hours` is all zeros. `people` lists
-every active user and agent of the organization, and any inactive one with
-hours in the window, ordered by name. Weeks are computed in UTC, so an
-estimate saved close to midnight can land one week away from what the app
-shows in another time zone.
+and `hidden_hours`, without the task or project. `hidden_hours` is the part
+of `hours` from those projects, so do not add the two. Viewers and guests
+receive only work in projects they can see and their own work. With
+`project`, only that project's tasks count, so `hidden_hours` is all zeros.
+`people` lists every active user and agent of the organization, and any
+inactive one with hours in the window, ordered by name. Weeks are computed
+in UTC, so an estimate saved close to midnight can land one week away from
+what the app shows in another time zone.
 
 ## Examples
 

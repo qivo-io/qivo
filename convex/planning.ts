@@ -180,11 +180,12 @@ export type WorkloadJson = {
 /**
  * Each person's planned hours for `weeks` weeks from the week holding
  * `fromDay` (YYYY-MM-DD), as `me` may see them. The rows are orgLoadRows for
- * `me`: work owned by the reviewer while In Review, else the assignee,
- * scheduled, not done, not paused, with remaining hours, outside archived
- * tasks and projects. Staff also receive the rows of projects they cannot
- * see, counted in hidden_hours without naming them; viewers and guests
- * receive only rows they can see or own. Each row's remaining hours spread
+ * `me`, which hold work owned by the reviewer while In Review, else the
+ * assignee, scheduled, not done, not paused, with remaining hours, outside
+ * archived tasks and projects. Staff also receive the rows of projects they
+ * cannot see, counted in hours and again, unnamed, in hidden_hours, the part
+ * of hours they cannot see; viewers and guests receive only rows they can
+ * see or own. Each row's remaining hours spread
  * over its weeks by the app's rule. `project`, a project `me` can see,
  * limits the hours to it and its visible sub-projects, which leaves no
  * hidden hours. Lists every active member of the organization and every

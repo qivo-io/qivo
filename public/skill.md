@@ -208,14 +208,16 @@ Useful field rules:
 - **Delete a file:** `delete_attachment` or
   `DELETE /v1/tasks/{ref}/attachments/{id}`, with Edit access to the
   project. Description images are left to the app. When you rewrite a
-  description, keep its `![alt](att:<id>)` references, or the app deletes
-  those images a day later.
+  description, keep its `![alt](att:<id>)` references. The next time someone
+  saves that description in the app, the app deletes every image uploaded
+  more than a day ago that the description no longer names.
 - **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
   answers who changed what, oldest first. Comments are in `list_comments`.
 - **Workload:** `get_workload` or `GET /v1/workload` answers each person's
   planned hours per week (`hours`, aligned with `week_starts`) beside their
-  `plannable_hours`. Use it before assigning or scheduling work. Hours from
-  projects hidden from you appear only in `hidden_hours`, without names.
+  `plannable_hours`. Use it before assigning or scheduling work. `hours`
+  already includes work in projects hidden from you, and `hidden_hours` is
+  that part of `hours`, without names. Do not add the two.
 
 ## Receive task events
 

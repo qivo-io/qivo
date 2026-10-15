@@ -467,7 +467,7 @@ export const RECORD_TOOLS: McpTool[] = [
       name: 'get_workload',
       title: 'Get workload',
       description:
-        "Each person's planned hours per week against their `plannable_hours`, from the week holding `from_week` (default this week) for `weeks` weeks (default 8). `project` limits it to one project. Hours from projects hidden from you count in `hidden_hours` without naming them.",
+        "Each person's planned hours per week against their `plannable_hours`, from the week holding `from_week` (default this week) for `weeks` weeks (default 8). `project` limits it to one project. `hours` includes work in projects hidden from you; `hidden_hours` is that part, unnamed.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
