@@ -23,6 +23,7 @@ import { creatorGrant, grantsAfterHandover } from '../lib/projectGrants'
 import { sha256hex } from '../machine/auth'
 import {
   HELD_TASKS_SHAPE,
+  type HeldTasks,
   LEAD_ACCESS_RULE,
   parseHeldTasks,
   removeProjectGrantCore,
@@ -907,12 +908,26 @@ describe('project access, one user or team at a time', () => {
   it("the app's removal window runs the same function", async () => {
     const fx = await setup()
     const { open } = await held(fx)
-    await as(fx.t, fx.user).mutation(api.projects.removeAccess, {
-      org_id: fx.org.id,
-      id: fx.sub.id,
-      user_id: fx.pia.id,
-      on_held_tasks: { reassign_to: null },
-    })
+    const remove = (p: Doc<'profiles'>, user_id: string, on_held_tasks: HeldTasks) =>
+      as(fx.t, p).mutation(api.projects.removeAccess, {
+        org_id: fx.org.id,
+        id: fx.sub.id,
+        user_id,
+        on_held_tasks,
+      })
+    // the app tells a refused reassignment from a refused removal
+    const reassigning = await expectRefusal(
+      remove(fx.user, fx.pia.id, { reassign_to: fx.viewer.id }),
+      'rule',
+    )
+    // src/store/planner.ts reads this reason (HELD_TASKS_REFUSED)
+    expect((reassigning.data as Refusal).reason).toBe('held_tasks')
+    const removing = await expectRefusal(
+      remove(fx.admin, fx.user.id, { reassign_to: null }),
+      'rule',
+    )
+    expect(removing.data).toEqual({ code: 'rule', message: LEAD_ACCESS_RULE })
+    await remove(fx.user, fx.pia.id, { reassign_to: null })
     expect((await taskRow(fx.t, open.id))?.assignee_id).toBeUndefined()
     expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBeUndefined()
   })

@@ -19,7 +19,7 @@
  * not at all (removeAndSettle). Removing a team member (model/teams.ts)
  * settles the member's tasks through the same function. */
 
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -33,7 +33,7 @@ import {
 } from '../lib/access'
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
-import { badRequest, forbidden, rule } from '../lib/functions'
+import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, updateIssueCore } from './issues'
 import { assertGrantee, assertTeamGrantee } from './projects'
@@ -328,6 +328,25 @@ async function assertCanTakeOver(ctx: QueryCtx, lost: readonly Lost[], to: strin
   }
 }
 
+/** The reason a refusal carries when it comes from settling a removal's
+ * held tasks (a Viewer grant or a reassignment), so the app can say the
+ * access stays because of the tasks rather than because the removal itself
+ * was refused. REST and MCP answer the refusal's sentence as before. */
+export const HELD_TASKS_REFUSED = 'held_tasks'
+
+/* Runs one part of a removal's settlement and marks its refusals with
+ * HELD_TASKS_REFUSED. A refusal that already has a reason, such as a billing
+ * pause, keeps it. */
+async function settling(step: () => Promise<void>): Promise<void> {
+  try {
+    await step()
+  } catch (e) {
+    if (!(e instanceof ConvexError)) throw e
+    const data = e.data as Refusal
+    throw new ConvexError<Refusal>({ ...data, reason: data.reason ?? HELD_TASKS_REFUSED })
+  }
+}
+
 /** What settling a removal did, besides the removal itself. `viewer_grants`
  * are the projects that received a Viewer grant, for the caller's
  * narration. */
@@ -344,8 +363,9 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
  * Edit access and sight of every task above once the access is gone. Any
  * refusal throws, so the removal and its settlement land together or not at
- * all. Project grant removal and team member removal (model/teams.ts) both
- * run through this, as the app, REST and MCP do.
+ * all, and one while settling the tasks carries HELD_TASKS_REFUSED. Project
+ * grant removal and team member removal (model/teams.ts) both run through
+ * this, as the app, REST and MCP do.
  */
 export async function removeAndSettle(
   ctx: MutationCtx,
@@ -366,51 +386,55 @@ export async function removeAndSettle(
   const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
   if (stranded.length > 0 && held === 'keep_as_viewer') {
-    if (a.keepRefusal !== undefined) throw rule(a.keepRefusal)
-    const granted = new Set<string>()
-    for (const h of lost) {
-      const where = await a.viewerOn(h.project)
-      const key = `${h.profile_id}:${where.id}`
-      if (granted.has(key)) continue
-      granted.add(key)
-      if (!result.viewer_grants.some((p) => p.id === where.id)) {
-        if (!(await canManageProjectUsers(ctx, me, where))) {
-          throw forbidden('no permission to manage users on this project')
+    await settling(async () => {
+      if (a.keepRefusal !== undefined) throw rule(a.keepRefusal)
+      const granted = new Set<string>()
+      for (const h of lost) {
+        const where = await a.viewerOn(h.project)
+        const key = `${h.profile_id}:${where.id}`
+        if (granted.has(key)) continue
+        granted.add(key)
+        if (!result.viewer_grants.some((p) => p.id === where.id)) {
+          if (!(await canManageProjectUsers(ctx, me, where))) {
+            throw forbidden('no permission to manage users on this project')
+          }
+          result.viewer_grants.push(where)
         }
-        result.viewer_grants.push(where)
+        const existing = await ctx.db
+          .query('project_access')
+          .withIndex('by_project_profile', (q) =>
+            q.eq('project_id', where.id).eq('profile_id', h.profile_id),
+          )
+          .unique()
+        if (existing === null) {
+          await ctx.db.insert('project_access', {
+            project_id: where.id,
+            profile_id: h.profile_id,
+            level: 'viewer',
+          })
+        }
       }
-      const existing = await ctx.db
-        .query('project_access')
-        .withIndex('by_project_profile', (q) =>
-          q.eq('project_id', where.id).eq('profile_id', h.profile_id),
-        )
-        .unique()
-      if (existing === null) {
-        await ctx.db.insert('project_access', {
-          project_id: where.id,
-          profile_id: h.profile_id,
-          level: 'viewer',
-        })
-      }
-    }
+    })
     result.stranded = []
     result.kept_as_viewer = [...new Set(lost.map((h) => h.profile_id))]
   } else if (stranded.length > 0 && typeof held === 'object') {
     const to = held.reassign_to
-    if (to !== null) await assertCanTakeOver(ctx, lost, to)
-    const byTask = new Map<string, Holding[]>()
-    for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
-    for (const holdings of byTask.values()) {
-      const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
-      for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
-      await updateIssueCore(ctx, {
-        me,
-        issue: holdings[0].task,
-        patch,
-        now,
-        machine: a.provenance === undefined ? undefined : { provenance: a.provenance },
-      })
-    }
+    await settling(async () => {
+      if (to !== null) await assertCanTakeOver(ctx, lost, to)
+      const byTask = new Map<string, Holding[]>()
+      for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
+      for (const holdings of byTask.values()) {
+        const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
+        for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
+        await updateIssueCore(ctx, {
+          me,
+          issue: holdings[0].task,
+          patch,
+          now,
+          machine: a.provenance === undefined ? undefined : { provenance: a.provenance },
+        })
+      }
+    })
     result.stranded = []
     result.reassigned = stranded
   }

@@ -1,4 +1,5 @@
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -25,8 +26,9 @@ const NOW = '2026-09-14T08:00:00.000Z'
 describe('removing someone who has work in the project', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
-  // tasks, projects and team members whose write the server refuses
+  // tasks, projects and team members whose write the server refuses, and how
   let refused: Set<string>
+  let refusal: unknown
   let work: string
 
   async function load(change?: (snap: Snapshot, task: Task) => void) {
@@ -100,13 +102,15 @@ describe('removing someone who has work in the project', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     requests = []
     refused = new Set()
+    // what the server answers when settling the held tasks fails
+    refusal = new ConvexError({ code: 'rule', message: 'refused', reason: 'held_tasks' })
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
       requests.push({ name, args })
       return refused.has(args.id ?? args.profile_id)
-        ? Promise.reject(new Error('refused'))
+        ? Promise.reject(refusal)
         : Promise.resolve(null)
     })
   })
@@ -259,6 +263,40 @@ describe('removing someone who has work in the project', () => {
       'Leo Person keeps access, because not every task could be reassigned.',
       'error',
     )
+  })
+
+  it('names the reason when the server refuses the removal itself', async () => {
+    await load()
+    refused.add(work)
+    const leo = P.accessRemoval(user('leo'))
+    refusal = new ConvexError({
+      code: 'forbidden',
+      message: 'no permission to manage users on this project',
+    })
+    expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      "You don't have permission for that — reverted",
+      'error',
+    )
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. — reverted',
+      'error',
+    )
+    refusal = new Error('network down')
+    expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith("Couldn't save — reverted", 'error')
+    expect(window.showToast).not.toHaveBeenCalledWith(
+      'Leo Person keeps access, because not every task could be reassigned.',
+      'error',
+    )
+    expect(P.levelOn(work, 'leo')).toBe('user')
+    expect(vm('t1').assignee).toBe('leo')
   })
 
   it('keeps the grant and the window when the server refuses the Viewer grant', async () => {
