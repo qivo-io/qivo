@@ -17,10 +17,13 @@
  * survives the function boundary; REST answers objects.
  *
  * Visibility: a comment, a follow or an inbox item about a task the caller
- * cannot read answers like an unknown one, and a read or a bulk inbox change
- * names only tasks the caller can read (lib/workingSet.ts with the machine
- * Shown, lib/core.ts machineShown). The inbox shows the live task title and
- * key, never the title stored on the message. */
+ * cannot read answers like an unknown one, and a bulk inbox change names
+ * only tasks the caller can read (lib/workingSet.ts with the machine Shown,
+ * lib/core.ts machineShown). The inbox lists what the app's Inbox lists, the
+ * items about tasks in the caller's working set (lib/workingSet.ts
+ * inWorkingSet), so an archived task's item leaves it until a restore. It
+ * shows the live task title and key, never the title stored on the
+ * message. */
 
 import { type ConvexError, v } from 'convex/values'
 import { internal } from '../_generated/api'
@@ -31,6 +34,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
+import { canSeeProject } from '../lib/access'
 import {
   asMachineCaller,
   type Caller,
@@ -48,7 +52,7 @@ import {
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
-import { aboutShownTasks } from '../lib/workingSet'
+import { aboutShownTasks, inWorkingSet, type Shown } from '../lib/workingSet'
 import { deleteComment, editComment } from '../model/comments'
 import {
   followTask,
@@ -138,32 +142,72 @@ type InboxItemJson = {
   messages: InboxMessageJson[]
 }
 
+/** A page of inbox items, and whether the inbox held more messages than
+ * one read folds (INBOX_SCAN). */
+type InboxPageJson = { items: InboxItemJson[]; truncated: boolean }
+
 /* (created_at, id), the total order the app and the prune use. */
 const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
   a.created_at > b.created_at || (a.created_at === b.created_at && a.id > b.id)
 
+/* The most messages one inbox read folds, newest first, so a backlog that
+ * nobody clears cannot push the read past Convex's transaction limits. */
+export const INBOX_SCAN = 1000
+
 /**
- * The caller's inbox items about tasks it can read, the latest activity
- * first, as the app folds its messages into items (src/store/viewModels.ts
- * shapeMessageGroup). Rows about a task it cannot read stay stored and come
- * back if it can read the task again. A snoozed item is left out unless
- * `includeSnoozed`, and `unreadOnly` keeps items with an unread message.
+ * The Shown of the inbox over these tasks: the ones in the caller's working
+ * set (lib/workingSet.ts inWorkingSet), which are its organization's active
+ * tasks in active projects it can see, as the app's snapshot shows them.
+ */
+async function inboxShown(
+  ctx: QueryCtx,
+  me: Caller,
+  tasks: Iterable<Doc<'issues'>>,
+): Promise<Shown> {
+  const sight = new Map<string, Promise<{ project?: Doc<'projects'>; visible: boolean }>>()
+  const ids = new Set<string>()
+  for (const task of tasks) {
+    if (task.org_id !== me.org_id || task.archived_at !== undefined) continue
+    let seen = sight.get(task.project_id)
+    if (seen === undefined) {
+      seen = byId(ctx, 'projects', task.project_id).then(async (p) =>
+        p === null ? { visible: false } : { project: p, visible: await canSeeProject(ctx, me, p) },
+      )
+      sight.set(task.project_id, seen)
+    }
+    const { project, visible } = await seen
+    if (inWorkingSet(task, project, visible)) ids.add(task.id)
+  }
+  return (taskId) => ids.has(taskId)
+}
+
+/**
+ * The caller's inbox items, the latest activity first, as the app folds its
+ * messages into items (src/store/viewModels.ts shapeMessageGroup). Like the
+ * app, it lists only tasks in the caller's working set (inboxShown). Rows
+ * about other tasks stay stored and come back if the task does. It folds
+ * the newest INBOX_SCAN messages only and says `truncated` when there were
+ * more. Older items are then missing, and the oldest listed may lack older
+ * messages. A snoozed item is left out unless `includeSnoozed`, and
+ * `unreadOnly` keeps items with an unread message.
  */
 async function inboxItems(
   ctx: QueryCtx,
   me: Caller,
   o: { unreadOnly: boolean; includeSnoozed: boolean; limit: number; offset: number },
-): Promise<InboxItemJson[]> {
-  const rows = await ctx.db
+): Promise<InboxPageJson> {
+  const scanned = await ctx.db
     .query('messages')
     .withIndex('by_recipient', (q) => q.eq('recipient_id', me.id))
-    .collect()
+    .order('desc')
+    .take(INBOX_SCAN + 1)
+  const rows = scanned.slice(0, INBOX_SCAN)
   const tasks = new Map<string, Doc<'issues'>>()
   for (const id of new Set(rows.map((row) => row.issue_id))) {
     const task = await byId(ctx, 'issues', id)
     if (task !== null) tasks.set(id, task)
   }
-  const shown = await machineShown(tasks.values(), me, projectReader(ctx, me))
+  const shown = await inboxShown(ctx, me, tasks.values())
   const byTask = new Map<string, Doc<'messages'>[]>()
   for (const row of aboutShownTasks(rows, shown)) {
     const list = byTask.get(row.issue_id)
@@ -209,7 +253,10 @@ async function inboxItems(
         ? 1
         : -1,
   )
-  return items.slice(o.offset, o.offset + o.limit)
+  return {
+    items: items.slice(o.offset, o.offset + o.limit),
+    truncated: scanned.length > INBOX_SCAN,
+  }
 }
 
 /** What an inbox change does to the items it names. */
@@ -406,13 +453,13 @@ export const mcpListInbox = internalQuery({
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const items = await inboxItems(ctx, me, {
+    const page = await inboxItems(ctx, me, {
       unreadOnly: a.unread_only === true,
       includeSnoozed: a.include_snoozed === true,
       limit: Math.min(a.limit ?? 50, 200),
       offset: a.offset ?? 0,
     })
-    return pretty(items)
+    return pretty(page)
   },
 })
 
@@ -489,7 +536,7 @@ export const restListInbox = internalQuery({
     limit: v.optional(v.string()),
     offset: v.optional(v.string()),
   },
-  handler: async (ctx, a): Promise<InboxItemJson[]> => {
+  handler: async (ctx, a): Promise<InboxPageJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     return await inboxItems(ctx, me, {
       unreadOnly: flagParam(a.unread_only, 'unread_only'),
@@ -596,8 +643,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description:
-        'Your inbox: one item per task you can still read, with its unread count and messages (oldest first), latest activity first. `unread_only` keeps items with unread messages. Snoozed items are left out unless `include_snoozed`. `limit` (50 by default) and `offset` page through the items.',
+      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. \`truncated: true\` means only your newest ${INBOX_SCAN} messages were read; mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

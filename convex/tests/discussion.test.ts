@@ -6,8 +6,9 @@
  *      ones.
  *   2. Following: own follows only, the single-task read's `following` and
  *      `followers`, and news reaching an agent that follows a task.
- *   3. Reading the inbox: only tasks the caller can read, the live title,
- *      the app's item fold, filters and paging.
+ *   3. Reading the inbox: what the app lists (tasks in the caller's working
+ *      set, so not archived ones), the live title, the app's item fold,
+ *      filters, paging and the bounded read of a large backlog.
  *   4. Changing the inbox: each action by task, `all` for read and remove
  *      with only readable tasks named, the input rules on both surfaces, and
  *      own rows only.
@@ -16,11 +17,14 @@
  *      every write entry is credentialAccess.test.ts. */
 /// <reference types="vite/client" />
 
+import { convexTest } from 'convex-test'
 import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
+import { INBOX_SCAN } from '../machine/discussion'
+import schema from '../schema'
 import {
   allMessages,
   as,
@@ -53,8 +57,7 @@ type Fx = OrgFixture & {
 
 /* withOrg, with the agent holding Edit on TBED (FW and PCB) and no access to
  * SKNK. */
-async function setup(): Promise<Fx> {
-  const t = newT()
+async function setup(t: T = newT()): Promise<Fx> {
   const f = await withOrg(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
@@ -401,7 +404,7 @@ describe('following tasks', () => {
       id: fx.task.id,
       patch: { priority: 'high' },
     })
-    const items = JSON.parse(
+    const { items } = JSON.parse(
       await fx.t.query(internal.machine.discussion.mcpListInbox, { callerId: fx.agent.id, ...R }),
     )
     expect(items).toHaveLength(1)
@@ -418,16 +421,24 @@ describe('following tasks', () => {
 
 /* ------------------------------------------------------------ 3. the inbox */
 
-const listMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx.agent.id) =>
+/* list_inbox's whole answer. */
+const pageMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx.agent.id) =>
   JSON.parse(
     await fx.t.query(internal.machine.discussion.mcpListInbox, { callerId, ...R, ...args }),
   ) as {
-    task: { id: string; key: string; title: string }
-    unread_count: number
-    latest_at: string
-    snoozed_until: string | null
-    messages: { id: string; read_at: string | null }[]
-  }[]
+    items: {
+      task: { id: string; key: string; title: string }
+      unread_count: number
+      latest_at: string
+      snoozed_until: string | null
+      messages: { id: string; detail: string; read_at: string | null }[]
+    }[]
+    truncated: boolean
+  }
+
+/* list_inbox's items. */
+const listMcp = async (fx: Fx, args: Record<string, unknown> = {}, callerId = fx.agent.id) =>
+  (await pageMcp(fx, args, callerId)).items
 
 describe('reading the inbox', () => {
   it('lists only tasks the caller can read, with the live title, one item per task', async () => {
@@ -484,7 +495,7 @@ describe('reading the inbox', () => {
     // REST answers the same items
     expect(
       await fx.t.query(internal.machine.discussion.restListInbox, { callerId: fx.agent.id, ...R }),
-    ).toEqual(items)
+    ).toEqual({ items, truncated: false })
   })
 
   it('filters unread and snoozed items, orders by latest activity and pages', async () => {
@@ -521,8 +532,14 @@ describe('reading the inbox', () => {
     expect(keys(await listMcp(fx, { unread_only: true }))).toEqual([a, d])
     expect(keys(await listMcp(fx, { include_snoozed: true }))).toEqual([a, d, c, b])
     expect(keys(await listMcp(fx, { limit: 1, offset: 1 }))).toEqual([d])
-    const rest = (q: Record<string, string>) =>
-      fx.t.query(internal.machine.discussion.restListInbox, { callerId: fx.agent.id, ...R, ...q })
+    const rest = async (q: Record<string, string>) =>
+      (
+        await fx.t.query(internal.machine.discussion.restListInbox, {
+          callerId: fx.agent.id,
+          ...R,
+          ...q,
+        })
+      ).items
     expect(keys(await rest({ unread_only: 'true', include_snoozed: 'true' }))).toEqual([a, d, c])
     expect(keys(await rest({ limit: '2', offset: '1' }))).toEqual([d, b])
     for (const [q, sentence] of [
@@ -535,6 +552,105 @@ describe('reading the inbox', () => {
     ] as const) {
       await refused(rest(q), 'bad_request', sentence)
     }
+  })
+
+  it('lists what the app lists: an archived task or one in an archived project leaves until restored', async () => {
+    const fx = await setup()
+    const archived = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const shelved = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id })
+    // the admin follows three tasks, and the user changes each of them
+    for (const task of [fx.task, archived, shelved]) {
+      await fx.t.mutation(internal.machine.discussion.mcpSetFollowing, {
+        callerId: fx.admin.id,
+        ...W,
+        ref: key(task),
+        following: true,
+      })
+      await as(fx.t, fx.user).mutation(api.issues.update, {
+        org_id: fx.org.id,
+        id: task.id,
+        patch: { priority: 'high' },
+      })
+    }
+    await as(fx.t, fx.user).mutation(api.issues.archive, { org_id: fx.org.id, id: archived.id })
+    await as(fx.t, fx.admin).mutation(api.projects.archive, { org_id: fx.org.id, id: fx.sub2.id })
+    // the admin holds messages about all three, the Archived notice included
+    expect((await messagesFor(fx.t, fx.admin.id, archived.id)).map((m) => m.detail)).toContain(
+      'Archived',
+    )
+    const listed = async () =>
+      (await listMcp(fx, { include_snoozed: true }, fx.admin.id)).map((i) => i.task.id).sort()
+    const inApp = async () => {
+      const snapshot = await as(fx.t, fx.admin).query(api.snapshot.forMe, {})
+      return [...new Set((snapshot?.messages ?? []).map((m) => m.issue_id))].sort()
+    }
+    expect(await listed()).toEqual([fx.task.id])
+    expect(await inApp()).toEqual([fx.task.id])
+    const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
+      callerId: fx.admin.id,
+      ...R,
+    })
+    expect(rest.items.map((i) => i.task.id)).toEqual([fx.task.id])
+    // a named change still reaches an archived task the caller can read
+    const read = await updateMcp(fx, { action: 'read', tasks: [key(archived)] }, fx.admin.id)
+    expect(read.tasks).toEqual([key(archived)])
+    // a restore brings the item back on both, with its stored messages
+    await as(fx.t, fx.user).mutation(api.issues.unarchive, { org_id: fx.org.id, id: archived.id })
+    await as(fx.t, fx.admin).mutation(api.projects.unarchive, {
+      org_id: fx.org.id,
+      id: fx.sub2.id,
+    })
+    const ids = [fx.task.id, archived.id, shelved.id].sort()
+    expect(await listed()).toEqual(ids)
+    expect(await inApp()).toEqual(ids)
+    // the read Archived notice made way for the unread Restored one, as in the app
+    const back = (await listMcp(fx, {}, fx.admin.id)).find((i) => i.task.id === archived.id)
+    expect(back?.messages).toMatchObject([{ detail: 'Restored', read_at: null }])
+  })
+
+  it('reads only the newest messages of a backlog that outgrows one transaction, and says so', async () => {
+    // Folding every message would read more documents than this allows.
+    const fx = await setup(
+      convexTest({
+        schema,
+        modules: import.meta.glob('../**/*.*s'),
+        transactionLimits: { documentsRead: INBOX_SCAN + 100 },
+      }),
+    )
+    const fresh = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await fx.t.run(async (ctx) => {
+      for (let n = 0; n < INBOX_SCAN + 200; n++) {
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: fx.org.id,
+          recipient_id: fx.agent.id,
+          issue_id: fx.task.id,
+          issue_title: 'Backlog',
+          kind: 'change',
+          detail: 'backlog',
+          created_at: `2026-01-01T00:00:00.${String(n % 1000).padStart(3, '0')}Z`,
+        })
+      }
+    })
+    await plantMessage(fx.t, {
+      org_id: fx.org.id,
+      recipient_id: fx.agent.id,
+      issue_id: fresh.id,
+      created_at: '2026-02-01T00:00:00.000Z',
+    })
+    const page = await pageMcp(fx)
+    expect(page.truncated).toBe(true)
+    expect(page.items.map((i) => [i.task.key, i.unread_count])).toEqual([
+      [key(fresh), 1],
+      [key(fx.task), INBOX_SCAN - 1],
+    ])
+    const rest = await fx.t.query(internal.machine.discussion.restListInbox, {
+      callerId: fx.agent.id,
+      ...R,
+      unread_only: 'true',
+      limit: '1',
+    })
+    expect(rest).toEqual({ items: [page.items[0]], truncated: true })
   })
 
   it("lists only the caller's own rows", async () => {
@@ -823,7 +939,10 @@ describe('the routes over HTTP', () => {
     })
     const inbox = await http(fx.t, secret, 'GET', '/v1/inbox?unread_only=true')
     expect(inbox.status).toBe(200)
-    expect(inbox.body).toMatchObject([{ task: { key: ref }, unread_count: 1 }])
+    expect(inbox.body).toMatchObject({
+      items: [{ task: { key: ref }, unread_count: 1 }],
+      truncated: false,
+    })
     expect(await http(fx.t, secret, 'POST', '/v1/inbox/read', { tasks: [ref] })).toEqual({
       status: 200,
       body: { action: 'read', has_more: false, tasks: [ref] },
@@ -869,9 +988,9 @@ describe('the routes over HTTP', () => {
     })
     const secret = await plantKey(fx.t, viewerAgent)
     const ref = key(fx.task)
-    expect((await http(fx.t, secret, 'GET', '/v1/inbox')).body).toMatchObject([
-      { task: { key: ref } },
-    ])
+    expect((await http(fx.t, secret, 'GET', '/v1/inbox')).body).toMatchObject({
+      items: [{ task: { key: ref } }],
+    })
     const readOnly = { status: 403, body: { error: 'this agent is a Viewer and can only read' } }
     for (const [method, path, body] of [
       ['POST', '/v1/inbox/read', { tasks: [ref] }],

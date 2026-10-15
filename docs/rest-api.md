@@ -932,7 +932,8 @@ or comments on it, as described under [Comments](#comments).
 ### Inbox
 
 The caller's own inbox, the same items the app's **Inbox** shows: one item
-per task, holding the messages about that task the caller has not removed.
+per active task the caller can read, holding the messages about that task
+the caller has not removed.
 
 ```
 GET  /v1/inbox                 items, latest activity first (read)
@@ -944,30 +945,43 @@ POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:0
 
 `GET /v1/inbox` takes `unread_only=true` (items with an unread message),
 `include_snoozed=true` (snoozed items are left out otherwise, as in the app),
-`limit` (1 to 200, 50 by default) and `offset`. An item is:
+`limit` (1 to 200, 50 by default) and `offset`. It answers:
 
 ```json
 {
-  "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
-  "unread_count": 1,
-  "latest_at": "2026-10-14T09:12:03.000Z",
-  "snoozed_until": null,
-  "messages": [
+  "items": [
     {
-      "id": "…uuid…", "kind": "comment", "detail": "New comment",
-      "actor_id": "…uuid…", "actor_name": "Priya Patel",
-      "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
+      "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
+      "unread_count": 1,
+      "latest_at": "2026-10-14T09:12:03.000Z",
+      "snoozed_until": null,
+      "messages": [
+        {
+          "id": "…uuid…", "kind": "comment", "detail": "New comment",
+          "actor_id": "…uuid…", "actor_name": "Priya Patel",
+          "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
+        }
+      ]
     }
-  ]
+  ],
+  "truncated": false
 }
 ```
 
-`task` is the task as it is now, its current title included. Items are listed
-only for tasks the caller can read. Messages about a task it has lost access
-to stay stored and come back with the access. `messages` run oldest first;
-`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
-shows. `latest_at` is the newest message's time, or the end of a snooze when
-that is later, and orders the list.
+`task` is the task as it is now, its current title included. As in the app,
+items are listed only for active tasks the caller can read in active
+projects. Messages about a task it has lost access to, an archived task or a
+task in an archived project stay stored and come back when the access or the
+task does, so the `Archived` message itself is not listed. `messages` run
+oldest first; `kind` is `mention`, `comment` or `change`, and `detail` is
+the line the app shows. `latest_at` is the newest message's time, or the end
+of a snooze when that is later, and orders the list.
+
+One request reads the caller's newest 1,000 messages. When it holds more,
+`truncated` is `true`. Older items are then missing, and the oldest items
+listed may lack their older messages. Marking items read keeps only each item's
+latest message, so `POST /v1/inbox/read` with `{"all": true}`, repeated
+while `has_more` is `true`, shrinks the inbox until it fits.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the

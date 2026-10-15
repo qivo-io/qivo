@@ -199,10 +199,11 @@ Useful field rules:
   the task's updates in their inbox. `get_task` shows `following` and
   `followers`. You are also made a follower when you are assigned, mentioned
   or comment.
-- **Read your inbox:** `list_inbox` or `GET /v1/inbox` lists one item per
-  task you can read, latest activity first, with its unread count and
-  messages. Use `unread_only` to see what is new. The task title shown is the
-  current one.
+- **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
+  per active task you can read, latest activity first, with its unread count
+  and messages. Use `unread_only` to see what is new. The task title shown is
+  the current one. `truncated: true` means only your newest 1,000 messages
+  were read; mark everything read to shrink the inbox.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
   `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
   `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with

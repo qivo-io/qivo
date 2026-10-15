@@ -678,7 +678,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
 | `update_comment` | Replace a comment's `body`; `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `delete_comment` | Delete a comment, by the same rule as `update_comment` |
-| `list_inbox` | Your inbox, one item per task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset` |
+| `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says older messages were not read |
 | `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
 | `set_following` | Follow a task (`following: true`) or stop following it |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
@@ -829,29 +829,40 @@ follow.
 task, latest activity first:
 
 ```json
-[
-  {
-    "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
-    "unread_count": 1,
-    "latest_at": "2026-10-14T09:12:03.000Z",
-    "snoozed_until": null,
-    "messages": [
-      {
-        "id": "…uuid…", "kind": "comment", "detail": "New comment",
-        "actor_id": "…uuid…", "actor_name": "Priya Patel",
-        "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
-      }
-    ]
-  }
-]
+{
+  "items": [
+    {
+      "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
+      "unread_count": 1,
+      "latest_at": "2026-10-14T09:12:03.000Z",
+      "snoozed_until": null,
+      "messages": [
+        {
+          "id": "…uuid…", "kind": "comment", "detail": "New comment",
+          "actor_id": "…uuid…", "actor_name": "Priya Patel",
+          "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
+        }
+      ]
+    }
+  ],
+  "truncated": false
+}
 ```
 
-`task` is the task as it is now, its current title included. Items are listed
-only for tasks you can read; messages about a task you lost access to stay
-stored and come back with the access. `messages` run oldest first, `kind` is
-`mention`, `comment` or `change`, and `detail` is the line the app shows.
-`latest_at` is the newest message's time, or the end of a snooze when that
-is later. Snoozed items are left out unless `include_snoozed` is `true`.
+`task` is the task as it is now, its current title included. As in the app,
+items are listed only for active tasks you can read in active projects.
+Messages about a task you lost access to, an archived task or a task in an
+archived project stay stored and come back when the access or the task does,
+so the `Archived` message itself is not listed. `messages` run oldest first,
+`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
+shows. `latest_at` is the newest message's time, or the end of a snooze when
+that is later. Snoozed items are left out unless `include_snoozed` is `true`.
+
+One call reads your newest 1,000 messages. When you hold more, `truncated` is
+`true`. Older items are then missing, and the oldest items listed may lack
+their older messages. Marking items read keeps only each item's latest message, so
+`update_inbox` with `action: "read"` and `all: true`, repeated while
+`has_more` is `true`, shrinks the inbox until it fits.
 
 `update_inbox` applies `action` to your items about `tasks` (task refs), or
 with `all: true` to every item:
