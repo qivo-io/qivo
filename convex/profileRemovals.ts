@@ -92,11 +92,14 @@ function edge<Row>(a: {
   }
 }
 
+/** The OAuth connections of `profileId`, as a new query for each read. */
 const connectionsOf = (ctx: MutationCtx, profileId: string) =>
   ctx.db.query('oauth_connections').withIndex('by_profile', (q) => q.eq('profile_id', profileId))
 
 /* A connection is deleted after its replay hashes, which grow by one row per
- * refresh. Its revocation already happened in removeProfile. */
+ * refresh. removeProfile revoked only the newest REVOKE_AT_ONCE connections,
+ * so older ones are deleted here unrevoked, which is safe because every
+ * OAuth path already refuses once the profile row is gone. */
 const oauthEdge: Edge = {
   sweep: async (ctx, profileId, budget) => {
     while (!budgetSpent(budget)) {

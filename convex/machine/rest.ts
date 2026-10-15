@@ -160,6 +160,7 @@ type Access = {
   writable: (projectId: string) => boolean
 }
 
+/* Access for `callerId`, resolved to the live caller by asMachineCaller. */
 async function withAccess(
   ctx: QueryCtx,
   callerId: string,
@@ -561,8 +562,8 @@ export const listIssues = internalQuery({
 })
 
 /* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. The
- * single-task shape adds labels, subtasks, links and a group's remaining
- * hours (lib/core.ts taskOut). */
+ * single-task shape adds labels, subtasks, links, a group's remaining
+ * hours, followers and attachments (lib/core.ts taskOut). */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestTaskJson> => {
@@ -1258,6 +1259,10 @@ const STATUS_OF: Partial<Record<string, number>> = {
   rule: 400, // readable beats a 500; machine pre-checks fire first in practice
 }
 
+/* The REST response for an error a route threw. A caller gone or
+ * deactivated since auth gets its own 401 sentence, a refusal whose code
+ * STATUS_OF maps gets that status and its message, and anything else is a
+ * 500 with its text. */
 function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>

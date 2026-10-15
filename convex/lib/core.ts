@@ -36,6 +36,7 @@ import { postArchiveReason } from '../model/comments'
 import {
   assertLive,
   type IssuePatch,
+  type LaterPeople,
   metaNeedsSub,
   moveIssueCore,
   pairRule,
@@ -689,14 +690,24 @@ export function taskUrl(orgSlug: string, num: number): string | null {
  * before it reads the organization's tasks once instead (the read a REST
  * list makes anyway). The read walks the subtree once (subtreeIndex) and
  * every group total uses that one index, which keeps both Convex limits in
- * reach. Index ranges stay far below 4,096, and only a very large group
- * pays a full read. */
+ * reach. Index ranges stay far below 4,096, and only a group with more
+ * tasks that count under it than this pays a full read. */
 const SUBTREE_WALK_BUDGET = 1000
 
-/* `root` and the tasks under it, indexed by parent. It reads one level at a
- * time and stops at the depth assertParentChain allows; past
- * SUBTREE_WALK_BUDGET tasks it reads the organization's tasks once instead. */
-async function subtreeIndex(ctx: QueryCtx, root: Doc<'issues'>): Promise<ChildIndex> {
+/* The subtasks a single-task read of `root` uses, indexed by parent. They
+ * are the root's own and those of every task under it that counts toward
+ * its totals (`counts`, groupCounter). is_group and the subtask list need
+ * only the root's subtasks, and the totals' walks enter only tasks that
+ * count and need each one's subtasks to tell a leaf from a group, so a
+ * branch that cannot count is never read below its top. It reads one level
+ * at a time and stops at the depth assertParentChain allows; past
+ * SUBTREE_WALK_BUDGET reads it reads the organization's tasks once
+ * instead. */
+async function subtreeIndex(
+  ctx: QueryCtx,
+  root: Doc<'issues'>,
+  counts: GroupCounter,
+): Promise<ChildIndex> {
   const index = new Map<string, Doc<'issues'>[]>()
   const seen = new Set<string>([root.id])
   let frontier = [root.id]
@@ -717,7 +728,7 @@ async function subtreeIndex(ctx: QueryCtx, root: Doc<'issues'>): Promise<ChildIn
         .collect()
       index.set(id, kids)
       for (const kid of kids) {
-        if (seen.has(kid.id)) continue
+        if (seen.has(kid.id) || !(await counts(kid))) continue
         seen.add(kid.id)
         next.push(kid.id)
       }
@@ -816,8 +827,9 @@ type Reader = {
 }
 
 /** The tasks by parent that a row's group facts come from. A list passes the
- * organization's tasks, and a single-task read the task's subtreeIndex. */
-type Subtree = { children: ChildIndex }
+ * organization's tasks, and a single-task read the task's subtreeIndex with
+ * the groupCounter that walk used, which the totals then share. */
+type Subtree = { children: ChildIndex; counts?: GroupCounter }
 
 export async function issueOut(
   ctx: QueryCtx,
@@ -844,7 +856,7 @@ export async function issueOut(
     ? await groupWeeks(
         issue,
         opts.children,
-        groupCounter(ctx, opts.me, issue, project, opts.readable),
+        opts.counts ?? groupCounter(ctx, opts.me, issue, project, opts.readable),
       )
     : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
   const parent = await parentOut(ctx, opts.me, issue, opts.readable)
@@ -956,13 +968,14 @@ export const taskRefOf = (t: Doc<'issues'>): TaskRefJson => ({
   status: t.status,
 })
 
+/* Orders tasks by number, lowest first. */
 const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
 
 /**
  * The single-task read's extra fields for `issue`, read by `me`. `isGroup`,
- * `project` and `children` (its subtreeIndex) are what taskOut already
- * holds. The group total counts what groupCounter counts, as the plan weeks
- * do.
+ * `project`, `children` (its subtreeIndex) and `counts` (the groupCounter
+ * that walk used) are what taskOut already holds. The group total counts
+ * what groupCounter counts, as the plan weeks do.
  */
 export async function taskDetail(
   ctx: QueryCtx,
@@ -972,6 +985,7 @@ export async function taskDetail(
     project: Doc<'projects'>
     isGroup: boolean
     children: ChildIndex
+    counts?: GroupCounter
     readable?: (projectId: string) => boolean
   },
 ): Promise<TaskDetailJson> {
@@ -986,7 +1000,7 @@ export async function taskDetail(
     .map(taskRefOf)
   let group_remaining_hours: number | null = null
   if (o.isGroup) {
-    const counts = groupCounter(ctx, me, issue, o.project, o.readable)
+    const counts = o.counts ?? groupCounter(ctx, me, issue, o.project, o.readable)
     const counted = new Set<string>()
     for (const task of [...o.children.values()].flat()) {
       if (await counts(task)) counted.add(task.id)
@@ -1051,16 +1065,19 @@ export async function taskOut(
 ): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson & TaskAttachmentsJson> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
-  // one walk of the subtree serves the row's group facts and the detail
-  const children = await subtreeIndex(ctx, issue)
+  // one walk of the subtree serves the row's group facts and the detail,
+  // and one counter its pruning and both totals
+  const counts = groupCounter(ctx, opts.me, issue, project, opts.readable)
+  const children = await subtreeIndex(ctx, issue, counts)
   const row =
     opts.surface === 'rest'
-      ? await issueOut(ctx, issue, { ...opts, surface: 'rest', project, children })
-      : await issueOut(ctx, issue, { ...opts, surface: 'mcp', project, children })
+      ? await issueOut(ctx, issue, { ...opts, surface: 'rest', project, children, counts })
+      : await issueOut(ctx, issue, { ...opts, surface: 'mcp', project, children, counts })
   const detail = await taskDetail(ctx, opts.me, issue, {
     project,
     isGroup: row.is_group,
     children,
+    counts,
     readable: opts.readable,
   })
   return { ...row, ...detail, attachments: await taskAttachments(ctx, opts.me, issue) }
@@ -1116,7 +1133,10 @@ export function destinationOf(
  * the task's state change nothing. Each step that changes something writes
  * its own activity row signed with `provenance`, and each runs the model's
  * own rules and write gate, so a refusal at any step undoes the whole
- * update. Answers the task as written.
+ * update. The move and the parent are checked with the assignee and
+ * reviewer the task ends up with, so the ones `patch` sets or clears take
+ * the place of the current ones (model/issues.ts LaterPeople). Answers the
+ * task as written.
  */
 export async function applyTaskUpdate(
   ctx: MutationCtx,
@@ -1136,6 +1156,10 @@ export async function applyTaskUpdate(
   const { me, now, provenance } = a
   const archives = a.archive === true && a.issue.archived_at === undefined
   const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)
+  // the people the field patch sets, which that write checks itself
+  const later: LaterPeople = {}
+  if ('assignee_id' in a.patch) later.assignee_id = a.patch.assignee_id
+  if ('reviewer_id' in a.patch) later.reviewer_id = a.patch.reviewer_id
   let task = a.issue
   if (a.destination !== undefined) {
     task = await moveIssueCore(ctx, {
@@ -1143,7 +1167,7 @@ export async function applyTaskUpdate(
       issue: task,
       project_id: a.destination.id,
       now,
-      machine: { provenance },
+      machine: { provenance, later },
     })
   }
   if (a.parent !== undefined && (a.parent ?? undefined) !== task.parent_id) {
@@ -1152,7 +1176,7 @@ export async function applyTaskUpdate(
       issue: task,
       patch: { parent_id: a.parent },
       now,
-      machine: { provenance, appGrammar: true },
+      machine: { provenance, appGrammar: true, later },
     })
   }
   // one row write, one notify fan-out and one activity row for the fields

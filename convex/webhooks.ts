@@ -227,6 +227,7 @@ export const list = internalQuery({
   },
 })
 
+/** Refuses anyone but an organization admin, which only a person can be. */
 function assertAdministrator(profile: Doc<'profiles'>): void {
   if (profile.kind !== 'person' || profile.org_role !== 'admin')
     throw forbidden('Organization administrator access is required')

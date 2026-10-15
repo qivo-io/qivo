@@ -259,6 +259,7 @@ export const REVOKE_AT_ONCE = 256
 
 export type RemovalBudget = { rows: number; bytes: number }
 
+/** Whether `budget` has run out of rows or of bytes. */
 export const budgetSpent = (budget: RemovalBudget): boolean => budget.rows <= 0 || budget.bytes <= 0
 
 /** Clears the rows `read` returns until the range is empty (true) or the

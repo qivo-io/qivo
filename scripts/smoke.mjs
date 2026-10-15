@@ -320,7 +320,7 @@ async function checkCompressedCanvas(page) {
     }))
     const startupFailures = [
       loadingPaint.loaded && 'workspace loaded before its held snapshot',
-      !loadingPaint.card.includes('qivo') && 'Qivo loading card missing',
+      !loadingPaint.card.includes('Qivo') && 'Qivo loading card missing',
       loadingPaint.shellColor !== 'rgba(0, 0, 0, 0)' && 'loading shell is opaque',
       requests.includes(previewPath) && 'preview requested before the original finished',
       loadingPaint.backgrounds.length > 0 && 'background displayed while the original is held',
