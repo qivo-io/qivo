@@ -7,9 +7,9 @@
  *   2. Removing an attachment: the app's Edit rule, an attachment of another
  *      task, description images left to the app, the activity row.
  *   3. The REST upload: the ticket the start records, and a confirm that
- *      must match the caller, the task, the expiry and the declared size,
- *      with the organization's cap measured from the stored file; expired
- *      tickets are reaped.
+ *      must match the caller, the task, the expiry, a file stored after the
+ *      ticket and the declared size, with the organization's cap measured
+ *      from the stored file; expired tickets are reaped.
  *   4. Task activity: the app's visibility rule for members, every row for
  *      organization admins.
  *   5. Workload: the app's spread rule, the anonymized hidden hours, a
@@ -22,7 +22,7 @@ import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
-import { UPLOAD_TICKET_MISSING } from '../model/attachments'
+import { UPLOAD_STORAGE_ID, UPLOAD_TICKET_MISSING } from '../model/attachments'
 import {
   activityFor,
   expectRefusal,
@@ -498,21 +498,74 @@ describe('the REST upload', () => {
     )
     expect(await storageExists(fx.t, wrong)).toBe(true)
     expect(await tickets(fx.t)).toHaveLength(1)
-    // a stored file over the cap is deleted and the ticket spent, even when
-    // it was declared small
+    // so is one over the cap: only a file of the declared size is ever
+    // deleted, and the weekly sweep reaps the rest
     const huge = await storeFile(fx.t, 10 * MiB + 1)
-    expect(await confirm(fx, issue.id, ticket, { storage_id: huge })).toEqual({
-      refused: 'attachment exceeds the organization limit of 10 MiB',
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: huge }),
+      'bad_request',
+      `the uploaded file has ${10 * MiB + 1} bytes, not the 100 declared`,
+    )
+    expect(await storageExists(fx.t, huge)).toBe(true)
+    expect(await tickets(fx.t)).toHaveLength(1)
+  })
+
+  it('deletes a file of the declared size over a cap lowered since the start, and spends the ticket', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { ticket } = await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB })
+    const six = await storeFile(fx.t, 6 * MiB)
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
+    expect(await confirm(fx, issue.id, ticket, { storage_id: six })).toEqual({
+      refused: 'attachment exceeds the organization limit of 5 MiB',
     })
-    expect(await storageExists(fx.t, huge)).toBe(false)
+    expect(await storageExists(fx.t, six)).toBe(false)
     expect(await tickets(fx.t)).toEqual([])
+    expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
+  })
+
+  it('accepts only a file stored after the ticket, and never deletes an earlier one', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    // another caller's pending upload, stored before this ticket started,
+    // of the size this ticket declares and over the cap once it is lowered
+    const earlier = await storeFile(fx.t, 6 * MiB)
+    const { ticket } = await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB })
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: earlier }),
+      'bad_request',
+      UPLOAD_STORAGE_ID,
+    )
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: earlier }),
+      'bad_request',
+      UPLOAD_STORAGE_ID,
+    )
+    expect(await storageExists(fx.t, earlier)).toBe(true)
+    // a storage id whose file is gone answers the same
+    const gone = await storeFile(fx.t, 6 * MiB)
+    await fx.t.run((ctx) => ctx.storage.delete(gone))
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: gone }),
+      'bad_request',
+      UPLOAD_STORAGE_ID,
+    )
+    expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
+    // the ticket is still usable for the file its upload stored
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 10 }))
+    const mine = await storeFile(fx.t, 6 * MiB)
+    const out = await confirm(fx, issue.id, ticket, { storage_id: mine })
+    expect(out).toMatchObject({ attachment: { name: 'six.bin', size_bytes: 6 * MiB } })
+    expect(await storageExists(fx.t, earlier)).toBe(true)
   })
 
   it('refuses a file another row holds and an id that is not a storage id', async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const held = await plantAttachment(fx, issue, { size_bytes: 12 })
     const { ticket } = await start(fx, issue.id, { name: 'a.bin', size: 12 })
+    // stored after the ticket started, then attached by someone else
+    const held = await plantAttachment(fx, issue, { size_bytes: 12 })
     await refused(
       confirm(fx, issue.id, ticket, { storage_id: held.storage_id }),
       'bad_request',
@@ -521,13 +574,9 @@ describe('the REST upload', () => {
     await refused(
       confirm(fx, issue.id, ticket, { storage_id: 'not-an-id' }),
       'bad_request',
-      'storage_id must be the storageId the upload answered',
+      UPLOAD_STORAGE_ID,
     )
-    await refused(
-      confirm(fx, issue.id, ticket, {}),
-      'bad_request',
-      'storage_id must be the storageId the upload answered',
-    )
+    await refused(confirm(fx, issue.id, ticket, {}), 'bad_request', UPLOAD_STORAGE_ID)
     expect(await storageExists(fx.t, held.storage_id)).toBe(true)
   })
 
@@ -558,7 +607,7 @@ describe('the REST upload', () => {
     expect(await tickets(fx.t)).toEqual([])
   })
 
-  it('answers over HTTP: 201 for the start and the confirm, 400 for an oversize file', async () => {
+  it('answers over HTTP: 201 for the start and the confirm, 400 for a file it refuses', async () => {
     const fx = await setup()
     const issue = await task(fx)
     const res = await rest(fx, 'POST', `/v1/tasks/QN-${issue.num}/attachments`, {
@@ -574,23 +623,28 @@ describe('the REST upload', () => {
     })
     expect(done.status).toBe(201)
     expect(JSON.parse(done.text)).toMatchObject({ name: 'log.txt', size_bytes: 3 })
+    const earlier = await storeFile(fx.t, 6 * MiB)
     const big = JSON.parse(
       (
         await rest(fx, 'POST', `/v1/tasks/QN-${issue.num}/attachments`, {
           name: 'big.bin',
-          size: 10,
+          size: 6 * MiB,
         })
       ).text,
     ) as { ticket: string }
-    const huge = await storeFile(fx.t, 10 * MiB + 1)
-    const over = await rest(fx, 'POST', `/v1/tasks/QN-${issue.num}/attachments/${big.ticket}`, {
-      storage_id: huge,
-    })
-    expect(over).toEqual({
+    const path = `/v1/tasks/QN-${issue.num}/attachments/${big.ticket}`
+    expect(await rest(fx, 'POST', path, { storage_id: earlier })).toEqual({
       status: 400,
-      text: JSON.stringify({ error: 'attachment exceeds the organization limit of 10 MiB' }),
+      text: JSON.stringify({ error: UPLOAD_STORAGE_ID }),
     })
-    expect(await storageExists(fx.t, huge)).toBe(false)
+    const six = await storeFile(fx.t, 6 * MiB)
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
+    expect(await rest(fx, 'POST', path, { storage_id: six })).toEqual({
+      status: 400,
+      text: JSON.stringify({ error: 'attachment exceeds the organization limit of 5 MiB' }),
+    })
+    expect(await storageExists(fx.t, six)).toBe(false)
+    expect(await storageExists(fx.t, earlier)).toBe(true)
   })
 
   it('reaps expired tickets and leaves live ones', async () => {

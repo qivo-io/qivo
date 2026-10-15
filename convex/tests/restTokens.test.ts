@@ -222,7 +222,6 @@ const REQUESTS: Record<
     body: { name: 'notes.txt', content_type: 'text/plain', size: 5 },
   }),
   'POST tasks/:ref/attachments/:ticket': async (fx, task, row, as) => {
-    const storage_id = await storeFile(fx.t, 5)
     const ticket = uuid()
     await fx.t.run((ctx) =>
       ctx.db.insert('attachment_uploads', {
@@ -235,6 +234,8 @@ const REQUESTS: Record<
         expires_at: Date.now() + 60_000,
       }),
     )
+    // stored after the ticket, as the upload to its URL would be
+    const storage_id = await storeFile(fx.t, 5)
     return { path: `/v1/tasks/${task}/attachments/${ticket}`, body: { storage_id } }
   },
   'DELETE tasks/:ref/attachments/:id': async (fx, task, row) => {

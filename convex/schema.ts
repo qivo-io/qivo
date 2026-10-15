@@ -640,9 +640,10 @@ export default defineSchema({
     .index('by_issue', ['issue_id'])
     .index('by_storage', ['storage_id']),
 
-  // A REST upload in progress (model/attachments.ts): the caller that asked
-  // for the upload URL, the task it attaches to and when it expires. Only
-  // that caller may confirm it, once, for that task. files.ts reapOrphans
+  // A REST upload in progress (model/attachments.ts). It names the caller
+  // that asked for the upload URL, the task it attaches to and when it
+  // expires. Only that caller may confirm it, once, for that task, with a
+  // file stored after the ticket's _creationTime. files.ts reapOrphans
   // deletes expired tickets with the unreferenced bytes.
   attachment_uploads: defineTable({
     id: v.string(), // the ticket

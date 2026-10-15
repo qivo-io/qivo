@@ -940,12 +940,16 @@ Uploading takes three requests:
    "…" }`, which answers `201` with the attachment.
 
 The ticket and its upload URL expire after an hour. Only the user that
-started the upload can confirm it, only for the same task, and only once:
-any other ticket, including an expired one, answers `404` (`upload not found
-or expired; start a new upload`). The stored file must have exactly the
-declared number of bytes (`400` otherwise, and the ticket stays usable), and
-it may not exceed the organization's limit, measured from the stored file:
-an oversize file is deleted and answers `400`, and its ticket is spent.
+started the upload can confirm it, only for the same task, and only once.
+Any other ticket, including an expired one, answers `404` (`upload not found
+or expired; start a new upload`). `storage_id` must name a file stored after
+the upload started. Any other value, including a file stored earlier,
+answers `400` (`storage_id must be the storageId the upload answered`). The
+stored file must have exactly the declared number of bytes. A file of
+another size answers `400` (`the uploaded file has 99 bytes, not the 100
+declared`), Qivo keeps it, and the ticket stays usable. If the organization
+lowered its per-file limit after the upload started and the file now
+exceeds it, Qivo deletes the file, answers `400` and spends the ticket.
 Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
 Attaching writes an `attached a file to` activity row with the file name and
 the provenance.

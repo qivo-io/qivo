@@ -1,10 +1,10 @@
 /* Task attachments, one set of rules for the app, REST and MCP. An
- * attachment is a stored file on a task: one in the task's attachment list,
- * or an image inside its description (`inline`), which the description names
- * as `att:<id>`.
+ * attachment is a stored file on a task, either one in the task's attachment
+ * list or an image inside its description (`inline`), which the description
+ * names as `att:<id>`.
  *
- * Who may attach or remove: anyone with Edit (User) or Lead on the task's
- * project, not only the uploader (files.ts header, ia_insert and ia_delete).
+ * Anyone with Edit (User) or Lead on the task's project may attach or
+ * remove, not only the uploader (files.ts header, ia_insert and ia_delete).
  * Each caller resolves the task and refuses with its own sentence first;
  * these cores repeat the write gate as defense in depth.
  *
@@ -18,9 +18,12 @@
  * the declared size, mints a Convex upload URL and records a ticket naming
  * the caller, the task and an expiry. The client sends the bytes to the URL,
  * and confirmAttachmentUpload attaches them only for that caller and task
- * before the ticket expires. Unconfirmed bytes are reaped with every other
- * unreferenced file (files.ts reapOrphans), which also deletes expired
- * tickets.
+ * before the ticket expires. Convex does not tell which URL stored a file,
+ * so confirm binds the ticket to its bytes as far as it can. The file must
+ * have been stored after the ticket was issued and have exactly the
+ * declared size before anything else, the cap's byte delete included, looks
+ * at it. Unconfirmed bytes are reaped with every other unreferenced file
+ * (files.ts reapOrphans), which also deletes expired tickets.
  *
  * Downloads go through the /files gateway with a 10-minute token minted for
  * the reader (lib/fileTokens.ts), which the gateway re-checks on every fetch.
@@ -106,9 +109,11 @@ export type AttachResult =
  * activity row the app writes ('attached a file to', or 'added an image to'
  * for an inline image), signed with `provenance` for a machine caller. The
  * size comes from storage metadata. When `declaredSize` is given, the stored
- * file must have exactly that many bytes. Throws before any write; only an
- * oversize file is a returned refusal, after its bytes are deleted. Does not
- * notify and does not stamp the task's updated_at, as in the app.
+ * file must have exactly that many bytes, checked before the cap so that a
+ * file of another size is refused and kept, never deleted. Throws before any
+ * write; only an oversize file is a returned refusal, after its bytes are
+ * deleted. Does not notify and does not stamp the task's updated_at, as in
+ * the app.
  */
 export async function attachFileCore(
   ctx: MutationCtx,
@@ -133,13 +138,13 @@ export async function attachFileCore(
   }
   const meta = await ctx.db.system.get(a.storage_id)
   if (meta === null) throw badRequest('attachment bytes not found in storage')
+  if (a.declaredSize !== undefined && meta.size !== a.declaredSize) {
+    throw badRequest(`the uploaded file has ${meta.size} bytes, not the ${a.declaredSize} declared`)
+  }
   const cap = await attachmentCapMb(ctx, issue.org_id)
   if (meta.size > cap * 1024 * 1024) {
     await ctx.storage.delete(a.storage_id)
     return { refused: { code: 'bad_request', message: overCap(cap) } }
-  }
-  if (a.declaredSize !== undefined && meta.size !== a.declaredSize) {
-    throw badRequest(`the uploaded file has ${meta.size} bytes, not the ${a.declaredSize} declared`)
   }
   const rowId = await insertUnique(
     ctx,
@@ -222,7 +227,7 @@ export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
 const EXPIRED_TICKETS_PER_UPLOAD = 100
 
 /**
- * Starts a REST upload of a file of `size` bytes to `issue` for `me`: checks
+ * Starts a REST upload of a file of `size` bytes to `issue` for `me`. Checks
  * the write gate and the organization's cap against the declared size, mints
  * a Convex upload URL and records the ticket that confirmAttachmentUpload
  * requires. `nowMs` is the request's clock. Deletes some of the caller's
@@ -266,13 +271,21 @@ export async function startAttachmentUpload(
  * or another task's, so a refusal says nothing about other tickets. */
 export const UPLOAD_TICKET_MISSING = 'upload not found or expired; start a new upload'
 
+/** The one answer for a `storage_id` that is not a file stored after the
+ * ticket was issued: malformed, unknown, or stored earlier. */
+export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload answered'
+
 /**
  * Confirms the REST upload `ticketId` of `me` to `issue` with the uploaded
  * file `storage_id`, then attaches it like the app does (attachFileCore,
  * with the declared size enforced and `provenance` signing the activity
  * row). The ticket must be this caller's, for this task and unexpired at
- * `nowMs`. A confirmed ticket is spent, and so is one whose oversize file
- * was deleted. Any other refusal leaves the ticket for another try.
+ * `nowMs`, and the file must have been stored after the ticket was issued,
+ * so a ticket cannot claim or delete a file that existed before it. A
+ * confirmed ticket is spent, and so is one whose file was deleted for
+ * exceeding the cap, which happens only when the organization lowered its
+ * limit after the upload started. Any other refusal leaves the ticket for
+ * another try.
  */
 export async function confirmAttachmentUpload(
   ctx: MutationCtx,
@@ -295,7 +308,10 @@ export async function confirmAttachmentUpload(
     throw notFound(UPLOAD_TICKET_MISSING)
   }
   const storageId = ctx.db.system.normalizeId('_storage', a.storage_id)
-  if (storageId === null) throw badRequest('storage_id must be the storageId the upload answered')
+  const meta = storageId === null ? null : await ctx.db.system.get(storageId)
+  if (storageId === null || meta === null || meta._creationTime < ticket._creationTime) {
+    throw badRequest(UPLOAD_STORAGE_ID)
+  }
   const result = await attachFileCore(ctx, {
     me: a.me,
     issue: a.issue,

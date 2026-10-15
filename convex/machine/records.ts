@@ -42,6 +42,7 @@ import {
   removeAttachmentCore,
   startAttachmentUpload,
   taskAttachments,
+  UPLOAD_STORAGE_ID,
 } from '../model/attachments'
 import { calendarDay } from '../model/taskValues'
 import { type WorkloadJson, workloadCore } from '../planning'
@@ -176,9 +177,7 @@ export const restConfirmUpload = internalMutation({
     if (issue === null) throw notFound('task not found')
     if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
     const b = needJson(a.body)
-    if (typeof b.storage_id !== 'string') {
-      throw badRequest('storage_id must be the storageId the upload answered')
-    }
+    if (typeof b.storage_id !== 'string') throw badRequest(UPLOAD_STORAGE_ID)
     const result: AttachResult = await confirmAttachmentUpload(ctx, {
       me,
       issue,
