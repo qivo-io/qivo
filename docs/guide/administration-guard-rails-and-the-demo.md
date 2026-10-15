@@ -10,8 +10,9 @@ Open **Settings → Organization → Users** to manage account status:
 - **Standard user** can access projects shared with them, directly or through
   a team. They can create projects when the organization allows it
   ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
-- **Viewer** can read shared projects and follow tasks, but cannot change
-  project work, comment, lead a project or team, or receive new assignments.
+- **Viewer** can read shared projects, and a Viewer person can follow tasks.
+  Viewers cannot change project work, comment, lead a project or team, or
+  receive new assignments.
   Hand over leadership before changing someone to Viewer. Existing assignments
   and access grants remain, and active viewers count toward billing.
 - **Inactive** has no access and does not count toward the next renewal.

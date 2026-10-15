@@ -18,8 +18,9 @@ inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
 `update_comment`, `delete_comment`, `set_following`, `list_inbox` and
 `update_inbox`. REST uses `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
 and `/v1/inbox`. A Standard user agent reads and clears its own inbox this
-way. A Viewer or Inactive agent can do neither, so it receives no inbox
-messages and cannot follow tasks.
+way. A Viewer agent gets no new inbox messages and cannot follow tasks or
+clear its inbox, but it can still read messages it received before. An
+Inactive agent can neither read nor clear its inbox.
 
 For projects, MCP offers `get_project`, `create_project`, `update_project`,
 `set_project_access`, `set_milestone` and `delete_milestone`, and REST uses
@@ -67,10 +68,12 @@ token from **MCP access** to act as that person. Viewer access permits
 reading; User and Lead access permit changes, subject to the user's
 organization role. Access can come from an individual or team grant. A Viewer
 agent's key can only read, so every change returns `403` with
-`this agent is a Viewer and can only read`. A personal token can only read
-when it was created without change access, and every change then returns
-`this credential can only read`. Both can still create, list and remove their
-own task event subscriptions.
+`this agent is a Viewer and can only read`. Personal tokens created in the
+app today can make changes and never expire. A choice of read-only access and
+an expiry date is planned. A token without change access gets
+`this credential can only read` for every change. Both kinds of read-only
+credential can still create, list and remove their own task event
+subscriptions.
 
 `GET /v1/me` says who the credential acts as, the organization's calendar
 settings and whether the credential can make changes. The API lists projects,
@@ -150,10 +153,11 @@ supported.
 For manual setup, use **Personal access tokens** on the same page. Your client
 must accept a custom Authorization header. Copy the token when created; it
 cannot be shown again. Qivo also supplies a `claude mcp add …` command. Tokens
-created on this page can make changes and do not expire automatically, so
-revoke them when no longer needed. The same token also works with the REST
-API.
-Organization admins can instead create an agent user with its own key ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
+created on this page can make changes and never expire, so revoke them when no
+longer needed. A choice of read-only access and an expiry date is planned. The
+same token also works with the REST API. Organization admins can instead
+create an agent user with its own key
+([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 MCP tools say who the connection acts as and whether it can make changes;
 list teams, projects, users, project users and tasks; read and change tasks

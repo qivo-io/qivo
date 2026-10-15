@@ -52,8 +52,9 @@ Use these steps for a personal-token fallback or a named agent's key:
 1. Have the user sign in at [Qivo](https://qivo.io/app).
 2. For a personal token, open **Settings → User account → MCP access →
    Personal access tokens**, enter a name and choose **New token**. Tokens
-   created there can make changes and do not expire automatically. The same
-   token works with MCP and the REST API.
+   created there can make changes and never expire. A choice of read-only
+   access and an expiry date is planned. The same token works with MCP and
+   the REST API.
 3. For an agent key, an organization admin opens **Settings → Organization →
    Users**, creates an **Agent**, and copies its key. Existing agents can
    receive another key from their row. Grant the agent the necessary project
@@ -71,10 +72,11 @@ Use these steps for a personal-token fallback or a named agent's key:
   who the credential acts as and whether it can make changes
   (`credential.access` is `write` or `read`). Call `list_projects` to verify
   readable access and `list_tasks` with a returned project reference to read
-  its tasks. The task tools are `list_tasks`, `get_task`, `create_task`,
-  `update_task`, `delete_task` and `set_task_link`, and `list_labels` and
-  `set_label` manage labels. Refresh discovery or reconnect if the client
-  has an older tool catalogue.
+  its tasks. Task tools include `list_tasks`, `get_task`, `create_task`,
+  `update_task`, `delete_task` and `set_task_link`. `tools/list` names every
+  tool, including those for comments, labels, files, the inbox, projects and
+  teams. Refresh discovery or reconnect if the client has an older tool
+  catalogue.
 - **Organization REST API:** `https://api.qivo.io/v1`, using
   `Authorization: Bearer <full-qvt-or-qva-secret>`. `X-Api-Key` is also
   accepted by REST. Check the credential with `GET https://api.qivo.io/v1/me`, which
@@ -171,15 +173,16 @@ an additional ceiling and never overrides the person's current permissions.
 
 Each credential either can make changes or can only read. An OAuth
 connection can make changes only with `qivo:write`. A personal token can make
-changes only if it was created with change access and has not expired; a
-token stored without an access setting can only read. An agent key can make
-changes only for an agent whose organization role is **Standard user**; a
-**Viewer** agent's key is read-only. A read-only credential still reads
-everything its user can and manages its own task event subscriptions, but Qivo
-refuses every change before it looks up the task or project you named. An
-agent key gets `this agent is a Viewer and can only read`, a personal token
-gets `this credential can only read`, and an OAuth connection without
-`qivo:write` gets the MCP 403 `insufficient_scope` challenge.
+changes only if it has change access and has not expired; a token stored
+without an access setting can only read. Every token created in the app today
+has change access and never expires. An agent key can make changes only for an
+agent whose organization role is **Standard user**; a **Viewer** agent's key
+is read-only. A read-only credential still reads everything its user can and
+manages its own task event subscriptions, but Qivo refuses every change before
+it looks up the task or project you named. An agent key gets `this agent is a
+Viewer and can only read`, a personal token gets `this credential can only
+read`, and an OAuth connection without `qivo:write` gets the MCP 403
+`insufficient_scope` challenge.
 
 Project access follows the user's direct grants, current team memberships
 and applicable leadership rights. Sub-projects inherit access from their
@@ -202,11 +205,12 @@ refresh token revokes that connection, so clients must serialize refreshes.
 
 Personal tokens are revoked on **MCP access**; admins revoke agent keys from
 the agent's **Users** row. Revocation takes effect on subsequent requests.
-Switching a user to **Inactive** disables all their credentials. Agent keys,
-and personal tokens created without an expiry date, have no automatic
-expiration or refresh-token flow. A personal token with an expiry date is
-refused after it, like a revoked one. To rotate, create a replacement, update
-and verify the client, then revoke the old one.
+Switching a user to **Inactive** disables all their credentials. Agent keys
+and personal tokens have no refresh-token flow, and neither expires on its own
+today, because the app creates personal tokens without an expiry date. Once
+choosing an expiry date is offered, a token is refused after its date, like a
+revoked one. To rotate, create a replacement, update and verify the client,
+then revoke the old one.
 
 - **HTTP 401:** An initial unauthenticated MCP request starts OAuth discovery;
   let the client follow its authorization flow. For an existing connection,
