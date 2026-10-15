@@ -8,7 +8,7 @@
  * children detached not deleted, inbox messages of a deleted issue gone from
  * every inbox, and storage bytes dying with their row. */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc, Id } from '../_generated/dataModel'
 import {
   deleteIssueDeep,
@@ -643,7 +643,21 @@ describe('deleteOrgDeep', () => {
 })
 
 describe('removeProfile', () => {
-  it('SET NULLs touch issues and nothing else; deletes the whole inbox; reaps the avatar', async () => {
+  // the background steps' own clock, which they stamp on archived tasks
+  const STEP_TIME = '2026-03-03T03:03:03.000Z'
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(STEP_TIME)
+  })
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
+  const pendingJobs = (t: T) =>
+    t.run(async (ctx) => await ctx.db.query('profile_removals').collect())
+
+  it('clears access and open work at once and the history in background steps; touches only issues; deletes the whole inbox; reaps the avatar', async () => {
     const t = newT()
     const f = await withOrg(t)
     // SET NULL + touch: assignee/reporter on one issue, creator of another
@@ -660,6 +674,17 @@ describe('removeProfile', () => {
       created_by: f.user.id,
       assignee_id: f.admin.id,
       reporter_id: f.admin.id,
+    })
+    // archived work keeps the id until the background step reaches it
+    const archived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: NOW,
+      archived_at: NOW,
+      assignee_id: f.user.id,
+      reviewer_id: f.user.id,
+      created_by: f.admin.id,
     })
     await plantSubscription(t, { issue_id: assigned.id, profile_id: f.admin.id }) // must hear NOTHING
     // the reviewer ref: one task reviewed by the doomed profile, one by admin
@@ -800,9 +825,9 @@ describe('removeProfile', () => {
       await removeProfile(ctx, { profile: doomed, now: NOW2 })
     })
 
+    /* ---- at once, before any background step */
     expect(await rowByUuid(t, 'profiles', f.user.id)).toBeNull()
-
-    // issues: refs nulled WITH the issues_touch echo; the other side kept
+    // open issues: refs nulled WITH the issues_touch echo; the other side kept
     const a = (await rowByUuid(t, 'issues', assigned.id))!
     expect(a.assignee_id).toBeUndefined()
     expect(a.created_by).toBe(f.admin.id)
@@ -817,19 +842,51 @@ describe('removeProfile', () => {
     expect(r.reviewer_id).toBeUndefined()
     expect(r.updated_at).toBe(NOW2)
     expect(await rowByUuid(t, 'issues', reviewedByAdmin.id)).toEqual(reviewedByAdmin)
+    expect(await rowByUuid(t, 'issues', archived.id)).toEqual(archived)
+    // the unassignment sent NO message (the FK UPDATE's notify is deliberately
+    // not reproduced, only the touch is retained)
     expect(await messagesFor(t, f.admin.id, reviewed.id)).toEqual([])
-    // …and the unassignment sent NO message: the subscriber's inbox holds
-    // exactly the planted row, its actor nulled (the FK UPDATE's notify is
-    // deliberately not reproduced — only the touch is retained)
+    expect((await messagesFor(t, f.admin.id, assigned.id)).map((m) => m.id)).toEqual([mSent.id])
+    // SET NULL, no touch, on what the working app shows
+    expect((await rowByUuid(t, 'projects', f.hidden.id))!.lead_id).toBeUndefined()
+    const eventsNow = await collect(t, 'activity_events')
+    expect(eventsNow.find((e) => e.id === eActed.id)?.actor_id).toBeUndefined()
+    // access and the seat's own settings
+    expect((await collect(t, 'team_members')).some((m) => m.profile_id === f.user.id)).toBe(false)
+    expect((await collect(t, 'project_access')).some((g) => g.profile_id === f.user.id)).toBe(false)
+    expect((await collect(t, 'user_prefs')).map((p) => p.profile_id)).toEqual([f.admin.id])
+    expect((await collect(t, 'mcp_tokens')).map((p) => p.profile_id)).toEqual([f.admin.id])
+    expect(await storageMeta(t, avatarId)).toBeNull() // avatar bytes reaped
+    // the person's connection is revoked and hidden from their own list
+    const revoked = (await collect(t, 'oauth_connections')).find((x) => x.profile_id === f.user.id)
+    expect(revoked).toMatchObject({ revoked_at: NOW2, revocation_reason: 'deleted' })
+    expect((await collect(t, 'oauth_credential_uses')).length).toBe(2)
+    // the history still names the id
+    expect((await collect(t, 'comments')).find((x) => x.id === cAuthored.id)?.author).toBe(
+      f.user.id,
+    )
+    expect((await messagesFor(t, f.user.id)).length).toBe(2)
+    expect(await pendingJobs(t)).toMatchObject([
+      { profile_id: f.user.id, removed_at: NOW2, phase: 'tasks' },
+    ])
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    /* ---- after the background steps */
+    // archived issues: refs nulled with the step's own touch
+    const z = (await rowByUuid(t, 'issues', archived.id))!
+    expect(z.assignee_id).toBeUndefined()
+    expect(z.reviewer_id).toBeUndefined()
+    expect(z.created_by).toBe(f.admin.id)
+    expect(z.updated_at).toBe(STEP_TIME)
+    // …and still no message to anyone. The subscriber's inbox holds exactly
+    // the planted row, its actor nulled
     const adminInbox = await messagesFor(t, f.admin.id, assigned.id)
     expect(adminInbox.length).toBe(1)
     expect(adminInbox[0].id).toBe(mSent.id)
     expect(adminInbox[0].actor_id).toBeUndefined()
 
     // SET NULL, no touch
-    expect((await rowByUuid(t, 'projects', f.hidden.id))!.lead_id).toBeUndefined()
-    const events = await collect(t, 'activity_events')
-    expect(events.find((e) => e.id === eActed.id)?.actor_id).toBeUndefined()
     const comments = await collect(t, 'comments')
     expect(comments.find((x) => x.id === cAuthored.id)?.author).toBeUndefined()
     expect(comments.find((x) => x.id === cEdited.id)?.edited_by).toBeUndefined()
@@ -838,28 +895,23 @@ describe('removeProfile', () => {
     const atts = await collect(t, 'issue_attachments')
     expect(atts.find((x) => x.id === att.row.id)?.uploaded_by).toBeUndefined()
     expect(await storageMeta(t, att.storage_id)).not.toBeNull() // attachment bytes die with their ISSUE, never a profile
+    expect((await rowByUuid(t, 'issues', assigned.id))!.updated_at).toBe(NOW2) // touched once
 
     // DELETE edges: the person's whole footprint, nobody else's
     expect(await messagesFor(t, f.user.id)).toEqual([]) // the entire inbox
     const memberships = await collect(t, 'team_members')
-    expect(memberships.some((m) => m.profile_id === f.user.id)).toBe(false)
     expect(memberships.some((m) => m.profile_id === f.admin.id)).toBe(true)
     const grants = await collect(t, 'project_access')
-    expect(grants.some((g) => g.profile_id === f.user.id)).toBe(false)
     expect(grants.some((g) => g.profile_id === f.viewer.id)).toBe(true)
     const subs = await collect(t, 'issue_subscriptions')
     expect(subs.some((s) => s.profile_id === f.user.id)).toBe(false)
     expect(subs.some((s) => s.profile_id === f.admin.id)).toBe(true)
-    const prefs = await collect(t, 'user_prefs')
-    expect(prefs.map((p) => p.profile_id)).toEqual([f.admin.id])
-    const tokens = await collect(t, 'mcp_tokens')
-    expect(tokens.map((p) => p.profile_id)).toEqual([f.admin.id])
     const connections = await collect(t, 'oauth_connections')
     expect(connections.map((connection) => connection.profile_id)).toEqual([f.admin.id])
     const uses = await collect(t, 'oauth_credential_uses')
     expect(uses.map((use) => use.connection_id)).toEqual([connections[0].id])
-    expect(await storageMeta(t, avatarId)).toBeNull() // avatar bytes reaped
 
+    expect(await pendingJobs(t)).toEqual([])
     await assertNoDanglingRefs(t, 'after removeProfile')
   })
 
@@ -882,6 +934,8 @@ describe('removeProfile', () => {
     })
     expect(await rowByUuid(t, 'profiles', f.agent.id)).toBeNull()
     expect(await t.run(async (ctx) => await ctx.db.query('agent_keys').collect())).toEqual([])
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await pendingJobs(t)).toEqual([])
     await assertNoDanglingRefs(t, 'after agent removeProfile')
   })
 })

@@ -151,6 +151,9 @@ const APP_SHARED = [
   'demo_metrics_scans', // deployment sampler progress has no tenant ownership
   'demo_metric_reports', // main deployment's aggregate reporting cache
   'marketing_demo', // private operator fixture; public demos never touch its receipt
+  // Keyed by an already removed profile; its own steps delete it, also after
+  // the demo organization is gone (profileRemovals.ts).
+  'profile_removals',
   'panorama_images',
   'panorama_calendar',
   'panorama_curation_keys',

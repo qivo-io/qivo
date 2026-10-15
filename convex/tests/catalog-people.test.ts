@@ -6,7 +6,7 @@
  * toasts them byte-for-byte). */
 /// <reference types="vite/client" />
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
@@ -680,6 +680,10 @@ describe('profiles.deactivate', () => {
 
 describe('profiles.remove', () => {
   it('folds no-row/foreign/non-admin into ONE sentence; self refused; cascade + removed narration', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
     const t = newT()
     const f = await withOrg(t)
     // the SQL raised the same sentence for all three — a probing uuid learns nothing
@@ -713,7 +717,8 @@ describe('profiles.remove', () => {
     await plantMessage(t, { org_id: f.org.id, recipient_id: f.guest.id, issue_id: issue.id })
     await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.guest.id })
     expect(await profileById(t, f.guest.id)).toBeNull()
-    // grants and inbox die with the seat; assigned issues detach WITH a touch
+    // grants die with the seat and assigned issues detach WITH a touch; the
+    // background step deletes the inbox
     expect(
       await t.run(async (ctx) =>
         ctx.db
@@ -722,6 +727,8 @@ describe('profiles.remove', () => {
           .collect(),
       ),
     ).toEqual([])
+    expect(await messagesFor(t, f.guest.id)).toHaveLength(1)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await messagesFor(t, f.guest.id)).toEqual([])
     const orphan = await t.run(async (ctx) =>
       ctx.db

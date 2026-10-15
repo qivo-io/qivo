@@ -60,7 +60,7 @@ import {
 } from './lib/functions'
 import { projectRightAfterUpdate } from './lib/projectCreators'
 import { logActivity } from './model/activity'
-import { removeProfile } from './model/cascade'
+import { pendingRemoval, removeProfile } from './model/cascade'
 import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model/orgs'
 import {
   assertNameShape,
@@ -157,6 +157,10 @@ export const create = adminMutation({
     }
     if (teams.length > 0 && args.org_role === 'guest')
       throw forbidden('a guest is never a team member')
+    // A removed profile keeps its id until its background cleanup ends, so
+    // a new seat cannot inherit the history that still names it.
+    if ((await pendingRemoval(ctx, args.id)) !== null)
+      throw badRequest('a profile with this id already exists')
     await insertUnique(
       ctx,
       'profiles',
@@ -416,8 +420,10 @@ async function updateProfile(
  * "not an admin" into ONE raised sentence. A stranger probing uuids learns
  * nothing. The wrapper also lets an admin remove a seat while billing has
  * made the organization read-only. The cascade (model/cascade.removeProfile)
- * owns every FK edge incl. the avatar bytes; the 'removed' narration is the
- * caller's, after the cascade. */
+ * owns every FK edge incl. the avatar bytes. It ends access in this
+ * transaction and leaves the profile's history to bounded background steps
+ * (profileRemovals.ts). The 'removed' narration is the caller's, after the
+ * cascade. */
 export const remove = accessRemovalMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {

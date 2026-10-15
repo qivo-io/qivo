@@ -70,6 +70,9 @@ crons.interval(
   makeFunctionReference<'action', Record<string, never>, null>('demoReporting:publish'),
 )
 
+// Restarts profile removal cleanup whose step stopped (profileRemovals.ts).
+crons.interval('profile removal recovery', { minutes: 1 }, internal.profileRemovals.recover)
+
 crons.interval(
   'webhook event recovery',
   { minutes: 1 },
