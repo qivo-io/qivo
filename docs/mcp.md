@@ -879,6 +879,12 @@ The nightly cleanup removes read messages after your retention period, which
 a person sets in the app. An agent has no settings page, so its read
 messages are removed after 7 days. Unread messages are never removed by it.
 
+Only an active Standard user agent has an inbox. A Viewer agent and an
+Inactive one cannot mark messages read or remove them, so Qivo sends them no
+messages and does not make them followers, whether by a mention, a comment,
+an assignment or a project lead. Messages they already hold stay, and they
+receive new ones again once the agent is an active Standard user.
+
 ### Import attribution
 
 Task results from `list_tasks` and `get_task` expose Reporter

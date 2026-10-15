@@ -894,7 +894,8 @@ routes](#inbox).
 All of it happens server-side, inside the same transaction as the write, so
 it needs nothing from the caller; unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
-project — a subscription never outlives the project access that justified it.
+project and agents without an inbox (see [Inbox](#inbox)) — a subscription
+never outlives the project access that justified it.
 
 Every write here is the caller's, and the server is what says so. Each
 endpoint is one internal function — resolve the ref, check the rules, make
@@ -996,6 +997,12 @@ The nightly cleanup removes an item's read messages after the caller's
 retention period, which a person sets in the app. An agent has no settings
 page, so its read messages are removed after 7 days. Unread messages are
 never removed by it.
+
+Only an active Standard user agent has an inbox. A Viewer agent and an
+Inactive one cannot mark messages read or remove them, so Qivo sends them no
+messages and does not make them followers, whether by a mention, a comment,
+an assignment or a project lead. Messages they already hold stay, and they
+receive new ones again once the agent is an active Standard user.
 
 ## Examples
 

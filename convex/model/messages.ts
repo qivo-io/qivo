@@ -21,7 +21,7 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { canSeeProject, profileCanSeeProject } from '../lib/access'
+import { canSeeProject, keepsInbox, profileCanSeeProject } from '../lib/access'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden } from '../lib/functions'
@@ -156,10 +156,12 @@ async function recipientCanSee(
 /* ------------------------------------------------------------- postMessage
  * THE single insert path (0109:95-114) — no other code may insert messages.
  * Silent drops, never errors: the actor's own copy, a recipient outside the
- * issue's org, and a recipient who cannot see the project are all skipped
- * without a trace — a mention must not leak a hidden project's existence
- * (0074), and a subscription can never outlive the access that justified it
- * (0114:40-42). Returns whether a row was inserted.
+ * issue's org, a recipient without an inbox (a Viewer or Inactive agent,
+ * lib/access.ts keepsInbox, which could never read or remove the row) and a
+ * recipient who cannot see the project are all skipped without a trace — a
+ * mention must not leak a hidden project's existence (0074), and a
+ * subscription can never outlive the access that justified it (0114:40-42).
+ * Returns whether a row was inserted.
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
  * are read by uuid. `visibility` is a seed's memo (NotifyPreload), never
@@ -183,7 +185,7 @@ export async function postMessage(
 ): Promise<boolean> {
   if (m.actor_id !== undefined && m.recipient_id === m.actor_id) return false
   const recipient = m.recipient ?? (await byId(ctx, 'profiles', m.recipient_id))
-  if (recipient === null || recipient.org_id !== m.org_id) return false
+  if (recipient === null || recipient.org_id !== m.org_id || !keepsInbox(recipient)) return false
   const issue = m.issue ?? (await byId(ctx, 'issues', m.issue_id))
   if (issue === null) return false
   const project = m.project ?? (await byId(ctx, 'projects', issue.project_id))
@@ -213,9 +215,10 @@ export async function postMessage(
 }
 
 /* --------------------------------------------------------------- subscribe
- * subscribe_to_issue (0114:134-149): same fence as postMessage (org +
- * visibility — a subscription row decides who gets messages, so it must not
- * be creatable for someone who could not have received them), idempotent.
+ * subscribe_to_issue (0114:134-149): same fence as postMessage (org, an
+ * inbox and visibility — a subscription row decides who gets messages, so it
+ * must not be creatable for someone who could not have received them),
+ * idempotent.
  * `visibility` is a seed's memo (NotifyPreload), never passed interactively.
  * Returns whether a row was inserted. */
 export async function subscribeToIssue(
@@ -229,7 +232,7 @@ export async function subscribeToIssue(
     visibility?: NotifyPreload['visibility']
   },
 ): Promise<boolean> {
-  if (a.profile.org_id !== a.org_id) return false
+  if (a.profile.org_id !== a.org_id || !keepsInbox(a.profile)) return false
   if (a.project === null) return false
   if (!(await recipientCanSee(ctx, a.profile, a.project, a.visibility))) return false
   const existing = await ctx.db

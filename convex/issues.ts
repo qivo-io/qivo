@@ -40,7 +40,7 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel } from './lib/access'
+import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
 import { byId } from './lib/db'
 import { vIssuePriority, vIssueStatus, vLinkType } from './lib/enums'
 import { authedQuery, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
@@ -405,8 +405,9 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
 
 /* Organization roster ids only; profile display data already lives in the
  * snapshot. Existing subscriptions remain visible after access/deactivation
- * so a manager can remove them. Add candidates require CURRENT access and
- * an active seat; a subscription itself never grants project access. */
+ * so a manager can remove them. Add candidates require CURRENT access, an
+ * active seat and an inbox (lib/access.ts keepsInbox, which leaves out
+ * Viewer agents); a subscription itself never grants project access. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -425,7 +426,12 @@ export const subscribers = orgQuery({
     const candidates: string[] = []
     for (const profile of profiles) {
       if (subscribed.has(profile.id)) subscribers.push(profile.id)
-      else if (canManage && profile.active && (await canSeeProject(ctx, profile, project))) {
+      else if (
+        canManage &&
+        profile.active &&
+        keepsInbox(profile) &&
+        (await canSeeProject(ctx, profile, project))
+      ) {
         candidates.push(profile.id)
       }
     }
@@ -452,6 +458,7 @@ export const setSubscriber = orgMutation({
       if (!profile.active || !(await canSeeProject(ctx, profile, project))) {
         throw rule('subscriber must be an active user who can see this task')
       }
+      if (!keepsInbox(profile)) throw rule('a Viewer agent has no inbox and cannot follow tasks')
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
         profile,

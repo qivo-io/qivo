@@ -13,7 +13,9 @@ Both can also edit and delete comments, follow tasks and work through the
 inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
 `update_comment`, `delete_comment`, `set_following`, `list_inbox` and
 `update_inbox`. REST uses `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
-and `/v1/inbox`. An agent reads and clears its own inbox this way.
+and `/v1/inbox`. A Standard user agent reads and clears its own inbox this
+way. A Viewer or Inactive agent can do neither, so it receives no inbox
+messages and cannot follow tasks.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the

@@ -210,7 +210,8 @@ Useful field rules:
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
   items back). Mark items read once you have handled them, so new updates
   stand out. Unread messages are never removed automatically; an agent's read
-  messages are removed after 7 days.
+  messages are removed after 7 days. A Viewer agent has no inbox and receives
+  no messages.
 
 ## Receive task events
 
