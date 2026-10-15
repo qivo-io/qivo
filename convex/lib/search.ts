@@ -36,6 +36,7 @@ export function allWordsMatcher(query: string, stars = false): (hay: string) => 
   }
 }
 
+/** Whether `hay` matches `query` under allWordsMatcher, for one-off checks. */
 export function matchesAllWords(hay: string, query: string): boolean {
   return allWordsMatcher(query)(hay)
 }

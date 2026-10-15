@@ -562,8 +562,8 @@ export const listIssues = internalQuery({
 })
 
 /* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. The
- * single-task shape adds labels, subtasks, links and a group's remaining
- * hours (lib/core.ts taskOut). */
+ * single-task shape adds labels, subtasks, links, a group's remaining
+ * hours, followers and attachments (lib/core.ts taskOut). */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestTaskJson> => {

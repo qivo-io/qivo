@@ -1608,8 +1608,9 @@ export const listIssues = internalQuery({
   },
 })
 
-/* get_task answers the single-task shape: the list row plus labels,
- * subtasks, links and a group's remaining hours (lib/core.ts taskOut). */
+/* get_task answers the single-task shape, the list row plus labels,
+ * subtasks, links, a group's remaining hours, followers and attachments
+ * (lib/core.ts taskOut). */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, { callerId, access, ref }) => {
