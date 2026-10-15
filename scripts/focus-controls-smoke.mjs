@@ -320,7 +320,7 @@ try {
   await route('inbox', '[data-inbox]')
   await sweep(page.locator('body'), 'Inbox filters, notification actions and sidebar')
   await route('settings/account', '[data-appearance-settings]')
-  await page.locator('[data-appearance-mode="blue"]').scrollIntoViewIfNeeded()
+  await page.locator('[data-appearance-mode="dark"]').scrollIntoViewIfNeeded()
   await sweep(page.locator('body'), 'Account preferences and appearance radios')
   const retention = page.locator('[data-message-retention]')
   await retention.scrollIntoViewIfNeeded()

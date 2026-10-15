@@ -3,8 +3,7 @@
    every page without data-appearance (the operator UI, and the sign-in
    screens before a theme is known), with two neutral fills: --bg is the page
    ground; --surface-1 is every solid UI surface, including controls and
-   floating panels. The planner's Dark, Light and Blue blocks below override
-   it. Personal appearance is applied on <html> so portals inherit the same
+   floating panels. The planner's Dark and Light blocks below override it. Personal appearance is applied on <html> so portals inherit the same
    tokens. */
 :root {
   --sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
@@ -59,7 +58,6 @@
   --scrim: rgba(13, 15, 17, 0.6);
   --image-control-bg: var(--surface-1);
   --checkbox-bg: var(--surface-1);
-  --workspace-image-veil: transparent;
   --board-parent-text: #dfebff;
   --board-hierarchy-line: #647d9f;
 
@@ -219,13 +217,16 @@
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Dark is Blue's structure in neutral graphite: four fills about 1.08 apart
-   (ground < panel and sheet < control < floating), and lines and states as
-   white ink at a fixed alpha, so hover, tracks, the lit chip and hairlines
-   lift the same step on every fill. Over the photograph all but the lit
-   chip do too; it turns opaque there (below). Primary, the semantic inks,
-   the roadmap palette and the shadows stay the bare :root values. */
-:root[data-appearance="dark"] {
+/* Dark is the default theme, in neutral graphite: four fills about 1.08
+   apart (ground < panel and sheet < control < floating), and lines and
+   states as white ink at a fixed alpha, so hover, tracks, the lit chip and
+   hairlines lift the same step on every fill. Over the photograph all but
+   the lit chip do too; it turns opaque there (below). Primary, the semantic
+   inks, the roadmap palette and the shadows stay the bare :root values.
+   Operator Canvas previews, which always show a photo, share Dark's
+   blocks. */
+:root[data-appearance="dark"],
+[data-canvas-preview] {
   --bg: #09090b;
   /* Panels, sheets (dialogs, the task window, the Inbox detail) and every
      --chrome consumer share the panel fill, so fields inside a sheet still
@@ -289,7 +290,10 @@
   --border: rgba(25, 39, 56, 0.24);
   --border-strong: #8593a5;
   --text-1: #192738;
-  --text-2: #4a596c;
+  /* A step darker than the grey the Light theme had before glass, so
+     supporting text keeps 4.5:1 on glass over darker photos. Backlog, To Do
+     and the low and medium priority inks follow it. */
+  --text-2: #3e4b5b;
   --primary: #1d4ed8;
   --accent-soft: rgba(29, 78, 216, 0.14);
   --danger: #b42335;
@@ -301,7 +305,6 @@
   --qivo-shadow-card: 0 1px 2px rgba(25, 39, 56, 0.08);
   --qivo-shadow-hover: 0 6px 18px rgba(25, 39, 56, 0.12);
   --qivo-shadow-pop: 0 1px 3px rgba(25, 39, 56, 0.1), 0 12px 32px rgba(25, 39, 56, 0.16);
-  --scrim: rgba(25, 39, 56, 0.35);
   --image-control-bg: rgba(255, 255, 255, 0.94);
   --board-parent-text: var(--text-1);
   --board-hierarchy-line: var(--border-strong);
@@ -313,12 +316,7 @@
      a palette that sets none keeps the default look:
      --float-border             menu, popover, select and AnchoredPop rims;
                                 Light's toast, plan card and editor menus;
-                                the Dark and Blue tooltip ring
-     --float-material           Blue's floating surfaces (appearance.css); the
-                                Dark and Blue tooltip fill, else --popover
-     --tooltip-shadow           the Dark and Blue tooltip ring and shadow,
-                                else an outer --float-border ring and the
-                                pop shadow
+                                the Dark tooltip ring
      --switch-off               off track of the settings and auto-fit switches
      --theme-choice-checked     the chosen theme card
      --status-fill-<status>     Overview status bar segments (dots keep inks)
@@ -341,106 +339,53 @@
   --heat-empty-fill: rgba(25, 39, 56, 0.03);
 }
 
-/* Blue is the default theme: Dark's four-step ladder in navy, under a
-   translucent blue material that shows the Canvas image through its panels.
-   Over the photo, which takes a 16% veil, panels and sheets take the 81%
-   material with blur, and floating surfaces the floating step at 88%; with
-   No image, or before one loads, the ladder turns solid (below). Lines and
-   states are one blue-white ink at a fixed alpha, as in Dark, but the lit
-   chip stays an opaque #304553, so "current" never takes the photo's
-   colour. Operator Canvas previews, which always show a photo, share this
-   block. */
-:root[data-appearance="blue"],
+/* Every planner backdrop (dialogs, the palette, the task and focus windows)
+   leaves the page undimmed under a 5px blur, with or without a photo.
+   appearance.css paints it. */
+:root[data-appearance] {
+  --scrim: transparent;
+  --scrim-blur: blur(5px);
+}
+
+/* While a Canvas image is painted, every layer is tinted glass in its
+   palette's own fills: panels at 90% (each theme's tint follows), board
+   cards at 50% of the control fill, windows at 95% of the sheet fill, and
+   menus and tooltips at 95% of the floating fill, each blurring what lies
+   behind it by 20px. Controls and the lit chip stay opaque. With No image,
+   or before one loads, every surface keeps its solid fill and nothing
+   blurs. appearance.css paints the layers. */
+:root[data-appearance][data-background-state="ready"],
 [data-canvas-preview] {
-  --bg: #101a24;
-  /* The panel fill, pinned so wells and outline Buttons keep it when --bg
-     drops below it with No image. */
-  --chrome: #101a24;
-  --background: #101a24;
-  --image-control-bg: rgba(15, 16, 18, 0.86);
-  --checkbox-bg: color-mix(in oklab, var(--input) 31%, transparent);
-  --workspace-image-veil: rgba(5, 17, 34, 0.16);
-  /* Controls, rows and chips, then the recess (secondary buttons, the
-     checked theme card). */
-  --surface-1: #142330;
-  --surface-2: #203340;
-  /* The floating step: --float-material is what menus, popovers, tooltips,
-     the palette and the other floating surfaces paint (appearance.css);
-     --popover is its opaque form, which --float-material takes with No image
-     (below). */
-  --popover: #1a2a38;
-  --float-material: rgba(26, 42, 56, 0.88);
-  /* hover < surface-3 < lit; --accent follows --hover. */
-  --hover: rgba(224, 238, 248, 0.08);
-  --surface-3: rgba(224, 238, 248, 0.11);
-  --lit: #304553;
-  --text-1: #fff;
-  --text-2: #c8d3dc;
-  /* The hairline (menus use it as their rim) and a 3:1 outline for fields,
-     the card hover rim and month rules. */
-  --border: rgba(224, 238, 248, 0.21);
-  --border-strong: #6c8091;
-  --workspace-panel: rgba(16, 26, 36, 0.81);
-  --workspace-panel-shadow: 0 2px 10px rgba(6, 18, 28, 0.12);
-  --workspace-panel-blur: blur(10px);
-  --board-parent-text: #fff;
-
-  /* Component hooks (listed with Light's above). The tooltip ring sits
-     inside the translucent chip, where an outer one left a pale fringe on
-     the sky, under a compact shadow that does not darken the header it
-     labels. Navy swallows the default near tint, so Team utilization near
-     weeks are an opaque amber at the roadmap yellow's hue and over weeks 34%
-     of the roadmap red: over always outweighs near. */
-  --float-border: var(--border);
-  --switch-off: rgba(224, 238, 248, 0.24);
-  --tooltip-shadow: inset 0 0 0 1px var(--float-border), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --heat-near-fill: #44391e;
-  --heat-over-fill: color-mix(in oklab, var(--roadmap-bar-late) 34%, transparent);
+  --workspace-panel-blur: blur(20px);
+  --board-card-fill: color-mix(in srgb, var(--surface-1) 50%, transparent);
+  --window-material: color-mix(in srgb, var(--background) 95%, transparent);
+  --window-blur: blur(20px);
+  --float-material: color-mix(in srgb, var(--popover) 95%, transparent);
+  --float-blur: blur(20px);
+  --tooltip-material: var(--float-material);
 }
-/* Blue with No image, or before the photo loads: the ground steps under the
-   panel, panels and floating surfaces turn opaque and nothing blurs. On html
-   only, since Canvas previews always show a photo. */
-:root[data-appearance="blue"]:not([data-background-state="ready"]) {
-  --bg: #09101a;
-  --workspace-panel: #101a24;
-  --workspace-panel-blur: none;
-  --float-material: var(--popover);
-}
-
-/* While a Canvas image is painted, Dark and Light panels take Blue's
-   translucent material in their own palette so the photograph reads through.
-   With No image, or before one loads, they keep solid surfaces and no blur.
-   Controls, sheets and floating surfaces stay opaque either way, and so do
-   Light's board cards. */
 /* Dark tints with a near-neutral graphite biased just cool enough to cancel
    part of the photo's warm cast. Its lit chip turns an opaque graphite: the
    white ink took the photo's colour and varied in strength with it. */
-:root[data-background-state="ready"][data-appearance="dark"] {
-  --workspace-panel: color-mix(in srgb, #0e1015 83%, transparent);
-  --workspace-panel-blur: blur(10px);
+:root[data-background-state="ready"][data-appearance="dark"],
+[data-canvas-preview] {
+  --workspace-panel: color-mix(in srgb, #0e1015 90%, transparent);
   --lit: #3a3c40;
 }
-/* Light frosts at 90%, which halves the photo's spread under the ink states
-   while it still reads through. Group bands sit a step under the frosted rows. */
+/* Light frosts at 90% white, which halves the photo's spread under the ink
+   states while it still reads through. Group bands sit a step under the
+   frosted rows, and tooltips keep their navy. */
 :root[data-background-state="ready"][data-appearance="light"] {
   --workspace-panel: color-mix(in srgb, var(--surface-1) 90%, transparent);
-  --workspace-panel-blur: blur(10px);
   --roadmap-group: #e4e8ed;
+  --tooltip-material: color-mix(in srgb, var(--foreground) 95%, transparent);
 }
 
 /* Theme-picker illustrations show each palette regardless of the active
    appearance, drawn flat so a thumbnail never fetches a photograph. Each
-   draws its alpha hairline as it flattens on the thumbnail's panel. Blue
-   keeps its ground on the panel step, so its card reads navy beside Dark's. */
+   draws its alpha hairline as it flattens on the thumbnail's panel. */
 [data-theme-preview] {
   --preview-accent: #689ef3;
-}
-[data-theme-preview="blue"] {
-  --preview-background: #101a24;
-  --preview-panel: #142330;
-  --preview-border: #3f4e5a;
-  --preview-text: #fff;
-  --preview-muted: #c8d3dc;
 }
 [data-theme-preview="dark"] {
   --preview-background: #09090b;
@@ -454,7 +399,7 @@
   --preview-panel: #fff;
   --preview-border: #c8cbcf;
   --preview-text: #192738;
-  --preview-muted: #4a596c;
+  --preview-muted: #3e4b5b;
 }
 
 * {
@@ -583,10 +528,7 @@ textarea {
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c4c9cf' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 :root[data-appearance="light"] {
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a596c' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-}
-:root[data-appearance="blue"] {
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c8d3dc' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233e4b5b' stroke-opacity='.5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 [data-slot="native-select"] {
   appearance: none;
@@ -657,12 +599,13 @@ textarea {
       box-shadow: var(--qivo-shadow-pop);
       min-inline-size: anchor-size(self-inline);
     }
-    /* Blue floats its menus on --float-material, as appearance.css does for
+    /* Over a photo the list is glass, as appearance.css paints
        FieldSelect's menu (a ::picker cannot sit in that rule's :is()). */
-    html[data-appearance="blue"] [data-slot="native-select"]::picker(select) {
+    html[data-appearance][data-background-state="ready"]
+      [data-slot="native-select"]::picker(select) {
       background: var(--float-material);
-      -webkit-backdrop-filter: var(--workspace-panel-blur);
-      backdrop-filter: var(--workspace-panel-blur);
+      -webkit-backdrop-filter: var(--float-blur);
+      backdrop-filter: var(--float-blur);
     }
     [data-slot="native-select"] :is(option, optgroup) {
       font-size: var(--fs-base);

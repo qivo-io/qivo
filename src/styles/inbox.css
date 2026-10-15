@@ -214,12 +214,17 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
     padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
     background: var(--background);
   }
-  /* The full-screen task supplies its own window material. Keep its Inbox
-     wrapper clear so it can sample the same photograph as other task windows. */
-  html[data-appearance="blue"] .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame {
+  /* Over a photo the full-screen task supplies its own window glass. Keep
+     its Inbox wrapper clear so it can sample the same photograph as other
+     task windows. */
+  html[data-appearance][data-background-state="ready"]
+    .inbox-layout[data-inbox-mobile-detail]
+    > .inbox-detail-frame {
     background: transparent;
   }
-  html[data-appearance="blue"] .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame--note {
+  html[data-appearance][data-background-state="ready"]
+    .inbox-layout[data-inbox-mobile-detail]
+    > .inbox-detail-frame--note {
     background: var(--workspace-panel);
     -webkit-backdrop-filter: var(--workspace-panel-blur);
     backdrop-filter: var(--workspace-panel-blur);

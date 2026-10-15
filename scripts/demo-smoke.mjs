@@ -456,13 +456,13 @@ export async function runDemoSmoke(env = process.env) {
       const { convex } = await import('/src/lib/convex.ts')
       return convex.query('appearance:get', {})
     })
-    assert.equal(preferences.mode, 'blue', 'A new demo must default to the Blue theme')
+    assert.equal(preferences.mode, 'dark', 'A new demo must default to the Dark theme')
     assert.equal(preferences.image_source, 'daily', 'A new demo must use the shared weekly photo')
     await page.waitForFunction(
       (imageUrls) => {
         const image = document.querySelector('[data-appearance-background]')
         return (
-          document.documentElement.dataset.appearance === 'blue' &&
+          document.documentElement.dataset.appearance === 'dark' &&
           document.documentElement.dataset.backgroundState === 'ready' &&
           image?.complete &&
           image.naturalWidth > 0 &&

@@ -50,7 +50,7 @@ async function ensureSettings(ctx: MutationCtx, authId: string) {
   if (existing) return existing
   const id = await ctx.db.insert('account_appearance', {
     auth_user_id: authId,
-    mode: 'blue',
+    mode: 'dark',
     image_source: 'daily',
     revision: crypto.randomUUID(),
     updated_at: new Date().toISOString(),

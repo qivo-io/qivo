@@ -54,7 +54,6 @@ export function BackgroundBoardPreview({
           className="absolute inset-0 -z-20 h-full w-full object-cover object-center"
         />
       )}
-      <div className="absolute inset-0 -z-10 bg-[var(--workspace-image-veil)]" />
       <div className="flex h-full min-h-0 gap-3 overflow-auto p-3 text-xs">
         <aside className="hidden w-36 shrink-0 rounded-xl border border-[var(--border)] bg-[var(--workspace-panel)] p-3 [backdrop-filter:var(--workspace-panel-blur)] sm:block">
           <div className="wordmark mb-7 text-base">Qivo</div>

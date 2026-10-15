@@ -50,7 +50,7 @@ export type GrantLevel = (typeof GRANT_LEVELS)[number]
 
 /* Personal appearance: the theme picks the palette; the Canvas source picks
  * the background image painted behind every theme, or none. */
-export const APPEARANCE_MODES = ['blue', 'dark', 'light'] as const
+export const APPEARANCE_MODES = ['dark', 'light'] as const
 export const vAppearanceMode = literals(...APPEARANCE_MODES)
 export type AppearanceMode = (typeof APPEARANCE_MODES)[number]
 

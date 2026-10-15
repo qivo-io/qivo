@@ -40,7 +40,7 @@ type AppearanceState = {
 }
 
 const AppearanceContext = createContext<AppearanceState>({
-  mode: 'blue',
+  mode: 'dark',
   backgroundStatus: 'loading',
   backgroundQuality: null,
   backgroundUrl: null,
@@ -189,10 +189,9 @@ export function AppearanceProvider({
       cache?.dispose()
     }
   }, [cache])
-  const [initialMode] = useState<AppearancePreferences['mode']>(() => {
-    const mode = document.documentElement.dataset.appearance
-    return mode === 'dark' || mode === 'light' ? mode : 'blue'
-  })
+  const [initialMode] = useState<AppearancePreferences['mode']>(() =>
+    document.documentElement.dataset.appearance === 'light' ? 'light' : 'dark',
+  )
   const mode = preferences?.mode ?? initialMode
   // The theme only chooses the palette; every theme paints the Canvas image.
   const usesDaily = !preferencesFailed && preferences?.image_source === 'daily'

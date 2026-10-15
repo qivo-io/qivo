@@ -44,7 +44,7 @@ export class ViewBoundary extends Component<
       <Dialog open onOpenChange={(open) => !open && this.props.onBack()}>
         <DialogContent
           aria-describedby={undefined}
-          overlayClassName="z-[100] bg-[var(--scrim)] backdrop-blur-[4px]"
+          overlayClassName="z-[100]"
           className="z-[101]"
           onEscapeKeyDown={(event) => event.stopPropagation()}
         >

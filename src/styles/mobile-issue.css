@@ -19,9 +19,9 @@
     backdrop-filter: none;
   }
 
-  /* The task window supplies the Canvas material. An opaque outer frame
+  /* Over a photo the task window supplies the glass. An opaque outer frame
      would hide the photograph before the window can sample it. */
-  html[data-appearance="blue"] [data-mobile-task-frame] {
+  html[data-appearance][data-background-state="ready"] [data-mobile-task-frame] {
     background: transparent;
   }
 
