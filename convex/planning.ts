@@ -186,7 +186,8 @@ export type WorkloadJson = {
  * cannot see, counted in hours and again, unnamed, in hidden_hours, the part
  * of hours they cannot see; viewers and guests receive only rows they can
  * see or own. Each row's remaining hours spread
- * over its weeks by the app's rule. `project`, a project `me` can see,
+ * over its weeks by the app's rule, and only the requested weeks are added
+ * up, so the work follows the window. `project`, a project `me` can see,
  * limits the hours to it and its visible sub-projects, which leaves no
  * hidden hours. Lists every active member of the organization and every
  * inactive one with hours in the window, ordered by name.
@@ -239,8 +240,10 @@ export async function workloadCore(
   }
   const first = grid.ofDay(o.fromDay)
   const window = Array.from({ length: o.weeks }, (_, i) => first + i)
+  // only the asked weeks are added up, however far a plan runs
+  const asked = { from: first, to: first + o.weeks - 1 }
   const perWeek = (items: LoadSpan[]): number[] => {
-    const byWeek = committedByWeek(items)
+    const byWeek = committedByWeek(items, null, asked)
     return window.map((week) => roundTenths(byWeek.get(week) ?? 0))
   }
   const people: PersonWorkloadJson[] = []

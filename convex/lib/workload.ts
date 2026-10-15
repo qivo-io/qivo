@@ -30,12 +30,29 @@ export function spreadWindow(
   return { start: s, end: Math.max(end, s) }
 }
 
+/** Week indexes `from` to `to`, both included. */
+export type WeekRange = { from: number; to: number }
+
+let weeksSpread = 0
+
+/** How many week entries committedByWeek has added hours to so far, in this
+    module instance. A test reads it before and after a call to measure the
+    call's work without a clock. */
+export function weeksSpreadSoFar(): number {
+  return weeksSpread
+}
+
 /** Hours the owner is committed to per week, spreading each issue's
     remaining hours evenly across its spread window. `excludeUuid` drops the
-    issue being planned so it doesn't compete with itself. */
+    issue being planned so it doesn't compete with itself. `range` limits the
+    answer to the weeks a caller reads. Each issue still divides its hours by
+    its whole spread window, but only the weeks in the range are added up, so
+    a plan that runs to the year 9999 costs no more than the range. A week in
+    the range holds exactly what the answer without a range holds. */
 export function committedByWeek(
   items: LoadSpan[],
   excludeUuid?: string | null,
+  range?: WeekRange,
 ): Map<number, number> {
   const m = new Map<number, number>()
   for (const it of items) {
@@ -45,7 +62,10 @@ export function committedByWeek(
     if (span <= 0) continue
     const per = (it.remaining || 0) / span
     if (per <= 0) continue
-    for (let w = win.start; w <= win.end; w++) m.set(w, (m.get(w) || 0) + per)
+    const first = range === undefined ? win.start : Math.max(win.start, range.from)
+    const last = range === undefined ? win.end : Math.min(win.end, range.to)
+    if (last >= first) weeksSpread += last - first + 1
+    for (let w = first; w <= last; w++) m.set(w, (m.get(w) || 0) + per)
   }
   return m
 }

@@ -302,6 +302,27 @@ describe('the Team sync store', () => {
     expect(P.weekLoadOf(f.ben, w14)).toBe(8)
   })
 
+  it('reads a week of a plan that runs to the year 9999 without spreading the rest', async () => {
+    // the store's own instance, which counts the week entries it spreads
+    const { weeksSpreadSoFar } = await import('../lib/workload')
+    const w14 = P.isoToWeek('2026-09-14')
+    const end = '9999-12-27'
+    const span = P.isoToWeek(end) - w14 + 1
+    expect(span).toBeGreaterThan(416_000)
+    // five such plans of an hour a week beside Ben's one-week task
+    const long = { ...f.snap.orgLoad[2], issue_id: null, end_week: end, remaining: span }
+    const before = weeksSpreadSoFar()
+    deliver({ ...f.snap, orgLoad: [...f.snap.orgLoad, ...Array(5).fill(long)] })
+    const delivered = weeksSpreadSoFar()
+    expect(P.weekLoadOf(f.ben, w14)).toBe(9)
+    expect(P.weekLoadOf(f.ben, w14 + 1)).toBe(5)
+    expect(P.weekLoadOf(f.ben, P.isoToWeek('9999-12-20'))).toBe(5)
+    // each read spreads its one week of every plan that covers it: 6, 5 and 5
+    expect(weeksSpreadSoFar() - delivered).toBe(16)
+    // the rebuild's delay projections spread less than one such plan in full
+    expect(delivered - before).toBeLessThan(span)
+  })
+
   it('stamps a person optimistically and on the wire, keeping a sitting’s reading point', () => {
     P.syncStamp(f.ben)
     const first = P.user(f.ben)!.sync!

@@ -198,7 +198,8 @@ Useful field rules:
 - **Move:** send `project`, and `sub_project` when `project` names a
   meta-project, on `update_task` or PATCH. You need User or Lead access on
   both sub-projects, and the task's assignee and reviewer must be able to work
-  in the destination; reassign first if they cannot. The task keeps its key.
+  in the destination. If they cannot, send a new `assignee_id` or
+  `reviewer_id`, or `null`, in the same request. The task keeps its key.
 - **Link:** `set_task_link` with `ref`, `other`, `kind` (`blocks`,
   `blocked_by` or `relates`, as seen from `ref`) and `linked`, or the REST
   links routes. Two tasks share at most one link; remove a link before

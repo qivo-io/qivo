@@ -7,7 +7,7 @@
    track or behind. The store decides whether the project displays delay. */
 
 import { TODAY_WEEK } from './dates'
-import { committedByWeek, fitEndWeek, type LoadSpan, prepareLoadProjection } from './workload'
+import { fitEndWeekAgainst, type LoadSpan, prepareLoadProjection } from './workload'
 
 export type DelayStatus = 'ok' | 'behind' | 'late'
 
@@ -35,7 +35,7 @@ export type DelayIssue = {
 /** Delay status for one issue given its owner's org-wide load. */
 export function delayOf(it: DelayIssue, load: LoadSpan[]): DelayInfo | null {
   return delayWithProjection(it, (from, remaining, capacity) =>
-    fitEndWeek(from, remaining, capacity, committedByWeek(load, it.uuid)),
+    fitEndWeekAgainst(load, it.uuid, from, remaining, capacity),
   )
 }
 

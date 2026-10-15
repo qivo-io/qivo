@@ -4,9 +4,15 @@
    The spread rule lives in convex/lib/workload.ts, which the REST and MCP
    workload read shares. */
 
-import { committedByWeek, type LoadSpan, spreadWindow } from '../../convex/lib/workload'
+import {
+  committedByWeek,
+  type LoadSpan,
+  spreadWindow,
+  type WeekRange,
+  weeksSpreadSoFar,
+} from '../../convex/lib/workload'
 
-export { committedByWeek, type LoadSpan, spreadWindow }
+export { committedByWeek, type LoadSpan, spreadWindow, type WeekRange, weeksSpreadSoFar }
 
 /** Capacity when the person is missing; must match the organization default. */
 export const DEFAULT_PLANNABLE_HOURS = 32
@@ -62,7 +68,7 @@ export function fitEndWeek(
   start: number,
   remaining: number,
   capacity: number,
-  committed: Map<number, number>,
+  committed: Pick<ReadonlyMap<number, number>, 'get'>,
   maxWeeks = 520,
 ): number {
   if (!(remaining > 0)) return start
@@ -76,24 +82,59 @@ export function fitEndWeek(
   return start + maxWeeks - 1
 }
 
-/** Reuse one owner's weekly totals across projections. Near a completion
+/** fitEndWeek against an owner's load. Only the weeks the fit can read,
+    `maxWeeks` of them from `start`, are added up, so a plan that runs to the
+    year 9999 costs no more than they do. */
+export function fitEndWeekAgainst(
+  load: LoadSpan[],
+  excludeUuid: string | null | undefined,
+  start: number,
+  remaining: number,
+  capacity: number,
+  maxWeeks = 520,
+): number {
+  const committed = committedByWeek(load, excludeUuid, { from: start, to: start + maxWeeks - 1 })
+  return fitEndWeek(start, remaining, capacity, committed, maxWeeks)
+}
+
+/** How many weeks of an owner's totals prepareLoadProjection adds up at once. */
+const TOTALS_BLOCK = 64
+
+/** Reuse one owner's weekly totals across projections. Each total is added
+ * up on first use, TOTALS_BLOCK weeks at a time, so a plan that runs to the
+ * year 9999 costs only the weeks the projections read. Near a completion
  * boundary, repeat the original ordered sum: subtracting self from a total
  * can lose small commitments to rounding and change the finish week. */
 export function prepareLoadProjection(items: LoadSpan[]) {
-  const totals = committedByWeek(items)
+  const blocks = new Map<number, Map<number, number>>()
+  const totals = {
+    get(week: number): number {
+      const block = Math.floor(week / TOTALS_BLOCK)
+      let byWeek = blocks.get(block)
+      if (!byWeek) {
+        const from = block * TOTALS_BLOCK
+        byWeek = committedByWeek(items, null, { from, to: from + TOTALS_BLOCK - 1 })
+        blocks.set(block, byWeek)
+      }
+      return byWeek.get(week) || 0
+    },
+  }
   const own = new Map<string, { start: number; end: number; per: number }[]>()
-  let finite = true
-  for (const value of totals.values()) finite &&= Number.isFinite(value)
+  // each week's total adds some of these hours in the same order, so no
+  // total can exceed their sum, and all are finite when it is
+  let sum = 0
   for (const it of items) {
-    if (!it.issueUuid) continue
     const win = spreadWindow(it.start, it.end, it.remainingSet)
     const span = win.end - win.start + 1
     const per = (it.remaining || 0) / span
     if (span <= 0 || per <= 0) continue
+    sum += per
+    if (!it.issueUuid) continue
     const spans = own.get(it.issueUuid) || []
     spans.push({ ...win, per })
     own.set(it.issueUuid, spans)
   }
+  const finite = Number.isFinite(sum)
   return (
     start: number,
     remaining: number,
@@ -101,8 +142,7 @@ export function prepareLoadProjection(items: LoadSpan[]) {
     excludeUuid?: string | null,
     maxWeeks = 520,
   ): number => {
-    const exact = () =>
-      fitEndWeek(start, remaining, capacity, committedByWeek(items, excludeUuid), maxWeeks)
+    const exact = () => fitEndWeekAgainst(items, excludeUuid, start, remaining, capacity, maxWeeks)
     if (!(remaining > 0)) return start
     if (!finite || !Number.isFinite(remaining) || !Number.isFinite(capacity)) return exact()
     const self = excludeUuid ? own.get(excludeUuid) : undefined
@@ -111,7 +151,7 @@ export function prepareLoadProjection(items: LoadSpan[]) {
     let left = remaining
     let uncertainty = 0
     for (let w = start; w < start + maxWeeks; w++) {
-      const total = totals.get(w) || 0
+      const total = totals.get(w)
       let excluded = 0
       for (const span of self) if (w >= span.start && w <= span.end) excluded += span.per
       const committed = Math.max(0, total - excluded)
@@ -148,10 +188,12 @@ export type LoadIssue = {
 /** person id → (week → (project id → committed hours)) over their owned
     issues. `inScope`, when given, keeps only issues whose project passes it
     (the "this project only" view). Paused issues add nothing;
-    `pausedWeeksByPerson` marks where they sit. */
+    `pausedWeeksByPerson` marks where they sit. `range` limits the answer to
+    the weeks a view shows, as committedByWeek's does. */
 export function issueLoadByPerson(
   issues: LoadIssue[],
   inScope?: (projectId: string) => boolean,
+  range?: WeekRange,
 ): Map<string, PersonWeekLoad> {
   const out = new Map<string, PersonWeekLoad>()
   for (const it of issues) {
@@ -162,12 +204,15 @@ export function issueLoadByPerson(
     if (span <= 0) continue
     const per = (it.remaining || 0) / span
     if (per <= 0) continue
+    const first = range === undefined ? win.start : Math.max(win.start, range.from)
+    const last = range === undefined ? win.end : Math.min(win.end, range.to)
+    if (first > last) continue
     let wl = out.get(it.owner)
     if (!wl) {
       wl = new Map()
       out.set(it.owner, wl)
     }
-    for (let w = win.start; w <= win.end; w++) {
+    for (let w = first; w <= last; w++) {
       let pm = wl.get(w)
       if (!pm) {
         pm = new Map()
@@ -181,10 +226,12 @@ export function issueLoadByPerson(
 
 /** person id → the weeks their owned paused issues are planned in, over the
     whole planned period whatever the remaining hours (a pause is a fact about
-    the week, not an amount). Same scope rule as `issueLoadByPerson`. */
+    the week, not an amount). Same scope rule and `range` as
+    `issueLoadByPerson`. */
 export function pausedWeeksByPerson(
   issues: LoadIssue[],
   inScope?: (projectId: string) => boolean,
+  range?: WeekRange,
 ): Map<string, Set<number>> {
   const out = new Map<string, Set<number>>()
   for (const it of issues) {
@@ -195,7 +242,9 @@ export function pausedWeeksByPerson(
       weeks = new Set()
       out.set(it.owner, weeks)
     }
-    for (let w = it.start; w <= it.end; w++) weeks.add(w)
+    const first = range === undefined ? it.start : Math.max(it.start, range.from)
+    const last = range === undefined ? it.end : Math.min(it.end, range.to)
+    for (let w = first; w <= last; w++) weeks.add(w)
   }
   return out
 }

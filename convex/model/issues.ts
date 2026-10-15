@@ -812,9 +812,36 @@ export async function browserVerbDetail(
  *           tasks a row names through namedTaskNums, which knows only the
  *           browser wording
  *   move    detail = the browser's destination sentence plus the provenance
- *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail */
+ *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail
+ *   move's and update's `later` name the people a later write of the same
+ *           machine update sets (LaterPeople) */
 export type MachineNarration = { provenance: string }
-export type MachineUpdate = MachineNarration & { archive?: boolean; appGrammar?: boolean }
+export type MachineUpdate = MachineNarration & {
+  archive?: boolean
+  appGrammar?: boolean
+  later?: LaterPeople
+}
+export type MachineMove = MachineNarration & { later?: LaterPeople }
+
+/**
+ * The assignee and reviewer that a later write of the same machine update
+ * sets (lib/core.ts applyTaskUpdate's field patch), with IssuePatch's
+ * presence rule, so a key present replaces the field and null clears it. A move
+ * or a parent change does not check a person this replaces, because the task
+ * will not keep them. The later write checks the replacement at the task's
+ * project and against its parents, as any change of assignee or reviewer is
+ * checked, and the whole update rolls back if it is refused.
+ */
+export type LaterPeople = Pick<IssuePatch, 'assignee_id' | 'reviewer_id'>
+
+/** Whether `later` gives the task someone other than its current `field`. */
+function replacedLater(
+  issue: Doc<'issues'>,
+  later: LaterPeople | undefined,
+  field: keyof LaterPeople,
+): boolean {
+  return later !== undefined && field in later && (later[field] ?? undefined) !== issue[field]
+}
 
 /* ----------------------------------------------------------- create core */
 
@@ -1052,7 +1079,9 @@ export async function updateIssueCore(
   }
   // whoever holds a subtask must see every task above it: a new assignee or
   // reviewer is checked against the chain, and a new parent against
-  // everyone holding this task or its subtasks
+  // everyone holding this task or its subtasks. Someone a later write of the
+  // same machine update replaces (LaterPeople) holds nothing; that write
+  // checks the replacement against the chain.
   const heldAssignee = 'assignee_id' in patch ? w.assignee_id : issue.assignee_id
   const heldReviewer = 'reviewer_id' in patch ? w.reviewer_id : issue.reviewer_id
   const newAssignee = heldAssignee !== undefined && heldAssignee !== issue.assignee_id
@@ -1064,9 +1093,12 @@ export async function updateIssueCore(
     if (newAssignee && !(await sees(heldAssignee))) throw rule(ASSIGNEE_SIGHT_RULE)
     if (newReviewer && !(await sees(heldReviewer))) throw rule(REVIEWER_SIGHT_RULE)
     if (newParent) {
+      // `later` only speaks for a field this write leaves alone
+      const replaced = (field: keyof LaterPeople): boolean =>
+        !(field in patch) && replacedLater(issue, a.machine?.later, field)
       const holders = await holdersUnder(ctx, issue.id, {
-        assignee_id: heldAssignee,
-        reviewer_id: heldReviewer,
+        assignee_id: replaced('assignee_id') ? undefined : heldAssignee,
+        reviewer_id: replaced('reviewer_id') ? undefined : heldReviewer,
         group: await isGroup(),
       })
       for (const holder of holders) {
@@ -1215,7 +1247,9 @@ export async function updateIssueCore(
  * keyed to the SOURCE project and records the destination as its related
  * project. issues.move and the machine moves check Edit on BOTH ends before
  * calling this, and the write gate here checks them again before any guard,
- * so these guards only ever describe a destination the caller can write. */
+ * so these guards only ever describe a destination the caller can write. A
+ * machine update that also sets the assignee or reviewer (MachineMove.later)
+ * is checked with the people the task ends up with. */
 export async function moveIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1223,7 +1257,7 @@ export async function moveIssueCore(
     issue: Doc<'issues'>
     project_id: string
     now: string
-    machine?: MachineNarration
+    machine?: MachineMove
   },
 ): Promise<Doc<'issues'>> {
   const { me, issue, project_id, now } = a
@@ -1238,10 +1272,12 @@ export async function moveIssueCore(
   if (target.org_id !== issue.org_id) throw rule('tasks cannot move between organizations')
   assertProjectArrival(target)
   // The assignee and a leaf's reviewer must be eligible in the destination;
-  // a group's dormant reviewer who is not is cleared instead. Immutable
-  // reporter and creator attribution survive moves and changes to those
-  // users' access.
-  if (issue.assignee_id !== undefined) {
+  // a group's dormant reviewer who is not is cleared instead. Someone a later
+  // write of the same machine update replaces is left to that write, which
+  // checks the replacement in the destination. Immutable reporter and
+  // creator attribution survive moves and changes to those users' access.
+  const later = a.machine?.later
+  if (issue.assignee_id !== undefined && !replacedLater(issue, later, 'assignee_id')) {
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
   const w: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
@@ -1251,7 +1287,9 @@ export async function moveIssueCore(
   if (issue.reviewer_id !== undefined) {
     isGroup = await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
     if (!isGroup) {
-      await assertAssigneeRule(ctx, target, issue.reviewer_id, 'reviewer')
+      if (!replacedLater(issue, later, 'reviewer_id')) {
+        await assertAssigneeRule(ctx, target, issue.reviewer_id, 'reviewer')
+      }
     } else if (!(await canHoldTaskIn(ctx, target, issue.reviewer_id))) {
       w.reviewer_id = undefined // ctx.db.patch unsets it
     }
