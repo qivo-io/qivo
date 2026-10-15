@@ -86,7 +86,8 @@ destination. Clear or change either person first if they cannot edit that
 project or are switched off. For a grouping parent, an ineligible reviewer
 saved before it gained subtasks is cleared instead of preventing the move.
 Removing a person from the organization clears their assignments and reviewer
-roles, on open tasks at once and on archived tasks within a few minutes.
+roles. Qivo clears open tasks at once, or shortly after for someone with
+hundreds of them, and archived tasks within a few minutes.
 
 ## Creating a task
 

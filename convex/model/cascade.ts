@@ -21,6 +21,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
+import { estimateDocumentBytes } from './demoMetrics'
 import { notifyIssueUpdate } from './messages'
 import { emitTaskEvent } from './taskEvents'
 
@@ -181,7 +182,9 @@ export async function deleteTeamDeep(
   await ctx.db.delete(team._id)
 }
 
-/* The four task fields that name a profile, each with its own index. */
+/* The four task fields that name a profile, each with its own index. A
+ * removal clears them in this order, so the fields that route work go
+ * first when its budget runs out. */
 export const TASK_HOLDERS = ['assignee_id', 'reviewer_id', 'created_by', 'reporter_id'] as const
 export type TaskHolder = (typeof TASK_HOLDERS)[number]
 
@@ -238,6 +241,45 @@ export async function clearHolder(
   })
 }
 
+/** What one part of a removal may clear. removeProfile spends one budget on
+ * open tasks, and each background step (profileRemovals.ts) spends one. A
+ * mutable object, so tests can lower it. */
+export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
+
+/* Comments and tasks can approach Convex's 1 MiB document limit, so their
+ * ranges are read a few rows at a time. Unused rows of the last read then
+ * add at most three such documents to what a transaction reads. */
+export const LARGE_ROWS_PER_READ = 4
+
+export type RemovalBudget = { rows: number; bytes: number }
+
+export const budgetSpent = (budget: RemovalBudget): boolean => budget.rows <= 0 || budget.bytes <= 0
+
+/** Clears the rows `read` returns until the range is empty (true) or the
+ * budget is spent (false). A budget not yet spent clears at least one row,
+ * however large. Bytes are estimated from each cleared document. `clear`
+ * must move each row out of the range, because every read starts at the
+ * beginning of the range. */
+export async function sweep<Row>(
+  budget: RemovalBudget,
+  read: (n: number) => Promise<Row[]>,
+  clear: (row: Row) => Promise<void>,
+  perRead: number,
+): Promise<boolean> {
+  while (!budgetSpent(budget)) {
+    const n = Math.min(budget.rows, perRead)
+    const rows = await read(n)
+    for (const row of rows) {
+      await clear(row)
+      budget.rows -= 1
+      budget.bytes -= estimateDocumentBytes(row)
+      if (budgetSpent(budget)) return false
+    }
+    if (rows.length < n) return true
+  }
+  return false
+}
+
 /** The unfinished background removal of `profileId`, or null. While it
  * exists, the id stays reserved (profiles.create). */
 export function pendingRemoval(ctx: QueryCtx, profileId: string) {
@@ -258,19 +300,21 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
  * logs nothing, exactly like the SQL FK resolution.
  *
  * The work is split so that removal stays within one transaction's limits
- * however long the profile's history is. This transaction ends access and
- * clears everything the working app shows: the profile row and avatar
- * bytes, memberships, grants, preferences, own agent keys, MCP tokens, the
- * rate-limit row and the OAuth connections (revoked as 'deleted', so the
- * person's own list hides them at once). Every session, credential and OAuth
- * path requires the profile row, so access fails closed here. It also clears
- * the profile from open tasks, project leads and the activity feed, which
- * logActivity caps at 500 rows per organization. Then it inserts the
- * profile_removals row and schedules the first background step
- * (profileRemovals.ts), which clears archived tasks, comments, messages,
- * subscriptions, attachments, agent keys it created and the revoked
- * connections in bounded steps. Readers already show an id that no longer
- * resolves as "Someone" or "Unknown user" until then.
+ * however much work and history the profile holds. This transaction ends
+ * access. It deletes the profile row and avatar bytes, memberships, grants,
+ * preferences, own agent keys, MCP tokens and the rate-limit row, and
+ * revokes the OAuth connections as 'deleted', so the person's own list
+ * hides them at once. Every session, credential and OAuth path requires the
+ * profile row, so access fails closed here. It also clears the profile from
+ * project leads, the activity feed (logActivity caps it at 500 rows per
+ * organization) and as many open tasks as REMOVAL_BUDGET allows, assignee
+ * and reviewer fields first. That is every open task unless the profile
+ * holds hundreds. Then it inserts the profile_removals row and schedules
+ * the first background step (profileRemovals.ts), which clears the open
+ * tasks left over, archived tasks, comments, messages, subscriptions,
+ * attachments, agent keys it created and the revoked connections in
+ * bounded steps. Readers already show an id that no longer resolves as
+ * "Someone" or "Unknown user" until then.
  *
  * Three FK behaviors, spelled out:
  * - SET NULL + touch: issues.assignee_id (0001:94), issues.reviewer_id,
@@ -297,11 +341,19 @@ export async function removeProfile(
   a: { profile: Doc<'profiles'>; now: string },
 ): Promise<void> {
   const { profile, now } = a
-  // SET NULL + touch on open tasks. Collect first, because the patch moves
-  // rows out of the index.
+  // SET NULL + touch on open tasks within one budget, in TASK_HOLDERS order.
+  // Each clear reads and writes the whole task, and a task the profile
+  // created and reports is cleared once per field, so an unbounded pass
+  // fails for a busy agent. The first step's tasks phase clears the rest.
+  const budget: RemovalBudget = { ...REMOVAL_BUDGET }
   for (const holder of TASK_HOLDERS) {
-    const held = await heldTasks(ctx, holder, profile.id, true).collect()
-    for (const task of held) await clearHolder(ctx, task, holder, now)
+    const cleared = await sweep(
+      budget,
+      (n) => heldTasks(ctx, holder, profile.id, true).take(n),
+      (task) => clearHolder(ctx, task, holder, now),
+      LARGE_ROWS_PER_READ,
+    )
+    if (!cleared) break
   }
   // SET NULL, no touch
   const led = await ctx.db

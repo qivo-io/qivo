@@ -2,11 +2,11 @@
  * background steps in profileRemovals.ts).
  *
  * The removal transaction must fit Convex's limits in a large organization
- * and end access before any background step runs. The steps must finish any
- * amount of history in bounded batches, survive a dropped or repeated step,
- * pick up a row that appears late, and end in the same state the old single
- * transaction reached, where no row names the removed id and the job row is
- * gone.
+ * and for a profile holding thousands of open tasks, and end access before
+ * any background step runs. The steps must finish any amount of history in
+ * bounded batches, survive a dropped or repeated step, pick up a row that
+ * appears late, and end in the same state the old single transaction
+ * reached, where no row names the removed id and the job row is gone.
  * Fake timers keep every scheduled step from running until a test releases
  * it. The cascade.test.ts removeProfile cases pin the row-level end state. */
 /// <reference types="vite/client" />
@@ -16,8 +16,8 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { mcpResource } from '../lib/oauth'
-import { deleteOrgDeep, removeProfile } from '../model/cascade'
-import { REMOVAL_BUDGET, STALLED_MS } from '../profileRemovals'
+import { deleteOrgDeep, REMOVAL_BUDGET, removeProfile } from '../model/cascade'
+import { STALLED_MS } from '../profileRemovals'
 import schema from '../schema'
 import {
   as,
@@ -252,6 +252,56 @@ describe('the removal transaction under real limits', () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await jobOf(t, invited.id)).toBeNull()
     expect(await jobOf(t, cancelled.id)).toBeNull()
+  }, 120_000)
+
+  it('clears one budget of an agent with 3,000 open tasks and leaves the rest to the steps', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const agent = f.agent.id
+    // The agent created, reports and is assigned every task. Clearing all
+    // 9,000 fields in one transaction reads each 2 KiB task twice per field,
+    // about 40 MiB against the 16 MiB limit.
+    const description = 'x'.repeat(2048)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3000; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          num: nextNum++,
+          title: `Imported ${i}`,
+          description,
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          assignee_id: agent,
+          created_by: agent,
+          reporter_id: agent,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+    })
+    const held = () =>
+      t.run(async (ctx) => {
+        const count = { assignee_id: 0, created_by: 0, reporter_id: 0 }
+        for (const task of await ctx.db.query('issues').collect())
+          for (const field of Object.keys(count) as (keyof typeof count)[])
+            if (task[field] === agent) count[field]++
+        return count
+      })
+
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: agent })
+    expect(await t.run((ctx) => ctx.db.get(f.agent._id))).toBeNull()
+    expect(await jobOf(t, agent)).not.toBeNull()
+    // one budget of rows, assignee fields first
+    expect(await held()).toEqual({
+      assignee_id: 3000 - REMOVAL_BUDGET.rows,
+      created_by: 3000,
+      reporter_id: 3000,
+    })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await held()).toEqual({ assignee_id: 0, created_by: 0, reporter_id: 0 })
+    expect(await jobOf(t, agent)).toBeNull()
   }, 120_000)
 })
 

@@ -4986,11 +4986,13 @@ export const PLANNER = {
 
   /* Removes a person or agent from the organization. The local copy mirrors
      what the server's removal clears in its own transaction (the SET NULL
-     fires the touch server-side). rows.issues holds only open tasks, and the
-     server clears those at once. Archived tasks, comments, messages and the
-     removed profile's subscriptions are cleared later in the background, and
-     this client holds only its own subscriptions. The server also owns the
-     avatar bytes, so there is no client-side reap. */
+     fires the touch server-side). rows.issues holds only open tasks. The
+     server clears those at once, unless the profile holds hundreds. Then its
+     first background steps clear the rest a moment later, and the server's
+     copy names the id until they do. Archived tasks, comments, messages and
+     the removed profile's subscriptions are cleared later in the background,
+     and this client holds only its own subscriptions. The server also owns
+     the avatar bytes, so there is no client-side reap. */
   removeUser: (id: string) => {
     if (id === CURRENT_USER) return
     const target = rows.profiles.get(id)

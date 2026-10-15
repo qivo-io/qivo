@@ -1,8 +1,9 @@
 /* Background cleanup after a profile removal. model/cascade.ts removeProfile
- * deletes the profile, ends its access and clears what the working app
- * shows in one transaction. It then inserts a profile_removals row and
- * schedules `step`. Each step clears a bounded part of the remaining
- * history that names the removed id, phase by phase (REMOVAL_PHASES), and
+ * deletes the profile and ends its access in one transaction. It also
+ * clears the profile from project leads, the activity feed and as many open
+ * tasks as one budget allows. It then inserts a profile_removals row and
+ * schedules `step`. Each step clears a bounded part of the remaining rows
+ * that name the removed id, phase by phase (REMOVAL_PHASES), and
  * schedules the next step until nothing names the id. Then it deletes the
  * row, which also frees the id for profiles.create.
  *
@@ -28,19 +29,21 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { byId } from './lib/db'
 import { REMOVAL_PHASES, type RemovalPhase } from './lib/enums'
-import { clearHolder, heldTasks, pendingRemoval, TASK_HOLDERS } from './model/cascade'
+import {
+  budgetSpent,
+  clearHolder,
+  heldTasks,
+  LARGE_ROWS_PER_READ,
+  pendingRemoval,
+  REMOVAL_BUDGET,
+  type RemovalBudget,
+  sweep,
+  TASK_HOLDERS,
+} from './model/cascade'
 import { estimateDocumentBytes } from './model/demoMetrics'
-
-/** What one step may clear. A mutable object, so tests can lower it. */
-export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
 
 /** A row whose last step committed longer ago than this is restarted. */
 export const STALLED_MS = 60_000
-
-/* Comments and tasks can approach Convex's 1 MiB document limit, so their
- * ranges are read a few rows at a time. Unused rows of the last read then
- * add at most three such documents to what a step reads. */
-const LARGE_ROWS_PER_READ = 4
 
 const RECOVER_BATCH = 32
 
@@ -48,36 +51,15 @@ const stepRef = makeFunctionReference<'mutation', { profile_id: string }, null>(
   'profileRemovals:step',
 )
 
-type Budget = { rows: number; bytes: number }
-
-const spent = (budget: Budget): boolean => budget.rows <= 0 || budget.bytes <= 0
-
-/** Clears the rows `read` returns until the range is empty (true) or the
- * budget is spent (false). `clear` must move each row out of the range. */
-async function sweep<Row>(
-  budget: Budget,
-  read: (n: number) => Promise<Row[]>,
-  clear: (row: Row) => Promise<void>,
-  perRead: number,
-): Promise<boolean> {
-  while (!spent(budget)) {
-    const n = Math.min(budget.rows, perRead)
-    const rows = await read(n)
-    for (const row of rows) {
-      await clear(row)
-      budget.rows -= 1
-      budget.bytes -= estimateDocumentBytes(row)
-      if (spent(budget)) return false
-    }
-    if (rows.length < n) return true
-  }
-  return false
-}
-
 /** One index range whose rows still name the removed profile. */
 type Edge = {
   /** Clears rows until the range is empty (true) or the budget is spent. */
-  sweep: (ctx: MutationCtx, profileId: string, budget: Budget, now: string) => Promise<boolean>
+  sweep: (
+    ctx: MutationCtx,
+    profileId: string,
+    budget: RemovalBudget,
+    now: string,
+  ) => Promise<boolean>
   /** Whether any row is left in the range. */
   remains: (ctx: MutationCtx, profileId: string) => Promise<boolean>
 }
@@ -111,7 +93,7 @@ const connectionsOf = (ctx: MutationCtx, profileId: string) =>
  * refresh. Its revocation already happened in removeProfile. */
 const oauthEdge: Edge = {
   sweep: async (ctx, profileId, budget) => {
-    while (!spent(budget)) {
+    while (!budgetSpent(budget)) {
       const connection = await connectionsOf(ctx, profileId).first()
       if (connection === null) return true
       const usesCleared = await sweep(
@@ -137,7 +119,8 @@ const oauthEdge: Edge = {
 /* The ranges each phase clears, in order. The SET NULLs keep their rows;
  * the inbox, subscriptions and connections are deleted. */
 const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
-  // archived tasks, and any task restored before this step reached it
+  // open tasks the removal transaction left, archived tasks, and any task
+  // restored before this step reached it
   tasks: TASK_HOLDERS.map((holder) =>
     edge({
       range: (ctx, profileId) => heldTasks(ctx, holder, profileId, false),
@@ -234,7 +217,7 @@ export const step = internalMutation({
     // Archived tasks are stamped with the step's own time, so a task
     // restored after the removal never moves back in time.
     const now = new Date().toISOString()
-    const budget: Budget = { ...REMOVAL_BUDGET }
+    const budget: RemovalBudget = { ...REMOVAL_BUDGET }
     let phase: RemovalPhase = job.phase
     for (;;) {
       if (phase === 'finish') {

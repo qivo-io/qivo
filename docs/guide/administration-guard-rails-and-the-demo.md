@@ -22,7 +22,8 @@ Open **Settings → Organization → Users** to manage account status:
 
 Removing a user takes effect at once. The account loses all access and
 leaves the Users list, its teams, project sharing, project leads and open
-tasks. Qivo then clears it from archived tasks, comments and notifications in
+tasks. If it holds hundreds of open tasks, some are cleared shortly after.
+Qivo then clears it from archived tasks, comments and notifications in
 the background, usually within a few minutes. Until then, an archived task,
 or one restored from the archive in that time, can still show the removed
 user as an unknown person.

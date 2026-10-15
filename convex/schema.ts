@@ -589,8 +589,9 @@ export default defineSchema({
     // An access removal reads only the open tasks of the projects it touches.
     .index('by_project_archived', ['project_id', 'archived_at'])
     .index('by_parent', ['parent_id'])
-    // Profile refs for removeProfile's SET NULLs. A removal clears its open
-    // tasks at once (archived_at absent) and the rest in the background.
+    // Profile refs for removeProfile's SET NULLs. The removal transaction
+    // reads only open tasks (archived_at absent), the background steps the
+    // whole range.
     .index('by_assignee_archived', ['assignee_id', 'archived_at'])
     .index('by_reviewer_archived', ['reviewer_id', 'archived_at'])
     .index('by_created_by_archived', ['created_by', 'archived_at'])
