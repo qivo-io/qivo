@@ -33,6 +33,15 @@ export function spreadWindow(
 /** Week indexes `from` to `to`, both included. */
 export type WeekRange = { from: number; to: number }
 
+let weeksSpread = 0
+
+/** How many week entries committedByWeek has added hours to so far, in this
+    module instance. A test reads it before and after a call to measure the
+    call's work without a clock. */
+export function weeksSpreadSoFar(): number {
+  return weeksSpread
+}
+
 /** Hours the owner is committed to per week, spreading each issue's
     remaining hours evenly across its spread window. `excludeUuid` drops the
     issue being planned so it doesn't compete with itself. `range` limits the
@@ -55,6 +64,7 @@ export function committedByWeek(
     if (per <= 0) continue
     const first = range === undefined ? win.start : Math.max(win.start, range.from)
     const last = range === undefined ? win.end : Math.min(win.end, range.to)
+    if (last >= first) weeksSpread += last - first + 1
     for (let w = first; w <= last; w++) m.set(w, (m.get(w) || 0) + per)
   }
   return m

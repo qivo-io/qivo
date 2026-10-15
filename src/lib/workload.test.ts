@@ -16,6 +16,7 @@ import {
   plannableHoursOf,
   prepareLoadProjection,
   spreadWindow,
+  weeksSpreadSoFar,
 } from './workload'
 
 const item = (o: Partial<LoadItem>): LoadItem => ({
@@ -28,8 +29,6 @@ const item = (o: Partial<LoadItem>): LoadItem => ({
   visible: true,
   ...o,
 })
-
-declare const performance: { now(): number }
 
 /* About as many weeks as a plan from 2026 to the year 9999 runs. */
 const LONG = 416_000
@@ -283,8 +282,8 @@ describe('prepared owner projections', () => {
   })
 
   it('projects against plans that run to the year 9999 at the cost of the weeks it reads', () => {
-    const long = (issueUuid: string, start: number) =>
-      item({ issueUuid, start, end: LONG - 1, remaining: (LONG - start) * 3 }) // 3/wk
+    const long = (issueUuid: string, start: number, end = LONG - 1) =>
+      item({ issueUuid, start, end, remaining: (end - start + 1) * 3 }) // 3/wk
     const own = item({ issueUuid: 'self', start: 0, end: 3, remaining: 40 })
     const two = [long('a', 0), long('b', 2), own]
     const project = prepareLoadProjection(two)
@@ -293,14 +292,18 @@ describe('prepared owner projections', () => {
       expect(project(start, 40, 34, 'self')).toBe(fitEndWeek(start, 40, 34, whole))
     }
     expect(project(100, 40, 34, null)).toBe(fitEndWeek(100, 40, 34, committedByWeek(two)))
-    // twenty such plans would be 8.3 million week entries spread in full,
-    // which takes hundreds of milliseconds here; the weeks read take far
-    // less than one
-    const twenty = [...Array.from({ length: 20 }, (_, i) => long(`p${i}`, i)), own]
-    const started = performance.now()
-    // week 0 has 31 of 34 hours free and week 1 has 28
-    expect(prepareLoadProjection(twenty)(0, 40, 34, 'self')).toBe(1)
-    expect(performance.now() - started).toBeLessThan(50)
+    // Twenty such plans would be 8.3 million week entries spread in full.
+    // The projection spreads only the 64-week block it reads, so plans that
+    // end about two years out cost it the same.
+    const work = (end: number): number => {
+      const twenty = [...Array.from({ length: 20 }, (_, i) => long(`p${i}`, i, end)), own]
+      const before = weeksSpreadSoFar()
+      // week 0 has 31 of 34 hours free and week 1 has 28
+      expect(prepareLoadProjection(twenty)(0, 40, 34, 'self')).toBe(1)
+      return weeksSpreadSoFar() - before
+    }
+    expect(work(LONG - 1)).toBe(work(120))
+    expect(work(LONG - 1)).toBeLessThanOrEqual(21 * 64)
   })
 })
 

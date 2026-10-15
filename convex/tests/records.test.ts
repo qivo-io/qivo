@@ -20,7 +20,7 @@ import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { weekGrid } from '../lib/workload'
+import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { UPLOAD_STORAGE_ID, UPLOAD_TICKET_MISSING } from '../model/attachments'
 import {
@@ -37,12 +37,11 @@ import {
   withOrg,
 } from './helpers.setup'
 
-/* edge-runtime provides Blob and performance; convex/tsconfig's
- * ESNext-only lib does not declare them. */
+/* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
+ * declare it. */
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
 }
-declare const performance: { now(): number }
 
 /* fileTokens reads these lazily (attachments.test.ts plants the same). */
 const g = globalThis as unknown as { process?: { env: Record<string, string | undefined> } }
@@ -922,27 +921,41 @@ describe('workload', () => {
     expect(span).toBeGreaterThan(416_000)
     // ten such plans of 2.5 hours a week, half in a project the agent cannot
     // see, which a full spread would expand fifteen times
+    const planted: Doc<'issues'>[] = []
     for (let i = 0; i < 10; i++) {
-      await task(fx, {
-        ...plan,
-        project_id: i % 2 === 0 ? fx.sub.id : fx.hiddenSub.id,
-        assignee_id: fx.user.id,
-        remaining_hours: span * 2.5,
-      })
+      planted.push(
+        await task(fx, {
+          ...plan,
+          project_id: i % 2 === 0 ? fx.sub.id : fx.hiddenSub.id,
+          assignee_id: fx.user.id,
+          remaining_hours: span * 2.5,
+        }),
+      )
     }
-    // after a first read warms the test backend up, the asked week takes a
-    // few milliseconds here and a full spread hundreds
-    await restLoad(fx, { weeks: '1' })
-    const started = performance.now()
-    const load = await restLoad(fx, { weeks: '1' })
-    expect(performance.now() - started).toBeLessThan(50)
-    expect(person(load, fx.user.id)).toMatchObject({ hours: [25], hidden_hours: [12.5] })
+    /* A read's answer and the week entries it spread (lib/workload.ts
+     * weeksSpreadSoFar), the work, measured without a clock. */
+    const spread = async <R>(read: () => Promise<R>): Promise<{ out: R; weeks: number }> => {
+      const before = weeksSpreadSoFar()
+      const out = await read()
+      return { out, weeks: weeksSpreadSoFar() - before }
+    }
+    // each plan adds the asked week to hours, and each hidden one adds it
+    // again to hidden_hours
+    const one = await spread(() => restLoad(fx, { weeks: '1' }))
+    expect(one.weeks).toBe(15)
+    expect(person(one.out, fx.user.id)).toMatchObject({ hours: [25], hidden_hours: [12.5] })
     // every week of a later window keeps the whole plan's rate
-    const later = await mcpLoad(fx, { from_week: '2031-03-05', weeks: 52 })
-    expect(person(later, fx.user.id)).toMatchObject({
+    const later = await spread(() => mcpLoad(fx, { from_week: '2031-03-05', weeks: 52 }))
+    expect(later.weeks).toBe(15 * 52)
+    expect(person(later.out, fx.user.id)).toMatchObject({
       hours: Array(52).fill(25),
       hidden_hours: Array(52).fill(12.5),
     })
+    // the same plans ending in 2027 cost the asked week the same
+    await fx.t.run(async (ctx) => {
+      for (const row of planted) await ctx.db.patch(row._id, { end_week: '2027-12-27' })
+    })
+    expect((await spread(() => restLoad(fx, { weeks: '1' }))).weeks).toBe(one.weeks)
   })
 
   it('checks the window', async () => {

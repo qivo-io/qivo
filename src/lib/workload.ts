@@ -9,9 +9,10 @@ import {
   type LoadSpan,
   spreadWindow,
   type WeekRange,
+  weeksSpreadSoFar,
 } from '../../convex/lib/workload'
 
-export { committedByWeek, type LoadSpan, spreadWindow, type WeekRange }
+export { committedByWeek, type LoadSpan, spreadWindow, type WeekRange, weeksSpreadSoFar }
 
 /** Capacity when the person is missing; must match the organization default. */
 export const DEFAULT_PLANNABLE_HOURS = 32
