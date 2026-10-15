@@ -45,6 +45,13 @@ and `update_task` name any argument they do not know in
 `ignored_arguments`, so a client with an older catalogue sees what it sent
 in vain.
 
+Parity with the app also added `get_me`; `update_comment` and
+`delete_comment` for comments; `list_inbox`, `update_inbox` and
+`set_following` for the inbox and follows; and `delete_attachment`,
+`list_task_activity` and `get_workload` for files, task history and workload.
+`create_task` now also takes `paused`. A client holding an older catalogue
+does not see these until it refreshes its tool list.
+
 Project parity added `get_project`, `create_project`, `update_project`,
 `set_project_access`, `set_milestone` and `delete_milestone`. A client
 holding an older catalogue does not see them until it refreshes its tool
@@ -127,8 +134,9 @@ only read. One shared rule decides it (`credentialAccess` in
 `convex/lib/access.ts`), and MCP, the REST API and webhook management all use
 it. `get_me` reports the result as `credential.access`:
 
-- A personal token can make changes only when it was created with change
-  access and has not expired.
+- A personal token can make changes only when it has change access and has
+  not expired. Every token the settings page creates today has change access
+  and no expiry date, as described above.
 - An OAuth connection can make changes only with both `qivo:read` and
   `qivo:write`.
 - An agent key can make changes only when its agent's organization role is
@@ -146,17 +154,22 @@ create, list and remove its own [webhook subscriptions](#task-events-and-webhook
 **The Viewer role.** A user whose **organization role** is `viewer`
 (migration 0102) holds a seat and signs in, reads exactly the projects they
 can access directly or through a team, and changes no project. A Viewer
-person's credential may be able to make changes, but every tool that changes
-a project still refuses with the same "your account has no write access to
-that project" a missing grant produces, and they are never handed a task. As
-in the app, a Viewer person may still follow tasks, manage their own inbox and
-edit or delete comments they wrote. It is a ceiling, not a
-grant. It opens no project and only stops any other path (an individual or
-team grant, a project-lead title, a team leadership) from exceeding read. An
-**agent** can be a viewer too, which is how a read-only key is made, with one
-setting on the Users page instead of a grant list audited project by project.
-That key's agent is then refused as a Viewer agent, as described above. The
-cap lives in the shared access layer (`cappedLevel` and `credentialAccess` in
+person's credential may be able to make changes, but every change to a task,
+and every new comment, link or attachment, still refuses with the same `your
+account has no write access to that project` a missing grant produces, and
+they are never handed a task. Changes to a project, its access and milestones,
+project creation, labels, teams and plannable hours refuse a Viewer person
+with each rule's own sentence, the one anyone without that right gets, such as
+`requires lead access to this project` or `only an organization admin or a
+leader of one of this person's teams can set their plannable hours`. As in the
+app, a Viewer person may still follow tasks, manage their own inbox and edit
+or delete comments they wrote. It is a ceiling, not a grant. It opens no
+project and only stops any other path (an individual or team grant, a
+project-lead title, a team leadership) from exceeding read. An **agent** can
+be a viewer too, which is how a read-only key is made, with one setting on the
+Users page instead of a grant list audited project by project. That key's
+agent is then refused as a Viewer agent, as described above. The cap lives in
+the shared access layer (`cappedLevel` and `credentialAccess` in
 `convex/lib/access.ts`), so the same profile is read-only over MCP, over the
 REST API and in the browser alike.
 
@@ -357,7 +370,7 @@ why. What changed, for anyone writing against the endpoint directly:
   `io.modelcontextprotocol/serverInfo`, since no client can be assumed to have
   asked. Every result carries a `resultType`, `"complete"` for all of ours.
 - **`tools/list` and `server/discover` are cacheable.** Both come back with
-  `ttlMs` (an hour) and `cacheScope: "private"` — the tools are
+  `ttlMs` (an hour) and `cacheScope: "private"`. The tools are
   identical for every credential, but the response sits behind a bearer
   token, so cache it per client and never in a shared cache. Stop re-listing
   on every turn.
@@ -639,8 +652,8 @@ lists event definitions, not subscriptions. Organization administrators can use
 REST `GET /v1/webhooks/organization` and `DELETE /v1/webhooks/organization/{id}`
 to inspect and reclaim shared quota with a personal token or OAuth connection.
 Deleting another owner's subscription needs a credential that can make
-changes: a personal token created with change access, or an OAuth connection
-with `qivo:write`. A read-only personal token gets HTTP 403 with
+changes: a personal token with change access, or an OAuth connection with
+`qivo:write`. A read-only personal token gets HTTP 403 with
 `this credential can only read` there, and a read-only OAuth connection gets
 HTTP 403 with `OAuth connection does not have the required scope`. Managing
 your own subscriptions, and
@@ -682,7 +695,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
-| `get_project` | One readable `project` (number/key/uuid): the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name`, or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name`, `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`, plus `ignored_arguments` when you sent arguments the tool does not know, such as `archive_reason`, which only tasks take |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
@@ -730,7 +743,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
   "billing": { "read_only": false, "reason": null },
   "credential": {
     "kind": "personal_token", "access": "write",
-    "expires_at": "2027-01-31T00:00:00.000Z", "name": "Laptop"
+    "expires_at": null, "name": "Laptop"
   }
 }
 ```
@@ -756,8 +769,9 @@ with a cached tool catalogue must refresh discovery or reconnect.
   **Read-only credentials** above). A change still needs the user's project
   permission and an organization that billing does not pause. `name` is the
   token's or key's name, or the connected app's name for OAuth. `expires_at`
-  is a personal token's expiry, and `null` for a token without one, an OAuth
-  connection or an agent key.
+  is a personal token's expiry date, and `null` for a token without one, an
+  OAuth connection or an agent key. Every token the settings page creates
+  today has no expiry date.
 
 The answer never contains a secret, a hash or a display prefix. A read-only
 OAuth connection may call `get_me`, because it only reads.
@@ -804,16 +818,19 @@ organization admin and names someone else as lead of a top-level project
 gets User access to it, as in the app. The tool takes no grants; add them
 with `set_project_access`.
 
-**Changing.** `update_project` needs Lead access. In one call it restores
-(`archived: false`) or archives (`archived: true`) first, then applies the
-fields and the lead, so a lead can archive a project and hand it over
-together. Archiving a top-level project carries its active sub-projects, and
-restoring brings back the ones archived with it. A lead
+**Changing.** `update_project` needs Lead access (`requires lead access to
+this project`). A lead handover alone on a top-level project follows the rule
+for managing its users instead, so someone who is neither an organization
+admin nor its lead gets `no permission to manage users on this project`. In
+one call it restores (`archived: false`) or archives (`archived: true`) first,
+then applies the fields and the lead, so a lead can archive a project and hand
+it over together. Archiving a top-level project carries its active
+sub-projects, and restoring brings back the ones archived with it. A lead
 handover keeps the outgoing lead as User and drops the new lead's own grant,
 and only a person may make one. A project takes no archive reason, as in the
 app, where only archiving a task asks for one. `update_project` does not know
-`archive_reason`, so a call that sends it still archives the project and
-names the argument in `ignored_arguments`.
+`archive_reason`, so a call that sends it still archives the project and names
+the argument in `ignored_arguments`.
 
 **Access.** `set_project_access` names exactly one of `user_id` and
 `team_id` (uuids from `list_users` and `list_teams`). It needs a person who is
@@ -850,7 +867,11 @@ you)`. Both need Edit access on the top-level project, and an archived
 project takes no new milestone. Results are `{id, name, date, project_id,
 created}` and `{deleted: true, id}`.
 
-Every change writes the app's activity row, signed `via MCP`.
+Creating, renaming, archiving and restoring a project, handing over its lead,
+changing its access and changing its milestones write the app's activity
+rows, signed `via MCP`. Changes to the description, review time or delay
+tracking write none, as in the app. A call that renames a project and hands
+over its lead writes only `renamed`.
 
 ### Teams
 
@@ -906,7 +927,7 @@ MCP`.
 ### Task results
 
 `list_tasks` rows and `get_task` share these fields besides the task's own
-columns: `owner_id` (whose work it is: the reviewer while the task is in
+columns: `owner_id` (whose work it is, the reviewer while the task is in
 `review` with one, else the assignee, and always the assignee on a group),
 `parent_id` with `has_hidden_parent`, `start_week` and `end_week`, and `url`,
 the address the app's **Copy link** gives. `parent_id` is the parent's uuid
@@ -933,15 +954,15 @@ you can read, at any depth.
 who does, by name, as the app's follower list shows them. `attachments`
 lists the task's files, described under [Attachments](#attachments).
 
-`subtasks` are the direct subtasks you can read, by number: the active ones
-of an active task, and all of them for an archived task. `links` are the
+`subtasks` are the direct subtasks you can read, by number. An active task
+lists its active ones, and an archived task lists all of them. `links` are the
 task's links whose other task you can read, `kind` as seen from this task.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
-is the remaining time the app shows: the sum over its unfinished subtasks at
-any depth that you can read, or `null` when none has hours. Like the group's
-dates, it counts only active subtasks of an active group, leaves out
-subtasks in archived projects while the group's project is active, and stops
-at a subtask you cannot read.
+is the remaining time the app shows, which is the sum over its unfinished
+subtasks at any depth that you can read, or `null` when none has hours. Like
+the group's dates, it counts only active subtasks of an active group, leaves
+out subtasks in archived projects while the group's project is active, and
+stops at a subtask you cannot read.
 
 ### Moving, parents and labels
 
@@ -1146,8 +1167,9 @@ with `all: true` to every item:
 - `remove` removes the items. With `all`, it removes every read message
   except snoozed ones and leaves unread messages alone.
 - `snooze` hides the items until `until`, an ISO date-time in the future and
-  at most a year ahead, and leaves them unread. `until: null` brings snoozed
-  items back now. A new update on the task brings its item back too.
+  at most a year ahead, and marks them unread, so they return bold.
+  `until: null` brings snoozed items back now. A new update on the task
+  brings its item back too.
 
 The result is `{ "action": "read", "tasks": ["QN-3"], "has_more": false }`,
 where `tasks` lists the items the call changed. With `all`, each call
@@ -1162,11 +1184,12 @@ The nightly cleanup removes read messages after your retention period, which
 a person sets in the app. An agent has no settings page, so its read
 messages are removed after 7 days. Unread messages are never removed by it.
 
-Only an active Standard user agent has an inbox. A Viewer agent and an
-Inactive one cannot mark messages read or remove them, so Qivo sends them no
-messages and does not make them followers, whether by a mention, a comment,
-an assignment or a project lead. Messages they already hold stay, and they
-receive new ones again once the agent is an active Standard user.
+Only an active Standard user agent receives inbox messages. A Viewer agent
+and an Inactive one cannot mark messages read or remove them, so Qivo sends
+them no messages and does not make them followers, whether by a mention, a
+comment, an assignment or a project lead. Messages they already hold stay. A
+Viewer agent can still read them with `list_inbox`, and both receive new ones
+again once the agent is an active Standard user.
 
 ### Import attribution
 
@@ -1230,16 +1253,12 @@ does not know is dropped before the tool runs, so a client still sending
 `estimate_hours` changes nothing; both tools name it in
 `ignored_arguments`. Update the client. A task **with
 active subtasks** has no remaining time of its own (0066; archived
-subtasks stopped counting in 0070): `update_task` with a
-non-null `remaining_hours` for one is an error — usually "remaining_hours
-cannot be set on a task with subtasks — it is the sum of their remaining
-time", though when every subtask lives in a project hidden from your
-account the model guard surfaces instead ("a task with
-subtasks has no remaining time of its own — it shows the sum of its
-subtasks") — so match on "remaining time", not the exact sentence. `null`
-passes as a no-op. The hours live on the subtasks, and the app shows the
-parent's value as the sum over its unfinished subtasks; such tasks read back
-`remaining_hours: null`.
+subtasks stopped counting in 0070). `update_task` with a non-null
+`remaining_hours` for one is refused with `remaining_hours cannot be set on a
+task with subtasks — it is the sum of their remaining time`, also when you
+cannot read the subtasks. `null` passes as a no-op. The hours live on the
+subtasks, and the app shows the parent's value as the sum over its unfinished
+subtasks; such tasks read back `remaining_hours: null`.
 
 Tasks also read back `remaining_set_at` (0072) — the server-stamped moment
 `remaining_hours` was last saved. A remaining time is a measurement, and the
@@ -1250,12 +1269,15 @@ any tool schema, so the server drops it like every unknown argument and
 `update_task` lists it in `ignored_arguments`.
 
 A task that enters `review`, created there or moved there, gets its project's
-review time as `remaining_hours` (2 hours unless the project lead sets
-another in the app), with a fresh `remaining_set_at` even when the hours are
-unchanged. A non-null `remaining_hours` in the same call wins; `null` or no
-value takes the review time. Leaving `review` keeps whatever is left, and a
-call that stays in `review` changes nothing. `update_task` does not add
-`remaining_hours` to `updated` for this; read the task back to see it.
+review time as `remaining_hours`. That is `effective_review_hours` in
+`get_project`, 2 hours unless a lead sets another in the app or with
+`update_project` (see [Projects, access and
+milestones](#projects-access-and-milestones)). The task gets a fresh
+`remaining_set_at` even when the hours are unchanged. A non-null
+`remaining_hours` in the same call wins; `null` or no value takes the review
+time. Leaving `review` keeps whatever is left, and a call that stays in
+`review` changes nothing. `update_task` does not add `remaining_hours` to
+`updated` for this; read the task back to see it.
 
 Archived tasks (0070) are a separate axis from `status`: they leave the
 default `list_tasks` result, stop counting as workload, and in the app live
@@ -1282,8 +1304,9 @@ everything it had, but it is not part of the working set: it is absent from
 refused with a sentence naming the project to restore. Naming a LIVE project
 asks for it as it stands, so a sub-project archived out of it stays out;
 naming an archived one asks for it as it was put away, and everything under
-it comes. There is no tool that archives or restores a project — that is a
-project lead's decision, taken in Settings.
+it comes. A project lead archives or restores a project with `update_project`
+(`archived: true` or `false`), as in the project's settings in the app, and
+REST does the same with `PATCH /v1/projects/{ref}`.
 
 Mentions (0074/0075/0114): description and comment markdown may carry the
 app's mention form — `@[Display Name](user:<profile uuid>)` (uuids from
@@ -1308,8 +1331,9 @@ else's inbox or follows; theirs change only through the messages and
 subscriptions described above. The server does the rest, inside the same
 transaction as the write.
 Unknown/out-of-org uuids, users without visibility into the project and
-agents without an inbox (Viewer or Inactive agents) are silently skipped — a
-subscription never outlives the project access that justified it.
+agents that receive no inbox messages (Viewer or Inactive agents) are
+silently skipped, so a subscription never outlives the project access that
+justified it.
 
 Tool errors are readable sentences ("not found (or not visible to you)",
 "your account has no write access to that project") — a denial by the access

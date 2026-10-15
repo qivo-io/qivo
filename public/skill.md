@@ -30,14 +30,17 @@ whether billing has paused changes, and what this credential may do:
 
 - `credential.access` is `write` when the credential can make changes and
   `read` when it can only read. Do not plan changes with a read-only
-  credential.
+  credential. Personal tokens created in the app today can make changes and
+  never expire; a choice of read-only access and an expiry date is planned.
 - `billing.read_only: true` means every change is refused until an
   organization admin restores billing; `billing.reason` says so.
 - `organization.week_start` is the first day of every planning week, `0`
   (Sunday) through `6` (Saturday). `organization.slug` is the organization's
   part of browser links.
 
-A write also needs Edit access on the project, as described below.
+Changing a task also needs User or Lead access on its project, and changing a
+project's settings needs Lead access. Following a task, your inbox and your
+own comments need only read access to the task.
 
 ## Choose the interface
 
@@ -178,16 +181,16 @@ Useful field rules:
 ## Subtasks, moves, links and labels
 
 - **Subtask:** create the task with `parent` set to the parent's task
-  reference. You need Edit access on the parent's project, because the
-  parent becomes a group and loses its own remaining hours. Change the
-  parent later with `parent` on `update_task` or PATCH, or detach it with
+  reference. You need User or Lead access on the parent's project, because the
+  parent becomes a group and loses its own remaining hours. Change the parent
+  later with `parent` on `update_task` or PATCH, or detach it with
   `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list `subtasks`; a
   `parent_id` of `null` with `has_hidden_parent: true` means the parent
   exists but you cannot read it.
 - **Move:** send `project`, and `sub_project` when `project` names a
-  meta-project, on `update_task` or PATCH. You need Edit access on both
-  sub-projects, and the task's assignee and reviewer must be able to work in
-  the destination; reassign first if they cannot. The task keeps its key.
+  meta-project, on `update_task` or PATCH. You need User or Lead access on
+  both sub-projects, and the task's assignee and reviewer must be able to work
+  in the destination; reassign first if they cannot. The task keeps its key.
 - **Link:** `set_task_link` with `ref`, `other`, `kind` (`blocks`,
   `blocked_by` or `relates`, as seen from `ref`) and `linked`, or the REST
   links routes. Two tasks share at most one link; remove a link before
@@ -214,7 +217,7 @@ Useful field rules:
   hour. The organization's per-file limit is `max_attachment_mb` in
   `get_me`.
 - **Delete a file:** `delete_attachment` or
-  `DELETE /v1/tasks/{ref}/attachments/{id}`, with Edit access to the
+  `DELETE /v1/tasks/{ref}/attachments/{id}`, with User or Lead access to the
   project. Description images are left to the app. When you rewrite a
   description, keep its `![alt](att:<id>)` references. The next time someone
   saves that description in the app, the app deletes every image uploaded
@@ -223,9 +226,11 @@ Useful field rules:
   answers who changed what, oldest first. Comments are in `list_comments`.
 - **Workload:** `get_workload` or `GET /v1/workload` answers each person's
   planned hours per week (`hours`, aligned with `week_starts`) beside their
-  `plannable_hours`. Use it before assigning or scheduling work. `hours`
-  already includes work in projects hidden from you, and `hidden_hours` is
-  that part of `hours`, without names. Do not add the two.
+  `plannable_hours`. Use it before assigning or scheduling work. For
+  organization admins and Standard users, `hours` already includes work in
+  projects hidden from you, and `hidden_hours` is that part of `hours`,
+  without names. Do not add the two. Viewers and guests get only work they
+  can see or own.
 
 ## Comments, inbox and following
 
@@ -250,8 +255,8 @@ Useful field rules:
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
   items back). Mark items read once you have handled them, so new updates
   stand out. Unread messages are never removed automatically; an agent's read
-  messages are removed after 7 days. A Viewer agent has no inbox and receives
-  no messages.
+  messages are removed after 7 days. A Viewer agent receives no new messages
+  and cannot clear its inbox, but can still read the messages it holds.
 
 ## Projects, access and milestones
 

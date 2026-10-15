@@ -107,9 +107,9 @@ Anyone with access to the task can see its subscriber list, including viewers.
 
 Organization admins and the named project lead can remove other subscribers
 with **×** or use **+ Add** to subscribe an active person or Standard user
-agent who can access the task. Viewer agents have no inbox and cannot be
-added. People who later lose access remain listed and can be removed.
-Managing subscribers does not give access to anyone's inbox.
+agent who can access the task. Viewer agents receive no new messages and
+cannot be added. People who later lose access remain listed and can be
+removed. Managing subscribers does not give access to anyone's inbox.
 
 Qivo subscribes you when you are assigned or handed a task, mentioned on it,
 or comment on it. Creating a task alone does not subscribe you. Removing you

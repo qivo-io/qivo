@@ -80,9 +80,10 @@ The secret is shown exactly once, at creation. Only its SHA-256 digest and a
 safe display identifier (for an agent key the first 7 and last 5 characters,
 such as `qva_012...abcde`) are stored. A revoked key or token stops working
 immediately, and so does **every** credential of a user switched to Inactive.
-A personal token may also carry an expiry date, after which it is refused like
-a revoked one. `GET /v1/me` reports which credential a request used and what it
-may do.
+A personal token with an expiry date is refused after that date, like a
+revoked one. The app does not offer an expiry date yet, so every token created
+there today never expires; a choice is planned. `GET /v1/me` reports which
+credential a request used and what it may do.
 
 `401` means the credential is missing, unknown, revoked, expired or belongs to
 a deactivated user. The sentence depends on the credential:
@@ -122,17 +123,19 @@ A readable project the user cannot write answers `403` with
 
 **Read-only credentials.** Every credential either can make changes or can
 only read, by the same rule as on MCP (`credentialAccess` in
-`convex/lib/access.ts`). A personal token can make changes only when it was
-created with change access and has not expired; a token stored without an
-access setting can only read. An agent key can make changes only when its
-agent's organization role is `user`. A read-only credential still reads
-everything its user can, and every project comes back
-`"access": { "read": …, "write": false }`. Every `POST`, `PUT`, `PATCH` and
-`DELETE` request returns `403` with `{"error": "this credential can only read"}` for a
-personal token and `{"error": "this agent is a Viewer and can only read"}` for
-a Viewer agent's key, before Qivo resolves any reference, so the answer is
-the same whether or not the reference exists. Managing the credential's own
-webhooks remains allowed.
+`convex/lib/access.ts`). A personal token can make changes only when it has
+change access and has not expired; a token stored without an access setting
+can only read. Every token created in the app today has change access and
+never expires, and a choice of read-only access and an expiry date is planned.
+An agent key can make changes only when its agent's organization role is
+`user`. A read-only credential still reads everything its user can, and every
+project comes back `"access": { "read": …, "write": false }`. Every `POST`,
+`PUT`, `PATCH` and `DELETE` request returns `403` with
+`{"error": "this credential can only read"}` for a personal token and
+`{"error": "this agent is a Viewer and can only read"}` for a Viewer agent's
+key, before Qivo resolves any reference, so the answer is the same whether or
+not the reference exists. Managing the credential's own webhooks remains
+allowed.
 
 **Two different things are spelled `viewer`.** The one above is a **project
 role** — a grant on one project, reported in that project's `access` flags.
@@ -149,17 +152,20 @@ holds there. For an agent that makes its key a read-only credential, so every
 `{"error": "this agent is a Viewer and can only read"}` before Qivo resolves
 any project or task reference. That is how a read-only key is made, with one
 setting on the Users page rather than a grant list audited project by project.
-A Viewer person's token may be able to make changes, but every write to a
-project still refuses with `your account has no write access to that project`
-(or the plannable hours rule's own sentence), the refusal a missing grant
-produces. As in the app, a Viewer person may still follow tasks, manage their
-own inbox and edit or delete comments they wrote.
-Nothing in this surface implements either rule. They live in the shared
-access layer (`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`),
-which REST, MCP and webhook management all call, so the same user is
-read-only here, over MCP and in the browser alike. A Standard user agent
-(`org_role` `user`) that holds only a `viewer` project role gets
-`this agent has no write access to that project` on that project instead.
+A Viewer person's token may be able to make changes, but every change to a
+task, and every new comment, link or attachment, still refuses with `your
+account has no write access to that project`, the refusal a missing grant
+produces. Changes to a project, its access and milestones, project creation,
+labels, teams and plannable hours refuse a Viewer person with each rule's own
+sentence, the one anyone without that right gets, such as `requires lead
+access to this project`. As in the app, a Viewer person may still follow
+tasks, manage their own inbox and edit or delete comments they wrote. Nothing
+in this surface implements either rule. They live in the shared access layer
+(`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`), which REST,
+MCP and webhook management all call, so the same user is read-only here, over
+MCP and in the browser alike. A Standard user agent (`org_role` `user`) that
+holds only a `viewer` project role gets `this agent has no write access to
+that project` on that project instead.
 
 > **Migration note.** Org-level `qv_` keys, with their own per-project
 > read/write grant list, were removed in migration 0100. They authenticated
@@ -222,8 +228,8 @@ GET /v1/me   → who this credential acts as, its organization's settings,
 ```
 
 A personal token answers its person, with `email` set, and for example
-`"credential": { "kind": "personal_token", "access": "read",
-"expires_at": "2027-01-31T00:00:00.000Z", "name": "Reporting script" }`.
+`"credential": { "kind": "personal_token", "access": "write",
+"expires_at": null, "name": "Reporting script" }`.
 
 Call it first. It tells a client who it is, how the organization's calendar
 works and whether it can make changes, before it plans a request that would
@@ -249,14 +255,13 @@ be refused.
   `reason` is then the sentence every write is refused with, otherwise
   `null`. No plan, price or usage is included.
 - `credential.access` is `write` when this credential may make changes and
-  `read` when it can only read, such as a read-only personal token or a
-  Viewer agent's key. It is the same rule that refuses writes (see
-  Authentication). A write still needs Edit access on the project and an
-  organization that billing does not pause.
+  `read` when it can only read, such as a Viewer agent's key. It is the same
+  rule that refuses writes (see Authentication). A write still needs Edit
+  access on the project and an organization that billing does not pause.
 - `credential.kind` is `agent_key` or `personal_token`, and `name` is the
-  key's or token's name. `expires_at` is a personal token's expiry, and
-  `null` for a token without one or an agent key, because agent keys do not
-  expire.
+  key's or token's name. `expires_at` is a personal token's expiry date, or
+  `null`. It is `null` for an agent key, which never expires, and for every
+  token created in the app today.
 
 The response never contains a secret, a hash or a display identifier.
 
@@ -395,8 +400,10 @@ read, `access` flags included.
   characters, and `null` means none.
 - The body takes no grants. `access` and `team_access` are refused with
   `give access one user or team at a time, under /v1/projects/{ref}/access`,
-  and `key` with `a project's key comes from its name and cannot be written`.
-  Other unknown fields are ignored.
+  `key` with `a project's key comes from its name and cannot be written`, and
+  `parent_id` and `type` with `a project's parent is set when it is created,
+  with parent`. Send `parent` to create a sub-project. Other unknown fields
+  are ignored.
 
 #### Changing a project
 
@@ -408,7 +415,10 @@ PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 
 
 Every field is optional, and the answer is the single-project read. Changing a
 project needs Lead access (`requires lead access to this project`), which
-organization admins have.
+organization admins have. A lead handover alone on a top-level project
+follows the rule for managing its users instead, so someone who is neither an
+organization admin nor its lead gets `no permission to manage users on this
+project`.
 
 - `review_hours` is a number of hours from 0 to 999, kept to 0.1 h, or `null`
   to use the parent's or the default again.
@@ -425,15 +435,20 @@ organization admins have.
   with `only people can change who has access, not agents`. The outgoing lead
   keeps User access, and the new lead's own grant goes, because the lead role
   carries their access.
-- `key`, `parent`, `parent_id`, `type`, `access` and `team_access` are
-  refused. Other unknown fields are ignored, and a body with nothing to
-  change is a `400`.
+- `key`, `access` and `team_access` are refused with the sentences `POST`
+  gives them, and `parent`, `parent_id` and `type` with `a project's parent
+  is set when it is created, with parent`. Other unknown fields are ignored,
+  and a body with nothing to change is a `400` (`no recognized fields to
+  update`).
 
-Each change writes the app's activity row (`created`, `renamed`, `changed the
-lead of`, `archived`, `restored`), signed with the provenance described under
-[Side effects and audit trail](#side-effects-and-audit-trail). Deleting a
-project, inviting a guest by email and changing a project's icon stay in the
-app.
+Creating, renaming, archiving and restoring a project and handing over its
+lead write the app's activity rows (`created`, `renamed`, `archived`,
+`restored`, `changed the lead of`), signed with the provenance described
+under [Side effects and audit trail](#side-effects-and-audit-trail). Changes
+to the description, review time or delay tracking write none, as in the app.
+A request that renames a project and hands over its lead writes only
+`renamed`. Deleting a project, inviting a guest by email and changing a
+project's icon stay in the app.
 
 ### Project access
 
@@ -610,9 +625,10 @@ Two rows of that list — a person, and an agent:
 ```
 
 `kind` is `"person"` or `"agent"`; an agent finds *itself* in this list,
-and `GET /v1/me` answers its own row directly. `org_role` is the **organization** role —
-`"admin"` · `"user"` · `"viewer"` · `"guest"` — never a project role; what
-someone holds on a given project is that project's `access` flags.
+and `GET /v1/me` answers its own row directly. `org_role` is the
+**organization** role, `"admin"`, `"user"`, `"viewer"` or `"guest"`, and never
+a project role. What someone holds on a given project is that project's
+`access` flags.
 
 That is the whole shape. It carries **no email address**, no auth id, and no
 profile picture, deliberately: a roster of addresses is exactly the sort of
@@ -733,7 +749,7 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
                                            (status=todo,progress)
        &assignee=<profile-uuid>            the stored assignee, also while
                                            a reviewer owns the task
-       &owner=<profile-uuid>               whose work it is: the reviewer
+       &owner=<profile-uuid>               whose work it is, the reviewer
                                            while the task is in review with
                                            one, else the assignee
        &search=text                        matches fragments of the fields the
@@ -766,6 +782,10 @@ anywhere inside a word. These are the fields the app's task filter searches.
 `search=in%20progress%20anna` finds Anna's tasks in progress.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
 literal.
+
+The list comes in creation order, oldest first, with tasks created at the
+same moment ordered by number, so `offset` pages through it. MCP's
+`list_tasks` orders by project key and task number instead.
 
 
 POST body — `project` (uuid, number or key) and `title` are required. Tasks live in
@@ -856,19 +876,19 @@ Other unknown fields are ignored; invalid values are rejected with `400` and
 a message.
 
 **Moving a task.** `project` and `sub_project` on PATCH move the task, named
-exactly as on POST: the destination sub-project directly as `project`, or its
-project as `project` and the sub-project as `sub_project`. `sub_project`
+exactly as on POST. Name the destination sub-project directly as `project`, or
+its project as `project` and the sub-project as `sub_project`. `sub_project`
 without `project` is a `400`. The move follows the app's Move dialog. The
-caller needs Edit access on both the current and the destination
-sub-project; a readable destination it cannot write answers `403`, and one it
-cannot read answers like an unknown one. An archived destination is a `400`.
-The task's assignee, and the reviewer of a task without subtasks, must be
-able to work in the destination, and everyone assigned to or reviewing its
-active subtasks must be able to see it; otherwise the PATCH is a `400` and
-nothing changes. A group's own reviewer who cannot work there is cleared. A new `assignee_id` or `reviewer_id` in
-the same PATCH is checked against the destination. A moved task keeps its
-number, its labels, its links and its subtasks, which stay in their own
-sub-projects. Naming the current sub-project changes nothing.
+caller needs Edit access on both the current and the destination sub-project;
+a readable destination it cannot write answers `403`, and one it cannot read
+answers like an unknown one. An archived destination is a `400`. The task's
+assignee, and the reviewer of a task without subtasks, must be able to work in
+the destination, and everyone assigned to or reviewing its active subtasks
+must be able to see it; otherwise the PATCH is a `400` and nothing changes. A
+group's own reviewer who cannot work there is cleared. A new `assignee_id` or
+`reviewer_id` in the same PATCH is checked against the destination. A moved
+task keeps its number, its labels, its links and its subtasks, which stay in
+their own sub-projects. Naming the current sub-project changes nothing.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
 and `null` detaches it. The rules are those of `parent` on POST. Setting the
@@ -956,13 +976,15 @@ unchanged value writes nothing), clears the stamp with the hours, and ignores
 any `remaining_set_at` a client sends (unknown-field rule).
 
 **Review time.** A task that enters `review`, whether created there by POST or
-moved there by PATCH, gets its project's review time as `remaining_hours`
-(2 h unless the project lead sets another in the app), with a fresh
-`remaining_set_at` even when the hours are unchanged. A non-null
+moved there by PATCH, gets its project's review time as `remaining_hours`,
+with a fresh `remaining_set_at` even when the hours are unchanged. The review
+time is the project's `effective_review_hours` in the
+[single-project read](#projects), 2 h unless a lead sets another in the app
+or with [`PATCH /v1/projects/{ref}`](#changing-a-project). A non-null
 `remaining_hours` in the same request wins; `null` or no value takes the
 review time. Leaving `review` keeps whatever remaining time is there, and a
 PATCH that stays in `review` changes nothing. A group cannot change status,
-so it never gets one. The review time is not exposed on the project routes.
+so it never gets one.
 
 PATCH also accepts `archived: true | false` (0070 — the Active/Archived axis,
 orthogonal to `status`). Archiving a task archives its subtasks with it;
@@ -983,10 +1005,11 @@ a no-op `200` returning the full task. Sending `archived` on POST is a `400` —
 are created active. In the app, archiving unfinished work requires a written
 reason, which becomes a comment. The API does not require one, but
 `archive_reason` (a string) in a PATCH with `archived: true` posts it the
-same way: a comment by the caller, trimmed, at the moment of the archive. It
-is posted only when that PATCH archives the task, so not for a task that was
-already archived, and a blank reason posts nothing. `archive_reason` without
-`archived: true` is a `400` (`archive_reason needs archived set to true`).
+same way, as a comment by the caller, trimmed, at the moment of the archive.
+It is posted only when that PATCH archives the task, so not for a task that
+was already archived, and a blank reason posts nothing. `archive_reason`
+without `archived: true` is a `400` (`archive_reason needs archived set to
+true`).
 
 Task shape of a list row from `GET /v1/tasks`:
 
@@ -1029,7 +1052,7 @@ everyone who does, by name, as the app's follower list shows them. See
 [Following](#following). `attachments` lists the task's files with download
 links, in the shape [Attachments](#attachments) describes.
 
-`owner_id` is whose work the task is: the reviewer while the task is in
+`owner_id` is whose work the task is. It is the reviewer while the task is in
 `review` with a reviewer set, else the assignee, and always the assignee on a
 group. `url` is the address the app's **Copy link** gives. `parent_id` is
 the parent task's uuid when the caller can read the parent. Otherwise it is
@@ -1037,24 +1060,24 @@ the parent task's uuid when the caller can read the parent. Otherwise it is
 caller cannot read is not mistaken for a top-level task.
 
 The single-task fields name only tasks the caller can read. `subtasks` lists
-the direct subtasks it can read, by number: the active ones of an active
-task, and all of them for an archived task. `links` lists the task's links
+the direct subtasks it can read, by number. An active task lists its active
+ones, and an archived task lists all of them. `links` lists the task's links
 whose other task it can read, with `kind` as seen from this task (`blocks`,
 `blocked_by` or `relates`). `labels` are ordered by name.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
-is the remaining time the app shows: the sum over the unfinished subtasks at
-any depth that the caller can read, `null` when none has hours. Like the
-group's dates, it counts only active subtasks of an active group, leaves out
-subtasks in archived projects while the group's project is active, and stops
-at a subtask the caller cannot read. `is_group` still reports subtasks the
-caller cannot read, without identifying them. Their dates do not count
-toward the group's `start_week` and `end_week`.
+is the remaining time the app shows, which is the sum over the unfinished
+subtasks at any depth that the caller can read, or `null` when none has hours.
+Like the group's dates, it counts only active subtasks of an active group,
+leaves out subtasks in archived projects while the group's project is active,
+and stops at a subtask the caller cannot read. `is_group` still reports
+subtasks the caller cannot read, without identifying them. Their dates do not
+count toward the group's `start_week` and `end_week`.
 
 `DELETE` returns `{ "deleted": true, "id": "…", "key": "QN-3" }`.
 
 ### Links
 
-Two tasks of the organization share at most one link: one blocks the other,
+Two tasks of the organization share at most one link. One blocks the other,
 or they relate. A link's `kind` is always read from the task in the path:
 
 ```
@@ -1070,7 +1093,7 @@ number or uuid` for `task`, `404` for `{other}`); two readable tasks
 without Edit access on either answer `403`. `POST` answers `201` with the
 link as seen from `{ref}`, in the single-task `links` shape. Sending the
 same link again changes nothing, while a different link between the same
-two tasks is a `400` (`these tasks are already linked`): remove it first. A
+two tasks is a `400` (`these tasks are already linked`). Remove it first. A
 task cannot be linked to itself. `DELETE` answers `{ "removed": true |
 false, "kind": "…", "id": "…", "key": "QN-9", "title": "…", "status": "…" }`
 naming the other task; `removed` is `false` when no link of that kind
@@ -1121,17 +1144,17 @@ DELETE /v1/comments/{id}                                           (write)
 }
 ```
 
-A comment created here is authored by **the caller**: the agent itself for
-an agent key, the person for a personal token. An agent is a user, so it
-speaks under its own name instead of landing as the anonymous "Someone" an
-org-level key used to produce. Attribution is still server-stamped precisely
-so it cannot be forged: passing `author`/`author_id` is rejected with `400`
-(`comments cannot be attributed over the API — a comment is always authored
-by the agent posting it`, or for a personal token `comments cannot be
-attributed over the API; a comment is always authored by the person posting
-it`). You are only ever yourself. `POST` returns `201`
-with the created comment; a blank `body` is a `400`. Comments are deleted
-with their task.
+A comment created here is authored by **the caller**, which is the agent
+itself for an agent key and the person for a personal token. An agent is a
+user, so it speaks under its own name instead of landing as the anonymous
+"Someone" an org-level key used to produce. Attribution is still
+server-stamped precisely so it cannot be forged, and passing
+`author`/`author_id` is rejected with `400` (`comments cannot be attributed
+over the API — a comment is always authored by the agent posting it`, or for
+a personal token `comments cannot be attributed over the API; a comment is
+always authored by the person posting it`). You are only ever yourself. `POST` returns `201` with
+the created comment; a blank `body` is a `400`. Comments are deleted with
+their task.
 
 `PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
@@ -1170,8 +1193,8 @@ routes](#inbox).
 All of it happens server-side, inside the same transaction as the write, so
 it needs nothing from the caller; unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
-project and agents without an inbox (see [Inbox](#inbox)) — a subscription
-never outlives the project access that justified it.
+project and agents that receive no inbox messages (see [Inbox](#inbox)), so a
+subscription never outlives the project access that justified it.
 
 Every write here is the caller's, and the server is what says so. Each
 endpoint is one internal function — resolve the ref, check the rules, make
@@ -1207,9 +1230,9 @@ or comments on it, as described under [Comments](#comments).
 
 ### Inbox
 
-The caller's own inbox, the same items the app's **Inbox** shows: one item
-per active task the caller can read, holding the messages about that task
-the caller has not removed.
+The caller's own inbox, with the same items the app's **Inbox** shows. Each
+item is one active task the caller can read and holds the messages about
+that task the caller has not removed.
 
 ```
 GET  /v1/inbox                 items, latest activity first (read)
@@ -1288,11 +1311,12 @@ retention period, which a person sets in the app. An agent has no settings
 page, so its read messages are removed after 7 days. Unread messages are
 never removed by it.
 
-Only an active Standard user agent has an inbox. A Viewer agent and an
-Inactive one cannot mark messages read or remove them, so Qivo sends them no
-messages and does not make them followers, whether by a mention, a comment,
-an assignment or a project lead. Messages they already hold stay, and they
-receive new ones again once the agent is an active Standard user.
+Only an active Standard user agent receives inbox messages. A Viewer agent
+and an Inactive one cannot mark messages read or remove them, so Qivo sends
+them no messages and does not make them followers, whether by a mention, a
+comment, an assignment or a project lead. Messages they already hold stay. A
+Viewer agent can still read them with `GET /v1/inbox`, and both receive new
+ones again once the agent is an active Standard user.
 
 ### Attachments
 
@@ -1820,7 +1844,7 @@ Standard Webhooks signatures and delivery queue as
 [MCP Events](mcp.md#task-events-and-webhook-delivery). Authenticate these routes
 with the owning agent key, personal token or a current OAuth access token for
 the owning connection. OAuth requires `qivo:read`. Read-only credentials, such
-as a Viewer agent's key or a personal token created without change access,
+as a Viewer agent's key or a personal token without change access,
 can create, list and remove their own subscriptions without gaining rights to
 change tasks. An expired personal token gets `401`.
 
@@ -1888,8 +1912,8 @@ The `/v1/webhooks/organization` routes require a personal token or OAuth
 connection belonging to an active person with the organization administrator
 role. Agent keys cannot use these routes. Deleting another owner's
 subscription changes shared state, so it also needs a credential that can
-make changes: a personal token created with change access, or an OAuth
-connection with `qivo:write`. A read-only
+make changes: a personal token with change access, or an OAuth connection
+with `qivo:write`. A read-only
 personal token gets `403` with `{"error": "this credential can only read"}`
 and a read-only OAuth connection gets
 `OAuth connection does not have the required scope`. Listing works with a
