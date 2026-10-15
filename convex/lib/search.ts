@@ -6,9 +6,16 @@
 import type { IssuePriority, IssueStatus } from './enums'
 import { PRIORITY_NAMES, STATUS_NAMES } from './taskRefs'
 
-export function allWordsMatcher(query: string, stars = false): (hay: string) => boolean {
+/* Each whitespace-separated fragment of `query`, lowercased and split into
+ * the pieces that must occur in it in order, at every `*` with `stars` and
+ * nowhere without. */
+function searchFragments(query: string, stars: boolean): string[][] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-  const fragments = words.map((word) => (stars ? word.split('*') : [word]))
+  return words.map((word) => (stars ? word.split('*') : [word]))
+}
+
+export function allWordsMatcher(query: string, stars = false): (hay: string) => boolean {
+  const fragments = searchFragments(query, stars)
   return (hay) => {
     const h = hay.toLowerCase()
     return fragments.every((parts) => {
@@ -25,6 +32,17 @@ export function allWordsMatcher(query: string, stars = false): (hay: string) => 
 
 export function matchesAllWords(hay: string, query: string): boolean {
   return allWordsMatcher(query)(hay)
+}
+
+/**
+ * The distinct non-empty pieces of `query`'s fragments, lowercased, as
+ * allWordsMatcher reads them. A piece holds no whitespace, so it never spans
+ * the line between two taskSearchText fields, and leaving out a field that
+ * contains none of these pieces never changes whether a task matches. A
+ * query with no pieces (blank, or only `*` with `stars`) matches any text.
+ */
+export function searchPieces(query: string, stars = false): string[] {
+  return [...new Set(searchFragments(query, stars).flat())].filter(Boolean)
 }
 
 /** What a task search reads about one task, as the reader knows it. */
