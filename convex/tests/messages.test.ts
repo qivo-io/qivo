@@ -13,12 +13,14 @@
 /// <reference types="vite/client" />
 
 import type { FunctionArgs } from 'convex/server'
+import { convexTest } from 'convex-test'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MessageKind } from '../lib/enums'
 import {
   extractMentions,
+  ITEM_TRIM_STEP,
   ITEM_UNREAD_CAP,
   type NotifyPreload,
   notifyCommentInsert,
@@ -26,6 +28,7 @@ import {
   postMessage,
   pruneReadMessages,
 } from '../model/messages'
+import schema from '../schema'
 import {
   allMessages,
   as,
@@ -914,6 +917,75 @@ describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', 
     // inbox, keep every message
     expect(await details(t, f.guest, other)).toEqual(arrivals(0, 1))
     expect(await details(t, f.admin, issue)).toEqual(arrivals(0, 2))
+  })
+
+  it('keeps the newest row of a kind, not the oldest one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // two mentions, the older one neither the item's oldest row nor among
+    // the newest 50
+    await arrive(t, f, { recipient: f.guest, issue }, [
+      'change',
+      'mention',
+      'mention',
+      'comment',
+      ...Array.from({ length: 56 }, () => 'change' as const),
+    ])
+    const kept = await details(t, f.guest, issue)
+    expect(kept).toEqual([...arrivals(0, 0), ...arrivals(2, 3), ...arrivals(13, 59)])
+    expect(kept).not.toContain('arrival 1')
+  })
+
+  it('an item that grew past the cap before it existed shrinks by ITEM_TRIM_STEP per arrival, so comments on the task still commit', async () => {
+    // Trimming all 351 excess rows inside one comment would pass this limit.
+    const t = convexTest({
+      schema,
+      modules: import.meta.glob('../**/*.*s'),
+      transactionLimits: { documentsWritten: 300 },
+    })
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plantSubscription(t, { issue_id: issue.id, profile_id: f.admin.id })
+    // 400 unread rows, the second one the only mention, in two transactions
+    for (const from of [0, 200]) {
+      await t.run(async (ctx) => {
+        for (let n = from; n < from + 200; n++) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: f.org.id,
+            recipient_id: f.admin.id,
+            issue_id: issue.id,
+            issue_title: 'T',
+            kind: n === 1 ? 'mention' : 'change',
+            detail: `legacy ${n}`,
+            created_at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + n * 1000).toISOString(),
+          })
+        }
+      })
+    }
+    const comment = () =>
+      as(t, f.user).mutation(api.comments.create, {
+        org_id: f.org.id,
+        id: uuid(),
+        issue_id: issue.id,
+        body: 'news',
+      })
+    const legacy = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => `legacy ${from + i}`)
+
+    await comment()
+    let kept = await details(t, f.admin, issue)
+    expect(ITEM_TRIM_STEP).toBe(ITEM_UNREAD_CAP)
+    expect(kept).toHaveLength(400 + 1 - ITEM_TRIM_STEP)
+    // the oldest row, the only mention and the newest change stay
+    expect(kept).toEqual([...legacy(0, 1), ...legacy(52, 399), 'New comment'])
+
+    // seven more comments, six taking 50 rows each and the last the 8 left
+    for (let n = 0; n < 7; n++) await comment()
+    kept = await details(t, f.admin, issue)
+    expect(kept).toHaveLength(ITEM_UNREAD_CAP)
+    expect(kept).toEqual([...legacy(0, 1), ...legacy(360, 399), ...Array(8).fill('New comment')])
   })
 
   it('an item at the cap keeps every message', async () => {

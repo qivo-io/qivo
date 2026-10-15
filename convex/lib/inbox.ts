@@ -1,7 +1,9 @@
 /* The one bounded read of a recipient's inbox, shared by the app's snapshot
  * (convex/snapshot.ts forMe) and the machine inbox (machine/discussion.ts
- * inboxItems), so both pick the same messages when the inbox outgrows what
- * they deliver.
+ * inboxItems). Both walk the same rows in the same order and list read rows
+ * only once every unread row was examined, so when the inbox outgrows what
+ * they deliver, the messages the app lists for a seat are among the ones
+ * the machine inbox lists for that profile.
  *
  * Unread rows are never retired by retention, and read rows stay while a
  * person keeps retention at Never, so an inbox nobody clears grows without
@@ -25,6 +27,10 @@ export type InboxLoad = {
   unread: Doc<'messages'>[]
   /** read rows about shown tasks, most recently read first */
   read: Doc<'messages'>[]
+  /** whether some unread rows were left unexamined. A list that puts unread
+   * rows first then cannot show `read` without showing read rows ahead of
+   * unread ones this read never reached. */
+  unreadTruncated: boolean
   /** whether some of the recipient's rows were left unexamined */
   truncated: boolean
 }
@@ -58,16 +64,19 @@ async function keepShown(
  * from the same index with a `read_at`, most recently read first. Each walk
  * keeps rows whose task `isShown` until `limit` are kept and examines at most
  * 2 * limit rows, so at most 4 * limit + 2 messages are read however large
- * the inbox is. Rows about tasks the reader is not shown stay stored; when
- * more than `limit` of them are newer than the shown ones, the older shown
- * rows are not reached, which is the accepted cost of the bound.
+ * the inbox is. Rows about tasks the reader is not shown stay stored and
+ * count toward the examination bound, so when enough of them are newer than
+ * the shown ones to use it up, the older shown rows are not reached, which
+ * is the accepted cost of the bound.
  *
  * `limit` bounds each walk separately, so a reader whose unread rows fill
  * the limit still learns of its read rows (the snapshot counts them for
- * Remove all read). With `shared`, both walks share one limit and one
- * examination bound: read rows only fill the room the unread rows left, so
- * at most `limit` rows come back and at most 2 * limit + 2 are read (the
- * machine inbox, whose `isShown` reads a task per new task id).
+ * Remove all read, and lists them only when `unreadTruncated` is false).
+ * With `shared`, both walks share one limit and one examination bound. Read
+ * rows then only fill the room the unread rows left, at most `limit` rows
+ * come back, at most 2 * limit + 2 are read, and no read row comes back
+ * while `unreadTruncated` (the machine inbox, whose `isShown` reads a task
+ * per new task id).
  */
 export async function loadInbox(
   ctx: QueryCtx,
@@ -101,6 +110,7 @@ export async function loadInbox(
   return {
     unread: unread.kept,
     read: read.kept,
+    unreadTruncated: unread.truncated,
     truncated: unread.truncated || read.truncated,
   }
 }

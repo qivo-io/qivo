@@ -134,24 +134,37 @@ export async function pruneReadMessages(
  * without limit, until each new comment or change to that task read more
  * than one transaction allows and failed for everybody, and snoozing or
  * marking the item read failed too. Only arrivals add rows, and the prune
- * keeps at most one read row, so from its next arrival on an item holds at
- * most ITEM_UNREAD_CAP + 1 rows. */
+ * keeps at most one read row, so an item held at the cap stays within
+ * ITEM_UNREAD_CAP + 1 rows. An item that grew past the cap before the cap
+ * existed shrinks by up to ITEM_TRIM_STEP rows per arrival, so it reaches
+ * the cap over later arrivals. */
 export const ITEM_UNREAD_CAP = 50
+
+/* The most unread rows one arrival trims from its item. An item at the cap
+ * needs one or two (an arrival adds one row, and mark unread can reopen the
+ * one read row). The bound matters for an item that grew past the cap
+ * before the cap existed. Trimming all of its excess in the arriving
+ * comment or change would add one write per excess row to that mutation,
+ * for every such follower, and once that passed the transaction's write
+ * limit every later comment or change to the task would fail, rolling the
+ * trim back each time. */
+export const ITEM_TRIM_STEP = ITEM_UNREAD_CAP
 
 /* Collapses an oversized item. When `rows` (the whole item, as postMessage
  * read it after its insert) holds more than ITEM_UNREAD_CAP unread rows, it
  * deletes the oldest unread rows, by (created_at, id) like the prune, until
- * the item holds the cap. It never deletes the item's oldest unread row,
- * which marks where the unread run starts (src/lib/spine.ts firstUnreadTs
- * puts the New divider there), nor the newest unread row of each kind, so
- * the Inbox kind filter still finds the item. This is separate from
- * retention, and the nightly sweep still never deletes an unread row. */
+ * the item holds the cap or ITEM_TRIM_STEP rows are gone. It never deletes
+ * the item's oldest unread row, which marks where the unread run starts
+ * (src/lib/spine.ts firstUnreadTs puts the New divider there), nor the
+ * newest unread row of each kind, so the Inbox kind filter still finds the
+ * item. This is separate from retention, and the nightly sweep still never
+ * deletes an unread row. */
 async function trimUnreadMessages(
   ctx: MutationCtx,
   rows: readonly Doc<'messages'>[],
 ): Promise<void> {
   const unread = rows.filter((r) => r.read_at === undefined).sort(oldestFirst)
-  let excess = unread.length - ITEM_UNREAD_CAP
+  let excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
   if (excess <= 0) return
   const newestOfKind = new Map<MessageKind, Doc<'messages'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
@@ -209,7 +222,8 @@ async function recipientCanSee(
  * mention must not leak a hidden project's existence (0074), and a
  * subscription can never outlive the access that justified it (0114:40-42).
  * After the insert it wakes a snoozed item, prunes its read rows and trims
- * its unread rows to ITEM_UNREAD_CAP. Returns whether a row was inserted.
+ * its unread rows toward ITEM_UNREAD_CAP (trimUnreadMessages). Returns
+ * whether a row was inserted.
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
  * are read by uuid. `visibility` is a seed's memo (NotifyPreload), never

@@ -759,6 +759,39 @@ describe('messages', () => {
     expect(snap.issues.map((i) => i.id)).toContain(visibleTask.id)
   })
 
+  it('lists no read rows while hidden rows leave unread ones unexamined, but still counts them', async () => {
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const visible = { unread: msg(f.user.id, NOW), read: msg(f.user.id, NOW, NOW) }
+    await t.run(async (ctx) => {
+      await ctx.db.insert('messages', visible.unread)
+      await ctx.db.insert('messages', visible.read)
+      // newer unread rows about a hidden task, more than the unread walk
+      // examines (2 * 500)
+      for (let i = 0; i < 1100; i++) {
+        await ctx.db.insert('messages', msg(f.user.id, NOW, undefined, hiddenTask.id))
+      }
+    })
+    let snap = await snapFor(f.user)
+    // listing the read row would show the task as read while its unread row
+    // was never reached; the machine inbox lists no read row then either
+    expect(snap.messages).toEqual([])
+    expect(snap.readMessageCount).toBe(1)
+
+    // once the walk reaches every unread row, both are listed, unread first
+    await t.run(async (ctx) => {
+      const hiddenRows = await ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', f.user.id).eq('issue_id', hiddenTask.id),
+        )
+        .take(200)
+      for (const row of hiddenRows) await ctx.db.delete(row._id)
+    })
+    snap = await snapFor(f.user)
+    expect(snap.messages.map((m) => m.id)).toEqual([visible.unread.id, visible.read.id])
+    expect(snap.readMessageCount).toBe(1)
+  })
+
   it('counts read messages across own seats even when 500 unread messages hide every read row', async () => {
     const { profile: seat, task: otherTask } = await guestSeatOfUser()
     await t.run(async (ctx) => {

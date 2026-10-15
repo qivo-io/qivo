@@ -129,8 +129,9 @@ type InboxItemJson = {
   messages: InboxMessageJson[]
 }
 
-/** A page of inbox items, and whether the inbox held more messages than
- * one read folds (INBOX_SCAN). */
+/** A page of inbox items, and whether some of the caller's messages were
+ * left unexamined, because more than INBOX_SCAN were about listed tasks or
+ * a backlog about unlisted ones used the examination bound (lib/inbox.ts). */
 type InboxPageJson = { items: InboxItemJson[]; truncated: boolean }
 
 /* (created_at, id), the total order the app and the prune use. */
@@ -139,7 +140,8 @@ const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
 
 /* The most messages one inbox read folds, unread ones first (lib/inbox.ts
  * loadInbox), so a backlog that nobody clears cannot push the read past
- * Convex's transaction limits. */
+ * Convex's transaction limits. The read examines at most 2 * INBOX_SCAN,
+ * counting rows about tasks it does not list. */
 export const INBOX_SCAN = 1000
 
 /**
@@ -192,10 +194,11 @@ function inboxShown(
  * app, it lists only tasks in the caller's working set (inboxShown). Rows
  * about other tasks stay stored and come back if the task does. It folds at
  * most INBOX_SCAN messages, chosen like the app's (lib/inbox.ts loadInbox),
- * unread ones newest first, then read ones most recently read first. It
- * says `truncated` when some messages were not read. Items whose messages
- * were not read are then missing, and an item listed may lack older
- * messages. A snoozed item is left out unless `includeSnoozed`, and
+ * unread ones newest first, then read ones most recently read first, and
+ * examines at most 2 * INBOX_SCAN rows, those about unlisted tasks included.
+ * It says `truncated` when some messages were not examined. Items whose
+ * messages were not examined are then missing, and an item listed may lack
+ * older messages. A snoozed item is left out unless `includeSnoozed`, and
  * `unreadOnly` keeps items with an unread message.
  */
 async function inboxItems(
@@ -676,7 +679,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call reads up to ${INBOX_SCAN} of your messages, unread ones first (newest first), then read ones (most recently read first); \`truncated: true\` means more were not read. Mark items read to shrink the inbox.`,
+      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call lists up to ${INBOX_SCAN} of your messages, unread ones first (newest first), then read ones (most recently read first), and looks at no more than ${2 * INBOX_SCAN}, counting messages about tasks it does not list; \`truncated: true\` means some were not looked at. Mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

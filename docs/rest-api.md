@@ -1278,13 +1278,15 @@ oldest first; `kind` is `mention`, `comment` or `change`, and `detail` is
 the line the app shows. `latest_at` is the newest message's time, or the end
 of a snooze when that is later, and orders the list.
 
-One request reads up to 1,000 of the caller's messages, unread ones first
-(newest first), then read ones (most recently read first). When it holds
-more, `truncated` is `true`. Items whose messages were not read are then
-missing, and an item listed may lack its older messages. Marking items read
-keeps only each item's latest message, so `POST /v1/inbox/read` with
-`{"all": true}`, repeated while `has_more` is `true`, shrinks the inbox until
-it fits.
+One request lists up to 1,000 of the caller's messages, unread ones first
+(newest first), then read ones (most recently read first). It looks at no
+more than 2,000 messages, counting the stored ones about tasks it does not
+list. When some messages were not looked at, `truncated` is `true`, so a
+large backlog about such tasks can set it too. Items whose messages were not
+looked at are then missing, and an item listed may lack its older messages.
+Marking items read keeps only each item's latest message, so
+`POST /v1/inbox/read` with `{"all": true}`, repeated while `has_more` is
+`true`, shrinks the inbox until it fits.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the

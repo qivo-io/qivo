@@ -1154,13 +1154,15 @@ An item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
 message of each `kind`.
 
-One call reads up to 1,000 of your messages, unread ones first (newest
-first), then read ones (most recently read first). When you hold more,
-`truncated` is `true`. Items whose messages were not read are then missing,
-and an item listed may lack its older messages. Marking items read keeps
-only each item's latest message, so `update_inbox` with `action: "read"` and
-`all: true`, repeated while `has_more` is `true`, shrinks the inbox until it
-fits.
+One call lists up to 1,000 of your messages, unread ones first (newest
+first), then read ones (most recently read first). It looks at no more than
+2,000 messages, counting the stored ones about tasks it does not list. When
+some messages were not looked at, `truncated` is `true`, so a large backlog
+about such tasks can set it too. Items whose messages were not looked at are
+then missing, and an item listed may lack its older messages. Marking items
+read keeps only each item's latest message, so `update_inbox` with
+`action: "read"` and `all: true`, repeated while `has_more` is `true`,
+shrinks the inbox until it fits.
 
 `update_inbox` applies `action` to your items about `tasks` (task refs), or
 with `all: true` to every item:

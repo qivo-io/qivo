@@ -84,6 +84,14 @@ export const forMe = authedQuery({
     const activityDocs: Doc<'activity_events'>[] = []
     const unreadDocs: Doc<'messages'>[] = []
     const readDocs: Doc<'messages'>[] = []
+    // Cleanup must remain available when unread rows fill the client cap and
+    // hide every read notification. Count the read rows each seat's bounded
+    // read kept (at most CAP per seat), listed or not, minus snoozed rows,
+    // which messages.removeRead leaves alone. The client only asks whether
+    // it is above zero. removeRead also deletes read rows about tasks the
+    // caller can no longer access; they are not counted because the caller
+    // cannot see them.
+    let readMessageCount = 0
     const seenLinkIds = new Set<string>()
     /* Active tasks and project rows fill these caches below. Only an admin's
      * activity row about a task outside the active set needs a lookup; never
@@ -307,7 +315,11 @@ export const forMe = authedQuery({
       // access does.
       const inbox = await loadInbox(ctx, me.id, workingSet.shown, CAP)
       unreadDocs.push(...inbox.unread)
-      readDocs.push(...inbox.read)
+      // The list puts every unread row first, so read rows wait while some
+      // of this seat's unread rows went unexamined (rows about hidden tasks
+      // used the bound); the machine inbox follows the same rule.
+      if (!inbox.unreadTruncated) readDocs.push(...inbox.read)
+      for (const row of inbox.read) if (row.snoozed_until === undefined) readMessageCount += 1
 
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))
@@ -321,17 +333,6 @@ export const forMe = authedQuery({
     // then read rows, most recently read first, as the list shows them.
     unreadDocs.sort(newestFirst)
     readDocs.sort(recentlyReadFirst)
-    // Cleanup must remain available when unread rows fill the client cap and
-    // hide every read notification. Count the read rows each seat's bounded
-    // read kept (at most CAP per seat), before the cut, minus snoozed rows,
-    // which messages.removeRead leaves alone. The client only asks whether
-    // it is above zero. removeRead also deletes read rows about tasks the
-    // caller can no longer access; they are not counted because the caller
-    // cannot see them.
-    const readMessageCount = readDocs.reduce(
-      (count, message) => count + (message.snoozed_until === undefined ? 1 : 0),
-      0,
-    )
     const messages = [...unreadDocs, ...readDocs].slice(0, CAP).map(rowOf)
 
     return {
