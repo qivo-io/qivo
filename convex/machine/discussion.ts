@@ -256,6 +256,23 @@ async function inboxItems(
   return { items: items.slice(o.offset, o.offset + o.limit), truncated: inbox.truncated }
 }
 
+/**
+ * The most task refs one inbox change may name, which keeps a call well
+ * inside Convex's transaction limits. An item holds at most
+ * ITEM_UNREAD_CAP + 1 = 51 rows (model/messages.ts). Mark read patches up
+ * to 51 of them and its prune then deletes up to 50, which Convex counts
+ * as more writes, so 100 items write at most 100 * 101 = 10,100 of the
+ * 16,000 allowed. Unread, remove and snooze write at most 51 rows per item.
+ * Resolving a ref (lib/core.ts findIssue) reads the task, its project, the
+ * root project and the caller's grant and team grants on both, 7 index
+ * ranges plus 2 per team granted either project. The item read and the
+ * prune's or snooze's second read add 2, so 100 refs use about 900 of the
+ * 4,096 index ranges and stay inside with up to 15 such teams. Snooze
+ * schedules one wake per item, 100 of the 1,000 allowed. Duplicate refs
+ * count too.
+ */
+export const INBOX_TASKS_MAX = 100
+
 /** What an inbox change does to the items it names. */
 const INBOX_ACTIONS = ['read', 'unread', 'remove', 'snooze'] as const
 type InboxAction = (typeof INBOX_ACTIONS)[number]
@@ -287,6 +304,9 @@ function inboxRequest(
     const tasks = b.tasks
     if (!Array.isArray(tasks) || tasks.length === 0 || tasks.some((t) => typeof t !== 'string')) {
       throw badRequest('tasks must be a non-empty list of task refs')
+    }
+    if (tasks.length > INBOX_TASKS_MAX) {
+      throw badRequest(`tasks must name at most ${INBOX_TASKS_MAX} tasks per call`)
     }
     refs = tasks as string[]
   }
@@ -743,8 +763,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'update_inbox',
       title: 'Update inbox',
-      description:
-        'Apply `action` to your inbox items about `tasks` (task refs): `read`, `unread`, `remove` or `snooze`. With `all: true` instead, `read` marks every item read and `remove` removes every read item; repeat while `has_more` is true, and with `read` pass back the `before` each answer returns, so messages that arrive meanwhile stay unread. `snooze` needs `until`, an ISO date-time at most a year ahead, or null to bring the items back now; a snoozed item returns unread. The result lists the tasks whose items changed.',
+      description: `Apply \`action\` to your inbox items about \`tasks\` (up to ${INBOX_TASKS_MAX} task refs): \`read\`, \`unread\`, \`remove\` or \`snooze\`. With \`all: true\` instead, \`read\` marks every item read and \`remove\` removes every read item; repeat while \`has_more\` is true, and with \`read\` pass back the \`before\` each answer returns, so messages that arrive meanwhile stay unread. \`snooze\` needs \`until\`, an ISO date-time at most a year ahead, or null to bring the items back now; a snoozed item returns unread. The result lists the tasks whose items changed.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -757,6 +776,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
             type: 'array',
             items: { type: 'string' },
             minItems: 1,
+            maxItems: INBOX_TASKS_MAX,
           },
           all: {
             type: 'boolean',

@@ -1306,9 +1306,11 @@ it fits.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the
-items the call changed. `tasks` in the body are task refs; one the caller
-cannot read is a `400` (`tasks must name tasks by key, number or uuid`) and
-changes nothing. Name the items with `tasks`, or send `"all": true` instead:
+items the call changed. `tasks` in the body are task refs, at most 100 per
+call with repeats counted. A longer list is a `400` (`tasks must name at
+most 100 tasks per call`), and so is a task the caller cannot read (`tasks
+must name tasks by key, number or uuid`); neither changes anything. Name the
+items with `tasks`, or send `"all": true` instead:
 
 - `read` marks the named items read. Like opening an item in the app, it
   keeps only each item's latest message. With `all`, it marks every item

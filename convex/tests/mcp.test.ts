@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'ea5017f37c870a27e0ff60d5711a3b08e28af4e44cdfdbb893b66f7f8d29ddc0'
-const SHA_TOOLS_MODERN = '70b6f38947ef4585026deac0f201ffd5c5ed538cf370928b11521ee4682777a9'
+const SHA_TOOLS_LEGACY = '146612031e95a7b4f21719025aa23a39b8644a67cdd4dc7625bd72841765bee2'
+const SHA_TOOLS_MODERN = '33a02ed7dcd30c6697eb2676fe5551751a90f20ef572fd5b5b968475de925bc3'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -2036,7 +2036,7 @@ describe('write tools', () => {
     expect(err.data.reason).toBe('caller_deactivated')
   })
 
-  test('update_inbox over the transport: the schema checks before, and the answered one goes back', async () => {
+  test('update_inbox over the transport: the schema checks before and the task count, and the answered before goes back', async () => {
     const fx = await machineOrg()
     await mintKey(fx.t, fx.agent, QVA)
     const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
@@ -2080,15 +2080,24 @@ describe('write tools', () => {
     const again = await call({ action: 'read', all: true, before: answer.before })
     expect(again.isError).toBeUndefined()
     expect(JSON.parse(again.content[0].text)).toEqual({ ...answer, tasks: [] })
-    for (const [before, problem] of [
-      ['1', 'Invalid input: expected number, received string'],
-      [-1, 'Too small: expected number to be >=0'],
+    const ref = `QN-${task.num}`
+    for (const [args, problem] of [
+      [{ all: true, before: '1' }, 'before: Invalid input: expected number, received string'],
+      [{ all: true, before: -1 }, 'before: Too small: expected number to be >=0'],
+      [{ tasks: Array(101).fill(ref) }, 'tasks: Too big: expected array to have <=100 items'],
     ] as const) {
-      const refused = await call({ action: 'read', all: true, before })
+      const refused = await call({ action: 'read', ...args })
       expect(refused.isError).toBe(true)
       expect(refused.content[0].text).toBe(
-        `Input validation error: Invalid arguments for tool update_inbox: before: ${problem}`,
+        `Input validation error: Invalid arguments for tool update_inbox: ${problem}`,
       )
     }
+    // 100 refs pass both the schema and the handler
+    const atLimit = await call({ action: 'unread', tasks: Array(100).fill(ref) })
+    expect(JSON.parse(atLimit.content[0].text)).toEqual({
+      action: 'unread',
+      tasks: [ref],
+      has_more: false,
+    })
   })
 })

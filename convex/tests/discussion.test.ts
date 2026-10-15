@@ -24,6 +24,8 @@ import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { INBOX_LIMIT } from '../lib/inbox'
 import { sha256hex } from '../machine/auth'
+import { INBOX_TASKS_MAX } from '../machine/discussion'
+import { ITEM_UNREAD_CAP } from '../model/messages'
 import schema from '../schema'
 import {
   allMessages,
@@ -995,6 +997,51 @@ describe('changing the inbox', () => {
       await refused(updateRest(fx, 'read', body), 'bad_request', sentence)
     }
     expect((await messagesFor(fx.t, fx.agent.id))[0].read_at).toBeUndefined()
+  })
+
+  it('tasks names at most INBOX_TASKS_MAX tasks, and that many full items fit one transaction', async () => {
+    // Convex's own limits apply to every call here
+    const fx = await setup(newT({ transactionLimits: true }))
+    const tasks: Doc<'issues'>[] = []
+    for (let n = 0; n < INBOX_TASKS_MAX; n++) {
+      tasks.push(await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }))
+    }
+    // every item as full as it gets, all unread as after a snooze
+    await fx.t.run(async (ctx) => {
+      for (const task of tasks) {
+        for (let n = 0; n <= ITEM_UNREAD_CAP; n++) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: fx.org.id,
+            recipient_id: fx.agent.id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: `change ${n}`,
+            created_at: `2026-01-01T00:00:${String(n).padStart(2, '0')}.000Z`,
+          })
+        }
+      }
+    })
+    const refs = tasks.map(key)
+    const sentence = `tasks must name at most ${INBOX_TASKS_MAX} tasks per call`
+    // one more, even a repeat, is refused on both surfaces before anything changes
+    for (const over of [
+      [...refs, key(fx.task)],
+      [...refs, refs[0]],
+    ]) {
+      await refused(updateMcp(fx, { action: 'read', tasks: over }), 'bad_request', sentence)
+      await refused(updateRest(fx, 'read', { tasks: over }), 'bad_request', sentence)
+    }
+    expect((await messagesFor(fx.t, fx.agent.id)).every((m) => m.read_at === undefined)).toBe(true)
+    // at the limit, the heaviest action, mark read, patches and prunes every item
+    expect((await updateMcp(fx, { action: 'read', tasks: refs })).tasks).toEqual(refs)
+    const kept = await messagesFor(fx.t, fx.agent.id)
+    expect(kept).toHaveLength(INBOX_TASKS_MAX)
+    expect(
+      kept.every((m) => m.read_at !== undefined && m.detail === `change ${ITEM_UNREAD_CAP}`),
+    ).toBe(true)
+    expect((await updateRest(fx, 'unread', { tasks: refs })).tasks).toEqual(refs)
   })
 
   it('a task the caller cannot read refuses the whole change like an unknown one', async () => {
