@@ -1325,12 +1325,12 @@ changes nothing. Name the items with `tasks`, or send `"all": true` instead:
 `unread` and `snooze`, with a date or `null`, refuse a task that is archived
 or in an archived project. No inbox lists such a task, and its messages stay
 read until it is restored. The answer is a `400` that names the task:
-`QN-3 is archived; restore it first`, `QN-3 is in an archived project;
-restore the project first` or `QN-3 and its project are archived; restore
-both first`. One such task refuses the whole call, even when the caller
-holds no messages about it, and nothing changes. A task the caller cannot
-read is refused first, as above. `read` and `remove` still work on archived
-tasks.
+`QN-3 is archived and must be restored first`,
+`QN-3 is in an archived project, which must be restored first` or
+`QN-3 and its project are archived and must be restored first`. One such
+task refuses the whole call, even when the caller holds no messages about
+it, and nothing changes. A task the caller cannot read is refused first, as
+above. `read` and `remove` still work on archived tasks.
 
 With `all`, repeat the call while `has_more` is `true`. Like the app's bulk
 actions, `all` also reaches messages about tasks that are not listed,

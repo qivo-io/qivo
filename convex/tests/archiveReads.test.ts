@@ -698,11 +698,11 @@ const scheduled = (t: T) => t.run((ctx) => ctx.db.system.query('_scheduled_funct
 const anHourAhead = () => new Date(Date.now() + 3_600_000).toISOString()
 
 /* The rule sentences, as the model writes them. */
-const isArchived = (task: Doc<'issues'>) => `${keyOf(task)} is archived; restore it first`
+const isArchived = (task: Doc<'issues'>) => `${keyOf(task)} is archived and must be restored first`
 const inArchivedProject = (task: Doc<'issues'>) =>
-  `${keyOf(task)} is in an archived project; restore the project first`
+  `${keyOf(task)} is in an archived project, which must be restored first`
 const bothArchived = (task: Doc<'issues'>) =>
-  `${keyOf(task)} and its project are archived; restore both first`
+  `${keyOf(task)} and its project are archived and must be restored first`
 
 /* withOrg with the agent on TBED, an active and an archived task in FW, and
  * PCB archived with one active and one archived task in it. The agent and

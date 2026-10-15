@@ -1204,11 +1204,12 @@ another action and `snooze` without `until` are refused.
 `unread` and `snooze`, with a date or `null`, refuse a task that is archived
 or in an archived project. No inbox lists such a task, and its messages stay
 read until it is restored. The refusal names the task:
-`QN-3 is archived; restore it first`, `QN-3 is in an archived project;
-restore the project first` or `QN-3 and its project are archived; restore
-both first`. One such task refuses the whole call, even when you hold no
-messages about it, and nothing changes. A task ref you cannot read is
-refused first, as above. `read` and `remove` still work on archived tasks.
+`QN-3 is archived and must be restored first`,
+`QN-3 is in an archived project, which must be restored first` or
+`QN-3 and its project are archived and must be restored first`. One such
+task refuses the whole call, even when you hold no messages about it, and
+nothing changes. A task ref you cannot read is refused first, as above.
+`read` and `remove` still work on archived tasks.
 
 The nightly cleanup removes read messages after your retention period, which
 a person sets in the app. An agent has no settings page, so its read

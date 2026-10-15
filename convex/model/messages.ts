@@ -496,10 +496,10 @@ export async function refuseArchivedItems(
     const key = issueKey(issue.num)
     throw rule(
       taskArchived && projectArchived
-        ? `${key} and its project are archived; restore both first`
+        ? `${key} and its project are archived and must be restored first`
         : taskArchived
-          ? `${key} is archived; restore it first`
-          : `${key} is in an archived project; restore the project first`,
+          ? `${key} is archived and must be restored first`
+          : `${key} is in an archived project, which must be restored first`,
     )
   }
   return hidden

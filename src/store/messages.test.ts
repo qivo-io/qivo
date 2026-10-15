@@ -583,11 +583,11 @@ describe('snooze through the client store', () => {
       snap.readMessageCount -= item.ids.length
       publish(structuredClone(snap))
       requests[0].reject(
-        new ConvexError({ code: 'rule', message: 'QN-2 is archived; restore it first' }),
+        new ConvexError({ code: 'rule', message: 'QN-2 is archived and must be restored first' }),
       )
       await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
       expect(showToast).toHaveBeenCalledWith(
-        'QN-2 is archived; restore it first — reverted',
+        'QN-2 is archived and must be restored first — reverted',
         'error',
       )
       expect(P.messageGroups.find((g) => g.issueTitle === 'Notification task 2')).toBeUndefined()

@@ -602,7 +602,7 @@ describe('reading the inbox', () => {
     await refused(
       updateMcp(fx, { action: 'unread', tasks: [key(archived)] }, fx.admin.id),
       'rule',
-      `${key(archived)} is archived; restore it first`,
+      `${key(archived)} is archived and must be restored first`,
     )
     expect(await held(archived)).toEqual([['Archived', true]])
     const read = await updateMcp(fx, { action: 'read', tasks: [key(archived)] }, fx.admin.id)
