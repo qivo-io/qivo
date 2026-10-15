@@ -1435,12 +1435,12 @@ const restHandler = httpAction(async (ctx, req) => {
 
 /* Registration — http.ts calls this ONCE at its bolt-on seam and is never
  * edited from here. Per-method routes: httpRouter has no wildcard method, and
- * pathPrefix '/v1/' does not match bare /v1. PUT serves the following and
- * project access routes and answers the deployed auth-then-404 everywhere
- * else; HEAD cannot be registered (accepted edge). Requests outside /v1/* get
- * Convex's default 404, not the in-handler sentence (an accepted delta,
- * because a root catch-all would collide with the auth + file-gateway
- * prefixes). */
+ * pathPrefix '/v1/' does not match bare /v1. PUT serves the task following,
+ * project access and team member routes and answers the deployed
+ * auth-then-404 everywhere else; HEAD cannot be registered (accepted edge).
+ * Requests outside /v1/* get Convex's default 404, not the in-handler
+ * sentence (an accepted delta, because a root catch-all would collide with
+ * the auth + file-gateway prefixes). */
 export function registerRestRoutes(http: HttpRouter): void {
   for (const method of ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS', 'PUT'] as const) {
     http.route({ path: '/v1', method, handler: restHandler })
