@@ -4992,14 +4992,21 @@ export const PLANNER = {
     return null
   },
 
+  /* Removes a person or agent from the organization. The local copy mirrors
+     what the server's removal clears in its own transaction (the SET NULL
+     fires the touch server-side). rows.issues holds only open tasks. The
+     server clears those at once, unless the profile holds hundreds. Then its
+     first background steps clear the rest a moment later, and the server's
+     copy names the id until they do. Archived tasks, comments, messages and
+     the removed profile's subscriptions are cleared later in the background,
+     and this client holds only its own subscriptions. The server also owns
+     the avatar bytes, so there is no client-side reap. */
   removeUser: (id: string) => {
     if (id === CURRENT_USER) return
     const target = rows.profiles.get(id)
     if (!target) return
     const admins = [...rows.profiles.values()].filter((u) => u.org_role === 'admin')
-    if (target.org_role === 'admin' && admins.length <= 1)
-      return // local cascade mirror (the SET NULL fires the touch server-side); the
-      // server cascade owns the avatar bytes too — no client-side reap
+    if (target.org_role === 'admin' && admins.length <= 1) return
     ;[...rows.issues.values()].forEach((i) => {
       if (
         i.assignee_id !== id &&
@@ -5016,7 +5023,6 @@ export const PLANNER = {
     })
     rows.teamMembers = rows.teamMembers.filter((m) => m.profile_id !== id)
     rows.access = rows.access.filter((a) => a.profile_id !== id)
-    rows.issueSubs = rows.issueSubs.filter((s) => s.profile_id !== id)
     ;[...rows.projects.values()].forEach((p) => {
       if (p.lead_id === id) p.lead_id = undefined
     })

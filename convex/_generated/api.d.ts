@@ -136,6 +136,7 @@ import type * as panoramaImages from "../panoramaImages.js";
 import type * as panoramaUploads from "../panoramaUploads.js";
 import type * as planning from "../planning.js";
 import type * as prefs from "../prefs.js";
+import type * as profileRemovals from "../profileRemovals.js";
 import type * as profiles from "../profiles.js";
 import type * as projects from "../projects.js";
 import type * as roadmap from "../roadmap.js";
@@ -282,6 +283,7 @@ declare const fullApi: ApiFromModules<{
   panoramaUploads: typeof panoramaUploads;
   planning: typeof planning;
   prefs: typeof prefs;
+  profileRemovals: typeof profileRemovals;
   profiles: typeof profiles;
   projects: typeof projects;
   roadmap: typeof roadmap;

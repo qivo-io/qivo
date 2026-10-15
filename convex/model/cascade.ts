@@ -15,10 +15,13 @@
  * Activity rows STAY — "History survives its subjects" (0001:144);
  * activity_events carries no issue FK, target_id is plain text (0026). */
 
+import { makeFunctionReference } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
+import { estimateDocumentBytes } from './demoMetrics'
 import { notifyIssueUpdate } from './messages'
 import { emitTaskEvent } from './taskEvents'
 
@@ -179,74 +182,182 @@ export async function deleteTeamDeep(
   await ctx.db.delete(team._id)
 }
 
+/* The four task fields that name a profile, each with its own index. A
+ * removal clears them in this order, so the fields that route work go
+ * first when its budget runs out. */
+export const TASK_HOLDERS = ['assignee_id', 'reviewer_id', 'created_by', 'reporter_id'] as const
+export type TaskHolder = (typeof TASK_HOLDERS)[number]
+
+/** The tasks whose `holder` field names `profileId`, read through that
+ * field's index. `open` keeps only unarchived tasks. Returns a new query on
+ * every call, because a query runs once. */
+export function heldTasks(ctx: QueryCtx, holder: TaskHolder, profileId: string, open: boolean) {
+  const issues = ctx.db.query('issues')
+  switch (holder) {
+    case 'assignee_id':
+      return issues.withIndex('by_assignee_archived', (q) =>
+        open
+          ? q.eq('assignee_id', profileId).eq('archived_at', undefined)
+          : q.eq('assignee_id', profileId),
+      )
+    case 'reviewer_id':
+      return issues.withIndex('by_reviewer_archived', (q) =>
+        open
+          ? q.eq('reviewer_id', profileId).eq('archived_at', undefined)
+          : q.eq('reviewer_id', profileId),
+      )
+    case 'created_by':
+      return issues.withIndex('by_created_by_archived', (q) =>
+        open
+          ? q.eq('created_by', profileId).eq('archived_at', undefined)
+          : q.eq('created_by', profileId),
+      )
+    case 'reporter_id':
+      return issues.withIndex('by_reporter_archived', (q) =>
+        open
+          ? q.eq('reporter_id', profileId).eq('archived_at', undefined)
+          : q.eq('reporter_id', profileId),
+      )
+  }
+}
+
+/** Clears `holder` on `task` with the SQL SET NULL's touch (updated_at =
+ * `now`) and emits task.updated. It posts no inbox message. The task is not
+ * read again, because its new state is `task` with the patch applied. */
+export async function clearHolder(
+  ctx: MutationCtx,
+  task: Doc<'issues'>,
+  holder: TaskHolder,
+  now: string,
+): Promise<void> {
+  const patch: Partial<Doc<'issues'>> = { updated_at: now }
+  patch[holder] = undefined
+  await ctx.db.patch(task._id, patch)
+  await emitTaskEvent(ctx, {
+    name: 'task.updated',
+    issue: { ...task, ...patch },
+    before: task,
+    now,
+  })
+}
+
+/** What one part of a removal may clear. removeProfile spends one budget on
+ * open tasks, and each background step (profileRemovals.ts) spends one. A
+ * mutable object, so tests can lower it. */
+export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
+
+/* Comments and tasks can approach Convex's 1 MiB document limit, so their
+ * ranges are read a few rows at a time. Unused rows of the last read then
+ * add at most three such documents to what a transaction reads. */
+export const LARGE_ROWS_PER_READ = 4
+
+/** The most OAuth connections removeProfile revokes itself. The background
+ * step deletes the rest, which can no longer be used anyway. */
+export const REVOKE_AT_ONCE = 256
+
+export type RemovalBudget = { rows: number; bytes: number }
+
+export const budgetSpent = (budget: RemovalBudget): boolean => budget.rows <= 0 || budget.bytes <= 0
+
+/** Clears the rows `read` returns until the range is empty (true) or the
+ * budget is spent (false). A budget not yet spent clears at least one row,
+ * however large. Bytes are estimated from each cleared document. `clear`
+ * must move each row out of the range, because every read starts at the
+ * beginning of the range. */
+export async function sweep<Row>(
+  budget: RemovalBudget,
+  read: (n: number) => Promise<Row[]>,
+  clear: (row: Row) => Promise<void>,
+  perRead: number,
+): Promise<boolean> {
+  while (!budgetSpent(budget)) {
+    const n = Math.min(budget.rows, perRead)
+    const rows = await read(n)
+    for (const row of rows) {
+      await clear(row)
+      budget.rows -= 1
+      budget.bytes -= estimateDocumentBytes(row)
+      if (budgetSpent(budget)) return false
+    }
+    if (rows.length < n) return true
+  }
+  return false
+}
+
+/** The unfinished background removal of `profileId`, or null. While it
+ * exists, the id stays reserved (profiles.create). */
+export function pendingRemoval(ctx: QueryCtx, profileId: string) {
+  return ctx.db
+    .query('profile_removals')
+    .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+    .unique()
+}
+
+const removalStepRef = makeFunctionReference<'mutation', { profile_id: string }, null>(
+  'profileRemovals:step',
+)
+
 /* remove_member's cascade (0100:206-222 authorizes; the FK graph resolves).
- * Guards live in the caller (profiles.remove): 'user not found' /
- * 'you cannot remove yourself' / 'cannot remove the last admin' — and the
- * caller writes the 'removed' narration. The cascade itself logs nothing,
- * exactly like the SQL FK resolution.
+ * Guards live in the callers (profiles.remove, adminOrgs.cancelInvite):
+ * 'user not found' / 'you cannot remove yourself' / 'cannot remove the last
+ * admin', and the caller writes the 'removed' narration. The cascade itself
+ * logs nothing, exactly like the SQL FK resolution.
+ *
+ * The work is split so that removal stays within one transaction's limits
+ * however much work and history the profile holds. This transaction ends
+ * access. It deletes the profile row and avatar bytes, memberships, grants,
+ * preferences, own agent keys, MCP tokens and the rate-limit row, and
+ * revokes the OAuth connections as 'deleted', so the person's own list
+ * hides them at once. Every session, credential and OAuth path requires the
+ * profile row, so access fails closed here. It also clears the profile from
+ * project leads, the activity feed (logActivity caps it at 500 rows per
+ * organization) and as many open tasks as REMOVAL_BUDGET allows, assignee
+ * and reviewer fields first. That is every open task unless the profile
+ * holds hundreds. Then it inserts the profile_removals row and schedules
+ * the first background step (profileRemovals.ts), which clears the open
+ * tasks left over, archived tasks, comments, messages, subscriptions,
+ * attachments, agent keys it created and the revoked connections in
+ * bounded steps. Readers already show an id that no longer resolves as
+ * "Someone" or "Unknown user" until then.
  *
  * Three FK behaviors, spelled out:
  * - SET NULL + touch: issues.assignee_id (0001:94), issues.reviewer_id,
- *   issues.created_by (0041:5), and issues.reporter_id — the FK UPDATE fired
- *   issues_touch, so each patched issue is stamped updated_at = now (the
+ *   issues.created_by (0041:5), and issues.reporter_id. The FK UPDATE fired
+ *   issues_touch, so each patched issue is stamped updated_at (the
  *   stale-dimming filter reads it; old client mirror bc022c2:3471-3478). No
- *   notify — removeProfile lists touch only. A cleared reviewer leaves
+ *   notify; removeProfile lists touch only. A cleared reviewer leaves
  *   issues.review_at as it is: the task still waits from its hand-off.
  * - SET NULL, no touch: projects.lead_id (0001:65), activity_events.actor_id
- *   (0001:149 — rows KEPT, history survives its actor), comments.author /
+ *   (0001:149, rows KEPT, history survives its actor), comments.author /
  *   comments.edited_by (0054:15/19), messages.actor_id (0074:24),
- *   agent_keys.created_by (0100:51, reached via the org's agents' keys),
- *   issue_attachments.uploaded_by (0018:23, reached via the org's issues).
+ *   agent_keys.created_by (0100:51), issue_attachments.uploaded_by (0018:23).
  * - DELETE: team_members (0001:52), project_access (0001:81),
- *   issue_subscriptions (0114:86), messages by recipient — the whole inbox
+ *   issue_subscriptions (0114:86), messages by recipient, the whole inbox
  *   (0074:23), user_prefs (0036:11), agent_keys by profile (0100:47),
  *   mcp_tokens (0030:11).
  *
  * Storage: the avatar bytes die HERE (phase 5 on); phase 7 owns only avatar
  * upload/serving (setAvatar/clearAvatar and their replace-time deletes) and
- * the attachment upload path — attachment bytes die with their issue in
+ * the attachment upload path. Attachment bytes die with their issue in
  * deleteIssueDeep, never with a profile. */
 export async function removeProfile(
   ctx: MutationCtx,
   a: { profile: Doc<'profiles'>; now: string },
 ): Promise<void> {
   const { profile, now } = a
-  // SET NULL + touch (collect first: the patch moves rows out of the index)
-  const assigned = await ctx.db
-    .query('issues')
-    .withIndex('by_assignee', (q) => q.eq('assignee_id', profile.id))
-    .collect()
-  for (const i of assigned) {
-    await ctx.db.patch(i._id, { assignee_id: undefined, updated_at: now })
-    const after = (await ctx.db.get(i._id)) as Doc<'issues'>
-    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: i, now })
-  }
-  const reviewing = await ctx.db
-    .query('issues')
-    .withIndex('by_reviewer', (q) => q.eq('reviewer_id', profile.id))
-    .collect()
-  for (const i of reviewing) {
-    await ctx.db.patch(i._id, { reviewer_id: undefined, updated_at: now })
-    const after = (await ctx.db.get(i._id)) as Doc<'issues'>
-    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: i, now })
-  }
-  const created = await ctx.db
-    .query('issues')
-    .withIndex('by_created_by', (q) => q.eq('created_by', profile.id))
-    .collect()
-  for (const i of created) {
-    await ctx.db.patch(i._id, { created_by: undefined, updated_at: now })
-    const after = (await ctx.db.get(i._id)) as Doc<'issues'>
-    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: i, now })
-  }
-  const reported = await ctx.db
-    .query('issues')
-    .withIndex('by_reporter', (q) => q.eq('reporter_id', profile.id))
-    .collect()
-  for (const i of reported) {
-    await ctx.db.patch(i._id, { reporter_id: undefined, updated_at: now })
-    const after = (await ctx.db.get(i._id)) as Doc<'issues'>
-    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: i, now })
+  // SET NULL + touch on open tasks within one budget, in TASK_HOLDERS order.
+  // Each clear reads and writes the whole task, and a task the profile
+  // created and reports is cleared once per field, so an unbounded pass
+  // fails for a busy agent. The first step's tasks phase clears the rest.
+  const budget: RemovalBudget = { ...REMOVAL_BUDGET }
+  for (const holder of TASK_HOLDERS) {
+    const cleared = await sweep(
+      budget,
+      (n) => heldTasks(ctx, holder, profile.id, true).take(n),
+      (task) => clearHolder(ctx, task, holder, now),
+      LARGE_ROWS_PER_READ,
+    )
+    if (!cleared) break
   }
   // SET NULL, no touch
   const led = await ctx.db
@@ -259,48 +370,6 @@ export async function removeProfile(
     .withIndex('by_actor', (q) => q.eq('actor_id', profile.id))
     .collect()
   for (const e of acted) await ctx.db.patch(e._id, { actor_id: undefined })
-  const authored = await ctx.db
-    .query('comments')
-    .withIndex('by_author', (q) => q.eq('author', profile.id))
-    .collect()
-  for (const c of authored) await ctx.db.patch(c._id, { author: undefined })
-  const edited = await ctx.db
-    .query('comments')
-    .withIndex('by_edited_by', (q) => q.eq('edited_by', profile.id))
-    .collect()
-  for (const c of edited) await ctx.db.patch(c._id, { edited_by: undefined })
-  const sent = await ctx.db
-    .query('messages')
-    .withIndex('by_actor', (q) => q.eq('actor_id', profile.id))
-    .collect()
-  for (const m of sent) await ctx.db.patch(m._id, { actor_id: undefined })
-  const orgProfiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
-    .collect()
-  for (const p of orgProfiles) {
-    if (p.kind !== 'agent') continue
-    const keys = await ctx.db
-      .query('agent_keys')
-      .withIndex('by_profile', (q) => q.eq('profile_id', p.id))
-      .collect()
-    for (const k of keys) {
-      if (k.created_by === profile.id) await ctx.db.patch(k._id, { created_by: undefined })
-    }
-  }
-  const orgIssues = await ctx.db
-    .query('issues')
-    .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
-    .collect()
-  for (const i of orgIssues) {
-    const atts = await ctx.db
-      .query('issue_attachments')
-      .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
-      .collect()
-    for (const att of atts) {
-      if (att.uploaded_by === profile.id) await ctx.db.patch(att._id, { uploaded_by: undefined })
-    }
-  }
   // DELETE
   const memberships = ctx.db
     .query('team_members')
@@ -310,14 +379,6 @@ export async function removeProfile(
     .query('project_access')
     .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
   for await (const g of grants) await ctx.db.delete(g._id)
-  const subs = ctx.db
-    .query('issue_subscriptions')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const s of subs) await ctx.db.delete(s._id)
-  const inbox = ctx.db
-    .query('messages')
-    .withIndex('by_recipient', (q) => q.eq('recipient_id', profile.id))
-  for await (const m of inbox) await ctx.db.delete(m._id)
   const prefs = ctx.db
     .query('user_prefs')
     .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
@@ -330,19 +391,38 @@ export async function removeProfile(
     .query('mcp_tokens')
     .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
   for await (const t of tokens) await ctx.db.delete(t._id)
-  const connections = ctx.db
+  // The background step deletes the connections with their replay hashes.
+  // Every OAuth path already refuses once the profile row is gone, so this
+  // only hides the newest connections from the person's own list at once;
+  // every authorization adds a row and revoked ones stay, so the rest wait
+  // for the step instead of making this transaction unbounded.
+  const connections = await ctx.db
     .query('oauth_connections')
     .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-  for await (const connection of connections) {
-    const uses = ctx.db
-      .query('oauth_credential_uses')
-      .withIndex('by_connection', (q) => q.eq('connection_id', connection.id))
-    for await (const use of uses) await ctx.db.delete(use._id)
-    await ctx.db.delete(connection._id)
+    .order('desc')
+    .take(REVOKE_AT_ONCE)
+  for (const connection of connections) {
+    if (connection.revoked_at !== undefined && connection.revocation_reason === 'deleted') continue
+    await ctx.db.patch(connection._id, {
+      revoked_at: connection.revoked_at ?? now,
+      revocation_reason: 'deleted',
+    })
   }
   // Usage remains owed by the organization after its profile departs.
   await deleteProfileRateLimit(ctx, profile.id)
-  // storage, then the row — ctx.storage.delete is transactional
+  const scheduled_id = await ctx.scheduler.runAfter(0, removalStepRef, { profile_id: profile.id })
+  const job = {
+    profile_id: profile.id,
+    removed_at: now,
+    phase: REMOVAL_PHASES[0],
+    progress_at: new Date().toISOString(),
+    scheduled_id,
+  }
+  // A row left by an earlier removal of the same id starts over.
+  const earlier = await pendingRemoval(ctx, profile.id)
+  if (earlier) await ctx.db.replace(earlier._id, job)
+  else await ctx.db.insert('profile_removals', job)
+  // storage, then the row; ctx.storage.delete is transactional
   if (profile.avatar_storage_id !== undefined) await ctx.storage.delete(profile.avatar_storage_id)
   await ctx.db.delete(profile._id)
 }
@@ -358,8 +438,10 @@ export async function removeProfile(
  * the operator's tool once no profile references it), the appearance tables
  * and roadmap_history (per login, cleared with the login), demo_sessions
  * (internal/demoCleanup owns the public demo's lifecycle) and the platform
- * audit log (history survives its subjects). No narration: nothing is left to
- * read it. */
+ * audit log (history survives its subjects). Pending profile_removals rows
+ * are also left alone. Their background steps still delete the removed
+ * profiles' inboxes and OAuth connections, which this sweep only reaches
+ * through live profiles. No narration: nothing is left to read it. */
 export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>): Promise<void> {
   const subscriptions = await ctx.db
     .query('billing_subscriptions')
