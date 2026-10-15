@@ -33,7 +33,7 @@ import {
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { logActivity, machineDetail } from './activity'
+import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, updateIssueCore } from './issues'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
@@ -55,6 +55,18 @@ export const vHeldTasks = v.union(
 
 export const HELD_TASKS_SHAPE =
   'on_held_tasks must be "leave", "keep_as_viewer" or {"reassign_to": a user id or null}'
+
+/** on_held_tasks in an MCP tool's input schema. */
+export const ON_HELD_TASKS_SCHEMA = {
+  anyOf: [
+    { type: 'string', enum: ['leave', 'keep_as_viewer'] },
+    {
+      type: 'object',
+      properties: { reassign_to: { anyOf: [{ type: 'string' }, { type: 'null' }] } },
+      required: ['reassign_to'],
+    },
+  ],
+}
 
 /** A machine request's on_held_tasks, checked before anything resolves.
  * Absent or null means 'leave'. */
@@ -143,7 +155,7 @@ async function narrateAccess(
     target_type: 'project',
     target_id: a.project.id,
     label: a.project.name,
-    detail: a.provenance === undefined ? undefined : machineDetail(undefined, a.provenance),
+    detail: signedDetail(undefined, a.provenance),
     project_id: a.project.id,
     ts: a.now,
   })

@@ -10,7 +10,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { logActivity, machineDetail } from './activity'
+import { logActivity, signedDetail } from './activity'
 import { assertCanEdit } from './issues'
 
 /** Refuses a caller who may not add labels to the organization's list. */
@@ -219,7 +219,7 @@ export async function setTaskLabel(
     target_type: 'issue',
     target_id: issue.id,
     label: issue.title,
-    detail: a.provenance === undefined ? named : machineDetail(named, a.provenance),
+    detail: signedDetail(named, a.provenance),
     project_id: issue.project_id,
     ts: now,
   })

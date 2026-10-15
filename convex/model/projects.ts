@@ -31,7 +31,7 @@ import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGr
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
-import { logActivity, machineDetail } from './activity'
+import { logActivity, signedDetail } from './activity'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
 
 /** Preserve the supplied text; null/omitted create values mean no description. */
@@ -72,10 +72,6 @@ export async function reviewHoursFor(ctx: QueryCtx, project: Doc<'projects'>): P
   const parent = project.parent_id ? await byId(ctx, 'projects', project.parent_id) : null
   return resolveReviewHours(undefined, parent?.review_hours)
 }
-
-/* An activity detail, signed with the machine provenance when there is one. */
-const signed = (detail: string | undefined, provenance: string | undefined) =>
-  provenance === undefined ? detail : machineDetail(detail, provenance)
 
 /* ----------------------------------------------------------------- keys */
 
@@ -398,7 +394,7 @@ export async function createProjectCore(
     target_type: 'project',
     target_id: project.id,
     label: name,
-    detail: signed(undefined, a.provenance),
+    detail: signedDetail(undefined, a.provenance),
     project_id: project.id,
     ts: now,
   })
@@ -560,13 +556,13 @@ export async function updateProjectCore(
     await logActivity(ctx, {
       ...event,
       verb: 'changed access on',
-      detail: signed(undefined, a.provenance),
+      detail: signedDetail(undefined, a.provenance),
     })
   } else if (nameChanged) {
     await logActivity(ctx, {
       ...event,
       verb: 'renamed',
-      detail: signed(`from “${project.name}”`, a.provenance),
+      detail: signedDetail(`from “${project.name}”`, a.provenance),
     })
   } else if (leadChanged) {
     const from = prevLead === undefined ? null : await byId(ctx, 'profiles', prevLead)
@@ -574,7 +570,7 @@ export async function updateProjectCore(
     await logActivity(ctx, {
       ...event,
       verb: to !== null ? 'changed the lead of' : 'removed the lead of',
-      detail: signed(
+      detail: signedDetail(
         to !== null
           ? `to ${to.name}${from !== null ? ` (was ${from.name})` : ''}`
           : from !== null
@@ -647,7 +643,7 @@ export async function archiveProjectCore(
     target_type: 'project',
     target_id: project.id,
     label: project.name,
-    detail: signed(
+    detail: signedDetail(
       carried > 0 ? `with ${carried} sub-project${carried > 1 ? 's' : ''}` : undefined,
       a.provenance,
     ),
@@ -701,7 +697,7 @@ export async function unarchiveProjectCore(
     target_type: 'project',
     target_id: project.id,
     label: project.name,
-    detail: signed('from the archive', a.provenance),
+    detail: signedDetail('from the archive', a.provenance),
     project_id: project.id,
     ts: now,
   })

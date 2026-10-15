@@ -15,7 +15,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
-import { logActivity, machineDetail } from './activity'
+import { logActivity, signedDetail } from './activity'
 import { weekLabel } from './orgs'
 import { calendarDay } from './taskValues'
 
@@ -100,10 +100,6 @@ async function orgOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Doc<'organizat
   return org
 }
 
-/* An activity detail, signed with the machine provenance when there is one. */
-const signed = (detail: string | undefined, provenance: string | undefined) =>
-  provenance === undefined ? detail : machineDetail(detail, provenance)
-
 /**
  * Adds a milestone named against `projectId` to the top-level project that
  * stores it (milestoneTarget) and narrates it. Narration details embed
@@ -141,7 +137,7 @@ export async function addMilestoneCore(
     target_type: 'milestone',
     target_id: id,
     label: name,
-    detail: signed(`at ${weekLabel(week, await orgOf(ctx, me))}`, a.provenance),
+    detail: signedDetail(`at ${weekLabel(week, await orgOf(ctx, me))}`, a.provenance),
     project_id: home.id,
     ts: now,
   })
@@ -183,7 +179,7 @@ export async function updateMilestoneCore(
     target_type: 'milestone',
     target_id: milestone.id,
     label: name,
-    detail: signed(
+    detail: signedDetail(
       weekChanged
         ? `from ${weekLabel(milestone.week, org)} to ${weekLabel(db.week as string, org)}` +
             (renamed ? ` (renamed from “${milestone.name}”)` : '')
@@ -214,7 +210,7 @@ export async function removeMilestoneCore(
     target_type: 'milestone',
     target_id: milestone.id,
     label: milestone.name,
-    detail: signed(undefined, a.provenance),
+    detail: signedDetail(undefined, a.provenance),
     project_id: milestone.project_id,
     ts: now,
   })

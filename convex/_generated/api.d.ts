@@ -91,6 +91,7 @@ import type * as machine_mcp from "../machine/mcp.js";
 import type * as machine_projects from "../machine/projects.js";
 import type * as machine_registry from "../machine/registry.js";
 import type * as machine_rest from "../machine/rest.js";
+import type * as machine_shared from "../machine/shared.js";
 import type * as machine_testing from "../machine/testing.js";
 import type * as mail from "../mail.js";
 import type * as messages from "../messages.js";
@@ -227,6 +228,7 @@ declare const fullApi: ApiFromModules<{
   "machine/projects": typeof machine_projects;
   "machine/registry": typeof machine_registry;
   "machine/rest": typeof machine_rest;
+  "machine/shared": typeof machine_shared;
   "machine/testing": typeof machine_testing;
   mail: typeof mail;
   messages: typeof messages;

@@ -136,6 +136,13 @@ const clean = (s: string): string => {
 export const machineDetail = (extra: string | undefined, provenance: string): string =>
   (extra !== undefined && extra !== '' ? `${extra} — ` : '') + provenance
 
+/** An activity detail signed with a machine write's provenance, or the
+ * detail alone for an app write, which passes none. */
+export const signedDetail = (
+  detail: string | undefined,
+  provenance: string | undefined,
+): string | undefined => (provenance === undefined ? detail : machineDetail(detail, provenance))
+
 // Narrate stored before/after values, resolving profile names when available.
 // No changed narratable fields means no detail string.
 export function issueChanges(

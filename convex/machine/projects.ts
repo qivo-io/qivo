@@ -68,6 +68,7 @@ import {
   type AccessSubject,
   type HeldTasks,
   type Holding,
+  ON_HELD_TASKS_SCHEMA,
   parseHeldTasks,
   removeProjectGrantCore,
   setProjectGrantCore,
@@ -83,6 +84,7 @@ import {
 } from '../model/projects'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
+import { MCP_PROVENANCE, needJson, optionalJson, pretty, restProvenance, vKeyName } from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -90,35 +92,6 @@ type RestRoute = (typeof ROUTES)[number]
 /* machine/rest.ts route(), which types each `run`'s params from its path.
  * Only its type is imported, so this module does not load rest.ts. */
 const route: typeof restRoute = (declared) => declared
-
-/* MCP's result text: 2-space pretty JSON, stringified inside the internal
- * function so the projection's key order is the wire's. */
-const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
-
-const MCP_PROVENANCE = 'via MCP'
-
-/* An agent key's writes name the key; a personal token's name no token, as
- * in machine/rest.ts. */
-const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
-
-/* The agent key's name for a REST write's provenance, or null for a
- * personal token. */
-const vKeyName = v.union(v.string(), v.null())
-
-/* A REST request body, parsed like machine/rest.ts needJson. An empty body
- * reads as {} where `optional`, for DELETE. */
-function jsonBody(raw: string, optional = false): Record<string, unknown> {
-  if (optional && raw.trim() === '') return {}
-  let body: unknown = null
-  try {
-    body = JSON.parse(raw)
-  } catch {
-    body = null
-  }
-  if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
-  return body as Record<string, unknown>
-}
 
 /* --------------------------------------------------------------- reading */
 
@@ -645,7 +618,7 @@ export const restCreateProject = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, body: v.string() },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const b = jsonBody(a.body)
+    const b = needJson(a.body)
     refuseProjectFields(b)
     if (!('name' in b)) throw badRequest('name is required')
     if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -680,7 +653,7 @@ export const restUpdateProject = internalMutation({
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await restProject(ctx, me, a.ref)
-    const b = jsonBody(a.body)
+    const b = needJson(a.body)
     refuseProjectFields(b)
     // POST takes `parent`; a project keeps the parent it was created with
     if ('parent' in b) throw badRequest(PARENT_AT_CREATION)
@@ -731,7 +704,7 @@ export const restSetAccess = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await restProject(ctx, me, a.ref)
     const subject = await restSubject(ctx, me, a.kind, a.subject)
-    const level = restLevel(jsonBody(a.body))
+    const level = restLevel(needJson(a.body))
     const { changed } = await setProjectGrantCore(ctx, {
       me,
       project,
@@ -758,7 +731,7 @@ export const restRemoveAccess = internalMutation({
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const held: HeldTasks = parseHeldTasks(jsonBody(a.body, true).on_held_tasks)
+    const held: HeldTasks = parseHeldTasks(optionalJson(a.body).on_held_tasks)
     const project = await restProject(ctx, me, a.ref)
     const subject = await restSubject(ctx, me, a.kind, a.subject)
     const removal = await removeProjectGrantCore(ctx, {
@@ -806,7 +779,7 @@ export const restAddMilestone = internalMutation({
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await restProject(ctx, me, a.ref)
-    const f = milestoneFields(jsonBody(a.body), true)
+    const f = milestoneFields(needJson(a.body), true)
     const m = await addMilestoneCore(ctx, {
       me,
       id: newUuid(),
@@ -835,7 +808,7 @@ export const restUpdateMilestone = internalMutation({
     const project = await restProject(ctx, me, a.ref)
     const milestone = await milestoneOn(ctx, me, project, a.milestone)
     if (milestone === null) throw notFound('milestone not found')
-    const patch = milestoneFields(jsonBody(a.body), false)
+    const patch = milestoneFields(needJson(a.body), false)
     if (patch.name === undefined && patch.week === undefined) {
       throw badRequest('no recognized fields to update')
     }
@@ -1015,16 +988,7 @@ export const PROJECT_TOOLS: McpTool[] = [
           level: {
             anyOf: [{ type: 'string', enum: ['user', 'viewer'] }, { type: 'null' }],
           },
-          on_held_tasks: {
-            anyOf: [
-              { type: 'string', enum: ['leave', 'keep_as_viewer'] },
-              {
-                type: 'object',
-                properties: { reassign_to: { anyOf: [{ type: 'string' }, { type: 'null' }] } },
-                required: ['reassign_to'],
-              },
-            ],
-          },
+          on_held_tasks: ON_HELD_TASKS_SCHEMA,
         },
         required: ['project', 'level'],
       },
