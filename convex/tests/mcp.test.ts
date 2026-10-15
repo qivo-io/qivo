@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'f964dbf43898f176db38e7d17ecb05c71e0c14c3966d5cd667ef3812b8e153a7'
-const SHA_TOOLS_MODERN = 'b2bdeb95453154f032d3453de7249be4c322dcb0efd5eda592aa37b47308be26'
+const SHA_TOOLS_LEGACY = '09c0163bcde71f0741e0cced0fe0989c538d3f28145b92730d6e5153acc15f5d'
+const SHA_TOOLS_MODERN = '1cbcbac8a88abbdba963dac7c9bbf2fbabfb3003c97862d281a93cdb463e6188'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -477,6 +477,9 @@ describe('body shape and leg selection', () => {
       'set_task_link',
       'list_labels',
       'set_label',
+      'delete_attachment',
+      'list_task_activity',
+      'get_workload',
       'update_comment',
       'delete_comment',
       'list_inbox',

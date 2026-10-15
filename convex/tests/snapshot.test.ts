@@ -141,6 +141,19 @@ describe('forMe scoping', () => {
     expect(stored.find((l) => l.id === unsafe[0])?.color).toBe('url(https://example.test/p.png)')
   })
 
+  it('a stored avatar color that is not #rrggbb goes out as gray; valid colors pass unchanged', async () => {
+    const unsafe: Doc<'profiles'>[] = []
+    for (const color of ['url(https://example.test/p.png)', 'red', '#fff']) {
+      unsafe.push(await plantSeat(t, { org_id: f.org.id, color }))
+    }
+    const colorById = new Map((await snapFor(f.guest)).profiles.map((p) => [p.id, p.color]))
+    expect(colorById.get(f.user.id)).toBe(f.user.color)
+    expect(unsafe.map((p) => colorById.get(p.id))).toEqual(['#8A8F98', '#8A8F98', '#8A8F98'])
+    // the read does not rewrite the row
+    const stored = await t.run(async (ctx) => ctx.db.get(unsafe[0]._id))
+    expect(stored?.color).toBe('url(https://example.test/p.png)')
+  })
+
   it('viewer reaches the family via the grant only — dropping the grant drops everything', async () => {
     const snap = await snapFor(f.viewer)
     expect(snap.projects.map((p) => p.id).sort()).toEqual([f.meta.id, f.sub.id, f.sub2.id].sort())

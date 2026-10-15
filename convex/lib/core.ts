@@ -31,6 +31,7 @@ import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
+import { type AttachmentJson, taskAttachments } from '../model/attachments'
 import { postArchiveReason } from '../model/comments'
 import {
   assertLive,
@@ -916,8 +917,9 @@ export async function issueOut(
 /* --------------------------------------------------- the single-task read
  * GET /v1/tasks/{ref} (and the REST create and update answers) and MCP
  * get_task add what a list row leaves out: the task's labels, its subtasks,
- * its links, for a group its remaining hours, and who follows it. Each names
- * other tasks only through lib/workingSet.ts with the machine Shown. */
+ * its links, for a group its remaining hours, who follows it (taskDetail)
+ * and its attachments (taskOut). Each names other tasks only through
+ * lib/workingSet.ts with the machine Shown. */
 
 /** Another task as a read names it. */
 export type TaskRefJson = { id: string; key: string; title: string; status: IssueStatus }
@@ -1019,22 +1021,27 @@ export async function taskDetail(
   }
 }
 
-/** issueOut plus taskDetail, the shape of every single-task read. */
+/** The task's attachments with download links minted for the reader
+ * (model/attachments.ts taskAttachments), inline images included. */
+export type TaskAttachmentsJson = { attachments: AttachmentJson[] }
+
+/** issueOut plus taskDetail and the attachments, the shape of every
+ * single-task read. */
 export async function taskOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
   opts: IssueOutPre & Reader & { surface: 'rest' },
-): Promise<RestIssueJson & TaskDetailJson>
+): Promise<RestIssueJson & TaskDetailJson & TaskAttachmentsJson>
 export async function taskOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
   opts: IssueOutPre & Reader & { surface: 'mcp' },
-): Promise<McpIssueOut & TaskDetailJson>
+): Promise<McpIssueOut & TaskDetailJson & TaskAttachmentsJson>
 export async function taskOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
   opts: IssueOutPre & Reader,
-): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson> {
+): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson & TaskAttachmentsJson> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
   // one walk of the subtree serves the row's group facts and the detail
@@ -1049,7 +1056,7 @@ export async function taskOut(
     children,
     readable: opts.readable,
   })
-  return { ...row, ...detail }
+  return { ...row, ...detail, attachments: await taskAttachments(ctx, opts.me, issue) }
 }
 
 /* ------------------------------------------------------------ destinations

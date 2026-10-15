@@ -48,6 +48,8 @@ const EXCLUDED_TABLES = [
   'account_appearance',
   'custom_backgrounds',
   'background_uploads',
+  // An expiring REST upload in progress belongs to one credential's caller.
+  'attachment_uploads',
   'marketing_demo',
   'issue_subscriptions',
   'messages',

@@ -9,9 +9,9 @@
  * Two credentials reach the organization routes: a `qva_` agent key, acting
  * as its agent, and a `qvt_` personal access token, acting as its person.
  * Every sentence that names the caller has an agent and a person form
- * (CALLER below and the 401 tables in machine/auth.ts); the agent forms are
- * the pinned bytes. A person's writes narrate `via the REST API` with no
- * token name.
+ * (CALLER, which is machine/shared.ts REST_CALLER, and the 401 tables in
+ * machine/auth.ts); the agent forms are the pinned bytes. A person's writes
+ * narrate `via the REST API` with no token name.
  *
  * Layering: the httpAction shell owns auth (ordinary routes accept agent keys
  * and personal tokens; webhook management also accepts OAuth credentials),
@@ -67,6 +67,7 @@ import {
   type RestCommentJson,
   type RestIssueJson,
   restProjectJson,
+  type TaskAttachmentsJson,
   type TaskDetailJson,
   type TaskRefJson,
   taskOut,
@@ -127,56 +128,17 @@ import {
 } from '../model/links'
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
-import {
-  authenticateSecret,
-  REST_AUTH_401,
-  REST_PERSON_AUTH_401,
-  restAuth401,
-  sha256hex,
-} from './auth'
+import { authenticateSecret, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
+import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
+import { REST_CALLER as CALLER, needJson, restProvenance as provenanceOf, vKeyName } from './shared'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
-type RestTaskJson = RestIssueJson & TaskDetailJson
+type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
 type RestLabelJson = ReturnType<typeof labelJson>
-
-/* An agent key's writes name the key; a personal token's writes name no
- * token, because the person is the actor and their tokens are private. */
-const provenanceOf = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
-
-/* Every REST sentence that names the caller, keyed by who the credential acts
- * as: an agent key acts as its agent and a personal token as its person
- * (machine/auth.ts lookupCredential holds them to that). The agent column is
- * the pinned contract; the person column follows MCP's wording. The 401
- * sentences of a failed lookup are machine/auth.ts REST_AUTH_401 and
- * REST_PERSON_AUTH_401. */
-const CALLER = {
-  agent: {
-    gone: REST_AUTH_401.unknown,
-    deactivated: REST_AUTH_401.inactive,
-    noWrite: 'this agent has no write access to that project',
-    commentAuthor:
-      'comments cannot be attributed over the API — a comment is always authored by the agent posting it',
-  },
-  person: {
-    gone: REST_PERSON_AUTH_401.unknown,
-    deactivated: REST_PERSON_AUTH_401.inactive,
-    noWrite: 'your account has no write access to that project',
-    commentAuthor:
-      'comments cannot be attributed over the API; a comment is always authored by the person posting it',
-  },
-} as const satisfies Record<
-  ProfileKind,
-  { gone: string; deactivated: string; noWrite: string; commentAuthor: string }
->
-
-/* The agent key's name for its writes' provenance, or null for a personal
- * token. */
-const vKeyName = v.union(v.string(), v.null())
 
 /** The 403 for a readable project the caller cannot write. */
 const noWrite = (me: Caller): ConvexError<Refusal> => forbidden(CALLER[me.kind].noWrite)
@@ -222,19 +184,6 @@ async function orgNames(ctx: QueryCtx, orgId: string): Promise<Map<string, strin
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .collect()
   return new Map(profiles.map((p) => [p.id, p.name]))
-}
-
-/* Body tolerance (rest:196-198, 323-326): no Content-Type check, invalid JSON
- * → null → this 400; arrays pass typeof 'object' and fail field-wise. */
-function needJson(raw: string): Record<string, unknown> {
-  let body: unknown = null
-  try {
-    body = JSON.parse(raw)
-  } catch {
-    body = null
-  }
-  if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
-  return body as Record<string, unknown>
 }
 
 /* Validates + maps a request body onto issue columns (rest:267-302, sentences
@@ -1268,6 +1217,7 @@ export const ROUTES: RestRoute[] = [
         body,
       }),
   }),
+  ...RECORD_ROUTES,
   ...DISCUSSION_ROUTES,
 ]
 

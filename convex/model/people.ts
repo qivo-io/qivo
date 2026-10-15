@@ -4,6 +4,7 @@
  *
  *   address shape      the only address check the database ever had
  *   name shape         0116's normalization and its two sentences
+ *   avatar color       #rrggbb on write, gray on read for older values
  *   retention stamp    0112's sibling inheritance, stamped on every create
  *   viewer leads none  0102:391-411, checked before a seat becomes a viewer
  *   claim order        the order claiming adopts an address's pending seats
@@ -15,7 +16,8 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
-import { rule } from '../lib/functions'
+import { badRequest, rule } from '../lib/functions'
+import { isLabelColor } from './labels'
 
 /* invite_project_guest's regex, mirrored by the client's EMAIL_RE: something,
  * @, something, dot, something, no whitespace. The address is proved by
@@ -35,6 +37,25 @@ export const cleanName = (raw: string): string => raw.replace(/\s+/g, ' ').trim(
 export function assertNameShape(name: string): void {
   if (name === '') throw rule('a name cannot be blank')
   if ([...name].length > 80) throw rule('a name is at most 80 characters')
+}
+
+/** The avatar color as given, refused unless it is `#rrggbb`. Clients paint
+ * it as a CSS background like a label color, so it follows the label rule. */
+export function avatarColor(raw: string): string {
+  if (!isLabelColor(raw)) {
+    throw badRequest('an avatar color must be # followed by six hex digits, like #0F766E')
+  }
+  return raw
+}
+
+/** The gray a new guest seat gets, sent in place of a color that breaks the rule. */
+const FALLBACK_AVATAR_COLOR = '#8A8F98'
+
+/** The color to send a client. Seats created before the `#rrggbb` rule may
+ * hold any text, so every read that hands a profile to a client uses this and
+ * sends gray instead. The stored value stays as it is. */
+export function shownAvatarColor(stored: string): string {
+  return isLabelColor(stored) ? stored : FALLBACK_AVATAR_COLOR
 }
 
 export const byCreated = (a: Doc<'profiles'>, b: Doc<'profiles'>) =>

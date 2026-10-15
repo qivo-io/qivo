@@ -322,11 +322,10 @@ describe('following tasks', () => {
     expect(await follow(true)).toEqual({ key: key(fx.task), following: true, changed: true })
     expect(await follow(true)).toEqual({ key: key(fx.task), following: true, changed: false })
     expect(await follows(fx.t, fx.task.id)).toEqual([fx.agent.id])
-    const off = await fx.t.mutation(internal.machine.discussion.restSetFollowing, {
+    const off = await fx.t.mutation(internal.machine.discussion.restUnfollowTask, {
       callerId: fx.agent.id,
       ...W,
       ref: key(fx.task),
-      following: false,
     })
     expect(off).toEqual({ id: fx.task.id, key: key(fx.task), following: false, changed: true })
     expect(await follows(fx.t, fx.task.id)).toEqual([])
@@ -378,11 +377,10 @@ describe('following tasks', () => {
         `task "${ref}" not found (or not visible to you)`,
       )
       await refused(
-        fx.t.mutation(internal.machine.discussion.restSetFollowing, {
+        fx.t.mutation(internal.machine.discussion.restFollowTask, {
           callerId: fx.agent.id,
           ...W,
           ref,
-          following: true,
         }),
         'not_found',
         'task not found',
@@ -676,11 +674,18 @@ const updateMcp = async (fx: Fx, args: Record<string, unknown>, callerId = fx.ag
     }),
   ) as { action: string; tasks: string[]; has_more: boolean }
 
-const updateRest = (fx: Fx, action: 'read' | 'unread' | 'remove' | 'snooze', body: unknown) =>
-  fx.t.mutation(internal.machine.discussion.restUpdateInbox, {
+/* Each POST /v1/inbox/{action} route's internal function. */
+const REST_INBOX = {
+  read: internal.machine.discussion.restReadInbox,
+  unread: internal.machine.discussion.restUnreadInbox,
+  remove: internal.machine.discussion.restRemoveInbox,
+  snooze: internal.machine.discussion.restSnoozeInbox,
+}
+
+const updateRest = (fx: Fx, action: keyof typeof REST_INBOX, body: unknown) =>
+  fx.t.mutation(REST_INBOX[action], {
     callerId: fx.agent.id,
     ...W,
-    action,
     body: typeof body === 'string' ? body : JSON.stringify(body),
   })
 

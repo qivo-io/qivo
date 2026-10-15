@@ -987,6 +987,7 @@ describe('POST /v1/tasks', () => {
       // creating a task does not make the creator follow it
       following: false,
       followers: [],
+      attachments: [],
     })
     expect('project_name' in out).toBe(false)
     expect('created_by' in out).toBe(false)

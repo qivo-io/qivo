@@ -13,6 +13,7 @@
 import { literals } from 'convex-helpers/validators'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { insertUnique } from '../lib/db'
 import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
@@ -74,10 +75,10 @@ export async function linksOf(ctx: QueryCtx, taskId: string): Promise<Doc<'issue
  * Links two tasks as stored (source, target, type), stamped `now`. `id` is
  * the app's client-made id; machine callers omit it. The same link again is
  * a no-op that writes nothing and answers `added: false`; a different link
- * between the same tasks is refused. `provenance` signs a machine write's
- * activity row. Refuses a self link, a task the actor cannot see (in the
- * organization sentence, so no answer describes it) and an actor without
- * Edit on either task.
+ * between the same tasks, or an `id` another link already has, is refused.
+ * `provenance` signs a machine write's activity row. Refuses a self link, a
+ * task the actor cannot see (in the organization sentence, so no answer
+ * describes it) and an actor without Edit on either task.
  */
 export async function addLinkCore(
   ctx: MutationCtx,
@@ -110,15 +111,15 @@ export async function addLinkCore(
     if (same) return { link: existing, added: false }
     throw badRequest('these tasks are already linked')
   }
-  const docId = await ctx.db.insert('issue_links', {
-    id: a.id ?? newUuid(),
-    org_id: source.org_id,
-    source_id,
-    target_id,
-    type,
-    pair_key: key,
-    created_at: now,
-  })
+  const id = a.id ?? newUuid()
+  const docId = await insertUnique(
+    ctx,
+    'issue_links',
+    'by_uuid',
+    { id },
+    { id, org_id: source.org_id, source_id, target_id, type, pair_key: key, created_at: now },
+    badRequest('a link with this id already exists'),
+  )
   // model/activity.ts namedTaskNums reads this wording back; keep in step
   const named = `${type === 'blocks' ? '— blocks' : '— relates to'} ${issueKey(target.num)}`
   await logActivity(ctx, {

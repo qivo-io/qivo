@@ -25,7 +25,7 @@
  * shows the live task title and key, never the title stored on the
  * message. */
 
-import { type ConvexError, v } from 'convex/values'
+import { type ConvexError, type ObjectType, v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import {
@@ -547,37 +547,76 @@ export const restListInbox = internalQuery({
   },
 })
 
-/* POST /v1/inbox/{read|unread|remove|snooze} {tasks | all, until?}. A body
- * ref the caller cannot read is a 400, like other refs in a REST body. */
-export const restUpdateInbox = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, action: vInboxAction, body: v.string() },
-  handler: async (ctx, a): Promise<InboxChangeJson> => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const req = inboxRequest(a.action, jsonBody(a.body))
-    return await changeInbox(ctx, me, a.action, req, () =>
-      badRequest('tasks must name tasks by key, number or uuid'),
-    )
-  },
+/* The arguments of each POST /v1/inbox/{action} function. */
+const vRestInboxArgs = { callerId: v.string(), access: vCredentialAccess, body: v.string() }
+
+/* POST /v1/inbox/{read|unread|remove|snooze} {tasks | all, until?}, which
+ * each action's own internal function below runs, so every route reaches
+ * exactly one function. A body ref the caller cannot read is a 400, like
+ * other refs in a REST body. */
+async function restChangeInbox(
+  ctx: MutationCtx,
+  a: ObjectType<typeof vRestInboxArgs>,
+  action: InboxAction,
+): Promise<InboxChangeJson> {
+  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const req = inboxRequest(action, jsonBody(a.body))
+  return await changeInbox(ctx, me, action, req, () =>
+    badRequest('tasks must name tasks by key, number or uuid'),
+  )
+}
+
+/* POST /v1/inbox/read. */
+export const restReadInbox = internalMutation({
+  args: vRestInboxArgs,
+  handler: (ctx, a) => restChangeInbox(ctx, a, 'read'),
 })
 
-/* PUT (following) and DELETE (not following) /v1/tasks/{ref}/following. */
-export const restSetFollowing = internalMutation({
-  args: {
-    callerId: v.string(),
-    access: vCredentialAccess,
-    ref: v.string(),
-    following: v.boolean(),
-  },
-  handler: async (
-    ctx,
-    a,
-  ): Promise<{ id: string; key: string; following: boolean; changed: boolean }> => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const issue = await findIssue(ctx, me, a.ref)
-    if (issue === null) throw notFound('task not found')
-    const changed = await setFollowing(ctx, me, issue, a.following)
-    return { id: issue.id, key: issueKey(issue.num), following: a.following, changed }
-  },
+/* POST /v1/inbox/unread. */
+export const restUnreadInbox = internalMutation({
+  args: vRestInboxArgs,
+  handler: (ctx, a) => restChangeInbox(ctx, a, 'unread'),
+})
+
+/* POST /v1/inbox/remove. */
+export const restRemoveInbox = internalMutation({
+  args: vRestInboxArgs,
+  handler: (ctx, a) => restChangeInbox(ctx, a, 'remove'),
+})
+
+/* POST /v1/inbox/snooze. */
+export const restSnoozeInbox = internalMutation({
+  args: vRestInboxArgs,
+  handler: (ctx, a) => restChangeInbox(ctx, a, 'snooze'),
+})
+
+/* The arguments of PUT and DELETE /v1/tasks/{ref}/following. */
+const vRestFollowingArgs = { callerId: v.string(), access: vCredentialAccess, ref: v.string() }
+
+/* Sets the caller following the task `ref` or not, for restFollowTask and
+ * restUnfollowTask. */
+async function restFollowing(
+  ctx: MutationCtx,
+  a: ObjectType<typeof vRestFollowingArgs>,
+  following: boolean,
+): Promise<{ id: string; key: string; following: boolean; changed: boolean }> {
+  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const issue = await findIssue(ctx, me, a.ref)
+  if (issue === null) throw notFound('task not found')
+  const changed = await setFollowing(ctx, me, issue, following)
+  return { id: issue.id, key: issueKey(issue.num), following, changed }
+}
+
+/* PUT /v1/tasks/{ref}/following. */
+export const restFollowTask = internalMutation({
+  args: vRestFollowingArgs,
+  handler: (ctx, a) => restFollowing(ctx, a, true),
+})
+
+/* DELETE /v1/tasks/{ref}/following. */
+export const restUnfollowTask = internalMutation({
+  args: vRestFollowingArgs,
+  handler: (ctx, a) => restFollowing(ctx, a, false),
 })
 
 /* ------------------------------------------------------- registry entries */
@@ -750,8 +789,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
   },
 ]
 
-/** The REST routes of this domain. The four inbox actions share one
- * internal function, and so do PUT and DELETE on a task's following. */
+/** The REST routes of this domain, each with its own internal function. */
 export const DISCUSSION_ROUTES: RestRoute[] = [
   route({
     method: 'PATCH',
@@ -793,32 +831,48 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
         offset: query('offset'),
       }),
   }),
-  ...INBOX_ACTIONS.map((action) =>
-    route({
-      method: 'POST',
-      path: `inbox/${action}`,
-      access: 'write',
-      status: 200,
-      run: (r, { callerId, access, body }) =>
-        r.runMutation(internal.machine.discussion.restUpdateInbox, {
-          callerId,
-          access,
-          action,
-          body,
-        }),
-    }),
-  ),
+  route({
+    method: 'POST',
+    path: 'inbox/read',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, body }) =>
+      r.runMutation(internal.machine.discussion.restReadInbox, { callerId, access, body }),
+  }),
+  route({
+    method: 'POST',
+    path: 'inbox/unread',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, body }) =>
+      r.runMutation(internal.machine.discussion.restUnreadInbox, { callerId, access, body }),
+  }),
+  route({
+    method: 'POST',
+    path: 'inbox/remove',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, body }) =>
+      r.runMutation(internal.machine.discussion.restRemoveInbox, { callerId, access, body }),
+  }),
+  route({
+    method: 'POST',
+    path: 'inbox/snooze',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, body }) =>
+      r.runMutation(internal.machine.discussion.restSnoozeInbox, { callerId, access, body }),
+  }),
   route({
     method: 'PUT',
     path: 'tasks/:ref/following',
     access: 'write',
     status: 200,
     run: (r, { callerId, access, param }) =>
-      r.runMutation(internal.machine.discussion.restSetFollowing, {
+      r.runMutation(internal.machine.discussion.restFollowTask, {
         callerId,
         access,
         ref: param('ref'),
-        following: true,
       }),
   }),
   route({
@@ -827,11 +881,10 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
     access: 'write',
     status: 200,
     run: (r, { callerId, access, param }) =>
-      r.runMutation(internal.machine.discussion.restSetFollowing, {
+      r.runMutation(internal.machine.discussion.restUnfollowTask, {
         callerId,
         access,
         ref: param('ref'),
-        following: false,
       }),
   }),
 ]

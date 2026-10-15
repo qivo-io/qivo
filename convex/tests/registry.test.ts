@@ -6,11 +6,12 @@
  * from the flag is driven over HTTP in oauth.test.ts.
  *
  * Entries call internal functions in their surface's module or in a domain
- * module that declares entries for both surfaces (machine/discussion.ts), so
- * the kinds below cover every one of those modules. A domain module keeps
- * each surface's functions apart, and one function may serve several routes
- * that differ only in a fixed argument (the inbox actions, PUT and DELETE on
- * a task's following). */
+ * module that declares entries for both surfaces (machine/records.ts,
+ * machine/discussion.ts), so the kinds below cover every one of those
+ * modules. A domain module keeps each surface's functions apart, and each
+ * entry calls a function of its own, so routes that differ only in a fixed
+ * argument (the inbox actions, PUT and DELETE on a task's following) each
+ * have one. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
@@ -18,6 +19,7 @@ import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import * as discussion from '../machine/discussion'
 import * as mcp from '../machine/mcp'
+import * as records from '../machine/records'
 import {
   type MachineAccess,
   type MachineEntry,
@@ -33,7 +35,8 @@ type Kind = 'query' | 'mutation' | 'action'
 type Call = { via: Kind; name: string; args: unknown }
 type Ctx = Pick<ActionCtx, 'runQuery' | 'runMutation' | 'runAction'>
 
-/* A raw ctx that records what each run tries to call, and resolves. */
+/* A raw ctx that records what each run tries to call, and resolves an
+ * empty object, so a run that reads its result's fields still finishes. */
 function recorder(): { runner: Ctx; calls: Call[] } {
   const calls: Call[] = []
   const record =
@@ -43,7 +46,7 @@ function recorder(): { runner: Ctx; calls: Call[] } {
       ...args: unknown[]
     ): Promise<never> => {
       calls.push({ via, name: getFunctionName(ref), args: args[0] })
-      return undefined as never
+      return {} as never
     }
   return {
     calls,
@@ -88,6 +91,7 @@ type Surface = { module: string; kinds: Map<string, Kind>; entries: Entry[] }
 const KINDS = new Map<string, Kind>([
   ...registeredKinds('machine/mcp', mcp),
   ...registeredKinds('machine/rest', rest),
+  ...registeredKinds('machine/records', records),
   ...registeredKinds('machine/discussion', discussion),
 ])
 
@@ -185,18 +189,14 @@ describe('the machine action registry', () => {
     }
   })
 
-  it('every internal function is reached, and by entries of one surface only', async () => {
-    const surfacesOf = new Map<string, Set<string>>()
+  it('every internal function is reached by exactly one entry', async () => {
+    // one flat list across both surfaces, duplicates kept, so a function
+    // that two entries call fails here, whichever surfaces they belong to
+    const reached: string[] = []
     for (const surface of SURFACES) {
-      for (const { calls } of await callsOf(surface)) {
-        for (const { name } of calls) {
-          surfacesOf.set(name, (surfacesOf.get(name) ?? new Set()).add(surface.module))
-        }
-      }
+      for (const { calls } of await callsOf(surface)) reached.push(...calls.map((c) => c.name))
     }
-    expect([...surfacesOf.keys()].sort()).toEqual([...KINDS.keys()].sort())
-    const shared = [...surfacesOf].filter(([, surfaces]) => surfaces.size > 1).map(([name]) => name)
-    expect(shared).toEqual([])
+    expect(reached.sort()).toEqual([...KINDS.keys()].sort())
   })
 
   it('each surface module serves only its own surface', async () => {
@@ -314,6 +314,12 @@ describe('REST route matching', () => {
       ref: 'FW',
     })
     expect(match('GET', 'users')).toEqual({ route: 'GET users' })
+    expect(match('POST', 'tasks/QN-1/attachments/abc')).toEqual({
+      route: 'POST tasks/:ref/attachments/:ticket',
+      ref: 'QN-1',
+      ticket: 'abc',
+    })
+    expect(match('GET', 'workload')).toEqual({ route: 'GET workload' })
     // PUT has one route, and each inbox action is a literal segment
     expect(match('PUT', 'tasks/QN-1/following')).toEqual({
       route: 'PUT tasks/:ref/following',
@@ -338,6 +344,8 @@ describe('REST route matching', () => {
       ['POST', 'projects'],
       ['GET', '%70rojects'],
       ['GET', 'issues'],
+      ['PATCH', 'tasks/QN-1/attachments/abc'],
+      ['POST', 'workload'],
       ['GET', 'webhooks'],
       ['GET', ''],
     ]) {

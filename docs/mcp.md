@@ -654,9 +654,11 @@ The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
 operations, `set_task_link` for links between tasks, `list_labels` and
-`set_label` for the organization's labels, `update_comment` and
-`delete_comment` for comments, `list_inbox` and `update_inbox` for your inbox,
-and `set_following` to follow a task. This pre-launch rename replaces the former tool names; clients
+`set_label` for the organization's labels, `delete_attachment` and
+`list_task_activity` for a task's files and history, `get_workload` for
+planned hours per person, `update_comment` and `delete_comment` for comments,
+`list_inbox` and `update_inbox` for your inbox, and `set_following` to follow
+a task. This pre-launch rename replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
@@ -667,7 +669,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links`, `following`, `followers` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's discussion thread, oldest first, with author and edit attribution |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row — the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters. Returns `id` and `key`, plus `ignored_arguments` when you sent arguments the tool does not know |
@@ -676,6 +678,9 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
+| `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
+| `list_task_activity` | The task's history, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. See [Task activity](#task-activity) |
+| `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`. See [Workload](#workload) |
 | `update_comment` | Replace a comment's `body`; `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `delete_comment` | Delete a comment, by the same rule as `update_comment` |
 | `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says older messages were not read |
@@ -745,7 +750,7 @@ is `true`, so a subtask under a task hidden from you is not mistaken for a
 top-level task. A group's `start_week` and `end_week` come from the subtasks
 you can read, at any depth.
 
-`get_task` adds six fields, which name only tasks you can read:
+`get_task` adds seven fields, which name only tasks you can read:
 
 ```json
 {
@@ -754,12 +759,14 @@ you can read, at any depth.
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
   "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }],
   "following": false,
-  "followers": [{ "id": "…uuid…", "name": "Priya Patel" }]
+  "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
+  "attachments": [{ "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213, "…": "…" }]
 }
 ```
 
 `following` says whether you follow the task, and `followers` lists everyone
-who does, by name, as the app's follower list shows them.
+who does, by name, as the app's follower list shows them. `attachments`
+lists the task's files, described under [Attachments](#attachments).
 
 `subtasks` are the direct subtasks you can read, by number: the active ones
 of an active task, and all of them for an archived task. `links` are the
@@ -803,6 +810,106 @@ One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
 `archive_reason`. Everything lands or nothing does, and each step writes its
 own activity row signed `via MCP`.
+
+### Attachments
+
+`get_task` lists every file of the task, oldest first, including the images
+inside its description:
+
+```json
+{
+  "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213,
+  "content_type": "application/pdf", "inline": false,
+  "uploaded_by_id": "…uuid…", "uploaded_by_name": "Priya Patel",
+  "created_at": "…",
+  "url": "https://api.qivo.io/files/…?e=…&m=…&t=…",
+  "url_expires_at": "…"
+}
+```
+
+`inline` is `true` for a description image, which the description names as
+`![alt](att:<id>)`. `url` downloads the file for 10 minutes
+(`url_expires_at`); call `get_task` again for a fresh link. Each download
+checks again that your user is active and can see the task's project, but
+not the credential, so a link fetched before a token was revoked works until
+it expires. Images open in the browser and other types download.
+
+`delete_attachment` deletes one file and writes a `removed an attachment
+from` activity row signed `via MCP`. Anyone with Edit access to the
+project may delete any file, not only their own. An id that is not a file of
+that task reads `attachment "<id>" not found on QN-<n>`. MCP does not
+upload files; scripts upload through the REST API. Description images stay
+with the app, so `delete_attachment` refuses one with `this image belongs to
+the task description; remove it by editing the description in the app`.
+When `update_task` rewrites a description, keep every `![alt](att:<id>)`
+reference whose image should stay. An image the description no longer names
+stays until someone next saves that task's description in the app. That
+save deletes the image at once if it was uploaded more than a day ago, so
+put a dropped reference back before then.
+
+### Task activity
+
+`list_task_activity` answers the task's history, oldest first, the rows the
+task window's **All** filter shows beside the comments (`list_comments` has
+those):
+
+```json
+[
+  {
+    "id": "…uuid…", "created_at": "…",
+    "actor_id": "…uuid…", "actor_name": "Leo Martins",
+    "verb": "changed", "detail": "(status To Do → In Progress) — via MCP"
+  }
+]
+```
+
+You receive the rows the app's activity feed would give you. Organization
+admins receive every row. Other users do not receive a row that names a
+project they cannot access, such as where the task was before a move, or
+another task they cannot read, such as the other end of a link. An
+archived task's history is answered too, by the same rule. `actor_id` and
+`actor_name` are `null` once the user who made the change has been removed
+from the organization. The organization keeps its newest 500 activity rows.
+
+### Workload
+
+`get_workload` answers each person's planned hours per week, as the
+Roadmap's Team strip and the planning panel count them:
+
+```json
+{
+  "week_starts": ["2026-10-12", "2026-10-19"],
+  "project": null,
+  "people": [
+    {
+      "id": "…uuid…", "name": "Leo Martins", "org_role": "user", "kind": "person",
+      "active": true, "plannable_hours": 32,
+      "hours": [30, 22], "hidden_hours": [4, 0]
+    }
+  ]
+}
+```
+
+- `from_week` is any day of the first week (`YYYY-MM-DD`), by default the
+  current week. Weeks begin on the organization's `week_start` from
+  `get_me`. `weeks` is 1 to 52, 8 by default.
+- `project` (number, key or uuid) limits the hours to that project and its
+  sub-projects; `project` names it in the result.
+- `hours[i]` is the week starting `week_starts[i]`, rounded to a tenth. A
+  task counts toward its owner (the reviewer while it is In Review with one,
+  else the assignee) when it is scheduled, not Done, not paused, has
+  remaining hours and is not archived. Its remaining hours spread evenly from
+  the week its estimate was saved, or its start week if later, through its
+  end week.
+- Compare `hours` with `plannable_hours`. An agent's is `null`, because
+  agents have no weekly limit.
+- Organization admins and Standard users also receive the hours of projects
+  they cannot see, in `hours` and `hidden_hours`, without naming the task or
+  project. `hidden_hours` is the part of `hours` from those projects, so do
+  not add the two. Viewers and guests receive only work they can see or own.
+  With `project`, `hidden_hours` is all zeros.
+- `people` lists every active user and agent, and any inactive one with hours
+  in the window, ordered by name.
 
 ### Comments, inbox and following
 
