@@ -130,7 +130,7 @@ describe('public demo ownership and authentication', () => {
     expect(retry.orgId).toBe(first.orgId)
     expect(await t.run((ctx) => ctx.db.query('organizations').collect())).toHaveLength(1)
     expect(await login.as.query(api.appearance.get, {})).toEqual({
-      mode: 'blue',
+      mode: 'dark',
       image_source: 'daily',
       custom_image: null,
     })

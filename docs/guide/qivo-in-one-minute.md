@@ -26,7 +26,7 @@ password. Opening the welcome page alone creates nothing. Other visitors
 receive separate copies, and sharing a task link does not give them access
 to yours.
 
-You can edit the sample work, scheduling and team. Demos start with the Blue
+You can edit the sample work, scheduling and team. Demos start with the Dark
 theme and **Image of the week** as the Canvas background, using the default
 photo if no weekly image is assigned. Change these in **Settings → Your
 preferences**.

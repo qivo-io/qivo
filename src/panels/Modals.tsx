@@ -112,13 +112,14 @@ function ModalShell({
       {/* top-anchored 4vh from the browser edge (IssueDetail matches); the
           card grows with content and caps at 92vh so the 4vh margin also
           holds at the bottom before the body starts scrolling */}
-      {/* Dialogs and task windows share the theme's floating material, with
-          borders and shadows separating them from the page beneath. */}
+      {/* Dialogs and task windows share the theme's window material and
+          backdrop (appearance.css), with borders and shadows separating them
+          from the page beneath. */}
       <DialogContent
         data-modal-shell
         showCloseButton={false}
         aria-describedby={undefined}
-        overlayClassName="z-[100] bg-[var(--scrim)] backdrop-blur-[4px]"
+        overlayClassName="z-[100]"
         className="top-[4vh] z-[101] flex max-h-[92vh] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 shadow-pop"
         style={{ width: mobile ? '100%' : width }}
         onOpenAutoFocus={(event) => {

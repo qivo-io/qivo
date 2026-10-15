@@ -1146,7 +1146,7 @@ function AnchoredPop({
 /* ---- Segmented control -------------------------------------------------- */
 /* `ground` selects the surrounding surface: ordinary controls use
    --background, while controls inside raised popovers use --surface-3.
-   Themes choose the fills; in Dark, Light and Blue --surface-3 is a
+   Themes choose the fills; in Dark and Light --surface-3 is a
    translucent ink, so a raised well tints whatever popover it sits in. */
 /* Generic over the value string (inferred from `value`) so a caller whose
    state is a literal union can pass its setter straight through; the store's

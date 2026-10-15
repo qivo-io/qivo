@@ -197,7 +197,7 @@ describe('public approved Canvas feed', () => {
       })
       await ctx.db.insert('account_appearance', {
         auth_user_id: 'private-owner',
-        mode: 'blue',
+        mode: 'dark',
         image_source: 'custom',
         custom_image_id: privateId,
         revision: uuid(),

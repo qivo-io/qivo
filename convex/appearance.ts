@@ -1,12 +1,14 @@
 /* Account-owned appearance and the approved weekly Canvas image. Custom files
  * remain private and never enter platform curation. */
+
 import { v } from 'convex/values'
+import { literals } from 'convex-helpers/validators'
 import { internal } from './_generated/api'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { storageIdInUse } from './files'
 import { isDemoDeployment } from './lib/demo'
-import { vAppearanceMode, vImageSource } from './lib/enums'
+import { APPEARANCE_MODES, vImageSource } from './lib/enums'
 import {
   backgroundFileUrl,
   backgroundUploadUrl,
@@ -50,7 +52,7 @@ async function ensureSettings(ctx: MutationCtx, authId: string) {
   if (existing) return existing
   const id = await ctx.db.insert('account_appearance', {
     auth_user_id: authId,
-    mode: 'blue',
+    mode: 'dark',
     image_source: 'daily',
     revision: crypto.randomUUID(),
     updated_at: new Date().toISOString(),
@@ -88,13 +90,20 @@ export const publicCanvas = internalQuery({
 
 export const save = authedMutation({
   args: {
-    mode: vAppearanceMode,
+    // A tab loaded before Blue retired still offers it. Backend changes stay
+    // compatible with open tabs (docs/deployment.md), so 'blue' saves as
+    // Dark. Drop it once no served build offers Blue.
+    mode: literals(...APPEARANCE_MODES, 'blue'),
     image_source: vImageSource,
   },
-  handler: async (ctx, choices): Promise<AppearanceSettings> => {
+  handler: async (ctx, { mode, image_source }): Promise<AppearanceSettings> => {
     await requireAppearanceAccount(ctx, ctx.authUserId)
     const settings = await ensureSettings(ctx, ctx.authUserId)
-    await ctx.db.patch(settings._id, { ...choices, updated_at: new Date().toISOString() })
+    await ctx.db.patch(settings._id, {
+      mode: mode === 'blue' ? 'dark' : mode,
+      image_source,
+      updated_at: new Date().toISOString(),
+    })
     return appearanceSettings(ctx, ctx.authUserId)
   },
 })

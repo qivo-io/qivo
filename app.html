@@ -9,12 +9,14 @@
 <script>
 // Restore only the theme before the first paint. Images still require the
 // authenticated, current selection; no photo URL or private lease is cached.
+// A cached choice of the retired Blue theme paints Dark, as the server reads it.
 try {
-  const mode = localStorage.getItem('qivo-appearance-mode');
-  if (mode === 'blue' || mode === 'dark' || mode === 'light') {
+  const stored = localStorage.getItem('qivo-appearance-mode');
+  if (stored === 'dark' || stored === 'light' || stored === 'blue') {
+    const mode = stored === 'light' ? 'light' : 'dark';
     document.documentElement.dataset.appearance = mode;
     document.documentElement.classList.toggle('dark', mode !== 'light');
-    document.documentElement.style.colorScheme = mode === 'light' ? 'light' : 'dark';
+    document.documentElement.style.colorScheme = mode;
   }
 } catch {}
 </script>

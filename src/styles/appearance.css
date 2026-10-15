@@ -1,9 +1,14 @@
 /* Put prefixed backdrop-filter before the standard property: production CSS
    optimization can otherwise leave only the spelling Chromium ignores.
-   Every planner theme uses the same panel structure over the Canvas image.
-   Only the material changes: tokens.css supplies each palette's panels,
-   translucent while a Canvas image is painted and solid with No image or
-   before one loads.
+   Every planner theme uses the same structure over the Canvas image. Only
+   the material changes. tokens.css supplies each palette's panels, cards,
+   windows and menus, as tinted glass while a Canvas image is painted and
+   solid with No image or before one loads.
+   A backdrop-filter reaches back only to the nearest ancestor with its own
+   backdrop-filter, filter, opacity below 1, mask, clip-path or blend mode
+   (its Backdrop Root). A blurred surface must therefore never sit inside
+   another one. Windows stand beside their backdrop, and the cards and
+   controls on a blurred panel take a tint only.
    Scope these rules to the authenticated planner, leaving the operator UI alone. */
 html[data-appearance] {
   --board-body-frame: 1px solid var(--border);
@@ -30,15 +35,6 @@ html[data-appearance] :is([data-track], [data-subtrack]) {
   pointer-events: none;
   background: var(--bg);
 }
-.appearance-background::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--workspace-image-veil);
-}
-html:not([data-appearance="blue"]) .appearance-background::after {
-  display: none;
-}
 .appearance-background img {
   width: 100%;
   height: 100%;
@@ -58,22 +54,6 @@ html:not([data-appearance="blue"]) .appearance-background::after {
   padding: 8px 12px;
   flex-shrink: 0;
   background: var(--chrome);
-}
-.planner-navigation-drawer {
-  top: 0;
-  left: 0;
-  transform: none;
-  translate: none;
-  height: 100dvh;
-  width: min(320px, 90vw);
-  max-width: none;
-  border-radius: 0;
-  padding: 0;
-  display: block;
-}
-.planner-navigation-drawer .planner-sidebar {
-  width: 100%;
-  height: 100%;
 }
 
 html[data-appearance]
@@ -113,8 +93,8 @@ html[data-appearance] .planner-sidebar {
 /* Tailwind's bare border uses currentColor. Menu outlines must use the theme's
    float rim (--float-border, which falls back to the subdued --border of
    their triggers) instead of white/black text ink. The search palette,
-   dialogs and task windows keep their --border rim: the scrim already
-   separates them from the page. */
+   dialogs and task windows keep their --border rim, since their backdrop
+   already sets them off the page. */
 html[data-appearance]
 :is(
   [data-slot="popover-content"],
@@ -124,27 +104,34 @@ html[data-appearance]
   border-color: var(--float-border, var(--border));
 }
 
-/* Blue sheets (dialogs, alert dialogs, the task window, the Description and
-   Activity focus windows, and the workspace loading and address-moved
-   cards) use the same material as workspace panels, sampling the content
-   beneath them even when another window is already open. */
-html[data-appearance="blue"]
-:is([data-floating-surface], [data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
-  background: var(--workspace-panel);
-  -webkit-backdrop-filter: var(--workspace-panel-blur);
-  backdrop-filter: var(--workspace-panel-blur);
+/* Every backdrop: the dialog and alert dialog overlays and the task and
+   focus windows' [data-scrim], whatever fill or blur a call site names. */
+html[data-appearance]
+:is([data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], [data-scrim]) {
+  background: var(--scrim);
+  -webkit-backdrop-filter: var(--scrim-blur);
+  backdrop-filter: var(--scrim-blur);
 }
-/* Blue's menus, popovers, selects, tooltips, AnchoredPop, toasts, the app
+
+/* Over a photo, sheets (dialogs, alert dialogs, the task window, the
+   Description and Activity focus windows, and the workspace loading and
+   address-moved cards) are window glass, sampling the content beneath them
+   even when another window is already open. */
+html[data-appearance][data-background-state="ready"]
+:is([data-floating-surface], [data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  background: var(--window-material);
+  -webkit-backdrop-filter: var(--window-blur);
+  backdrop-filter: var(--window-blur);
+}
+/* Over a photo, menus, popovers, selects, AnchoredPop, toasts, the app
    update notice, the roadmap plan card, the editor's link and mention menus
-   and the search palette sit a step above the panel on --float-material:
-   translucent with the panel blur over the photo, opaque with No image.
-   Its :is() holds (0,2,0) arguments, so this is (0,3,1) and beats the
+   and the search palette sit a step above the window on floating glass.
+   Its :is() holds (0,2,0) arguments, so this is (0,4,1) and beats the
    sheet rule above. */
-html[data-appearance="blue"]
+html[data-appearance][data-background-state="ready"]
 :is(
   [data-slot="popover-content"],
   [data-slot="select-content"],
-  [data-slot="tooltip-content"],
   [data-anchoredpop-backdrop] + [data-floating-surface],
   .planner-toast-host > [data-floating-surface],
   [data-app-update],
@@ -154,42 +141,40 @@ html[data-appearance="blue"]
   [data-slot="dialog-content"]:has(> [data-slot="command"])
 ) {
   background: var(--float-material);
-  -webkit-backdrop-filter: var(--workspace-panel-blur);
-  backdrop-filter: var(--workspace-panel-blur);
+  -webkit-backdrop-filter: var(--float-blur);
+  backdrop-filter: var(--float-blur);
 }
 
-/* These children inherit their parent's material; another coat would make
-   the palette and mobile navigation appear more opaque, and a Command's
-   bg-popover would be an opaque block inside a translucent picker: a
-   desktop Popover, or the landscape roadmap's AnchoredPop, whose Popover
-   wraps it in a role="dialog" div. */
-html[data-appearance="blue"]
+/* A Command inherits its parent's glass. Its bg-popover would make the
+   palette appear more opaque, and would be an opaque block inside a
+   translucent picker, such as a desktop Popover or the landscape roadmap's
+   AnchoredPop, whose Popover wraps it in a role="dialog" div. */
+html[data-appearance][data-background-state="ready"]
   :is(
     [data-slot="dialog-content"],
     [data-slot="popover-content"],
     [data-floating-surface] > [role="dialog"]
   )
-  > [data-slot="command"],
-html[data-appearance="blue"]
-  .planner-navigation-drawer
-  :is(.planner-navigation, .settings-navigation) {
+  > [data-slot="command"] {
   background: transparent;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
-/* Dark and Blue tooltips float like a menu: the floating fill
-   (--float-material, else --popover) inside the float rim, instead of an
-   inverted near-white bubble. Blue's also takes the float rule's blur and
-   draws its rim inset (--tooltip-shadow). Light keeps its navy tooltip. */
-html:is([data-appearance="dark"], [data-appearance="blue"]) [data-slot="tooltip-content"] {
-  background: var(--float-material, var(--popover));
+/* Dark tooltips float like a menu: the floating fill inside the float rim,
+   instead of an inverted near-white bubble. Light keeps its navy tooltip.
+   Over a photo both are floating glass in their own fill. */
+html[data-appearance="dark"] [data-slot="tooltip-content"] {
+  background: var(--popover);
   color: var(--text-1);
-  box-shadow: var(
-    --tooltip-shadow,
-    0 0 0 1px var(--float-border, var(--border)),
-    var(--qivo-shadow-pop)
-  );
+  box-shadow:
+    0 0 0 1px var(--float-border),
+    var(--qivo-shadow-pop);
+}
+html[data-appearance][data-background-state="ready"] [data-slot="tooltip-content"] {
+  background: var(--tooltip-material);
+  -webkit-backdrop-filter: var(--float-blur);
+  backdrop-filter: var(--float-blur);
 }
 html[data-appearance] .planner-brand {
   padding: 0 20px;
@@ -292,12 +277,6 @@ html[data-appearance] .board-panel-photo img {
   object-fit: cover;
   object-position: center;
 }
-html[data-appearance] .board-panel-photo::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--workspace-image-veil);
-}
 html[data-appearance] :is(.board-panel-heading, .board-lane-body, [data-lane-foot]) {
   background: transparent;
 }
@@ -307,18 +286,23 @@ html[data-appearance] .board-status-panel[data-board-fused="true"] {
 html[data-appearance] .board-card {
   background: transparent;
   border-radius: var(--r-md);
-  /* The enclosing lane supplies the tint and blur once for all its cards. */
+  /* The enclosing lane supplies the blur once for all its cards. */
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 html[data-appearance] .board-card:hover {
   border-color: var(--border-strong);
 }
-/* Light cards are opaque white objects on the lane. A hovered card answers
-   with a contact shadow and a slightly deeper rim, and the rows inside it
-   hover at a faint ink (a visible one on a parent card with child rows),
-   rather than the full row fill in a --border-strong frame, which read as
-   selected. The scoped --hover also reaches buttons inside the card. */
+/* Over a photo every card tints the lane with half the control fill. */
+html[data-appearance][data-background-state="ready"] .board-card {
+  background: var(--board-card-fill);
+}
+/* Light cards are white objects on the lane, opaque with No image. A
+   hovered card answers with a contact shadow and a slightly deeper rim, and
+   the rows inside it hover at a faint ink (a visible one on a parent card
+   with child rows), rather than the full row fill in a --border-strong
+   frame, which read as selected. The scoped --hover also reaches buttons
+   inside the card. */
 html[data-appearance="light"] .board-card {
   --hover: rgba(25, 39, 56, 0.04);
   background: var(--surface-1);
@@ -441,11 +425,11 @@ html[data-appearance] .mobile-task-tools [data-on] {
   background-image: linear-gradient(var(--lit), var(--lit));
 }
 
-/* The palette's esc key rests on its rim alone: its --background would be a
-   hole in the palette's floating fill, darker in Dark and Blue and greyer in
-   Light. Hovered, it keeps the bare hover ink over the palette. The search
-   rule under the palette and picker inputs is the theme border, not
-   currentColor text ink. */
+/* The palette's esc key rests on its rim alone. Its --background would be a
+   hole in the palette's floating fill, darker in Dark and greyer in Light.
+   Hovered, it keeps the bare hover ink over the palette. The search rule
+   under the palette and picker inputs is the theme border, not currentColor
+   text ink. */
 html[data-appearance] [data-palette-close]:not(:hover) {
   background-color: transparent;
 }
@@ -484,7 +468,8 @@ html[data-appearance="light"]
 }
 /* Light: lit and current chips letter in deep primary, so "current" carries
    the accent while the chip keeps the slate --lit fill; a lit filter chip's
-   clear x follows its chip. */
+   clear x follows its chip. A step darker than primary keeps 4.5:1 on glass
+   over darker photos. */
 html[data-appearance="light"]
 :is(
   [data-on],
@@ -492,7 +477,7 @@ html[data-appearance="light"]
   [data-slot="toggle-group-item"][data-state="on"]
 ),
 html[data-appearance="light"] [data-on] ~ [data-filter-x] {
-  color: #1e40af;
+  color: #18338b;
 }
 /* Light: unchecked checkboxes get a 3:1 rim; focus and invalid keep theirs. */
 html[data-appearance="light"]

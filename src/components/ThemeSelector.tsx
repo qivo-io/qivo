@@ -1,4 +1,4 @@
-import { Check, Layers, Moon, Sun } from 'lucide-react'
+import { Check, Moon, Sun } from 'lucide-react'
 import { useId } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -50,7 +50,6 @@ export function ThemeSelector({
       <div className="theme-choice-grid">
         {(
           [
-            ['blue', 'Blue', Layers],
             ['dark', 'Dark', Moon],
             ['light', 'Light', Sun],
           ] as const
