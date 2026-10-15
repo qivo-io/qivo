@@ -48,7 +48,8 @@ in vain.
 Project parity added `get_project`, `create_project`, `update_project`,
 `set_project_access`, `set_milestone` and `delete_milestone`. A client
 holding an older catalogue does not see them until it refreshes its tool
-list.
+list. `update_project` also names any argument it does not know in
+`ignored_arguments`, such as an `archive_reason`, which only tasks take.
 
 Team parity added `set_team` and `set_team_member`, and `list_teams` now
 answers each team's `members`. A client holding an older catalogue still
@@ -683,7 +684,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `get_project` | One readable `project` (number/key/uuid): the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name`, or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
-| `update_project` | Change a project you lead: `name`, `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project` |
+| `update_project` | Change a project you lead: `name`, `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`, plus `ignored_arguments` when you sent arguments the tool does not know, such as `archive_reason`, which only tasks take |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
 | `set_milestone` | Add a milestone (`name`, `date`) to a `project`'s top-level project, or with `milestone` rename or move one |
 | `delete_milestone` | Delete a `milestone` of a `project` |
@@ -809,7 +810,10 @@ fields and the lead, so a lead can archive a project and hand it over
 together. Archiving a top-level project carries its active sub-projects, and
 restoring brings back the ones archived with it. A lead
 handover keeps the outgoing lead as User and drops the new lead's own grant,
-and only a person may make one.
+and only a person may make one. A project takes no archive reason, as in the
+app, where only archiving a task asks for one. `update_project` does not know
+`archive_reason`, so a call that sends it still archives the project and
+names the argument in `ignored_arguments`.
 
 **Access.** `set_project_access` names exactly one of `user_id` and
 `team_id` (uuids from `list_users` and `list_teams`). It needs a person who is

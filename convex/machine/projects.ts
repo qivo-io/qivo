@@ -85,7 +85,15 @@ import {
 } from '../model/projects'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
-import { MCP_PROVENANCE, needJson, optionalJson, pretty, restProvenance, vKeyName } from './shared'
+import {
+  MCP_PROVENANCE,
+  needJson,
+  optionalJson,
+  pretty,
+  restProvenance,
+  vKeyName,
+  withIgnored,
+} from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -411,7 +419,9 @@ export const mcpCreateProject = internalMutation({
   },
 })
 
-/* update_project: settings, the lead and archive/restore of one project. */
+/* update_project: settings, the lead and archive/restore of one project.
+ * Its registry entry names the arguments the schema dropped, such as an
+ * `archive_reason` only tasks take, in `ignored_arguments`. */
 export const mcpUpdateProject = internalMutation({
   args: {
     callerId: v.string(),
@@ -557,6 +567,10 @@ async function restProject(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<
 
 const PARENT_AT_CREATION = "a project's parent is set when it is created, with parent"
 
+/* Projects have no comment thread, so archiving one takes no reason. */
+const NO_PROJECT_ARCHIVE_REASON =
+  'only tasks take an archive reason; archive a project with archived alone'
+
 /* Fields a project body may not write, each refused with where to go
  * instead rather than ignored. */
 function refuseProjectFields(b: Record<string, unknown>): void {
@@ -640,7 +654,9 @@ export const restCreateProject = internalMutation({
 })
 
 /* PATCH /v1/projects/{ref} {name?, description?, review_hours?,
- * track_delay?, lead_id?, archived?}. Unknown fields are ignored. */
+ * track_delay?, lead_id?, archived?}. The fields refuseProjectFields names,
+ * `parent` and `archive_reason` are refused; other unknown fields are
+ * ignored. */
 export const restUpdateProject = internalMutation({
   args: {
     callerId: v.string(),
@@ -656,6 +672,8 @@ export const restUpdateProject = internalMutation({
     refuseProjectFields(b)
     // POST takes `parent`; a project keeps the parent it was created with
     if ('parent' in b) throw badRequest(PARENT_AT_CREATION)
+    // a task's archive reason, refused rather than dropped without a word
+    if ('archive_reason' in b) throw badRequest(NO_PROJECT_ARCHIVE_REASON)
     const input: UpdateInput = {}
     if ('name' in b) {
       if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -936,7 +954,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'update_project',
       title: 'Update project',
       description:
-        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access.',
+        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason. Arguments this tool does not know are listed in `ignored_arguments`.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -967,20 +985,23 @@ export const PROJECT_TOOLS: McpTool[] = [
         required: ['project'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.projects.mcpUpdateProject, {
-        callerId,
-        access,
-        ...(args as {
-          project: string
-          name?: string
-          description?: string
-          review_hours?: number | null
-          track_delay?: boolean
-          lead_id?: string
-          archived?: boolean
+    run: async (r, { callerId, access, args, ignored }) =>
+      withIgnored(
+        await r.runMutation(internal.machine.projects.mcpUpdateProject, {
+          callerId,
+          access,
+          ...(args as {
+            project: string
+            name?: string
+            description?: string
+            review_hours?: number | null
+            track_delay?: boolean
+            lead_id?: string
+            archived?: boolean
+          }),
         }),
-      }),
+        ignored,
+      ),
   },
   {
     access: 'write',

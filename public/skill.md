@@ -47,8 +47,9 @@ A write also needs Edit access on the project, as described below.
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
   allows at most 200; page with `offset` until a shorter page arrives. If
-  `create_task` or `update_task` answers with `ignored_arguments`, those
-  arguments did nothing. Refresh the tool list and retry with current names.
+  `create_task`, `update_task` or `update_project` answers with
+  `ignored_arguments`, those arguments did nothing. Refresh the tool list and
+  retry with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
   token for scripts, large paginated reads or setting someone's plannable
   hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
@@ -196,7 +197,8 @@ Useful field rules:
   `set_label` or `POST /v1/labels` creates a label (`#rrggbb` color); only
   organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
-  reason becomes a comment, as in the app's archive dialog.
+  reason becomes a comment, as in the app's archive dialog. Only tasks take
+  a reason. Archive a project with `archived` alone.
 
 ## Files, history and workload
 

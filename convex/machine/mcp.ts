@@ -131,7 +131,7 @@ import { DISCUSSION_TOOLS } from './discussion'
 import { PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
-import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty } from './shared'
+import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty, withIgnored } from './shared'
 import { TEAM_TOOLS } from './teams'
 
 /* --------------------------------------------------------------- the tools
@@ -1064,17 +1064,11 @@ function pickArgs(tool: ToolDef, args: Record<string, unknown>): Record<string, 
 }
 
 /* The argument names pickArgs drops because the schema does not know them,
- * in the order sent. create_task and update_task report them (withIgnored),
- * so a client with an outdated cached schema learns they changed nothing. */
+ * in the order sent. create_task, update_task and update_project report
+ * them (machine/shared.ts withIgnored), so a client with an outdated cached
+ * schema learns they changed nothing. */
 const unknownArgs = (tool: ToolDef, args: Record<string, unknown>): string[] =>
   Object.keys(args).filter((key) => !Object.hasOwn(tool.inputSchema.properties, key))
-
-/* A create or update result with `ignored_arguments` appended when some
- * argument was dropped; otherwise the result bytes are unchanged. */
-function withIgnored(text: string, ignored: readonly string[]): string {
-  if (ignored.length === 0) return text
-  return pretty({ ...(JSON.parse(text) as Record<string, unknown>), ignored_arguments: ignored })
-}
 
 /* --------------------------------------------------- JSON-RPC dispatch core
  * Everything from body parse on, exported so the conformance suite can drive

@@ -417,7 +417,10 @@ organization admins have.
   archived along with it, and a sub-project's archived parent too (which
   needs Lead on the parent). Qivo archives or restores before it changes the
   other fields, so one request may restore and rename, or archive and hand
-  over the lead.
+  over the lead. A project takes no archive reason, as in the app, where only
+  archiving a task asks for one. A body with `archive_reason` is a `400`
+  (`only tasks take an archive reason; archive a project with archived
+  alone`), and nothing changes.
 - `lead_id` hands over the lead. Only a person may do it; an agent is refused
   with `only people can change who has access, not agents`. The outgoing lead
   keeps User access, and the new lead's own grant goes, because the lead role

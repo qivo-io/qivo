@@ -82,3 +82,12 @@ export const optionalJson = (raw: string): Record<string, unknown> =>
  * insertion key order survives the Convex value boundary, which sorts
  * object keys. */
 export const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
+
+/** An MCP result with `ignored_arguments` appended when the tool dropped
+ * arguments its schema does not know, so a client learns they changed
+ * nothing. Without any, the result bytes are unchanged. create_task,
+ * update_task and update_project report them. */
+export function withIgnored(text: string, ignored: readonly string[]): string {
+  if (ignored.length === 0) return text
+  return pretty({ ...(JSON.parse(text) as Record<string, unknown>), ignored_arguments: ignored })
+}

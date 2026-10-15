@@ -124,8 +124,8 @@ const plantViewerAgent = (fx: Fx) =>
     plannable_hours: undefined,
   })
 
-/* POST /v1/projects {name} over HTTP with a new key of `agent`. */
-async function restCreate(fx: Fx, agent: Doc<'profiles'>, name: string) {
+/* A new key of `agent`, as the bearer secret. */
+async function mintAgentKey(fx: Fx, agent: Doc<'profiles'>): Promise<string> {
   const key = `qva_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
   await fx.t.run(async (ctx) => {
     await ctx.db.insert('agent_keys', {
@@ -137,19 +137,62 @@ async function restCreate(fx: Fx, agent: Doc<'profiles'>, name: string) {
       created_at: NOW,
     })
   })
-  const res = await (
+  return key
+}
+
+/* A POST through the deployment's HTTP routes. */
+const httpPost = (fx: Fx, path: string, headers: Record<string, string>, body: unknown) =>
+  (
     fx.t as unknown as {
       fetch(
         path: string,
         init: { method: string; headers: Record<string, string>; body: string },
       ): Promise<{ status: number; text(): Promise<string> }>
     }
-  ).fetch('/v1/projects', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
+  ).fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
+
+/* POST /v1/projects {name} over HTTP with a new key of `agent`. */
+async function restCreate(fx: Fx, agent: Doc<'profiles'>, name: string) {
+  const key = await mintAgentKey(fx, agent)
+  const res = await httpPost(
+    fx,
+    '/v1/projects',
+    { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    { name },
+  )
   return { status: res.status, body: JSON.parse(await res.text()) as Json }
+}
+
+/* One MCP tools/call over HTTP with a new key of `agent`, answering the
+ * tool's result text parsed. The HTTP route, unlike the internal function,
+ * drops and reports arguments the tool's schema does not know. */
+async function mcpTool(fx: Fx, agent: Doc<'profiles'>, name: string, args: Json): Promise<Json> {
+  const key = await mintAgentKey(fx, agent)
+  const res = await httpPost(
+    fx,
+    '/mcp',
+    {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Mcp-Method': 'tools/call',
+      'Mcp-Name': name,
+    },
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name,
+        arguments: args,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    },
+  )
+  const body = JSON.parse(await res.text()) as { result: { content: { text: string }[] } }
+  return JSON.parse(body.result.content[0].text) as Json
 }
 
 /* ---------------------------------------------------- 1. creating projects */
@@ -574,6 +617,38 @@ describe('changing a project', () => {
       'bad_request',
       'no fields to update',
     )
+  })
+
+  it('takes no archive reason, which only tasks have: REST refuses it, MCP names it', async () => {
+    const fx = await setup()
+    const patch = (body: unknown) =>
+      fx.t.mutation(internal.machine.projects.restUpdateProject, {
+        ...rest(fx.user),
+        ref: 'TBED',
+        body: JSON.stringify(body),
+      })
+    await refused(
+      patch({ archived: true, archive_reason: 'Shipped' }),
+      'bad_request',
+      'only tasks take an archive reason; archive a project with archived alone',
+    )
+    expect((await projectRow(fx.t, fx.meta.id))?.archived_at).toBeUndefined()
+    expect((await patch({ archived: true })).archived_at).not.toBeNull()
+    // MCP clients cache schemas, so the tool archives and names what it dropped
+    await plantProject(fx.t, { org_id: fx.org.id, key: 'BOT', lead_id: fx.agent.id })
+    const archived = await mcpTool(fx, fx.agent, 'update_project', {
+      project: 'BOT',
+      archived: true,
+      archive_reason: 'Shipped',
+    })
+    expect(archived.archived_at).not.toBeNull()
+    expect(archived.ignored_arguments).toEqual(['archive_reason'])
+    const restored = await mcpTool(fx, fx.agent, 'update_project', {
+      project: 'BOT',
+      archived: false,
+    })
+    expect(restored.archived_at).toBeNull()
+    expect(restored).not.toHaveProperty('ignored_arguments')
   })
 
   it('hands over the lead; the old lead keeps User, the new one loses their own grant', async () => {
