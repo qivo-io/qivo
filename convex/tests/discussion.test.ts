@@ -597,11 +597,16 @@ describe('reading the inbox', () => {
       ...R,
     })
     expect(rest.items.map((i) => i.task.id)).toEqual([fx.task.id])
-    // a named change still reaches an archived task the caller can read
-    for (const action of ['unread', 'read']) {
-      const changed = await updateMcp(fx, { action, tasks: [key(archived)] }, fx.admin.id)
-      expect(changed.tasks).toEqual([key(archived)])
-    }
+    // unread refuses an archived task the caller can read, and read still
+    // reaches it (archiveReads.test.ts covers every action)
+    await refused(
+      updateMcp(fx, { action: 'unread', tasks: [key(archived)] }, fx.admin.id),
+      'rule',
+      `${key(archived)} is archived and must be restored first`,
+    )
+    expect(await held(archived)).toEqual([['Archived', true]])
+    const read = await updateMcp(fx, { action: 'read', tasks: [key(archived)] }, fx.admin.id)
+    expect(read).toEqual({ action: 'read', tasks: [], has_more: false })
     // a restore brings the item back on both, with its stored messages
     await as(fx.t, fx.user).mutation(api.issues.unarchive, { org_id: fx.org.id, id: archived.id })
     await as(fx.t, fx.admin).mutation(api.projects.unarchive, {

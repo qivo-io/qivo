@@ -22,7 +22,8 @@
  * only tasks the caller can read (lib/workingSet.ts with the machine Shown,
  * lib/core.ts machineShown). The inbox lists what the app's Inbox lists, the
  * items about tasks in the caller's working set (lib/workingSet.ts
- * inWorkingSet), so an archived task's item leaves it until a restore. It
+ * inWorkingSet), so an archived task's item leaves it until a restore, and
+ * `unread` and `snooze` refuse such a task, so its messages stay read. It
  * shows the live task title and key, never the title stored on the
  * message. */
 
@@ -62,6 +63,7 @@ import {
   markAllMessagesRead,
   markMessagesRead,
   markMessagesUnread,
+  refuseArchivedItems,
   removeMessages,
   removeReadMessages,
   snoozeMessages,
@@ -267,9 +269,12 @@ async function inboxItems(
  * root project and the caller's grant and team grants on both, 7 index
  * ranges plus 2 per team granted either project. The item read and the
  * prune's or snooze's second read add 2, so 100 refs use about 900 of the
- * 4,096 index ranges and stay inside with up to 15 such teams. Snooze
- * schedules one wake per item, 100 of the 1,000 allowed. Duplicate refs
- * count too.
+ * 4,096 index ranges and stay inside with up to 15 such teams. Unread and
+ * snooze also read each task and its project twice to refuse an archived
+ * one (model/messages.ts refuseArchivedItems), once for the refs and once
+ * for the rows, so they use about 1,300 and stay inside with up to 13 such
+ * teams. Snooze schedules one wake per item, 100 of the 1,000 allowed.
+ * Duplicate refs count too.
  */
 export const INBOX_TASKS_MAX = 100
 
@@ -352,7 +357,11 @@ type InboxChangeJson = {
  * read notifications do, one bounded batch per call and rows about tasks the
  * caller cannot read included. The answer names only tasks the caller can
  * read. A ref the caller cannot read refuses the whole change with
- * `unknownTask`.
+ * `unknownTask`. Every ref is resolved before anything else, so that
+ * refusal comes first. Then `unread` and `snooze` refuse the whole change
+ * when a named task is archived or in an archived project, whether or not
+ * the caller holds messages about it (model/messages.ts
+ * refuseArchivedItems). `read` and `remove` still work there.
  */
 async function changeInbox(
   ctx: MutationCtx,
@@ -396,13 +405,20 @@ async function changeInbox(
     if (issue === null) throw unknownTask(ref)
     if (!named.some((n) => n.id === issue.id)) named.push(issue)
   }
+  if (action === 'unread' || action === 'snooze') {
+    await refuseArchivedItems(
+      ctx,
+      me,
+      named.map((issue) => issue.id),
+    )
+  }
   const rows: Doc<'messages'>[] = []
   for (const issue of named) rows.push(...(await itemMessages(ctx, me, issue.id)))
   const changed =
     action === 'read'
       ? await markMessagesRead(ctx, me, rows, now)
       : action === 'unread'
-        ? await markMessagesUnread(ctx, rows)
+        ? await markMessagesUnread(ctx, me, rows)
         : action === 'remove'
           ? await removeMessages(ctx, rows)
           : await snoozeMessages(ctx, me, rows, req.until)

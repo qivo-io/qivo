@@ -19,8 +19,9 @@
  * reads 'Reviewer set to you'.
  *
  * An archived task's messages are read for every recipient. postMessage
- * stores news about one already read, and the archive paths schedule
- * readArchivedTaskMessages and readArchivedProjectMessages for the rest. */
+ * stores news about one already read, the archive paths schedule
+ * readArchivedTaskMessages and readArchivedProjectMessages for the rest, and
+ * mark unread and snooze refuse such a task (refuseArchivedItems). */
 
 import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -28,9 +29,9 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, keepsInbox, profileCanSeeProject } from '../lib/access'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
-import { badRequest, forbidden } from '../lib/functions'
+import { badRequest, forbidden, rule } from '../lib/functions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
-import { PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
@@ -478,17 +479,66 @@ export async function markMessagesRead(
 }
 
 /**
+ * Refuses to make the items of archived tasks unread or snoozed. Messages
+ * about an archived task, or a task in an archived project, stay read (see
+ * "archived tasks" below), because no inbox lists that task and an unread
+ * row there would sit hidden in the bounded unread walk until a restore.
+ * The first such task among `issueIds` that `me` can see refuses the whole
+ * change with a rule naming it, so nothing changes. Mark unread and snooze
+ * call it on the tasks of their rows, and the machine inbox also on the
+ * tasks a request names, which refuses an archived task without messages
+ * too. Returns the ids of such tasks `me` can no longer see. The caller
+ * leaves their rows out silently, as it skips an unknown id, so the answer
+ * says nothing about a hidden task.
+ */
+export async function refuseArchivedItems(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  issueIds: Iterable<string>,
+): Promise<Set<string>> {
+  const hidden = new Set<string>()
+  for (const id of new Set(issueIds)) {
+    const issue = await byId(ctx, 'issues', id)
+    if (issue === null) continue
+    const project = await byId(ctx, 'projects', issue.project_id)
+    const taskArchived = issue.archived_at !== undefined
+    const projectArchived = project !== null && project.archived_at !== undefined
+    if (!taskArchived && !projectArchived) continue
+    if (project === null || !(await canSeeProject(ctx, me, project))) {
+      hidden.add(id)
+      continue
+    }
+    const key = issueKey(issue.num)
+    throw rule(
+      taskArchived && projectArchived
+        ? `${key} and its project are archived and must be restored first`
+        : taskArchived
+          ? `${key} is archived and must be restored first`
+          : `${key} is in an archived project, which must be restored first`,
+    )
+  }
+  return hidden
+}
+
+/**
  * Marks the read rows unread. It prunes nothing ("Mark-as-unread …
  * correctly does nothing", 0109:122): the rows it reopens are no longer
- * read, which is all the prune asks.
+ * read, which is all the prune asks. A row about an archived task refuses
+ * the whole change (refuseArchivedItems).
  */
 export async function markMessagesUnread(
   ctx: MutationCtx,
+  me: Doc<'profiles'>,
   rows: readonly Doc<'messages'>[],
 ): Promise<Set<string>> {
+  const hidden = await refuseArchivedItems(
+    ctx,
+    me,
+    rows.map((row) => row.issue_id),
+  )
   const issues = new Set<string>()
   for (const row of rows) {
-    if (row.read_at === undefined) continue
+    if (row.read_at === undefined || hidden.has(row.issue_id)) continue
     await ctx.db.patch(row._id, { read_at: undefined })
     issues.add(row.issue_id)
   }
@@ -630,7 +680,9 @@ const wakeRef = makeFunctionReference<
  * that returns already read is easy to miss. The write covers every row of each
  * item, so all of them keep the same stamp, and schedules the wake that
  * brings the item back on every client at once. An early return is a wake
- * without the stamp, because the person asked for it here and now.
+ * without the stamp, because the person asked for it here and now. A row
+ * about an archived task refuses the whole change, with or without `until`
+ * (refuseArchivedItems), before `until` is checked.
  */
 export async function snoozeMessages(
   ctx: MutationCtx,
@@ -638,6 +690,11 @@ export async function snoozeMessages(
   rows: readonly Doc<'messages'>[],
   until: string | null,
 ): Promise<Set<string>> {
+  const hidden = await refuseArchivedItems(
+    ctx,
+    me,
+    rows.map((row) => row.issue_id),
+  )
   let at: string | null = null
   if (until !== null) {
     const ms = Date.parse(until)
@@ -648,6 +705,7 @@ export async function snoozeMessages(
   }
   const changed = new Set<string>()
   for (const issue_id of new Set(rows.map((row) => row.issue_id))) {
+    if (hidden.has(issue_id)) continue
     const pair = { recipient_id: me.id, issue_id }
     const item = await pairRows(ctx, pair)
     if (at === null) {
@@ -692,7 +750,12 @@ export async function snoozeMessages(
  * newest message, read (the prune's invariant). A step that runs twice finds
  * nothing left to mark. A restore changes nothing here. The Restored notice
  * arrives unread and, being the newest, the prune drops the older read
- * rows, as it does whenever news reaches a read item. */
+ * rows, as it does whenever news reaches a read item.
+ *
+ * While the archive stands, mark unread and snooze refuse the task
+ * (refuseArchivedItems), so no inbox write reopens what the steps marked.
+ * Mark read and remove still work on it. Messages stored before archiving
+ * marked anything read are marked by internal/archivedReadsBackfill.ts. */
 
 /** The most rows one archived-read step marks read. */
 export const ARCHIVED_READ_BATCH = 500

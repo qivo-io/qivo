@@ -568,6 +568,33 @@ describe('snooze through the client store', () => {
     expect(restored.read).toBe(true)
   })
 
+  it.each([
+    ['marking it unread', (ids: string[]) => P.markMessagesUnread(ids)],
+    ['snoozing it', (ids: string[]) => P.snoozeMessages(ids, UNTIL)],
+  ])(
+    'an item whose task is archived elsewhere while on screen: %s shows the refusal and the item leaves',
+    async (_, act) => {
+      const item = group('Notification task 2')
+      act(item.ids)
+      expect(requests).toHaveLength(1)
+      // the archive's delivery arrives while the write is in flight, without
+      // the task's messages, and the server refuses the write
+      snap.messages = snap.messages.filter((m) => !item.ids.includes(m.id))
+      snap.readMessageCount -= item.ids.length
+      publish(structuredClone(snap))
+      requests[0].reject(
+        new ConvexError({ code: 'rule', message: 'QN-2 is archived and must be restored first' }),
+      )
+      await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
+      expect(showToast).toHaveBeenCalledWith(
+        'QN-2 is archived and must be restored first — reverted',
+        'error',
+      )
+      expect(P.messageGroups.find((g) => g.issueTitle === 'Notification task 2')).toBeUndefined()
+      expect(P.unreadMessages).toBe(2)
+    },
+  )
+
   it('mark all as read and remove all read leave a snoozed item alone', async () => {
     const task1 = group('Notification task 1')
     P.snoozeMessages(task1.ids, UNTIL)
