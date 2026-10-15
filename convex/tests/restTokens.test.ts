@@ -335,6 +335,16 @@ const REQUESTS: Record<
   'DELETE projects/:ref/milestones/:milestone': async (fx) => ({
     path: `/v1/projects/FW/milestones/${await plantMilestone(fx)}`,
   }),
+  'GET teams': () => ({ path: '/v1/teams' }),
+  'GET teams/:ref': (fx) => ({ path: `/v1/teams/${fx.f.team.id}` }),
+  'POST teams': () => ({ path: '/v1/teams', body: { name: 'Token team' } }),
+  'PATCH teams/:ref': (fx) => ({ path: `/v1/teams/${fx.f.team.id}`, body: { name: 'Hardware' } }),
+  'PUT teams/:ref/members/:user': (fx) => ({
+    path: `/v1/teams/${fx.f.team.id}/members/${fx.f.viewer.id}`,
+  }),
+  'DELETE teams/:ref/members/:user': (fx) => ({
+    path: `/v1/teams/${fx.f.team.id}/members/${fx.f.viewer.id}`,
+  }),
 }
 
 const label = (route: { method: string; path: string }) => `${route.method} ${route.path}`
@@ -350,7 +360,9 @@ type Outcome = 'ok' | { status: number; error: string }
  * Neither leads FW, and only a person who leads a project changes its
  * access. The agent creates a top-level project like any standard user under
  * the default setting, which a Viewer never may; a milestone needs User on
- * the top-level project, which the agent holds. */
+ * the top-level project, which the agent holds. Only organization admins
+ * create teams, neither leads Hardware, and only a person changes its
+ * members. */
 const refusedWrite = (
   route: { method: string; path: string },
   kind: 'viewer' | 'agent',
@@ -378,6 +390,17 @@ const refusedWrite = (
   }
   if (route.path.startsWith('projects/:ref/milestones') && kind === 'viewer') {
     return { status: 403, error: 'no write access to this project' }
+  }
+  if (route.path === 'teams') {
+    return { status: 403, error: 'only organization admins can create teams' }
+  }
+  if (route.path === 'teams/:ref') {
+    return { status: 403, error: 'requires an organization admin or a leader of this team' }
+  }
+  if (route.path === 'teams/:ref/members/:user') {
+    return kind === 'viewer'
+      ? { status: 403, error: 'requires an organization admin or a leader of this team' }
+      : { status: 403, error: 'only people can change who has access, not agents' }
   }
   return kind === 'viewer' ? { status: 403, error: PERSON_NO_WRITE } : 'ok'
 }

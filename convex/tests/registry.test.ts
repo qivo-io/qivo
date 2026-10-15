@@ -7,8 +7,8 @@
  *
  * Entries call internal functions in their surface's module or in a domain
  * module that declares entries for both surfaces (machine/records.ts,
- * machine/discussion.ts, machine/projects.ts), so the kinds below cover
- * every one of those modules. A domain module keeps each surface's
+ * machine/discussion.ts, machine/projects.ts, machine/teams.ts), so the
+ * kinds below cover every one of those modules. A domain module keeps each surface's
  * functions apart, and each entry calls a function of its own, so routes
  * that differ only in a fixed argument (the inbox actions, PUT and DELETE on
  * a task's following, a project's user and team access) each have one. */
@@ -31,6 +31,7 @@ import {
   writeRunner,
 } from '../machine/registry'
 import * as rest from '../machine/rest'
+import * as teams from '../machine/teams'
 
 type Kind = 'query' | 'mutation' | 'action'
 type Call = { via: Kind; name: string; args: unknown }
@@ -95,6 +96,7 @@ const KINDS = new Map<string, Kind>([
   ...registeredKinds('machine/records', records),
   ...registeredKinds('machine/discussion', discussion),
   ...registeredKinds('machine/projects', projects),
+  ...registeredKinds('machine/teams', teams),
 ])
 
 const SURFACES: Surface[] = [

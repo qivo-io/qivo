@@ -16,7 +16,8 @@
  * not archived, whose active assignee, or whose reviewer when the task has no
  * subtasks, could see them before and cannot after. The caller chooses what
  * happens to them, and the removal and that choice land in one transaction or
- * not at all. */
+ * not at all (removeAndSettle). Removing a team member (model/teams.ts)
+ * settles the member's tasks through the same function. */
 
 import { ConvexError, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -143,8 +144,9 @@ async function grantOf(ctx: QueryCtx, project: Doc<'projects'>, subject: AccessS
         .unique()
 }
 
-/* One activity row per access change, as the app's access writes narrate. */
-async function narrateAccess(
+/** One `changed access on` activity row for a project, as the app's access
+ * writes narrate, signed with a machine write's provenance. */
+export async function narrateAccess(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; project: Doc<'projects'>; now: string; provenance?: string },
 ): Promise<void> {
@@ -203,10 +205,10 @@ export async function setProjectGrantCore(
   return { changed: true }
 }
 
-/* The projects whose tasks a grant on `project` reaches: itself and, for a
+/** The projects whose tasks a grant on `project` reaches: itself and, for a
  * top-level project, its sub-projects, leaving out archived ones as the
  * app's working set does. */
-async function reachedProjects(
+export async function reachedProjects(
   ctx: QueryCtx,
   project: Doc<'projects'>,
 ): Promise<Doc<'projects'>[]> {
@@ -345,56 +347,76 @@ async function settling(step: () => Promise<void>): Promise<void> {
   }
 }
 
+/** What settling a removal did, besides the removal itself. `viewer_grants`
+ * are the projects that received a Viewer grant, for the caller's
+ * narration. */
+export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'projects'>[] }
+
 /**
- * Removes one person's or one team's grant from the project and settles the
- * open tasks that leave their holders' sight by `held`. 'keep_as_viewer'
- * gives each of those people a Viewer grant on the project, which a person
- * whose removed grant was already Viewer cannot be given. `reassign_to` hands
+ * Takes access away with `remove` and settles, by `held`, the open tasks in
+ * `projects` that someone in `people` worked on and could see before and
+ * cannot after. 'leave' lists them as stranded. 'keep_as_viewer' gives each
+ * of those people a Viewer grant on `viewerOn(project)` of each such task,
+ * which the caller must be allowed to give (canManageProjectUsers);
+ * `keepRefusal`, when set, refuses that choice instead. `reassign_to` hands
  * each of those tasks, by role, to that user or to nobody, with every rule of
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
- * Edit access and sight of every task above once the grant is gone. A
- * refusal anywhere leaves everything as it was, and one while settling the
- * tasks carries HELD_TASKS_REFUSED. No grant to remove changes nothing.
+ * Edit access and sight of every task above once the access is gone. Any
+ * refusal throws, so the removal and its settlement land together or not at
+ * all, and one while settling the tasks carries HELD_TASKS_REFUSED. Project
+ * grant removal and team member removal (model/teams.ts) both run through
+ * this, as the app, REST and MCP do.
  */
-export async function removeProjectGrantCore(
+export async function removeAndSettle(
   ctx: MutationCtx,
   a: {
     me: Doc<'profiles'>
-    project: Doc<'projects'>
-    subject: AccessSubject
+    people: ReadonlyMap<string, Doc<'profiles'>>
+    projects: readonly Doc<'projects'>[]
+    remove: () => Promise<void>
     held: HeldTasks
+    viewerOn: (project: Doc<'projects'>) => Promise<Doc<'projects'>>
+    keepRefusal?: string
     now: string
     provenance?: string
   },
-): Promise<AccessRemoval> {
-  const { me, project, subject, held, now } = a
-  await assertManagesAccess(ctx, me, project, subject)
-  await assertNotLead(ctx, project, subject)
-  const row = await grantOf(ctx, project, subject)
-  if (row === null) return { removed: false, stranded: [], kept_as_viewer: [], reassigned: [] }
-  const lost = await removeAndFindLost(ctx, {
-    projects: await reachedProjects(ctx, project),
-    people: await peopleOf(ctx, subject),
-    remove: () => ctx.db.delete(row._id),
-  })
+): Promise<Settlement> {
+  const { me, held, now } = a
+  const lost = await removeAndFindLost(ctx, a)
   const stranded = lost.map(({ project: _where, ...h }) => h)
-  const result: AccessRemoval = { removed: true, stranded, kept_as_viewer: [], reassigned: [] }
+  const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
   if (stranded.length > 0 && held === 'keep_as_viewer') {
-    const keep = [...new Set(stranded.map((h) => h.profile_id))]
     await settling(async () => {
-      if ('profile' in subject && row.level === 'viewer') {
-        throw rule('a Viewer grant cannot be kept as Viewer; leave the tasks or reassign them')
-      }
-      for (const uid of keep) {
-        await ctx.db.insert('project_access', {
-          project_id: project.id,
-          profile_id: uid,
-          level: 'viewer',
-        })
+      if (a.keepRefusal !== undefined) throw rule(a.keepRefusal)
+      const granted = new Set<string>()
+      for (const h of lost) {
+        const where = await a.viewerOn(h.project)
+        const key = `${h.profile_id}:${where.id}`
+        if (granted.has(key)) continue
+        granted.add(key)
+        if (!result.viewer_grants.some((p) => p.id === where.id)) {
+          if (!(await canManageProjectUsers(ctx, me, where))) {
+            throw forbidden('no permission to manage users on this project')
+          }
+          result.viewer_grants.push(where)
+        }
+        const existing = await ctx.db
+          .query('project_access')
+          .withIndex('by_project_profile', (q) =>
+            q.eq('project_id', where.id).eq('profile_id', h.profile_id),
+          )
+          .unique()
+        if (existing === null) {
+          await ctx.db.insert('project_access', {
+            project_id: where.id,
+            profile_id: h.profile_id,
+            level: 'viewer',
+          })
+        }
       }
     })
     result.stranded = []
-    result.kept_as_viewer = keep
+    result.kept_as_viewer = [...new Set(lost.map((h) => h.profile_id))]
   } else if (stranded.length > 0 && typeof held === 'object') {
     const to = held.reassign_to
     await settling(async () => {
@@ -416,6 +438,48 @@ export async function removeProjectGrantCore(
     result.stranded = []
     result.reassigned = stranded
   }
-  await narrateAccess(ctx, a)
   return result
+}
+
+/**
+ * Removes one person's or one team's grant from the project and settles the
+ * open tasks that leave their holders' sight by `held` (removeAndSettle).
+ * 'keep_as_viewer' gives each of those people a Viewer grant on the project,
+ * which a person whose removed grant was already Viewer cannot be given. A
+ * refusal anywhere leaves everything as it was. No grant to remove changes
+ * nothing.
+ */
+export async function removeProjectGrantCore(
+  ctx: MutationCtx,
+  a: {
+    me: Doc<'profiles'>
+    project: Doc<'projects'>
+    subject: AccessSubject
+    held: HeldTasks
+    now: string
+    provenance?: string
+  },
+): Promise<AccessRemoval> {
+  const { me, project, subject } = a
+  await assertManagesAccess(ctx, me, project, subject)
+  await assertNotLead(ctx, project, subject)
+  const row = await grantOf(ctx, project, subject)
+  if (row === null) return { removed: false, stranded: [], kept_as_viewer: [], reassigned: [] }
+  const settled = await removeAndSettle(ctx, {
+    me,
+    people: await peopleOf(ctx, subject),
+    projects: await reachedProjects(ctx, project),
+    remove: () => ctx.db.delete(row._id),
+    held: a.held,
+    viewerOn: async () => project,
+    keepRefusal:
+      'profile' in subject && row.level === 'viewer'
+        ? 'a Viewer grant cannot be kept as Viewer; leave the tasks or reassign them'
+        : undefined,
+    now: a.now,
+    provenance: a.provenance,
+  })
+  await narrateAccess(ctx, a)
+  const { viewer_grants: _granted, ...settlement } = settled
+  return { removed: true, ...settlement }
 }

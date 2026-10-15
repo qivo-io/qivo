@@ -545,6 +545,7 @@ type ToolDef = (typeof TOOLS)[number]['def']
  * whose required arguments alone would name nothing and still write. */
 const MISSING_OPTIONAL: Record<string, Record<string, unknown>> = {
   create_project: { parent: 'NOPE' },
+  set_team: { team_id: MISSING_UUID },
 }
 
 /* Arguments that pass a tool's schema and name nothing that exists. An
@@ -753,6 +754,8 @@ async function credentials() {
       projects: (await ctx.db.query('projects').collect()).length,
       grants: (await ctx.db.query('project_access').collect()).length,
       milestones: (await ctx.db.query('milestones').collect()).length,
+      teams: (await ctx.db.query('teams').collect()).length,
+      members: (await ctx.db.query('team_members').collect()).length,
     }))
   return {
     t,

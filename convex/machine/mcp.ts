@@ -125,12 +125,14 @@ import {
   vTaskLinkKind,
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
+import { teamsJson } from '../model/teams'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
 import { PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty } from './shared'
+import { TEAM_TOOLS } from './teams'
 
 /* --------------------------------------------------------------- the tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
@@ -214,7 +216,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_teams',
       title: 'List teams',
       description:
-        'Teams in your organization, as id and name. Teams group users for sharing and administration. Projects have no owning team; membership grants access only when a team is explicitly assigned permission.',
+        'Teams in your organization, each with `id`, `name` and its `members` (`id`, `name`, `leader`). Teams group users for sharing and administration. Projects have no owning team; membership grants access only when a team is explicitly assigned permission.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -858,6 +860,7 @@ export const TOOLS: McpTool[] = [
   ...RECORD_TOOLS,
   ...DISCUSSION_TOOLS,
   ...PROJECT_TOOLS,
+  ...TEAM_TOOLS,
 ]
 
 const TOOL_DEFS: ToolDef[] = TOOLS.map((t) => t.def)
@@ -1460,19 +1463,12 @@ export const getMe = internalQuery({
   },
 })
 
+/* list_teams runs model/teams.ts teamsJson, shared with REST's GET /v1/teams. */
 export const listTeams = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess },
   handler: async (ctx, { callerId, access }): Promise<string> => {
     const me = await asMachineCaller(ctx, callerId, access)
-    const rows = await ctx.db
-      .query('teams')
-      .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-      .collect()
-    return pretty(
-      rows
-        .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
-        .map((t) => ({ id: t.id, name: t.name })),
-    )
+    return pretty(await teamsJson(ctx, me))
   },
 })
 

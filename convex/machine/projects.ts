@@ -209,15 +209,15 @@ async function readableProject(
   return project !== null && (await canSeeProject(ctx, me, project)) ? project : null
 }
 
-/* A profile uuid in the caller's organization, else null. */
-async function orgProfile(ctx: QueryCtx, me: Caller, ref: string) {
+/** A profile uuid in the caller's organization, else null. */
+export async function orgProfile(ctx: QueryCtx, me: Caller, ref: string) {
   if (!UUID.test(ref)) return null
   const profile = await byId(ctx, 'profiles', ref.toLowerCase())
   return profile !== null && profile.org_id === me.org_id ? profile : null
 }
 
-/* A team uuid in the caller's organization, else null. */
-async function orgTeam(ctx: QueryCtx, me: Caller, ref: string) {
+/** A team uuid in the caller's organization, else null. */
+export async function orgTeam(ctx: QueryCtx, me: Caller, ref: string) {
   if (!UUID.test(ref)) return null
   const team = await byId(ctx, 'teams', ref.toLowerCase())
   return team !== null && team.org_id === me.org_id ? team : null
@@ -298,7 +298,7 @@ async function applyUpdate(
   return current
 }
 
-type HoldingJson = {
+export type HoldingJson = {
   id: string
   key: string
   title: string
@@ -306,7 +306,7 @@ type HoldingJson = {
   role: 'assignee' | 'reviewer'
 }
 
-const holdingJson = (h: Holding): HoldingJson => ({
+export const holdingJson = (h: Holding): HoldingJson => ({
   id: h.task.id,
   key: issueKey(h.task.num),
   title: h.task.title,
@@ -320,8 +320,8 @@ const subjectJson = (subject: AccessSubject) =>
     ? { team: { id: subject.team.id, name: subject.team.name } }
     : { user: { id: subject.profile.id, name: subject.profile.name } }
 
-/* A removal's result fields. */
-const removalJson = (r: Awaited<ReturnType<typeof removeProjectGrantCore>>) => ({
+/** A removal's result fields. */
+export const removalJson = (r: Awaited<ReturnType<typeof removeProjectGrantCore>>) => ({
   stranded: r.stranded.map(holdingJson),
   kept_as_viewer: r.kept_as_viewer,
   reassigned: r.reassigned.map(holdingJson),

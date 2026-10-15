@@ -134,6 +134,7 @@ import { PROJECT_ROUTES, restProjectDetail } from './projects'
 import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 import { REST_CALLER as CALLER, needJson, restProvenance as provenanceOf, vKeyName } from './shared'
+import { TEAM_ROUTES } from './teams'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestProjectDetailJson = Awaited<ReturnType<typeof restProjectDetail>>
@@ -1224,6 +1225,7 @@ export const ROUTES: RestRoute[] = [
   ...RECORD_ROUTES,
   ...DISCUSSION_ROUTES,
   ...PROJECT_ROUTES,
+  ...TEAM_ROUTES,
 ]
 
 /**
