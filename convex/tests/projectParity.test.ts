@@ -16,11 +16,17 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { MutationCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { creatorGrant, grantsAfterHandover } from '../lib/projectGrants'
 import { sha256hex } from '../machine/auth'
-import { HELD_TASKS_SHAPE, LEAD_ACCESS_RULE, parseHeldTasks } from '../model/projectAccess'
+import {
+  HELD_TASKS_SHAPE,
+  LEAD_ACCESS_RULE,
+  parseHeldTasks,
+  removeProjectGrantCore,
+} from '../model/projectAccess'
 import {
   activityFor,
   as,
@@ -618,6 +624,81 @@ describe('project access, one user or team at a time', () => {
     })
   })
 
+  /* `ctx` with every task document its queries return pushed to `seen`. */
+  function recordingTasks(ctx: MutationCtx, seen: Doc<'issues'>[]): MutationCtx {
+    const record = <D>(d: D): D => {
+      if (d !== null) seen.push(d as Doc<'issues'>)
+      return d
+    }
+    const wrap = (query: object): object =>
+      new Proxy(query, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop)
+          if (prop === Symbol.asyncIterator) {
+            return async function* () {
+              for await (const d of target as AsyncIterable<unknown>) yield record(d)
+            }
+          }
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            const out: unknown = value.apply(target, args)
+            if (prop === 'collect' || prop === 'take') {
+              return (out as Promise<unknown[]>).then((ds) => ds.map(record))
+            }
+            if (prop === 'first' || prop === 'unique') return (out as Promise<unknown>).then(record)
+            return typeof out === 'object' && out !== null && !('then' in out) ? wrap(out) : out
+          }
+        },
+      })
+    const db = new Proxy(ctx.db, {
+      get(target, prop) {
+        const value: unknown = Reflect.get(target, prop)
+        if (prop === 'query') {
+          return (table: 'issues') =>
+            table === 'issues' ? wrap(target.query(table)) : target.query(table)
+        }
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    return { ...ctx, db } as MutationCtx
+  }
+
+  it('a removal reads only open tasks, whatever the archive holds', async () => {
+    const fx = await setup()
+    const { open, reviewing } = await held(fx)
+    for (let i = 0; i < 40; i++) {
+      await plantIssue(fx.t, {
+        org_id: fx.org.id,
+        project_id: fx.sub.id,
+        assignee_id: fx.pia.id,
+        archived_at: NOW,
+      })
+    }
+    // a group's reviewer is dormant, so Pia does not hold this one
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      reviewer_id: fx.pia.id,
+    })
+    await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id: group.id })
+    const seen: Doc<'issues'>[] = []
+    const out = await fx.t.run((ctx) =>
+      removeProjectGrantCore(recordingTasks(ctx, seen), {
+        me: fx.user,
+        project: fx.sub,
+        subject: { profile: fx.pia },
+        held: 'leave',
+        now: NOW,
+      }),
+    )
+    expect(out.stranded.map((h) => [h.task.id, h.role])).toEqual([
+      [open.id, 'assignee'],
+      [reviewing.id, 'reviewer'],
+    ])
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.filter((d) => d.archived_at !== undefined)).toEqual([])
+  })
+
   it('keep_as_viewer keeps the people as Viewers; a Viewer grant cannot be kept', async () => {
     const fx = await setup()
     await held(fx)
@@ -733,6 +814,17 @@ describe('project access, one user or team at a time', () => {
       status: 400,
       body: { error: HELD_TASKS_SHAPE },
     })
+    // handing the tasks back to the person losing sight of them is refused
+    expect(
+      await call('DELETE', path, JSON.stringify({ on_held_tasks: { reassign_to: fx.pia.id } })),
+    ).toEqual({
+      status: 400,
+      body: {
+        error:
+          'a task can only be assigned to an active user with Edit permission or higher on its project',
+      },
+    })
+    expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBe('viewer')
     const removed = await call(
       'DELETE',
       path,

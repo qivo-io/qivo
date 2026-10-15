@@ -26,14 +26,15 @@ import {
   canChangeAccess,
   canManageProjectTeams,
   canManageProjectUsers,
-  canSeeProject,
+  type OrgProjectLevels,
+  projectLevelsForOrg,
   rootMetaOf,
 } from '../lib/access'
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { logActivity, machineDetail } from './activity'
-import { hasSubtasks, updateIssueCore } from './issues'
+import { assertAssigneeRule, hasSubtasks, updateIssueCore } from './issues'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
 /** The one person or team whose access a write changes, already resolved in
@@ -208,49 +209,76 @@ async function reachedProjects(
   return out
 }
 
-/* The open tasks in `projects` that the people in `people` work on, by
- * role, each with its project. A switched-off person holds no work, and a
- * group's reviewer is dormant. */
-async function holdingsOf(
-  ctx: QueryCtx,
-  projects: readonly Doc<'projects'>[],
-  people: ReadonlyMap<string, Doc<'profiles'>>,
-): Promise<(Holding & { project: Doc<'projects'> })[]> {
-  const out: (Holding & { project: Doc<'projects'> })[] = []
-  for (const project of projects) {
+/* One person's role on an open task a removal takes out of their sight, with
+ * the task's project. */
+type Lost = Holding & { project: Doc<'projects'> }
+
+/**
+ * Runs `remove` and answers the open tasks in `projects` that someone in
+ * `people` works on and could see before and cannot see after. A
+ * switched-off person holds no work, and a group's reviewer is dormant.
+ *
+ * The reads are bounded by what the app's snapshot reads, never by history.
+ * Only the active tasks of `projects` are read (by_project_archived). Each
+ * person holding one of them gets their sight worked out once before and once
+ * after, for every project at a time (lib/access.ts projectLevelsForOrg, over
+ * one read of the organization's projects). Only a reviewer who lost sight
+ * costs a subtask lookup.
+ */
+async function removeAndFindLost(
+  ctx: MutationCtx,
+  a: {
+    projects: readonly Doc<'projects'>[]
+    people: ReadonlyMap<string, Doc<'profiles'>>
+    remove: () => Promise<void>
+  },
+): Promise<Lost[]> {
+  const candidates: Lost[] = []
+  for (const project of a.projects) {
     const tasks = ctx.db
       .query('issues')
-      .withIndex('by_project', (q) => q.eq('project_id', project.id))
+      .withIndex('by_project_archived', (q) =>
+        q.eq('project_id', project.id).eq('archived_at', undefined),
+      )
     for await (const task of tasks) {
-      if (task.archived_at !== undefined || task.status === 'done') continue
-      if (task.assignee_id !== undefined && people.get(task.assignee_id)?.active) {
-        out.push({ task, project, profile_id: task.assignee_id, role: 'assignee' })
-      }
-      if (
-        task.reviewer_id !== undefined &&
-        people.get(task.reviewer_id)?.active &&
-        !(await hasSubtasks(ctx, task.id))
-      ) {
-        out.push({ task, project, profile_id: task.reviewer_id, role: 'reviewer' })
+      if (task.status === 'done') continue
+      for (const role of ['assignee', 'reviewer'] as const) {
+        const holder = role === 'assignee' ? task.assignee_id : task.reviewer_id
+        if (holder !== undefined && a.people.get(holder)?.active) {
+          candidates.push({ task, project, profile_id: holder, role })
+        }
       }
     }
   }
-  return out
-}
-
-/* Whether each person sees each project now, read once per pair. */
-function sightOf(ctx: QueryCtx, people: ReadonlyMap<string, Doc<'profiles'>>) {
-  const known = new Map<string, Promise<boolean>>()
-  return (profileId: string, project: Doc<'projects'>): Promise<boolean> => {
-    const key = `${profileId}:${project.id}`
-    let sees = known.get(key)
-    if (sees === undefined) {
-      const profile = people.get(profileId)
-      sees = profile === undefined ? Promise.resolve(false) : canSeeProject(ctx, profile, project)
-      known.set(key, sees)
+  const holders = [...new Set(candidates.map((h) => h.profile_id))]
+  const orgProjects =
+    holders.length === 0
+      ? []
+      : await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', a.projects[0].org_id))
+          .collect()
+  const sight = async (): Promise<Map<string, OrgProjectLevels>> => {
+    const out = new Map<string, OrgProjectLevels>()
+    for (const id of holders) {
+      const person = a.people.get(id)
+      if (person !== undefined) out.set(id, await projectLevelsForOrg(ctx, person, orgProjects))
     }
-    return sees
+    return out
   }
+  const before = await sight()
+  await a.remove()
+  // Convex reads this transaction's own writes, so sight is now as it will be
+  const after = await sight()
+  const sees = (levels: Map<string, OrgProjectLevels>, h: Lost) =>
+    (levels.get(h.profile_id)?.levelOf(h.project) ?? null) !== null
+  const lost: Lost[] = []
+  for (const h of candidates) {
+    if (!sees(before, h) || sees(after, h)) continue
+    if (h.role === 'reviewer' && (await hasSubtasks(ctx, h.task.id))) continue
+    lost.push(h)
+  }
+  return lost
 }
 
 /* The people a removal can take access from: the person, or every member of
@@ -269,6 +297,21 @@ async function peopleOf(
     if (profile !== null && profile.org_id === subject.team.org_id) people.set(profile.id, profile)
   }
   return people
+}
+
+/* Refuses a reassignment target who cannot work on every task handed over,
+ * checked once per project and role after the access is gone.
+ * updateIssueCore checks a holder only when it changes, so without this a
+ * task handed back to the person who just lost sight of it would stay with
+ * them. */
+async function assertCanTakeOver(ctx: QueryCtx, lost: readonly Lost[], to: string) {
+  const checked = new Set<string>()
+  for (const h of lost) {
+    const key = `${h.project.id}:${h.role}`
+    if (checked.has(key)) continue
+    checked.add(key)
+    await assertAssigneeRule(ctx, h.project, to, h.role)
+  }
 }
 
 /**
@@ -298,18 +341,12 @@ export async function removeProjectGrantCore(
   await assertNotLead(ctx, project, subject)
   const row = await grantOf(ctx, project, subject)
   if (row === null) return { removed: false, stranded: [], kept_as_viewer: [], reassigned: [] }
-  const people = await peopleOf(ctx, subject)
-  const candidates = await holdingsOf(ctx, await reachedProjects(ctx, project), people)
-  const before = sightOf(ctx, people)
-  const sawBefore: typeof candidates = []
-  for (const h of candidates) if (await before(h.profile_id, h.project)) sawBefore.push(h)
-  await ctx.db.delete(row._id)
-  // Convex reads this transaction's own writes, so sight is now as it will be
-  const after = sightOf(ctx, people)
-  const stranded: Holding[] = []
-  for (const { project: where, ...h } of sawBefore) {
-    if (!(await after(h.profile_id, where))) stranded.push(h)
-  }
+  const lost = await removeAndFindLost(ctx, {
+    projects: await reachedProjects(ctx, project),
+    people: await peopleOf(ctx, subject),
+    remove: () => ctx.db.delete(row._id),
+  })
+  const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: AccessRemoval = { removed: true, stranded, kept_as_viewer: [], reassigned: [] }
   if (stranded.length > 0 && held === 'keep_as_viewer') {
     if ('profile' in subject && row.level === 'viewer') {
@@ -327,6 +364,7 @@ export async function removeProjectGrantCore(
     result.kept_as_viewer = keep
   } else if (stranded.length > 0 && typeof held === 'object') {
     const to = held.reassign_to
+    if (to !== null) await assertCanTakeOver(ctx, lost, to)
     const byTask = new Map<string, Holding[]>()
     for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
     for (const holdings of byTask.values()) {

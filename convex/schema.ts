@@ -568,6 +568,8 @@ export default defineSchema({
     .index('by_org_archived', ['org_id', 'archived_at'])
     .index('by_org_num', ['org_id', 'num'])
     .index('by_project', ['project_id'])
+    // An access removal reads only the open tasks of the projects it touches.
+    .index('by_project_archived', ['project_id', 'archived_at'])
     .index('by_parent', ['parent_id'])
     // Profile refs — removeProfile's SET NULLs.
     .index('by_assignee', ['assignee_id'])
