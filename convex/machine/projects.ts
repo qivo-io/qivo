@@ -117,12 +117,14 @@ type ProjectDetailJson = {
   grants: { users: GrantJson[]; teams: GrantJson[] }
 }
 
+/* A milestone as REST and MCP send it, its stored `week` day as `date`. */
 const milestoneJson = (m: Doc<'milestones'>): MilestoneJson => ({
   id: m.id,
   name: m.name,
   date: m.week,
 })
 
+/* Orders rows by name. Names may repeat, so id breaks ties for a stable order. */
 const byName = (a: { name: string; id: string }, b: { name: string; id: string }) =>
   a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
 
@@ -310,6 +312,8 @@ export type HoldingJson = {
   role: 'assignee' | 'reviewer'
 }
 
+/** One open task someone holds, as removalJson's `stranded` and
+ * `reassigned` lists name it. */
 export const holdingJson = (h: Holding): HoldingJson => ({
   id: h.task.id,
   key: issueKey(h.task.num),

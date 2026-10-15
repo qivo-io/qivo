@@ -968,6 +968,7 @@ export const taskRefOf = (t: Doc<'issues'>): TaskRefJson => ({
   status: t.status,
 })
 
+/* Orders tasks by number, lowest first. */
 const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
 
 /**

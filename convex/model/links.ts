@@ -26,6 +26,7 @@ export const TASK_LINK_KINDS = ['blocks', 'blocked_by', 'relates'] as const
 export const vTaskLinkKind = literals(...TASK_LINK_KINDS)
 export type TaskLinkKind = (typeof TASK_LINK_KINDS)[number]
 
+/** Whether `value` is a TaskLinkKind, as REST checks its untyped body and path values. */
 export const isTaskLinkKind = (value: unknown): value is TaskLinkKind =>
   (TASK_LINK_KINDS as readonly unknown[]).includes(value)
 

@@ -87,6 +87,7 @@ export type TeamJson = {
   members: { id: string; name: string; leader: boolean }[]
 }
 
+/* Orders rows by name. Names may repeat, so id breaks ties for a stable order. */
 const byName = (a: { name: string; id: string }, b: { name: string; id: string }) =>
   a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
 
