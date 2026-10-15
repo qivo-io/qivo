@@ -8,6 +8,7 @@ import type { ActivityTarget } from './lib/enums'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
+import { aboutShownTasks, linkShown, parentLink, type Shown, workingSetOf } from './lib/workingSet'
 import { namedTaskNums } from './model/activity'
 import { shownLabelColor } from './model/labels'
 import { shownAvatarColor } from './model/people'
@@ -97,7 +98,8 @@ async function memberSeesActivity(
   a: {
     me: Doc<'profiles'>
     view: OrgProjectView
-    workingSet: Set<string>
+    /* whether the task is in the member's working set */
+    inWorkingSet: Shown
     leaderOf: Map<string, boolean>
     /* the current project of the org's task with this number, if any */
     taskProject: (num: number) => Promise<string | undefined>
@@ -107,7 +109,7 @@ async function memberSeesActivity(
     return false
   }
   if (ev.target_type === 'issue') {
-    if (!a.workingSet.has(ev.target_id)) return false
+    if (!a.inWorkingSet(ev.target_id)) return false
     if (isUnrecordedProjectMove(ev)) return false
     if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return false
     const named = namedTaskNums(ev)
@@ -250,40 +252,30 @@ export const forMe = authedQuery({
         archivedProjects.set(p.id, Promise.resolve(p.archived_at !== undefined))
       }
       const visibleProjects = view.projects.filter((p) => view.visible(p.id))
-      /* The working set is the active tasks of visible, active projects.
-       * Every task id this query sends (task rows, parent ids, links, own
-       * subscriptions, inbox messages and activity targets) belongs to it. A
-       * task related to work outside it learns only that such work exists
-       * (has_hidden_subtasks, has_hidden_parent). Visible children remain
-       * client-derived so optimistic detaching/deleting the last one
-       * immediately restores normal status. */
-      const hiddenSubtaskParents = new Set<string>()
-      const fenceIssues: Doc<'issues'>[] = []
-      for (const child of activeOrgIssues) {
-        const childProject = view.byUuid.get(child.project_id)
-        const projectArchived = childProject?.archived_at !== undefined
-        archivedIssues.set(child.id, Promise.resolve(projectArchived))
-        if (view.visible(child.project_id) && !projectArchived) {
-          fenceIssues.push(child)
-        }
-        if (child.parent_id === undefined) continue
-        if (!view.visible(child.project_id) || projectArchived) {
-          hiddenSubtaskParents.add(child.parent_id)
-        }
+      for (const issue of activeOrgIssues) {
+        archivedIssues.set(
+          issue.id,
+          Promise.resolve(view.byUuid.get(issue.project_id)?.archived_at !== undefined),
+        )
       }
-      const workingSet = new Set(fenceIssues.map((issue) => issue.id))
-      /* Active issues of every visible, active project.  Archived issues are
-       * deliberately absent from the working set; their detail rows are
-       * fetched only by the archive/read paths that explicitly ask for one.
-       * A parent outside the working set keeps its id out of the row. */
+      /* The working set is the active tasks of visible, active projects
+       * (lib/workingSet.ts). Every task id this query sends (task rows,
+       * parent ids, links, own subscriptions, inbox messages and activity
+       * targets) belongs to it. A task related to work outside it learns
+       * only that such work exists (has_hidden_subtasks, has_hidden_parent).
+       * Visible children remain client-derived so optimistic
+       * detaching/deleting the last one immediately restores normal status.
+       * Archived issues are deliberately absent from the working set; their
+       * detail rows are fetched only by the archive/read paths that
+       * explicitly ask for one. */
+      const workingSet = workingSetOf(activeOrgIssues, view)
+      const fenceIssues = workingSet.tasks
       for (const issue of fenceIssues) {
-        const { parent_id, ...row } = rowOf(issue)
-        const parentShown = parent_id !== undefined && workingSet.has(parent_id)
+        const { parent_id: _parentId, ...row } = rowOf(issue)
         issues.push({
           ...row,
-          ...(parentShown ? { parent_id } : {}),
-          has_hidden_subtasks: hiddenSubtaskParents.has(issue.id),
-          has_hidden_parent: parent_id !== undefined && !parentShown,
+          ...parentLink(issue, workingSet.shown),
+          has_hidden_subtasks: workingSet.hasHiddenSubtasks(issue.id),
         })
       }
       for (const p of visibleProjects) {
@@ -321,7 +313,7 @@ export const forMe = authedQuery({
         // its id must not leave this query.
         for (const link of [...asSource, ...asTarget]) {
           if (seenLinkIds.has(link.id)) continue
-          if (!workingSet.has(link.source_id) || !workingSet.has(link.target_id)) continue
+          if (!linkShown(link, workingSet.shown)) continue
           seenLinkIds.add(link.id)
           links.push(relationRow(link))
         }
@@ -348,7 +340,7 @@ export const forMe = authedQuery({
         .query('issue_subscriptions')
         .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
         .collect()
-      for (const s of mySubs) if (workingSet.has(s.issue_id)) issueSubs.push(rowOf(s))
+      for (const s of aboutShownTasks(mySubs, workingSet.shown)) issueSubs.push(rowOf(s))
 
       // Activity: org admins receive every row except those about archived
       // tasks or tasks in archived projects; other members receive only the
@@ -379,7 +371,13 @@ export const forMe = authedQuery({
       for await (const ev of orgActivity) {
         if (
           !isAdmin &&
-          !(await memberSeesActivity(ev, { me, view, workingSet, leaderOf, taskProject }))
+          !(await memberSeesActivity(ev, {
+            me,
+            view,
+            inWorkingSet: workingSet.shown,
+            leaderOf,
+            taskProject,
+          }))
         )
           continue
         if (ev.target_type === 'issue' && (await isArchivedIssue(ev.target_id))) continue
@@ -394,7 +392,7 @@ export const forMe = authedQuery({
         .query('messages')
         .withIndex('by_recipient', (q) => q.eq('recipient_id', me.id))
         .collect()
-      messageDocs.push(...inbox.filter((message) => workingSet.has(message.issue_id)))
+      messageDocs.push(...aboutShownTasks(inbox, workingSet.shown))
 
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))

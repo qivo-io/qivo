@@ -47,7 +47,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { httpAction, internalMutation, internalQuery } from '../_generated/server'
-import { canAccessProject, hasProjectLevel, profileCanBeAssigned } from '../lib/access'
+import { hasProjectLevel } from '../lib/access'
 import {
   accessFlags,
   asMachineCaller,
@@ -64,6 +64,7 @@ import {
   listCommentsCore,
   listIssuesCore,
   listProjectsCore,
+  listProjectUsersCore,
   listUsersCore,
   loadCatalogue,
   mcpProjectOut,
@@ -85,15 +86,16 @@ import {
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
-import { logActivity } from '../model/activity'
-import { deleteIssueDeep } from '../model/cascade'
+import { postComment } from '../model/comments'
 import {
   assertAssignable,
+  assertAssignableChange,
   assertLive,
   assertNoSubtasks,
   assertReporter,
   cleanTitle,
   createIssueCore,
+  deleteIssueCore,
   type IssuePatch,
   metaNeedsSub,
   pairRule,
@@ -101,7 +103,6 @@ import {
   SUB_MUST_NAME,
   updateIssueCore,
 } from '../model/issues'
-import { notifyCommentInsert } from '../model/messages'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
@@ -284,7 +285,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_tasks',
       title: 'List tasks',
       description:
-        "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `search` matches every whitespace-separated fragment across task ID, title and description, case-insensitively and in any order. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project — archiving a project and archiving a task are separate things, and only the second has a flag here.",
+        "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1255,17 +1256,7 @@ export const listProjectUsers = internalQuery({
     if (target === undefined || !readable(target.id)) {
       throw notFound(`project "${project}" not found (or not visible to you)`)
     }
-    const out = []
-    // A parent's people are those with standing on the parent itself; someone
-    // who sees it only through a sub-project is listed under that sub-project.
-    for (const profile of await listUsersCore(ctx, me)) {
-      if (!(await canAccessProject(ctx, profile, target))) continue
-      out.push({
-        ...userJson(profile),
-        assignable: await profileCanBeAssigned(ctx, profile, target),
-      })
-    }
-    return pretty(out)
+    return pretty(await listProjectUsersCore(ctx, me, target))
   },
 })
 
@@ -1392,20 +1383,12 @@ export const addComment = internalMutation({
     const text = body.trim()
     if (text === '') throw badRequest('comment body must not be blank')
     await mustWrite(ctx, me, issue.project_id)
-    const id = newUuid() // machine comment ids are server-generated
-    await ctx.db.insert('comments', {
-      id,
-      issue_id: issue.id,
-      author: me.id,
-      body: text,
-      created_at: now,
-    })
-    const comment = (await byId(ctx, 'comments', id)) as Doc<'comments'>
-    // 0114 parity: the author subscribes, mentions fan out, subscribers read
-    // 'New comment' — and deliberately NO activity row (the comment IS its
-    // own feed entry on the discussion spine)
-    await notifyCommentInsert(ctx, { comment, issue, actor: me, now })
-    return pretty({ id, task: issueKey(issue.num), created_at: now })
+    // 0114 parity through model/comments.ts postComment. The id is made by
+    // the server, the author subscribes, mentions fan out and subscribers
+    // read 'New comment'. There is deliberately NO activity row, because the
+    // comment IS its own feed entry on the discussion spine.
+    const comment = await postComment(ctx, { issue, author: me, body: text, now })
+    return pretty({ id: comment.id, task: issueKey(issue.num), created_at: now })
   },
 })
 
@@ -1551,13 +1534,15 @@ export const updateIssue = internalMutation({
       patch.paused = a.paused
       updated.push('paused')
     }
-    // the readable pre-check sentences fire before the core's rule backstop
+    // the readable pre-check sentences fire before the core's rule backstop;
+    // resending the current assignee or reviewer is no change and is not
+    // checked again, as in the app
     const project = await byId(ctx, 'projects', issue.project_id)
     if (project === null) throw notFound('task not found')
     if (typeof patch.assignee_id === 'string')
-      await assertAssignable(ctx, project, patch.assignee_id)
+      await assertAssignableChange(ctx, project, issue.assignee_id, patch.assignee_id)
     if (typeof patch.reviewer_id === 'string')
-      await assertAssignable(ctx, project, patch.reviewer_id, 'reviewer')
+      await assertAssignableChange(ctx, project, issue.reviewer_id, patch.reviewer_id, 'reviewer')
     // archived is a boolean on the surface, a timestamp underneath; matching
     // the current state is a no-op slot, not a toggle
     const toggles = a.archived !== undefined && a.archived !== (issue.archived_at !== undefined)
@@ -1593,18 +1578,7 @@ export const deleteIssue = internalMutation({
     const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
     await mustWrite(ctx, me, issue.project_id)
-    await deleteIssueDeep(ctx, { issue, actor: me, now })
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: me.id,
-      verb: 'deleted',
-      target_type: 'issue',
-      target_id: issue.id,
-      label: issue.title,
-      detail: PROVENANCE,
-      project_id: issue.project_id,
-      ts: now,
-    })
+    await deleteIssueCore(ctx, { me, issue, now, provenance: PROVENANCE })
     return pretty({ deleted: true, key: issueKey(issue.num) })
   },
 })

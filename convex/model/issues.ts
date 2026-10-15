@@ -35,6 +35,14 @@
  * nothing else, so their notify is skipped outright; restored-up ancestors
  * pass notifyIssueUpdate's suppressNotify.
  *
+ * Every core that changes a task (create, update, move on both ends,
+ * archive, restore, delete) first runs the write gate, assertCanEdit, which
+ * refuses an actor without Edit on the task's project. Each caller still
+ * checks access itself, before the core, in its own order and with its own
+ * sentence (the app's 'no write access to this project', REST's and MCP's
+ * per-caller ones). The gate is defense in depth, so a new caller that
+ * forgets its check still fails closed.
+ *
  * Refusal grammar: `rule` sentences are toasted verbatim by the client.
  * `badRequest` sentences name machine fields where useful to API callers.
  * Both surfaces call the work items tasks and their children subtasks. */
@@ -52,8 +60,9 @@ import { byId, insertUnique } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { reviewStamp } from '../lib/review'
-import { ISSUE_PREFIX } from '../lib/taskRefs'
-import { issueChanges, logActivity, machineDetail, PRIORITY_NAMES, STATUS_NAMES } from './activity'
+import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { issueChanges, logActivity, machineDetail } from './activity'
+import { deleteIssueDeep } from './cascade'
 import { notifyIssueInsert, notifyIssueUpdate } from './messages'
 import { nextIssueNum } from './orgs'
 import { reviewHoursFor } from './projects'
@@ -101,6 +110,20 @@ export const GROUP_DATES_RULE =
 export const GROUP_DATES_MACHINE =
   'start_week and end_week cannot be set on a task with subtasks; its dates come from its subtasks'
 
+/* The write gate's sentence. It names no caller kind, because each surface
+ * refuses with its own sentence before any core runs. */
+export const NO_WRITE_ACCESS = 'no write access to this project'
+
+/** Refuses an actor without Edit (or Lead) on the project, the write gate
+ * every task core runs first. A missing or foreign project refuses too. */
+export async function assertCanEdit(
+  ctx: QueryCtx,
+  actor: Doc<'profiles'>,
+  projectId: string,
+): Promise<void> {
+  if (!(await hasProjectLevel(ctx, actor, projectId, 'user'))) throw forbidden(NO_WRITE_ACCESS)
+}
+
 /* ------------------------------------------------------- shared guards
  * core.ts grammar (bad_request) — the machine surface's readable errors,
  * built here because the browser mutations need the same predicates. */
@@ -144,6 +167,20 @@ export async function assertAssignable(
       `user "${profileId}" needs Edit permission or higher on this project to ${role === 'reviewer' ? 'review work' : 'be assigned work'}`,
     )
   }
+}
+
+/* assertAssignable for an update. As in the app (updateIssueCore), only a
+ * change is checked. Sending the task's current assignee or reviewer again
+ * hands over no new work, so it passes even after that person was switched
+ * off or lost access. */
+export async function assertAssignableChange(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+  current: string | undefined,
+  next: string,
+  role: 'assignee' | 'reviewer' = 'assignee',
+): Promise<void> {
+  if (next !== current) await assertAssignable(ctx, project, next, role)
 }
 
 /* Reporter is immutable attribution, not workload: an inactive user or viewer
@@ -766,9 +803,7 @@ export async function browserVerbDetail(
  *           cascade with its usual suppression semantics (descendants: no
  *           notify; restored ancestors: suppressNotify). A value matching the
  *           current state is a no-op slot, not a toggle.
- * Machine deletes need no seam: the surface composes deleteIssueDeep +
- * logActivity('deleted', detail: provenance) itself, as the browser wrapper
- * does. */
+ *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail */
 export type MachineNarration = { provenance: string }
 export type MachineUpdate = MachineNarration & { archive?: boolean }
 
@@ -797,6 +832,7 @@ export async function createIssueCore(
   a: { me: Doc<'profiles'>; args: CreateIssueArgs; now: string; machine?: MachineNarration },
 ): Promise<Doc<'issues'>> {
   const { me, args, now } = a
+  await assertCanEdit(ctx, me, args.project_id)
   // resolve → meta guard → arrival guard (0050's issues_assign_num fires
   // before 0106's archived guard: the meta sentence wins on an archived meta)
   const project = await byId(ctx, 'projects', args.project_id)
@@ -935,6 +971,7 @@ export async function updateIssueCore(
   },
 ): Promise<Doc<'issues'>> {
   const { me, issue, now } = a
+  await assertCanEdit(ctx, me, issue.project_id)
   // An unchanged parent is no attach: it is dropped, so no access check,
   // write, hours clear or narration runs for a parent the caller may not
   // even see.
@@ -1161,15 +1198,17 @@ export async function updateIssueCore(
  * clearParentRemaining does). num is org-scoped and immutable: the key
  * survives the move; labels survive too (org vocabulary). The activity row is
  * keyed to the SOURCE project and records the destination as its related
- * project. Access ('member' on BOTH ends) is the mutation layer's job, and
- * issues.move checks it before calling this, so these guards only ever
- * describe a destination the caller can write. */
+ * project. issues.move checks Edit on BOTH ends before calling this, and
+ * the write gate here checks them again before any guard, so these guards
+ * only ever describe a destination the caller can write. */
 export async function moveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; project_id: string; now: string },
 ): Promise<Doc<'issues'>> {
   const { me, issue, project_id, now } = a
+  await assertCanEdit(ctx, me, issue.project_id)
   if (issue.project_id === project_id) return issue // no-op, as in SQL
+  await assertCanEdit(ctx, me, project_id)
   const target = await byId(ctx, 'projects', project_id)
   if (target === null) throw notFound(`project ${project_id} not found`)
   if (target.type !== 'project') {
@@ -1300,6 +1339,7 @@ export async function archiveIssueCore(
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
 ): Promise<Doc<'issues'>> {
   const { me, issue, now } = a
+  await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at !== undefined) return issue
   const before = { ...issue }
   await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })
@@ -1384,6 +1424,7 @@ export async function unarchiveIssueCore(
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
 ): Promise<Doc<'issues'>> {
   const { me, issue, now } = a
+  await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at === undefined) return issue
   const before = { ...issue }
   await ctx.db.patch(issue._id, {
@@ -1407,4 +1448,33 @@ export async function unarchiveIssueCore(
   }
   await logActivity(ctx, event)
   return rootAfter
+}
+
+/* ----------------------------------------------------------- delete core
+ * One task deleted with its 'deleted' activity row, shared by the app's
+ * delete (each chosen subtask, then the task) and the machine deletes.
+ * model/cascade.ts deleteIssueDeep does the deleting. It detaches, touches
+ * and notifies the direct subtasks and removes the task's links, labels,
+ * follows, comments, messages and attachments. Activity rows stay. The
+ * row's detail is the machine provenance, or none for the app.
+ * deleteIssueDeep itself stays ungated, because a project delete runs it
+ * for every task after checking the project. */
+export async function deleteIssueCore(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string; provenance?: string },
+): Promise<void> {
+  const { me, issue, now } = a
+  await assertCanEdit(ctx, me, issue.project_id)
+  await deleteIssueDeep(ctx, { issue, actor: me, now })
+  await logActivity(ctx, {
+    org_id: issue.org_id,
+    actor_id: me.id,
+    verb: 'deleted',
+    target_type: 'issue',
+    target_id: issue.id,
+    label: issue.title,
+    detail: a.provenance,
+    project_id: issue.project_id,
+    ts: now,
+  })
 }

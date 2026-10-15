@@ -379,4 +379,83 @@ describe('assignee project permission', () => {
       }
     },
   )
+
+  /* Problem 10: the app never checks an unchanged assignee or reviewer again
+   * (updateIssueCore), so REST and MCP accept the current one resent too,
+   * even after that person was switched off or lost Edit. A change to such
+   * a person is still refused with the readable sentence. */
+  it.each(['REST', 'MCP'] as const)(
+    '%s accepts the current assignee and reviewer resent after they lose eligibility',
+    async (surface) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const assignee = await plantSeat(t, { org_id: f.org.id, name: 'Assignee' })
+      const reviewer = await plantSeat(t, { org_id: f.org.id, name: 'Reviewer' })
+      const other = await plantSeat(t, { org_id: f.org.id, name: 'Other' })
+      await t.run(async (ctx) => {
+        for (const id of [f.agent.id, assignee.id, reviewer.id, other.id]) {
+          await ctx.db.insert('project_access', {
+            project_id: f.meta.id,
+            profile_id: id,
+            level: 'user',
+          })
+        }
+      })
+      const task = await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        assignee_id: assignee.id,
+        reviewer_id: reviewer.id,
+      })
+      // the assignee is switched off, the reviewer keeps only View
+      await t.run(async (ctx) => {
+        await ctx.db.patch(assignee._id, { active: false })
+        await ctx.db.patch(other._id, { active: false })
+        const grant = await ctx.db
+          .query('project_access')
+          .withIndex('by_project_profile', (q) =>
+            q.eq('project_id', f.meta.id).eq('profile_id', reviewer.id),
+          )
+          .unique()
+        if (grant === null) throw new Error('fixture reviewer grant missing')
+        await ctx.db.patch(grant._id, { level: 'viewer' })
+      })
+      const update = (fields: { title?: string; assignee_id?: string; reviewer_id?: string }) =>
+        surface === 'REST'
+          ? t.mutation(internal.machine.rest.updateIssue, {
+              callerId: f.agent.id,
+              access: 'write',
+              keyName: 'assignee test',
+              ref: task.id,
+              body: JSON.stringify(fields),
+            })
+          : t.mutation(internal.machine.mcp.updateIssue, {
+              callerId: f.agent.id,
+              access: 'write',
+              ref: task.id,
+              ...fields,
+            })
+      // a uuid in capitals is the same person, as on every other field
+      await update({
+        title: 'Resent people',
+        assignee_id: assignee.id.toUpperCase(),
+        reviewer_id: reviewer.id,
+      })
+      expect(await t.run((ctx) => ctx.db.get(task._id))).toMatchObject({
+        title: 'Resent people',
+        assignee_id: assignee.id,
+        reviewer_id: reviewer.id,
+      })
+      await expectRefusal(
+        update({ assignee_id: other.id }),
+        'bad_request',
+        new RegExp(`^user "${other.id}" is switched off and can hold no new work$`),
+      )
+      await expectRefusal(update({ reviewer_id: assignee.id }), 'bad_request', /is switched off/)
+      expect(await t.run((ctx) => ctx.db.get(task._id))).toMatchObject({
+        assignee_id: assignee.id,
+        reviewer_id: reviewer.id,
+      })
+    },
+  )
 })

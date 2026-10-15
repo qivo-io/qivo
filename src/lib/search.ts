@@ -1,6 +1,6 @@
-import { matchesAllWords } from '../../convex/lib/search'
+import { matchesAllWords, taskSearchText } from '../../convex/lib/search'
 
-export { matchesAllWords }
+export { matchesAllWords, taskSearchText }
 
 /** All fragments must match; a contiguous phrase ranks above reordered
  * fragments, with earlier phrase matches first. Zero means no match. */

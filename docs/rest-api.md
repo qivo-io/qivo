@@ -275,8 +275,9 @@ GET /v1/projects/{ref}/users    → users with access to that project, for
 ```
 
 `num` is the durable per-org project number (migration 0050) — it never
-changes, while `key` is a display name an admin can rename. Prefer numbers
-or uuids in stored configuration. Keys are unique within the organization,
+changes. `key` is the short code the app shows. The app has no screen that
+changes a key, but only numbers and uuids are guaranteed to stay the same, so
+prefer them in stored configuration. Keys are unique within the organization,
 archived projects included. A new project's key comes from its name, with a
 number added when another project already holds it (`TES`, then `TES2`).
 
@@ -371,11 +372,13 @@ never learns anything about the person it names. An otherwise eligible user
 who cannot see the task's project answers
 `user "<uuid>" has no access to this project`.
 
-Existing assignments survive a downgrade to View or an organization Viewer
-role; updates that omit `assignee_id` preserve them. Any explicitly supplied
-non-null `assignee_id`, even the current value, requires current eligibility.
-Reviewers follow the same rules. Moving a task in the app checks its assignee
-and its reviewer against the destination project, except that a task with
+Existing assignments survive a downgrade to View, an organization Viewer
+role or a switched-off account; updates that omit `assignee_id` preserve them.
+Sending the task's current `assignee_id` again is not a change and passes
+even when that person is no longer eligible, as in the app. Any other non-null
+`assignee_id` requires current eligibility. Reviewers follow the same rules.
+Moving a task in the app checks its assignee and its reviewer against the
+destination project, except that a task with
 active subtasks is never refused for its reviewer: the move clears a
 `reviewer_id` the destination would refuse. An agent can be a viewer
 too, and that is the read-only key described above: its row here reads
@@ -449,8 +452,9 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
        &status=todo &priority=high         enum filters
        &assignee=<profile-uuid>            the stored assignee, also while
                                            a reviewer owns the task
-       &search=text                        matches task ID, title and description fragments
-                                           (substring; * acts as a wildcard)
+       &search=text                        matches fragments of the fields the
+                                           app's task filter searches (below;
+                                           substring; * acts as a wildcard)
        &archived=true                      the ARCHIVED tasks instead (0070);
                                            the default lists active ones only.
                                            A task's archive and its PROJECT's
@@ -466,8 +470,12 @@ DELETE /v1/tasks/{ref}                     requires write
 ```
 
 Search is case-insensitive: every whitespace-separated fragment must match the
-task ID (`QN-<num>`), title or description, in any order and anywhere inside a
-word. `search=upd%20firm` finds “Add signed firmware updates and rollback”.
+task ID (`QN-<num>`), title, description, status name (`To Do`, `In
+Progress` and so on, except on a task with subtasks, whose own status is
+dormant), priority name, assignee name or a label name, in any order and
+anywhere inside a word. These are the fields the app's task filter searches.
+`search=upd%20firm` finds “Add signed firmware updates and rollback”, and
+`search=in%20progress%20anna` finds Anna's tasks in progress.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
 literal.
 
@@ -541,8 +549,8 @@ PATCH accepts the same fields except `reporter_id`, `project` and `sub_project`.
 Any PATCH containing `reporter_id`, including `null` or the current reporter,
 returns `400` with `reporter_id is set when a task is created and cannot be changed`;
 other fields in that request also remain unchanged. Moving a
-task between projects is not supported over the API (the app's Move dialog
-handles the label rules; the task's number never changes). Unknown fields are ignored; invalid values are
+task between projects is not supported over the API; use the app's Move
+dialog. A moved task keeps its number and its labels. Unknown fields are ignored; invalid values are
 rejected with `400` and a message. `title` is trimmed and capped at 80
 characters (a longer one is a `400`; the same shared rule holds in the app
 and over MCP). `status` ∈ backlog · todo · progress ·

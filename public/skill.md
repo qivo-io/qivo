@@ -120,8 +120,9 @@ filters, then `get_task` with the returned task reference. Read
 `list_comments` with the `task` argument when the discussion matters. REST
 reads and posts comments at `/v1/tasks/{ref}/comments`; its comment records
 identify the task by `task_id`. Search matches every
-whitespace-separated fragment across task ID, title, and description,
-case-insensitively and in any order. MCP treats `*` literally; REST supports
+whitespace-separated fragment across task ID, title, description, status,
+priority, assignee name and label names, case-insensitively and in any order,
+like the app's task filter. MCP treats `*` literally; REST supports
 it as a wildcard. Resolve multiple plausible matches before editing.
 
 Call `update_task` with `ref` and only the requested changes, or

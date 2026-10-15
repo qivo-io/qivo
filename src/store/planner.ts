@@ -78,7 +78,7 @@ import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issu
 import { LABEL_COLORS } from '../lib/labelColors'
 import { watchLocalDay } from '../lib/localDay'
 import { desktopNotify } from '../lib/notify'
-import { matchesAllWords } from '../lib/search'
+import { matchesAllWords, taskSearchText } from '../lib/search'
 import type { ToastTone } from '../lib/toasts'
 import { beginUpdateBlock } from '../lib/updateSafety'
 import {
@@ -2682,27 +2682,27 @@ export const PLANNER = {
     const days = 120
     return Date.now() - newest > days * 86400000
   },
-  /* "Filter issues" — wildcard, multi-word AND over every text field the
-     issue carries: QN key, title, description, status + priority display
-     names, assignee name, label names. Each word may land on
-     a different field ("to do cable" = status To Do + "cable" in the title). */
+  /* "Filter issues" is a multi-word AND over every text field the issue
+     carries (QN key, title, description, status and priority display names,
+     assignee name, label names). Each word may land on a different field
+     ("to do cable" = status To Do + "cable" in the title). The text comes
+     from taskSearchText, which REST and MCP task search build too. */
   /* Also answers for archived rows: fetchArchived's shapes carry every field
      the haystack reads, which is what "shaped enough like snapshot issues for
      matchesSearch" means. */
   matchesSearch: (x: IssueVM | ArchivedIssueVM | string, query: string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     if (!it) return false
-    const hay = [
-      it.key,
-      it.title,
-      it.description,
-      !PLANNER.isGroup(it) && STATUSES.find((s) => s.id === it.status)?.name,
-      PRIORITIES[it.priority]?.name,
-      PLANNER.users.find((u) => u.id === it.assignee)?.name,
-      ...it.labels.map((lid) => PLANNER.labelById[lid]?.name),
-    ]
-      .filter(Boolean)
-      .join('\n')
+    const hay = taskSearchText({
+      key: it.key,
+      title: it.title,
+      description: it.description,
+      status: it.status,
+      group: PLANNER.isGroup(it),
+      priority: it.priority,
+      assigneeName: PLANNER.users.find((u) => u.id === it.assignee)?.name,
+      labelNames: it.labels.map((lid) => PLANNER.labelById[lid]?.name),
+    })
     return matchesAllWords(hay, query)
   },
   /* The toolbar filter row as ONE predicate for every view that renders it.

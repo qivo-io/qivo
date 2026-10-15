@@ -29,9 +29,13 @@
  * markRead/markUnread (+ the prune-per-pair statement-trigger successor) and
  * comments.create/update/remove live in phase 5's messages.ts / comments.ts —
  * NOT here. The archive reason-comment is the
- * one comment insert this file makes (the old client posted it gated on the
- * archive landing); it shares the archive's `now` and fires the comment
- * fan-out, exactly what phase 5's comments.create will compose. */
+ * one comment this file posts (the old client posted it gated on the
+ * archive landing); it shares the archive's `now` and goes through
+ * model/comments.ts postComment, as comments.create does.
+ *
+ * Each write checks Edit here first with the app's own sentence; the model
+ * cores repeat that check as defense in depth (model/issues.ts
+ * assertCanEdit). */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -49,19 +53,20 @@ import {
   rule,
 } from './lib/functions'
 import { logActivity } from './model/activity'
-import { deleteIssueDeep } from './model/cascade'
+import { postComment } from './model/comments'
 import {
   archiveIssueCore,
+  assertCanEdit,
   assertLinkableIssues,
   createIssueCore,
+  deleteIssueCore,
   hasSubtasks,
   linkAccess,
   moveIssueCore,
   unarchiveIssueCore,
   updateIssueCore,
 } from './model/issues'
-import { notifyCommentInsert, subscribeToIssue } from './model/messages'
-import { newUuid } from './model/orgs'
+import { subscribeToIssue } from './model/messages'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
@@ -102,12 +107,10 @@ async function myIssue(ctx: MeCtx, id: string): Promise<Doc<'issues'>> {
 }
 
 /* has_project_level(project, 'member') — false for a missing/foreign project
- * too, exactly the empty RLS join. */
-async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
-  if (!(await hasProjectLevel(ctx, ctx.me, projectId, 'user'))) {
-    throw forbidden('no write access to this project')
-  }
-}
+ * too, exactly the empty RLS join. The model cores' own write gate, run
+ * here first with the same sentence. */
+const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
+  assertCanEdit(ctx, ctx.me, projectId)
 
 /* --------------------------------------------------------------- archived
  * Issue reads that live OUTSIDE the snapshot: the Archive page's per-project
@@ -272,15 +275,7 @@ export const archive = orgMutation({
     const after = await archiveIssueCore(ctx, { me: ctx.me, issue, now })
     const text = (reason ?? '').trim()
     if (wasActive && text !== '') {
-      const commentDoc = await ctx.db.insert('comments', {
-        id: newUuid(),
-        issue_id: issue.id,
-        author: ctx.me.id,
-        body: text,
-        created_at: now,
-      })
-      const comment = (await ctx.db.get(commentDoc)) as Doc<'comments'>
-      await notifyCommentInsert(ctx, { comment, issue: after, actor: ctx.me, now })
+      await postComment(ctx, { issue: after, author: ctx.me, body: text, now })
     }
     return { issue: await pubFor(ctx, ctx.me, after) }
   },
@@ -301,10 +296,11 @@ export const unarchive = orgMutation({
 })
 
 /* ------------------------------------------------------------- deleteDeep
- * P.deleteIssue. model/cascade owns the FK edges (children detached +
- * touched + notified, links/labels/subscriptions/comments/messages/
- * attachment rows AND bytes); activity rows survive — history outlives its
- * subjects. The 'deleted' row matches the old client's: no detail.
+ * P.deleteIssue, one model/issues deleteIssueCore per task. model/cascade
+ * owns the FK edges (children detached + touched + notified, links/labels/
+ * subscriptions/comments/messages/attachment rows AND bytes). Activity rows
+ * survive, because history outlives its subjects. The 'deleted' row matches
+ * the old client's, with no detail.
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
  * the delete window listed them. Each must still be an active task under one
@@ -341,17 +337,7 @@ export const deleteDeep = orgMutation({
     }
     if (chosen.size) throw rule(SUBTASKS_CHANGED)
     for (const gone of [...doomed.reverse(), issue]) {
-      await deleteIssueDeep(ctx, { issue: gone, actor: ctx.me, now })
-      await logActivity(ctx, {
-        org_id: gone.org_id,
-        actor_id: ctx.me.id,
-        verb: 'deleted',
-        target_type: 'issue',
-        target_id: gone.id,
-        label: gone.title,
-        project_id: gone.project_id,
-        ts: now,
-      })
+      await deleteIssueCore(ctx, { me: ctx.me, issue: gone, now })
     }
     return null
   },

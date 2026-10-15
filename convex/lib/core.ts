@@ -14,10 +14,13 @@
  * its internal fn is a query. The /v1/webhooks routes and the MCP events/*
  * methods are served outside it. Shared RULES live in model/issues.ts
  * (cleanTitle, pairRule, metaNeedsSub, assertLive, assertAssignable,
- * assertNoSubtasks, assertNoGroupDates, assertWeekPair, SUB_MUST_NAME) and
- * model/orgs.ts (setPlannableHoursCore); this file adds only what the model
- * does not own: the caller shape, the ref grammar, the catalogue, the access
- * flags, the shared list reads and the wire projections.
+ * assertAssignableChange, assertNoSubtasks, assertNoGroupDates,
+ * assertWeekPair, SUB_MUST_NAME, deleteIssueCore), model/comments.ts
+ * (postComment) and model/orgs.ts (setPlannableHoursCore); the task search
+ * text is lib/search.ts taskSearchText, as in the app. This file adds only
+ * what the model does not own: the caller shape, the ref grammar, the
+ * catalogue, the access flags, the shared list reads and the wire
+ * projections.
  *
  * Refusal grammar: helpers here throw the shipped ConvexError {code, message,
  * reason?} values (lib/functions.ts). REST maps code → status (not_found 404,
@@ -31,10 +34,12 @@ import { machineDetail } from '../model/activity'
 import { hasSubtasks, subtaskParentIds } from '../model/issues'
 import { attachmentLimitMb } from '../model/orgs'
 import {
+  canAccessProject,
   canSeeProject,
   hasProjectLevel,
   liveCredentialRow,
   machineAccess,
+  profileCanBeAssigned,
   readOnlyRefusal,
 } from './access'
 import { assertBillingWritable, BILLING_READ_ONLY, billingReadOnly } from './billingAccess'
@@ -50,7 +55,7 @@ import type {
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
 import { canCreateProjects } from './projectCreators'
-import { allWordsMatcher } from './search'
+import { allWordsMatcher, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
 
@@ -299,11 +304,55 @@ export type ListIssueOpts = {
   order: 'created' | 'key'
 }
 
-/* Each fragment may match the task ID, title or description, in any order.
- * REST retains explicit `*` wildcards; all other punctuation stays literal. */
-export function searchMatcher(term: string, stars: boolean): (i: Doc<'issues'>) => boolean {
-  const matches = allWordsMatcher(term, stars)
-  return (i) => matches(`${ISSUE_PREFIX}-${i.num}\n${i.title}\n${i.description}`)
+/* The organization's label names by task, read through each label so that
+ * assignments stored without an organization are found too. */
+async function labelNamesByTask(ctx: QueryCtx, orgId: string): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  const labels = ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', orgId))
+  for await (const label of labels) {
+    const rows = ctx.db
+      .query('issue_labels')
+      .withIndex('by_label', (q) => q.eq('label_id', label.id))
+    for await (const row of rows) {
+      const names = out.get(row.issue_id)
+      if (names === undefined) out.set(row.issue_id, [label.name])
+      else names.push(label.name)
+    }
+  }
+  return out
+}
+
+/* Each fragment may match any field of the app's task filter (lib/search.ts
+ * taskSearchText), in any order: the task ID, title, description, status
+ * name (not on a task with subtasks), priority name, assignee name or a
+ * label name. REST retains explicit `*` wildcards; all other punctuation
+ * stays literal. `children` is the organization's tasks by parent, which
+ * tells whether a task has subtasks. */
+async function searchMatcher(
+  ctx: QueryCtx,
+  me: Caller,
+  o: { term: string; stars: boolean; children: ChildIndex },
+): Promise<(i: Doc<'issues'>) => boolean> {
+  const matches = allWordsMatcher(o.term, o.stars)
+  const profiles = await ctx.db
+    .query('profiles')
+    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
+    .collect()
+  const names = new Map(profiles.map((p) => [p.id, p.name]))
+  const labels = await labelNamesByTask(ctx, me.org_id)
+  return (i) =>
+    matches(
+      taskSearchText({
+        key: issueKey(i.num),
+        title: i.title,
+        description: i.description,
+        status: i.status,
+        group: hasSubtasksIn(o.children, i),
+        priority: i.priority,
+        assigneeName: i.assignee_id === undefined ? null : names.get(i.assignee_id),
+        labelNames: labels.get(i.id) ?? [],
+      }),
+    )
 }
 
 /* The page of matching tasks, plus the organization's tasks indexed by
@@ -316,12 +365,15 @@ export async function listIssuesCore(
   readable: (projectId: string) => boolean,
 ): Promise<{ page: Doc<'issues'>[]; children: ChildIndex }> {
   const scope = o.scope === null ? null : new Set(o.scope)
-  const match = o.search ? searchMatcher(o.search, o.stars) : null
   const out: Doc<'issues'>[] = []
   const rows = await ctx.db
     .query('issues')
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
     .collect()
+  const children = childIndexOf(rows)
+  const match = o.search
+    ? await searchMatcher(ctx, me, { term: o.search, stars: o.stars, children })
+    : null
   const groupIds = o.status ? subtaskParentIds(rows, o.archived) : null
   for (const i of rows) {
     if ((i.archived_at !== undefined) !== o.archived) continue
@@ -345,7 +397,7 @@ export async function listIssuesCore(
     const keyOf = (i: Doc<'issues'>): string => cat.byUuid.get(i.project_id)?.key ?? ''
     out.sort((a, b) => keyOf(a).localeCompare(keyOf(b)) || a.num - b.num)
   }
-  return { page: out.slice(o.offset, o.offset + o.limit), children: childIndexOf(rows) }
+  return { page: out.slice(o.offset, o.offset + o.limit), children }
 }
 
 const byKeyOrder = (a: Doc<'projects'>, b: Doc<'projects'>): number => a.key.localeCompare(b.key)
@@ -396,6 +448,28 @@ export async function listUsersCore(ctx: QueryCtx, me: Caller): Promise<Doc<'pro
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
     .collect()
   return rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+}
+
+/* A project's people for the machine surfaces' project roster (REST
+ * GET /v1/projects/{ref}/users, MCP list_project_users), ordered by name.
+ * The caller must already have resolved a project it can read. A parent's
+ * people are those with standing on the parent itself; someone who sees it
+ * only through a sub-project is listed under that sub-project. A reporter
+ * may be anyone listed; an assignee or reviewer needs `assignable`. */
+export async function listProjectUsersCore(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+): Promise<(ReturnType<typeof userJson> & { assignable: boolean })[]> {
+  const out = []
+  for (const profile of await listUsersCore(ctx, me)) {
+    if (!(await canAccessProject(ctx, profile, project))) continue
+    out.push({
+      ...userJson(profile),
+      assignable: await profileCanBeAssigned(ctx, profile, project),
+    })
+  }
+  return out
 }
 
 /* A task's discussion thread, oldest first (ties keep insertion order —

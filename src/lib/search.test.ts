@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commandSearchFilter, matchesAllWords, searchScore } from './search'
+import { commandSearchFilter, matchesAllWords, searchScore, taskSearchText } from './search'
 
 const HAY = ['QN-20', 'C-to-C 240W cable spec', 'To Do', 'Medium', 'Anna Fält'].join('\n')
 
@@ -75,5 +75,32 @@ describe('commandSearchFilter', () => {
     expect(commandSearchFilter('image-uuid', '  ALP\tann ', keywords)).toBe(1)
     expect(commandSearchFilter('image-uuid', 'mount beach', keywords)).toBe(0)
     expect(commandSearchFilter('No image assigned', 'assign no')).toBe(1)
+  })
+})
+
+describe('taskSearchText', () => {
+  const task = {
+    key: 'QN-20',
+    title: 'C-to-C 240W cable spec',
+    description: '',
+    status: 'todo' as const,
+    group: false,
+    priority: 'medium' as const,
+    assigneeName: 'Anna Fält',
+    labelNames: ['Power', undefined],
+  }
+
+  it('reads every field the app filter and the machine search share, one per line', () => {
+    expect(taskSearchText(task)).toBe(
+      ['QN-20', 'C-to-C 240W cable spec', 'To Do', 'Medium', 'Anna Fält', 'Power'].join('\n'),
+    )
+    expect(matchesAllWords(taskSearchText(task), 'to do anna power')).toBe(true)
+    expect(matchesAllWords(taskSearchText(task), 'urgent cable')).toBe(false)
+  })
+
+  it('leaves out the dormant status of a task with subtasks', () => {
+    const group = taskSearchText({ ...task, group: true, assigneeName: null, labelNames: [] })
+    expect(group).toBe(['QN-20', 'C-to-C 240W cable spec', 'Medium'].join('\n'))
+    expect(matchesAllWords(group, 'to do cable')).toBe(false)
   })
 })

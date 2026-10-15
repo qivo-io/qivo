@@ -41,7 +41,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { httpAction, internalMutation, internalQuery } from '../_generated/server'
-import { canAccessProject, hasProjectLevel, profileCanBeAssigned } from '../lib/access'
+import { hasProjectLevel } from '../lib/access'
 import {
   type AccessFlag,
   accessFlags,
@@ -57,6 +57,7 @@ import {
   issueOut,
   listCommentsCore,
   listIssuesCore,
+  listProjectUsersCore,
   listUsersCore,
   loadCatalogue,
   type MeJson,
@@ -79,10 +80,10 @@ import {
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
-import { logActivity } from '../model/activity'
-import { deleteIssueDeep } from '../model/cascade'
+import { postComment } from '../model/comments'
 import {
   assertAssignable,
+  assertAssignableChange,
   assertLive,
   assertNoGroupDates,
   assertNoSubtasks,
@@ -90,6 +91,7 @@ import {
   assertWeekPair,
   cleanTitle,
   createIssueCore,
+  deleteIssueCore,
   type IssuePatch,
   type MachineUpdate,
   metaNeedsSub,
@@ -98,7 +100,6 @@ import {
   SUB_MUST_NAME,
   updateIssueCore,
 } from '../model/issues'
-import { notifyCommentInsert } from '../model/messages'
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
 import {
@@ -112,7 +113,7 @@ import { type MachineEntry, type Principal, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
-type RestProjectUserJson = RestUserJson & { assignable: boolean }
+type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 
 /* An agent key's writes name the key; a personal token's writes name no
  * token, because the person is the actor and their tokens are private. */
@@ -257,13 +258,16 @@ function assertEffectiveWeekPair(f: Record<string, unknown>, current?: Doc<'issu
  * null clears. User references are lowercased before the by_uuid lookup
  * (stored uuids are lowercase; the SQL uuid type compared case-insensitively).
  * The shared model guards enforce that a selected user is eligible for work on
- * the project; only the last refusal sentence names the role. */
+ * the project; only the last refusal sentence names the role. On PATCH,
+ * `current` is the task. Resending its current assignee or reviewer is no
+ * change and is not checked again, as in the app. */
 async function applyPerson(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   b: Record<string, unknown>,
   f: Record<string, unknown>,
   field: 'assignee_id' | 'reviewer_id',
+  current?: Doc<'issues'>,
 ): Promise<void> {
   if (!(field in b)) return
   const value = b[field]
@@ -275,7 +279,9 @@ async function applyPerson(
     throw badRequest(`${field} must be a profile uuid or null`)
   }
   const id = value.toLowerCase()
-  await assertAssignable(ctx, project, id, field === 'reviewer_id' ? 'reviewer' : 'assignee')
+  const role = field === 'reviewer_id' ? 'reviewer' : 'assignee'
+  if (current === undefined) await assertAssignable(ctx, project, id, role)
+  else await assertAssignableChange(ctx, project, current[field], id, role)
   f[field] = id
 }
 
@@ -352,17 +358,7 @@ export const listProjectUsers = internalQuery({
     const { me, cat, readable } = await withAccess(ctx, a.callerId, a.access)
     const project = findProjectRef(cat, a.ref)
     if (project === undefined || !readable(project.id)) throw notFound('project not found')
-    const out: RestProjectUserJson[] = []
-    // A parent's people are those with standing on the parent itself; someone
-    // who sees it only through a sub-project is listed under that sub-project.
-    for (const profile of await listUsersCore(ctx, me)) {
-      if (!(await canAccessProject(ctx, profile, project))) continue
-      out.push({
-        ...userJson(profile),
-        assignable: await profileCanBeAssigned(ctx, profile, project),
-      })
-    }
-    return out
+    return await listProjectUsersCore(ctx, me, project)
   },
 })
 
@@ -646,8 +642,8 @@ export const updateIssue = internalMutation({
       .withIndex('by_uuid', (q) => q.eq('id', issue.project_id))
       .unique()
     if (project === null) throw notFound('task not found')
-    await applyPerson(ctx, project, b, fields, 'assignee_id')
-    await applyPerson(ctx, project, b, fields, 'reviewer_id')
+    await applyPerson(ctx, project, b, fields, 'assignee_id', issue)
+    await applyPerson(ctx, project, b, fields, 'reviewer_id', issue)
     const toggles = archive !== undefined && archive !== (issue.archived_at !== undefined)
     if (Object.keys(fields).length === 0 && !toggles) {
       // archived matching the current state is a clean no-op, not an error
@@ -664,9 +660,10 @@ export const updateIssue = internalMutation({
   },
 })
 
-/* DELETE /v1/tasks/{ref} (rest:479-484) — deleteIssueDeep (detached children
- * are touched AND notified; attachment bytes die in the same transaction) +
- * the 'deleted' narration whose detail is exactly the provenance. */
+/* DELETE /v1/tasks/{ref} (rest:479-484) runs model/issues deleteIssueCore.
+ * Detached children are touched AND notified, attachment bytes die in the
+ * same transaction, and the 'deleted' narration's detail is exactly the
+ * provenance. */
 export const deleteIssue = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, ref: v.string() },
   handler: async (ctx, a): Promise<{ deleted: boolean; id: string; key: string }> => {
@@ -675,18 +672,7 @@ export const deleteIssue = internalMutation({
     if (issue === null) throw notFound('task not found')
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const now = new Date().toISOString()
-    await deleteIssueDeep(ctx, { issue, actor: me, now })
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: me.id,
-      verb: 'deleted',
-      target_type: 'issue',
-      target_id: issue.id,
-      label: issue.title,
-      detail: provenanceOf(a.keyName),
-      project_id: issue.project_id,
-      ts: now,
-    })
+    await deleteIssueCore(ctx, { me, issue, now, provenance: provenanceOf(a.keyName) })
     return { deleted: true, id: issue.id, key: issueKey(issue.num) }
   },
 })
@@ -711,9 +697,10 @@ export const listComments = internalQuery({
 /* POST /v1/tasks/{ref}/comments (rest:425-437), authored by the CALLER (the
  * agent or the person the credential acts as). Attribution cannot be forged,
  * the id is server-generated (§5), and there is deliberately NO activity row
- * (the comment IS its own feed entry). An issue outside the caller's reach is
- * not found BEFORE the write gate is consulted, never a 403 that would
- * confirm it exists. */
+ * (the comment IS its own feed entry; model/comments.ts postComment, shared
+ * with the app and MCP). An issue outside the caller's reach is not found
+ * BEFORE the write gate is consulted, never a 403 that would confirm it
+ * exists. */
 export const addComment = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<RestCommentJson> => {
@@ -727,15 +714,7 @@ export const addComment = internalMutation({
     const trimmed = b.body.trim()
     if (trimmed === '') throw badRequest('comment body must not be blank')
     const now = new Date().toISOString()
-    const docId = await ctx.db.insert('comments', {
-      id: newUuid(),
-      issue_id: issue.id,
-      author: me.id,
-      body: trimmed,
-      created_at: now,
-    })
-    const comment = (await ctx.db.get(docId)) as Doc<'comments'>
-    await notifyCommentInsert(ctx, { comment, issue, actor: me, now })
+    const comment = await postComment(ctx, { issue, author: me, body: trimmed, now })
     return (await commentOut(ctx, comment, { surface: 'rest' })) as RestCommentJson
   },
 })
