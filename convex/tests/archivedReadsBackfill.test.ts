@@ -180,4 +180,47 @@ describe('internal/archivedReadsBackfill', () => {
     await runSteps(t)
     expect(await allMessages(t)).toEqual([])
   })
+
+  it('also marks the relation rows of tasks archived before archive marks existed', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const archived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+    })
+    const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (const task of [archived, active]) {
+        await ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id: task.id, label_id: 'l' })
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: task.id,
+          profile_id: f.admin.id,
+          created_at: NOW,
+        })
+      }
+    })
+
+    await t.mutation(backfill.start, {})
+    await runSteps(t)
+
+    const marks = (task: Doc<'issues'>) =>
+      t.run(async (ctx) => ({
+        flagged: (await ctx.db.get(task._id))?.relations_marked === true,
+        labels: (
+          await ctx.db
+            .query('issue_labels')
+            .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+            .collect()
+        ).map((row) => row.task_archived === true),
+        follows: (
+          await ctx.db
+            .query('issue_subscriptions')
+            .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', task.id))
+            .collect()
+        ).map((row) => row.task_archived === true),
+      }))
+    expect(await marks(archived)).toEqual({ flagged: true, labels: [true], follows: [true] })
+    expect(await marks(active)).toEqual({ flagged: false, labels: [false], follows: [false] })
+  })
 })
