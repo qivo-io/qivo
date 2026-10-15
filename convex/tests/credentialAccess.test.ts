@@ -876,6 +876,15 @@ describe('read-only credentials over HTTP', () => {
         const { text } = toolText(res.body)
         expect(text, tool.def.name).not.toBe(CREDENTIAL_READS_ONLY)
         expect(text, tool.def.name).not.toBe(VIEWER_AGENT_READS_ONLY)
+        // a project row never offers a write this credential cannot make
+        if (tool.def.name === 'list_projects' || tool.def.name === 'get_project') {
+          const rows = [JSON.parse(text)].flat() as { access: { write: boolean } }[]
+          expect(rows.length, tool.def.name).toBeGreaterThan(0)
+          expect(
+            rows.map((row) => row.access.write),
+            tool.def.name,
+          ).not.toContain(true)
+        }
       }
     }
     for (const path of ['/v1/me', '/v1/projects', '/v1/tasks', '/v1/users']) {
@@ -890,6 +899,12 @@ describe('read-only credentials over HTTP', () => {
     const { token: writeGrant } = await c.oauth(['qivo:read', 'qivo:write'])
     const before = await c.counts()
     for (const secret of [c.writeToken, writeGrant, c.agentKey]) {
+      const listed = await callTool(c.t, secret, 'list_projects', {})
+      const rows = JSON.parse(toolText(listed.body).text) as {
+        key: string
+        access: { write: boolean }
+      }[]
+      expect(rows.find((row) => row.key === c.f.sub.key)?.access.write).toBe(true)
       const res = await callTool(c.t, secret, 'create_task', {
         project: c.f.sub.key,
         title: 'Written',

@@ -81,8 +81,10 @@ safe display identifier (for an agent key the first 7 and last 5 characters,
 such as `qva_012...abcde`) are stored. A revoked key or token stops working
 immediately, and so does **every** credential of a user switched to Inactive.
 A personal token with an expiry is refused from that instant on, like a
-revoked one. In the app, **New token** offers **Never** or a last day, and a
-token with a last day expires when that day ends in the creator's time zone.
+revoked one. A request already accepted when its credential is revoked or
+expires can still finish. In the app, **New token** offers **Never** or a
+last day, and a token with a last day expires when that day ends in the
+creator's time zone.
 `GET /v1/me` reports which credential a request used and what it may do.
 
 `401` means the credential is missing, unknown, revoked, expired or belongs to
@@ -1306,13 +1308,19 @@ it fits.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the
-items the call changed. `tasks` in the body are task refs; one the caller
-cannot read is a `400` (`tasks must name tasks by key, number or uuid`) and
-changes nothing. Name the items with `tasks`, or send `"all": true` instead:
+items the call changed. `tasks` in the body are task refs, at most 100 per
+call with repeats counted. A longer list is a `400` (`tasks must name at
+most 100 tasks per call`), and so is a task the caller cannot read (`tasks
+must name tasks by key, number or uuid`); neither changes anything. Name the
+items with `tasks`, or send `"all": true` instead:
 
 - `read` marks the named items read. Like opening an item in the app, it
   keeps only each item's latest message. With `all`, it marks every item
-  read except snoozed ones, up to 256 messages per call.
+  read except snoozed ones, up to 256 messages per call, and the answer
+  adds `before`, a number. Send it back unchanged as `"before"` with each
+  later call, so messages that arrive meanwhile stay unread. `before` with
+  `tasks` or another action, or one that is not a number from 0 up, is a
+  `400`.
 - `unread` marks the named items unread again.
 - `remove` removes the named items. With `all`, it removes every read
   message except snoozed ones, up to 256 per call, and leaves unread

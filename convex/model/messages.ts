@@ -79,32 +79,47 @@ const pairRows = (
  * narrows it to the snooze it was scheduled for, so a wake scheduled for a
  * superseded or already-lifted snooze finds nothing and does nothing (no
  * cancellation bookkeeping). Without `until` (the nightly fallback) any
- * snooze on the pair ends. Returns whether anything woke. */
+ * snooze on the pair ends. Returns how many rows it wrote, 0 when nothing
+ * woke. It writes each row of the item at most once, so a wake writes at
+ * most ITEM_UNREAD_CAP + 1 rows, which the nightly sweep budgets on. */
 export async function wakeSnoozedItem(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string; until?: string },
   now: string,
-): Promise<boolean> {
-  const rows = (await pairRows(ctx, a)).filter(
+): Promise<number> {
+  const item = await pairRows(ctx, a)
+  const rows = item.filter(
     (r) => r.snoozed_until !== undefined && (a.until === undefined || r.snoozed_until === a.until),
   )
-  if (rows.length === 0) return false
-  // Messages about an archived task stay read (see "archived tasks" below),
-  // so such an item only loses its snooze and does not return.
+  if (rows.length === 0) return 0
   const issue = await byId(ctx, 'issues', a.issue_id)
   const project = issue === null ? null : await byId(ctx, 'projects', issue.project_id)
-  const archived = issue?.archived_at !== undefined || project?.archived_at !== undefined
-  for (const r of rows) {
-    await ctx.db.patch(
-      r._id,
-      archived
-        ? { snoozed_until: undefined, read_at: r.read_at ?? now }
-        : { snoozed_until: undefined, read_at: undefined, woke_at: now },
-    )
+  if (issue?.archived_at === undefined && project?.archived_at === undefined) {
+    for (const r of rows) {
+      await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: undefined, woke_at: now })
+    }
+    return rows.length
   }
-  // read rows now, so keep the item to its newest one like a mark read does
-  if (archived) await pruneReadMessages(ctx, a)
-  return true
+  // Messages about an archived task stay read (see "archived tasks" below),
+  // so such an item only loses its snooze and does not return. Its rows are
+  // read now, so it keeps only its newest row, as pruneReadMessages leaves
+  // an item after a mark read. A row the prune would drop is deleted
+  // without a patch first, since Convex counts every write.
+  const waking = new Set(rows.map((r) => r._id))
+  const newest = item.reduce((best, r) => (oldestFirst(best, r) < 0 ? r : best))
+  let written = 0
+  for (const r of item) {
+    if (r._id === newest._id) {
+      if (!waking.has(r._id)) continue
+      await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: r.read_at ?? now })
+    } else if (waking.has(r._id) || r.read_at !== undefined) {
+      await ctx.db.delete(r._id)
+    } else {
+      continue
+    }
+    written += 1
+  }
+  return written
 }
 
 /* Oldest first by (created_at, id), the total order the prune uses too. */

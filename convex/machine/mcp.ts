@@ -69,8 +69,8 @@ import {
   listProjectUsersCore,
   listUsersCore,
   loadCatalogue,
-  mcpProjectOut,
   meCore,
+  projectJson,
   taskOut,
   userJson,
 } from '../lib/core'
@@ -155,6 +155,7 @@ type SchemaProp = {
   maximum?: number
   items?: SchemaProp
   minItems?: number
+  maxItems?: number
   anyOf?: SchemaProp[]
   properties?: Record<string, SchemaProp>
   required?: string[]
@@ -232,7 +233,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_projects',
       title: 'List projects',
       description:
-        'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). Active projects only by default; `archived: true` lists the archived ones instead — an archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
+        'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). `access.write` says whether you may create and change tasks in that project. Active projects only by default; `archived: true` lists the archived ones instead — an archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1018,6 +1019,9 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       if (p.minItems !== undefined && x.length < p.minItems) {
         return `Too small: expected array to have >=${p.minItems} items`
       }
+      if (p.maxItems !== undefined && x.length > p.maxItems) {
+        return `Too big: expected array to have <=${p.maxItems} items`
+      }
       if (p.items === undefined) return null
       for (const item of x) {
         const problem = checkValue(p.items, item)
@@ -1406,14 +1410,15 @@ async function mustFindParent(ctx: QueryCtx, me: Caller, ref: string): Promise<D
   return parent
 }
 
-/* The caller's readable/writable predicates over the whole org catalogue —
- * one by_org scan + the access predicates, shared by every scoped read.
- * Writable also needs a credential that may write. */
+/* The caller's flags and readable/writable predicates over the whole org
+ * catalogue, from one by_org scan and the access predicates, shared by every
+ * scoped read. Writable also needs a credential that may write. */
 async function catalogueFlags(ctx: QueryCtx, me: Caller, access: CredentialAccess) {
   const cat = await loadCatalogue(ctx, me)
   const flags = await accessFlags(ctx, me, cat.projects, access)
   return {
     cat,
+    flags,
     readable: (id: string) => flags.get(id)?.read === true,
     writable: (id: string) => flags.get(id)?.write === true,
   }
@@ -1466,12 +1471,17 @@ export const listTeams = internalQuery({
   },
 })
 
+/* list_projects: REST GET /v1/projects' rows, with the caller's access flags. */
 export const listProjects = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, archived: v.optional(v.boolean()) },
   handler: async (ctx, { callerId, access, archived }) => {
     const me = await asMachineCaller(ctx, callerId, access)
-    const { readable } = await catalogueFlags(ctx, me, access)
-    return pretty((await listProjectsCore(ctx, me, archived === true, readable)).map(mcpProjectOut))
+    const { cat, flags, readable } = await catalogueFlags(ctx, me, access)
+    return pretty(
+      listProjectsCore(cat, archived === true, readable).map((p) =>
+        projectJson(p, flags.get(p.id) ?? { read: false, write: false }),
+      ),
+    )
   },
 })
 

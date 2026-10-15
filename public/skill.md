@@ -21,6 +21,13 @@ support, or when the user explicitly requests it. An agent key is for
 automation acting as a named agent user. REST accepts personal tokens and
 agent keys. Use an existing working connection for the requested task.
 
+If Microsoft work or school sign-in shows **Need admin approval**, direct the
+user and their Microsoft administrator to
+[Microsoft sign-in and administrator approval](https://qivo.io/docs/microsoft-sign-in-and-administrator-approval/)
+for Qivo's organization approval link. Resume connection setup after the
+administrator grants consent. Microsoft approval does not grant Qivo project
+access or replace the person's approval of the assistant's connection.
+
 ## Learn who you are first
 
 Call `get_me` over MCP, or `GET /v1/me` over REST, before other work. It
@@ -257,9 +264,11 @@ Useful field rules:
   or project marks the messages about its tasks read for everyone, and
   messages about an archived task arrive read.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
-  `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
-  `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
-  `remove` removes every read item; repeat while `has_more` is `true`.
+  `remove` or `snooze`) and `tasks` (at most 100 per call), or REST
+  `POST /v1/inbox/{action}` with `{"tasks": [...]}`. `all: true` with `read`
+  marks everything read, and with `remove` removes every read item; repeat
+  while `has_more` is `true`. With `read`, send back the `before` each
+  answer returns, so messages that arrive meanwhile stay unread.
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
   items back). Mark items read once you have handled them, so new updates
   stand out. Retention never removes unread messages, and an agent's read
