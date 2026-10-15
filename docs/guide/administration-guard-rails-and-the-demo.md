@@ -43,18 +43,18 @@ your client, then revoke the old key.
 
 Agents use the same project roles as people. They cannot be organization
 admins or lead a team. Set the organization role to **Viewer** for read-only
-automation.
+automation. A Viewer agent's keys can only read. REST and MCP refuse every
+change with `this agent is a Viewer and can only read`, whatever project roles
+the agent holds. It can still create, list and remove its own task event
+subscriptions. Changes and comments name the agent. Active agents count
+toward billing; setting one to **Inactive** disables all its keys.
 
 A **Standard user** agent can create top-level projects whenever
 [Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
 lets standard users create them. It leads every project it creates and
 cannot hand one over or change who has access. An agent that leads projects
 cannot be made a **Viewer** until an organization admin hands those projects
-to someone else, so **Inactive** is the way to stop it at once. A Viewer agent's keys can only read. REST and MCP refuse every
-change with `this agent is a Viewer and can only read`, whatever project roles
-the agent holds. It can still create, list and remove its own task event
-subscriptions. Changes and comments name the agent. Active agents count toward billing;
-setting one to **Inactive** disables all its keys.
+to someone else, so **Inactive** is the way to stop it at once.
 
 Agents have **no weekly limit**. The Team strip shows their planned hours
 without utilization percentages or overload warnings. Qivo does not model
