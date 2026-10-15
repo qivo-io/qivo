@@ -269,9 +269,12 @@ async function inboxItems(
  * root project and the caller's grant and team grants on both, 7 index
  * ranges plus 2 per team granted either project. The item read and the
  * prune's or snooze's second read add 2, so 100 refs use about 900 of the
- * 4,096 index ranges and stay inside with up to 15 such teams. Snooze
- * schedules one wake per item, 100 of the 1,000 allowed. Duplicate refs
- * count too.
+ * 4,096 index ranges and stay inside with up to 15 such teams. Unread and
+ * snooze also read each task and its project twice to refuse an archived
+ * one (model/messages.ts refuseArchivedItems), once for the refs and once
+ * for the rows, so they use about 1,300 and stay inside with up to 13 such
+ * teams. Snooze schedules one wake per item, 100 of the 1,000 allowed.
+ * Duplicate refs count too.
  */
 export const INBOX_TASKS_MAX = 100
 
