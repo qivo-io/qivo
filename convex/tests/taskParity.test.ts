@@ -247,12 +247,14 @@ describe('the single-task read names only tasks the caller can read', () => {
     expect(rest).toMatchObject({ is_group: true, remaining_hours: 9, ...expected })
     const viaMcp = await mcp(fx, internal.machine.mcp.getIssue, { ref: parent.id })
     expect(viaMcp).toMatchObject(expected)
-    expect(Object.keys(viaMcp).slice(-6)).toEqual([
+    expect(Object.keys(viaMcp).slice(-8)).toEqual([
       'url',
       'group_remaining_hours',
       'labels',
       'subtasks',
       'links',
+      'following',
+      'followers',
       'attachments',
     ])
     // an admin reads the hidden subtask and link too, and counts its hours

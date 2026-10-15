@@ -110,6 +110,10 @@ Access follows the user's effective project roles, including team grants:
 - **write**: `user` or `lead`, to create, edit and delete tasks in the
   project and post comments on them. A writing role reads too; the access
   model has no write-without-read grant.
+- **your own**: following a task, changing your own [inbox](#inbox) and
+  editing or deleting your own [comments](#comments) need only read access to
+  the task, as in the app. They are still changes, so a credential that can
+  only read is refused them.
 
 A readable project the user cannot write answers `403` with
 `this agent has no write access to that project` for an agent key and
@@ -122,8 +126,8 @@ created with change access and has not expired; a token stored without an
 access setting can only read. An agent key can make changes only when its
 agent's organization role is `user`. A read-only credential still reads
 everything its user can, and every project comes back
-`"access": { "read": …, "write": false }`. Every `POST`, `PATCH` and `DELETE`
-request returns `403` with `{"error": "this credential can only read"}` for a
+`"access": { "read": …, "write": false }`. Every `POST`, `PUT`, `PATCH` and
+`DELETE` request returns `403` with `{"error": "this credential can only read"}` for a
 personal token and `{"error": "this agent is a Viewer and can only read"}` for
 a Viewer agent's key, before Qivo resolves any reference, so the answer is
 the same whether or not the reference exists. Managing the credential's own
@@ -140,13 +144,15 @@ They share a word because they are the same idea one altitude apart. A user whos
 `org_role` is `viewer` therefore comes back with
 `"access": { "read": …, "write": false }` on **every** project, whatever it
 holds there. For an agent that makes its key a read-only credential, so every
-`POST`, `PATCH` and `DELETE` request returns `403` with
+`POST`, `PUT`, `PATCH` and `DELETE` request returns `403` with
 `{"error": "this agent is a Viewer and can only read"}` before Qivo resolves
 any project or task reference. That is how a read-only key is made, with one
 setting on the Users page rather than a grant list audited project by project.
-A Viewer person's token may be able to make changes, but every write still
-refuses with `your account has no write access to that project` (or the
-plannable hours rule's own sentence), the refusal a missing grant produces.
+A Viewer person's token may be able to make changes, but every write to a
+project still refuses with `your account has no write access to that project`
+(or the plannable hours rule's own sentence), the refusal a missing grant
+produces. As in the app, a Viewer person may still follow tasks, manage their
+own inbox and edit or delete comments they wrote.
 Nothing in this surface implements either rule. They live in the shared
 access layer (`credentialAccess` and `cappedLevel` in `convex/lib/access.ts`),
 which REST, MCP and webhook management all call, so the same user is
@@ -731,7 +737,7 @@ Task shape of a list row from `GET /v1/tasks`:
 ```
 
 `GET /v1/tasks/{ref}`, `POST /v1/tasks` and `PATCH /v1/tasks/{ref}` answer
-the single-task shape, which adds five fields:
+the single-task shape, which adds seven fields:
 
 ```json
 {
@@ -739,12 +745,16 @@ the single-task shape, which adds five fields:
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
   "links": [{ "kind": "blocked_by", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "progress" }],
+  "following": true,
+  "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
   "attachments": [{ "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213, "…": "…" }]
 }
 ```
 
-`attachments` lists the task's files with download links, in the shape
-[Attachments](#attachments) describes.
+`following` says whether the caller follows the task, and `followers` lists
+everyone who does, by name, as the app's follower list shows them. See
+[Following](#following). `attachments` lists the task's files with download
+links, in the shape [Attachments](#attachments) describes.
 
 `owner_id` is whose work the task is: the reviewer while the task is in
 `review` with a reviewer set, else the assignee, and always the assignee on a
@@ -823,8 +833,10 @@ The task's discussion thread (migration 0054) — the same comments the app
 shows on the task window's discussion spine:
 
 ```
-GET  /v1/tasks/{ref}/comments   the full thread, oldest first (read)
-POST /v1/tasks/{ref}/comments   { "body": "Markdown text" }      (write)
+GET    /v1/tasks/{ref}/comments   the full thread, oldest first (read)
+POST   /v1/tasks/{ref}/comments   { "body": "Markdown text" }      (write)
+PATCH  /v1/comments/{id}          { "body": "Markdown text" }      (write)
+DELETE /v1/comments/{id}                                           (write)
 ```
 
 ```json
@@ -845,9 +857,21 @@ so it cannot be forged: passing `author`/`author_id` is rejected with `400`
 by the agent posting it`, or for a personal token `comments cannot be
 attributed over the API; a comment is always authored by the person posting
 it`). You are only ever yourself. `POST` returns `201`
-with the created comment; a blank `body` is a `400`. Editing or deleting
-comments is not supported over the API (in the app that is the author or a
-project lead). Comments are deleted with their task.
+with the created comment; a blank `body` is a `400`. Comments are deleted
+with their task.
+
+`PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
+`DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
+"…" }`. `{id}` is the comment's `id` from the thread. As in the app, the
+comment's author may edit or delete it, and so may a lead of the task's
+project (an organization admin leads every project); anyone else gets `403`
+(`only the author or a project lead can edit this comment`, or `delete`). A
+comment on a task the caller cannot read answers `404` (`comment not found`),
+like an unknown id. The body is trimmed and may not be blank (`400` `a comment
+cannot be empty`). Sending the text it already has changes nothing. An edit
+records `edited_at` and `edited_by_id`, and people it newly mentions follow
+the task and get an inbox message, as on a new comment. Neither writes an
+activity row or a webhook event.
 
 **Mentions and inbox messages (0074/0075/0114).** Description and comment
 markdown may carry the app's mention form — `@[Display Name](user:<profile
@@ -866,15 +890,15 @@ loses its reviewer there. A reviewer set in any other status is not
 subscribed, and a task with subtasks stays with its assignee, so clearing its
 reviewer subscribes nobody.
 
-There is no subscribe endpoint. Subscribing is a person's own notification
-preference, expressed in the app, and this API has no way to read an inbox
-back — so a subscription made here would be signing up for something you
-could not collect.
+Following (subscribing to) a task yourself is [its own route](#following),
+and the caller reads and clears what arrives through [the inbox
+routes](#inbox).
 
 All of it happens server-side, inside the same transaction as the write, so
 it needs nothing from the caller; unknown or out-of-org uuids in mention
 position are silently ignored, as are users without visibility into the
-project — a subscription never outlives the project access that justified it.
+project and agents without an inbox (see [Inbox](#inbox)) — a subscription
+never outlives the project access that justified it.
 
 Every write here is the caller's, and the server is what says so. Each
 endpoint is one internal function — resolve the ref, check the rules, make
@@ -888,6 +912,114 @@ records that agent or person as the actor even when task creation selects a
 different `reporter_id`. Selecting a reporter never rewrites who performed
 the operation. Task responses expose reporter, assignee and reviewer, with no
 separate creator fields. The caller is not notified of its own changes.
+
+### Following
+
+Following a task is how its updates reach the caller's [inbox](#inbox):
+
+```
+PUT    /v1/tasks/{ref}/following   follow the task
+DELETE /v1/tasks/{ref}/following   stop following it
+```
+
+Both answer `{ "id": "…uuid…", "key": "QN-3", "following": true | false,
+"changed": true | false }`; `changed` is `false` when the caller already
+was, or was not, following. Following needs only read access to the task,
+as the app's eye button does, and a task the caller cannot read answers
+`404` like an unknown one. The caller's own follow is the only one these
+routes change; managing other people's follows stays in the app. The
+single-task read shows `following` and `followers`. Qivo also makes the
+caller follow a task when it is assigned or handed the task, mentioned on it
+or comments on it, as described under [Comments](#comments).
+
+### Inbox
+
+The caller's own inbox, the same items the app's **Inbox** shows: one item
+per active task the caller can read, holding the messages about that task
+the caller has not removed.
+
+```
+GET  /v1/inbox                 items, latest activity first (read)
+POST /v1/inbox/read            { "tasks": ["QN-3"] } or { "all": true }
+POST /v1/inbox/unread          { "tasks": ["QN-3"] }
+POST /v1/inbox/remove          { "tasks": ["QN-3"] } or { "all": true }
+POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:00Z" }
+```
+
+`GET /v1/inbox` takes `unread_only=true` (items with an unread message),
+`include_snoozed=true` (snoozed items are left out otherwise, as in the app),
+`limit` (1 to 200, 50 by default) and `offset`. It answers:
+
+```json
+{
+  "items": [
+    {
+      "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
+      "unread_count": 1,
+      "latest_at": "2026-10-14T09:12:03.000Z",
+      "snoozed_until": null,
+      "messages": [
+        {
+          "id": "…uuid…", "kind": "comment", "detail": "New comment",
+          "actor_id": "…uuid…", "actor_name": "Priya Patel",
+          "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
+        }
+      ]
+    }
+  ],
+  "truncated": false
+}
+```
+
+`task` is the task as it is now, its current title included. As in the app,
+items are listed only for active tasks the caller can read in active
+projects. Messages about a task it has lost access to, an archived task or a
+task in an archived project stay stored and come back when the access or the
+task does, so the `Archived` message itself is not listed. `messages` run
+oldest first; `kind` is `mention`, `comment` or `change`, and `detail` is
+the line the app shows. `latest_at` is the newest message's time, or the end
+of a snooze when that is later, and orders the list.
+
+One request reads the caller's newest 1,000 messages. When it holds more,
+`truncated` is `true`. Older items are then missing, and the oldest items
+listed may lack their older messages. Marking items read keeps only each item's
+latest message, so `POST /v1/inbox/read` with `{"all": true}`, repeated
+while `has_more` is `true`, shrinks the inbox until it fits.
+
+The `POST` routes change the caller's own items and answer `{ "action":
+"read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the
+items the call changed. `tasks` in the body are task refs; one the caller
+cannot read is a `400` (`tasks must name tasks by key, number or uuid`) and
+changes nothing. Name the items with `tasks`, or send `"all": true` instead:
+
+- `read` marks the named items read. Like opening an item in the app, it
+  keeps only each item's latest message. With `all`, it marks every item
+  read except snoozed ones, up to 256 messages per call.
+- `unread` marks the named items unread again.
+- `remove` removes the named items. With `all`, it removes every read
+  message except snoozed ones, up to 256 per call, and leaves unread
+  messages alone.
+- `snooze` hides the named items until `until`, an ISO date-time in the
+  future and at most a year ahead, and marks them unread so they return
+  bold. `"until": null` brings snoozed items back now. A new update on the
+  task also brings its item back.
+
+With `all`, repeat the call while `has_more` is `true`. Like the app's bulk
+actions, `all` also reaches messages about tasks the caller can no longer
+read, but `tasks` names only readable ones. Other bodies are `400`: neither
+or both of `tasks` and `all`, `all` with `unread` or `snooze`, `until` on
+another action, or `snooze` without `until`.
+
+The nightly cleanup removes an item's read messages after the caller's
+retention period, which a person sets in the app. An agent has no settings
+page, so its read messages are removed after 7 days. Unread messages are
+never removed by it.
+
+Only an active Standard user agent has an inbox. A Viewer agent and an
+Inactive one cannot mark messages read or remove them, so Qivo sends them no
+messages and does not make them followers, whether by a mention, a comment,
+an assignment or a project lead. Messages they already hold stay, and they
+receive new ones again once the agent is an active Standard user.
 
 ### Attachments
 
@@ -1112,6 +1244,16 @@ curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/workload?weeks=4"
 # give someone 30 plannable hours a week (needs an organization admin's token)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
+
+# follow QN-26, then read what is new and mark it read
+curl -X PUT -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/following"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/inbox?unread_only=true"
+curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"tasks":["QN-26"]}' "$BASE/inbox/read"
+
+# fix a typo in a comment you wrote (the id comes from the thread)
+curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"body":"Measured 0.4 mm of play"}' "$BASE/comments/<comment uuid>"
 ```
 
 ## Side effects and audit trail

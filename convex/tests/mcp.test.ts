@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '06e65e8a3860538c44efc1b4cd0ce2e81344542ac804acb1debb7da7d5562454'
-const SHA_TOOLS_MODERN = 'b318c7ef16c3c6cec23e27e7766add35ee50f2154a0fe3c84b3b838c81d00e59'
+const SHA_TOOLS_LEGACY = '09c0163bcde71f0741e0cced0fe0989c538d3f28145b92730d6e5153acc15f5d'
+const SHA_TOOLS_MODERN = '1cbcbac8a88abbdba963dac7c9bbf2fbabfb3003c97862d281a93cdb463e6188'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -480,6 +480,11 @@ describe('body shape and leg selection', () => {
       'delete_attachment',
       'list_task_activity',
       'get_workload',
+      'update_comment',
+      'delete_comment',
+      'list_inbox',
+      'update_inbox',
+      'set_following',
     ])
     expect(JSON.stringify(catalogue.result.tools)).not.toMatch(/\bissues?\b|_issues?\b/)
     expect(await sha256hex(dataJson)).toBe(SHA_TOOLS_LEGACY)
@@ -1589,6 +1594,8 @@ describe('write tools', () => {
     // stripped before an otherwise-valid update reaches the mutation.
     await mintKey(fx.t, fx.agent, QVA)
     await plantSubscription(fx.t, { issue_id: selected.id, profile_id: fx.user.id })
+    // the follower now shows in the task, so compare against this read
+    const followedRow = await get(selected.key)
     for (const modern of [false, true]) {
       const headers = (name: string): Record<string, string> =>
         modern
@@ -1633,7 +1640,7 @@ describe('write tools', () => {
         expect(refused.content[0].text).toBe(
           'Input validation error: Invalid arguments for tool update_task: reporter_id: reporter_id is set when a task is created and cannot be changed',
         )
-        expect(await get(selected.key)).toEqual(selectedRow)
+        expect(await get(selected.key)).toEqual(followedRow)
       }
     }
     expect(await activityFor(fx.t, fx.org.id)).toEqual(activity)

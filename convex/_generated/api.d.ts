@@ -89,6 +89,7 @@ import type * as lib_workingSet from "../lib/workingSet.js";
 import type * as lib_workload from "../lib/workload.js";
 import type * as machine_auth from "../machine/auth.js";
 import type * as machine_curation from "../machine/curation.js";
+import type * as machine_discussion from "../machine/discussion.js";
 import type * as machine_mcp from "../machine/mcp.js";
 import type * as machine_records from "../machine/records.js";
 import type * as machine_registry from "../machine/registry.js";
@@ -228,6 +229,7 @@ declare const fullApi: ApiFromModules<{
   "lib/workload": typeof lib_workload;
   "machine/auth": typeof machine_auth;
   "machine/curation": typeof machine_curation;
+  "machine/discussion": typeof machine_discussion;
   "machine/mcp": typeof machine_mcp;
   "machine/records": typeof machine_records;
   "machine/registry": typeof machine_registry;

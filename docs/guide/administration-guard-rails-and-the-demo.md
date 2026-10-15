@@ -46,8 +46,10 @@ admins or lead a team. Set the organization role to **Viewer** for read-only
 automation. A Viewer agent's keys can only read. REST and MCP refuse every
 change with `this agent is a Viewer and can only read`, whatever project roles
 the agent holds. It can still create, list and remove its own task event
-subscriptions. Changes and comments name the agent. Active agents count toward billing;
-setting one to **Inactive** disables all its keys.
+subscriptions. Viewer and Inactive agents receive no inbox messages and
+cannot follow tasks, because they could never clear their inbox. Changes and
+comments name the agent. Active agents count toward billing; setting one to
+**Inactive** disables all its keys.
 
 Agents have **no weekly limit**. The Team strip shows their planned hours
 without utilization percentages or overload warnings. Qivo does not model

@@ -45,6 +45,7 @@ import {
 } from '../model/issues'
 import { labelJson, setTaskLabel } from '../model/labels'
 import { linkKindFrom, linksOf, type TaskLinkKind } from '../model/links'
+import { followersOf } from '../model/messages'
 import { attachmentLimitMb } from '../model/orgs'
 import {
   canAccessProject,
@@ -614,7 +615,7 @@ const hasSubtasksIn = (index: ChildIndex, task: Doc<'issues'>): boolean =>
 
 /** The caller's project read access, from the surface's flags when it holds
  * them, else canSeeProject, read once per project. */
-function projectReader(
+export function projectReader(
   ctx: QueryCtx,
   me: Caller,
   readable?: (projectId: string) => boolean,
@@ -637,7 +638,7 @@ function projectReader(
 
 /** The Shown of a machine read over these tasks: the ones in the caller's
  * organization whose project it can read. */
-async function machineShown(
+export async function machineShown(
   tasks: Iterable<Doc<'issues'>>,
   me: Caller,
   reads: (projectId: string) => Promise<boolean>,
@@ -916,13 +917,14 @@ export async function issueOut(
 /* --------------------------------------------------- the single-task read
  * GET /v1/tasks/{ref} (and the REST create and update answers) and MCP
  * get_task add what a list row leaves out: the task's labels, its subtasks,
- * its links and, for a group, its remaining hours. Each names other tasks
- * only through lib/workingSet.ts with the machine Shown. */
+ * its links, for a group its remaining hours, who follows it (taskDetail)
+ * and its attachments (taskOut). Each names other tasks only through
+ * lib/workingSet.ts with the machine Shown. */
 
 /** Another task as a read names it. */
 export type TaskRefJson = { id: string; key: string; title: string; status: IssueStatus }
 
-export type TaskDetailJson = {
+export type TaskDetailJson = TaskFollowJson & {
   /** a group's remaining hours as the app shows them, null for a leaf */
   group_remaining_hours: number | null
   labels: ReturnType<typeof labelJson>[]
@@ -930,6 +932,13 @@ export type TaskDetailJson = {
   subtasks: TaskRefJson[]
   /** the links whose other task the caller can read, as seen from this one */
   links: (TaskRefJson & { kind: TaskLinkKind })[]
+}
+
+/** Whether the reader follows the task, and who does (model/messages.ts
+ * followersOf, the app's follower list). */
+export type TaskFollowJson = {
+  following: boolean
+  followers: { id: string; name: string }[]
 }
 
 /** Another task as a read names it: id, key, title and status. */
@@ -1001,7 +1010,15 @@ export async function taskDetail(
     if (label !== null && label.org_id === issue.org_id) labels.push(label)
   }
   labels.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
-  return { group_remaining_hours, labels: labels.map(labelJson), subtasks, links }
+  const followers = await followersOf(ctx, issue)
+  return {
+    group_remaining_hours,
+    labels: labels.map(labelJson),
+    subtasks,
+    links,
+    following: followers.some((p) => p.id === me.id),
+    followers: followers.map((p) => ({ id: p.id, name: p.name })),
+  }
 }
 
 /** The task's attachments with download links minted for the reader

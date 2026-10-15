@@ -835,7 +835,9 @@ export default defineSchema({
       'id',
     ])
     .index('by_issue', ['issue_id'])
-    .index('by_actor', ['actor_id']), // messages_actor_idx — removeProfile's SET NULL
+    .index('by_actor', ['actor_id']) // messages_actor_idx — removeProfile's SET NULL
+    // the nightly sweep's fallback wake finds a recipient's overdue snoozes
+    .index('by_recipient_snoozed', ['recipient_id', 'snoozed_until']),
 
   user_prefs: defineTable({
     profile_id: v.string(),

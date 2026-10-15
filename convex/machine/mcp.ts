@@ -126,6 +126,7 @@ import {
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
+import { DISCUSSION_TOOLS } from './discussion'
 import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty } from './shared'
@@ -852,6 +853,7 @@ export const TOOLS: McpTool[] = [
       }),
   },
   ...RECORD_TOOLS,
+  ...DISCUSSION_TOOLS,
 ]
 
 const TOOL_DEFS: ToolDef[] = TOOLS.map((t) => t.def)

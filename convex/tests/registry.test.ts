@@ -6,14 +6,18 @@
  * from the flag is driven over HTTP in oauth.test.ts.
  *
  * Entries call internal functions in their surface's module or in a domain
- * module that declares entries for both surfaces (machine/records.ts), so
- * the kinds below cover every one of those modules. A domain module keeps
- * each surface's functions apart. */
+ * module that declares entries for both surfaces (machine/records.ts,
+ * machine/discussion.ts), so the kinds below cover every one of those
+ * modules. A domain module keeps each surface's functions apart, and each
+ * entry calls a function of its own, so routes that differ only in a fixed
+ * argument (the inbox actions, PUT and DELETE on a task's following) each
+ * have one. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
+import * as discussion from '../machine/discussion'
 import * as mcp from '../machine/mcp'
 import * as records from '../machine/records'
 import {
@@ -88,6 +92,7 @@ const KINDS = new Map<string, Kind>([
   ...registeredKinds('machine/mcp', mcp),
   ...registeredKinds('machine/rest', rest),
   ...registeredKinds('machine/records', records),
+  ...registeredKinds('machine/discussion', discussion),
 ])
 
 const SURFACES: Surface[] = [
@@ -315,6 +320,12 @@ describe('REST route matching', () => {
       ticket: 'abc',
     })
     expect(match('GET', 'workload')).toEqual({ route: 'GET workload' })
+    // PUT has one route, and each inbox action is a literal segment
+    expect(match('PUT', 'tasks/QN-1/following')).toEqual({
+      route: 'PUT tasks/:ref/following',
+      ref: 'QN-1',
+    })
+    expect(match('POST', 'inbox/snooze')).toEqual({ route: 'POST inbox/snooze' })
   })
 
   it('answers null (the unknown-route 404) for every other method or shape', () => {
@@ -322,6 +333,10 @@ describe('REST route matching', () => {
       ['PATCH', 'tasks/QN-1/comments'],
       ['DELETE', 'tasks/QN-1/comments'],
       ['PUT', 'tasks'],
+      ['PUT', 'tasks/QN-1'],
+      ['POST', 'inbox/archive'],
+      ['GET', 'inbox/read'],
+      ['POST', 'tasks/QN-1/following'],
       ['POST', 'tasks/QN-1'],
       ['PATCH', 'tasks'],
       ['GET', 'users/a/b'],
