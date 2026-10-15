@@ -184,18 +184,14 @@ describe('the machine action registry', () => {
     }
   })
 
-  it('every internal function is reached, and by entries of one surface only', async () => {
-    const surfacesOf = new Map<string, Set<string>>()
+  it('every internal function is reached by exactly one entry', async () => {
+    // one flat list across both surfaces, duplicates kept, so a function
+    // that two entries call fails here, whichever surfaces they belong to
+    const reached: string[] = []
     for (const surface of SURFACES) {
-      for (const { calls } of await callsOf(surface)) {
-        for (const { name } of calls) {
-          surfacesOf.set(name, (surfacesOf.get(name) ?? new Set()).add(surface.module))
-        }
-      }
+      for (const { calls } of await callsOf(surface)) reached.push(...calls.map((c) => c.name))
     }
-    expect([...surfacesOf.keys()].sort()).toEqual([...KINDS.keys()].sort())
-    const shared = [...surfacesOf].filter(([, surfaces]) => surfaces.size > 1).map(([name]) => name)
-    expect(shared).toEqual([])
+    expect(reached.sort()).toEqual([...KINDS.keys()].sort())
   })
 
   it('each surface module serves only its own surface', async () => {
