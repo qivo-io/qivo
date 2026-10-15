@@ -253,7 +253,9 @@ Useful field rules:
   `truncated: true` means some were not looked at, so mark everything read
   to shrink the inbox. The app's Inbox loads up to 500 of them, unread
   first. An item keeps at most 50 unread messages, dropping the oldest
-  except its first unread one and the newest of each kind.
+  except its first unread one and the newest of each kind. Archiving a task
+  or project marks the messages about its tasks read for everyone, and
+  messages about an archived task arrive read.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
   `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
   `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
