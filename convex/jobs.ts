@@ -28,6 +28,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
+import { scheduleMarkClears } from './model/archiveMarks'
 import { scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
 import { messageRetentionDays } from './model/people'
@@ -76,6 +77,13 @@ const archiveLegRef = makeFunctionReference<
  * stored about its tasks read, and the tasks' relation rows for the app
  * snapshot (model/messages.ts scheduleArchivedReads), as every archive path
  * does.
+ *
+ * The leg also schedules the steps that clear archive marks again for every
+ * active task still flagged relations_marked (model/archiveMarks.ts). A
+ * restore schedules them itself, so this only repairs a step that failed. It
+ * reads nothing more, as the leg holds the organization's active tasks
+ * already. A later leg in the same organization schedules them again, which
+ * is harmless because a step skips a task it finds cleared.
  *
  * `now` is the run's stamp and clock, shared by every leg. Returns how many
  * tasks this leg archived and whether due tasks remain in the organization. */
@@ -141,6 +149,11 @@ async function archiveOrgDoneIssues(
     })
   }
   await scheduleArchivedReads(ctx, { issues: batch.map((i) => i.id) })
+  const archivedNow = new Set(batch.map((i) => i.id))
+  await scheduleMarkClears(
+    ctx,
+    live.filter((i) => !archivedNow.has(i.id)),
+  )
   return { archived: batch.length, more: candidates.length > batch.length }
 }
 

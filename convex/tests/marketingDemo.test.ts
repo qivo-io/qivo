@@ -498,10 +498,9 @@ describe('marketing demo rebuild ownership', () => {
     const t = newAuthT()
     await seeded(t)
     await t.run(async (ctx) => {
+      const tasks = await ctx.db.query('issues').collect()
       const archived = new Set(
-        (await ctx.db.query('issues').collect())
-          .filter((task) => task.archived_at !== undefined)
-          .map((task) => task.id),
+        tasks.filter((task) => task.archived_at !== undefined).map((task) => task.id),
       )
       const labels = await ctx.db.query('issue_labels').collect()
       const follows = await ctx.db.query('issue_subscriptions').collect()
@@ -515,6 +514,10 @@ describe('marketing demo rebuild ownership', () => {
       }
       expect(labels.filter((row) => row.task_archived).length).toBeGreaterThan(0)
       expect(follows.filter((row) => row.task_archived).length).toBeGreaterThan(0)
+      // every archived task here has a follow, so each carries the flag
+      for (const task of tasks) {
+        expect(task.relations_marked === true, task.title).toBe(archived.has(task.id))
+      }
     })
   })
 

@@ -2162,7 +2162,7 @@ describe('/v1/tasks/{ref}/comments', () => {
       async (ctx) =>
         await ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', row.id))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', row.id))
           .collect(),
     )
     expect(subs.some((s) => s.profile_id === f.agent.id)).toBe(true) // saying something subscribes you

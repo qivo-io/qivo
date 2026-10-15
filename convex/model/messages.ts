@@ -399,7 +399,7 @@ export async function followersOf(
   const out: Doc<'profiles'>[] = []
   const rows = ctx.db
     .query('issue_subscriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
   for await (const row of rows) {
     const profile = await byId(ctx, 'profiles', row.profile_id)
     if (profile !== null && profile.org_id === issue.org_id) out.push(profile)
@@ -927,7 +927,7 @@ const orgProfilesOf = (ctx: MutationCtx, orgId: string): Promise<Doc<'profiles'>
 const subscribersOf = (ctx: MutationCtx, issueId: string): Promise<Doc<'issue_subscriptions'>[]> =>
   ctx.db
     .query('issue_subscriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
     .collect()
 
 /* ---------------------------------------------------------- notify: insert

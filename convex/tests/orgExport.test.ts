@@ -150,6 +150,7 @@ describe('organization export', () => {
       org_id: f.org.id,
       project_id: f.sub.id,
       archived_at: NOW,
+      relations_marked: true,
       description: '<p>Archived description</p>',
     })
     const target = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
@@ -262,6 +263,7 @@ describe('organization export', () => {
         expect(row).not.toHaveProperty('message_retention_days')
         expect(row).not.toHaveProperty('key_hash')
         expect(row).not.toHaveProperty('task_archived')
+        expect(row).not.toHaveProperty('relations_marked')
       }
     }
     expect(exported.organizations).toHaveLength(1)

@@ -103,7 +103,7 @@ describe('task subscriber popover', () => {
       expect(
         await ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
           .collect(),
       ).toEqual([])
       expect(await ctx.db.query('messages').collect()).toEqual([])

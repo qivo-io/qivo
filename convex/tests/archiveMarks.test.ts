@@ -1,18 +1,21 @@
 /* Archiving a task marks its relation rows (labels, attachments, follows and
- * links) in background steps, so the app snapshot skips them by index
- * (model/archiveMarks.ts). A marked row always belongs to an archived task:
- * the steps check the task when they run, a project archive marks nothing,
- * and every restore clears the marks in its own transaction. The steps run
- * when the test fires the fake timers, so each case can look before and
- * after them. */
+ * links) in background steps, so the app snapshot skips them by index, and
+ * flags the task relations_marked (model/archiveMarks.ts). The steps check
+ * the task when they run, and a project archive marks nothing. A restore
+ * writes no relation row: it schedules steps that clear the marks, and until
+ * they finish the snapshot reads the flagged task through its own indexes.
+ * The steps run when the test fires the fake timers, so each case can look
+ * before and after them. */
 /// <reference types="vite/client" />
 
+import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { SELECTIVE_READ } from '../lib/snapshotRelations'
-import { ARCHIVE_MARKS } from '../model/archiveMarks'
+import { RELATION_READ } from '../lib/snapshotRelations'
+import { ARCHIVE_MARKS, clearMarkedTasks, markArchivedTasks } from '../model/archiveMarks'
 import { scheduleArchivedReads } from '../model/messages'
+import schema from '../schema'
 import {
   as,
   messagesFor,
@@ -26,18 +29,24 @@ import {
 } from './helpers.setup'
 
 const DEFAULT_MARKS = { ...ARCHIVE_MARKS }
-const DEFAULT_READ = { ...SELECTIVE_READ }
+const DEFAULT_READ = { ...RELATION_READ }
 
 /* Every case drives the scheduler itself, so none may await real time. */
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => {
   vi.useRealTimers()
   Object.assign(ARCHIVE_MARKS, DEFAULT_MARKS)
-  Object.assign(SELECTIVE_READ, DEFAULT_READ)
+  Object.assign(RELATION_READ, DEFAULT_READ)
 })
 
 /* Runs every scheduled function, and anything they schedule, to completion. */
 const runSteps = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
+
+/* Runs the functions scheduled so far once, not the ones they schedule. */
+async function runPending(t: T): Promise<void> {
+  vi.runOnlyPendingTimers()
+  await t.finishInProgressScheduledFunctions()
+}
 
 /* A label, an attachment and the admin's follow on `task`, and a link from
  * it to each task in `to`. */
@@ -82,48 +91,51 @@ async function plantRelations(
 }
 
 /* Whether each relation row of the task carries the mark, by table, its
- * links at either end. */
-const marks = (t: T, issueId: string) =>
+ * links at either end, and whether the task carries relations_marked. */
+const marks = (t: T, task: Doc<'issues'>) =>
   t.run(async (ctx) => {
     const of = (rows: { task_archived?: true }[]) => rows.map((row) => row.task_archived === true)
     return {
       labels: of(
         await ctx.db
           .query('issue_labels')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
           .collect(),
       ),
       attachments: of(
         await ctx.db
           .query('issue_attachments')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
           .collect(),
       ),
       follows: of(
         await ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', task.id))
           .collect(),
       ),
       links: of([
         ...(await ctx.db
           .query('issue_links')
-          .withIndex('by_source', (q) => q.eq('source_id', issueId))
+          .withIndex('by_source', (q) => q.eq('source_id', task.id))
           .collect()),
         ...(await ctx.db
           .query('issue_links')
-          .withIndex('by_target', (q) => q.eq('target_id', issueId))
+          .withIndex('by_target', (q) => q.eq('target_id', task.id))
           .collect()),
       ]),
+      flagged: (await ctx.db.get(task._id))?.relations_marked === true,
     }
   })
 
-/* The marks of a task with one row in each table and `links` links. */
+/* The marks of a task with one row in each table and `links` links, all
+ * marked (and the task flagged) or none. */
 const each = (mark: boolean, links = 1) => ({
   labels: [mark],
   attachments: [mark],
   follows: [mark],
   links: Array.from({ length: links }, () => mark),
+  flagged: mark,
 })
 
 /* How many of the task's relation rows the admin's snapshot sends, by table. */
@@ -162,6 +174,14 @@ const machineArchive = (t: T, f: OrgFixture, task: Doc<'issues'>, archived: bool
     archived,
   })
 
+/* The scheduled functions waiting under `name`. */
+const pending = (t: T, name: string) =>
+  t.run(async (ctx) =>
+    (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+      (job) => job.name === name && job.state.kind === 'pending',
+    ),
+  )
+
 /* An active task, a parent, and its subtask in another project, each with
  * relation rows; the parent and the subtask each link to the active task. */
 async function family(t: T, f: OrgFixture) {
@@ -179,7 +199,7 @@ async function family(t: T, f: OrgFixture) {
 }
 
 describe('archiving a task', () => {
-  it('marks the rows of the task and its subtree once the steps run; the snapshot sends none of them before or after', async () => {
+  it('marks the rows of the task and its subtree and flags them once the steps run; the snapshot sends none of them before or after', async () => {
     const t = newT()
     const f = await withOrg(t)
     const { other, parent, child } = await family(t, f)
@@ -189,16 +209,16 @@ describe('archiving a task', () => {
 
     // unmarked rows of archived tasks are filtered, as before marks existed
     for (const task of [parent, child]) {
-      expect(await marks(t, task.id)).toEqual(each(false))
+      expect(await marks(t, task)).toEqual(each(false))
       expect(await shown(t, f, task.id)).toEqual(NONE)
     }
     await runSteps(t)
     for (const task of [parent, child]) {
-      expect(await marks(t, task.id)).toEqual(each(true))
+      expect(await marks(t, task)).toEqual(each(true))
       expect(await shown(t, f, task.id)).toEqual(NONE)
     }
     // the active task keeps its own rows; its links lead to archived tasks
-    expect(await marks(t, other.id)).toEqual({ ...each(false, 0), links: [true, true] })
+    expect(await marks(t, other)).toEqual({ ...each(false, 0), links: [true, true] })
     expect(await shown(t, f, other.id)).toEqual({ ...ALL, links: 0 })
   })
 
@@ -211,7 +231,7 @@ describe('archiving a task', () => {
     await machineArchive(t, f, parent, true)
     await runSteps(t)
 
-    for (const task of [parent, child]) expect(await marks(t, task.id)).toEqual(each(true))
+    for (const task of [parent, child]) expect(await marks(t, task)).toEqual(each(true))
   })
 
   it('by the nightly sweep marks the tasks it archives', async () => {
@@ -230,7 +250,7 @@ describe('archiving a task', () => {
     await runSteps(t)
 
     expect((await t.run((ctx) => ctx.db.get(done._id)))?.archived_at).toBeDefined()
-    expect(await marks(t, done.id)).toEqual(each(true))
+    expect(await marks(t, done)).toEqual(each(true))
   })
 
   it('a project archive stamps no task and marks nothing', async () => {
@@ -243,7 +263,7 @@ describe('archiving a task', () => {
 
     for (const task of [parent, child]) {
       expect((await t.run((ctx) => ctx.db.get(task._id)))?.archived_at).toBeUndefined()
-      expect(await marks(t, task.id)).toEqual(each(false))
+      expect(await marks(t, task)).toEqual(each(false))
     }
   })
 
@@ -257,31 +277,39 @@ describe('archiving a task', () => {
     await runSteps(t)
 
     // the step found the parent active; the subtask stays archived and marked
-    expect(await marks(t, parent.id)).toEqual(each(false))
+    expect(await marks(t, parent)).toEqual(each(false))
     expect(await shown(t, f, parent.id)).toEqual(ALL)
-    expect(await marks(t, child.id)).toEqual(each(true))
+    expect(await marks(t, child)).toEqual(each(true))
   })
 })
 
 describe('a restore', () => {
-  it('clears the marks of the task and every archived ancestor at once, and the next snapshot sends their rows', async () => {
+  it('sends the rows of the task and every archived ancestor in the very next snapshot, and clears their marks in the background', async () => {
     const t = newT()
     const f = await withOrg(t)
     const { other, parent, child } = await family(t, f)
     await archive(t, f, parent)
     await runSteps(t)
 
-    // restoring the subtask restores its parent with it
-    await unarchive(t, f, child)
+    // restoring the subtask restores its parent with it; the flag, server
+    // bookkeeping, stays out of the row the app gets back
+    const row = await unarchive(t, f, child)
+    expect(row).not.toHaveProperty('relations_marked')
 
     for (const task of [parent, child]) {
-      expect(await marks(t, task.id)).toEqual(each(false))
+      expect(await marks(t, task)).toEqual(each(true))
+      expect(await shown(t, f, task.id)).toEqual(ALL)
+    }
+    expect(await shown(t, f, other.id)).toEqual({ ...ALL, links: 2 })
+    await runSteps(t)
+    for (const task of [parent, child]) {
+      expect(await marks(t, task)).toEqual(each(false))
       expect(await shown(t, f, task.id)).toEqual(ALL)
     }
     expect(await shown(t, f, other.id)).toEqual({ ...ALL, links: 2 })
   })
 
-  it('through the machine toggle clears them too', async () => {
+  it('through the machine toggle does the same', async () => {
     const t = newT()
     const f = await withOrg(t)
     await grantAgent(t, f)
@@ -291,8 +319,10 @@ describe('a restore', () => {
 
     await machineArchive(t, f, child, false)
 
+    for (const task of [parent, child]) expect(await shown(t, f, task.id)).toEqual(ALL)
+    await runSteps(t)
     for (const task of [parent, child]) {
-      expect(await marks(t, task.id)).toEqual(each(false))
+      expect(await marks(t, task)).toEqual(each(false))
       expect(await shown(t, f, task.id)).toEqual(ALL)
     }
   })
@@ -307,19 +337,110 @@ describe('a restore', () => {
 
     await archive(t, f, a)
     await runSteps(t)
-    expect((await marks(t, b.id)).links).toEqual([true])
+    expect((await marks(t, b)).links).toEqual([true])
     expect(await linkShown()).toBe(0)
     await archive(t, f, b)
     await runSteps(t)
 
-    // restoring one end clears the mark, which is safe: the other end is
-    // still archived, so the snapshot still filters the link
+    // with the other end still archived, the restored task's link stays out,
+    // marked or not; clearing the mark meanwhile is safe
     await unarchive(t, f, a)
-    expect((await marks(t, a.id)).links).toEqual([false])
+    expect(await linkShown()).toBe(0)
+    await runSteps(t)
+    expect((await marks(t, a)).links).toEqual([false])
     expect(await linkShown()).toBe(0)
 
     await unarchive(t, f, b)
     expect(await linkShown()).toBe(1)
+  })
+
+  it('of a task with more relation rows than one transaction may write succeeds, and its marks clear in bounded steps', async () => {
+    Object.assign(ARCHIVE_MARKS, { rows: 40 })
+    const t = convexTest({
+      schema,
+      modules: import.meta.glob('../**/*.*s'),
+      transactionLimits: { documentsWritten: 100 },
+    })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    for (let from = 0; from < 240; from += 80) {
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 80; i++)
+          await ctx.db.insert('issue_labels', {
+            org_id: f.org.id,
+            issue_id: task.id,
+            label_id: `label-${i}`,
+          })
+      })
+    }
+    const marked = async () => (await marks(t, task)).labels.filter(Boolean).length
+    await archive(t, f, task)
+    await runSteps(t)
+    expect(await marked()).toBe(240)
+
+    // a restore that cleared 240 marks itself would pass the 100-write limit
+    await unarchive(t, f, task)
+    expect((await shown(t, f, task.id)).labels).toBe(240)
+    await runSteps(t)
+    expect(await marked()).toBe(0)
+    expect((await marks(t, task)).flagged).toBe(false)
+  })
+
+  it('stays right in the snapshot when its clear step is lost, and the nightly sweep schedules it again', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { other, parent } = await family(t, f)
+    await archive(t, f, parent)
+    await runSteps(t)
+
+    await unarchive(t, f, parent)
+    const lost = await pending(t, 'archiveMarks:clearTasks')
+    expect(lost).toHaveLength(1)
+    await t.run((ctx) => ctx.scheduler.cancel(lost[0]._id))
+    await runSteps(t)
+
+    expect(await marks(t, parent)).toEqual(each(true))
+    expect(await shown(t, f, parent.id)).toEqual(ALL)
+    expect(await shown(t, f, other.id)).toEqual({ ...ALL, links: 1 })
+
+    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await runSteps(t)
+    expect(await marks(t, parent)).toEqual(each(false))
+    expect(await shown(t, f, parent.id)).toEqual(ALL)
+  })
+
+  it('archived again while its marks are cleared leaves the rows to the mark steps', async () => {
+    Object.assign(ARCHIVE_MARKS, { rows: 2 })
+    const t = newT()
+    const f = await withOrg(t)
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plantRelations(t, f, task, [other])
+    await archive(t, f, task)
+    await runSteps(t)
+    expect(await marks(t, task)).toEqual(each(true))
+
+    await unarchive(t, f, task)
+    await runPending(t)
+    // the first clear step cleared two of the four rows
+    const half = await marks(t, task)
+    expect([...half.labels, ...half.attachments, ...half.follows, ...half.links]).toEqual([
+      false,
+      false,
+      true,
+      true,
+    ])
+    expect(half.flagged).toBe(true)
+
+    await archive(t, f, task)
+    await runSteps(t)
+    expect(await marks(t, task)).toEqual(each(true))
+    expect(await shown(t, f, task.id)).toEqual(NONE)
+
+    await unarchive(t, f, task)
+    expect(await shown(t, f, task.id)).toEqual(ALL)
+    await runSteps(t)
+    expect(await marks(t, task)).toEqual(each(false))
   })
 })
 
@@ -339,11 +460,8 @@ describe('the background steps', () => {
     await t.mutation(internal.archiveMarks.markTasks, { issues })
 
     // two of a's three rows, and the next step starts at a again
-    expect(await marks(t, a.id)).toEqual({ ...each(true, 0), follows: [false] })
-    const pending = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    expect(pending.map((job) => [job.name, job.args[0]])).toEqual([
-      ['archiveMarks:markTasks', { issues }],
-    ])
+    expect(await marks(t, a)).toEqual({ ...each(true, 0), follows: [false] })
+    expect(await pending(t, 'archiveMarks:markTasks')).toHaveLength(1)
 
     await runSteps(t)
 
@@ -356,19 +474,53 @@ describe('the background steps', () => {
       { issues: [b.id, c.id] },
       { issues: [c.id] },
     ])
-    for (const task of [a, b, c]) expect(await marks(t, task.id)).toEqual(each(true, 0))
-    expect(await marks(t, active.id)).toEqual(each(false, 0))
+    for (const task of [a, b, c]) expect(await marks(t, task)).toEqual(each(true, 0))
+    expect(await marks(t, active)).toEqual(each(false, 0))
 
     const rows = () =>
       t.run(async (ctx) => [
         ...(await ctx.db.query('issue_labels').collect()),
         ...(await ctx.db.query('issue_attachments').collect()),
         ...(await ctx.db.query('issue_subscriptions').collect()),
+        ...(await ctx.db.query('issues').collect()),
       ])
     const before = await rows()
     await t.mutation(internal.archiveMarks.markTasks, { issues })
     await runSteps(t)
     expect(await rows()).toEqual(before)
+  })
+
+  it('read only the rows they change, so a step that continues on a task reads none twice', async () => {
+    Object.assign(ARCHIVE_MARKS, { rows: 10 })
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 30; i++)
+        await ctx.db.insert('issue_labels', {
+          org_id: f.org.id,
+          issue_id: task.id,
+          label_id: `label-${i}`,
+        })
+    })
+    // each call is one step; the continuations they schedule are not run
+    const documentsRead = (step: typeof markArchivedTasks) =>
+      t.mutation(async (ctx) => {
+        await step(ctx, [task.id])
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      })
+    await t.run((ctx) => ctx.db.patch(task._id, { archived_at: NOW }))
+    const marking = [] as number[]
+    for (let i = 0; i < 3; i++) marking.push(await documentsRead(markArchivedTasks))
+    expect((await marks(t, task)).labels.every(Boolean)).toBe(true)
+    await t.run((ctx) => ctx.db.patch(task._id, { archived_at: undefined }))
+    const clearing = [] as number[]
+    for (let i = 0; i < 3; i++) clearing.push(await documentsRead(clearMarkedTasks))
+    expect((await marks(t, task)).labels.some(Boolean)).toBe(false)
+    // The task and its flag, at most the 10 rows a step changes plus one that
+    // shows more remain, and each row again as it is patched; never the rows
+    // an earlier step already changed (a rescan would read 30 by the third).
+    for (const used of [...marking, ...clearing]) expect(used).toBeLessThanOrEqual(23)
   })
 
   it('are scheduled in steps of at most ARCHIVE_MARKS.tasks tasks', async () => {
@@ -381,8 +533,7 @@ describe('the background steps', () => {
 
     await archive(t, f, parent)
 
-    const jobs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    const marking = jobs.filter((job) => job.name === 'archiveMarks:markTasks')
+    const marking = await pending(t, 'archiveMarks:markTasks')
     expect(marking.map((job) => (job.args[0] as { issues: string[] }).issues.length)).toEqual([
       2, 2, 1,
     ])
@@ -400,27 +551,27 @@ describe('rows of tasks archived before marks existed', () => {
     await plantRelations(t, f, active)
 
     expect(await shown(t, f, old.id)).toEqual(NONE)
-    Object.assign(SELECTIVE_READ, { tasks: Number.POSITIVE_INFINITY, ratio: 0 })
+    Object.assign(RELATION_READ, { ranges: Number.POSITIVE_INFINITY, ratio: 0 })
     expect(await shown(t, f, old.id)).toEqual(NONE)
     expect(await shown(t, f, active.id)).toEqual({ ...ALL, links: 0 })
-    Object.assign(SELECTIVE_READ, DEFAULT_READ)
+    Object.assign(RELATION_READ, DEFAULT_READ)
 
     // what a backfill over old archives does
     await t.run((ctx) => scheduleArchivedReads(ctx, { issues: [old.id] }))
     await runSteps(t)
-    expect(await marks(t, old.id)).toEqual(each(true))
+    expect(await marks(t, old)).toEqual(each(true))
   })
 })
 
 describe('a follow of an archived task', () => {
-  it('is not sent, still brings news, and is sent again after a restore', async () => {
+  it('is not sent, still brings news, and is sent again at once after a restore', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantRelations(t, f, task)
     await archive(t, f, task)
     await runSteps(t)
-    expect((await marks(t, task.id)).follows).toEqual([true])
+    expect((await marks(t, task)).follows).toEqual([true])
     expect((await shown(t, f, task.id)).follows).toBe(0)
 
     // the roster still lists the follower, and a comment still reaches them
@@ -442,6 +593,8 @@ describe('a follow of an archived task', () => {
     ])
 
     await unarchive(t, f, task)
+    expect((await shown(t, f, task.id)).follows).toBe(1)
+    await runSteps(t)
     expect((await shown(t, f, task.id)).follows).toBe(1)
   })
 })

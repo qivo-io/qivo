@@ -9,14 +9,18 @@
  *   (lib/access.ts projectLevelsForOrg);
  * - up to three per visible project, archived ones included (grants, team
  *   grants, and the milestones of an active one);
- * - the relation rows, six ranges in bulk and at most 1,030 otherwise, as
- *   long as no row stored without org_id remains (lib/snapshotRelations.ts);
+ * - the relation rows, at most 2,054 ranges as long as no row stored without
+ *   org_id remains (lib/snapshotRelations.ts RELATION_READ);
+ * - one per visible task restored so recently that its relation rows still
+ *   carry archive marks (model/archiveMarks.ts), for its follow. Its four
+ *   relation reads come out of the budget above unless such tasks alone pass
+ *   it. Background steps clear the marks moments after the restore;
  * - one per task an activity row is about, or names by number, that is not
  *   among the active tasks. The organization keeps 500 rows
  *   (model/activity.ts), so that is at most 500 for an admin, who reads the
  *   task each row is about, and at most 1,000 for a member, who reads up to
  *   two numbered tasks a row names.
- * One seat therefore reads at most about 2,040 ranges plus three per team and
+ * One seat therefore reads at most about 3,070 ranges plus three per team and
  * per visible project, and a person's seats add up. Teams and projects are
  * few beside tasks. Documents read follow the active tasks and their unmarked
  * relation rows (model/archiveMarks.ts marks the rows of archived tasks), the
@@ -98,7 +102,7 @@ export const forMe = authedQuery({
     const projects: AppRow<'projects'>[] = []
     const access: AppRow<'project_access'>[] = []
     const teamAccess: AppRow<'project_team_access'>[] = []
-    const issues: (AppRow<'issues'> & {
+    const issues: (Omit<AppRow<'issues'>, 'relations_marked'> & {
       has_hidden_subtasks: boolean
       has_hidden_parent: boolean
     })[] = []
@@ -218,7 +222,8 @@ export const forMe = authedQuery({
       const workingSet = workingSetOf(activeOrgIssues, view)
       const fenceIssues = workingSet.tasks
       for (const issue of fenceIssues) {
-        const { parent_id: _parentId, ...row } = rowOf(issue)
+        // relations_marked only steers the relation reads below
+        const { parent_id: _parentId, relations_marked: _marks, ...row } = rowOf(issue)
         issues.push({
           ...row,
           ...parentLink(issue, workingSet.shown),
@@ -254,7 +259,7 @@ export const forMe = authedQuery({
 
       const relatedRows = await snapshotRelations(ctx, {
         orgId,
-        visible: fenceIssues.length,
+        tasks: fenceIssues,
         active: activeOrgIssues.length,
       })
       for (const issue of fenceIssues) {
@@ -289,13 +294,25 @@ export const forMe = authedQuery({
       // still remove it, but its task id must not leave this query. Follows
       // of archived tasks are marked in the background (model/archiveMarks.ts)
       // and skipped by index; an unmarked one is filtered here. They stay
-      // stored, still bring news and return with a restore.
+      // stored, still bring news and return with a restore. A visible task
+      // restored before its marks were cleared (relations_marked) has its
+      // follow read by its own index, and every follow goes out in creation
+      // order, the order of the caller's index.
       const mySubs = await ctx.db
         .query('issue_subscriptions')
         .withIndex('by_profile_task_archived', (q) =>
           q.eq('profile_id', me.id).eq('task_archived', undefined),
         )
         .collect()
+      for (const issue of fenceIssues) {
+        if (issue.relations_marked !== true) continue
+        const follow = await ctx.db
+          .query('issue_subscriptions')
+          .withIndex('by_issue_profile', (q) => q.eq('issue_id', issue.id).eq('profile_id', me.id))
+          .unique()
+        if (follow?.task_archived === true) mySubs.push(follow)
+      }
+      mySubs.sort((x, y) => x._creationTime - y._creationTime)
       for (const s of aboutShownTasks(mySubs, workingSet.shown)) issueSubs.push(relationRow(s))
 
       // Activity: org admins receive every row except those about archived

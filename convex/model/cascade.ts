@@ -75,7 +75,7 @@ export async function deleteIssueDeep(
   for await (const il of labels) await ctx.db.delete(il._id)
   const subs = ctx.db
     .query('issue_subscriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
   for await (const s of subs) await ctx.db.delete(s._id)
   const comments = ctx.db.query('comments').withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
   for await (const c of comments) await ctx.db.delete(c._id)
@@ -524,7 +524,7 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       await ctx.db.delete(il._id)
     for (const s of await ctx.db
       .query('issue_subscriptions')
-      .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
+      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', i.id))
       .collect())
       await ctx.db.delete(s._id)
     for (const a of await ctx.db

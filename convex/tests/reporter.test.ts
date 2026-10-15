@@ -66,7 +66,7 @@ describe('reporter attribution', () => {
     const subscriptions = await t.run(async (ctx) =>
       ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', row.id))
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', row.id))
         .collect(),
     )
     expect(subscriptions.some((s) => s.profile_id === f.viewer.id)).toBe(false)

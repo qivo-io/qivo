@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
-import { SELECTIVE_READ } from '../lib/snapshotRelations'
+import { RELATION_READ } from '../lib/snapshotRelations'
 import { invokeSnapshot } from './backendPerformance.setup'
 import { as, NOW, newT, type T, withOrg } from './helpers.setup'
 
@@ -8,15 +8,15 @@ import { as, NOW, newT, type T, withOrg } from './helpers.setup'
 const sameDelivery = <S extends { delivered_at: string } | null>(snapshot: S): S =>
   snapshot === null ? snapshot : { ...snapshot, delivered_at: '' }
 
-const DEFAULT_READ = { ...SELECTIVE_READ }
+const DEFAULT_READ = { ...RELATION_READ }
 afterEach(() => {
-  Object.assign(SELECTIVE_READ, DEFAULT_READ)
+  Object.assign(RELATION_READ, DEFAULT_READ)
 })
 
-/* Every view counts as larger than SELECTIVE_READ.tasks and reads in bulk. */
-const ALL_BULK = { tasks: 0, ratio: DEFAULT_READ.ratio }
+/* No range budget, so every view reads each table in bulk and in full. */
+const ALL_BULK = { ranges: 0, ratio: DEFAULT_READ.ratio }
 /* Every view reads task by task. */
-const ALL_SELECTIVE = { tasks: Number.POSITIVE_INFINITY, ratio: 0 }
+const ALL_SELECTIVE = { ranges: Number.POSITIVE_INFINITY, ratio: 0 }
 
 /* The caller's snapshot with the transaction's read counts. */
 const read = (t: T, profile: Doc<'profiles'>) =>
@@ -25,13 +25,13 @@ const read = (t: T, profile: Doc<'profiles'>) =>
     metrics: await ctx.meta.getTransactionMetrics(),
   }))
 
-/* The same read with SELECTIVE_READ set to `rule` for its duration. */
+/* The same read with RELATION_READ set to `rule` for its duration. */
 const readWith = async (t: T, profile: Doc<'profiles'>, rule: typeof DEFAULT_READ) => {
-  Object.assign(SELECTIVE_READ, rule)
+  Object.assign(RELATION_READ, rule)
   try {
     return await read(t, profile)
   } finally {
-    Object.assign(SELECTIVE_READ, DEFAULT_READ)
+    Object.assign(RELATION_READ, DEFAULT_READ)
   }
 }
 
@@ -66,8 +66,11 @@ describe('snapshot bulk relation reads', () => {
         const id = `task-${i}`
         // task-2 is archived. Its label and its link from task-3 carry the
         // mark the archive step leaves; its link to task-1 and its attachment
-        // are unmarked, as rows stored before marks existed are.
+        // are unmarked, as rows stored before marks existed are. task-12 was
+        // restored and its marks are not cleared yet: its label, its links
+        // with task-11 and task-13, and a link from task-4 are still marked.
         const archived = i === 2
+        const restored = i === 12
         await ctx.db.insert('issues', {
           id,
           org_id: f.org.id,
@@ -83,6 +86,7 @@ describe('snapshot bulk relation reads', () => {
           start_week: '2026-01-05',
           end_week: '2026-01-12',
           archived_at: archived ? NOW : undefined,
+          relations_marked: archived || restored ? true : undefined,
           parent_id: i === 0 ? 'task-3' : undefined,
           created_at: NOW,
           updated_at: NOW,
@@ -91,7 +95,7 @@ describe('snapshot bulk relation reads', () => {
           org_id: f.org.id,
           issue_id: id,
           label_id: `label-${i}`,
-          task_archived: archived ? true : undefined,
+          task_archived: archived || restored ? true : undefined,
         })
         if (i % 4 === 0 || archived)
           await ctx.db.insert('issue_attachments', {
@@ -113,9 +117,33 @@ describe('snapshot bulk relation reads', () => {
             type: 'blocks',
             pair_key: `${i}:${i - 1}`,
             created_at: NOW,
-            task_archived: i === 3 ? true : undefined,
+            task_archived: i === 3 || i === 12 || i === 13 ? true : undefined,
+          })
+        if (restored)
+          await ctx.db.insert('issue_links', {
+            id: 'link-4-12',
+            org_id: f.org.id,
+            source_id: 'task-4',
+            target_id: id,
+            type: 'relates',
+            pair_key: 'task-12:task-4',
+            created_at: NOW,
+            task_archived: true,
           })
       }
+      // Two more links to task-20, the later one from the task whose id sorts
+      // first, so the org-wide read (by source) and task-20's own index (by
+      // creation) list them in different orders.
+      for (const source of ['task-30', 'task-25'])
+        await ctx.db.insert('issue_links', {
+          id: `link-${source}-20`,
+          org_id: f.org.id,
+          source_id: source,
+          target_id: 'task-20',
+          type: 'relates',
+          pair_key: `task-20:${source}`,
+          created_at: NOW,
+        })
       await ctx.db.insert('issue_labels', {
         org_id: f.otherOrg.id,
         issue_id: 'foreign',
@@ -128,7 +156,8 @@ describe('snapshot bulk relation reads', () => {
       const selective = await readWith(t, profile, ALL_SELECTIVE)
       expect(sameDelivery(usual.snapshot)).toEqual(sameDelivery(selective.snapshot))
       expect(sameDelivery(bulk.snapshot)).toEqual(sameDelivery(selective.snapshot))
-      // every view here holds at least half the active tasks, so it reads in bulk
+      // every view here holds at least half the active tasks, so it reads in
+      // bulk, and every table fits its cap
       expect(usual.metrics.databaseQueries.used).toBe(bulk.metrics.databaseQueries.used)
       expect(bulk.metrics.databaseQueries.used).toBeLessThan(
         selective.metrics.databaseQueries.used / 2,
@@ -140,6 +169,13 @@ describe('snapshot bulk relation reads', () => {
       expect(
         rows.links.some((row) => row.source_id === 'task-2' || row.target_id === 'task-2'),
       ).toBe(false)
+      // the restored task's marked rows are back
+      expect(rows.issues.some((row) => row.id === 'task-12')).toBe(true)
+      expect(rows.issueLabels.some((row) => row.issue_id === 'task-12')).toBe(true)
+      expect(rows.links.map((row) => row.id)).toEqual(
+        expect.arrayContaining(['link-12', 'link-13', 'link-4-12']),
+      )
+      for (const row of rows.issues) expect(row).not.toHaveProperty('relations_marked')
       // the mark and the organization id stay on the server
       for (const row of [...rows.links, ...rows.issueLabels, ...rows.attachments]) {
         expect(row).not.toHaveProperty('task_archived')
@@ -150,12 +186,18 @@ describe('snapshot bulk relation reads', () => {
     const legacyRows = await t.run(async (ctx) => {
       const ids = []
       for (const table of ['issue_links', 'issue_labels', 'issue_attachments'] as const) {
-        const row = (await ctx.db
-          .query(table)
-          .withIndex('by_org_task_archived', (q) =>
-            q.eq('org_id', f.org.id).eq('task_archived', undefined),
-          )
-          .first())!
+        const row = (await (table === 'issue_links'
+          ? ctx.db
+              .query(table)
+              .withIndex('by_org_task_archived_source', (q) =>
+                q.eq('org_id', f.org.id).eq('task_archived', undefined),
+              )
+          : ctx.db
+              .query(table)
+              .withIndex('by_org_task_archived_issue', (q) =>
+                q.eq('org_id', f.org.id).eq('task_archived', undefined),
+              )
+        ).first())!
         ids.push(row._id)
         await ctx.db.patch(row._id, { org_id: undefined })
       }
@@ -204,7 +246,7 @@ describe('snapshot bulk relation reads', () => {
     expect(foreignLegacy.metrics.databaseQueries.used).toBe(legacy.metrics.databaseQueries.used)
   })
 
-  it('read a small view of a larger organization task by task, and a view past SELECTIVE_READ.tasks in bulk', async () => {
+  it('read a small view of a larger organization task by task, and one whose task-by-task cost passes the budget in bulk', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the guest is shown the four tasks in Firmware, not the 36 in Skunkworks
@@ -215,8 +257,8 @@ describe('snapshot bulk relation reads', () => {
     expect(usual.snapshot!.issues).toHaveLength(4)
     expect(usual.metrics.databaseQueries.used).toBe(selective.metrics.databaseQueries.used)
     expect(usual.metrics.databaseQueries.used).not.toBe(bulk.metrics.databaseQueries.used)
-    // the same view counts as large once the bound is below its size
-    const large = await readWith(t, f.guest, { ...DEFAULT_READ, tasks: 3 })
+    // the same view reads in bulk once four ranges per task exceed the budget
+    const large = await readWith(t, f.guest, { ...DEFAULT_READ, ranges: 15 })
     expect(large.metrics.databaseQueries.used).toBe(bulk.metrics.databaseQueries.used)
     expect(sameDelivery(large.snapshot)).toEqual(sameDelivery(usual.snapshot))
   })
@@ -225,7 +267,8 @@ describe('snapshot bulk relation reads', () => {
     const t = newT()
     const f = await withOrg(t)
     await plantTasks(t, f.org.id, () => f.sub.id, 32)
-    // more rows in one table than BULK_ROWS_PER_TASK (8) per visible task
+    // more rows in one table than BULK_ROWS_PER_RANGE (4) per range its
+    // task-by-task read costs
     await t.run(async (ctx) => {
       for (let i = 0; i < 300; i++)
         await ctx.db.insert('issue_labels', {
@@ -237,7 +280,7 @@ describe('snapshot bulk relation reads', () => {
     const labels = Array.from({ length: 300 }, (_, i) => `label-${i}`)
     const small = await read(t, f.admin)
     expect(small.snapshot!.issueLabels.map((row) => row.label_id)).toEqual(labels)
-    // a view counted as large reads the table in full, with no cap and no
+    // without a range budget the table is read in full, with no cap and no
     // fallback costing a range per task
     const large = await readWith(t, f.admin, ALL_BULK)
     expect(large.snapshot!.issueLabels.map((row) => row.label_id)).toEqual(labels)
@@ -442,5 +485,82 @@ describe('the snapshot of an organization with a long archive', () => {
     // over 6,000 here.
     expect(metrics.databaseQueries.used).toBeLessThan(400)
     expect(metrics.documentsRead.used).toBeLessThan(12_000)
+  }, 120_000)
+})
+
+/* `total` active tasks, the first `visible` in Firmware, which the guest
+ * sees, the rest in Skunkworks, which they do not. Each task has `labels`
+ * labels and, with `links`, a link to the task before it. */
+async function plantDense(
+  t: T,
+  a: { total: number; visible: number; labels: number; links: boolean },
+) {
+  const f = await withOrg(t)
+  const chunk = Math.floor(3000 / (a.labels + 2))
+  for (let from = 0; from < a.total; from += chunk) {
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(from + chunk, a.total); i++) {
+        const id = `task-${i}`
+        await ctx.db.insert('issues', {
+          id,
+          org_id: f.org.id,
+          project_id: i < a.visible ? f.sub.id : f.hidden.id,
+          num: i + 1,
+          title: `Task ${i}`,
+          description: '',
+          status: 'progress',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        for (let l = 0; l < a.labels; l++)
+          await ctx.db.insert('issue_labels', {
+            org_id: f.org.id,
+            issue_id: id,
+            label_id: `label-${l}`,
+          })
+        if (a.links && i > 0)
+          await ctx.db.insert('issue_links', {
+            id: `link-${i}`,
+            org_id: f.org.id,
+            source_id: id,
+            target_id: `task-${i - 1}`,
+            type: 'blocks',
+            pair_key: `task-${i - 1}:${id}`,
+            created_at: NOW,
+          })
+      }
+    })
+  }
+  await t.run((ctx) => ctx.db.patch(f.org._id, { next_issue_num: a.total + 1 }))
+  return f
+}
+
+describe('the snapshot of a restricted view in a dense organization', () => {
+  it('reads 300 of 6,000 active tasks with five labels each task by task, within limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await plantDense(t, { total: 6000, visible: 300, labels: 5, links: false })
+    const { snapshot, metrics } = await read(t, f.guest)
+    expect(snapshot!.issues).toHaveLength(300)
+    expect(snapshot!.issueLabels).toHaveLength(1500)
+    // four ranges per visible task, not the 30,000 labels of the whole org
+    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(1200)
+    expect(metrics.databaseQueries.used).toBeLessThan(1300)
+    expect(metrics.documentsRead.used).toBeLessThan(10_000)
+  }, 120_000)
+
+  it('reads a dense table task by task and the others in bulk for 600 of 2,000 tasks, within limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await plantDense(t, { total: 2000, visible: 600, labels: 15, links: true })
+    const { snapshot, metrics } = await read(t, f.guest)
+    expect(snapshot!.issues).toHaveLength(600)
+    expect(snapshot!.issueLabels).toHaveLength(9000)
+    expect(snapshot!.links).toHaveLength(599)
+    // 2,400 ranges task by task would pass the budget, so the labels, over
+    // their cap, take 600 and the links stay in bulk
+    expect(metrics.databaseQueries.used).toBeGreaterThanOrEqual(600)
+    expect(metrics.databaseQueries.used).toBeLessThan(700)
+    expect(metrics.documentsRead.used).toBeLessThan(20_000)
   }, 120_000)
 })
