@@ -524,7 +524,8 @@ A team is `{"id", "name", "members"}`, and `members` lists `{"id", "name",
 "leader"}` by name. Everyone in the organization reads every team and its
 members, as in the app. `leader` is `true` for a person who leads the team.
 Only people with the organization admin or Standard user role lead teams, so
-an agent, a Viewer or a guest never reads `true`. Teams are named by uuid
+an agent or a Viewer never reads `true`. A guest is never a member, so an old
+membership a guest still holds is not listed. Teams are named by uuid
 only, because two teams may share a name. An unknown uuid, or one from
 another organization, answers `404` `team not found`, and a `{user}` outside
 the organization answers `404` `user not found`.

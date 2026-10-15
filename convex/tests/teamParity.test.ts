@@ -16,11 +16,12 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { HELD_TASKS_SHAPE } from '../model/projectAccess'
-import { TEAM_RUNS_RULE } from '../model/teams'
+import { TEAM_RUNS_RULE, teamsJson } from '../model/teams'
 import {
   activityFor,
   as,
@@ -171,8 +172,10 @@ const plantTeam = (fx: Fx, orgId: string, name: string) =>
 describe('listing teams', () => {
   it('lists each team with its members and who leads it, alike on both surfaces', async () => {
     const fx = await setup()
-    // an agent's leader row from before agents were refused grants nothing
+    // an agent's leader row from before agents were refused grants nothing,
+    // and a guest's old row is no membership at all, as on Team settings
     await plantLeaderRow(fx, fx.agent.id)
+    await plantLeaderRow(fx, fx.guest.id)
     const assembly = await plantTeam(fx, fx.org.id, 'Assembly')
     const hardware = {
       id: fx.team.id,
@@ -194,6 +197,38 @@ describe('listing teams', () => {
     expect(
       await fx.t.query(internal.machine.teams.restGetTeam, { ...read, ref: fx.team.id }),
     ).toEqual(hardware)
+  })
+
+  it('reads the organization profiles once, however many members the teams have', async () => {
+    const fx = await setup()
+    const assembly = await plantTeam(fx, fx.org.id, 'Assembly')
+    await fx.t.run(async (ctx) => {
+      for (const who of [fx.pia, fx.emil, fx.viewer]) {
+        await ctx.db.insert('team_members', {
+          team_id: assembly,
+          profile_id: who.id,
+          is_leader: false,
+        })
+      }
+    })
+    const tables: string[] = []
+    const teams = await fx.t.run(async (ctx) => {
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop)
+          if (prop === 'query') {
+            return (table: 'profiles') => {
+              tables.push(table)
+              return target.query(table)
+            }
+          }
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      return await teamsJson({ ...ctx, db } as QueryCtx, fx.viewer)
+    })
+    expect(teams.map((t) => t.members.length)).toEqual([3, 3])
+    expect(tables.filter((t) => t === 'profiles')).toEqual(['profiles'])
   })
 
   it('answers a team outside the organization like a missing one', async () => {
@@ -264,22 +299,25 @@ describe('creating and renaming teams', () => {
 
   it('lets an admin or a leader of the team rename it; others are refused', async () => {
     const fx = await setup()
-    const renamed = await parsed(
+    const rename = (name: string) =>
       fx.t.mutation(internal.machine.teams.mcpSetTeam, {
         ...as_(fx.user),
         team_id: fx.team.id.toUpperCase(),
-        name: 'HW',
-      }),
-    )
+        name,
+      })
+    const renamed = await parsed(rename(' HW '))
     expect(renamed).toMatchObject({ id: fx.team.id, name: 'HW', created: false })
+    await refused(rename('  '), 'bad_request', 'a team name cannot be blank')
     const patch = (who: Doc<'profiles'>, body: unknown, ref = fx.team.id) =>
       fx.t.mutation(internal.machine.teams.restUpdateTeam, {
         ...as_(who),
         ref,
         body: JSON.stringify(body),
       })
-    // fields REST does not change are ignored
-    expect(await patch(fx.admin, { name: 'Hardware', icon: 'zap' })).toMatchObject({
+    await refused(patch(fx.admin, { name: ' ' }), 'bad_request', 'a team name cannot be blank')
+    expect((await teamRow(fx.t, fx.team.id))?.name).toBe('HW')
+    // names are trimmed, and fields REST does not change are ignored
+    expect(await patch(fx.admin, { name: ' Hardware ', icon: 'zap' })).toMatchObject({
       name: 'Hardware',
     })
     expect((await teamRow(fx.t, fx.team.id))?.icon).toBeUndefined()
@@ -370,6 +408,29 @@ describe('adding members and leaders', () => {
       expect(await put(who, {})).toMatchObject({ leader: false, changed: true })
     }
     expect(await activityFor(fx.t, fx.org.id)).toHaveLength(2)
+  })
+
+  it('answers whether the user leads afterwards, so an old agent leader row reads false', async () => {
+    const fx = await setup()
+    await plantLeaderRow(fx, fx.agent.id)
+    const put = (who: Doc<'profiles'>) =>
+      fx.t.mutation(internal.machine.teams.restPutMember, {
+        ...rest(fx.admin),
+        ref: fx.team.id,
+        user: who.id,
+        body: '{}',
+      })
+    expect(await put(fx.agent)).toMatchObject({ leader: false, changed: false })
+    expect(await put(fx.user)).toMatchObject({ leader: true, changed: false })
+    const set = await parsed(
+      fx.t.mutation(internal.machine.teams.mcpSetTeamMember, {
+        ...as_(fx.admin),
+        team_id: fx.team.id,
+        user_id: fx.agent.id,
+        member: true,
+      }),
+    )
+    expect(set).toMatchObject({ member: true, leader: false, changed: false })
   })
 
   it('lets only a person who runs the team change its members', async () => {
@@ -543,6 +604,12 @@ describe('removing a member settles their open tasks', () => {
     const fx = await setup()
     await refused(
       del(fx, fx.user, { on_held_tasks: { reassign_to: fx.viewer.id } }),
+      'rule',
+      'a task can only be assigned to an active user with Edit permission or higher on its project',
+    )
+    // nor to the member who loses sight of them
+    await refused(
+      del(fx, fx.user, { on_held_tasks: { reassign_to: fx.emil.id } }),
       'rule',
       'a task can only be assigned to an active user with Edit permission or higher on its project',
     )

@@ -839,8 +839,9 @@ Every change writes the app's activity row, signed `via MCP`.
 `{id, name, members}`. Everyone in the organization reads every team and its
 members, as in the app. `members` lists `{id, name, leader}` by name, where
 `leader` is `true` for a person who leads the team. Only people with the
-organization admin or Standard user role lead teams, so an agent, a Viewer or
-a guest never reads `true`. Teams are named by `team_id`, a uuid from
+organization admin or Standard user role lead teams, so an agent or a Viewer
+never reads `true`. A guest is never a member, so an old membership a guest
+still holds is not listed. Teams are named by `team_id`, a uuid from
 `list_teams`, because two teams may share a name. One outside your
 organization answers `team "<id>" not found in your organization`.
 
@@ -867,7 +868,7 @@ person who is an organization admin or a leader of the team; an agent gets
 - `member: false` removes the user, leadership included. Their open tasks in
   the projects the team shares, and in those projects' sub-projects, that
   they can no longer see afterwards are settled by `on_held_tasks`, as for
-  `set_project_access`: `"leave"` (the default) lists them as `stranded`,
+  `set_project_access`. `"leave"` (the default) lists them as `stranded`,
   `"keep_as_viewer"` gives the user a Viewer grant on the project the team
   shared that showed each task (the task's own sub-project when the team
   shares it, else its top-level project), and `{"reassign_to": user id or

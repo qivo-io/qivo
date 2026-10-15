@@ -30,7 +30,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
-import { canLeadTeams } from '../lib/access'
+import { isTeamLeader } from '../lib/access'
 import { asMachineCaller, type Caller } from '../lib/core'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
@@ -45,7 +45,6 @@ import {
 import {
   addTeamMemberCore,
   createTeamCore,
-  membershipOf,
   removeTeamMemberCore,
   setTeamLeaderCore,
   teamJson,
@@ -65,12 +64,6 @@ type RestRoute = (typeof ROUTES)[number]
 const route: typeof restRoute = (declared) => declared
 
 /* ---------------------------------------------------------------- shared */
-
-/* Whether `member` leads `team` after a change, as teamJson reports it. */
-async function leadsAfter(ctx: QueryCtx, team: Doc<'teams'>, member: Doc<'profiles'>) {
-  const row = await membershipOf(ctx, team.id, member.id)
-  return (row?.is_leader ?? false) && canLeadTeams(member)
-}
 
 /* Adds `member` to `team` when missing and, with `leader`, makes or unmakes
  * them a leader, in one transaction. Returns whether anything changed and
@@ -94,7 +87,7 @@ async function putMember(
       : await setTeamLeaderCore(ctx, { ...base, isLeader: a.leader })
   return {
     changed: added.changed || promoted.changed,
-    leader: await leadsAfter(ctx, a.team, a.member),
+    leader: await isTeamLeader(ctx, a.member, a.team.id),
   }
 }
 
