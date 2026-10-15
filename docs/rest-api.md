@@ -212,7 +212,7 @@ GET /v1/me   → who this credential acts as, its organization's settings,
     "id": "…uuid…", "name": "Northstar Labs", "slug": "northstar-labs",
     "date_format": "YYYY-MM-DD", "week_start": 1, "week_one_rule": "first4day",
     "default_plannable_hours": 32, "max_attachment_mb": 20,
-    "project_creators": "users", "can_create_projects": false
+    "project_creators": "users", "can_create_projects": true
   },
   "billing": { "read_only": false, "reason": null },
   "credential": {
