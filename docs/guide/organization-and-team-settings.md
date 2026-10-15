@@ -25,17 +25,26 @@ can change it.
   create projects** turned on in **Organization → Users**
   ([Four ways to be a user](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)).
 
-Viewers, guests and agents never create projects, whatever the choice.
+An agent whose role is **Standard user** counts as a standard user, so it
+can create projects through the REST API or MCP under **Standard users**, and
+under **Selected users** when its box is ticked. Viewers and guests never
+create projects, whatever the choice, and neither do **Viewer** agents.
 Changing it leaves existing projects as they are, and project leads still
 create sub-projects under every choice
 ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
 
+An agent leads every project it creates, and only a person can hand those
+projects over. Until an organization admin does, the agent cannot be made a
+**Viewer**, so set it to **Inactive** to stop it at once
+([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
+
 The line under the setting names who can create projects now, such as
 **Nora Berg, Leo Martins and 2 more can create projects.** It lists up to
 three names, organization admins first. With more, it shows two names and a
-count. Pending invitations count. Inactive people, agents, viewers and guests
-do not. With **Org admins**, it adds **Project leads still create
-sub-projects.** With **Selected users**, it adds **Choose people in Users.**
+count. Pending invitations and **Standard user** agents count, and an
+agent's name says so, such as **Atlas (agent)**. Inactive users, viewers and
+guests do not. With **Org admins**, it adds **Project leads still create
+sub-projects.** With **Selected users**, it adds **Choose who in Users.**
 The **Users** link opens **Organization → Users**.
 
 ## Export data

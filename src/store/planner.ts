@@ -2732,7 +2732,7 @@ export const PLANNER = {
     const actor = actorIn(HOME_ORG, uid)
     if (!actor?.active) return false
     return canCreateProjects(
-      { org_role: actor.orgRole, kind: actor.kind, can_create_projects: actor.canCreateProjects },
+      { org_role: actor.orgRole, can_create_projects: actor.canCreateProjects },
       homeRow()?.project_creators,
     )
   },

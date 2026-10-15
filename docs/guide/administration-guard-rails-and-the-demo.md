@@ -21,12 +21,12 @@ Open **Settings → Organization → Users** to manage account status:
 
 While **Who can create new projects?** is set to **Selected users**, the list
 has a **Can create projects** column. It holds a checkbox for each active
-standard user who is a person, including pending invitations. The value stays
-when the organization picks another choice, but it counts only under
-**Selected users**. Changing someone's role to **Org admin** or **Viewer**
-clears it; making them **Inactive** keeps it. Active org admins show a ticked
-checkbox that cannot be changed, because they can always create projects.
-Agents and viewers have none.
+standard user, including pending invitations and **Standard user** agents.
+The value stays when the organization picks another choice, but it counts
+only under **Selected users**. Changing someone's role to **Org admin** or
+**Viewer** clears it; making them **Inactive** keeps it. Active org admins
+show a ticked checkbox that cannot be changed, because they can always create
+projects. Viewers, including **Viewer** agents, have none.
 
 You cannot remove or deactivate yourself, demote or deactivate the last admin,
 or delete the last team. Adding or reactivating a user requires no prepaid
@@ -50,6 +50,13 @@ subscriptions. Viewer and Inactive agents receive no inbox messages and
 cannot follow tasks, because they could never clear their inbox. Changes and
 comments name the agent. Active agents count toward billing; setting one to
 **Inactive** disables all its keys.
+
+A **Standard user** agent can create top-level projects whenever
+[Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
+lets standard users create them. It leads every project it creates and
+cannot hand one over or change who has access. An agent that leads projects
+cannot be made a **Viewer** until an organization admin hands those projects
+to someone else, so **Inactive** is the way to stop it at once.
 
 Agents have **no weekly limit**. The Team strip shows their planned hours
 without utilization percentages or overload warnings. Qivo does not model

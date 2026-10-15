@@ -212,7 +212,7 @@ GET /v1/me   → who this credential acts as, its organization's settings,
     "id": "…uuid…", "name": "Northstar Labs", "slug": "northstar-labs",
     "date_format": "YYYY-MM-DD", "week_start": 1, "week_one_rule": "first4day",
     "default_plannable_hours": 32, "max_attachment_mb": 20,
-    "project_creators": "users", "can_create_projects": false
+    "project_creators": "users", "can_create_projects": true
   },
   "billing": { "read_only": false, "reason": null },
   "credential": {
@@ -243,7 +243,8 @@ be refused.
 - `project_creators` is the **Who can create new projects?** setting:
   `admins`, `users` (the default) or `selected`. `can_create_projects` says
   whether this user may create a top-level project under it, by the same
-  rule as the app's **New project** button.
+  rule as the app's **New project** button. A Standard user agent counts as
+  a standard user, and a Viewer agent never may.
 - `billing.read_only` is `true` while organization billing pauses editing.
   `reason` is then the sentence every write is refused with, otherwise
   `null`. No plan, price or usage is included.
@@ -373,7 +374,9 @@ read, `access` flags included.
   projects?** setting, the same rule as the app's **New project** button.
   `GET /v1/me` reports it as `organization.can_create_projects`. A refusal
   names the setting, for example `only org admins and standard users can
-  create projects`. Agents do not count as standard users for this setting.
+  create projects`. A Standard user agent counts as a standard user for this
+  setting, including the **Can create projects** box under `selected`. A
+  Viewer agent never creates projects.
 - A sub-project needs Lead access on its parent, whatever the setting, and the
   parent must be an active top-level project. A parent the caller cannot read
   answers `400` with `parent project not found`, exactly like an unknown one.
@@ -381,7 +384,10 @@ read, `access` flags included.
   user or guest of the organization; a Viewer is refused with `a viewer cannot
   lead a project — make them a standard user first`. Only a person may name
   someone else, so an agent leads every project it creates and is refused
-  with `only people can change who has access, not agents` otherwise.
+  with `only people can change who has access, not agents` otherwise. An
+  agent that leads projects cannot be made a Viewer until an organization
+  admin hands them over, so setting it to Inactive is the way to stop it at
+  once.
 - A creator who is not an organization admin and names someone else as the
   lead of a top-level project gets User access to it, as in the app, so the
   project stays in their sight.

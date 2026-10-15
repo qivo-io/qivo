@@ -264,8 +264,11 @@ Useful field rules:
 
 - **Create:** a top-level project follows the organization's project
   creation setting; check `can_create_projects` in `get_me` or `GET /v1/me`
-  first. Create a sub-project with `parent`, which needs Lead access on that
-  parent. Tasks go in sub-projects. The lead defaults to you.
+  first. A Standard user agent counts as a standard user there. Create a
+  sub-project with `parent`, which needs Lead access on that parent. Tasks go
+  in sub-projects. The lead defaults to you, and an agent always leads what
+  it creates and cannot hand it over, so create a project only when the user
+  asks for one.
 - **Change:** settings, archive and restore need Lead access. Archiving a
   project hides its tasks from default task lists; restore it before adding
   tasks.

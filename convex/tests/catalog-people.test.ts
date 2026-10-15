@@ -521,21 +521,38 @@ describe('profiles.update and the project-creation right', () => {
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
 
-  it('refuses the right for agents, viewers, guests and admins; turning it off is accepted', async () => {
+  it('gives the right to a Standard user agent like a person, and off is stored as absent', async () => {
     const t = newT()
     const f = await withOrg(t)
+    const update = (can_create_projects: boolean) =>
+      as(t, f.admin).mutation(api.profiles.update, {
+        org_id: f.org.id,
+        id: f.agent.id,
+        patch: { can_create_projects },
+      })
+    await update(true)
+    expect((await profileById(t, f.agent.id))?.can_create_projects).toBe(true)
+    await update(false)
+    expect(await profileById(t, f.agent.id)).not.toHaveProperty('can_create_projects')
+  })
+
+  it('refuses the right for viewers, Viewer agents, guests and admins; turning it off is accepted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const viewerAgent = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'Ledger',
+      kind: 'agent',
+      org_role: 'viewer',
+      plannable_hours: undefined,
+    })
     const update = (id: string, can_create_projects: boolean) =>
       as(t, f.admin).mutation(api.profiles.update, {
         org_id: f.org.id,
         id,
         patch: { can_create_projects },
       })
-    await expectRefusal(
-      update(f.agent.id, true),
-      'rule',
-      /^an agent cannot be allowed to create projects$/,
-    )
-    for (const p of [f.viewer, f.guest, f.admin]) {
+    for (const p of [f.viewer, viewerAgent, f.guest, f.admin]) {
       await expectRefusal(
         update(p.id, true),
         'rule',
@@ -543,7 +560,7 @@ describe('profiles.update and the project-creation right', () => {
       )
     }
     // a stale value planted raw, so turning it off has something to clear
-    const stale = [f.agent, f.viewer, f.guest, f.admin]
+    const stale = [viewerAgent, f.viewer, f.guest, f.admin]
     await t.run(async (ctx) => {
       for (const p of stale) await ctx.db.patch(p._id, { can_create_projects: true })
     })

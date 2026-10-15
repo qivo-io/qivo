@@ -8,7 +8,8 @@ import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* "Who can create new projects?" in Organization settings and the
    "Can create projects" column in Organization > Users, on the real store.
-   Nora (me) is the org admin; the roster holds one member of every kind. */
+   Nora (me) is the org admin; the roster holds one member of every kind,
+   with Atlas a Standard user agent and Ledger a Viewer agent. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
@@ -59,7 +60,13 @@ async function load(setting: Setting) {
     member('mira', 'Mira Lind', { auth_user_id: undefined, can_create_projects: true }),
     member('emil', 'Emil Strand', { active: false, can_create_projects: true }),
     member('ingrid', 'Ingrid Holm', { org_role: 'viewer' }),
-    member('atlas', 'Atlas', { kind: 'agent' }),
+    member('atlas', 'Atlas', { kind: 'agent', auth_user_id: undefined, email: undefined }),
+    member('ledger', 'Ledger', {
+      kind: 'agent',
+      org_role: 'viewer',
+      auth_user_id: undefined,
+      email: undefined,
+    }),
   )
   requests = []
   // the Users page lists agent keys on mount
@@ -136,12 +143,13 @@ describe('Who can create new projects?', () => {
     )
 
     await act(async () => segment('Standard users')?.click())
-    // admins first, then standard users in roster order; Mira is invited
-    expect(summary()).toBe('Nora Berg, Leo Martins and 2 more can create projects.')
+    // admins first, then standard users in roster order, the agent Atlas
+    // included; Mira is invited
+    expect(summary()).toBe('Nora Berg, Leo Martins and 3 more can create projects.')
 
     await act(async () => segment('Selected users')?.click())
     expect(summary()).toBe(
-      'Nora Berg, Leo Martins and Mira Lind can create projects. Choose people in Users.',
+      'Nora Berg, Leo Martins and Mira Lind can create projects. Choose who in Users.',
     )
     expect(query('[data-project-creators-summary] .text-text-1')?.textContent).toBe('Nora Berg')
   })
@@ -213,11 +221,11 @@ describe('Can create projects in Organization > Users', () => {
     expect(boxes()).toEqual([])
   })
 
-  it('offers the checkbox to active standard users who are people, and locks the org admin on', async () => {
+  it('offers the checkbox to active standard users, people and agents, and locks the org admin on', async () => {
     await load('selected')
     await render(() => <pages.users.OrgUsersPage setPage={vi.fn()} />)
     expect(query('[data-project-creators-header]')?.textContent).toBe('Can create projects')
-    expect(boxes()).toEqual(['nora', 'leo', 'aisha', 'mira'])
+    expect(boxes()).toEqual(['nora', 'leo', 'aisha', 'mira', 'atlas'])
     const disabled = [...container.querySelectorAll<HTMLInputElement>('[data-can-create-projects]')]
       .filter((box) => box.disabled)
       .map((box) => box.dataset.canCreateProjects)
@@ -260,6 +268,24 @@ describe('Can create projects in Organization > Users', () => {
     expect(window.showToast).toHaveBeenCalledWith('Leo Martins can no longer create projects')
   })
 
+  it('ticks a Standard user agent, and the summary marks it as an agent', async () => {
+    await load('selected')
+    await render(() => <pages.users.OrgUsersPage setPage={vi.fn()} />)
+    await act(async () => query<HTMLInputElement>('[data-can-create-projects="atlas"]')?.click())
+    expect(requests.at(-1)).toMatchObject({
+      name: 'profiles:update',
+      args: { id: 'atlas', patch: { can_create_projects: true } },
+    })
+    expect(window.showToast).toHaveBeenCalledWith('Atlas can create projects')
+    expect(P.canCreateProject('atlas')).toBe(true)
+    await act(async () => query<HTMLInputElement>('[data-can-create-projects="leo"]')?.click())
+
+    await render(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
+    expect(summary()).toBe(
+      'Nora Berg, Mira Lind and Atlas (agent) can create projects. Choose who in Users.',
+    )
+  })
+
   it('labels the checkbox on the phone user page, which has no column header', async () => {
     await load('selected')
     vi.stubGlobal(
@@ -274,7 +300,12 @@ describe('Can create projects in Organization > Users', () => {
     expect(query('[data-project-right-cell="nora"]')?.textContent).toBe('Can create projects')
     expect(query<HTMLInputElement>('[data-can-create-projects="nora"]')?.disabled).toBe(true)
 
-    await render(() => <pages.users.OrgUsersPage narrow userId="ingrid" setPage={vi.fn()} />)
-    expect(query('[data-project-right-cell]')).toBeNull()
+    await render(() => <pages.users.OrgUsersPage narrow userId="atlas" setPage={vi.fn()} />)
+    expect(query('[data-project-right-cell="atlas"]')?.textContent).toBe('Can create projects')
+
+    for (const userId of ['ingrid', 'ledger']) {
+      await render(() => <pages.users.OrgUsersPage narrow userId={userId} setPage={vi.fn()} />)
+      expect(query('[data-project-right-cell]')).toBeNull()
+    }
   })
 })

@@ -736,7 +736,8 @@ with a cached tool catalogue must refresh discovery or reconnect.
 - `project_creators` is the **Who can create new projects?** setting
   (`admins`, `users`, the default, or `selected`). `can_create_projects` says
   whether this user may create a top-level project under it, by the same
-  rule as the app's **New project** button.
+  rule as the app's **New project** button. A Standard user agent counts as
+  a standard user, and a Viewer agent never may.
 - `billing.read_only` is `true` while organization billing pauses editing,
   and `reason` is then the sentence every writing tool is refused with. No
   plan, price or usage is included.
@@ -779,13 +780,17 @@ like an unknown one.
 
 **Creating.** `create_project` without `parent` makes a top-level project,
 which follows the organization's **Who can create new projects?** setting
-(`get_me` reports it as `can_create_projects`; agents do not count as standard
-users for it). With `parent` it makes a sub-project, which needs Lead access
-on that parent; a parent you cannot read answers `parent project "<ref>" not
-found (or not visible to you)`. Qivo picks the number, the key (from the
-name) and the position. `lead_id` defaults to you, and only a person may name
-someone else. An agent always leads what it creates, and naming another lead
-gets `only people can change who has access, not agents`. A creator who is not an
+(`get_me` reports it as `can_create_projects`). A Standard user agent counts
+as a standard user for it, including the **Can create projects** box under
+`selected`, and a Viewer agent never creates projects. With `parent` it makes
+a sub-project, which needs Lead access on that parent; a parent you cannot
+read answers `parent project "<ref>" not found (or not visible to you)`. Qivo
+picks the number, the key (from the name) and the position. `lead_id`
+defaults to you, and only a person may name someone else. An agent always
+leads what it creates, and naming another lead gets `only people can change
+who has access, not agents`. An agent that leads projects cannot be made a
+Viewer until an organization admin hands them over, so setting it to
+Inactive is the way to stop it at once. A creator who is not an
 organization admin and names someone else as lead of a top-level project
 gets User access to it, as in the app. The tool takes no grants; add them
 with `set_project_access`.
