@@ -31,10 +31,6 @@
     "count": 3,
     "reason": "dialog width, picker geometry, and task/delete state colors; field layout uses classes"
   },
-  "src/panels/settings/AccountSettings.tsx": {
-    "count": 2,
-    "reason": "MCP token control state and permission-derived opacity"
-  },
   "src/panels/settings/LabelsSettings.tsx": {
     "count": 3,
     "reason": "persisted label colors and armed-delete emphasis"

@@ -1,7 +1,5 @@
 /* Personal profile, appearance, Inbox retention and assistant connections. */
-import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { CopyValue } from '../../components/CopyValue'
 import { Avatar, Icon } from '../../components/qivo'
@@ -12,12 +10,12 @@ import {
   SettingsSection,
 } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { AppearanceSettings } from '../AppearanceSettings'
 import { ConnectedApps } from '../ConnectedApps'
 import { BackLink, DemoCapabilityNotice } from './controls'
+import { PersonalTokens } from './PersonalTokens'
 import { AvatarField, NameField } from './ProfileControls'
 
 /* ---------- pages ---------- */
@@ -190,44 +188,9 @@ function RetentionField({ me }: { me: Pick<UserVM, 'messageRetentionDays'> }) {
 }
 
 /* OAuth is the primary connection flow. Personal tokens remain available for
-   manual setup; their secrets are shown once and never stored in the browser. */
+   manual setup (PersonalTokens). */
 function McpAccessSection() {
-  const [tokens, setTokens] = useStateS<Awaited<ReturnType<typeof P.listMcpTokens>> | false>(null)
-  const [name, setName] = useStateS('')
-  const [fresh, setFresh] = useStateS<{ name: string; secret: string } | null>(null)
-  const [busy, setBusy] = useStateS(false)
-  const [confirm, setConfirm] = useStateS<string | null>(null)
-  // Newly minted credentials only exist here until explicitly dismissed.
-  useUpdateBlocker(!!name || !!fresh || busy)
-
-  const reload = () => {
-    P.listMcpTokens().then((ts) => setTokens(ts === null ? false : ts))
-  }
-  useEffectS(() => {
-    reload()
-  }, [])
-
   const mcpUrl = `${import.meta.env.VITE_CONVEX_SITE_URL}/mcp`
-  const claudeCmd = (secret: string) =>
-    'claude mcp add --transport http qivo "' +
-    mcpUrl +
-    '" --header "Authorization: Bearer ' +
-    secret +
-    '"'
-  const create = async () => {
-    if (!name.trim() || busy) return
-    setBusy(true)
-    const res = await P.createMcpToken(name.trim())
-    setBusy(false)
-    if (!res) {
-      window.showToast?.("Couldn't create the MCP token", 'error')
-      return
-    }
-    setFresh({ name: name.trim(), secret: res.secret })
-    setName('')
-    reload()
-  }
-
   return (
     <div>
       <SettingsGroup legend="Connect with OAuth" data-mcp-oauth="">
@@ -245,141 +208,7 @@ function McpAccessSection() {
         </ol>
       </SettingsGroup>
       <ConnectedApps />
-      <SettingsGroup legend="Personal access tokens" data-mcp-tokens="">
-        <p className="mb-4 text-sm text-text-2">
-          Use a permanent token when your client needs one or you want to configure access manually.
-          Tokens do not expire automatically; revoke them here when you no longer need them.
-        </p>
-        {fresh && (
-          <div className="[margin-bottom:8px] [border:1px_solid_var(--primary)] [border-radius:var(--r-lg)] [padding:20px] [background:var(--accent-soft)]">
-            <div className="[font-size:var(--fs-base)] [font-weight:600] [margin-bottom:8px]">
-              “{fresh.name}” created
-            </div>
-            <div className="text-sm text-text-2">Copy the token now. It cannot be shown again.</div>
-            <div className="mt-1">
-              <CopyValue value={fresh.secret} label="Copy token" data-fresh-token="" />
-            </div>
-            <div className="mt-3 text-sm text-text-2">Claude Code setup command</div>
-            <div className="mt-1">
-              <CopyValue
-                value={claudeCmd(fresh.secret)}
-                label="Copy Claude Code setup command"
-                data-fresh-token-command=""
-              />
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              className="[margin-top:8px]"
-              onClick={() => setFresh(null)}
-            >
-              Done
-            </Button>
-          </div>
-        )}
-
-        {tokens === null && (
-          <div className="[color:var(--text-2)] [font-size:var(--fs-base)]">Loading…</div>
-        )}
-        {tokens === false && (
-          <div className="[color:var(--danger)] [font-size:var(--fs-base)]">
-            Couldn't load MCP tokens.
-          </div>
-        )}
-        {Array.isArray(tokens) && (
-          <div className="[display:flex] [flex-direction:column] [gap:6px] mb-6 empty:mb-0">
-            {tokens.map((t) => {
-              const arm = confirm === t.id
-              return (
-                <div
-                  key={t.id}
-                  style={{ opacity: t.revokedAt ? 0.6 : 1 }}
-                  className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
-                >
-                  <Icon name="command" size={16} color="var(--text-2)" />
-                  <div className="[flex:1] [min-width:0]">
-                    <div className="[font-size:var(--fs-base)] [font-weight:600]">
-                      {t.name}
-                      {t.revokedAt && (
-                        <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:700] [color:var(--danger)]">
-                          revoked
-                        </span>
-                      )}
-                    </div>
-                    <div className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                      {t.prefix}…, created {P.fmtDate(new Date(t.createdAt))}
-                      {t.lastUsedAt
-                        ? `, last used ${P.fmtDate(new Date(t.lastUsedAt))}`
-                        : ', never used'}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size={arm && t.revokedAt ? 'sm' : 'icon-sm'}
-                    style={{ color: arm ? 'var(--danger)' : undefined }}
-                    className="[flex-shrink:0]"
-                    aria-label={
-                      t.revokedAt
-                        ? arm
-                          ? 'Confirm token deletion'
-                          : 'Delete revoked token'
-                        : arm
-                          ? 'Confirm revocation — connected clients lose access immediately'
-                          : 'Revoke this token'
-                    }
-                    title={
-                      t.revokedAt
-                        ? arm
-                          ? 'Confirm token deletion'
-                          : 'Delete revoked token'
-                        : arm
-                          ? 'Confirm revocation — connected clients lose access immediately'
-                          : 'Revoke this token'
-                    }
-                    onClick={async () => {
-                      if (!arm) {
-                        setConfirm(t.id)
-                        return
-                      }
-                      setConfirm(null)
-                      const ok = t.revokedAt
-                        ? await P.deleteMcpToken(t.id)
-                        : await P.revokeMcpToken(t.id)
-                      if (ok)
-                        window.showToast?.(
-                          t.revokedAt ? 'MCP token deleted' : `“${t.name}” revoked`,
-                        )
-                      else window.showToast?.("That didn't go through", 'error')
-                      reload()
-                    }}
-                  >
-                    <Icon name={t.revokedAt ? 'trash' : 'blocked'} size={16} />
-                    {arm && t.revokedAt && 'Delete?'}
-                  </Button>
-                </div>
-              )
-            })}
-          </div>
-        )}
-        {Array.isArray(tokens) && (
-          <div className="[display:flex] [gap:8px]">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder='Token name, e.g. "Claude on my laptop"'
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') create()
-              }}
-              className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
-            />
-            <Button type="button" disabled={!name.trim() || busy} onClick={create}>
-              <Icon name="plus" size={16} />
-              {busy ? 'Creating…' : 'New token'}
-            </Button>
-          </div>
-        )}
-      </SettingsGroup>
+      <PersonalTokens mcpUrl={mcpUrl} />
       <p className="mt-4 text-sm text-text-2">
         For an agent with its own identity and project access, an organization admin can create an
         agent user in Settings → Organization → Users.

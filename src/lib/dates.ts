@@ -159,11 +159,18 @@ export function fmtDateTime(d: Date): string {
   return `${fmtFull(d)} ${fmtTime(d)}`
 }
 
+const monthFirst = () => dateFormat === 'MM/DD/YYYY' || dateFormat === 'MMM D, YYYY'
+
 export function fmtDate(d: Date): string {
-  const monthFirst = dateFormat === 'MM/DD/YYYY' || dateFormat === 'MMM D, YYYY'
-  return monthFirst
+  return monthFirst()
     ? `${MONTHS[d.getMonth()]} ${d.getDate()}`
     : `${d.getDate()} ${MONTHS[d.getMonth()]}`
+}
+/** fmtDate, plus the year when `d` falls in another year than `now`:
+    "14 Oct", "12 Jan 2027", or "Jan 12, 2027" in a month-first format. */
+export function fmtDateYear(d: Date, now: Date): string {
+  if (d.getFullYear() === now.getFullYear()) return fmtDate(d)
+  return monthFirst() ? `${fmtDate(d)}, ${d.getFullYear()}` : `${fmtDate(d)} ${d.getFullYear()}`
 }
 /* --- calendar week numbers ------------------------------------------------ */
 

@@ -68,11 +68,11 @@ token from **MCP access** to act as that person. Viewer access permits
 reading; User and Lead access permit changes, subject to the user's
 organization role. Access can come from an individual or team grant. A Viewer
 agent's key can only read, so every change returns `403` with
-`this agent is a Viewer and can only read`. Personal tokens created in the
-app today can make changes and never expire. A choice of read-only access and
-an expiry date is planned. A token without change access gets
-`this credential can only read` for every change. Both kinds of read-only
-credential can still create, list and remove their own task event
+`this agent is a Viewer and can only read`. A personal token can make
+changes only if it was created with **Allow changes** and has not expired. A
+token without change access gets `this credential can only read` for every
+change, and an expired token is refused like a revoked one. Both kinds of
+read-only credential can still create, list and remove their own task event
 subscriptions.
 
 `GET /v1/me` says who the credential acts as, the organization's calendar
@@ -151,12 +151,20 @@ registration. Client ID Metadata Documents and device-code flows are not
 supported.
 
 For manual setup, use **Personal access tokens** on the same page. Your client
-must accept a custom Authorization header. Copy the token when created; it
-cannot be shown again. Qivo also supplies a `claude mcp add …` command. Tokens
-created on this page can make changes and never expire, so revoke them when no
-longer needed. A choice of read-only access and an expiry date is planned. The
-same token also works with the REST API. Organization admins can instead
-create an agent user with its own key
+must accept a custom Authorization header. **New token** asks for a name,
+whether to **Allow changes** (on by default) and when the token expires:
+**Never**, or **On** a date that is the last day it works. You cannot change
+access or expiry after you create the token; create another one instead. Copy
+the token when it is created; it cannot be shown again. Qivo also supplies a
+`claude mcp add …` command.
+
+The list shows each token's access, expiry and last use. An expired token is
+refused like a revoked one and stays in the list until you delete it. Revoke a
+token when you no longer need it. Every personal token also works with the
+REST API. Tokens created before Qivo recorded access never expire and can
+only read, so the list shows them as **Read only**. If such a client needs to
+make changes, create a new token with **Allow changes**. Organization admins
+can instead create an agent user with its own key
 ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 MCP tools say who the connection acts as and whether it can make changes;

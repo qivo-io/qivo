@@ -15,8 +15,11 @@ export function useMobile() {
 /** Give a phone overlay one Back step without changing its underlying URL.
  * Completion may unmount it directly; only its own history marker is cleared.
  * An explicit enabled value keeps a phone layer through landscape rotation.
- * A close repeated before its Back step lands is dropped, never a second Back. */
-export function useMobileBackLayer(open: boolean, onClose: () => void, enabled?: boolean) {
+ * A close repeated before its Back step lands is dropped, never a second Back.
+ * `onClose` may return false to stay open (a dialog busy with something that
+ * must finish). After a Back step the layer then pushes its marker again, so
+ * the next Back still closes the layer instead of leaving the page. */
+export function useMobileBackLayer(open: boolean, onClose: () => unknown, enabled?: boolean) {
   const mobile = useMobile()
   const useHistory = enabled ?? mobile
   const id = useId()
@@ -33,7 +36,11 @@ export function useMobileBackLayer(open: boolean, onClose: () => void, enabled?:
       if (history.state?.qivoLayer !== id) {
         active.current = false
         leaving.current = false
-        closeRef.current()
+        if (closeRef.current() === false) {
+          // refused: restore the marker this Back step used up
+          history.pushState({ ...history.state, qivoLayer: id }, '', location.href)
+          active.current = true
+        }
       }
     }
     // A task's Plan action mounts Roadmap before App's URL-sync effect runs.
