@@ -212,9 +212,11 @@ const rows = {
 // Read notifications outside the snapshot's 500-row display window still
 // participate in Inbox cleanup. Loaded rows contribute their optimistic state.
 let hiddenReadMessages = 0
-// Whether the server's bounded inbox read left unread (read) rows unexamined
-// (snapshot unreadTruncated, readTruncated). Such rows may exist without any
-// loaded row or count showing them, and the bulk actions still reach them.
+// Whether the server's bounded inbox read left unread (read) rows that Mark
+// all as read (Remove all read) reaches undelivered (snapshot unreadTruncated,
+// readTruncated). Such rows may exist without any loaded row or count showing
+// them. Rows left that are all snoozed do not count, because neither action
+// touches a snoozed row.
 let unexaminedUnread = false
 let unexaminedRead = false
 

@@ -126,9 +126,14 @@ export const readArchivedTasks = internalMutation({
 })
 
 /* The same for the active tasks of an archived project, walked from `from`,
- * a task creation time. */
+ * a task creation time. `tasks` lowers the tasks per step in tests. */
 export const readArchivedProject = internalMutation({
-  args: { project_id: v.string(), from: v.optional(v.number()), batch: v.optional(v.number()) },
+  args: {
+    project_id: v.string(),
+    from: v.optional(v.number()),
+    batch: v.optional(v.number()),
+    tasks: v.optional(v.number()),
+  },
   handler: async (ctx, a) => {
     await readArchivedProjectMessages(ctx, { ...a, now: new Date().toISOString() })
     return null

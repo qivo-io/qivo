@@ -88,9 +88,10 @@ your account. The public demo does not keep this persistent cache.
 Your **Inbox** collects mentions in task descriptions and comments, plus
 updates to tasks you subscribe to. Updates include assignments, reviewer
 changes, status, priority, title, dates, remaining hours, pauses, moves,
-parent changes, restoring and comments. A task with subtasks
-takes its dates, status and remaining hours from them, so a subtask change
-that only shifts those values sends no message to the parent's subscribers.
+parent changes, archiving (which arrives already read), restoring and
+comments. A task with subtasks takes its dates, status and remaining hours
+from them, so a subtask change that only shifts those values sends no
+message to the parent's subscribers.
 Your own actions do not notify you. Updates made through the REST API and MCP
 also generate messages. Agents, and assistants acting for you, read the inbox
 through the REST API and MCP
@@ -101,12 +102,16 @@ Only you can see your inbox. If you lose access to a task, its updates leave
 your inbox and you stop receiving new ones. They and your subscription return
 if you regain access.
 
-Archiving a task removes its row from everyone's inbox and marks its
-messages read, including those of the subtasks archived with it. Archiving
-a project does the same for its tasks. Updates that arrive while a task or
-its project is archived are marked read too. Restoring brings the rows back
-with their messages read. Restoring a task also sends its other subscribers
-a **Restored** update. Deleting a task or a project removes its messages.
+Archiving a task removes its row from everyone's inbox and, moments later,
+marks its messages read, including those of the subtasks archived with it.
+Archiving a project does the same for its tasks. Updates that arrive while a
+task or its project is archived are marked read too. Like other read
+messages, retention removes them after your chosen period, and **Remove all
+read notifications** removes them at once. Restoring brings back the rows
+that remain, with their messages read. A task restored right after its
+archive keeps its messages as they were. Restoring a task also sends its
+other subscribers a **Restored** update. Deleting a task or a project
+removes its messages.
 
 **Subscriptions.** Click the eye button in a task window to open
 **Subscribers**, then use the eye beside **Me** to subscribe or unsubscribe.
@@ -182,8 +187,10 @@ The Inbox toolbar and context menu also offer:
 
 Each action is available while your inbox shows matching updates. It also
 stays available when Qivo could not check all your messages, which can
-happen when many of them are about tasks you cannot see. Both actions cover
-messages you cannot see, about archived tasks or tasks you lost access to.
+happen when many of them are about tasks you cannot see. Unchecked messages
+that are snoozed do not keep it available, because both actions skip them.
+Both actions cover messages you cannot see, about archived tasks or tasks
+you lost access to.
 These actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 

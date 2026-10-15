@@ -422,6 +422,32 @@ describe('the background steps', () => {
       expect(await item(t, f.admin, task.id)).toEqual([{ detail: 'planted', read: true }])
     }
   })
+
+  it('stop a project walk after `tasks` tasks, also when none of them holds a row to mark', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks = []
+    for (let n = 0; n < 3; n++) {
+      tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
+    }
+    // only the last task holds a message, so the row budget never stops the
+    // first step
+    await plantMessage(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: tasks[2].id })
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { archived_at: 'x' }))
+
+    await t.mutation(internal.messages.readArchivedProject, { project_id: f.sub.id, tasks: 2 })
+
+    expect(await item(t, f.admin, tasks[2].id)).toEqual([{ detail: 'planted', read: false }])
+    const [next] = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    expect(next.args[0]).toEqual({
+      project_id: f.sub.id,
+      from: tasks[2]._creationTime,
+      tasks: 2,
+    })
+
+    await runSteps(t)
+    expect(await item(t, f.admin, tasks[2].id)).toEqual([{ detail: 'planted', read: true }])
+  })
 })
 
 describe('the machine inbox', () => {

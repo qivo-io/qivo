@@ -84,7 +84,8 @@ export const forMe = authedQuery({
     const activityDocs: Doc<'activity_events'>[] = []
     const unreadDocs: Doc<'messages'>[] = []
     const readDocs: Doc<'messages'>[] = []
-    // whether some seat's bounded inbox read left unread (read) rows unexamined
+    // whether some seat's bounded inbox read left unread (read) rows
+    // unexamined that Mark all as read (Remove all read) reaches
     let unreadTruncated = false
     let readTruncated = false
     const seenLinkIds = new Set<string>()
@@ -310,10 +311,11 @@ export const forMe = authedQuery({
       // delivers are among the ones the API lists for it. Rows about an
       // archived task, a task in an archived project or a task the caller
       // can no longer access stay stored and return if the task or access
-      // does. An archive marks the rows about its tasks read in the
-      // background (model/messages.ts), so those come back read once that
-      // has run.
-      const inbox = await loadInbox(ctx, me.id, workingSet.shown, INBOX_LIMIT)
+      // does, unless they were removed meanwhile. An archive marks the rows
+      // about its tasks read in the background (model/messages.ts), so the
+      // retention sweep and removeRead delete them like any read row, and
+      // the ones left come back read once that has run.
+      const inbox = await loadInbox(ctx, me.id, workingSet.shown, INBOX_LIMIT, INBOX_LIMIT)
       unreadDocs.push(...inbox.unread)
       readDocs.push(...inbox.read)
       unreadTruncated ||= inbox.unreadTruncated
@@ -343,6 +345,12 @@ export const forMe = authedQuery({
       0,
     )
     const messages = [...unreadDocs, ...readDocs].slice(0, CAP).map(rowOf)
+    // When several seats keep unread rows, the cut can drop some that Mark
+    // all as read reaches while every unread row delivered is snoozed. Read
+    // rows it drops are in readMessageCount already.
+    if (unreadDocs.slice(CAP).some((message) => message.snoozed_until === undefined)) {
+      unreadTruncated = true
+    }
 
     return {
       auth_user_id: ctx.authUserId,
@@ -368,7 +376,10 @@ export const forMe = authedQuery({
       // rows about tasks the caller is not shown fill its examination budget.
       // Unread (read) rows may then exist that neither `messages` nor the
       // count includes. While the flag is true, the client keeps Mark all as
-      // read (Remove all read) available, because it reaches every row.
+      // read (Remove all read) available, because it reaches every row that
+      // is not snoozed. Both skip snoozed rows, so the flag stays false when
+      // the rows left are all snoozed, unless more than INBOX_LIMIT are
+      // (lib/inbox.ts loadInbox `peek`).
       unreadTruncated,
       readTruncated,
       orgLoad,

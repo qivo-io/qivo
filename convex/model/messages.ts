@@ -669,12 +669,15 @@ export async function snoozeMessages(
 /** The most rows one archived-read step marks read. */
 export const ARCHIVED_READ_BATCH = 500
 
-/** The most tasks one archived-read step visits, which is also the most task
- * ids one scheduled step carries. */
+/** The most tasks one archived-read step visits. scheduleArchivedReads gives
+ * each step at most this many task ids, and a project walk stops after this
+ * many tasks, because each task costs index ranges whether or not it holds
+ * a row to mark. */
 export const ARCHIVED_READ_TASKS = 500
 
 /* The steps in convex/messages.ts, referenced by name like wakeRef. `batch`
- * lowers the rows per step in tests. */
+ * lowers the rows per step in tests, and `tasks` the tasks a project step
+ * visits. */
 const readArchivedTasksRef = makeFunctionReference<
   'mutation',
   { issues: string[]; batch?: number },
@@ -682,7 +685,7 @@ const readArchivedTasksRef = makeFunctionReference<
 >('messages:readArchivedTasks')
 const readArchivedProjectRef = makeFunctionReference<
   'mutation',
-  { project_id: string; from?: number; batch?: number },
+  { project_id: string; from?: number; batch?: number; tasks?: number },
   null
 >('messages:readArchivedProject')
 
@@ -706,10 +709,10 @@ export async function scheduleArchivedReads(
   }
 }
 
-/* The rows per step a caller asked for, at least one so a step always makes
- * progress. */
-const stepBatch = (batch: number | undefined): number =>
-  Math.max(1, Math.floor(batch ?? ARCHIVED_READ_BATCH))
+/* A step's limit as a caller lowered it, or `fallback`, and at least one so
+ * a step always makes progress. */
+const stepLimit = (limit: number | undefined, fallback: number): number =>
+  Math.max(1, Math.floor(limit ?? fallback))
 
 /* Marks up to `budget` of the task's unread or snoozed rows read, for every
  * recipient, and keeps the prune's invariant on each item it touched. A row
@@ -745,14 +748,15 @@ async function readTaskMessages(
  * project archive still stands has its unread and snoozed messages marked
  * read for every recipient. A task that was restored or deleted meanwhile is
  * skipped. The step stops after `batch` rows (ARCHIVED_READ_BATCH by
- * default) or ARCHIVED_READ_TASKS tasks, and the next one starts at the
- * task it did not finish.
+ * default), and the next one starts at the task it did not finish. It
+ * visits at most the ids it carries, which scheduleArchivedReads keeps to
+ * ARCHIVED_READ_TASKS.
  */
 export async function readArchivedTaskMessages(
   ctx: MutationCtx,
   a: { issues: readonly string[]; batch?: number; now: string },
 ): Promise<void> {
-  let budget = stepBatch(a.batch)
+  let budget = stepLimit(a.batch, ARCHIVED_READ_BATCH)
   const projects = new Map<string, Promise<Doc<'projects'> | null>>()
   const projectOf = (id: string) => {
     let project = projects.get(id)
@@ -764,7 +768,7 @@ export async function readArchivedTaskMessages(
   }
   let rest: readonly string[] = []
   for (const [i, issueId] of a.issues.entries()) {
-    if (budget === 0 || i === ARCHIVED_READ_TASKS) {
+    if (budget === 0) {
       rest = a.issues.slice(i)
       break
     }
@@ -794,26 +798,29 @@ export async function readArchivedTaskMessages(
  * stopped. A project that was restored or deleted meanwhile ends the walk.
  * Tasks the project held archived already were handled by their own
  * archive. A meta-project holds no tasks, so its walk ends at once; its
- * sub-projects archived with it are walked by their own steps. Limits as in
- * readArchivedTaskMessages.
+ * sub-projects archived with it are walked by their own steps. The step
+ * stops after `batch` rows, as in readArchivedTaskMessages, or after
+ * `tasks` tasks (ARCHIVED_READ_TASKS by default), so a project with
+ * thousands of tasks and few messages still spreads over several steps.
  */
 export async function readArchivedProjectMessages(
   ctx: MutationCtx,
-  a: { project_id: string; from?: number; batch?: number; now: string },
+  a: { project_id: string; from?: number; batch?: number; tasks?: number; now: string },
 ): Promise<void> {
   const project = await byId(ctx, 'projects', a.project_id)
   if (project === null || project.archived_at === undefined) return
-  let budget = stepBatch(a.batch)
+  let budget = stepLimit(a.batch, ARCHIVED_READ_BATCH)
+  const cap = stepLimit(a.tasks, ARCHIVED_READ_TASKS)
   let visited = 0
   let from: number | undefined
-  const tasks = ctx.db.query('issues').withIndex('by_project_archived', (q) =>
+  const active = ctx.db.query('issues').withIndex('by_project_archived', (q) =>
     q
       .eq('project_id', project.id)
       .eq('archived_at', undefined)
       .gte('_creationTime', a.from ?? 0),
   )
-  for await (const task of tasks) {
-    if (budget === 0 || visited === ARCHIVED_READ_TASKS) {
+  for await (const task of active) {
+    if (budget === 0 || visited === cap) {
       from = task._creationTime
       break
     }
@@ -830,6 +837,7 @@ export async function readArchivedProjectMessages(
       project_id: project.id,
       from,
       batch: a.batch,
+      tasks: a.tasks,
     })
   }
 }

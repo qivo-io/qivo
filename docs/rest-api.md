@@ -1274,21 +1274,24 @@ POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:0
 items are listed only for active tasks the caller can read in active
 projects. Messages about a task it has lost access to, an archived task or a
 task in an archived project stay stored and come back when the access or the
-task does. `messages` run oldest first; `kind` is `mention`, `comment` or
-`change`, and `detail` is the line the app shows. `latest_at` is the newest
-message's time, or the end of a snooze when that is later, and orders the
-list.
+task does, unless they were removed meanwhile. `messages` run oldest first;
+`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
+shows. `latest_at` is the newest message's time, or the end of a snooze when
+that is later, and orders the list.
 
 Archiving a task marks every message about it and the subtasks archived
 with it read, for every recipient, shortly after the archive. Archiving a
 project does the same for the tasks of the project and its sub-projects. A
 snoozed item loses its snooze. Messages that arrive while the task or its
 project is archived, including the `Archived` message, mentions and
-comments, are stored read. A restore brings the items back with their
-messages read. Other followers of a restored task also receive an unread
-`Restored` message, which replaces the item's read messages as any new
-message does. Deleting a task or a project deletes the messages about its
-tasks.
+comments, are stored read. As with any read message, the nightly cleanup
+removes them after the recipient's retention period, and
+`POST /v1/inbox/remove` with `"all": true` removes them too. A restore
+brings back the items still stored, with their messages read. A restore
+that comes before the marking leaves the messages as they were. Other
+followers of a restored task also receive an unread `Restored` message,
+which replaces the item's read messages as any new message does. Deleting a
+task or a project deletes the messages about its tasks.
 
 One request lists up to 500 of the caller's unread messages (newest first)
 and up to 500 read ones (most recently read first). It looks at no more than

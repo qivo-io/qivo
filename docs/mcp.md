@@ -1145,13 +1145,17 @@ task, latest activity first:
 `task` is the task as it is now, its current title included. As in the app,
 items are listed only for active tasks you can read in active projects.
 Messages about a task you lost access to, an archived task or a task in an
-archived project stay stored and come back when the access or the task does.
-Archiving a task marks every message about it and the subtasks archived with
-it read, for every recipient, shortly after the archive, and archiving a
-project does the same for its tasks. A snoozed item loses its snooze.
-Messages that arrive while the task or its project is archived, including
-the `Archived` message, mentions and comments, are stored read. A restore
-brings the items back with their messages read. Other followers of a
+archived project stay stored and come back when the access or the task does,
+unless they were removed meanwhile. Archiving a task marks every message
+about it and the subtasks archived with it read, for every recipient,
+shortly after the archive, and archiving a project does the same for its
+tasks. A snoozed item loses its snooze. Messages that arrive while the task
+or its project is archived, including the `Archived` message, mentions and
+comments, are stored read. As with any read message, the nightly cleanup
+removes them after the recipient's retention period, and `update_inbox`
+with `action: "remove"` and `all: true` removes them too. A restore brings
+back the items still stored, with their messages read. A restore that comes
+before the marking leaves the messages as they were. Other followers of a
 restored task also receive an unread `Restored` message, which replaces the
 item's read messages as any new message does. Deleting a task or a project
 deletes the messages about its tasks. `messages` run oldest first, `kind` is
