@@ -123,8 +123,8 @@ created with change access and has not expired; a token stored without an
 access setting can only read. An agent key can make changes only when its
 agent's organization role is `user`. A read-only credential still reads
 everything its user can, and every project comes back
-`"access": { "read": …, "write": false }`. Every `POST`, `PATCH` and `DELETE`
-request returns `403` with `{"error": "this credential can only read"}` for a
+`"access": { "read": …, "write": false }`. Every `POST`, `PUT`, `PATCH` and
+`DELETE` request returns `403` with `{"error": "this credential can only read"}` for a
 personal token and `{"error": "this agent is a Viewer and can only read"}` for
 a Viewer agent's key, before Qivo resolves any reference, so the answer is
 the same whether or not the reference exists. Managing the credential's own
@@ -141,7 +141,7 @@ They share a word because they are the same idea one altitude apart. A user whos
 `org_role` is `viewer` therefore comes back with
 `"access": { "read": …, "write": false }` on **every** project, whatever it
 holds there. For an agent that makes its key a read-only credential, so every
-`POST`, `PATCH` and `DELETE` request returns `403` with
+`POST`, `PUT`, `PATCH` and `DELETE` request returns `403` with
 `{"error": "this agent is a Viewer and can only read"}` before Qivo resolves
 any project or task reference. That is how a read-only key is made, with one
 setting on the Users page rather than a grant list audited project by project.
@@ -443,10 +443,10 @@ this project; hand the lead to someone else first`.
 `PUT` answers `{"project_id", "user" | "team": {"id", "name"}, "level",
 "changed"}`; giving the level someone already has changes nothing.
 
-Removing access can hide open tasks from the people working on them: the
-tasks of the project and its sub-projects that are not Done, whose assignee,
-or reviewer on a task without subtasks, could see them before and cannot
-after. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
+Removing access can hide open tasks from the people working on them. These
+are the tasks of the project and its sub-projects that are not Done, whose
+assignee, or reviewer on a task without subtasks, could see them before and
+cannot after. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
 what happens to them:
 
 - `"leave"` (the default, also for an empty body) removes the access and
@@ -460,7 +460,7 @@ what happens to them:
   unassigned. The new holder must be able to work on each task once the
   access is gone, by the usual assignee rules.
 
-The removal and its choice land together or not at all: if any task cannot
+The removal and its choice land together or not at all. If any task cannot
 be reassigned, the access stays and nothing changes. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",

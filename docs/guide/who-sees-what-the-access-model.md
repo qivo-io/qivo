@@ -28,7 +28,7 @@ For a team, the grant is on each project the team shared that holds the
 listed tasks. **Reassign** hands every listed task, reviewer roles included,
 to one person who keeps User or Lead access to those tasks, or to
 **Unassigned**, and removes the access. Removing a person's or a team's grant
-saves the removal and the choice together: if a task cannot be reassigned,
+saves the removal and the choice together. If a task cannot be reassigned,
 nothing changes and the window lists the tasks again. Removing a member from
 a team or deleting a team saves each task and Viewer grant first; if one
 cannot be saved, the access stays, tasks already saved keep their new

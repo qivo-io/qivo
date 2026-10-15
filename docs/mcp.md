@@ -770,8 +770,8 @@ users for it). With `parent` it makes a sub-project, which needs Lead access
 on that parent; a parent you cannot read answers `parent project "<ref>" not
 found (or not visible to you)`. Qivo picks the number, the key (from the
 name) and the position. `lead_id` defaults to you, and only a person may name
-someone else: an agent always leads what it creates, and otherwise gets
-`only people can change who has access, not agents`. A creator who is not an
+someone else. An agent always leads what it creates, and naming another lead
+gets `only people can change who has access, not agents`. A creator who is not an
 organization admin and names someone else as lead of a top-level project
 gets User access to it, as in the app. The tool takes no grants; add them
 with `set_project_access`.
