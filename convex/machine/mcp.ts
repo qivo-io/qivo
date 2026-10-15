@@ -155,6 +155,7 @@ type SchemaProp = {
   maximum?: number
   items?: SchemaProp
   minItems?: number
+  maxItems?: number
   anyOf?: SchemaProp[]
   properties?: Record<string, SchemaProp>
   required?: string[]
@@ -1017,6 +1018,9 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       if (!Array.isArray(x)) return `Invalid input: expected array, received ${typeName(x)}`
       if (p.minItems !== undefined && x.length < p.minItems) {
         return `Too small: expected array to have >=${p.minItems} items`
+      }
+      if (p.maxItems !== undefined && x.length > p.maxItems) {
+        return `Too big: expected array to have <=${p.maxItems} items`
       }
       if (p.items === undefined) return null
       for (const item of x) {
