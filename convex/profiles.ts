@@ -65,6 +65,7 @@ import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model
 import {
   assertNameShape,
   assertViewerLeadsNothing,
+  avatarColor,
   byCreated,
   cleanName,
   EMAIL_SHAPE,
@@ -121,6 +122,7 @@ export const create = adminMutation({
     require(org !== null, notFound('organization not found'))
     const name = cleanName(args.name)
     assertNameShape(name)
+    const color = avatarColor(args.color)
     const isAgent = args.kind === 'agent'
     let email: string | undefined
     if (isAgent) {
@@ -166,7 +168,7 @@ export const create = adminMutation({
         email,
         name,
         initials: nameInitials(name),
-        color: args.color,
+        color,
         org_role: args.org_role,
         active: true,
         kind: args.kind,

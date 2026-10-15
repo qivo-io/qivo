@@ -39,11 +39,11 @@
 import { v } from 'convex/values'
 import { components } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import type { MutationCtx, QueryCtx } from './_generated/server'
+import type { MutationCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
 import { assertBillingWritable } from './lib/billingAccess'
-import { byId, insertUnique } from './lib/db'
+import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
 import {
   attachmentFileUrl,
@@ -60,8 +60,13 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
-import { logActivity } from './model/activity'
 import { clearAccountAppearance } from './model/appearance'
+import {
+  type AttachResult,
+  attachFileCore,
+  removeAttachmentCore,
+  storageIdInUse,
+} from './model/attachments'
 import {
   assertDemoFileOwnership,
   DEMO_FILE_BYTES,
@@ -69,22 +74,14 @@ import {
   demoFileExpiry,
   reserveDemoUpload,
 } from './model/demoUploads'
-import { attachmentLimitMb } from './model/orgs'
+
+/* The byte-reference fence and the attach result live in the shared
+ * attachment model (model/attachments.ts); other modules still import them
+ * from here. */
+export { type AttachmentRow, type AttachResult, storageIdInUse } from './model/attachments'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 type AuthedCtx = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
-
-/* System fields stay internal; optional columns come back ABSENT. */
-const pub = ({ _id, _creationTime, org_id: _orgId, ...row }: Doc<'issue_attachments'>) => row
-
-export type AttachmentRow = ReturnType<typeof pub>
-
-/* The structured refusal attach returns when the byte-delete must commit
- * (probe verdict above). The client wrapper toasts message and resolves null,
- * its existing failure contract. */
-export type AttachResult =
-  | { refused: { code: 'bad_request'; message: string } }
-  | { attachment: AttachmentRow }
 
 /* Missing and foreign-org issues are indistinguishable (0056). */
 async function myIssue(ctx: MeCtx, id: string): Promise<Doc<'issues'>> {
@@ -97,56 +94,6 @@ async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
   if (!(await hasProjectLevel(ctx, ctx.me, projectId, 'user'))) {
     throw forbidden('no write access to this project')
   }
-}
-
-/* The cross-tenant byte-destruction fence (0089 §3's vector, reborn as
- * storage ids): a storage id referenced by ANY attachment row or ANY
- * profile's avatar, curated background, or private custom background must never gain a second referent — the second row's
- * delete would destroy the first row's bytes. */
-export async function storageIdInUse(ctx: QueryCtx, storageId: Id<'_storage'>): Promise<boolean> {
-  const att = await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-    .first()
-  if (att !== null) return true
-  const prof = await ctx.db
-    .query('profiles')
-    .withIndex('by_avatar', (q) => q.eq('avatar_storage_id', storageId))
-    .first()
-  if (prof !== null) return true
-  const panorama =
-    (await ctx.db
-      .query('panorama_images')
-      .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-      .first()) !== null
-  if (panorama) return true
-  if (
-    await ctx.db
-      .query('panorama_images')
-      .withIndex('by_preview_storage', (q) => q.eq('preview_storage_id', storageId))
-      .first()
-  )
-    return true
-  if (
-    await ctx.db
-      .query('custom_backgrounds')
-      .withIndex('by_preview_storage', (q) => q.eq('preview_storage_id', storageId))
-      .first()
-  )
-    return true
-  return (
-    (await ctx.db
-      .query('custom_backgrounds')
-      .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
-      .first()) !== null
-  )
-}
-
-/* The issue's owning organization controls all attachments, including inline
- * images and projects without a team (attachmentLimitMb); legacy team caps
- * have no effect. */
-async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
-  return attachmentLimitMb(await byId(ctx, 'organizations', orgId))
 }
 
 /* ---------------------------------------------------------------- uploads
@@ -197,7 +144,9 @@ export const avatarUploadUrl = authedMutation({
 /* ----------------------------------------------------------------- attach
  * Order is load-bearing: every throw happens BEFORE any write, and the
  * oversize refusal-return happens before the row insert — the committed
- * transaction then carries exactly one effect, the byte delete. */
+ * transaction then carries exactly one effect, the byte delete. The cap,
+ * the byte fence, the row and the activity row are model/attachments.ts
+ * attachFileCore, which REST uploads run too. */
 export const attach = orgMutation({
   args: {
     id: v.string(), // client-generated attachment uuid
@@ -212,61 +161,15 @@ export const attach = orgMutation({
     const issue = await myIssue(ctx, issue_id)
     await assertWritable(ctx, issue.project_id)
     await assertDemoFileOwnership(ctx, ctx.authUserId, storage_id, 'attachment', issue_id)
-    if (await storageIdInUse(ctx, storage_id)) {
-      // never delete here — the bytes belong to the EXISTING referent
-      throw badRequest('this file is already attached')
-    }
-    const meta = await ctx.db.system.get(storage_id)
-    if (meta === null) throw badRequest('attachment bytes not found in storage')
-    const cap = await attachmentCapMb(ctx, issue.org_id)
-    if (meta.size > cap * 1024 * 1024) {
-      await ctx.storage.delete(storage_id)
-      return {
-        refused: {
-          code: 'bad_request',
-          message: `attachment exceeds the organization limit of ${cap} MiB`,
-        },
-      }
-    }
-    const rowId = await insertUnique(
-      ctx,
-      'issue_attachments',
-      'by_uuid',
-      { id },
-      {
-        id,
-        org_id: issue.org_id,
-        issue_id: issue.id,
-        name,
-        size_bytes: meta.size, // server truth — NEVER a client number (0089)
-        mime: mime ?? meta.contentType ?? undefined,
-        storage_id,
-        inline,
-        uploaded_by: ctx.me.id,
-        created_at: now,
-      },
-      badRequest('an attachment with this id already exists'),
-    )
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: ctx.me.id,
-      verb: inline ? 'added an image to' : 'attached a file to',
-      target_type: 'issue',
-      target_id: issue.id,
-      label: issue.title,
-      detail: name,
-      project_id: issue.project_id,
-      ts: now,
-    })
-    const row = (await ctx.db.get(rowId)) as Doc<'issue_attachments'>
-    return { attachment: pub(row) }
+    return await attachFileCore(ctx, { me: ctx.me, issue, id, storage_id, name, mime, inline, now })
   },
 })
 
 /* ------------------------------------------------------- removeAttachment
  * ia_delete (LAST 0018:38-40): any project member may delete ANY attachment
  * on the issue, not only their own. Row + bytes die in one transaction
- * (success path — no rollback concern). */
+ * (success path, no rollback concern), through model/attachments.ts
+ * removeAttachmentCore, which REST and MCP run too. */
 export const removeAttachment = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
@@ -276,19 +179,7 @@ export const removeAttachment = orgMutation({
     const issue = await byId(ctx, 'issues', att.issue_id)
     if (issue === null || issue.org_id !== ctx.me.org_id) throw notFound('attachment not found')
     await assertWritable(ctx, issue.project_id)
-    await ctx.storage.delete(att.storage_id)
-    await ctx.db.delete(att._id)
-    await logActivity(ctx, {
-      org_id: issue.org_id,
-      actor_id: ctx.me.id,
-      verb: att.inline ? 'removed an image from' : 'removed an attachment from',
-      target_type: 'issue',
-      target_id: issue.id,
-      label: issue.title,
-      detail: att.name,
-      project_id: issue.project_id,
-      ts: now,
-    })
+    await removeAttachmentCore(ctx, { me: ctx.me, attachment: att, issue, now })
     return null
   },
 })
@@ -447,7 +338,8 @@ export const gatewayAvatar = internalQuery({
 })
 
 /* ------------------------------------------------------------ reapOrphans
- * Uploaded-never-attached bytes are referenced by NOTHING. Reference points
+ * Uploaded-never-attached bytes (an app upload never attached, a REST upload
+ * never confirmed) are referenced by NOTHING. Reference points
  * are issue_attachments.storage_id, profiles.avatar_storage_id and
  * panorama_images/custom_backgrounds originals and preview_storage_id. Runnable
  * via `npx convex run files:reapOrphans` until phase 9's cron schedules it.
@@ -465,6 +357,13 @@ export const reapOrphans = internalMutation({
     // Bound each ticket sweep; the next run resumes from the oldest expiry.
     for (const ticket of await ctx.db
       .query('background_uploads')
+      .withIndex('by_expiry', (q) => q.lte('expires_at', now))
+      .take(1000))
+      await ctx.db.delete(ticket._id)
+    // Expired REST attachment upload tickets (model/attachments.ts); their
+    // unconfirmed bytes are unreferenced and fall to the sweep below.
+    for (const ticket of await ctx.db
+      .query('attachment_uploads')
       .withIndex('by_expiry', (q) => q.lte('expires_at', now))
       .take(1000))
       await ctx.db.delete(ticket._id)

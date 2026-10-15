@@ -424,6 +424,26 @@ export function machineAccess(
 }
 
 /**
+ * Whether Qivo sends `profile` inbox messages and makes it a follower. Every
+ * person has an inbox. An agent has one only while it is active and its key
+ * can write, because a Viewer or Inactive agent can never mark a message
+ * read or remove it, so its unread messages would pile up for good. An
+ * unknown kind gets no inbox.
+ */
+export function keepsInbox(
+  profile: Pick<Doc<'profiles'>, 'kind' | 'org_role' | 'active'>,
+): boolean {
+  switch (profile.kind) {
+    case 'person':
+      return true
+    case 'agent':
+      return profile.active && credentialAccess({ table: 'agent_keys' }, profile) === 'write'
+    default:
+      return false
+  }
+}
+
+/**
  * Whether a personal token has expired at `now` (epoch milliseconds). A
  * token without an expiry never expires; an unreadable one counts as expired.
  */

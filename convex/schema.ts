@@ -643,6 +643,25 @@ export default defineSchema({
     .index('by_issue', ['issue_id'])
     .index('by_storage', ['storage_id']),
 
+  // A REST upload in progress (model/attachments.ts). It names the caller
+  // that asked for the upload URL, the task it attaches to and when it
+  // expires. Only that caller may confirm it, once, for that task, with a
+  // file stored after the ticket's _creationTime. files.ts reapOrphans
+  // deletes expired tickets with the unreferenced bytes.
+  attachment_uploads: defineTable({
+    id: v.string(), // the ticket
+    org_id: v.string(),
+    profile_id: v.string(),
+    issue_id: v.string(),
+    name: v.string(),
+    content_type: v.optional(v.string()),
+    size_bytes: v.number(), // declared by the client, checked against the stored file
+    expires_at: v.number(), // epoch milliseconds
+  })
+    .index('by_uuid', ['id'])
+    .index('by_profile_expiry', ['profile_id', 'expires_at'])
+    .index('by_expiry', ['expires_at']),
+
   milestones: defineTable({
     id: v.string(),
     project_id: v.string(), // writes store a top-level project (model/milestones.ts)
@@ -819,7 +838,9 @@ export default defineSchema({
       'id',
     ])
     .index('by_issue', ['issue_id'])
-    .index('by_actor', ['actor_id']), // messages_actor_idx — removeProfile's SET NULL
+    .index('by_actor', ['actor_id']) // messages_actor_idx — removeProfile's SET NULL
+    // the nightly sweep's fallback wake finds a recipient's overdue snoozes
+    .index('by_recipient_snoozed', ['recipient_id', 'snoozed_until']),
 
   user_prefs: defineTable({
     profile_id: v.string(),
