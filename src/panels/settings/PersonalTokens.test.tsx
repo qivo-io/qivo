@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createHash } from 'node:crypto'
 import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -322,6 +323,8 @@ describe('New token', () => {
     const secret = find('[data-fresh-token]').textContent?.replace('Copy token ', '') ?? ''
     expect(secret).toMatch(/^qvt_[0-9a-f]{48}$/)
     expect(args.token_prefix).toBe(secret.slice(0, 11))
+    // the server only ever sees the SHA-256 of the secret
+    expect(args.token_hash).toBe(createHash('sha256').update(secret).digest('hex'))
     expect(find('[data-fresh-token-command]').textContent).toBe(
       `Copy Claude Code setup command claude mcp add --transport http qivo "${MCP_URL}" --header "Authorization: Bearer ${secret}"`,
     )

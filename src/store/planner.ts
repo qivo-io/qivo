@@ -761,6 +761,18 @@ function withUpdateBlock<Args extends unknown[], Result>(
   }
 }
 
+/** Mints an agent key (qva) or personal MCP token (qvt) in the browser.
+    Returns the one-time secret, its SHA-256 hex for the server and a new row
+    id. Rejects outside a secure context, where crypto.subtle and randomUUID
+    are missing, so callers that promise never to throw must call it inside
+    their try. */
+async function mintCredential(scheme: 'qva' | 'qvt') {
+  const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const secret = `${scheme}_${hex(crypto.getRandomValues(new Uint8Array(24)))}`
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
+  return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
+}
+
 function run<T>(
   op: Promise<T>,
   onOk?: (v: T) => void,
@@ -4102,15 +4114,15 @@ export const PLANNER = {
     return keys
   },
 
+  /** Mints an agent's key in the browser and stores only its hash. Returns
+      the secret once, or null when it could not be made or the server refused
+      it. It never throws, because both callers on the Users page recover
+      only from null. */
   createAgentKey: withUpdateBlock(async (agentId: string, name: string) => {
     const agent = rows.profiles.get(agentId)
     const org = agent ? agent.org_id : HOME_ORG
-    const bytes = crypto.getRandomValues(new Uint8Array(24))
-    const secret = `qva_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
-    const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
-    const id = crypto.randomUUID()
     try {
+      const { id, secret, hash } = await mintCredential('qva')
       await write(api.tokens.createAgentKey, {
         org_id: org,
         id,
@@ -4119,12 +4131,12 @@ export const PLANNER = {
         key_prefix: `${secret.slice(0, 7)}...${secret.slice(-5)}`,
         key_hash: hash,
       })
+      agentKeyOrg.set(id, org)
+      return { id, secret }
     } catch (e) {
       console.error('[qivo] agent key create failed:', e)
       return null
     }
-    agentKeyOrg.set(id, org)
-    return { id, secret }
   }),
 
   revokeAgentKey: async (id: string) => {
@@ -4195,11 +4207,7 @@ export const PLANNER = {
       null. crypto.subtle and randomUUID are missing outside a secure context. */
   createMcpToken: withUpdateBlock(async (name: string, { access, expiresAt }: McpTokenChoice) => {
     try {
-      const bytes = crypto.getRandomValues(new Uint8Array(24))
-      const secret = `qvt_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
-      const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
-      const id = crypto.randomUUID()
+      const { id, secret, hash } = await mintCredential('qvt')
       await write(api.tokens.createMcpToken, {
         id,
         profile_id: CURRENT_USER,
