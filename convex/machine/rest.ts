@@ -160,6 +160,7 @@ type Access = {
   writable: (projectId: string) => boolean
 }
 
+/* Access for `callerId`, resolved to the live caller by asMachineCaller. */
 async function withAccess(
   ctx: QueryCtx,
   callerId: string,
@@ -1258,6 +1259,10 @@ const STATUS_OF: Partial<Record<string, number>> = {
   rule: 400, // readable beats a 500; machine pre-checks fire first in practice
 }
 
+/* The REST response for an error a route threw. A caller gone or
+ * deactivated since auth gets its own 401 sentence, a refusal whose code
+ * STATUS_OF maps gets that status and its message, and anything else is a
+ * 500 with its text. */
 function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>

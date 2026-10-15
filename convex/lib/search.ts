@@ -14,6 +14,12 @@ function searchFragments(query: string, stars: boolean): string[][] {
   return words.map((word) => (stars ? word.split('*') : [word]))
 }
 
+/**
+ * A test of whether a text contains every whitespace-separated fragment of
+ * `query`, in any order, ignoring case. The query is parsed once, so one
+ * test can check many texts. A blank query matches any text. With `stars`,
+ * each `*` in a fragment stands for any run of text.
+ */
 export function allWordsMatcher(query: string, stars = false): (hay: string) => boolean {
   const fragments = searchFragments(query, stars)
   return (hay) => {

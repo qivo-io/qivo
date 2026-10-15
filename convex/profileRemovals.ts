@@ -92,6 +92,7 @@ function edge<Row>(a: {
   }
 }
 
+/** The OAuth connections of `profileId`, as a new query for each read. */
 const connectionsOf = (ctx: MutationCtx, profileId: string) =>
   ctx.db.query('oauth_connections').withIndex('by_profile', (q) => q.eq('profile_id', profileId))
 
