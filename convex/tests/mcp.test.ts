@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '146612031e95a7b4f21719025aa23a39b8644a67cdd4dc7625bd72841765bee2'
-const SHA_TOOLS_MODERN = '33a02ed7dcd30c6697eb2676fe5551751a90f20ef572fd5b5b968475de925bc3'
+const SHA_TOOLS_LEGACY = 'f10301423295fdb62ddf05196740b409eb6bcc9b72a39c98f784426a768bb358'
+const SHA_TOOLS_MODERN = '4f27c22f0d614a1755265216e898e83515efdd48d9a836b511cebd1eaf8cdc47'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -926,7 +926,9 @@ describe('read tools', () => {
       'parent_id',
       'team_id',
       'description',
+      'archived',
       'archived_at',
+      'access',
     ])
     expect(guestProjects[0].archived_at).toBeNull() // explicit null, never omitted
     const adminProjects = JSON.parse(
@@ -952,6 +954,87 @@ describe('read tools', () => {
       'plannable_hours',
     ])
     expect('email' in (users[0] as object)).toBe(false)
+  })
+
+  test('list_projects and get_project carry the caller access and archived, as REST does', async () => {
+    const fx = await machineOrg()
+    // Pia, a Standard user, may change FW's tasks and OLD's (an archived
+    // sub-project) but only read PCB's; TBED is visible to her as FW's parent
+    const pia = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Pia' })
+    const old = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      key: 'OLD',
+      archived_at: NOW,
+    })
+    await grant(fx.t, fx.sub.id, pia.id, 'user')
+    await grant(fx.t, fx.sub2.id, pia.id, 'viewer')
+    await grant(fx.t, old.id, pia.id, 'user')
+    type Access = 'read' | 'write'
+    type Row = Record<string, unknown> & { key: string; access: { read: boolean; write: boolean } }
+    const mcpRows = async (p: Doc<'profiles'>, access: Access, archived: boolean) =>
+      JSON.parse(
+        await fx.t.query(internal.machine.mcp.listProjects, { callerId: p.id, access, archived }),
+      ) as Row[]
+    const writes = async (p: Doc<'profiles'>, access: Access, archived = false) =>
+      Object.fromEntries((await mcpRows(p, access, archived)).map((r) => [r.key, r.access.write]))
+
+    // a Standard user writes where a grant gives User, not where it gives View
+    expect(await writes(pia, 'write')).toEqual({ FW: true, PCB: false, TBED: false })
+    expect(await writes(pia, 'write', true)).toEqual({ OLD: true })
+    // a read-only credential caps every project at read
+    expect(await writes(pia, 'read')).toEqual({ FW: false, PCB: false, TBED: false })
+    expect(await writes(pia, 'read', true)).toEqual({ OLD: false })
+    // a Viewer's User grant on TBED reaches no further than read
+    expect(await writes(fx.viewer, 'write')).toEqual({ FW: false, PCB: false, TBED: false })
+    // every returned row is readable; archived is archived_at as a boolean
+    const active = await mcpRows(pia, 'write', false)
+    expect(
+      active.every((r) => r.access.read && r.archived === false && r.archived_at === null),
+    ).toBe(true)
+    expect((await mcpRows(pia, 'write', true))[0]).toMatchObject({
+      key: 'OLD',
+      archived: true,
+      archived_at: NOW,
+    })
+
+    // each MCP row and get_project answer equals REST's for the same caller
+    const callers: [Doc<'profiles'>, Access][] = [
+      [pia, 'write'],
+      [pia, 'read'],
+      [fx.viewer, 'write'],
+      [fx.agent, 'write'],
+    ]
+    for (const [p, access] of callers) {
+      for (const archived of [false, true]) {
+        const rows = await mcpRows(p, access, archived)
+        expect(rows).toEqual(
+          await fx.t.query(internal.machine.rest.listProjects, {
+            callerId: p.id,
+            access,
+            archived: String(archived),
+          }),
+        )
+        for (const row of rows) {
+          const one = parse(
+            await fx.t.query(internal.machine.projects.mcpGetProject, {
+              callerId: p.id,
+              access,
+              project: row.key,
+            }),
+          )
+          expect(one).toMatchObject(row)
+          expect(one).toEqual(
+            await fx.t.query(internal.machine.rest.getProject, {
+              callerId: p.id,
+              access,
+              ref: row.key,
+            }),
+          )
+        }
+      }
+    }
   })
 
   test('list_project_users returns only visible real profiles and marks assignability', async () => {

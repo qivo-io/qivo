@@ -9,6 +9,17 @@ workflows and [llms.txt](https://qivo.io/llms.txt) for documentation discovery.
 Qivo's MCP server.** The person signs in and approves access in the browser;
 the assistant receives its credentials directly, without copying a token.
 
+## Microsoft sign-in and administrator approval
+
+If a person's Microsoft work or school sign-in shows **Need admin approval**,
+send their Microsoft administrator the
+[Microsoft sign-in and administrator approval guide](https://qivo.io/docs/microsoft-sign-in-and-administrator-approval/).
+It includes Qivo's organization approval link, administrator requirements and
+troubleshooting. A Qivo admin role alone cannot grant Microsoft consent.
+After approval, restart the assistant's connection flow. Microsoft approval
+does not grant Qivo membership, project access or permission for an assistant
+to act as the person. The person must still approve the connection in Qivo.
+
 ## Choose a credential
 
 | Credential | Acts as | Accepted by |

@@ -100,6 +100,11 @@ invitations. Without an invitation, Qivo offers to create an organization with
 you as its first admin. When billing is enabled, a new unpaid organization
 opens Billing.
 
+If Microsoft blocks sign-in until an administrator approves Qivo, follow
+[Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).
+Approval requires a Microsoft Entra administrator with consent permissions;
+a Qivo organization admin role alone is not enough.
+
 Destructive controls ask for a second click. Compact trash buttons first
 expand to **Delete?**; larger controls state what will be removed. Timed
 confirmations expire if unused. Deleting a parent project also deletes its
