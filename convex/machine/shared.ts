@@ -1,15 +1,47 @@
 /* The wording and parsing that machine/rest.ts, machine/mcp.ts and the domain
- * modules declaring entries for both surfaces (machine/projects.ts,
- * machine/teams.ts) share.
+ * modules declaring entries for both surfaces (machine/records.ts,
+ * machine/discussion.ts, machine/projects.ts, machine/teams.ts) share.
  *
  * The surface modules spread a domain module's entries into TOOLS and
  * ROUTES, so a domain module that imported a value from them would close an
  * import cycle. These rules therefore live here, once, and every module that
- * signs a write's activity row, reads an agent key's name or parses a REST
- * body imports them from this file. */
+ * names the caller, signs a write's activity row, reads an agent key's name
+ * or parses a REST body imports them from this file. */
 
 import { v } from 'convex/values'
+import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
+import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
+
+/** MCP's refusal for a readable project the caller cannot write, which
+ * REST's person sentence reuses. */
+export const MCP_NO_WRITE = 'your account has no write access to that project'
+
+/* Every REST sentence that names the caller, keyed by who the credential acts
+ * as. An agent key acts as its agent and a personal token as its person
+ * (machine/auth.ts lookupCredential holds them to that). The agent column is
+ * the pinned contract, and the person column follows MCP's wording. The 401
+ * sentences of a failed lookup are machine/auth.ts REST_AUTH_401 and
+ * REST_PERSON_AUTH_401. */
+export const REST_CALLER = {
+  agent: {
+    gone: REST_AUTH_401.unknown,
+    deactivated: REST_AUTH_401.inactive,
+    noWrite: 'this agent has no write access to that project',
+    commentAuthor:
+      'comments cannot be attributed over the API — a comment is always authored by the agent posting it',
+  },
+  person: {
+    gone: REST_PERSON_AUTH_401.unknown,
+    deactivated: REST_PERSON_AUTH_401.inactive,
+    noWrite: MCP_NO_WRITE,
+    commentAuthor:
+      'comments cannot be attributed over the API; a comment is always authored by the person posting it',
+  },
+} as const satisfies Record<
+  ProfileKind,
+  { gone: string; deactivated: string; noWrite: string; commentAuthor: string }
+>
 
 /** The provenance an MCP write's activity row carries. */
 export const MCP_PROVENANCE = 'via MCP'

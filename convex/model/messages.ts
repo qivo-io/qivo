@@ -2,7 +2,9 @@
  * prune, the snooze wake, mention extraction and the notify fan-outs:
  * postMessage, pruneReadMessages, wakeSnoozedItem, subscribeToIssue,
  * extractMentions, notifyIssueInsert, notifyIssueUpdate, notifyCommentInsert
- * and notifyCommentUpdate.
+ * and notifyCommentUpdate. Also one's own follows (followTask, unfollowTask,
+ * followersOf) and inbox writes (mark read or unread, remove, snooze), which
+ * the app and the machine surfaces share.
  *
  * Change fragments are joined as sentences; user-written values inside
  * them are preserved verbatim. Inbox.tsx still rewrites 'an issue in another
@@ -16,11 +18,13 @@
  * in any other status is not subscribed; one who already follows the task
  * reads 'Reviewer set to you'. */
 
+import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
-import { profileCanSeeProject } from '../lib/access'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { canSeeProject, keepsInbox, profileCanSeeProject } from '../lib/access'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
+import { badRequest, forbidden } from '../lib/functions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { newUuid } from './orgs'
@@ -152,10 +156,12 @@ async function recipientCanSee(
 /* ------------------------------------------------------------- postMessage
  * THE single insert path (0109:95-114) — no other code may insert messages.
  * Silent drops, never errors: the actor's own copy, a recipient outside the
- * issue's org, and a recipient who cannot see the project are all skipped
- * without a trace — a mention must not leak a hidden project's existence
- * (0074), and a subscription can never outlive the access that justified it
- * (0114:40-42). Returns whether a row was inserted.
+ * issue's org, a recipient without an inbox (a Viewer or Inactive agent,
+ * lib/access.ts keepsInbox, which could never read or remove the row) and a
+ * recipient who cannot see the project are all skipped without a trace — a
+ * mention must not leak a hidden project's existence (0074), and a
+ * subscription can never outlive the access that justified it (0114:40-42).
+ * Returns whether a row was inserted.
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
  * are read by uuid. `visibility` is a seed's memo (NotifyPreload), never
@@ -179,7 +185,7 @@ export async function postMessage(
 ): Promise<boolean> {
   if (m.actor_id !== undefined && m.recipient_id === m.actor_id) return false
   const recipient = m.recipient ?? (await byId(ctx, 'profiles', m.recipient_id))
-  if (recipient === null || recipient.org_id !== m.org_id) return false
+  if (recipient === null || recipient.org_id !== m.org_id || !keepsInbox(recipient)) return false
   const issue = m.issue ?? (await byId(ctx, 'issues', m.issue_id))
   if (issue === null) return false
   const project = m.project ?? (await byId(ctx, 'projects', issue.project_id))
@@ -209,10 +215,12 @@ export async function postMessage(
 }
 
 /* --------------------------------------------------------------- subscribe
- * subscribe_to_issue (0114:134-149): same fence as postMessage (org +
- * visibility — a subscription row decides who gets messages, so it must not
- * be creatable for someone who could not have received them), idempotent.
- * `visibility` is a seed's memo (NotifyPreload), never passed interactively. */
+ * subscribe_to_issue (0114:134-149): same fence as postMessage (org, an
+ * inbox and visibility — a subscription row decides who gets messages, so it
+ * must not be creatable for someone who could not have received them),
+ * idempotent.
+ * `visibility` is a seed's memo (NotifyPreload), never passed interactively.
+ * Returns whether a row was inserted. */
 export async function subscribeToIssue(
   ctx: MutationCtx,
   a: {
@@ -223,22 +231,320 @@ export async function subscribeToIssue(
     now: string
     visibility?: NotifyPreload['visibility']
   },
-): Promise<void> {
-  if (a.profile.org_id !== a.org_id) return
-  if (a.project === null) return
-  if (!(await recipientCanSee(ctx, a.profile, a.project, a.visibility))) return
+): Promise<boolean> {
+  if (a.profile.org_id !== a.org_id || !keepsInbox(a.profile)) return false
+  if (a.project === null) return false
+  if (!(await recipientCanSee(ctx, a.profile, a.project, a.visibility))) return false
   const existing = await ctx.db
     .query('issue_subscriptions')
     .withIndex('by_issue_profile', (q) =>
       q.eq('issue_id', a.issue_id).eq('profile_id', a.profile.id),
     )
     .unique()
-  if (existing !== null) return
+  if (existing !== null) return false
   await ctx.db.insert('issue_subscriptions', {
     issue_id: a.issue_id,
     profile_id: a.profile.id,
     created_at: a.now,
   })
+  return true
+}
+
+/* ----------------------------------------------------------------- follows
+ * Following a task is one's own subscription row. The app's eye button
+ * (issues.subscribe and unsubscribe) and the machine surfaces (MCP
+ * set_following, REST /v1/tasks/{ref}/following) run these. Changing a
+ * follow narrates nothing and notifies nobody. Managing other people's
+ * follows stays in issues.setSubscriber. */
+
+/**
+ * Starts `me` following `issue`. Refuses a task whose project `me` cannot
+ * see. Returns whether `me` was not following it before.
+ */
+export async function followTask(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
+): Promise<boolean> {
+  const project = await byId(ctx, 'projects', a.issue.project_id)
+  if (project === null || !(await canSeeProject(ctx, a.me, project))) {
+    throw forbidden('no access to this task')
+  }
+  return await subscribeToIssue(ctx, {
+    issue_id: a.issue.id,
+    profile: a.me,
+    org_id: a.issue.org_id,
+    project,
+    now: a.now,
+  })
+}
+
+/** Stops `me` following the task. Returns whether `me` was following it. */
+export async function unfollowTask(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; issueId: string },
+): Promise<boolean> {
+  const row = await ctx.db
+    .query('issue_subscriptions')
+    .withIndex('by_issue_profile', (q) => q.eq('issue_id', a.issueId).eq('profile_id', a.me.id))
+    .unique()
+  if (row === null) return false
+  await ctx.db.delete(row._id)
+  return true
+}
+
+/**
+ * The profiles following `issue`, ordered by name, as the app's follower
+ * list shows them. Someone who has since lost sight of the task stays
+ * listed, as in the app, but postMessage sends them nothing.
+ */
+export async function followersOf(
+  ctx: QueryCtx,
+  issue: Pick<Doc<'issues'>, 'id' | 'org_id'>,
+): Promise<Doc<'profiles'>[]> {
+  const out: Doc<'profiles'>[] = []
+  const rows = ctx.db
+    .query('issue_subscriptions')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+  for await (const row of rows) {
+    const profile = await byId(ctx, 'profiles', row.profile_id)
+    if (profile !== null && profile.org_id === issue.org_id) out.push(profile)
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+}
+
+/* ------------------------------------------------------------ inbox writes
+ * The recipient's own writes on its inbox, shared by the app's Inbox
+ * (convex/messages.ts) and the machine inbox (machine/discussion.ts). Each
+ * takes rows the caller already chose as its own. The app passes the message
+ * ids its list holds through ownMessages, and the machine every row of the
+ * items it names through itemMessages. Each returns the ids of the tasks
+ * whose items it changed. */
+
+/**
+ * The rows among `ids` that belong to `me`, each once. Other people's rows
+ * and unknown ids are skipped silently, so a probe learns nothing and a
+ * stale id is not an error.
+ */
+export async function ownMessages(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  ids: readonly string[],
+): Promise<Doc<'messages'>[]> {
+  const out: Doc<'messages'>[] = []
+  for (const id of new Set(ids)) {
+    const row = await byId(ctx, 'messages', id)
+    if (row !== null && row.recipient_id === me.id) out.push(row)
+  }
+  return out
+}
+
+/** Every row of `me`'s inbox item about one task. */
+export const itemMessages = (
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  issueId: string,
+): Promise<Doc<'messages'>[]> => pairRows(ctx, { recipient_id: me.id, issue_id: issueId })
+
+/**
+ * Marks the unread rows read, stamped `now`, then keeps 0109's invariant
+ * once per item it touched (pruneReadMessages). A row already read keeps
+ * its stamp.
+ */
+export async function markMessagesRead(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  rows: readonly Doc<'messages'>[],
+  now: string,
+): Promise<Set<string>> {
+  const issues = new Set<string>()
+  for (const row of rows) {
+    if (row.read_at !== undefined) continue
+    await ctx.db.patch(row._id, { read_at: now })
+    issues.add(row.issue_id)
+  }
+  for (const issue_id of issues) {
+    await pruneReadMessages(ctx, { recipient_id: me.id, issue_id })
+  }
+  return issues
+}
+
+/**
+ * Marks the read rows unread. It prunes nothing ("Mark-as-unread …
+ * correctly does nothing", 0109:122): the rows it reopens are no longer
+ * read, which is all the prune asks.
+ */
+export async function markMessagesUnread(
+  ctx: MutationCtx,
+  rows: readonly Doc<'messages'>[],
+): Promise<Set<string>> {
+  const issues = new Set<string>()
+  for (const row of rows) {
+    if (row.read_at === undefined) continue
+    await ctx.db.patch(row._id, { read_at: undefined })
+    issues.add(row.issue_id)
+  }
+  return issues
+}
+
+/** Deletes the rows. Removing an item means passing every row it holds. */
+export async function removeMessages(
+  ctx: MutationCtx,
+  rows: readonly Doc<'messages'>[],
+): Promise<Set<string>> {
+  const issues = new Set<string>()
+  for (const row of rows) {
+    await ctx.db.delete(row._id)
+    issues.add(row.issue_id)
+  }
+  return issues
+}
+
+/* How many rows one bulk inbox write changes at most. The caller repeats
+ * while hasMore is true. */
+const INBOX_BATCH = 256
+
+/**
+ * Marks up to INBOX_BATCH of `me`'s unread rows read, the ones created no
+ * later than `before`. The first call passes no `before`: the cutoff is then
+ * the newest stored unread row, not a client clock, and the caller passes
+ * the returned `before` to later batches so later arrivals stay unread.
+ * Snoozed rows are hidden, so a bulk act never reaches them; they are
+ * filtered inside the scan, so a page of snoozed rows cannot stall the
+ * batches. The prune reads at most the newly stamped rows plus one retained
+ * read row per affected task and seeks each task's newest unread directly
+ * in the index. Returns the rows it marked, as they were before.
+ */
+export async function markAllMessagesRead(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  before: number | undefined,
+  now: string,
+): Promise<{ marked: Doc<'messages'>[]; hasMore: boolean; before: number }> {
+  const latest =
+    before === undefined
+      ? await ctx.db
+          .query('messages')
+          .withIndex('by_recipient_read', (q) =>
+            q.eq('recipient_id', me.id).eq('read_at', undefined),
+          )
+          .order('desc')
+          .first()
+      : null
+  const cutoff = before ?? latest?._creationTime ?? 0
+  const rows = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_read', (q) =>
+      q.eq('recipient_id', me.id).eq('read_at', undefined).lte('_creationTime', cutoff),
+    )
+    .filter((q) => q.eq(q.field('snoozed_until'), undefined))
+    .take(INBOX_BATCH + 1)
+  const batch = rows.slice(0, INBOX_BATCH)
+  for (const row of batch) await ctx.db.patch(row._id, { read_at: now })
+  for (const issue_id of new Set(batch.map((row) => row.issue_id))) {
+    const newestUnread = await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_issue_read_order', (q) =>
+        q.eq('recipient_id', me.id).eq('issue_id', issue_id).eq('read_at', undefined),
+      )
+      .order('desc')
+      .first()
+    // The shared prune invariant guarantees at most one pre-existing read
+    // row. This batch added at most INBOX_BATCH more, so this bounded read is
+    // complete.
+    const read = await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_issue_read_order', (q) =>
+        q.eq('recipient_id', me.id).eq('issue_id', issue_id).gt('read_at', undefined),
+      )
+      .take(INBOX_BATCH + 1)
+    let newest = newestUnread ?? read[0]
+    for (const row of read) {
+      if (
+        row.created_at > newest.created_at ||
+        (row.created_at === newest.created_at && row.id > newest.id)
+      )
+        newest = row
+    }
+    for (const row of read) {
+      if (row._id !== newest._id) await ctx.db.delete(row._id)
+    }
+  }
+  return { marked: batch, hasMore: rows.length > INBOX_BATCH, before: cutoff }
+}
+
+/**
+ * Deletes up to INBOX_BATCH of `me`'s read rows. A snoozed row that was read
+ * meanwhile is a pending reminder, not clutter, and stays. Each batch
+ * selects the current read rows, so a row reopened elsewhere survives.
+ * Returns the rows it deleted.
+ */
+export async function removeReadMessages(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+): Promise<{ removed: Doc<'messages'>[]; hasMore: boolean }> {
+  const rows = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_read', (q) => q.eq('recipient_id', me.id).gt('read_at', undefined))
+    .filter((q) => q.eq(q.field('snoozed_until'), undefined))
+    .take(INBOX_BATCH + 1)
+  const batch = rows.slice(0, INBOX_BATCH)
+  for (const row of batch) await ctx.db.delete(row._id)
+  return { removed: batch, hasMore: rows.length > INBOX_BATCH }
+}
+
+/* The farthest ahead a snooze may reach. */
+const MAX_SNOOZE_MS = 366 * 86_400_000
+
+/* The scheduled end of a snooze, convex/messages.ts wake, referenced by
+ * name so this module does not import the app module. */
+const wakeRef = makeFunctionReference<
+  'mutation',
+  { recipient_id: string; issue_id: string; until: string },
+  null
+>('messages:wake')
+
+/**
+ * Snoozes the items the rows belong to until `until`, an ISO instant at
+ * most a year ahead, or with null lifts their snooze now. Either way the
+ * item ends up unread, because a snoozed row is a reminder, and a reminder
+ * that returns already read is easy to miss. The write covers every row of each
+ * item, so all of them keep the same stamp, and schedules the wake that
+ * brings the item back on every client at once. An early return is a wake
+ * without the stamp, because the person asked for it here and now.
+ */
+export async function snoozeMessages(
+  ctx: MutationCtx,
+  me: Doc<'profiles'>,
+  rows: readonly Doc<'messages'>[],
+  until: string | null,
+): Promise<Set<string>> {
+  let at: string | null = null
+  if (until !== null) {
+    const ms = Date.parse(until)
+    if (Number.isNaN(ms)) throw badRequest('snooze: until must be an ISO instant')
+    if (ms <= Date.now()) throw badRequest('snooze: until must be in the future')
+    if (ms > Date.now() + MAX_SNOOZE_MS) throw badRequest('snooze: at most a year ahead')
+    at = new Date(ms).toISOString() // normalized, so the wake's equality holds
+  }
+  const changed = new Set<string>()
+  for (const issue_id of new Set(rows.map((row) => row.issue_id))) {
+    const pair = { recipient_id: me.id, issue_id }
+    const item = await pairRows(ctx, pair)
+    if (at === null) {
+      for (const row of item) {
+        if (row.snoozed_until === undefined) continue
+        await ctx.db.patch(row._id, { snoozed_until: undefined, read_at: undefined })
+        changed.add(issue_id)
+      }
+      continue
+    }
+    for (const row of item) {
+      await ctx.db.patch(row._id, { snoozed_until: at, read_at: undefined, woke_at: undefined })
+    }
+    if (item.length > 0) changed.add(issue_id)
+    await ctx.scheduler.runAt(Date.parse(at), wakeRef, { ...pair, until: at })
+  }
+  return changed
 }
 
 /* ---------------------------------------------------------------- mentions

@@ -3,11 +3,23 @@ user with that user's project permissions ([User roles](./administration-guard-r
 a regular account; the private demo is browser-only.
 
 MCP offers `list_tasks`, `get_task`, `create_task`, `update_task`,
-`delete_task`, `set_task_link`, `list_labels` and `set_label`. REST uses
-`/v1/tasks`, `/v1/tasks/{ref}`, `/v1/tasks/{ref}/links` and `/v1/labels`.
-Both work with the same tasks and permanent `QN-<number>` IDs, and both can
-create subtasks, move tasks between sub-projects, link tasks and add or
-remove labels by the same rules as the app.
+`delete_task`, `set_task_link`, `list_labels`, `set_label`,
+`delete_attachment`, `list_task_activity` and `get_workload`. REST uses
+`/v1/tasks`, `/v1/tasks/{ref}`, `/v1/tasks/{ref}/links`,
+`/v1/tasks/{ref}/attachments`, `/v1/tasks/{ref}/activity`, `/v1/labels` and
+`/v1/workload`. Both work with the same tasks and permanent `QN-<number>`
+IDs, and both can create subtasks, move tasks between sub-projects, link
+tasks, add or remove labels, list and delete attachments, read a task's
+history and read planned hours per person by the same rules as the app.
+Uploading attachments uses REST. Images inside descriptions stay in the app.
+
+Both can also edit and delete comments, follow tasks and work through the
+inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
+`update_comment`, `delete_comment`, `set_following`, `list_inbox` and
+`update_inbox`. REST uses `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
+and `/v1/inbox`. A Standard user agent reads and clears its own inbox this
+way. A Viewer or Inactive agent can do neither, so it receives no inbox
+messages and cannot follow tasks.
 
 For projects, MCP offers `get_project`, `create_project`, `update_project`,
 `set_project_access`, `set_milestone` and `delete_milestone`, and REST uses
@@ -63,10 +75,10 @@ own task event subscriptions.
 `GET /v1/me` says who the credential acts as, the organization's calendar
 settings and whether the credential can make changes. The API lists projects,
 users and teams, manages projects, their sharing and milestones and teams,
-and supports task
-search, creation, updates, moves, subtasks, links, labels, deletion,
-archive/restore and comments. With an organization admin's or team leader's
-token it also sets a person's plannable weekly hours. It checks field values,
+and supports task search, creation, updates, moves, subtasks, links, labels,
+attachments, task history, workload, deletion, archive/restore, comments,
+following and the inbox. With an organization admin's or team leader's token
+it also sets a person's plannable weekly hours. It checks field values,
 including the 80-character title limit and paired planning dates. An
 unreadable task returns 404, as does a nonexistent one. Changes name the agent
 or person in the activity feed with **via the REST API** attribution, plus the
@@ -146,7 +158,9 @@ Organization admins can instead create an agent user with its own key ([Agent us
 MCP tools say who the connection acts as and whether it can make changes;
 list teams, projects, users, project users and tasks; read and change tasks
 and projects, their sharing and milestones; manage teams and their members;
-read and add comments; and set plannable weekly hours. Request
+read, add, edit and delete comments; follow tasks; read and clear your inbox;
+delete attachments; read a task's history and the planned hours per person;
+and set plannable weekly hours. Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

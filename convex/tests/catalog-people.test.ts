@@ -10,7 +10,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
+import { AVATAR_COLORS } from '../lib/avatarColors'
 import { newOrgDefaults } from '../model/orgs'
+import { avatarColor } from '../model/people'
 import {
   activityFor,
   as,
@@ -195,6 +197,33 @@ describe('profiles.create — the org-seat invitation', () => {
       /^team not found$/,
     )
     await expectRefusal(as(t, f.user).mutation(api.profiles.create, personArgs(f)), 'forbidden')
+  })
+
+  it('avatar color: #rrggbb in either case is stored; any other text is refused and nothing lands', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (const color of ['#0F766E', '#abcdef']) {
+      const args = personArgs(f, { color })
+      await as(t, f.admin).mutation(api.profiles.create, args)
+      expect((await profileById(t, args.id))?.color).toBe(color)
+    }
+    const unsafe = ['url(https://example.test/p.png)', 'red', '#fff', '#1234567', ' #123456', '']
+    const attempts = [
+      ...unsafe.map((color) => personArgs(f, { color })),
+      personArgs(f, { kind: 'agent', email: null, color: 'var(--accent)' }),
+    ]
+    for (const args of attempts) {
+      const refused = await expectRefusal(
+        as(t, f.admin).mutation(api.profiles.create, args),
+        'bad_request',
+      )
+      expect(refused.data.message).toBe(
+        'an avatar color must be # followed by six hex digits, like #0F766E',
+      )
+      expect(await profileById(t, args.id)).toBeNull()
+    }
+    // the palette the app's add-user flow and the operator's setup write from
+    expect(AVATAR_COLORS.map(avatarColor)).toEqual([...AVATAR_COLORS])
   })
 
   it('retention inheritance (0112): the oldest sibling by address wins, copying even Never', async () => {

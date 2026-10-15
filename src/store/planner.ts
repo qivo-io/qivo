@@ -12,6 +12,7 @@ import { type FunctionArgs, type FunctionReturnType, getFunctionName } from 'con
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
 import {
   canCreateProjects,
   isProjectCreators,
@@ -4705,20 +4706,6 @@ export const PLANNER = {
     const name = String(rec.name ?? '')
       .replace(/\s+/g, ' ')
       .trim()
-    // Hex on purpose, not tokens: this is DATA — written to profiles.color
-    // and read back by every client, so it cannot be a var()
-    const AVATAR_COLORS = [
-      '#0F766E',
-      '#B45309',
-      '#1D4ED8',
-      '#6D28D9',
-      '#9333EA',
-      '#0891B2',
-      '#BE123C',
-      '#4D7C0F',
-      '#A16207',
-      '#0E7490',
-    ]
     const orgRole = rec.orgRole === 'viewer' ? 'viewer' : isAgent ? 'user' : rec.orgRole || 'user'
     const row: Row<'profiles'> = {
       id: uuid,
@@ -4726,6 +4713,7 @@ export const PLANNER = {
       email: email || undefined,
       name,
       initials: nameInitials(name),
+      // the shared palette, which holds only colors the server stores
       color: AVATAR_COLORS[rows.profiles.size % AVATAR_COLORS.length],
       org_role: orgRole,
       kind: isAgent ? 'agent' : 'person',

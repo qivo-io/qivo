@@ -1,18 +1,21 @@
-/* The comment write the app, REST and MCP share, which inserts the row and
- * runs its fan-out (model/messages.ts notifyCommentInsert). The author
- * follows the task, mentions are notified and followers read 'New comment'.
- * A comment writes no activity row, because the comment is its own entry in
- * the discussion.
- * Each caller resolves the task, refuses with its own sentences in its own
- * order and trims the body first; this function only repeats the write gate
- * as defense in depth. */
+/* The comment writes the app, REST and MCP share. postComment inserts the
+ * row and runs its fan-out (model/messages.ts notifyCommentInsert), so the
+ * author follows the task, mentions are notified and followers read 'New
+ * comment'. editComment and deleteComment hold the app's rule that only a
+ * comment's author or a lead of the task's project may change it. A comment
+ * writes no activity row, because the comment is its own entry in the
+ * discussion.
+ * Each caller resolves the task, which the caller must be able to see, and
+ * refuses with its own sentences in its own order first; postComment only
+ * repeats the write gate as defense in depth. */
 
 import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { hasProjectLevel } from '../lib/access'
 import { insertUnique } from '../lib/db'
-import { badRequest } from '../lib/functions'
+import { badRequest, forbidden } from '../lib/functions'
 import { assertCanEdit } from './issues'
-import { notifyCommentInsert } from './messages'
+import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
 
 /**
@@ -55,4 +58,64 @@ export async function postArchiveReason(
   const body = (a.reason ?? '').trim()
   if (body === '') return null
   return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
+}
+
+/**
+ * Refuses `me` unless it wrote `comment` or leads the project of `issue`,
+ * the task the comment is on. A lead's standing comes from hasProjectLevel,
+ * so an organization admin passes too.
+ */
+export async function assertCommentEditor(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    comment: Doc<'comments'>
+    issue: Doc<'issues'>
+    verb: 'edit' | 'delete'
+  },
+): Promise<void> {
+  if (a.comment.author === a.me.id) return
+  if (await hasProjectLevel(ctx, a.me, a.issue.project_id, 'lead')) return
+  throw forbidden(`only the author or a project lead can ${a.verb} this comment`)
+}
+
+/**
+ * Replaces the body of `comment` with `body`, trimmed, as `me`, in place and
+ * without history. Refuses anyone but the author or a project lead, then a
+ * blank body. The same text again changes nothing and stamps nothing.
+ * Otherwise the comment records who edited it and when, stamped `now`, and
+ * people the edit newly mentions follow the task and hear about it. Returns
+ * the comment as stored and whether it changed.
+ */
+export async function editComment(
+  ctx: MutationCtx,
+  a: {
+    me: Doc<'profiles'>
+    comment: Doc<'comments'>
+    issue: Doc<'issues'>
+    body: string
+    now: string
+  },
+): Promise<{ comment: Doc<'comments'>; changed: boolean }> {
+  const { me, comment, issue, now } = a
+  await assertCommentEditor(ctx, { me, comment, issue, verb: 'edit' })
+  const text = a.body.trim()
+  if (text === '') throw badRequest('a comment cannot be empty')
+  if (text === comment.body) return { comment, changed: false }
+  await ctx.db.patch(comment._id, { body: text, edited_at: now, edited_by: me.id })
+  const after = (await ctx.db.get(comment._id)) as Doc<'comments'>
+  await notifyCommentUpdate(ctx, { before: comment, after, issue, actor: me, now })
+  return { comment: after, changed: true }
+}
+
+/**
+ * Deletes `comment` as `me`, its author or a project lead. The thread just
+ * loses the row. Nothing is narrated and nobody is notified.
+ */
+export async function deleteComment(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; comment: Doc<'comments'>; issue: Doc<'issues'> },
+): Promise<void> {
+  await assertCommentEditor(ctx, { ...a, verb: 'delete' })
+  await ctx.db.delete(a.comment._id)
 }

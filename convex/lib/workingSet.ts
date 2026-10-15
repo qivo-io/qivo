@@ -1,7 +1,8 @@
 /* What a read may say about the tasks around the ones it returns. In the
  * app, a reader is shown its working set (the active tasks of the projects
  * it can see that are not archived). Over REST and MCP, it is shown the
- * tasks whose project it can read. A parent, a link, an inbox row or a group
+ * tasks whose project it can read, except in the inbox, which shows the
+ * working set on every surface. A parent, a link, an inbox row or a group
  * total that a read sends goes through these rules, so no read names or
  * counts a task its reader is not shown. It may only say that such a task
  * exists (has_hidden_parent, has_hidden_subtasks). The app's snapshot
@@ -22,6 +23,25 @@ export type WorkingSet = {
 }
 
 /**
+ * Whether a task belongs to a member's working set: the task and its own
+ * project are not archived, and the member can see the project (`visible`).
+ * The app's snapshot applies it through workingSetOf, and the machine inbox
+ * applies it to the tasks its messages name.
+ */
+export function inWorkingSet(
+  task: Pick<Doc<'issues'>, 'archived_at'>,
+  project: Pick<Doc<'projects'>, 'archived_at'> | undefined,
+  visible: boolean,
+): boolean {
+  return (
+    visible &&
+    project !== undefined &&
+    task.archived_at === undefined &&
+    project.archived_at === undefined
+  )
+}
+
+/**
  * The working set within an organization's active tasks, which holds those
  * in a project the member can see that is not archived. `projects` is the
  * member's view of the organization's projects (lib/visibility.ts).
@@ -33,10 +53,8 @@ export function workingSetOf(
     visible: (projectId: string) => boolean
   },
 ): WorkingSet {
-  const tasks = activeTasks.filter(
-    (task) =>
-      projects.visible(task.project_id) &&
-      projects.byUuid.get(task.project_id)?.archived_at === undefined,
+  const tasks = activeTasks.filter((task) =>
+    inWorkingSet(task, projects.byUuid.get(task.project_id), projects.visible(task.project_id)),
   )
   const ids = new Set(tasks.map((task) => task.id))
   const shown: Shown = (taskId) => ids.has(taskId)

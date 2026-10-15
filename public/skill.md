@@ -42,7 +42,8 @@ A write also needs Edit access on the project, as described below.
 ## Choose the interface
 
 - **Connected MCP:** Prefer it for routine task discovery, edits, moves,
-  subtasks, links, labels, comments, and archive/restore. The endpoint is
+  subtasks, links, labels, comments, the inbox, following and
+  archive/restore. The endpoint is
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
   allows at most 200; page with `offset` until a shorter page arrives. If
@@ -56,10 +57,11 @@ A write also needs Edit access on the project, as described below.
   not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
-- **Browser:** Use it for attachment uploads, guest invitations, deleting a
-  project, and other actions absent from the machine interfaces. Enter at
-  `https://qivo.io/app` and use the user's signed-in session. Follow an
-  explicitly requested interface when it supports the work.
+- **Browser:** Use it for images inside descriptions, guest invitations,
+  deleting a project, and other actions absent from the machine interfaces.
+  Upload file attachments through REST. Enter at `https://qivo.io/app` and
+  use the user's signed-in session. Follow an explicitly requested interface
+  when it supports the work.
 
 Task operations use these names (REST paths are relative to `https://api.qivo.io`):
 
@@ -74,6 +76,15 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | Remove a link | `set_task_link` with `linked: false` | `DELETE /v1/tasks/{ref}/links/{kind}/{other}` |
 | List labels | `list_labels` | `GET /v1/labels` |
 | Create or edit a label | `set_label` | `POST /v1/labels`, `PATCH /v1/labels/{id}` |
+| List a task's files | `get_task` (`attachments`) | `GET /v1/tasks/{ref}/attachments` |
+| Attach a file | (REST only) | `POST /v1/tasks/{ref}/attachments`, then the upload and the confirm |
+| Delete a file | `delete_attachment` | `DELETE /v1/tasks/{ref}/attachments/{id}` |
+| Read a task's history | `list_task_activity` | `GET /v1/tasks/{ref}/activity` |
+| Planned hours per person and week | `get_workload` | `GET /v1/workload` |
+| Edit or delete a comment | `update_comment`, `delete_comment` | `PATCH /v1/comments/{id}`, `DELETE /v1/comments/{id}` |
+| Follow or stop following a task | `set_following` | `PUT /v1/tasks/{ref}/following`, `DELETE /v1/tasks/{ref}/following` |
+| Read your inbox | `list_inbox` | `GET /v1/inbox` |
+| Mark, remove or snooze inbox items | `update_inbox` | `POST /v1/inbox/{action}` |
 
 Use the current task names; former endpoint and tool names are not aliases.
 Refresh cached MCP discovery or reconnect if the client still has an older
@@ -186,6 +197,59 @@ Useful field rules:
   organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
   reason becomes a comment, as in the app's archive dialog.
+
+## Files, history and workload
+
+- **Read files:** `get_task` and `GET /v1/tasks/{ref}` list `attachments`,
+  each with a download `url` that works for 10 minutes
+  (`url_expires_at`). Read the task again for a fresh link. `inline: true`
+  marks an image inside the description.
+- **Attach a file (REST):** `POST /v1/tasks/{ref}/attachments` with `name`,
+  optional `content_type` and the exact byte `size`; then POST the bytes to
+  the returned `upload_url` with the file's `Content-Type`; then
+  `POST /v1/tasks/{ref}/attachments/{ticket}` with the `storage_id` the
+  upload answered. Only the same credential's user can confirm, within an
+  hour. The organization's per-file limit is `max_attachment_mb` in
+  `get_me`.
+- **Delete a file:** `delete_attachment` or
+  `DELETE /v1/tasks/{ref}/attachments/{id}`, with Edit access to the
+  project. Description images are left to the app. When you rewrite a
+  description, keep its `![alt](att:<id>)` references. The next time someone
+  saves that description in the app, the app deletes every image uploaded
+  more than a day ago that the description no longer names.
+- **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
+  answers who changed what, oldest first. Comments are in `list_comments`.
+- **Workload:** `get_workload` or `GET /v1/workload` answers each person's
+  planned hours per week (`hours`, aligned with `week_starts`) beside their
+  `plannable_hours`. Use it before assigning or scheduling work. `hours`
+  already includes work in projects hidden from you, and `hidden_hours` is
+  that part of `hours`, without names. Do not add the two.
+
+## Comments, inbox and following
+
+- **Edit or delete a comment:** `update_comment` or `delete_comment` with the
+  comment's `id` from `list_comments`, or REST `PATCH` and `DELETE
+  /v1/comments/{id}`. Only the comment's author or a lead of the task's
+  project may. An edit that adds a mention notifies that person.
+- **Follow a task:** `set_following` with `ref` and `following`, or REST `PUT`
+  (follow) and `DELETE` (stop) on `/v1/tasks/{ref}/following`. Followers get
+  the task's updates in their inbox. `get_task` shows `following` and
+  `followers`. You are also made a follower when you are assigned, mentioned
+  or comment.
+- **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
+  per active task you can read, latest activity first, with its unread count
+  and messages. Use `unread_only` to see what is new. The task title shown is
+  the current one. `truncated: true` means only your newest 1,000 messages
+  were read; mark everything read to shrink the inbox.
+- **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
+  `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
+  `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
+  `remove` removes every read item; repeat while `has_more` is `true`.
+  `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
+  items back). Mark items read once you have handled them, so new updates
+  stand out. Unread messages are never removed automatically; an agent's read
+  messages are removed after 7 days. A Viewer agent has no inbox and receives
+  no messages.
 
 ## Projects, access and milestones
 

@@ -2,8 +2,9 @@
  * snapshot, the archived-project drop, the leaf guard), its thresholds (the
  * standard default for teamless projects, a legacy team's saved value where
  * one remains) and its bounded legs, and the read-message retention sweep
- * (per-profile period, absent = Never), plus the counts-only
- * platform_audit_log row each run writes in-transaction.
+ * (per-profile period; absent is Never for a person and the default for an
+ * agent) and its bounded legs, plus the counts-only platform_audit_log row
+ * each run writes in-transaction.
  * The weekly reap-orphan-files cron targets files.reapOrphans directly
  * (crons.ts — it audits itself); its sweep is tested here with the others.
  *
@@ -18,8 +19,9 @@ import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { ARCHIVE_BATCH } from '../jobs'
+import { ARCHIVE_BATCH, SWEEP_BATCH, SWEEP_PROFILES } from '../jobs'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
+import { DEFAULT_MESSAGE_RETENTION_DAYS, messageRetentionDays } from '../model/people'
 import schema from '../schema'
 import {
   NOW,
@@ -27,6 +29,7 @@ import {
   plantIssue,
   plantMessage,
   plantProject,
+  plantSeat,
   type T,
   uuid,
   withOrg,
@@ -352,6 +355,21 @@ describe('archiveDoneIssues — bounded legs', () => {
   })
 })
 
+/* One nightly read-message sweep, the cron's first leg and every leg it
+ * schedules. Returns the counts from the run's audit row. */
+async function runSweep(t: T): Promise<{ deleted: number; woken: number }> {
+  vi.useFakeTimers()
+  try {
+    await t.mutation(internal.jobs.sweepReadMessages, {})
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  } finally {
+    vi.useRealTimers()
+  }
+  const last = (await auditRows(t, 'sweep_read_messages')).at(-1)
+  if (last === undefined) throw new Error('the sweep wrote no audit row')
+  return last.detail as { deleted: number; woken: number }
+}
+
 describe('sweepReadMessages — retention follows the person', () => {
   it('sweeps rows read longer ago than the period; unread and fresh-read stay; absent = Never', async () => {
     const t = newT()
@@ -387,13 +405,69 @@ describe('sweepReadMessages — retention follows the person', () => {
       read_at: ago(400),
     })
 
-    const { deleted } = await t.mutation(internal.jobs.sweepReadMessages, {})
+    const { deleted } = await runSweep(t)
 
     expect(deleted).toBe(1)
     const remaining = await t.run(async (ctx) => await ctx.db.query('messages').collect())
     const ids = remaining.map((m) => m.id).sort()
     expect(ids).toEqual([freshRead.id, keptForever.id, unread.id].sort())
     expect(ids).not.toContain(staleRead.id)
+  })
+
+  it('an agent without a period keeps read messages for the default; its own period wins', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // f.agent has no message_retention_days, like every agent created
+    // before the default and every seeded one
+    const base = { org_id: f.org.id, recipient_id: f.agent.id }
+    const stale = await plantMessage(t, {
+      ...base,
+      issue_id: uuid(),
+      read_at: ago(DEFAULT_MESSAGE_RETENTION_DAYS + 1),
+    })
+    const fresh = await plantMessage(t, {
+      ...base,
+      issue_id: uuid(),
+      read_at: ago(DEFAULT_MESSAGE_RETENTION_DAYS - 1),
+    })
+    const unread = await plantMessage(t, { ...base, issue_id: uuid(), created_at: ago(400) })
+    // a person without a period chose Never
+    const person = await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: f.user.id,
+      issue_id: uuid(),
+      read_at: ago(400),
+    })
+    const patient = await plantSeat(t, {
+      org_id: f.org.id,
+      kind: 'agent',
+      name: 'Patient',
+      plannable_hours: undefined,
+      message_retention_days: 30,
+    })
+    const kept = await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: patient.id,
+      issue_id: uuid(),
+      read_at: ago(DEFAULT_MESSAGE_RETENTION_DAYS + 1),
+    })
+
+    expect(await runSweep(t)).toEqual({ deleted: 1, woken: 0 })
+    const ids = (await t.run((ctx) => ctx.db.query('messages').collect())).map((m) => m.id)
+    expect(ids.sort()).toEqual([fresh.id, unread.id, person.id, kept.id].sort())
+    expect(ids).not.toContain(stale.id)
+  })
+
+  it('messageRetentionDays: a stored period decides, else agents get the default and people keep', () => {
+    expect(messageRetentionDays({ kind: 'person', message_retention_days: 30 })).toBe(30)
+    expect(messageRetentionDays({ kind: 'agent', message_retention_days: 1 })).toBe(1)
+    expect(messageRetentionDays({ kind: 'agent', message_retention_days: undefined })).toBe(
+      DEFAULT_MESSAGE_RETENTION_DAYS,
+    )
+    expect(messageRetentionDays({ kind: 'person', message_retention_days: undefined })).toBeNull()
+    // an unknown kind keeps its messages rather than losing them
+    const odd = { kind: 'robot', message_retention_days: undefined } as unknown as Doc<'profiles'>
+    expect(messageRetentionDays(odd)).toBeNull()
   })
 
   it('writes its counts-only audit row as actor system', async () => {
@@ -409,7 +483,7 @@ describe('sweepReadMessages — retention follows the person', () => {
       read_at: ago(31),
     })
 
-    await t.mutation(internal.jobs.sweepReadMessages, {})
+    await runSweep(t)
 
     const rows = await auditRows(t, 'sweep_read_messages')
     expect(rows).toHaveLength(1)
@@ -442,8 +516,7 @@ describe('sweepReadMessages — retention follows the person', () => {
     })
     const stale = await plantMessage(t, { ...base, issue_id: uuid(), read_at: ago(8) })
 
-    const result = await t.mutation(internal.jobs.sweepReadMessages, {})
-    expect(result).toEqual({ deleted: 1, woken: 1 })
+    expect(await runSweep(t)).toEqual({ deleted: 1, woken: 1 })
 
     const remaining = await t.run(async (ctx) => await ctx.db.query('messages').collect())
     const byId = new Map(remaining.map((m) => [m.id, m]))
@@ -456,6 +529,79 @@ describe('sweepReadMessages — retention follows the person', () => {
     expect(woken?.woke_at).toBeDefined()
     const rows = await auditRows(t, 'sweep_read_messages')
     expect(rows[0].detail).toEqual({ deleted: 1, woken: 1 })
+  })
+
+  it('runs in bounded legs: a backlog larger than one leg finishes in one run with one audit row', async () => {
+    // One leg's writes fit this budget; the whole backlog in one transaction would not.
+    const t = limitedT({ documentsWritten: SWEEP_BATCH + 10 })
+    const f = await withOrg(t)
+    const read = { org_id: f.org.id, recipient_id: f.agent.id, read_at: ago(30) }
+    const plantRead = (count: number, over: Partial<WithoutSystemFields<Doc<'messages'>>> = {}) =>
+      t.run(async (ctx) => {
+        for (let n = 0; n < count; n++) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            issue_title: 'Bulk',
+            kind: 'change',
+            detail: 'bulk',
+            created_at: NOW,
+            issue_id: uuid(),
+            ...read,
+            ...over,
+          })
+        }
+      })
+    await plantRead(SWEEP_BATCH)
+    await plantRead(SWEEP_BATCH)
+    await plantRead(10)
+    // unread rows, however many, are neither swept nor read by the sweep
+    await plantRead(SWEEP_BATCH, { read_at: undefined })
+    // overdue snoozes on another profile, past the same budget
+    await t.run((ctx) => ctx.db.patch(f.admin._id, { message_retention_days: 7 }))
+    await plantRead(SWEEP_BATCH + 5, {
+      recipient_id: f.admin.id,
+      read_at: undefined,
+      snoozed_until: ago(1),
+    })
+
+    expect(await runSweep(t)).toEqual({ deleted: 2 * SWEEP_BATCH + 10, woken: SWEEP_BATCH + 5 })
+    const left = await t.run((ctx) => ctx.db.query('messages').collect())
+    expect(left).toHaveLength(2 * SWEEP_BATCH + 5)
+    expect(left.filter((m) => m.recipient_id === f.agent.id && m.read_at !== undefined)).toEqual([])
+    expect(left.filter((m) => m.snoozed_until !== undefined)).toEqual([])
+    expect(await auditRows(t, 'sweep_read_messages')).toHaveLength(1)
+  })
+
+  it('visits at most SWEEP_PROFILES profiles per leg and still reaches every one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const agents: string[] = []
+    for (let n = 0; n < SWEEP_PROFILES + 5; n++) {
+      const agent = await plantSeat(t, {
+        org_id: f.org.id,
+        kind: 'agent',
+        name: `Bot ${n}`,
+        plannable_hours: undefined,
+      })
+      agents.push(agent.id)
+      await plantMessage(t, {
+        org_id: f.org.id,
+        recipient_id: agent.id,
+        issue_id: uuid(),
+        read_at: ago(30),
+      })
+    }
+    vi.useFakeTimers()
+    try {
+      await t.mutation(internal.jobs.sweepReadMessages, {})
+      // the first leg stopped short of the last profiles and scheduled the rest
+      expect(await auditRows(t, 'sweep_read_messages')).toEqual([])
+      await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    } finally {
+      vi.useRealTimers()
+    }
+    const rows = await auditRows(t, 'sweep_read_messages')
+    expect(rows.map((r) => r.detail)).toEqual([{ deleted: SWEEP_PROFILES + 5, woken: 0 }])
   })
 })
 

@@ -40,7 +40,7 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel } from './lib/access'
+import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
 import { byId } from './lib/db'
 import { vIssuePriority, vIssueStatus, vLinkType } from './lib/enums'
 import { authedQuery, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
@@ -56,7 +56,7 @@ import {
   updateIssueCore,
 } from './model/issues'
 import { addLinkCore, removeLinkCore } from './model/links'
-import { subscribeToIssue } from './model/messages'
+import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
@@ -369,25 +369,16 @@ export const removeLink = orgMutation({
 /* ---------------------------------------------------------- subscriptions
  * P.setIssueSubscribed keeps the own-row insert/delete surface. No activity
  * or notify is generated when changing notification preferences. The insert
- * fence is canSeeProject, stated here as an explicit refusal (the RLS
- * insert's error toast), then subscribeToIssue applies its own silent fence
- * idempotently. */
+ * fence is canSeeProject, stated as an explicit refusal (the RLS insert's
+ * error toast), then subscribeToIssue applies its own silent fence
+ * idempotently. Both are model/messages.ts followTask and unfollowTask,
+ * which the machine surfaces run too. */
 export const subscribe = orgMutation({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, issue_id)
-    const project = await byId(ctx, 'projects', issue.project_id)
-    if (project === null || !(await canSeeProject(ctx, ctx.me, project))) {
-      throw forbidden('no access to this task')
-    }
-    await subscribeToIssue(ctx, {
-      issue_id: issue.id,
-      profile: ctx.me,
-      org_id: issue.org_id,
-      project,
-      now,
-    })
+    await followTask(ctx, { me: ctx.me, issue, now })
     return null
   },
 })
@@ -395,11 +386,7 @@ export const subscribe = orgMutation({
 export const unsubscribe = orgMutation({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
-    const row = await ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_issue_profile', (q) => q.eq('issue_id', issue_id).eq('profile_id', ctx.me.id))
-      .unique()
-    if (row !== null) await ctx.db.delete(row._id)
+    await unfollowTask(ctx, { me: ctx.me, issueId: issue_id })
     return null
   },
 })
@@ -418,8 +405,9 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
 
 /* Organization roster ids only; profile display data already lives in the
  * snapshot. Existing subscriptions remain visible after access/deactivation
- * so a manager can remove them. Add candidates require CURRENT access and
- * an active seat; a subscription itself never grants project access. */
+ * so a manager can remove them. Add candidates require CURRENT access, an
+ * active seat and an inbox (lib/access.ts keepsInbox, which leaves out
+ * Viewer agents); a subscription itself never grants project access. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -438,7 +426,12 @@ export const subscribers = orgQuery({
     const candidates: string[] = []
     for (const profile of profiles) {
       if (subscribed.has(profile.id)) subscribers.push(profile.id)
-      else if (canManage && profile.active && (await canSeeProject(ctx, profile, project))) {
+      else if (
+        canManage &&
+        profile.active &&
+        keepsInbox(profile) &&
+        (await canSeeProject(ctx, profile, project))
+      ) {
         candidates.push(profile.id)
       }
     }
@@ -465,6 +458,7 @@ export const setSubscriber = orgMutation({
       if (!profile.active || !(await canSeeProject(ctx, profile, project))) {
         throw rule('subscriber must be an active user who can see this task')
       }
+      if (!keepsInbox(profile)) throw rule('a Viewer agent has no inbox and cannot follow tasks')
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
         profile,

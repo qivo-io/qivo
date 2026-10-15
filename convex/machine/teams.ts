@@ -5,8 +5,10 @@
  * TEAM_TOOLS and TEAM_ROUTES are registry entries (machine/registry.ts) that
  * machine/mcp.ts TOOLS and machine/rest.ts ROUTES spread in, like
  * machine/projects.ts. This module imports only types from those two, so
- * neither is loaded through it. MCP's list_teams keeps its internal function
- * in machine/mcp.ts and answers model/teams.ts teamsJson like GET /v1/teams.
+ * neither is loaded through it. The provenance, key name validator, body
+ * parsers and MCP text it shares with them come from machine/shared.ts.
+ * MCP's list_teams keeps its internal function in machine/mcp.ts and answers
+ * model/teams.ts teamsJson like GET /v1/teams.
  *
  * Each action is one shared model function the app runs too (model/teams.ts
  * createTeamCore, updateTeamCore, addTeamMemberCore, setTeamLeaderCore and

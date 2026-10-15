@@ -198,6 +198,36 @@ describe('task subscriber popover', () => {
     expect((await roster(f.user)).subscribers).toEqual([])
   })
 
+  it('offers and adds a Standard user agent but never a Viewer agent, which has no inbox', async () => {
+    const { t, f, roster, set } = await fixture()
+    const ledger = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'Ledger',
+      kind: 'agent',
+      org_role: 'viewer',
+      plannable_hours: undefined,
+    })
+    await t.run(async (ctx) => {
+      for (const p of [f.agent, ledger]) {
+        await ctx.db.insert('project_access', {
+          project_id: f.meta.id,
+          profile_id: p.id,
+          level: 'user',
+        })
+      }
+    })
+    const { candidates } = await roster(f.user)
+    expect(candidates).toContain(f.agent.id)
+    expect(candidates).not.toContain(ledger.id)
+    await set(f.user, f.agent.id, true)
+    await expectRefusal(
+      set(f.user, ledger.id, true),
+      'rule',
+      /a Viewer agent has no inbox and cannot follow tasks/,
+    )
+    expect((await roster(f.user)).subscribers).toEqual([f.agent.id])
+  })
+
   it('gives hidden, foreign and missing tasks the same refusal on roster and management', async () => {
     const { t, f, roster, set } = await fixture()
     const hidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
