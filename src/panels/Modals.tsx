@@ -79,7 +79,8 @@ function ModalShell({
   icon: string
   title: ReactNodeM
   badge?: ReactNodeM
-  onClose: () => void
+  /** return false to stay open; on a phone the Back step is then restored */
+  onClose: () => unknown
   onSubmit?: () => void
   canSubmit?: boolean
   submitLabel?: ReactNodeM

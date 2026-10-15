@@ -300,9 +300,11 @@ export function NewTokenDialog({
     setCreated({ name: name.trim(), secret: res.secret, choice })
     onCreated()
   }
-  // A token being created must reach step two, or its secret is lost.
+  // A token being created must reach step two, or its secret is lost, so a
+  // close while busy is refused (false keeps a phone's Back step too).
   const close = () => {
-    if (!busy) onClose()
+    if (busy) return false
+    onClose()
   }
   // Step two replaces the field that held focus, so focus would fall back to
   // the dialog itself. Hand it to the token's copy button, the next thing to

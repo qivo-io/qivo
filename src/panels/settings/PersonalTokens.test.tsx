@@ -393,6 +393,43 @@ describe('New token', () => {
     expect(createButton().disabled).toBe(true)
   })
 
+  it('keeps the phone Back step while a token is being created', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    let finish = () => {}
+    network.mutation.mockImplementation((ref, args) =>
+      getFunctionName(ref) === 'tokens:createMcpToken'
+        ? new Promise((resolve) => {
+            finish = () => resolve({ id: args.id })
+          })
+        : Promise.resolve(null),
+    )
+    const back = async () =>
+      act(async () => {
+        history.back()
+        await new Promise((r) => setTimeout(r, 50))
+      })
+    await render()
+    await openDialog()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await type('input[aria-label="Name"]', 'Raycast')
+    await click(createButton())
+
+    // Back while the create call runs is refused, and its step comes back
+    await back()
+    expect(dialog()).toBe('form')
+    expect(history.state?.qivoLayer).toBeTruthy()
+
+    await act(async () => finish())
+    await settle()
+    expect(dialog()).toBe('created')
+    // so the next Back closes the dialog rather than leaving the page
+    await back()
+    expect(dialog()).toBeUndefined()
+  })
+
   it('stays on step one with the toast when the server refuses', async () => {
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'tokens:createMcpToken'
