@@ -906,6 +906,19 @@ describe('milestones', () => {
     const renamed = await setMilestone(fx, fx.agent, { milestone: made.id, name: 'Freeze' })
     expect(renamed).toMatchObject({ name: 'Freeze', date: '2026-03-02', created: false })
     expect((await lastEvent(fx.t, fx.org.id))?.verb).toBe('renamed milestone')
+    await refused(
+      setMilestone(fx, fx.agent, { milestone: made.id, name: '  ' }),
+      'bad_request',
+      'a milestone name cannot be blank',
+    )
+    expect(
+      await fx.t.mutation(internal.machine.projects.restUpdateMilestone, {
+        ...rest(fx.agent),
+        ref: 'FW',
+        milestone: made.id as string,
+        body: JSON.stringify({ name: ' Freeze ' }),
+      }),
+    ).toMatchObject({ name: 'Freeze' })
     await setMilestone(fx, fx.agent, { milestone: made.id, date: '2026-03-09' })
     expect((await lastEvent(fx.t, fx.org.id))?.verb).toBe('moved milestone')
     // REST shows it on the project and on its sub-projects
@@ -953,7 +966,7 @@ describe('milestones', () => {
     )
   })
 
-  it("the app's milestone writes refuse a blank name too", async () => {
+  it("the app's milestone writes refuse a blank name and trim a padded one", async () => {
     const fx = await setup()
     await refused(
       as(fx.t, fx.user).mutation(api.projects.addMilestone, {
@@ -966,6 +979,23 @@ describe('milestones', () => {
       'bad_request',
       'a milestone name cannot be blank',
     )
+    // the roadmap's batch adds and changes milestones by the same rule
+    const change = (operation: Json) =>
+      as(fx.t, fx.user).mutation(api.roadmap.change, {
+        session_id: uuid(),
+        operations: [operation as never],
+      })
+    const add = (id: string, name: string) =>
+      change({ kind: 'milestone_create', id, project_id: fx.sub.id, name, week: '2026-03-02' })
+    const id = uuid()
+    await refused(add(id, '  '), 'bad_request', 'a milestone name cannot be blank')
+    await add(id, ' Gate ')
+    const stored = () => fx.t.run((ctx) => ctx.db.query('milestones').collect())
+    expect(await stored()).toMatchObject([{ id, name: 'Gate', project_id: fx.meta.id }])
+    const rename = (name: string) => change({ kind: 'milestone_update', id, patch: { name } })
+    await refused(rename(' '), 'bad_request', 'a milestone name cannot be blank')
+    await rename(' Freeze ')
+    expect(await stored()).toMatchObject([{ id, name: 'Freeze' }])
   })
 })
 
