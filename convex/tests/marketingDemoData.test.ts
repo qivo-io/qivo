@@ -15,6 +15,7 @@ import {
 import { taskOwnerId } from '../lib/review'
 import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
+import { avatarColor } from '../model/people'
 
 const { people, teams, projects, issues, labels, links, milestones, comments } = MARKETING_DEMO
 const defaultCapacity = newOrgDefaults('2026-09-07T00:00:00.000Z').default_plannable_hours
@@ -204,8 +205,11 @@ describe('the versioned Northstar marketing scenario', () => {
     const projectByKey = new Map(projects.map((project) => [project.key, project]))
     const issueByKey = new Map(issues.map((issue) => [issue.key, issue]))
     const labelKeys = new Set(labels.map((label) => label.key))
-    // the seed writes straight to the table, so it must keep the stored color rule
+    // the seed writes straight to the table, so it must keep the stored color rules
     expect(labels.filter((label) => !isLabelColor(label.color))).toEqual([])
+    expect(people.map((person) => avatarColor(person.color))).toEqual(
+      people.map((person) => person.color),
+    )
     const parents = new Set(issues.map((issue) => issue.parent).filter(Boolean))
     // Edit access to the task's project: admin, the root's lead or its team.
     const canHoldWork = (personKey: string, issue: (typeof issues)[number]) => {
