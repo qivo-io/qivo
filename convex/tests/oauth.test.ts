@@ -523,6 +523,7 @@ describe('OAuth provider and MCP integration', () => {
       list_project_users: { project: f.sub.id },
       get_task: { ref: task.id },
       list_comments: { ref: task.id },
+      list_task_activity: { ref: task.id },
     }
     const reads = TOOLS.filter((tool) => tool.access === 'read')
     expect(reads.length).toBeGreaterThan(0)

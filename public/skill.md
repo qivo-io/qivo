@@ -57,8 +57,8 @@ A write also needs Edit access on the project, as described below.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
 - **Browser:** Use it for project creation/sharing, project archive/restore,
-  attachment uploads, and other actions absent from the machine
-  interfaces. Enter at `https://qivo.io/app` and use the user's signed-in
+  images inside descriptions, and other actions absent from the machine
+  interfaces. Upload file attachments through REST. Enter at `https://qivo.io/app` and use the user's signed-in
   session. Follow an explicitly requested interface when it supports the work.
 
 Task operations use these names (REST paths are relative to `https://api.qivo.io`):
@@ -74,6 +74,11 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | Remove a link | `set_task_link` with `linked: false` | `DELETE /v1/tasks/{ref}/links/{kind}/{other}` |
 | List labels | `list_labels` | `GET /v1/labels` |
 | Create or edit a label | `set_label` | `POST /v1/labels`, `PATCH /v1/labels/{id}` |
+| List a task's files | `get_task` (`attachments`) | `GET /v1/tasks/{ref}/attachments` |
+| Attach a file | (REST only) | `POST /v1/tasks/{ref}/attachments`, then the upload and the confirm |
+| Delete a file | `delete_attachment` | `DELETE /v1/tasks/{ref}/attachments/{id}` |
+| Read a task's history | `list_task_activity` | `GET /v1/tasks/{ref}/activity` |
+| Planned hours per person and week | `get_workload` | `GET /v1/workload` |
 
 Use the current task names; former endpoint and tool names are not aliases.
 Refresh cached MCP discovery or reconnect if the client still has an older
@@ -186,6 +191,33 @@ Useful field rules:
   organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
   reason becomes a comment, as in the app's archive dialog.
+
+## Files, history and workload
+
+- **Read files:** `get_task` and `GET /v1/tasks/{ref}` list `attachments`,
+  each with a download `url` that works for 10 minutes
+  (`url_expires_at`). Read the task again for a fresh link. `inline: true`
+  marks an image inside the description.
+- **Attach a file (REST):** `POST /v1/tasks/{ref}/attachments` with `name`,
+  optional `content_type` and the exact byte `size`; then POST the bytes to
+  the returned `upload_url` with the file's `Content-Type`; then
+  `POST /v1/tasks/{ref}/attachments/{ticket}` with the `storage_id` the
+  upload answered. Only the same credential's user can confirm, within an
+  hour. The organization's per-file limit is `max_attachment_mb` in
+  `get_me`.
+- **Delete a file:** `delete_attachment` or
+  `DELETE /v1/tasks/{ref}/attachments/{id}`, with Edit access to the
+  project. Description images are left to the app. When you rewrite a
+  description, keep its `![alt](att:<id>)` references. The next time someone
+  saves that description in the app, the app deletes every image uploaded
+  more than a day ago that the description no longer names.
+- **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
+  answers who changed what, oldest first. Comments are in `list_comments`.
+- **Workload:** `get_workload` or `GET /v1/workload` answers each person's
+  planned hours per week (`hours`, aligned with `week_starts`) beside their
+  `plannable_hours`. Use it before assigning or scheduling work. `hours`
+  already includes work in projects hidden from you, and `hidden_hours` is
+  that part of `hours`, without names. Do not add the two.
 
 ## Receive task events
 

@@ -1,6 +1,12 @@
 /* Planning uses the effective owner's capacity: the reviewer during review,
    otherwise the assignee. Hidden projects still contribute organization-wide
-   load; presentation folds them into an anonymous "Other projects" bucket. */
+   load; presentation folds them into an anonymous "Other projects" bucket.
+   The spread rule lives in convex/lib/workload.ts, which the REST and MCP
+   workload read shares. */
+
+import { committedByWeek, type LoadSpan, spreadWindow } from '../../convex/lib/workload'
+
+export { committedByWeek, type LoadSpan, spreadWindow }
 
 /** Capacity when the person is missing; must match the organization default. */
 export const DEFAULT_PLANNABLE_HOURS = 32
@@ -45,53 +51,6 @@ export type LoadItem = {
   remaining: number // hours; 0 when unset
   remainingSet?: number | null // week the remaining hours were measured (remaining_set_at)
   visible: boolean
-}
-
-/** The slice of LoadItem the capacity math actually reads — also the shape of
-    plan_org_load rows, which carry no project identity at all. */
-export type LoadSpan = {
-  issueUuid: string | null
-  start: number
-  end: number
-  remaining: number
-  remainingSet?: number | null
-}
-
-/** The weeks an issue's remaining hours actually spread over. `remaining` is a
-    measurement taken in `remainingSet`: work before that moment is already excluded
-    from it, so the spread runs from there — never before the planned start
-    (nothing happens before the issue begins, which also covers a future start:
-    the hours then spread over the whole planned interval), and never empty (an
-    estimate saved after the planned end piles into its own week instead of
-    vanishing). No `remainingSet` means no measurement moment — the plain span. */
-export function spreadWindow(
-  start: number,
-  end: number,
-  remainingSet?: number | null,
-): { start: number; end: number } {
-  if (remainingSet == null) return { start, end } // raw span, inverted ones stay dropped by the callers
-  const s = Math.max(start, remainingSet)
-  return { start: s, end: Math.max(end, s) }
-}
-
-/** Hours the owner is committed to per week, spreading each issue's
-    remaining hours evenly across its spread window. `excludeUuid` drops the
-    issue being planned so it doesn't compete with itself. */
-export function committedByWeek(
-  items: LoadSpan[],
-  excludeUuid?: string | null,
-): Map<number, number> {
-  const m = new Map<number, number>()
-  for (const it of items) {
-    if (excludeUuid && it.issueUuid === excludeUuid) continue
-    const win = spreadWindow(it.start, it.end, it.remainingSet)
-    const span = win.end - win.start + 1
-    if (span <= 0) continue
-    const per = (it.remaining || 0) / span
-    if (per <= 0) continue
-    for (let w = win.start; w <= win.end; w++) m.set(w, (m.get(w) || 0) + per)
-  }
-  return m
 }
 
 /** The week by which the owner's free capacity covers `remaining` hours,

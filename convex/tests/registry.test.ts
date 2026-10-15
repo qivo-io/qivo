@@ -3,13 +3,19 @@
  * to the kind of internal function its entry actually calls, prove a read
  * entry cannot reach a mutation at runtime, check that a garbled flag fails
  * closed, and pin the REST route matching rules. The OAuth step-up derived
- * from the flag is driven over HTTP in oauth.test.ts. */
+ * from the flag is driven over HTTP in oauth.test.ts.
+ *
+ * Entries call internal functions in their surface's module or in a domain
+ * module that declares entries for both surfaces (machine/records.ts), so
+ * the kinds below cover every one of those modules. A domain module keeps
+ * each surface's functions apart. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import * as mcp from '../machine/mcp'
+import * as records from '../machine/records'
 import {
   type MachineAccess,
   type MachineEntry,
@@ -25,7 +31,8 @@ type Kind = 'query' | 'mutation' | 'action'
 type Call = { via: Kind; name: string; args: unknown }
 type Ctx = Pick<ActionCtx, 'runQuery' | 'runMutation' | 'runAction'>
 
-/* A raw ctx that records what each run tries to call, and resolves. */
+/* A raw ctx that records what each run tries to call, and resolves an
+ * empty object, so a run that reads its result's fields still finishes. */
 function recorder(): { runner: Ctx; calls: Call[] } {
   const calls: Call[] = []
   const record =
@@ -35,7 +42,7 @@ function recorder(): { runner: Ctx; calls: Call[] } {
       ...args: unknown[]
     ): Promise<never> => {
       calls.push({ via, name: getFunctionName(ref), args: args[0] })
-      return undefined as never
+      return {} as never
     }
   return {
     calls,
@@ -75,10 +82,18 @@ type Entry = { label: string; access: MachineAccess; run: (ctx: Ctx) => Promise<
 
 type Surface = { module: string; kinds: Map<string, Kind>; entries: Entry[] }
 
+/* The registered kind of every function an entry may call, across the
+ * surface modules and the domain modules. */
+const KINDS = new Map<string, Kind>([
+  ...registeredKinds('machine/mcp', mcp),
+  ...registeredKinds('machine/rest', rest),
+  ...registeredKinds('machine/records', records),
+])
+
 const SURFACES: Surface[] = [
   {
     module: 'machine/mcp',
-    kinds: registeredKinds('machine/mcp', mcp),
+    kinds: KINDS,
     entries: mcp.TOOLS.map((tool) => ({
       label: tool.def.name,
       access: tool.access,
@@ -88,7 +103,7 @@ const SURFACES: Surface[] = [
   },
   {
     module: 'machine/rest',
-    kinds: registeredKinds('machine/rest', rest),
+    kinds: KINDS,
     entries: rest.ROUTES.map((route) => ({
       label: `${route.method} /v1/${route.path}`,
       access: route.access,
@@ -169,10 +184,24 @@ describe('the machine action registry', () => {
     }
   })
 
-  it('every internal function of a surface is reached by exactly one entry', async () => {
+  it('every internal function is reached by exactly one entry', async () => {
+    // one flat list across both surfaces, duplicates kept, so a function
+    // that two entries call fails here, whichever surfaces they belong to
+    const reached: string[] = []
     for (const surface of SURFACES) {
-      const reached = (await callsOf(surface)).flatMap(({ calls }) => calls.map((c) => c.name))
-      expect(reached.sort()).toEqual([...surface.kinds.keys()].sort())
+      for (const { calls } of await callsOf(surface)) reached.push(...calls.map((c) => c.name))
+    }
+    expect(reached.sort()).toEqual([...KINDS.keys()].sort())
+  })
+
+  it('each surface module serves only its own surface', async () => {
+    for (const surface of SURFACES) {
+      for (const { label, calls } of await callsOf(surface)) {
+        for (const { name } of calls) {
+          const other = SURFACES.find((s) => s !== surface && name.startsWith(`${s.module}:`))
+          expect(other, `${label} runs ${name}`).toBeUndefined()
+        }
+      }
     }
   })
 
@@ -280,6 +309,12 @@ describe('REST route matching', () => {
       ref: 'FW',
     })
     expect(match('GET', 'users')).toEqual({ route: 'GET users' })
+    expect(match('POST', 'tasks/QN-1/attachments/abc')).toEqual({
+      route: 'POST tasks/:ref/attachments/:ticket',
+      ref: 'QN-1',
+      ticket: 'abc',
+    })
+    expect(match('GET', 'workload')).toEqual({ route: 'GET workload' })
   })
 
   it('answers null (the unknown-route 404) for every other method or shape', () => {
@@ -294,6 +329,8 @@ describe('REST route matching', () => {
       ['POST', 'projects'],
       ['GET', '%70rojects'],
       ['GET', 'issues'],
+      ['PATCH', 'tasks/QN-1/attachments/abc'],
+      ['POST', 'workload'],
       ['GET', 'webhooks'],
       ['GET', ''],
     ]) {

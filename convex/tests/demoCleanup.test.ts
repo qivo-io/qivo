@@ -142,6 +142,9 @@ const APP_OWNED: TableNames[] = [
 ]
 const APP_SHARED = [
   'webhook_workers', // shared background reservations contain no tenant data
+  // REST upload tickets: asMachineCaller refuses every machine call on a demo
+  // deployment, so a demo never has one
+  'attachment_uploads',
   'demo_admission', // expiring deployment admission windows, no owner/workspace data
   'demo_metrics', // durable anonymous totals, independent of demo lifetime
   'demo_metrics_daily', // aggregate UTC history survives workspace deletion
