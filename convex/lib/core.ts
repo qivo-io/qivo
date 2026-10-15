@@ -70,7 +70,7 @@ import type {
 import { badRequest, notFound, type Refusal } from './functions'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
-import { allWordsMatcher, taskSearchText } from './search'
+import { allWordsMatcher, searchPieces, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
@@ -323,12 +323,24 @@ export type ListIssueOpts = {
   order: 'created' | 'key'
 }
 
-/* The organization's label names by task, read through each label so that
- * assignments stored without an organization are found too. */
-async function labelNamesByTask(ctx: QueryCtx, orgId: string): Promise<Map<string, string[]>> {
+/* The organization's label names by task, for only the labels whose name
+ * contains one of the search's `pieces` (lib/search.ts searchPieces). No
+ * other label can change whether a task matches, so its assignments are not
+ * read, and a search whose pieces no label name contains reads none. Labels
+ * keep the organization's label order, and each is read through its own
+ * assignments (by_label), so that assignments stored without an
+ * organization are found too. */
+async function labelNamesByTask(
+  ctx: QueryCtx,
+  orgId: string,
+  pieces: readonly string[],
+): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()
+  if (pieces.length === 0) return out
   const labels = ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', orgId))
   for await (const label of labels) {
+    const name = label.name.toLowerCase()
+    if (!pieces.some((piece) => name.includes(piece))) continue
     const rows = ctx.db
       .query('issue_labels')
       .withIndex('by_label', (q) => q.eq('label_id', label.id))
@@ -358,7 +370,7 @@ async function searchMatcher(
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
     .collect()
   const names = new Map(profiles.map((p) => [p.id, p.name]))
-  const labels = await labelNamesByTask(ctx, me.org_id)
+  const labels = await labelNamesByTask(ctx, me.org_id, searchPieces(o.term, o.stars))
   return (i) =>
     matches(
       taskSearchText({
