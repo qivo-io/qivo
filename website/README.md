@@ -50,7 +50,7 @@ sends `/` to the app. The tests run with the rest of the suite:
 
 ## Fonts
 
-The "qivo" wordmark uses the same Rubik subset as the application
+The "Qivo" wordmark uses the same Rubik subset as the application
 (`src/assets/fonts/rubik-700-qivo.woff2`), embedded in the stylesheet so it
 never waits for a request. Manrope sets the text. It is published under a name
 that contains a hash of its contents and preloaded at the top of every page.
