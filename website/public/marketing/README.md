@@ -16,15 +16,15 @@ Manrope source: https://fonts.gstatic.com/s/manrope/v20/xn7gYHE41ni1AdIRggexSg.w
 Font SHA-256: `a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972`.
 License source: https://raw.githubusercontent.com/google/fonts/main/ofl/manrope/OFL.txt.
 
-Rubik 700 sets the "qivo" wordmark. The site uses Google's subset of it that
-contains only q, i, v and o, embedded in the stylesheet as a data URI so the
+Rubik 700 sets the "Qivo" wordmark. The site uses Google's subset of it that
+contains only Q, i, v and o, embedded in the stylesheet as a data URI so the
 wordmark never waits for a download. It is used under the SIL Open Font
 License, published at `/marketing/fonts/rubik-OFL.txt`.
 
-Rubik source: https://fonts.googleapis.com/css2?family=Rubik:wght@700&text=qivo,
-which served https://fonts.gstatic.com/l/font?kit=iJWZBXyIfDnIV5PNhY1KTN7Z-Yh-4I-1VVc0Nui85w&skey=cee854e66788286d&v=v31
+Rubik source: https://fonts.googleapis.com/css2?family=Rubik:wght@700&text=Qivo,
+which served https://fonts.gstatic.com/l/font?kit=iJWZBXyIfDnIV5PNhY1KTN7Z-Yh-4I-1VVc0Du6i5w&skey=cee854e66788286d&v=v31
 
-Font SHA-256: `fdb96e88d666d610d1024652404bbbf26438ac6a8adfe73389ef56fd632944df`.
+Font SHA-256: `090a67686cd73ff57767e67f130127d2d15589b8f5c13a8c9e8946e7ce035cad`.
 License source: https://raw.githubusercontent.com/google/fonts/main/ofl/rubik/OFL.txt.
 
 The website publishes Manrope under its file name plus the first eight hex

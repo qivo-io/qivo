@@ -27,7 +27,7 @@
 
 import type { WithoutSystemFields } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { canSeeProject, hasProjectLevel, isTeamLeader } from '../lib/access'
@@ -41,6 +41,7 @@ import {
   plantIssue,
   plantProject,
   plantSeat,
+  settleScheduled,
   type T,
   uuid,
   withOrg,
@@ -174,6 +175,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       })
     })
   })
+  afterEach(() => settleScheduled(t))
 
   /* One row per door: `ref()` yields the foreign-org ref, `call` drives the
    * door as f.admin (its natural caller), `answer` pins the byte sentence the
@@ -615,6 +617,7 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
       archived_at: '2026-01-02T00:00:00.000Z',
     })
   })
+  afterEach(() => settleScheduled(t))
 
   it('a viewer as assignee refuses through api.issues.create — the trigger sentence, verbatim', async () => {
     await expectRefusal(
@@ -833,6 +836,7 @@ describe("0056 §C — planted forbidden rows grant nothing ('the design assumes
     t = newT()
     f = await withOrg(t)
   })
+  afterEach(() => settleScheduled(t))
 
   it('a project_access grant onto a foreign project is inert on every read path', async () => {
     await t.run(async (ctx) => {
@@ -891,6 +895,7 @@ describe('0056 §D — guest write-probes into the hidden pair of their own org'
     f = await withOrg(t)
     hiddenIssue = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
   })
+  afterEach(() => settleScheduled(t))
 
   it('visibility-fenced doors: the hidden issue answers byte-identically to a nonexistent one', async () => {
     const comment = (issue_id: string) =>

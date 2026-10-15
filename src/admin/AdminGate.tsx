@@ -80,7 +80,7 @@ export function AdminGate() {
       <Card className="animate-in fade-in slide-in-from-bottom-1 w-full max-w-[400px] gap-0 rounded-lg bg-surface-1 p-6 shadow-pop">
         <header className="mb-7">
           <div className="text-lg font-semibold text-text-1">
-            <span className="wordmark">qivo</span> Admin
+            <span className="wordmark">Qivo</span> Admin
           </div>
           <div className="text-sm text-text-2">Platform operations</div>
         </header>

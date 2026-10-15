@@ -159,6 +159,7 @@ export function fmtDateTime(d: Date): string {
   return `${fmtFull(d)} ${fmtTime(d)}`
 }
 
+/* Whether the org's date format puts the month before the day. */
 const monthFirst = () => dateFormat === 'MM/DD/YYYY' || dateFormat === 'MMM D, YYYY'
 
 export function fmtDate(d: Date): string {

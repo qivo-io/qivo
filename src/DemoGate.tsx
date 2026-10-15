@@ -272,7 +272,7 @@ export function DemoGate() {
     <main className="demo-gate">
       <div data-floating-surface className="demo-gate-card">
         <a className="wordmark text-xl" href="https://qivo.io">
-          qivo
+          Qivo
         </a>
         <div role="status" aria-live="polite" className="mt-6">
           <h1 className="text-lg font-semibold">

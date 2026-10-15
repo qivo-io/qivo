@@ -17,7 +17,6 @@
  *      every write entry is credentialAccess.test.ts. */
 /// <reference types="vite/client" />
 
-import { convexTest } from 'convex-test'
 import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -26,7 +25,6 @@ import { INBOX_LIMIT } from '../lib/inbox'
 import { sha256hex } from '../machine/auth'
 import { INBOX_TASKS_MAX } from '../machine/discussion'
 import { ITEM_UNREAD_CAP } from '../model/messages'
-import schema from '../schema'
 import {
   allMessages,
   as,
@@ -626,9 +624,7 @@ describe('reading the inbox', () => {
   it('reads only the newest messages of a backlog that outgrows one transaction, and says so', async () => {
     // Folding every message would read more documents than this allows.
     const fx = await setup(
-      convexTest({
-        schema,
-        modules: import.meta.glob('../**/*.*s'),
+      newT({
         transactionLimits: { documentsRead: 2 * INBOX_LIMIT + 100 },
       }),
     )
@@ -732,9 +728,7 @@ describe('reading the inbox', () => {
   it('each walk examines at most 2 * INBOX_LIMIT rows, so hidden rows cannot widen the read', async () => {
     // Examining every row of either walk would pass this limit.
     const fx = await setup(
-      convexTest({
-        schema,
-        modules: import.meta.glob('../**/*.*s'),
+      newT({
         transactionLimits: { documentsRead: 4 * INBOX_LIMIT + 200 },
       }),
     )

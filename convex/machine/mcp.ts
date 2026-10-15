@@ -1432,6 +1432,8 @@ async function orgNames(ctx: QueryCtx, me: Caller): Promise<Map<string, string>>
   return new Map(rows.map((p) => [p.id, p.name]))
 }
 
+/* The forbidden refusal for a project the caller can read but not write
+ * (machine/shared.ts MCP_NO_WRITE). */
 const noWrite = (): ConvexError<Refusal> => forbidden(MCP_NO_WRITE)
 
 const mustWrite = async (ctx: QueryCtx, me: Caller, projectId: string): Promise<void> => {
@@ -1606,8 +1608,9 @@ export const listIssues = internalQuery({
   },
 })
 
-/* get_task answers the single-task shape: the list row plus labels,
- * subtasks, links and a group's remaining hours (lib/core.ts taskOut). */
+/* get_task answers the single-task shape, the list row plus labels,
+ * subtasks, links, a group's remaining hours, followers and attachments
+ * (lib/core.ts taskOut). */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, { callerId, access, ref }) => {
@@ -1952,6 +1955,8 @@ export const setTaskLink = internalMutation({
   },
 })
 
+/** list_labels answers the organization's labels ordered by name, the same
+ * rows as REST's GET /v1/labels (model/labels.ts listLabelsCore). */
 export const listLabels = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess },
   handler: async (ctx, { callerId, access }) => {

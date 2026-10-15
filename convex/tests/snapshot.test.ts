@@ -11,12 +11,10 @@
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
-import { convexTest } from 'convex-test'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
-import schema from '../schema'
 import {
   as,
   expectRefusal,
@@ -752,9 +750,7 @@ describe('messages', () => {
 
   it('answers over a backlog larger than one transaction may read; visible rows past the bound wait', async () => {
     // The old full read of the inbox scanned every row and failed here.
-    t = convexTest({
-      schema,
-      modules: import.meta.glob('../**/*.*s'),
+    t = newT({
       transactionLimits: { documentsRead: 2600 },
     })
     f = await withOrg(t)
