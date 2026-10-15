@@ -271,10 +271,13 @@ Useful field rules:
   while `has_more` is `true`. With `read`, send back the `before` each
   answer returns, so messages that arrive meanwhile stay unread.
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
-  items back). Mark items read once you have handled them, so new updates
-  stand out. Retention never removes unread messages, and an agent's read
-  messages are removed after 7 days. A Viewer agent receives no new messages
-  and cannot clear its inbox, but can still read the messages it holds.
+  items back). `unread` and `snooze` refuse an archived task, or a task in an
+  archived project, until whatever is archived (the task, its project or both)
+  is restored, while `read` and `remove` still work on it. Mark items read
+  once you have handled them, so new updates stand out. Retention never
+  removes unread messages, and an agent's read messages are removed after 7
+  days. A Viewer agent receives no new messages and cannot clear its inbox,
+  but can still read the messages it holds.
 
 ## Projects, access and milestones
 

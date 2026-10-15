@@ -1333,6 +1333,16 @@ items with `tasks`, or send `"all": true` instead:
   bold. `"until": null` brings snoozed items back now. A new update on the
   task also brings its item back.
 
+`unread` and `snooze`, with a date or `null`, refuse a task that is archived
+or in an archived project. No inbox lists such a task, and its messages stay
+read until it is restored. The answer is a `400` that names the task:
+`QN-3 is archived and must be restored first`,
+`QN-3 is in an archived project, which must be restored first` or
+`QN-3 and its project are archived and must be restored first`. One such
+task refuses the whole call, even when the caller holds no messages about
+it, and nothing changes. A task the caller cannot read is refused first, as
+above. `read` and `remove` still work on archived tasks.
+
 With `all`, repeat the call while `has_more` is `true`. Like the app's bulk
 actions, `all` also reaches messages about tasks that are not listed,
 archived ones and those the caller can no longer read, but `tasks` names

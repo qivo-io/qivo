@@ -213,6 +213,8 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
+internal/archivedReadsBackfill:org mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"tasks"},{"type":"literal","value":"projects"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"tasks":{"fieldType":{"type":"number"},"optional":false},"projects":{"fieldType":{"type":"number"},"optional":false},"page":{"fieldType":{"type":"number"},"optional":true}}}
+internal/archivedReadsBackfill:start mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"page":{"fieldType":{"type":"number"},"optional":true}}}
 internal/demoCleanup:purge mutation internal {"type":"object","value":{"demo_id":{"fieldType":{"type":"string"},"optional":false}}}
 internal/demoCleanup:recover mutation internal {"type":"object","value":{}}
 internal/demoMetrics:sample mutation internal {"type":"object","value":{}}
