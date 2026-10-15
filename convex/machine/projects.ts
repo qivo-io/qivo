@@ -9,7 +9,7 @@
  * This module imports only types from those two, so neither is loaded
  * through it. The provenance, key name validator, body parsers and MCP text
  * it shares with them come from machine/shared.ts. machine/rest.ts uses
- * restProjectDetail for GET /v1/projects/{ref}.
+ * projectDetailJson for GET /v1/projects/{ref}.
  *
  * Each action is one shared model function the app runs too
  * (model/projects.ts createProjectCore, updateProjectCore, archiveProjectCore
@@ -43,8 +43,7 @@ import {
   type Caller,
   findProject,
   issueKey,
-  mcpProjectOut,
-  restProjectJson,
+  projectJson,
   UUID,
 } from '../lib/core'
 import { byId } from '../lib/db'
@@ -174,34 +173,31 @@ async function projectDetail(ctx: QueryCtx, project: Doc<'projects'>): Promise<P
   }
 }
 
-/** GET /v1/projects/{ref}'s answer: the list row with the caller's flags,
- * plus the single read's fields (projectDetail). */
-export async function restProjectDetail(
+/** The single-project read of both surfaces (REST GET /v1/projects/{ref},
+ * MCP get_project): the list row with the caller's `flag`, plus the single
+ * read's fields (projectDetail). */
+export async function projectDetailJson(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   flag: AccessFlag,
-): Promise<ReturnType<typeof restProjectJson> & ProjectDetailJson> {
-  return { ...restProjectJson(project, flag), ...(await projectDetail(ctx, project)) }
+): Promise<ReturnType<typeof projectJson> & ProjectDetailJson> {
+  return { ...projectJson(project, flag), ...(await projectDetail(ctx, project)) }
 }
 
-/* restProjectDetail for a project the caller just changed. */
-async function restProjectOut(
+/* projectDetailJson for one project the caller resolved itself, such as one
+ * it just changed, with the caller's flags read for it alone. */
+async function projectOut(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
   access: CredentialAccess,
 ) {
   const flags = await accessFlags(ctx, me, [project], access)
-  return await restProjectDetail(
+  return await projectDetailJson(
     ctx,
     project,
     flags.get(project.id) ?? { read: false, write: false },
   )
-}
-
-/* get_project's answer: list_projects' row plus the single read's fields. */
-async function mcpProjectDetail(ctx: QueryCtx, project: Doc<'projects'>) {
-  return { ...mcpProjectOut(project), ...(await projectDetail(ctx, project)) }
 }
 
 /* ------------------------------------------------------------------ refs */
@@ -382,13 +378,14 @@ async function mcpSubject(
 
 /* ------------------------------------------------------ MCP internal fns */
 
-/* get_project: one readable project with its lead, settings, milestones and
- * grants. */
+/* get_project: one readable project with the caller's access, its lead,
+ * settings, milestones and grants. */
 export const mcpGetProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, project: v.string() },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    return pretty(await mcpProjectDetail(ctx, await mcpProject(ctx, me, a.project)))
+    const project = await mcpProject(ctx, me, a.project)
+    return pretty(await projectOut(ctx, me, project, a.access))
   },
 })
 
@@ -415,7 +412,7 @@ export const mcpCreateProject = internalMutation({
     const lead_id = await mcpLead(ctx, me, a.lead_id)
     const input = { name: a.name, parent, lead_id, description: a.description }
     const project = await createFrom(ctx, me, input, MCP_PROVENANCE)
-    return pretty(await mcpProjectDetail(ctx, project))
+    return pretty(await projectOut(ctx, me, project, a.access))
   },
 })
 
@@ -442,7 +439,7 @@ export const mcpUpdateProject = internalMutation({
     if (lead_id !== undefined) input.lead_id = await mcpLead(ctx, me, lead_id)
     if (Object.keys(input).length === 0) throw badRequest('no fields to update')
     const after = await applyUpdate(ctx, me, project, input, MCP_PROVENANCE)
-    return pretty(await mcpProjectDetail(ctx, after))
+    return pretty(await projectOut(ctx, me, after, a.access))
   },
 })
 
@@ -649,7 +646,7 @@ export const restCreateProject = internalMutation({
       description: restDescription(b),
     }
     const project = await createFrom(ctx, me, input, restProvenance(a.keyName))
-    return await restProjectOut(ctx, me, project, a.access)
+    return await projectOut(ctx, me, project, a.access)
   },
 })
 
@@ -702,7 +699,7 @@ export const restUpdateProject = internalMutation({
     }
     if (Object.keys(input).length === 0) throw badRequest('no recognized fields to update')
     const after = await applyUpdate(ctx, me, project, input, restProvenance(a.keyName))
-    return await restProjectOut(ctx, me, after, a.access)
+    return await projectOut(ctx, me, after, a.access)
   },
 })
 
@@ -1113,7 +1110,7 @@ export const PROJECT_TOOLS: McpTool[] = [
 ]
 
 /** The REST routes of this domain, matched after machine/rest.ts's own. GET
- * /v1/projects/{ref} stays there, with restProjectDetail's fields. */
+ * /v1/projects/{ref} stays there, with projectDetailJson's fields. */
 export const PROJECT_ROUTES: RestRoute[] = [
   route({
     method: 'POST',

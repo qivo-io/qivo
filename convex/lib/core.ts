@@ -424,22 +424,17 @@ export async function listIssuesCore(
 
 const byKeyOrder = (a: Doc<'projects'>, b: Doc<'projects'>): number => a.key.localeCompare(b.key)
 
-/* core.ts listProjects: the caller-visible projects on ONE side of the
- * archived axis — (archived_at set) === archived — ordered by key. */
-export async function listProjectsCore(
-  ctx: QueryCtx,
-  me: Caller,
+/** The catalogue's readable projects on ONE side of the archived axis,
+ * (archived_at set) === archived, ordered by key. REST GET /v1/projects and
+ * MCP list_projects both list them. */
+export function listProjectsCore(
+  cat: Catalogue,
   archived: boolean,
   readable: (projectId: string) => boolean,
-): Promise<Doc<'projects'>[]> {
-  const out: Doc<'projects'>[] = []
-  const rows = ctx.db.query('projects').withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-  for await (const p of rows) {
-    if ((p.archived_at !== undefined) !== archived) continue
-    if (!readable(p.id)) continue
-    out.push(p)
-  }
-  return out.sort(byKeyOrder)
+): Doc<'projects'>[] {
+  return cat.projects
+    .filter((p) => (p.archived_at !== undefined) === archived && readable(p.id))
+    .sort(byKeyOrder)
 }
 
 /* core.ts childProjects, visibility applied (the Deno one ran under RLS):
@@ -1171,8 +1166,12 @@ export async function applyTaskUpdate(
   return task
 }
 
-/* REST projectJson (rest:215-220) — the caller's flags ride along. */
-export const restProjectJson = (
+/** The project row of REST GET /v1/projects and MCP list_projects, in MCP's
+ * key order (REST's answer crosses the Convex value boundary, which sorts
+ * keys). `access` is the caller's flags on the project (accessFlags), so a
+ * read-only credential shows `write: false` everywhere. `archived` is
+ * `archived_at` as a boolean. */
+export const projectJson = (
   p: Doc<'projects'>,
   access: AccessFlag,
 ): {
@@ -1199,31 +1198,6 @@ export const restProjectJson = (
   archived: p.archived_at !== undefined,
   archived_at: p.archived_at ?? null,
   access: { read: access.read, write: access.write },
-})
-
-/* MCP projectOut (mcp:110-114): no flags, no boolean. */
-export const mcpProjectOut = (
-  p: Doc<'projects'>,
-): {
-  id: string
-  key: string
-  num: number
-  name: string
-  type: ProjectType
-  parent_id: string | null
-  team_id: string | null
-  description: string
-  archived_at: string | null
-} => ({
-  id: p.id,
-  key: p.key,
-  num: p.num,
-  name: p.name,
-  type: p.type,
-  parent_id: p.parent_id ?? null,
-  team_id: p.team_id ?? null,
-  description: p.description,
-  archived_at: p.archived_at ?? null,
 })
 
 /* REST userJson (rest:229-234) == the MCP list_users row: NO email, auth id
