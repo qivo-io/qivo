@@ -19,11 +19,7 @@ export function useMobile() {
  * `onClose` may return false to stay open (a dialog busy with something that
  * must finish). After a Back step the layer then pushes its marker again, so
  * the next Back still closes the layer instead of leaving the page. */
-export function useMobileBackLayer(
-  open: boolean,
-  onClose: () => unknown,
-  enabled?: boolean,
-) {
+export function useMobileBackLayer(open: boolean, onClose: () => unknown, enabled?: boolean) {
   const mobile = useMobile()
   const useHistory = enabled ?? mobile
   const id = useId()
