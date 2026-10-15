@@ -1149,7 +1149,7 @@ archived project stay stored and come back when the access or the task does,
 unless they were removed meanwhile. Archiving a task marks every message
 about it and the subtasks archived with it read, for every recipient,
 shortly after the archive, and archiving a project does the same for its
-tasks. A snoozed item loses its snooze. Messages that arrive while the task
+tasks. A snoozed item loses its snooze. A snooze set on such an item later ends without making it unread. Messages that arrive while the task
 or its project is archived, including the `Archived` message, mentions and
 comments, are stored read. As with any read message, the nightly cleanup
 removes them after the recipient's retention period, and `update_inbox`

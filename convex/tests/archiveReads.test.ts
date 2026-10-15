@@ -241,6 +241,31 @@ describe('archiving a task', () => {
     expect(rows[0].snoozed_until).toBeUndefined()
     expect(rows[0].woke_at).toBeUndefined()
   })
+  it('a snooze set on the item of an archived task wakes it read, not unread', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
+    const until = '2026-01-05T00:00:00.000Z'
+    await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: f.admin.id,
+      issue_id: task.id,
+      detail: 'snoozed',
+      read_at: '2026-01-02T00:00:00.000Z',
+      snoozed_until: until,
+    })
+
+    await t.mutation(internal.messages.wake, {
+      recipient_id: f.admin.id,
+      issue_id: task.id,
+      until,
+    })
+
+    const [row] = await messagesFor(t, f.admin.id, task.id)
+    expect(row.read_at).toBe('2026-01-02T00:00:00.000Z')
+    expect(row.snoozed_until).toBeUndefined()
+    expect(row.woke_at).toBeUndefined()
+  })
 })
 
 describe('arrivals about archived tasks', () => {
@@ -427,6 +452,38 @@ describe('the background steps', () => {
     const others = (await allMessages(t)).filter((m) => m.recipient_id !== f.admin.id)
     expect(others).toHaveLength(300)
     expect(others.every((m) => m.read_at === '2026-01-02T00:00:00.000Z')).toBe(true)
+  })
+
+  it('release a read snoozed row even when the unread rows fill the batch exactly', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
+    for (let n = 1; n <= 2; n++) {
+      await plantMessage(t, {
+        org_id: f.org.id,
+        recipient_id: f.admin.id,
+        issue_id: task.id,
+        detail: `u${n}`,
+        created_at: `2026-01-0${n}T00:00:00.000Z`,
+      })
+    }
+    // read through a named action after a snooze, so it kept the snooze
+    await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: f.guest.id,
+      issue_id: task.id,
+      detail: 'kept snooze',
+      read_at: '2026-01-02T00:00:00.000Z',
+      snoozed_until: '2026-02-01T00:00:00.000Z',
+    })
+
+    await t.mutation(internal.messages.readArchivedTasks, { issues: [task.id], batch: 2 })
+    await runSteps(t)
+
+    const [kept] = await messagesFor(t, f.guest.id, task.id)
+    expect(kept.snoozed_until).toBeUndefined()
+    expect(kept.read_at).toBe('2026-01-02T00:00:00.000Z')
+    expect(await item(t, f.admin, task.id)).toEqual([{ detail: 'u2', read: true }])
   })
 
   it('walk an archived project from where the last step stopped', async () => {

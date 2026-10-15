@@ -1282,7 +1282,7 @@ that is later, and orders the list.
 Archiving a task marks every message about it and the subtasks archived
 with it read, for every recipient, shortly after the archive. Archiving a
 project does the same for the tasks of the project and its sub-projects. A
-snoozed item loses its snooze. Messages that arrive while the task or its
+snoozed item loses its snooze. A snooze set on such an item later ends without making it unread. Messages that arrive while the task or its
 project is archived, including the `Archived` message, mentions and
 comments, are stored read. As with any read message, the nightly cleanup
 removes them after the recipient's retention period, and

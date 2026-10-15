@@ -87,10 +87,21 @@ export async function wakeSnoozedItem(
   const rows = (await pairRows(ctx, a)).filter(
     (r) => r.snoozed_until !== undefined && (a.until === undefined || r.snoozed_until === a.until),
   )
+  if (rows.length === 0) return false
+  // Messages about an archived task stay read (see "archived tasks" below),
+  // so such an item only loses its snooze and does not return.
+  const issue = await byId(ctx, 'issues', a.issue_id)
+  const project = issue === null ? null : await byId(ctx, 'projects', issue.project_id)
+  const archived = issue?.archived_at !== undefined || project?.archived_at !== undefined
   for (const r of rows) {
-    await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: undefined, woke_at: now })
+    await ctx.db.patch(
+      r._id,
+      archived
+        ? { snoozed_until: undefined, read_at: r.read_at ?? now }
+        : { snoozed_until: undefined, read_at: undefined, woke_at: now },
+    )
   }
-  return rows.length > 0
+  return true
 }
 
 /* Oldest first by (created_at, id), the total order the prune uses too. */
@@ -720,8 +731,10 @@ const stepLimit = (limit: number | undefined, fallback: number): number =>
  * hold only rows that need a change (by_issue_read with no read_at, then
  * by_issue_snoozed), so the rows already read, one per recipient after the
  * prune, are never scanned and the step reads at most about `budget` rows
- * however many people follow the task. `more` says rows remain for the next
- * step. */
+ * however many people follow the task. The snoozed range is checked even
+ * when the unread rows used the whole budget, so a read row that kept its
+ * snooze is never left to wake unread later. `more` says rows remain for
+ * the next step. */
 async function readTaskMessages(
   ctx: MutationCtx,
   issueId: string,
@@ -732,27 +745,31 @@ async function readTaskMessages(
     .query('messages')
     .withIndex('by_issue_read', (q) => q.eq('issue_id', issueId).eq('read_at', undefined))
     .take(budget + 1)
-  const batch = unread.slice(0, budget)
+  const touched = unread.slice(0, budget)
+  for (const row of touched) {
+    await ctx.db.patch(row._id, { read_at: now, snoozed_until: undefined })
+  }
   let more = unread.length > budget
-  if (!more && batch.length < budget) {
-    // unread snoozed rows were just read above; what is left in this range
-    // is a read row that kept a snooze
+  if (!more) {
+    // the unread rows marked above left this range, so what remains is a
+    // read row that kept a snooze
+    const room = budget - touched.length
     const snoozed = await ctx.db
       .query('messages')
       .withIndex('by_issue_snoozed', (q) =>
         q.eq('issue_id', issueId).gt('snoozed_until', undefined),
       )
-      .take(budget - batch.length + 1)
-    more = snoozed.length > budget - batch.length
-    batch.push(...snoozed.slice(0, budget - batch.length))
+      .take(room + 1)
+    more = snoozed.length > room
+    for (const row of snoozed.slice(0, room)) {
+      await ctx.db.patch(row._id, { snoozed_until: undefined })
+      touched.push(row)
+    }
   }
-  for (const row of batch) {
-    await ctx.db.patch(row._id, { read_at: row.read_at ?? now, snoozed_until: undefined })
-  }
-  for (const recipient_id of new Set(batch.map((row) => row.recipient_id))) {
+  for (const recipient_id of new Set(touched.map((row) => row.recipient_id))) {
     await pruneStampedItem(ctx, { recipient_id, issue_id: issueId }, budget)
   }
-  return { marked: batch.length, more }
+  return { marked: touched.length, more }
 }
 
 /**
