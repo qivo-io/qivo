@@ -74,14 +74,19 @@ export async function logActivity(
 
 /* Task rows that name other tasks by key: a parent change written by
  * model/issues.ts browserVerbDetail ('moved' under QN-n (from QN-m),
- * 'detached' from QN-m) and a link written by issues.addLink ('linked' —
- * blocks QN-n). Returns the task numbers the row names, [] when it names
- * none, and null when the wording is not one these writers produce, so the
- * reader can fail closed. Keep in step with those two writers. */
+ * 'detached' from QN-m) and a link written by model/links.ts addLinkCore
+ * ('linked' — blocks QN-n). A REST or MCP write appends its provenance
+ * (machineDetail below), which names no task. Returns the task numbers the
+ * row names, [] when it names none, and null when the wording is not one
+ * these writers produce, so the reader can fail closed. Keep in step with
+ * those two writers. */
 const KEY = `${ISSUE_PREFIX}-(\\d+)`
-const NAMED_PARENT_CHANGE = new RegExp(`^under (?:${KEY}|its parent)(?: \\(from ${KEY}\\))?$`)
-const NAMED_DETACH = new RegExp(`^from (?:${KEY}|its parent)$`)
-const NAMED_LINK = new RegExp(`^— (?:blocks|relates to) ${KEY}$`)
+const SIGNED = '(?: — via (?:MCP|the REST API(?: \\(.*\\))?))?'
+const NAMED_PARENT_CHANGE = new RegExp(
+  `^under (?:${KEY}|its parent)(?: \\(from ${KEY}\\))?${SIGNED}$`,
+)
+const NAMED_DETACH = new RegExp(`^from (?:${KEY}|its parent)${SIGNED}$`)
+const NAMED_LINK = new RegExp(`^— (?:blocks|relates to) ${KEY}${SIGNED}$`)
 export function namedTaskNums(
   ev: Pick<Doc<'activity_events'>, 'target_type' | 'verb' | 'detail'>,
 ): number[] | null {

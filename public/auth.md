@@ -72,8 +72,9 @@ Use these steps for a personal-token fallback or a named agent's key:
   (`credential.access` is `write` or `read`). Call `list_projects` to verify
   readable access and `list_tasks` with a returned project reference to read
   its tasks. The task tools are `list_tasks`, `get_task`, `create_task`,
-  `update_task` and `delete_task`. Refresh discovery or reconnect if the
-  client has an older tool catalogue.
+  `update_task`, `delete_task` and `set_task_link`, and `list_labels` and
+  `set_label` manage labels. Refresh discovery or reconnect if the client
+  has an older tool catalogue.
 - **Organization REST API:** `https://api.qivo.io/v1`, using
   `Authorization: Bearer <full-qvt-or-qva-secret>`. `X-Api-Key` is also
   accepted by REST. Check the credential with `GET https://api.qivo.io/v1/me`, which

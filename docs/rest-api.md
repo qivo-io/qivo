@@ -449,9 +449,14 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
                                            or key; a meta expands to its
                                            sub-projects) — naming an ARCHIVED
                                            project is how you read its tasks
-       &status=todo &priority=high         enum filters
+       &status=todo &priority=high         enum filters; status takes several
+                                           values separated by commas
+                                           (status=todo,progress)
        &assignee=<profile-uuid>            the stored assignee, also while
                                            a reviewer owns the task
+       &owner=<profile-uuid>               whose work it is: the reviewer
+                                           while the task is in review with
+                                           one, else the assignee
        &search=text                        matches fragments of the fields the
                                            app's task filter searches (below;
                                            substring; * acts as a wildcard)
@@ -462,10 +467,13 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
                                            the first, `project=` is the second
        &limit=100 &offset=0                limit ≤ 200
 GET    /v1/tasks/{ref}                     ref: QN-482 | 482 | uuid — resolves
-                                           archived tasks too
+                                           archived tasks too; adds labels,
+                                           subtasks and links (below)
 POST   /v1/tasks                           requires write on the target
                                            sub-project (see below)
-PATCH  /v1/tasks/{ref}                     requires write
+PATCH  /v1/tasks/{ref}                     requires write; also moves the
+                                           task, sets its parent and adds or
+                                           removes labels
 DELETE /v1/tasks/{ref}                     requires write
 ```
 
@@ -484,9 +492,9 @@ POST body — `project` (uuid, number or key) and `title` are required. Tasks li
 sub-projects: name the sub-project directly as `project`, or name the project
 as `project` and one of **its** sub-projects as `sub_project`. Naming a
 project without a `sub_project` is a `400` listing the sub-projects the caller
-can write to; a `sub_project` that belongs to a different project is a `400`
-— a task is never created under another project's sub-project (moving one
-later is the app's Move dialog, not the API). A `project` or `sub_project`
+can write to; a `sub_project` that belongs to a different project is a `400`.
+A task is never created under another project's sub-project; a PATCH can
+move it later (below). A `project` or `sub_project`
 the caller cannot read answers exactly like an unknown one, with `400`
 `project must name a project by uuid, number or key` or `sub_project must name
 a sub-project by key, number or uuid`. This includes the other sub-projects of
@@ -505,12 +513,23 @@ sub-projects the caller can read:
   "assignee_id": "…profile uuid… or null",
   "reviewer_id": "…profile uuid… or null",
   "reporter_id": "…profile uuid…",
+  "parent": "QN-482",
   "start_week": "2026-07-06", "end_week": "2026-07-20",
   "due_date": "2026-07-24",
   "remaining_hours": 8,
   "paused": false
 }
 ```
+
+`parent` makes the new task a subtask of another task, named by key, number
+or uuid. A POST that sends `parent_id` or `project_id` instead is refused
+(see PATCH below). The caller must be able to read the parent and needs Edit
+access on the parent's project, because the parent becomes a group and
+loses its own remaining hours. A parent the caller cannot read answers `400` with `parent
+task not found`; one it can read but not edit answers `403` with `no write
+access to the parent task`. The new task's project still comes from
+`project` and `sub_project`, so a subtask may live in another sub-project
+than its parent. A chain of subtasks is at most 20 tasks deep.
 
 Tasks have Reporter, Assignee and Reviewer. The reporter identifies the Qivo
 user who reported the work and is fixed when the task is created. Omitting
@@ -545,13 +564,49 @@ PATCH setting a new non-null `reviewer_id` on one is a `400` (`a task with
 subtasks has no reviewer of its own; set reviewers on its subtasks`), while
 clearing one always passes. A request may set only `reviewer_id`.
 
-PATCH accepts the same fields except `reporter_id`, `project` and `sub_project`.
-Any PATCH containing `reporter_id`, including `null` or the current reporter,
-returns `400` with `reporter_id is set when a task is created and cannot be changed`;
-other fields in that request also remain unchanged. Moving a
-task between projects is not supported over the API; use the app's Move
-dialog. A moved task keeps its number and its labels. Unknown fields are ignored; invalid values are
-rejected with `400` and a message. `title` is trimmed and capped at 80
+PATCH accepts the same fields except `reporter_id`. Any PATCH containing
+`reporter_id`, including `null` or the current reporter, returns `400` with
+`reporter_id is set when a task is created and cannot be changed`; other
+fields in that request also remain unchanged. `project_id` and `parent_id`
+are response fields. POST and PATCH both refuse a body that sends either
+with `400` (`project_id cannot be written; move a task with project and
+sub_project` or `parent_id cannot be written; send parent, or null to
+detach`) rather than ignore it, and nothing is created or changed.
+Other unknown fields are ignored; invalid values are rejected with `400` and
+a message.
+
+**Moving a task.** `project` and `sub_project` on PATCH move the task, named
+exactly as on POST: the destination sub-project directly as `project`, or its
+project as `project` and the sub-project as `sub_project`. `sub_project`
+without `project` is a `400`. The move follows the app's Move dialog. The
+caller needs Edit access on both the current and the destination
+sub-project; a readable destination it cannot write answers `403`, and one it
+cannot read answers like an unknown one. An archived destination is a `400`.
+The task's assignee, and the reviewer of a task without subtasks, must be
+able to work in the destination, and everyone assigned to or reviewing its
+active subtasks must be able to see it; otherwise the PATCH is a `400` and
+nothing changes. A group's own reviewer who cannot work there is cleared. A new `assignee_id` or `reviewer_id` in
+the same PATCH is checked against the destination. A moved task keeps its
+number, its labels, its links and its subtasks, which stay in their own
+sub-projects. Naming the current sub-project changes nothing.
+
+**Parent.** `parent` sets the task's parent, named by key, number or uuid,
+and `null` detaches it. The rules are those of `parent` on POST. Setting the
+parent to the task itself or to one of its own subtasks is a `400`, and so
+is a parent that is archived while the task is active. A new parent must be
+visible to the task's assignee and reviewer and to everyone working on its
+subtasks.
+
+**Labels.** `add_labels` and `remove_labels` are arrays of label ids or
+names (any case) from `GET /v1/labels`. A task's labels change one label at
+a time, never as a replacement list. Adding a label the task already has, or
+removing one it does not have, changes nothing. An unknown label is a `400`
+(`label "<ref>" not found`), and so is a label in both lists.
+
+**Order.** One PATCH may combine all of this. It applies the move first,
+then the parent, then the other fields with the archive toggle, then the
+labels, and finally posts `archive_reason`. All of it lands or none of it
+does, and each step writes its own activity row. `title` is trimmed and capped at 80
 characters (a longer one is a `400`; the same shared rule holds in the app
 and over MCP). `status` ∈ backlog · todo · progress ·
 review · done; `priority` ∈ urgent · high · medium · low. `paused` (a
@@ -611,8 +666,9 @@ sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks — it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
 subtasks, and clients show the parent's value as the sum over its unfinished
-subtasks at any depth. Such tasks return `remaining_hours: null` in the shape below. The API
-cannot set `parent_id` (response-only), so this only ever bites PATCH.
+subtasks at any depth. Such tasks return `remaining_hours: null` in the shape below, and
+the single-task read adds that sum as `group_remaining_hours`. Attaching a
+subtask clears its new parent's own hours.
 Writing `remaining_hours` also stamps the read-only `remaining_set_at`
 (0072): a remaining time is a measurement, and the planning math anchors on
 when it was taken — the server stamps the moment the value *changes* (an
@@ -645,10 +701,14 @@ clock** (0071), so a restore holds for the full threshold rather than being
 re-swept the next night. `archived` matching the current state is
 a no-op `200` returning the full task. Sending `archived` on POST is a `400` — tasks
 are created active. In the app, archiving unfinished work requires a written
-reason (stored as a comment); the API does not enforce that — API callers
-state their reasons in their own systems, or POST a comment alongside.
+reason, which becomes a comment. The API does not require one, but
+`archive_reason` (a string) in a PATCH with `archived: true` posts it the
+same way: a comment by the caller, trimmed, at the moment of the archive. It
+is posted only when that PATCH archives the task, so not for a task that was
+already archived, and a blank reason posts nothing. `archive_reason` without
+`archived: true` is a `400` (`archive_reason needs archived set to true`).
 
-Task shape returned by all task endpoints:
+Task shape of a list row from `GET /v1/tasks`:
 
 ```json
 {
@@ -657,21 +717,100 @@ Task shape returned by all task endpoints:
   "title": "…", "description": "…", "status": "todo", "is_group": false, "priority": "high",
   "assignee_id": "…uuid or null", "assignee_name": "Leo Martins",
   "reviewer_id": "…uuid or null", "reviewer_name": "Aisha Rahman",
+  "owner_id": "…uuid or null",
   "reporter_id": "…uuid or null", "reporter_name": "Nora Berg",
-  "parent_id": null, "start_week": null, "end_week": null, "due_date": null,
+  "parent_id": null, "has_hidden_parent": false,
+  "start_week": null, "end_week": null, "due_date": null,
   "remaining_hours": 8, "remaining_set_at": "…timestamp or null…",
   "paused": false,
   "archived": false, "archived_at": null,
-  "created_at": "…", "updated_at": "…"
+  "created_at": "…", "updated_at": "…",
+  "url": "https://qivo.io/app/northstar-labs/tasks/qn-3"
 }
 ```
 
-`parent_id` is the parent task's uuid when the caller can read the parent, and
-`null` otherwise, the same as for a top-level task. `is_group` still reports
-subtasks the caller cannot read, without identifying them. Their dates do not
-count toward the group's `start_week` and `end_week`.
+`GET /v1/tasks/{ref}`, `POST /v1/tasks` and `PATCH /v1/tasks/{ref}` answer
+the single-task shape, which adds four fields:
+
+```json
+{
+  "group_remaining_hours": null,
+  "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
+  "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
+  "links": [{ "kind": "blocked_by", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "progress" }]
+}
+```
+
+`owner_id` is whose work the task is: the reviewer while the task is in
+`review` with a reviewer set, else the assignee, and always the assignee on a
+group. `url` is the address the app's **Copy link** gives. `parent_id` is
+the parent task's uuid when the caller can read the parent. Otherwise it is
+`null` and `has_hidden_parent` is `true`, so a subtask under a task the
+caller cannot read is not mistaken for a top-level task.
+
+The single-task fields name only tasks the caller can read. `subtasks` lists
+the direct subtasks it can read, by number: the active ones of an active
+task, and all of them for an archived task. `links` lists the task's links
+whose other task it can read, with `kind` as seen from this task (`blocks`,
+`blocked_by` or `relates`). `labels` are ordered by name.
+`group_remaining_hours` is `null` for a task without subtasks. For a group it
+is the remaining time the app shows: the sum over the unfinished subtasks at
+any depth that the caller can read, `null` when none has hours. Like the
+group's dates, it counts only active subtasks of an active group, leaves out
+subtasks in archived projects while the group's project is active, and stops
+at a subtask the caller cannot read. `is_group` still reports subtasks the
+caller cannot read, without identifying them. Their dates do not count
+toward the group's `start_week` and `end_week`.
 
 `DELETE` returns `{ "deleted": true, "id": "…", "key": "QN-3" }`.
+
+### Links
+
+Two tasks of the organization share at most one link: one blocks the other,
+or they relate. A link's `kind` is always read from the task in the path:
+
+```
+POST   /v1/tasks/{ref}/links                 { "task": "QN-9", "kind": "blocked_by" }
+DELETE /v1/tasks/{ref}/links/{kind}/{other}  remove that link
+```
+
+`kind` is `blocks`, `blocked_by` or `relates`, and `task` and `{other}` are
+task refs. Adding or removing a link needs read access to both tasks and
+Edit access on at least one, the rule the app uses. A task the caller cannot
+read answers like an unknown one (`400` `task must name a task by key,
+number or uuid` for `task`, `404` for `{other}`); two readable tasks
+without Edit access on either answer `403`. `POST` answers `201` with the
+link as seen from `{ref}`, in the single-task `links` shape. Sending the
+same link again changes nothing, while a different link between the same
+two tasks is a `400` (`these tasks are already linked`): remove it first. A
+task cannot be linked to itself. `DELETE` answers `{ "removed": true |
+false, "kind": "…", "id": "…", "key": "QN-9", "title": "…", "status": "…" }`
+naming the other task; `removed` is `false` when no link of that kind
+existed. Adding a link writes a `linked` activity row against the blocking
+task (for `relates`, against the one whose uuid sorts first), with the
+provenance; removing one writes none, as in the app.
+
+### Labels
+
+The organization's labels, which any member may read:
+
+```
+GET   /v1/labels         every label, ordered by name
+POST  /v1/labels         { "name": "Hardware", "color": "#4C9AFF" }
+PATCH /v1/labels/{id}    { "name": "…", "color": "…" }; {id} is an id or name
+```
+
+A label is `{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }`.
+Names are trimmed, at most 40 characters and unique in the organization in
+any case. A color is `#` followed by six hex digits; a label stored before
+that rule reads as `#8A8F98`. Creating a label needs an organization admin,
+or a person or agent with the User role and Edit access to a top-level
+project (a sub-project alone is not enough), and answers `201`; it
+writes a `created label` activity row with the provenance. Renaming and
+recoloring are for organization admins only, as on the app's Labels
+settings page, and are checked before the label is looked up. Deleting a
+label is not offered over the API. Put labels on a task with `add_labels`
+and `remove_labels` on `PATCH /v1/tasks/{ref}`.
 
 ### Comments
 
@@ -779,6 +918,22 @@ curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"reviewer_id":"<profile uuid>"}' "$BASE/tasks/QN-26"
 
+# create a subtask of QN-26
+curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"project":"ENC","title":"Measure hinge play","parent":"QN-26"}' "$BASE/tasks"
+
+# move QN-26 to the PCB sub-project and label it
+curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"project":"PCB","add_labels":["Hardware"]}' "$BASE/tasks/QN-26"
+
+# QN-26 waits for QN-25
+curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"task":"QN-25","kind":"blocked_by"}' "$BASE/tasks/QN-26/links"
+
+# archive it with the reason the app would ask for
+curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"archived":true,"archive_reason":"Replaced by QN-40"}' "$BASE/tasks/QN-26"
+
 # give someone 30 plannable hours a week (needs an organization admin's token)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"plannable_hours":30}' "$BASE/users/<profile uuid>"
@@ -802,9 +957,13 @@ e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST A
 (`description “old…” → “new…”`). A reviewer change names both people
 (`reviewer unset → Aisha Rahman`), and a move into `review` lists the review
 time it set (`status In Progress → In Review, remaining 6 h → 2 h`).
+A move reads `moved` `to the <sub-project> sub-project (from <sub-project>)`,
+a parent change `moved` `under QN-<n>` or `detached` `from QN-<n>`, a label
+`labeled` or `removed a label from` `— <label>` and a link `linked` `—
+blocks QN-<n>` or `— relates to QN-<n>`, each followed by the provenance.
 Comments are the deliberate exception — no activity row is written,
 matching the app, where the comment itself is the feed entry on the
-discussion spine. Task numbers come from the same
+discussion spine. Removing a link writes no row either, as in the app. Task numbers come from the same
 per-organization counter the app uses (0050), so API- and app-created
 tasks share one sequence. `last_used_at` on the key or token updates on every
 authenticated request.

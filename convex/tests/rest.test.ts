@@ -964,9 +964,11 @@ describe('POST /v1/tasks', () => {
       assignee_name: null,
       reviewer_id: null,
       reviewer_name: null,
+      owner_id: null,
       reporter_id: f.agent.id,
       reporter_name: 'Relay',
       parent_id: null,
+      has_hidden_parent: false,
       start_week: null,
       end_week: null,
       due_date: null,
@@ -977,6 +979,11 @@ describe('POST /v1/tasks', () => {
       archived_at: null,
       created_at: out.created_at,
       updated_at: out.updated_at,
+      url: `http://localhost:5199/app/testbed/tasks/qn-${out.num}`,
+      group_remaining_hours: null,
+      labels: [],
+      subtasks: [],
+      links: [],
     })
     expect('project_name' in out).toBe(false)
     expect('created_by' in out).toBe(false)
@@ -1107,6 +1114,34 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       'start_week must not be after end_week',
     )
+  })
+
+  it('refuses the response fields project_id and parent_id rather than ignoring them', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const post = (body: unknown) =>
+      t.mutation(internal.machine.rest.createIssue, {
+        callerId: f.agent.id,
+        access: 'write',
+        keyName: KEY,
+        body: JSON.stringify(body),
+      })
+    await refused(
+      post({ project: 'FW', title: 'x', project_id: f.sub2.id }),
+      'bad_request',
+      'project_id cannot be written; move a task with project and sub_project',
+    )
+    await refused(
+      post({ project: 'FW', title: 'x', parent_id: parent.id }),
+      'bad_request',
+      'parent_id cannot be written; send parent, or null to detach',
+    )
+    const rows = await t.query(internal.machine.rest.listIssues, {
+      callerId: f.agent.id,
+      access: 'read',
+    })
+    expect(rows.map((r) => r.id)).toEqual([parent.id])
   })
 
   it('unknown and unreadable top-level projects read identically', async () => {
@@ -1639,17 +1674,30 @@ describe('PATCH /v1/tasks/{ref}', () => {
     await refused(patch({}), 'bad_request', 'no recognized fields to update')
     await refused(patch({ estimate_hours: 5 }), 'bad_request', 'no recognized fields to update')
     await refused(patch({ archived: 'yes' }), 'bad_request', 'archived must be a boolean')
-    for (const move of [
-      { project: 'FW' },
-      { project_id: f.sub.id },
-      { sub_project: 'FW', title: 'x' },
-    ]) {
+    // the response's own fields are refused with where to go, never dropped
+    await refused(
+      patch({ project_id: f.sub2.id, title: 'x' }),
+      'bad_request',
+      'project_id cannot be written; move a task with project and sub_project',
+    )
+    await refused(
+      patch({ parent_id: null }),
+      'bad_request',
+      'parent_id cannot be written; send parent, or null to detach',
+    )
+    // a move names its destination with create's grammar
+    for (const move of [{ sub_project: 'FW', title: 'x' }, { project: 7 }]) {
       await refused(
         patch(move),
         'bad_request',
-        'moving a task between projects is not supported over the API',
+        'project must name a project by uuid, number or key',
       )
     }
+    await refused(
+      patch({ archive_reason: 'done here' }),
+      'bad_request',
+      'archive_reason needs archived set to true',
+    )
     await refused(
       patch({ start_week: '2026-01-05' }),
       'bad_request',

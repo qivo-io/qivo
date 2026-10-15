@@ -52,11 +52,11 @@ const E401_MISSING = '{"error":"missing agent key (Authorization: Bearer qva_…
 const E401_UNKNOWN = '{"error":"unknown agent key"}'
 const E401_PERSON_UNKNOWN = '{"error":"unknown personal access token"}'
 
-/* The full REST issue projection (lib/core.ts issueOut, surface 'rest') as a
- * SET: the value crosses the Convex function boundary before the httpAction
- * stringifies it, and Convex canonically sorts object keys there — the live
- * wire is alphabetical, so key ORDER is not contract, key PRESENCE is
- * (explicit null, never omitted). */
+/* The full REST single-task projection (lib/core.ts taskOut, surface 'rest')
+ * as a SET: the value crosses the Convex function boundary before the
+ * httpAction stringifies it, and Convex canonically sorts object keys there —
+ * the live wire is alphabetical, so key ORDER is not contract, key PRESENCE
+ * is (explicit null, never omitted). A list row leaves out the last four. */
 const ISSUE_KEYS = [
   'archived',
   'archived_at',
@@ -66,10 +66,12 @@ const ISSUE_KEYS = [
   'description',
   'due_date',
   'end_week',
+  'has_hidden_parent',
   'id',
   'is_group',
   'key',
   'num',
+  'owner_id',
   'parent_id',
   'paused',
   'priority',
@@ -86,6 +88,11 @@ const ISSUE_KEYS = [
   'status',
   'title',
   'updated_at',
+  'url',
+  'group_remaining_hours',
+  'labels',
+  'subtasks',
+  'links',
 ].sort()
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/

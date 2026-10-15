@@ -45,12 +45,14 @@ import { hasProjectLevel } from '../lib/access'
 import {
   type AccessFlag,
   accessFlags,
+  applyTaskUpdate,
   asMachineCaller,
   CALLER_DEACTIVATED,
   CALLER_GONE,
   type Caller,
   type Catalogue,
   commentOut,
+  destinationOf,
   findIssue,
   findProjectRef,
   issueKey,
@@ -65,9 +67,14 @@ import {
   type RestCommentJson,
   type RestIssueJson,
   restProjectJson,
+  type TaskDetailJson,
+  type TaskRefJson,
+  taskOut,
+  taskRefOf,
   UUID,
   userJson,
 } from '../lib/core'
+import { byId } from '../lib/db'
 import {
   type CredentialAccess,
   ISSUE_PRIORITIES,
@@ -93,13 +100,31 @@ import {
   createIssueCore,
   deleteIssueCore,
   type IssuePatch,
-  type MachineUpdate,
+  linkAccess,
   metaNeedsSub,
   pairRule,
   REPORTER_IMMUTABLE_SENTENCE,
   SUB_MUST_NAME,
-  updateIssueCore,
 } from '../model/issues'
+import {
+  assertLabelCreator,
+  assertLabelManager,
+  createLabelCore,
+  findLabel,
+  labelChanges,
+  labelJson,
+  listLabelsCore,
+  updateLabelCore,
+} from '../model/labels'
+import {
+  addLinkCore,
+  isTaskLinkKind,
+  linkKindFrom,
+  removeLinkCore,
+  storedLink,
+  TASK_LINK_KINDS,
+  type TaskLinkKind,
+} from '../model/links'
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
 import {
@@ -114,6 +139,8 @@ import { type MachineEntry, type Principal, runEntry } from './registry'
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
+type RestTaskJson = RestIssueJson & TaskDetailJson
+type RestLabelJson = ReturnType<typeof labelJson>
 
 /* An agent key's writes name the key; a personal token's writes name no
  * token, because the person is the actor and their tokens are private. */
@@ -171,7 +198,11 @@ async function withAccess(
   callerId: string,
   access: CredentialAccess,
 ): Promise<Access> {
-  const me = await asMachineCaller(ctx, callerId, access)
+  return await accessOf(ctx, await asMachineCaller(ctx, callerId, access), access)
+}
+
+/* withAccess for a caller already resolved. */
+async function accessOf(ctx: QueryCtx, me: Caller, access: CredentialAccess): Promise<Access> {
   const cat = await loadCatalogue(ctx, me)
   const flags = await accessFlags(ctx, me, cat.projects, access)
   return {
@@ -298,6 +329,53 @@ async function applyReporter(
   const id = b.reporter_id.toLowerCase()
   await assertReporter(ctx, project, id)
   f.reporter_id = id
+}
+
+/* Fields a task body may not write, each refused with where to go instead
+ * rather than ignored, because each names something the response carries. */
+function refuseReadOnlyFields(b: Record<string, unknown>): void {
+  if ('project_id' in b) {
+    throw badRequest('project_id cannot be written; move a task with project and sub_project')
+  }
+  if ('parent_id' in b) {
+    throw badRequest('parent_id cannot be written; send parent, or null to detach')
+  }
+}
+
+/* `parent` in a body: a task the caller can read, by key, number or uuid,
+ * or null to detach. A task it cannot read answers like an unknown one.
+ * Undefined when the body leaves the parent alone. */
+async function parentFrom(
+  ctx: QueryCtx,
+  me: Caller,
+  b: Record<string, unknown>,
+): Promise<string | null | undefined> {
+  if (!('parent' in b)) return undefined
+  if (b.parent === null) return null
+  if (typeof b.parent !== 'string')
+    throw badRequest('parent must be a task key, number or uuid, or null')
+  const parent = await findIssue(ctx, me, b.parent)
+  if (parent === null) throw badRequest('parent task not found')
+  return parent.id
+}
+
+/* add_labels / remove_labels in a body, each an array of label ids or names. */
+function labelRefs(b: Record<string, unknown>, field: 'add_labels' | 'remove_labels'): string[] {
+  if (!(field in b)) return []
+  const refs = b[field]
+  if (!Array.isArray(refs) || refs.some((ref) => typeof ref !== 'string')) {
+    throw badRequest(`${field} must be an array of label ids or names`)
+  }
+  return refs as string[]
+}
+
+/* archive_reason, posted as a comment when the same request archives the
+ * task, as the app's archive dialog does. Undefined when absent. */
+function archiveReason(b: Record<string, unknown>): string | undefined {
+  if (!('archive_reason' in b)) return undefined
+  if (typeof b.archive_reason !== 'string') throw badRequest('archive_reason must be a string')
+  if (b.archived !== true) throw badRequest('archive_reason needs archived set to true')
+  return b.archive_reason
 }
 
 /* Presence-driven fields → the model's IssuePatch (a key's presence means
@@ -445,6 +523,7 @@ export const listIssues = internalQuery({
     status: v.optional(v.string()),
     priority: v.optional(v.string()),
     assignee: v.optional(v.string()),
+    owner: v.optional(v.string()),
     search: v.optional(v.string()),
     archived: v.optional(v.string()),
     limit: v.optional(v.string()),
@@ -477,13 +556,16 @@ export const listIssues = internalQuery({
     if (a.archived !== undefined && a.archived !== 'true' && a.archived !== 'false') {
       throw badRequest('archived must be true or false')
     }
-    if (a.status && !(ISSUE_STATUSES as readonly string[]).includes(a.status)) {
+    // one status, or several separated by commas
+    const statuses = a.status ? a.status.split(',').map((x) => x.trim()) : []
+    if (statuses.some((x) => !(ISSUE_STATUSES as readonly string[]).includes(x))) {
       throw badRequest(`status must be one of ${ISSUE_STATUSES.join(', ')}`)
     }
     if (a.priority && !(ISSUE_PRIORITIES as readonly string[]).includes(a.priority)) {
       throw badRequest(`priority must be one of ${ISSUE_PRIORITIES.join(', ')}`)
     }
     if (a.assignee && !UUID.test(a.assignee)) throw badRequest('assignee must be a profile uuid')
+    if (a.owner && !UUID.test(a.owner)) throw badRequest('owner must be a profile uuid')
     const limit = Math.min(Math.max(Number(a.limit ?? 100) || 100, 1), 200)
     const offset = Math.max(Number(a.offset ?? 0) || 0, 0)
     const { page, children } = await listIssuesCore(
@@ -492,9 +574,10 @@ export const listIssues = internalQuery({
       {
         scope,
         archived: a.archived === 'true',
-        status: a.status ? (a.status as IssueStatus) : undefined,
+        statuses: statuses as IssueStatus[],
         priority: a.priority ? (a.priority as IssuePriority) : undefined,
         assignee: a.assignee ? a.assignee.toLowerCase() : undefined,
+        owner: a.owner ? a.owner.toLowerCase() : undefined,
         search: a.search ? a.search : undefined,
         stars: true, // REST's `*` wildcard — REST-only
         limit,
@@ -505,6 +588,7 @@ export const listIssues = internalQuery({
       readable,
     )
     const names = await orgNames(ctx, me.org_id)
+    const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
     return await Promise.all(
       page.map((i) =>
         issueOut(ctx, i, {
@@ -514,20 +598,23 @@ export const listIssues = internalQuery({
           project: cat.byUuid.get(i.project_id),
           names,
           children,
+          orgSlug,
         }),
       ),
     )
   },
 })
 
-/* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. */
+/* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. The
+ * single-task shape adds labels, subtasks, links and a group's remaining
+ * hours (lib/core.ts taskOut). */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, a): Promise<RestIssueJson> => {
+  handler: async (ctx, a): Promise<RestTaskJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    return await issueOut(ctx, issue, { surface: 'rest', me })
+    return await taskOut(ctx, issue, { surface: 'rest', me })
   },
 })
 
@@ -536,7 +623,7 @@ export const getIssue = internalQuery({
  * answer reveals that a hidden project exists. */
 export const createIssue = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, body: v.string() },
-  handler: async (ctx, a): Promise<RestIssueJson> => {
+  handler: async (ctx, a): Promise<RestTaskJson> => {
     const { me, cat, readable, writable } = await withAccess(ctx, a.callerId, a.access)
     const b = needJson(a.body)
     const proj = findProjectRef(cat, typeof b.project === 'string' ? b.project : '')
@@ -568,11 +655,14 @@ export const createIssue = internalMutation({
     // a sub can be archived alone, so proj being live proves nothing
     assertLive(target)
     if (!writable(target.id)) throw noWrite(me)
+    refuseReadOnlyFields(b)
     const fields = issueFields(b, true)
     assertEffectiveWeekPair(fields)
     await applyPerson(ctx, target, b, fields, 'assignee_id')
     await applyPerson(ctx, target, b, fields, 'reviewer_id')
     await applyReporter(ctx, target, b, fields)
+    // a subtask: the model checks the parent chain, sight and Edit on it
+    const parent = await parentFrom(ctx, me, b)
     const now = new Date().toISOString()
     /* `paused` is forwarded on create like every other field (the deployed
      * edge once validated the old blocked flag and then dropped it from the
@@ -597,16 +687,24 @@ export const createIssue = internalMutation({
         remaining_hours:
           'remaining_hours' in fields ? (fields.remaining_hours as number | null) : undefined,
         paused: 'paused' in fields ? (fields.paused as boolean) : undefined,
+        parent_id: parent ?? undefined,
       },
     })
-    return await issueOut(ctx, issue, { surface: 'rest', me, readable, project: target })
+    return await taskOut(ctx, issue, { surface: 'rest', me, readable, project: target })
   },
 })
 
 /* PATCH /v1/tasks/{ref} (rest:474-506). A PATCH carrying fields
  * AND the archived toggle folds into ONE row write + ONE fan-out + ONE
  * activity row (updateIssueCore's machine seam); `archived` matching the
- * current state is a clean no-op 200 with the full row. */
+ * current state is a clean no-op 200 with the full row.
+ *
+ * One request may also move the task (`project`, `sub_project`, create's
+ * grammar, with Edit on both ends), set or clear its parent (`parent`), add
+ * or remove labels and give an `archive_reason`. This handler parses and
+ * checks them, a new assignee or reviewer against the destination, and
+ * lib/core.ts applyTaskUpdate writes them all or nothing, in the order MCP's
+ * update_task uses too. */
 export const updateIssue = internalMutation({
   args: {
     callerId: v.string(),
@@ -615,18 +713,14 @@ export const updateIssue = internalMutation({
     ref: v.string(),
     body: v.string(),
   },
-  handler: async (ctx, a): Promise<RestIssueJson> => {
+  handler: async (ctx, a): Promise<RestTaskJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const b = needJson(a.body)
     if ('reporter_id' in b) throw badRequest(REPORTER_IMMUTABLE_SENTENCE)
-    // a move attempt with other fields alongside is rejected whole, never a
-    // silent drop
-    if ('project' in b || 'project_id' in b || 'sub_project' in b) {
-      throw badRequest('moving a task between projects is not supported over the API')
-    }
+    refuseReadOnlyFields(b)
     const fields = issueFields(b, false)
     // a group's dates come from its subtasks, so any date key on one is
     // refused, null and unchanged values included
@@ -637,26 +731,63 @@ export const updateIssue = internalMutation({
       if (typeof b.archived !== 'boolean') throw badRequest('archived must be a boolean')
       archive = b.archived
     }
+    const reason = archiveReason(b)
     const project = await ctx.db
       .query('projects')
       .withIndex('by_uuid', (q) => q.eq('id', issue.project_id))
       .unique()
     if (project === null) throw notFound('task not found')
-    await applyPerson(ctx, project, b, fields, 'assignee_id', issue)
-    await applyPerson(ctx, project, b, fields, 'reviewer_id', issue)
+    // a move names its destination with create's grammar; an explicit null
+    // sub_project means "not provided", as on create
+    let destination: Doc<'projects'> | undefined
+    if ('project' in b || 'sub_project' in b) {
+      const { cat, readable, writable } = await accessOf(ctx, me, a.access)
+      const unknown = () => badRequest('project must name a project by uuid, number or key')
+      if (typeof b.project !== 'string') throw unknown()
+      const sub =
+        'sub_project' in b && b.sub_project !== null
+          ? typeof b.sub_project === 'string'
+            ? b.sub_project
+            : ''
+          : undefined
+      destination = destinationOf(
+        cat,
+        { readable, writable },
+        { project: b.project, sub_project: sub },
+        unknown,
+      )
+      if (!writable(destination.id)) throw noWrite(me)
+    }
+    await applyPerson(ctx, destination ?? project, b, fields, 'assignee_id', issue)
+    await applyPerson(ctx, destination ?? project, b, fields, 'reviewer_id', issue)
+    const parent = await parentFrom(ctx, me, b)
+    const labels = await labelChanges(ctx, me.org_id, {
+      add: labelRefs(b, 'add_labels'),
+      remove: labelRefs(b, 'remove_labels'),
+    })
     const toggles = archive !== undefined && archive !== (issue.archived_at !== undefined)
-    if (Object.keys(fields).length === 0 && !toggles) {
+    const other =
+      destination !== undefined || parent !== undefined || 'add_labels' in b || 'remove_labels' in b
+    if (Object.keys(fields).length === 0 && !toggles && !other) {
       // archived matching the current state is a clean no-op, not an error
-      if ('archived' in b) return await issueOut(ctx, issue, { surface: 'rest', me })
+      if ('archived' in b) return await taskOut(ctx, issue, { surface: 'rest', me })
       throw badRequest('no recognized fields to update')
     }
     // machine pre-check twin — fires on any non-null value; null clear passes
     if (fields.remaining_hours != null) await assertNoSubtasks(ctx, issue.id)
-    const now = new Date().toISOString()
-    const machine: MachineUpdate = { provenance: provenanceOf(a.keyName) }
-    if (toggles) machine.archive = archive
-    const after = await updateIssueCore(ctx, { me, issue, patch: patchFrom(fields), now, machine })
-    return await issueOut(ctx, after, { surface: 'rest', me })
+    const task = await applyTaskUpdate(ctx, {
+      me,
+      issue,
+      destination,
+      parent,
+      patch: patchFrom(fields),
+      archive,
+      labels,
+      reason,
+      now: new Date().toISOString(),
+      provenance: provenanceOf(a.keyName),
+    })
+    return await taskOut(ctx, task, { surface: 'rest', me })
   },
 })
 
@@ -716,6 +847,136 @@ export const addComment = internalMutation({
     const now = new Date().toISOString()
     const comment = await postComment(ctx, { issue, author: me, body: trimmed, now })
     return (await commentOut(ctx, comment, { surface: 'rest' })) as RestCommentJson
+  },
+})
+
+/* ---------------------------------------------------------------- links -- */
+
+type RestLinkJson = TaskRefJson & { kind: TaskLinkKind }
+
+const linkKindSentence = `kind must be one of ${TASK_LINK_KINDS.join(', ')}`
+
+/* POST /v1/tasks/{ref}/links {task, kind} links the task to another, kind
+ * as seen from {ref} (model/links.ts addLinkCore, the app's rule: sight of
+ * both tasks and Edit on either). The same link again is a no-op; another
+ * link between the two tasks is refused. Answers the link as seen from
+ * {ref}. */
+export const addLink = internalMutation({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    keyName: vKeyName,
+    ref: v.string(),
+    body: v.string(),
+  },
+  handler: async (ctx, a): Promise<RestLinkJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const issue = await findIssue(ctx, me, a.ref)
+    if (issue === null) throw notFound('task not found')
+    const b = needJson(a.body)
+    if (!isTaskLinkKind(b.kind)) throw badRequest(linkKindSentence)
+    const other = typeof b.task === 'string' ? await findIssue(ctx, me, b.task) : null
+    if (other === null) throw badRequest('task must name a task by key, number or uuid')
+    if ((await linkAccess(ctx, me, issue, other)) !== 'write') throw noWrite(me)
+    const { link } = await addLinkCore(ctx, {
+      me,
+      ...storedLink(issue.id, b.kind, other.id),
+      now: new Date().toISOString(),
+      provenance: provenanceOf(a.keyName),
+    })
+    return { kind: linkKindFrom(link, issue.id), ...taskRefOf(other) }
+  },
+})
+
+/* DELETE /v1/tasks/{ref}/links/{kind}/{other} removes that link, kind as
+ * seen from {ref}. No such link answers removed: false. Writes no activity
+ * row, as in the app. */
+export const removeLink = internalMutation({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    kind: v.string(),
+    other: v.string(),
+  },
+  handler: async (ctx, a): Promise<RestLinkJson & { removed: boolean }> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const issue = await findIssue(ctx, me, a.ref)
+    const other = await findIssue(ctx, me, a.other)
+    if (issue === null || other === null) throw notFound('task not found')
+    if (!isTaskLinkKind(a.kind)) throw badRequest(linkKindSentence)
+    if ((await linkAccess(ctx, me, issue, other)) !== 'write') throw noWrite(me)
+    const removed = await removeLinkCore(ctx, { me, a: issue, b: other, kind: a.kind })
+    return { removed: removed > 0, kind: a.kind, ...taskRefOf(other) }
+  },
+})
+
+/* --------------------------------------------------------------- labels -- */
+
+/* GET /v1/labels — the organization's labels, ordered by name. */
+export const listLabels = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess },
+  handler: async (ctx, a): Promise<RestLabelJson[]> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    return (await listLabelsCore(ctx, me.org_id)).map(labelJson)
+  },
+})
+
+/* A label body's name and color: strings when present, `required` names
+ * the ones that must be. */
+function labelFields(
+  b: Record<string, unknown>,
+  required: boolean,
+): { name?: string; color?: string } {
+  const out: { name?: string; color?: string } = {}
+  for (const field of ['name', 'color'] as const) {
+    if (!(field in b)) {
+      if (required) throw badRequest(`${field} is required`)
+      continue
+    }
+    if (typeof b[field] !== 'string') throw badRequest(`${field} must be a string`)
+    out[field] = b[field] as string
+  }
+  return out
+}
+
+/* POST /v1/labels {name, color} adds a label to the organization, by the
+ * app's rule (model/labels.ts createLabelCore): an organization admin, or
+ * a person or agent with the User role and Edit on a top-level project. */
+export const createLabel = internalMutation({
+  args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, body: v.string() },
+  handler: async (ctx, a): Promise<RestLabelJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    await assertLabelCreator(ctx, me)
+    const f = labelFields(needJson(a.body), true)
+    const label = await createLabelCore(ctx, {
+      me,
+      id: newUuid(),
+      name: f.name as string,
+      color: f.color as string,
+      now: new Date().toISOString(),
+      provenance: provenanceOf(a.keyName),
+    })
+    return labelJson(label)
+  },
+})
+
+/* PATCH /v1/labels/{id} {name?, color?} renames or recolors a label, for
+ * organization admins only, checked before the lookup so a refusal says
+ * nothing about which labels exist. {id} is a label id or name. No activity
+ * row, as in the app. */
+export const updateLabel = internalMutation({
+  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
+  handler: async (ctx, a): Promise<RestLabelJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    assertLabelManager(me)
+    const label = await findLabel(ctx, me.org_id, a.ref)
+    if (label === null) throw notFound('label not found')
+    const f = labelFields(needJson(a.body), false)
+    if (f.name === undefined && f.color === undefined) {
+      throw badRequest('no recognized fields to update')
+    }
+    return labelJson(await updateLabelCore(ctx, { me, label, ...f }))
   },
 })
 
@@ -878,6 +1139,7 @@ export const ROUTES: RestRoute[] = [
         status: query('status'),
         priority: query('priority'),
         assignee: query('assignee'),
+        owner: query('owner'),
         search: query('search'),
         archived: query('archived'),
         limit: query('limit'),
@@ -942,6 +1204,63 @@ export const ROUTES: RestRoute[] = [
     status: 201,
     run: (r, { callerId, access, param, body }) =>
       r.runMutation(internal.machine.rest.addComment, {
+        callerId,
+        access,
+        ref: param('ref'),
+        body,
+      }),
+  }),
+  route({
+    method: 'POST',
+    path: 'tasks/:ref/links',
+    access: 'write',
+    status: 201,
+    run: (r, { callerId, access, keyName, param, body }) =>
+      r.runMutation(internal.machine.rest.addLink, {
+        callerId,
+        access,
+        keyName,
+        ref: param('ref'),
+        body,
+      }),
+  }),
+  route({
+    method: 'DELETE',
+    path: 'tasks/:ref/links/:kind/:other',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, param }) =>
+      r.runMutation(internal.machine.rest.removeLink, {
+        callerId,
+        access,
+        ref: param('ref'),
+        kind: param('kind'),
+        other: param('other'),
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'labels',
+    access: 'read',
+    status: 200,
+    run: (r, { callerId, access }) =>
+      r.runQuery(internal.machine.rest.listLabels, { callerId, access }),
+  }),
+  route({
+    method: 'POST',
+    path: 'labels',
+    access: 'write',
+    status: 201,
+    run: (r, { callerId, access, keyName, body }) =>
+      r.runMutation(internal.machine.rest.createLabel, { callerId, access, keyName, body }),
+  }),
+  route({
+    method: 'PATCH',
+    path: 'labels/:ref',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, param, body }) =>
+      r.runMutation(internal.machine.rest.updateLabel, {
         callerId,
         access,
         ref: param('ref'),

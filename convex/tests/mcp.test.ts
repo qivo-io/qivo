@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '8b5f5d0c351e7183c88dab14f425fc9bc5fa05c1837a4885324f086d18ec758d'
-const SHA_TOOLS_MODERN = '1fcfc2dc0962a633441aae73bc8d5b21281c0e199a451480d17989d79b6d9e5b'
+const SHA_TOOLS_LEGACY = '5b8932a1511c74bb1007c2043db4d680068ae967c1f381fd388796890f001f9d'
+const SHA_TOOLS_MODERN = 'b2ffaf8a7a8f14ddd1270a8d91ab7485d7a83e843b41e1a109e659233954d84e'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -474,6 +474,9 @@ describe('body shape and leg selection', () => {
       'create_task',
       'update_task',
       'delete_task',
+      'set_task_link',
+      'list_labels',
+      'set_label',
     ])
     expect(JSON.stringify(catalogue.result.tools)).not.toMatch(/\bissues?\b|_issues?\b/)
     expect(await sha256hex(dataJson)).toBe(SHA_TOOLS_LEGACY)
@@ -1144,12 +1147,17 @@ describe('read tools', () => {
       'assignee_name',
       'reviewer_id',
       'reviewer_name',
+      'owner_id',
       'reporter_id',
       'reporter_name',
       'project_id',
       'project_key',
       'project_num',
       'project_name',
+      'parent_id',
+      'has_hidden_parent',
+      'start_week',
+      'end_week',
       'due_date',
       'remaining_hours',
       'remaining_set_at',
@@ -1157,8 +1165,11 @@ describe('read tools', () => {
       'archived_at',
       'created_at',
       'updated_at',
+      'url',
     ])
     expect(row.key).toBe(`QN-${i1.num}`)
+    expect(row.owner_id).toBe(fx.user.id)
+    expect(row.url).toBe(`http://localhost:5199/app/testbed/tasks/qn-${i1.num}`)
     expect(row.project_name).toBe('Firmware')
     expect(row.assignee_name).toBe('user')
     expect(row.reporter_id).toBe(fx.viewer.id)

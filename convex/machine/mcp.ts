@@ -50,6 +50,7 @@ import { httpAction, internalMutation, internalQuery } from '../_generated/serve
 import { hasProjectLevel } from '../lib/access'
 import {
   accessFlags,
+  applyTaskUpdate,
   asMachineCaller,
   assertOwnUser,
   CALLER_DEACTIVATED,
@@ -57,6 +58,7 @@ import {
   type Caller,
   childProjectsCore,
   commentOut,
+  destinationOf,
   findIssue,
   findProjectRef,
   issueKey,
@@ -69,6 +71,7 @@ import {
   loadCatalogue,
   mcpProjectOut,
   meCore,
+  taskOut,
   userJson,
 } from '../lib/core'
 import { byId } from '../lib/db'
@@ -91,23 +94,41 @@ import {
   assertAssignable,
   assertAssignableChange,
   assertLive,
+  assertNoGroupDates,
   assertNoSubtasks,
   assertReporter,
   cleanTitle,
   createIssueCore,
   deleteIssueCore,
   type IssuePatch,
+  linkAccess,
   metaNeedsSub,
   pairRule,
   REPORTER_IMMUTABLE_SENTENCE,
   SUB_MUST_NAME,
-  updateIssueCore,
 } from '../model/issues'
+import {
+  assertLabelCreator,
+  assertLabelManager,
+  createLabelCore,
+  findLabel,
+  labelChanges,
+  labelJson,
+  listLabelsCore,
+  updateLabelCore,
+} from '../model/labels'
+import {
+  addLinkCore,
+  removeLinkCore,
+  storedLink,
+  type TaskLinkKind,
+  vTaskLinkKind,
+} from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 
-/* ------------------------------------------------------------ the 13 tools
+/* ------------------------------------------------------------ the 16 tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
  * read/write `access` flag, its `def` and the `run` that calls its internal
  * fn. tools/list answers the defs in this order. Titles, descriptions and
@@ -126,7 +147,18 @@ type SchemaProp = {
   maxLength?: number
   minimum?: number
   maximum?: number
+  items?: SchemaProp
+  minItems?: number
   anyOf?: SchemaProp[]
+}
+
+/* The uuid pattern every uuid property of the tool schemas carries. */
+const UUID_PATTERN =
+  '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$'
+
+/* A task date or week start, or null to clear it. */
+const NULLABLE_DATE: SchemaProp = {
+  anyOf: [{ type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' }, { type: 'null' }],
 }
 
 type ToolDef = {
@@ -142,8 +174,13 @@ type ToolDef = {
 }
 
 /** The principal, the credential row that authenticated the request (for
- *  get_me) and the arguments a tool's `run` receives. */
-type ToolInput = Principal & { credential: EventOwner; args: Record<string, unknown> }
+ *  get_me), the arguments a tool's `run` receives and the names of the
+ *  arguments its schema does not know, which were dropped. */
+type ToolInput = Principal & {
+  credential: EventOwner
+  args: Record<string, unknown>
+  ignored: string[]
+}
 
 /** One MCP tool. `run` answers the already pretty-printed result text. */
 type McpTool = MachineEntry<ToolInput, string> & { def: ToolDef }
@@ -285,7 +322,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_tasks',
       title: 'List tasks',
       description:
-        "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
+        "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -294,8 +331,20 @@ export const TOOLS: McpTool[] = [
             type: 'string',
           },
           status: {
-            type: 'string',
-            enum: ['backlog', 'todo', 'progress', 'review', 'done'],
+            anyOf: [
+              {
+                type: 'string',
+                enum: ['backlog', 'todo', 'progress', 'review', 'done'],
+              },
+              {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: ['backlog', 'todo', 'progress', 'review', 'done'],
+                },
+                minItems: 1,
+              },
+            ],
           },
           priority: {
             type: 'string',
@@ -304,8 +353,12 @@ export const TOOLS: McpTool[] = [
           assignee_id: {
             type: 'string',
             format: 'uuid',
-            pattern:
-              '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
+            pattern: UUID_PATTERN,
+          },
+          owner_id: {
+            type: 'string',
+            format: 'uuid',
+            pattern: UUID_PATTERN,
           },
           search: {
             type: 'string',
@@ -318,6 +371,10 @@ export const TOOLS: McpTool[] = [
             minimum: 1,
             maximum: 200,
           },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+          },
         },
       },
     },
@@ -327,12 +384,14 @@ export const TOOLS: McpTool[] = [
         access,
         ...(args as {
           project?: string
-          status?: Doc<'issues'>['status']
+          status?: Doc<'issues'>['status'] | Doc<'issues'>['status'][]
           priority?: Doc<'issues'>['priority']
           assignee_id?: string
+          owner_id?: string
           search?: string
           archived?: boolean
           limit?: number
+          offset?: number
         }),
       }),
   },
@@ -342,7 +401,7 @@ export const TOOLS: McpTool[] = [
       name: 'get_task',
       title: 'Get task',
       description:
-        "One task with its full description. `is_group: true` identifies a parent whose stored status is dormant. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid — task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them).",
+        "One task with its full description, labels, subtasks and links, and for a group (`is_group: true`, whose stored status is dormant) `group_remaining_hours`. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them).",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -417,7 +476,7 @@ export const TOOLS: McpTool[] = [
       name: 'create_task',
       title: 'Create task',
       description:
-        'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects — a task is never created under another project\'s sub-project (create it in the right project, or move it later in the app). Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.',
+        'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects. A task is never created under another project\'s sub-project (create it in the right project, or move it later with update_task). `parent` (a task ref) makes it a subtask of that task. `start_week` and `end_week` plan it as week starts in YYYY-MM-DD, both or neither. Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left. Arguments this tool does not know are listed in `ignored_arguments`.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -427,6 +486,9 @@ export const TOOLS: McpTool[] = [
           },
           sub_project: {
             type: 'string',
+          },
+          parent: {
+            anyOf: [{ type: 'string' }, { type: 'null' }],
           },
           title: {
             type: 'string',
@@ -478,6 +540,8 @@ export const TOOLS: McpTool[] = [
             pattern:
               '^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$',
           },
+          start_week: NULLABLE_DATE,
+          end_week: NULLABLE_DATE,
           due_date: {
             anyOf: [
               {
@@ -501,6 +565,9 @@ export const TOOLS: McpTool[] = [
               },
             ],
           },
+          paused: {
+            type: 'boolean',
+          },
           archived: {
             type: 'boolean',
           },
@@ -508,25 +575,32 @@ export const TOOLS: McpTool[] = [
         required: ['project', 'title'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.mcp.createIssue, {
-        callerId,
-        access,
-        ...(args as {
-          project: string
-          sub_project?: string
-          title: string
-          description?: string
-          status?: Doc<'issues'>['status']
-          priority?: Doc<'issues'>['priority']
-          assignee_id?: string | null
-          reviewer_id?: string | null
-          reporter_id?: string
-          due_date?: string | null
-          remaining_hours?: number | null
-          archived?: boolean
+    run: async (r, { callerId, access, args, ignored }) =>
+      withIgnored(
+        await r.runMutation(internal.machine.mcp.createIssue, {
+          callerId,
+          access,
+          ...(args as {
+            project: string
+            sub_project?: string
+            parent?: string | null
+            title: string
+            description?: string
+            status?: Doc<'issues'>['status']
+            priority?: Doc<'issues'>['priority']
+            assignee_id?: string | null
+            reviewer_id?: string | null
+            reporter_id?: string
+            start_week?: string | null
+            end_week?: string | null
+            due_date?: string | null
+            remaining_hours?: number | null
+            paused?: boolean
+            archived?: boolean
+          }),
         }),
-      }),
+        ignored,
+      ),
   },
   {
     access: 'write',
@@ -534,7 +608,7 @@ export const TOOLS: McpTool[] = [
       name: 'update_task',
       title: 'Update task',
       description:
-        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group: its stored status is dormant and `status` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents). `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.",
+        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and `status`, `start_week` and `end_week` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents); `archive_reason` with `archived: true` posts the reason as a comment. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. `project` and `sub_project` move the task, named as in create_task. `parent` (a task ref) makes it a subtask, null detaches it. `add_labels` and `remove_labels` take label ids or names. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left. Arguments this tool does not know are listed in `ignored_arguments`.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -595,6 +669,8 @@ export const TOOLS: McpTool[] = [
               },
             ],
           },
+          start_week: NULLABLE_DATE,
+          end_week: NULLABLE_DATE,
           remaining_hours: {
             anyOf: [
               {
@@ -613,28 +689,59 @@ export const TOOLS: McpTool[] = [
           archived: {
             type: 'boolean',
           },
+          archive_reason: {
+            type: 'string',
+          },
+          project: {
+            type: 'string',
+          },
+          sub_project: {
+            type: 'string',
+          },
+          parent: {
+            anyOf: [{ type: 'string' }, { type: 'null' }],
+          },
+          add_labels: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          remove_labels: {
+            type: 'array',
+            items: { type: 'string' },
+          },
         },
         required: ['ref'],
       },
     },
-    run: (r, { callerId, access, args }) =>
-      r.runMutation(internal.machine.mcp.updateIssue, {
-        callerId,
-        access,
-        ...(args as {
-          ref: string
-          title?: string
-          description?: string
-          status?: Doc<'issues'>['status']
-          priority?: Doc<'issues'>['priority']
-          assignee_id?: string | null
-          reviewer_id?: string | null
-          due_date?: string | null
-          remaining_hours?: number | null
-          paused?: boolean
-          archived?: boolean
+    run: async (r, { callerId, access, args, ignored }) =>
+      withIgnored(
+        await r.runMutation(internal.machine.mcp.updateIssue, {
+          callerId,
+          access,
+          ...(args as {
+            ref: string
+            title?: string
+            description?: string
+            status?: Doc<'issues'>['status']
+            priority?: Doc<'issues'>['priority']
+            assignee_id?: string | null
+            reviewer_id?: string | null
+            due_date?: string | null
+            start_week?: string | null
+            end_week?: string | null
+            remaining_hours?: number | null
+            paused?: boolean
+            archived?: boolean
+            archive_reason?: string
+            project?: string
+            sub_project?: string
+            parent?: string | null
+            add_labels?: string[]
+            remove_labels?: string[]
+          }),
         }),
-      }),
+        ignored,
+      ),
   },
   {
     access: 'write',
@@ -659,6 +766,87 @@ export const TOOLS: McpTool[] = [
         callerId,
         access,
         ...(args as { ref: string }),
+      }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'set_task_link',
+      title: 'Link tasks',
+      description:
+        'Link two tasks, or with `linked: false` remove the link. `kind` is as seen from `ref`: `blocks`, `blocked_by` or `relates`. Two tasks share at most one link. Needs sight of both tasks and Edit on either; get_task lists the links.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+          other: {
+            type: 'string',
+          },
+          kind: {
+            type: 'string',
+            enum: ['blocks', 'blocked_by', 'relates'],
+          },
+          linked: {
+            type: 'boolean',
+          },
+        },
+        required: ['ref', 'other', 'kind', 'linked'],
+      },
+    },
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.mcp.setTaskLink, {
+        callerId,
+        access,
+        ...(args as { ref: string; other: string; kind: TaskLinkKind; linked: boolean }),
+      }),
+  },
+  {
+    access: 'read',
+    def: {
+      name: 'list_labels',
+      title: 'List labels',
+      description:
+        "Your organization's labels, as id, name and color. update_task adds and removes them by id or name.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {},
+      },
+    },
+    run: (r, { callerId, access }) =>
+      r.runQuery(internal.machine.mcp.listLabels, { callerId, access }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'set_label',
+      title: 'Set label',
+      description:
+        'Without `label`, create a label from `name` and `color` (#rrggbb); that needs Edit access to a top-level project. With `label` (an id or name), rename or recolor it; only organization admins may.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          label: {
+            type: 'string',
+          },
+          name: {
+            type: 'string',
+          },
+          color: {
+            type: 'string',
+          },
+        },
+      },
+    },
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.mcp.setLabel, {
+        callerId,
+        access,
+        ...(args as { label?: string; name?: string; color?: string }),
       }),
   },
 ]
@@ -753,10 +941,25 @@ const typeName = (x: unknown): string => {
 const expectedName = (p: SchemaProp): string =>
   p.type === 'integer' ? 'int' : (p.type ?? 'string')
 
+/* Whether `x` has the JSON type `p` names, before any narrower check. */
+function hasType(p: SchemaProp, x: unknown): boolean {
+  switch (p.type) {
+    case 'null':
+      return x === null
+    case 'array':
+      return Array.isArray(x)
+    case 'integer':
+      return typeof x === 'number'
+    default:
+      return typeof x === p.type
+  }
+}
+
 function checkValue(p: SchemaProp, x: unknown): string | null {
   if (p.anyOf !== undefined) {
-    if (x === null) return null // every anyOf in the schema set is <type>|null
-    return checkValue(p.anyOf[0], x)
+    // the alternative of the value's own type decides, else the first one
+    const alternative = p.anyOf.find((option) => hasType(option, x)) ?? p.anyOf[0]
+    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x)
   }
   switch (p.type) {
     case 'string': {
@@ -799,6 +1002,18 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       if (typeof x !== 'boolean') return `Invalid input: expected boolean, received ${typeName(x)}`
       return null
     }
+    case 'array': {
+      if (!Array.isArray(x)) return `Invalid input: expected array, received ${typeName(x)}`
+      if (p.minItems !== undefined && x.length < p.minItems) {
+        return `Too small: expected array to have >=${p.minItems} items`
+      }
+      if (p.items === undefined) return null
+      for (const item of x) {
+        const problem = checkValue(p.items, item)
+        if (problem !== null) return problem
+      }
+      return null
+    }
     default:
       return null
   }
@@ -837,6 +1052,19 @@ function pickArgs(tool: ToolDef, args: Record<string, unknown>): Record<string, 
   return out
 }
 
+/* The argument names pickArgs drops because the schema does not know them,
+ * in the order sent. create_task and update_task report them (withIgnored),
+ * so a client with an outdated cached schema learns they changed nothing. */
+const unknownArgs = (tool: ToolDef, args: Record<string, unknown>): string[] =>
+  Object.keys(args).filter((key) => !Object.hasOwn(tool.inputSchema.properties, key))
+
+/* A create or update result with `ignored_arguments` appended when some
+ * argument was dropped; otherwise the result bytes are unchanged. */
+function withIgnored(text: string, ignored: readonly string[]): string {
+  if (ignored.length === 0) return text
+  return pretty({ ...(JSON.parse(text) as Record<string, unknown>), ignored_arguments: ignored })
+}
+
 /* --------------------------------------------------- JSON-RPC dispatch core
  * Everything from body parse on, exported so the conformance suite can drive
  * it byte-for-byte without transport plumbing. `runTool` receives validated,
@@ -850,7 +1078,11 @@ export type McpHeaders = { get(name: string): string | null }
  * `text()` bytes). Stringification happens INSIDE the internal fn, before the
  * function-boundary crossing: Convex canonically SORTS object keys in values
  * that cross it, and the deployed projections' key order is the wire. */
-export type ToolRunner = (name: string, args: Record<string, unknown>) => Promise<string>
+export type ToolRunner = (
+  name: string,
+  args: Record<string, unknown>,
+  ignored: string[],
+) => Promise<string>
 
 type ToolOutcome =
   | { kind: 'protocol'; error: { code: number; message: string } }
@@ -886,7 +1118,7 @@ async function callTool(
     }
   }
   try {
-    const text = await run(tool.name, pickArgs(tool, args))
+    const text = await run(tool.name, pickArgs(tool, args), unknownArgs(tool, args))
     return { kind: 'result', result: { content: [{ type: 'text', text }] } }
   } catch (e) {
     if (e instanceof ConvexError) {
@@ -1162,6 +1394,13 @@ async function mustFindIssue(ctx: QueryCtx, me: Caller, ref: string): Promise<Do
   return issue
 }
 
+/* A parent task named by ref, in the uniform not-found grammar. */
+async function mustFindParent(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<'issues'>> {
+  const parent = await findIssue(ctx, me, ref)
+  if (parent === null) throw notFound(`parent task "${ref}" not found (or not visible to you)`)
+  return parent
+}
+
 /* The caller's readable/writable predicates over the whole org catalogue —
  * one by_org scan + the access predicates, shared by every scoped read.
  * Writable also needs a credential that may write. */
@@ -1291,12 +1530,14 @@ export const listIssues = internalQuery({
     callerId: v.string(),
     access: vCredentialAccess,
     project: v.optional(v.string()),
-    status: v.optional(vIssueStatus),
+    status: v.optional(v.union(vIssueStatus, v.array(vIssueStatus))),
     priority: v.optional(vIssuePriority),
     assignee_id: v.optional(v.string()),
+    owner_id: v.optional(v.string()),
     search: v.optional(v.string()),
     archived: v.optional(v.boolean()),
     limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
@@ -1319,32 +1560,38 @@ export const listIssues = internalQuery({
           : []
       scope = [p.id, ...kids.map((k) => k.id)]
     }
-    const { page: rows } = await listIssuesCore(
+    const { page: rows, children } = await listIssuesCore(
       ctx,
       me,
       {
         scope,
         archived: a.archived === true,
-        status: a.status,
+        statuses: typeof a.status === 'string' ? [a.status] : a.status,
         priority: a.priority,
         assignee: a.assignee_id?.toLowerCase(),
+        owner: a.owner_id?.toLowerCase(),
         search: a.search,
         stars: false, // MCP has no wildcard — a literal `*` must not widen
         limit: Math.min(a.limit ?? 50, 200),
-        offset: 0,
+        offset: a.offset ?? 0,
         order: 'key',
       },
       cat,
       readable,
     )
     const names = await orgNames(ctx, me)
+    const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
     const out = []
     for (const row of rows) {
       out.push(
         await issueOut(ctx, row, {
           surface: 'mcp',
+          me,
+          readable,
           project: cat.byUuid.get(row.project_id),
           names,
+          children,
+          orgSlug,
         }),
       )
     }
@@ -1352,12 +1599,14 @@ export const listIssues = internalQuery({
   },
 })
 
+/* get_task answers the single-task shape: the list row plus labels,
+ * subtasks, links and a group's remaining hours (lib/core.ts taskOut). */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, { callerId, access, ref }) => {
     const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
-    return pretty(await issueOut(ctx, issue, { surface: 'mcp' }))
+    return pretty(await taskOut(ctx, issue, { surface: 'mcp', me }))
   },
 })
 
@@ -1405,15 +1654,20 @@ export const createIssue = internalMutation({
     assignee_id: v.optional(v.union(v.string(), v.null())),
     reviewer_id: v.optional(v.union(v.string(), v.null())),
     reporter_id: v.optional(v.string()),
+    parent: v.optional(v.union(v.string(), v.null())),
+    start_week: v.optional(v.union(v.string(), v.null())),
+    end_week: v.optional(v.union(v.string(), v.null())),
     due_date: v.optional(v.union(v.string(), v.null())),
     remaining_hours: v.optional(v.union(v.number(), v.null())),
+    paused: v.optional(v.boolean()),
     archived: v.optional(v.boolean()),
   },
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    // declared in the schema so clients can't have it silently stripped;
-    // never accepted — and refused FIRST, before any other validation
+    // declared in the schema so the call is refused outright, FIRST and
+    // before any other validation, rather than only named in
+    // ignored_arguments while an active task is created
     if (a.archived !== undefined) {
       throw badRequest('tasks are created active — archive with update_task after creating')
     }
@@ -1451,6 +1705,8 @@ export const createIssue = internalMutation({
     if (reviewer !== undefined) await assertAssignable(ctx, target, reviewer, 'reviewer')
     if (reporter !== undefined) await assertReporter(ctx, target, reporter)
     if (!writable(target.id)) throw noWrite()
+    // a subtask: the model checks the parent chain, sight and Edit on it
+    const parent = typeof a.parent === 'string' ? await mustFindParent(ctx, me, a.parent) : null
     const row = await createIssueCore(ctx, {
       me,
       args: {
@@ -1463,8 +1719,12 @@ export const createIssue = internalMutation({
         assignee_id: assignee ?? null,
         reviewer_id: reviewer ?? null,
         reporter_id: reporter,
+        parent_id: parent?.id ?? null,
+        start_week: a.start_week ?? null,
+        end_week: a.end_week ?? null,
         due_date: a.due_date ?? null,
         remaining_hours: a.remaining_hours ?? null,
+        paused: a.paused ?? null,
       },
       now,
       machine: { provenance: PROVENANCE },
@@ -1473,6 +1733,13 @@ export const createIssue = internalMutation({
   },
 })
 
+/* update_task. The fields it always had keep their deployed check order
+ * (the readable pre-checks before the write gate). A move (`project`,
+ * `sub_project`, create's grammar, with Edit on both ends), `parent`, the
+ * plan weeks and labels are checked after the gate. With a move, a new
+ * assignee or reviewer is checked against the destination. lib/core.ts
+ * applyTaskUpdate then writes the change all or nothing, in the order REST's
+ * PATCH uses too. */
 export const updateIssue = internalMutation({
   args: {
     callerId: v.string(),
@@ -1485,9 +1752,17 @@ export const updateIssue = internalMutation({
     assignee_id: v.optional(v.union(v.string(), v.null())),
     reviewer_id: v.optional(v.union(v.string(), v.null())),
     due_date: v.optional(v.union(v.string(), v.null())),
+    start_week: v.optional(v.union(v.string(), v.null())),
+    end_week: v.optional(v.union(v.string(), v.null())),
     remaining_hours: v.optional(v.union(v.number(), v.null())),
     paused: v.optional(v.boolean()),
     archived: v.optional(v.boolean()),
+    archive_reason: v.optional(v.string()),
+    project: v.optional(v.string()),
+    sub_project: v.optional(v.string()),
+    parent: v.optional(v.union(v.string(), v.null())),
+    add_labels: v.optional(v.array(v.string())),
+    remove_labels: v.optional(v.array(v.string())),
   },
   handler: async (ctx, a) => {
     const now = new Date().toISOString()
@@ -1526,6 +1801,14 @@ export const updateIssue = internalMutation({
       patch.due_date = a.due_date
       updated.push('due_date')
     }
+    if (a.start_week !== undefined) {
+      patch.start_week = a.start_week
+      updated.push('start_week')
+    }
+    if (a.end_week !== undefined) {
+      patch.end_week = a.end_week
+      updated.push('end_week')
+    }
     if (a.remaining_hours !== undefined) {
       patch.remaining_hours = a.remaining_hours
       updated.push('remaining_hours')
@@ -1534,15 +1817,32 @@ export const updateIssue = internalMutation({
       patch.paused = a.paused
       updated.push('paused')
     }
+    const moves = a.project !== undefined || a.sub_project !== undefined
+    if (a.parent !== undefined) updated.push('parent_id')
+    if (moves) updated.push('project_id')
+    if (a.add_labels !== undefined || a.remove_labels !== undefined) updated.push('labels')
+    // the request's own shape, before anything is looked up
+    if (a.archive_reason !== undefined && a.archived !== true) {
+      throw badRequest('archive_reason needs archived set to true')
+    }
+    if (moves && a.project === undefined) {
+      throw badRequest(
+        'project is required to move a task; sub_project names one of its sub-projects',
+      )
+    }
     // the readable pre-check sentences fire before the core's rule backstop;
     // resending the current assignee or reviewer is no change and is not
-    // checked again, as in the app
+    // checked again, as in the app. A move checks them at its destination,
+    // after the write gate.
     const project = await byId(ctx, 'projects', issue.project_id)
     if (project === null) throw notFound('task not found')
-    if (typeof patch.assignee_id === 'string')
-      await assertAssignableChange(ctx, project, issue.assignee_id, patch.assignee_id)
-    if (typeof patch.reviewer_id === 'string')
-      await assertAssignableChange(ctx, project, issue.reviewer_id, patch.reviewer_id, 'reviewer')
+    const checkPeople = async (where: Doc<'projects'>): Promise<void> => {
+      if (typeof patch.assignee_id === 'string')
+        await assertAssignableChange(ctx, where, issue.assignee_id, patch.assignee_id)
+      if (typeof patch.reviewer_id === 'string')
+        await assertAssignableChange(ctx, where, issue.reviewer_id, patch.reviewer_id, 'reviewer')
+    }
+    if (!moves) await checkPeople(project)
     // archived is a boolean on the surface, a timestamp underneath; matching
     // the current state is a no-op slot, not a toggle
     const toggles = a.archived !== undefined && a.archived !== (issue.archived_at !== undefined)
@@ -1557,15 +1857,38 @@ export const updateIssue = internalMutation({
     // the RLS-refused UPDATE)
     if (patch.remaining_hours != null) await assertNoSubtasks(ctx, issue.id)
     await mustWrite(ctx, me, issue.project_id)
-    // ONE row write, ONE notify fan-out (the Archived/Restored line rides
-    // with the field lines), ONE activity row + the cascade — the trusted
-    // machine-narration seam folds the toggle into the same patch
-    await updateIssueCore(ctx, {
+    // a group's dates come from its subtasks, so any date key on one is
+    // refused, null and unchanged values included
+    if (a.start_week !== undefined || a.end_week !== undefined) await assertNoGroupDates(ctx, issue)
+    let destination: Doc<'projects'> | undefined
+    if (a.project !== undefined) {
+      const { cat, readable, writable } = await catalogueFlags(ctx, me, a.access)
+      destination = destinationOf(
+        cat,
+        { readable, writable },
+        { project: a.project, sub_project: a.sub_project },
+        (ref) => notFound(`project "${ref}" not found (or not visible to you)`),
+      )
+      if (!writable(destination.id)) throw noWrite()
+      await checkPeople(destination)
+    }
+    const parent =
+      typeof a.parent === 'string' ? (await mustFindParent(ctx, me, a.parent)).id : a.parent
+    const labels = await labelChanges(ctx, me.org_id, {
+      add: a.add_labels ?? [],
+      remove: a.remove_labels ?? [],
+    })
+    await applyTaskUpdate(ctx, {
       me,
       issue,
+      destination,
+      parent,
       patch,
+      archive: a.archived,
+      labels,
+      reason: a.archive_reason,
       now,
-      machine: { provenance: PROVENANCE, archive: a.archived },
+      provenance: PROVENANCE,
     })
     return pretty({ id: issue.id, key: issueKey(issue.num), updated })
   },
@@ -1583,6 +1906,93 @@ export const deleteIssue = internalMutation({
   },
 })
 
+/* set_task_link adds or removes one link, `kind` as seen from `ref`
+ * (model/links.ts, the app's rule: sight of both tasks and Edit on either).
+ * Asking for the current state changes nothing; `changed` says whether the
+ * call did. Adding writes the 'linked' activity row, signed via MCP. */
+export const setTaskLink = internalMutation({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    other: v.string(),
+    kind: vTaskLinkKind,
+    linked: v.boolean(),
+  },
+  handler: async (ctx, a) => {
+    const now = new Date().toISOString()
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const issue = await mustFindIssue(ctx, me, a.ref)
+    const other = await mustFindIssue(ctx, me, a.other)
+    if ((await linkAccess(ctx, me, issue, other)) !== 'write') throw noWrite()
+    const changed = a.linked
+      ? (
+          await addLinkCore(ctx, {
+            me,
+            ...storedLink(issue.id, a.kind, other.id),
+            now,
+            provenance: PROVENANCE,
+          })
+        ).added
+      : (await removeLinkCore(ctx, { me, a: issue, b: other, kind: a.kind })) > 0
+    return pretty({
+      key: issueKey(issue.num),
+      other: issueKey(other.num),
+      kind: a.kind,
+      linked: a.linked,
+      changed,
+    })
+  },
+})
+
+export const listLabels = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess },
+  handler: async (ctx, { callerId, access }) => {
+    const me = await asMachineCaller(ctx, callerId, access)
+    return pretty((await listLabelsCore(ctx, me.org_id)).map(labelJson))
+  },
+})
+
+/* set_label creates a label without `label` (model/labels.ts
+ * createLabelCore: an organization admin, or the User role with Edit on a
+ * top-level project), or renames or recolors the one `label` names
+ * (updateLabelCore: organization admins only, checked before the lookup).
+ * `created` tells which. */
+export const setLabel = internalMutation({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    label: v.optional(v.string()),
+    name: v.optional(v.string()),
+    color: v.optional(v.string()),
+  },
+  handler: async (ctx, a) => {
+    const now = new Date().toISOString()
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    if (a.label === undefined) {
+      await assertLabelCreator(ctx, me)
+      if (a.name === undefined || a.color === undefined) {
+        throw badRequest('a new label needs name and color')
+      }
+      const label = await createLabelCore(ctx, {
+        me,
+        id: newUuid(),
+        name: a.name,
+        color: a.color,
+        now,
+        provenance: PROVENANCE,
+      })
+      return pretty({ ...labelJson(label), created: true })
+    }
+    assertLabelManager(me)
+    const label = await findLabel(ctx, me.org_id, a.label)
+    if (label === null) throw notFound(`label "${a.label}" not found`)
+    if (a.name === undefined && a.color === undefined) throw badRequest('no fields to update')
+    const after = await updateLabelCore(ctx, { me, label, name: a.name, color: a.color })
+    return pretty({ ...labelJson(after), created: false })
+  },
+})
+
 /* --------------------------------------------------------- tool dispatcher
  * Validated, stripped wire arguments → the tool's registry entry, run with
  * the narrowest runner its access flag allows. */
@@ -1593,11 +2003,12 @@ async function runTool(
   credential: EventOwner,
   name: string,
   args: Record<string, unknown>,
+  ignored: string[],
 ): Promise<string> {
   const tool = TOOL_INDEX.get(name)
   // Unreachable, because callTool resolves names against TOOL_INDEX first.
   if (tool === undefined) throw new Error(`unknown tool ${name}`)
-  return await runEntry(ctx, tool, { ...principal, credential, args })
+  return await runEntry(ctx, tool, { ...principal, credential, args, ignored })
 }
 
 /* Whether the named tool needs qivo:write. A known tool does unless its flag
@@ -1742,7 +2153,7 @@ const mcpPost = httpAction(async (ctx, request) => {
             params_json: JSON.stringify(params),
           })
         },
-        runTool: async (name, args) => {
+        runTool: async (name, args, ignored) => {
           // Both protocol versions enter this same gate. Recheck the live grant
           // on every tool in a batch, alongside the existing permission checks,
           // and pass its live access, so scopes narrowed mid-session apply.
@@ -1760,6 +2171,7 @@ const mcpPost = httpAction(async (ctx, request) => {
             oauthOwner(live),
             name,
             args,
+            ignored,
           )
         },
       })
@@ -1801,8 +2213,8 @@ const mcpPost = httpAction(async (ctx, request) => {
     return await dispatchMcp({
       headers: request.headers,
       bodyText,
-      runTool: (name, args) =>
-        runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args),
+      runTool: (name, args, ignored) =>
+        runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args, ignored),
       runEvent: (method, params) =>
         ctx.runAction(internal.webhookActions.manage, {
           owner,

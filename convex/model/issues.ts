@@ -803,9 +803,15 @@ export async function browserVerbDetail(
  *           cascade with its usual suppression semantics (descendants: no
  *           notify; restored ancestors: suppressNotify). A value matching the
  *           current state is a no-op slot, not a toggle.
+ *   update's `appGrammar` keeps the browser verb and detail and appends the
+ *           provenance instead. A parent change uses it, because the
+ *           machine diff cannot name tasks: the activity reader checks the
+ *           tasks a row names through namedTaskNums, which knows only the
+ *           browser wording
+ *   move    detail = the browser's destination sentence plus the provenance
  *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail */
 export type MachineNarration = { provenance: string }
-export type MachineUpdate = MachineNarration & { archive?: boolean }
+export type MachineUpdate = MachineNarration & { archive?: boolean; appGrammar?: boolean }
 
 /* ----------------------------------------------------------- create core */
 
@@ -1152,7 +1158,11 @@ export async function updateIssueCore(
   //    + provenance), else the browser verb/detail strings, ported verbatim
   let verb: string
   let detail: string | undefined
-  if (a.machine !== undefined) {
+  if (a.machine?.appGrammar === true) {
+    const browser = await browserVerbDetail(ctx, { before: issue, after, patch })
+    verb = browser.verb
+    detail = machineDetail(browser.detail, a.machine.provenance)
+  } else if (a.machine !== undefined) {
     // The diff's user labels — built from the before/after profile ids; a
     // missing profile leaves the uuid standing (issueChanges' own fallback).
     const names = new Map<string, string>()
@@ -1198,12 +1208,18 @@ export async function updateIssueCore(
  * clearParentRemaining does). num is org-scoped and immutable: the key
  * survives the move; labels survive too (org vocabulary). The activity row is
  * keyed to the SOURCE project and records the destination as its related
- * project. issues.move checks Edit on BOTH ends before calling this, and
- * the write gate here checks them again before any guard, so these guards
- * only ever describe a destination the caller can write. */
+ * project. issues.move and the machine moves check Edit on BOTH ends before
+ * calling this, and the write gate here checks them again before any guard,
+ * so these guards only ever describe a destination the caller can write. */
 export async function moveIssueCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; project_id: string; now: string },
+  a: {
+    me: Doc<'profiles'>
+    issue: Doc<'issues'>
+    project_id: string
+    now: string
+    machine?: MachineNarration
+  },
 ): Promise<Doc<'issues'>> {
   const { me, issue, project_id, now } = a
   await assertCanEdit(ctx, me, issue.project_id)
@@ -1249,6 +1265,8 @@ export async function moveIssueCore(
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // a group stays with its assignee: clearing its reviewer hands nothing over
   await notifyIssueUpdate(ctx, { before, after, actor: me, now, isGroup })
+  // snapshot.ts isUnrecordedProjectMove recognizes older rows by this wording
+  const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}`
   const event = {
     org_id: issue.org_id,
     actor_id: me.id,
@@ -1256,8 +1274,7 @@ export async function moveIssueCore(
     target_type: 'issue' as const,
     target_id: issue.id,
     label: after.title,
-    // snapshot.ts isUnrecordedProjectMove recognizes older rows by this wording
-    detail: `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}`,
+    detail: a.machine === undefined ? moved : machineDetail(moved, a.machine.provenance),
     project_id: issue.project_id, // the SOURCE project (old planner.ts:2063-2066)
     related_project_id: target.id, // the detail names it, so readers need it too
     ts: now,

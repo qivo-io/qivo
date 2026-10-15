@@ -38,6 +38,12 @@ The task Reviewer added a `reviewer_id` argument to `create_task` and
 `update_task` and changed several tool descriptions. A client holding the
 older catalogue keeps working, but its model does not learn about
 `reviewer_id` or the review time until the client refreshes its tool list.
+Task parity added plan weeks, `parent`, moves, labels and `archive_reason`
+to those two tools, `owner_id`, `offset` and status lists to `list_tasks`,
+and the `set_task_link`, `list_labels` and `set_label` tools. `create_task`
+and `update_task` name any argument they do not know in
+`ignored_arguments`, so a client with an older catalogue sees what it sent
+in vain.
 
 ## Access model: the credential is a user
 
@@ -337,7 +343,7 @@ why. What changed, for anyone writing against the endpoint directly:
   `io.modelcontextprotocol/serverInfo`, since no client can be assumed to have
   asked. Every result carries a `resultType`, `"complete"` for all of ours.
 - **`tools/list` and `server/discover` are cacheable.** Both come back with
-  `ttlMs` (an hour) and `cacheScope: "private"` — the thirteen tools are
+  `ttlMs` (an hour) and `cacheScope: "private"` — the sixteen tools are
   identical for every credential, but the response sits behind a bearer
   token, so cache it per client and never in a shared cache. Stop re-listing
   on every turn.
@@ -356,7 +362,7 @@ why. What changed, for anyone writing against the endpoint directly:
 with `initialize`, so a request without the `protocolVersion` envelope is
 served by the revision's own backward-compatible leg: `initialize` (echoing
 a supported 2025-era revision), `ping` (answering `{}`), `tools/list` and
-`tools/call`, the same thirteen tools, one fresh server per request. That leg
+`tools/call`, the same sixteen tools, one fresh server per request. That leg
 also keeps the old framing: each response is a single SSE `event: message`
 frame, behind the Accept header the 2025 protocol required (it must name
 both `application/json` and `text/event-stream`, or the answer is `406`);
@@ -645,7 +651,8 @@ anything stored), or a uuid.
 The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
-operations. This pre-launch rename replaces the former tool names; clients
+operations, `set_task_link` for links between tasks, and `list_labels` and
+`set_label` for the organization's labels. This pre-launch rename replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
@@ -653,15 +660,18 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id` and `name` — teams group users for project sharing and administration. MCP does not list team grants; `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
-| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status`, `priority`, `assignee_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit`; every result includes reporter, assignee and reviewer. `assignee_id` matches the stored assignee, also while a reviewer owns the task. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag |
+| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer; `ref` is `QN-482`, `482`, or a uuid — resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's discussion thread, oldest first, with author and edit attribution |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row — the comment is its own feed entry |
-| `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs — another project's sub-project is a hard error (moving tasks is the app's Move dialog). Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters. The result's `updated` lists the fields you sent (and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
+| `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters. Returns `id` and `key`, plus `ignored_arguments` when you sent arguments the tool does not know |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `ignored_arguments` names arguments the tool does not know |
 | `delete_task` | Delete a task (attachment bytes are reaped) |
+| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
+| `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
+| `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
 
 ### Who am I
@@ -713,6 +723,72 @@ with a cached tool catalogue must refresh discovery or reconnect.
 
 The answer never contains a secret, a hash or a display prefix. A read-only
 OAuth connection may call `get_me`, because it only reads.
+
+### Task results
+
+`list_tasks` rows and `get_task` share these fields besides the task's own
+columns: `owner_id` (whose work it is: the reviewer while the task is in
+`review` with one, else the assignee, and always the assignee on a group),
+`parent_id` with `has_hidden_parent`, `start_week` and `end_week`, and `url`,
+the address the app's **Copy link** gives. `parent_id` is the parent's uuid
+when you can read the parent. Otherwise it is `null` and `has_hidden_parent`
+is `true`, so a subtask under a task hidden from you is not mistaken for a
+top-level task. A group's `start_week` and `end_week` come from the subtasks
+you can read, at any depth.
+
+`get_task` adds four fields, which name only tasks you can read:
+
+```json
+{
+  "group_remaining_hours": 6.5,
+  "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
+  "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
+  "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }]
+}
+```
+
+`subtasks` are the direct subtasks you can read, by number: the active ones
+of an active task, and all of them for an archived task. `links` are the
+task's links whose other task you can read, `kind` as seen from this task.
+`group_remaining_hours` is `null` for a task without subtasks. For a group it
+is the remaining time the app shows: the sum over its unfinished subtasks at
+any depth that you can read, or `null` when none has hours. Like the group's
+dates, it counts only active subtasks of an active group, leaves out
+subtasks in archived projects while the group's project is active, and stops
+at a subtask you cannot read.
+
+### Moving, parents and labels
+
+`update_task` moves a task with `project` and `sub_project`, named as in
+`create_task`; `sub_project` without `project` is refused. The move follows
+the app's Move dialog. You need Edit access on the current and the
+destination sub-project; a destination you can read but not write is
+refused with `your account has no write access to that project`, and one you
+cannot read reads `project "<ref>" not found (or not visible to you)`. The
+task's assignee, and the reviewer of a task without subtasks, must be able to
+work in the destination, and everyone working on its active subtasks must be
+able to see it. A new `assignee_id` or `reviewer_id` in the same call is
+checked against the destination. A moved task keeps its key, labels, links
+and subtasks.
+
+`parent` (a task ref) makes the task a subtask of that task, and `null`
+detaches it. You need Edit access on the parent's project, because the
+parent becomes a group and loses its own remaining hours. A parent you
+cannot read reads `parent task "<ref>" not found (or not visible to you)`.
+The task cannot become its own parent or a subtask of one of its subtasks,
+an active task cannot go under an archived parent, and chains stop at 20
+tasks. Everyone assigned to or reviewing the task or its subtasks must be
+able to see the new parent.
+
+`add_labels` and `remove_labels` take label ids or names in any case from
+`list_labels`. Labels change one at a time, never as a replacement list, and
+asking for a label the task already has, or removing one it lacks, changes
+nothing. An unknown label, or one in both lists, is refused.
+
+One call may combine all of it. It applies the move, then the parent, then
+the other fields with the archive toggle, then the labels, then
+`archive_reason`. Everything lands or nothing does, and each step writes its
+own activity row signed `via MCP`.
 
 ### Import attribution
 
@@ -771,9 +847,10 @@ reviewer as its owner. In every other status the assignee owns it.
 
 The hours field on tasks is `remaining_hours` — named `estimate_hours` until
 2026-07-17 (0063; it now means hours of work *left*). The old name is no
-longer in the `create_task`/`update_task` schemas, and an argument the
-schema doesn't know is stripped before the tool runs — a client still sending
-`estimate_hours` silently changes nothing; update it. A task **with
+longer in the `create_task`/`update_task` schemas. An argument the schema
+does not know is dropped before the tool runs, so a client still sending
+`estimate_hours` changes nothing; both tools name it in
+`ignored_arguments`. Update the client. A task **with
 active subtasks** has no remaining time of its own (0066; archived
 subtasks stopped counting in 0070): `update_task` with a
 non-null `remaining_hours` for one is an error — usually "remaining_hours
@@ -791,7 +868,8 @@ Tasks also read back `remaining_set_at` (0072) — the server-stamped moment
 app's planning math anchors on when it was taken. The stamp moves only when
 the value genuinely *changes* (re-sending the same number is a no-op there),
 clears together with the hours, and cannot be written over MCP: it is not in
-any tool schema, so the server strips it like every unknown argument.
+any tool schema, so the server drops it like every unknown argument and
+`update_task` lists it in `ignored_arguments`.
 
 A task that enters `review`, created there or moved there, gets its project's
 review time as `remaining_hours` (2 hours unless the project lead sets
@@ -807,12 +885,16 @@ on the Archive page. A nightly sweep archives tasks that have been `done`
 for 30 days, or for a legacy team archive setting's number of days where an
 older project kept one. Restoring a still-`done` task restarts its
 auto-archive clock (0071), so a restore holds for the full threshold.
-`create_task` rejects `archived` outright (tasks are created active) — the
-key is declared in the schema precisely so it can't be silently stripped
-like an unknown argument.
-In the app, archiving unfinished work requires a written reason (stored as a
-comment); `update_task { archived: true }` does not enforce that — add one
-with `add_comment` when a reason is worth keeping.
+`create_task` rejects `archived` outright, because tasks are created
+active. The schema declares the key so that the call is refused. An unknown
+argument would only be named in `ignored_arguments`, and the call would
+still create an active task the client did not ask for.
+In the app, archiving unfinished work requires a written reason, stored as a
+comment. `update_task { archived: true }` does not require one, but
+`archive_reason` in the same call posts it the same way, as your comment at
+the moment of the archive. It is posted only when the call archives the
+task, so not for a task that is already archived, and a blank reason posts
+nothing. `archive_reason` without `archived: true` is refused.
 
 Archived **projects** (0106) are the same idea one altitude up, and a
 separate axis again. A project that has been put away in the app keeps

@@ -2,9 +2,12 @@ Connect an assistant through MCP or use REST for scripts. Both act as a Qivo
 user with that user's project permissions ([User roles](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)). External connections require
 a regular account; the private demo is browser-only.
 
-MCP offers `list_tasks`, `get_task`, `create_task`, `update_task` and
-`delete_task`. REST uses `/v1/tasks` and `/v1/tasks/{ref}`. Both work with the
-same tasks and permanent `QN-<number>` IDs.
+MCP offers `list_tasks`, `get_task`, `create_task`, `update_task`,
+`delete_task`, `set_task_link`, `list_labels` and `set_label`. REST uses
+`/v1/tasks`, `/v1/tasks/{ref}`, `/v1/tasks/{ref}/links` and `/v1/labels`.
+Both work with the same tasks and permanent `QN-<number>` IDs, and both can
+create subtasks, move tasks between sub-projects, link tasks and add or
+remove labels by the same rules as the app.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
@@ -38,8 +41,8 @@ own task event subscriptions.
 
 `GET /v1/me` says who the credential acts as, the organization's calendar
 settings and whether the credential can make changes. The API lists projects
-and users and supports task search, creation, updates, deletion,
-archive/restore and comments. With an organization admin's or team leader's
+and users and supports task search, creation, updates, moves, subtasks,
+links, labels, deletion, archive/restore and comments. With an organization admin's or team leader's
 token it also sets a person's plannable weekly hours. It checks field values,
 including the 80-character title limit and paired planning dates. An
 unreadable task returns 404, as does a nonexistent one. Changes name the agent
