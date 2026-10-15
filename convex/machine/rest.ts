@@ -134,6 +134,7 @@ import {
   restAuth401,
   sha256hex,
 } from './auth'
+import { DISCUSSION_ROUTES } from './discussion'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
@@ -985,7 +986,7 @@ export const updateLabel = internalMutation({
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-api-key, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
 }
 
 const json = (body: unknown, status: number): Response =>
@@ -1045,7 +1046,7 @@ type RouteInput<Name extends string> = Principal & {
 
 /** A route's fields besides its registry entry. */
 type RouteFields<Path extends string> = {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   path: Path
   status: 200 | 201
 }
@@ -1267,6 +1268,7 @@ export const ROUTES: RestRoute[] = [
         body,
       }),
   }),
+  ...DISCUSSION_ROUTES,
 ]
 
 /**
@@ -1449,8 +1451,8 @@ const restHandler = httpAction(async (ctx, req) => {
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
     const body = req.method === 'POST' || req.method === 'PATCH' ? await req.text() : ''
-    // other methods on a known path (PATCH …/comments, PUT anything) fall to
-    // the unknown-route 404, as deployed
+    // other methods on a known path (PATCH …/comments, PUT anywhere but
+    // …/following) fall to the unknown-route 404, as deployed
     const found = findRoute(req.method, seg.slice(1))
     if (found === null) return err('unknown route', 404)
     const result = await runEntry(ctx, found.route, {
@@ -1475,11 +1477,11 @@ const restHandler = httpAction(async (ctx, req) => {
 
 /* Registration — http.ts calls this ONCE at its bolt-on seam and is never
  * edited from here. Per-method routes: httpRouter has no wildcard method, and
- * pathPrefix '/v1/' does not match bare /v1. PUT is registered so it answers
- * the deployed auth-then-404 behavior; HEAD cannot be registered (accepted
- * edge). Requests outside /v1/* get Convex's default 404, not the in-handler
- * sentence (accepted delta — no root catch-all, it would collide with the
- * auth + file-gateway prefixes). */
+ * pathPrefix '/v1/' does not match bare /v1. PUT serves the following route
+ * and answers the deployed auth-then-404 everywhere else; HEAD cannot be
+ * registered (accepted edge). Requests outside /v1/* get Convex's default
+ * 404, not the in-handler sentence (an accepted delta, because a root
+ * catch-all would collide with the auth + file-gateway prefixes). */
 export function registerRestRoutes(http: HttpRouter): void {
   for (const method of ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS', 'PUT'] as const) {
     http.route({ path: '/v1', method, handler: restHandler })

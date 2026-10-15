@@ -16,12 +16,11 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { canSeeProject, hasProjectLevel } from './lib/access'
+import { canSeeProject } from './lib/access'
 import { byId } from './lib/db'
-import { badRequest, forbidden, notFound, orgMutation } from './lib/functions'
-import { postComment } from './model/comments'
+import { badRequest, notFound, orgMutation } from './lib/functions'
+import { deleteComment, editComment, postComment } from './model/comments'
 import { assertCanEdit } from './model/issues'
-import { notifyCommentUpdate } from './model/messages'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
@@ -73,40 +72,27 @@ export const create = orgMutation({
 /* ----------------------------------------------------------------- update
  * P.updateComment — in-place, no history. A same-body write is a silent
  * no-op WITHOUT stamps (comments_guard only stamped when the body actually
- * changed). Mention fan-out covers only mentions ADDED by the edit. */
+ * changed). Mention fan-out covers only mentions ADDED by the edit. The
+ * rule and the write are model/comments.ts editComment, shared with REST
+ * and MCP. */
 export const update = orgMutation({
   args: { id: v.string(), body: v.string() },
   handler: async (ctx, { id, body }) => {
     const now = new Date().toISOString()
     const { comment, issue } = await myComment(ctx, id)
-    if (
-      comment.author !== ctx.me.id &&
-      !(await hasProjectLevel(ctx, ctx.me, issue.project_id, 'lead'))
-    ) {
-      throw forbidden('only the author or a project lead can edit this comment')
-    }
-    const text = trimmedBody(body)
-    if (text === comment.body) return null
-    await ctx.db.patch(comment._id, { body: text, edited_at: now, edited_by: ctx.me.id })
-    const after = (await ctx.db.get(comment._id)) as Doc<'comments'>
-    await notifyCommentUpdate(ctx, { before: comment, after, issue, actor: ctx.me, now })
+    await editComment(ctx, { me: ctx.me, comment, issue, body, now })
     return null
   },
 })
 
 /* ----------------------------------------------------------------- remove
- * P.deleteComment. No notify, no narration — the thread just loses the row. */
+ * P.deleteComment. It notifies and narrates nothing; the thread just loses
+ * the row (model/comments.ts deleteComment, shared with REST and MCP). */
 export const remove = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const { comment, issue } = await myComment(ctx, id)
-    if (
-      comment.author !== ctx.me.id &&
-      !(await hasProjectLevel(ctx, ctx.me, issue.project_id, 'lead'))
-    ) {
-      throw forbidden('only the author or a project lead can delete this comment')
-    }
-    await ctx.db.delete(comment._id)
+    await deleteComment(ctx, { me: ctx.me, comment, issue })
     return null
   },
 })

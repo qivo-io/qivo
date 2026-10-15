@@ -56,7 +56,7 @@ import {
   updateIssueCore,
 } from './model/issues'
 import { addLinkCore, removeLinkCore } from './model/links'
-import { subscribeToIssue } from './model/messages'
+import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
@@ -369,25 +369,16 @@ export const removeLink = orgMutation({
 /* ---------------------------------------------------------- subscriptions
  * P.setIssueSubscribed keeps the own-row insert/delete surface. No activity
  * or notify is generated when changing notification preferences. The insert
- * fence is canSeeProject, stated here as an explicit refusal (the RLS
- * insert's error toast), then subscribeToIssue applies its own silent fence
- * idempotently. */
+ * fence is canSeeProject, stated as an explicit refusal (the RLS insert's
+ * error toast), then subscribeToIssue applies its own silent fence
+ * idempotently. Both are model/messages.ts followTask and unfollowTask,
+ * which the machine surfaces run too. */
 export const subscribe = orgMutation({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, issue_id)
-    const project = await byId(ctx, 'projects', issue.project_id)
-    if (project === null || !(await canSeeProject(ctx, ctx.me, project))) {
-      throw forbidden('no access to this task')
-    }
-    await subscribeToIssue(ctx, {
-      issue_id: issue.id,
-      profile: ctx.me,
-      org_id: issue.org_id,
-      project,
-      now,
-    })
+    await followTask(ctx, { me: ctx.me, issue, now })
     return null
   },
 })
@@ -395,11 +386,7 @@ export const subscribe = orgMutation({
 export const unsubscribe = orgMutation({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
-    const row = await ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_issue_profile', (q) => q.eq('issue_id', issue_id).eq('profile_id', ctx.me.id))
-      .unique()
-    if (row !== null) await ctx.db.delete(row._id)
+    await unfollowTask(ctx, { me: ctx.me, issueId: issue_id })
     return null
   },
 })

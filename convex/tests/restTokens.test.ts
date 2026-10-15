@@ -130,11 +130,31 @@ async function fixture() {
       created_at: NOW,
     }),
   )
+  // comments by someone else on that task: one to edit, and one for each
+  // credential's delete request
+  const comment = async () => {
+    const id = uuid()
+    await t.run((ctx) =>
+      ctx.db.insert('comments', {
+        id,
+        issue_id: other.id,
+        author: f.user.id,
+        body: 'Written by someone else',
+        created_at: NOW,
+      }),
+    )
+    return id
+  }
+  const editable = await comment()
+  const deletable: string[] = []
+  for (let n = 0; n < 5; n++) deletable.push(await comment())
   return {
     t,
     f,
     viewerAgent,
     other: `QN-${other.num}`,
+    editable,
+    deletable,
     label,
     writer: await plantToken(t, f.admin, { access: 'write' }),
     reader: await plantToken(t, f.admin, { access: 'read' }),
@@ -190,6 +210,22 @@ const REQUESTS: Record<string, (fx: Fx, task: string) => { path: string; body?: 
     body: { name: `Token ${uuid().slice(0, 8)}`, color: '#123456' },
   }),
   'PATCH labels/:ref': (fx) => ({ path: `/v1/labels/${fx.label}`, body: { color: '#654321' } }),
+  'PATCH comments/:ref': (fx) => ({
+    path: `/v1/comments/${fx.editable}`,
+    body: { body: `Edited ${uuid().slice(0, 8)}` },
+  }),
+  // each credential's request takes its own comment
+  'DELETE comments/:ref': (fx) => ({ path: `/v1/comments/${fx.deletable.pop()}` }),
+  'GET inbox': () => ({ path: '/v1/inbox' }),
+  'POST inbox/read': (_, task) => ({ path: '/v1/inbox/read', body: { tasks: [task] } }),
+  'POST inbox/unread': (_, task) => ({ path: '/v1/inbox/unread', body: { tasks: [task] } }),
+  'POST inbox/remove': (_, task) => ({ path: '/v1/inbox/remove', body: { tasks: [task] } }),
+  'POST inbox/snooze': (_, task) => ({
+    path: '/v1/inbox/snooze',
+    body: { tasks: [task], until: new Date(Date.now() + 3_600_000).toISOString() },
+  }),
+  'PUT tasks/:ref/following': (_, task) => ({ path: `/v1/tasks/${task}/following` }),
+  'DELETE tasks/:ref/following': (_, task) => ({ path: `/v1/tasks/${task}/following` }),
 }
 
 const label = (route: { method: string; path: string }) => `${route.method} ${route.path}`
@@ -199,8 +235,18 @@ type Outcome = 'ok' | { status: number; error: string }
 
 /* A Viewer person may not write any project; a Standard user agent may, but
  * neither may set someone's plannable hours or edit a label (organization
- * admins only), and a Viewer person may not add a label either. */
-const refusedWrite = (route: { path: string }, kind: 'viewer' | 'agent'): Outcome => {
+ * admins only), and a Viewer person may not add a label either. Neither
+ * wrote the comment the comment routes name, nor leads its project. Both
+ * manage their own inbox and follows, as a Viewer person does in the app. */
+const refusedWrite = (
+  route: { method: string; path: string },
+  kind: 'viewer' | 'agent',
+): Outcome => {
+  if (route.path === 'comments/:ref') {
+    const verb = route.method === 'PATCH' ? 'edit' : 'delete'
+    return { status: 403, error: `only the author or a project lead can ${verb} this comment` }
+  }
+  if (route.path.startsWith('inbox/') || route.path === 'tasks/:ref/following') return 'ok'
   if (route.path === 'users/:ref') return { status: 403, error: RIGHTS }
   if (route.path === 'labels/:ref') return { status: 403, error: LABEL_ADMINS }
   if (route.path === 'labels' && kind === 'viewer') {

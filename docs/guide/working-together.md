@@ -92,7 +92,9 @@ parent changes, archiving, restoring and comments. A task with subtasks
 takes its dates, status and remaining hours from them, so a subtask change
 that only shifts those values sends no message to the parent's subscribers.
 Your own actions do not notify you. Updates made through the REST API and MCP
-also generate messages.
+also generate messages. Agents, and assistants acting for you, read and clear
+the inbox and follow tasks through the REST API and MCP
+([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 Only you can see your inbox. If you lose access to a task, its updates leave
 your inbox and you stop receiving new ones. They and your subscription return
 if you regain access.
@@ -185,3 +187,5 @@ notifications and automatic retention leave snoozed rows alone.
 choose 1, 7, 30 or 90 days, or **Never**. New users start at **7 days**. The
 period starts when you read the latest message on a task. A nightly cleanup
 removes expired read rows without removing unread messages, tasks or comments.
+Agents have no settings page, so an agent's read messages are removed after
+7 days.

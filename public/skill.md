@@ -42,7 +42,8 @@ A write also needs Edit access on the project, as described below.
 ## Choose the interface
 
 - **Connected MCP:** Prefer it for routine task discovery, edits, moves,
-  subtasks, links, labels, comments, and archive/restore. The endpoint is
+  subtasks, links, labels, comments, the inbox, following and
+  archive/restore. The endpoint is
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
   allows at most 200; page with `offset` until a shorter page arrives. If
@@ -186,6 +187,30 @@ Useful field rules:
   organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
   reason becomes a comment, as in the app's archive dialog.
+
+## Comments, inbox and following
+
+- **Edit or delete a comment:** `update_comment` or `delete_comment` with the
+  comment's `id` from `list_comments`, or REST `PATCH` and `DELETE
+  /v1/comments/{id}`. Only the comment's author or a lead of the task's
+  project may. An edit that adds a mention notifies that person.
+- **Follow a task:** `set_following` with `ref` and `following`, or REST `PUT`
+  (follow) and `DELETE` (stop) on `/v1/tasks/{ref}/following`. Followers get
+  the task's updates in their inbox. `get_task` shows `following` and
+  `followers`. You are also made a follower when you are assigned, mentioned
+  or comment.
+- **Read your inbox:** `list_inbox` or `GET /v1/inbox` lists one item per
+  task you can read, latest activity first, with its unread count and
+  messages. Use `unread_only` to see what is new. The task title shown is the
+  current one.
+- **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
+  `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
+  `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
+  `remove` removes every read item; repeat while `has_more` is `true`.
+  `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
+  items back). Mark items read once you have handled them, so new updates
+  stand out. Unread messages are never removed automatically; an agent's read
+  messages are removed after 7 days.
 
 ## Receive task events
 

@@ -9,6 +9,12 @@ Both work with the same tasks and permanent `QN-<number>` IDs, and both can
 create subtasks, move tasks between sub-projects, link tasks and add or
 remove labels by the same rules as the app.
 
+Both can also edit and delete comments, follow tasks and work through the
+inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
+`update_comment`, `delete_comment`, `set_following`, `list_inbox` and
+`update_inbox`. REST uses `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
+and `/v1/inbox`. An agent reads and clears its own inbox this way.
+
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
 project's review time unless the request supplies hours ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)). Assignee filters
@@ -42,7 +48,7 @@ own task event subscriptions.
 `GET /v1/me` says who the credential acts as, the organization's calendar
 settings and whether the credential can make changes. The API lists projects
 and users and supports task search, creation, updates, moves, subtasks,
-links, labels, deletion, archive/restore and comments. With an organization admin's or team leader's
+links, labels, deletion, archive/restore, comments, following and the inbox. With an organization admin's or team leader's
 token it also sets a person's plannable weekly hours. It checks field values,
 including the 80-character title limit and paired planning dates. An
 unreadable task returns 404, as does a nonexistent one. Changes name the agent
@@ -122,7 +128,8 @@ Organization admins can instead create an agent user with its own key ([Agent us
 
 MCP tools say who the connection acts as and whether it can make changes;
 list teams, projects, users, project users and tasks; read and change tasks;
-read and add comments; and set plannable weekly hours. Request
+read, add, edit and delete comments; follow tasks; read and clear your inbox;
+and set plannable weekly hours. Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

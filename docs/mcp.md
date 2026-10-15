@@ -133,10 +133,12 @@ create, list and remove its own [webhook subscriptions](#task-events-and-webhook
 
 **The Viewer role.** A user whose **organization role** is `viewer`
 (migration 0102) holds a seat and signs in, reads exactly the projects they
-can access directly or through a team, and writes nothing. A Viewer person's
-credential may be able to make changes, but every writing tool still refuses
-with the same "your account has no write access to that project" a missing
-grant produces, and they are never handed a task. It is a ceiling, not a
+can access directly or through a team, and changes no project. A Viewer
+person's credential may be able to make changes, but every tool that changes
+a project still refuses with the same "your account has no write access to
+that project" a missing grant produces, and they are never handed a task. As
+in the app, a Viewer person may still follow tasks, manage their own inbox and
+edit or delete comments they wrote. It is a ceiling, not a
 grant. It opens no project and only stops any other path (an individual or
 team grant, a project-lead title, a team leadership) from exceeding read. An
 **agent** can be a viewer too, which is how a read-only key is made, with one
@@ -343,7 +345,7 @@ why. What changed, for anyone writing against the endpoint directly:
   `io.modelcontextprotocol/serverInfo`, since no client can be assumed to have
   asked. Every result carries a `resultType`, `"complete"` for all of ours.
 - **`tools/list` and `server/discover` are cacheable.** Both come back with
-  `ttlMs` (an hour) and `cacheScope: "private"` — the sixteen tools are
+  `ttlMs` (an hour) and `cacheScope: "private"` — the tools are
   identical for every credential, but the response sits behind a bearer
   token, so cache it per client and never in a shared cache. Stop re-listing
   on every turn.
@@ -362,7 +364,7 @@ why. What changed, for anyone writing against the endpoint directly:
 with `initialize`, so a request without the `protocolVersion` envelope is
 served by the revision's own backward-compatible leg: `initialize` (echoing
 a supported 2025-era revision), `ping` (answering `{}`), `tools/list` and
-`tools/call`, the same sixteen tools, one fresh server per request. That leg
+`tools/call`, the same tools, one fresh server per request. That leg
 also keeps the old framing: each response is a single SSE `event: message`
 frame, behind the Accept header the 2025 protocol required (it must name
 both `application/json` and `text/event-stream`, or the answer is `406`);
@@ -651,8 +653,10 @@ anything stored), or a uuid.
 The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
-operations, `set_task_link` for links between tasks, and `list_labels` and
-`set_label` for the organization's labels. This pre-launch rename replaces the former tool names; clients
+operations, `set_task_link` for links between tasks, `list_labels` and
+`set_label` for the organization's labels, `update_comment` and
+`delete_comment` for comments, `list_inbox` and `update_inbox` for your inbox,
+and `set_following` to follow a task. This pre-launch rename replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
@@ -672,6 +676,11 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
+| `update_comment` | Replace a comment's `body`; `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
+| `delete_comment` | Delete a comment, by the same rule as `update_comment` |
+| `list_inbox` | Your inbox, one item per task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset` |
+| `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
+| `set_following` | Follow a task (`following: true`) or stop following it |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
 
 ### Who am I
@@ -736,16 +745,21 @@ is `true`, so a subtask under a task hidden from you is not mistaken for a
 top-level task. A group's `start_week` and `end_week` come from the subtasks
 you can read, at any depth.
 
-`get_task` adds four fields, which name only tasks you can read:
+`get_task` adds six fields, which name only tasks you can read:
 
 ```json
 {
   "group_remaining_hours": 6.5,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
-  "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }]
+  "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }],
+  "following": false,
+  "followers": [{ "id": "…uuid…", "name": "Priya Patel" }]
 }
 ```
+
+`following` says whether you follow the task, and `followers` lists everyone
+who does, by name, as the app's follower list shows them.
 
 `subtasks` are the direct subtasks you can read, by number: the active ones
 of an active task, and all of them for an archived task. `links` are the
@@ -789,6 +803,81 @@ One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
 `archive_reason`. Everything lands or nothing does, and each step writes its
 own activity row signed `via MCP`.
+
+### Comments, inbox and following
+
+`update_comment` and `delete_comment` take the comment's `id` from
+`list_comments`. As in the app, the comment's author may edit or delete it,
+and so may a lead of the task's project (an organization admin leads every
+project); anyone else is refused with `only the author or a project lead can
+edit this comment` (or `delete`). A comment on a task you cannot read reads
+`comment "<id>" not found (or not visible to you)`, like an unknown one. The
+new body is trimmed and may not be blank. Sending the text the comment
+already has changes nothing, and the result's `changed` says so. An edit
+records `edited_at` and `edited_by_id`, and people it newly mentions follow
+the task and get an inbox message. Neither tool writes an activity row or a
+task event.
+
+`set_following` follows a task (`following: true`) or stops following it.
+Following needs only read access to the task, and the result's `changed`
+is `false` when nothing changed. Followers receive the task's updates in
+their inbox. Qivo also makes you follow a task when you are assigned or
+handed it, mentioned on it or comment on it. You can change only your own
+follow.
+
+`list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
+task, latest activity first:
+
+```json
+[
+  {
+    "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
+    "unread_count": 1,
+    "latest_at": "2026-10-14T09:12:03.000Z",
+    "snoozed_until": null,
+    "messages": [
+      {
+        "id": "…uuid…", "kind": "comment", "detail": "New comment",
+        "actor_id": "…uuid…", "actor_name": "Priya Patel",
+        "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
+      }
+    ]
+  }
+]
+```
+
+`task` is the task as it is now, its current title included. Items are listed
+only for tasks you can read; messages about a task you lost access to stay
+stored and come back with the access. `messages` run oldest first, `kind` is
+`mention`, `comment` or `change`, and `detail` is the line the app shows.
+`latest_at` is the newest message's time, or the end of a snooze when that
+is later. Snoozed items are left out unless `include_snoozed` is `true`.
+
+`update_inbox` applies `action` to your items about `tasks` (task refs), or
+with `all: true` to every item:
+
+- `read` marks the items read and, like opening an item in the app, keeps
+  only each item's latest message. With `all`, it marks every item read
+  except snoozed ones.
+- `unread` marks the items unread again.
+- `remove` removes the items. With `all`, it removes every read message
+  except snoozed ones and leaves unread messages alone.
+- `snooze` hides the items until `until`, an ISO date-time in the future and
+  at most a year ahead, and leaves them unread. `until: null` brings snoozed
+  items back now. A new update on the task brings its item back too.
+
+The result is `{ "action": "read", "tasks": ["QN-3"], "has_more": false }`,
+where `tasks` lists the items the call changed. With `all`, each call
+changes up to 256 messages; repeat it while `has_more` is `true`. Like the
+app's bulk actions, `all` also reaches messages about tasks you can no longer
+read, but the result names only tasks you can read. A task ref you cannot
+read refuses the whole call with `task "<ref>" not found (or not visible to
+you)`. Naming neither or both of `tasks` and `all`, `all` with `unread` or
+`snooze`, `until` on another action and `snooze` without `until` are refused.
+
+The nightly cleanup removes read messages after your retention period, which
+a person sets in the app. An agent has no settings page, so its read
+messages are removed after 7 days. Unread messages are never removed by it.
 
 ### Import attribution
 

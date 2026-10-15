@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '5b8932a1511c74bb1007c2043db4d680068ae967c1f381fd388796890f001f9d'
-const SHA_TOOLS_MODERN = 'b2ffaf8a7a8f14ddd1270a8d91ab7485d7a83e843b41e1a109e659233954d84e'
+const SHA_TOOLS_LEGACY = '072a4c852afe845267de2fe5f0548b4ba2541a2e3f5df5b2a112e3f600417331'
+const SHA_TOOLS_MODERN = '8f6ea32b5f51b1029c9e113f8df87e3449a36e5a849830dec6c1239236b1681d'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -477,6 +477,11 @@ describe('body shape and leg selection', () => {
       'set_task_link',
       'list_labels',
       'set_label',
+      'update_comment',
+      'delete_comment',
+      'list_inbox',
+      'update_inbox',
+      'set_following',
     ])
     expect(JSON.stringify(catalogue.result.tools)).not.toMatch(/\bissues?\b|_issues?\b/)
     expect(await sha256hex(dataJson)).toBe(SHA_TOOLS_LEGACY)
@@ -1586,6 +1591,8 @@ describe('write tools', () => {
     // stripped before an otherwise-valid update reaches the mutation.
     await mintKey(fx.t, fx.agent, QVA)
     await plantSubscription(fx.t, { issue_id: selected.id, profile_id: fx.user.id })
+    // the follower now shows in the task, so compare against this read
+    const followedRow = await get(selected.key)
     for (const modern of [false, true]) {
       const headers = (name: string): Record<string, string> =>
         modern
@@ -1630,7 +1637,7 @@ describe('write tools', () => {
         expect(refused.content[0].text).toBe(
           'Input validation error: Invalid arguments for tool update_task: reporter_id: reporter_id is set when a task is created and cannot be changed',
         )
-        expect(await get(selected.key)).toEqual(selectedRow)
+        expect(await get(selected.key)).toEqual(followedRow)
       }
     }
     expect(await activityFor(fx.t, fx.org.id)).toEqual(activity)
