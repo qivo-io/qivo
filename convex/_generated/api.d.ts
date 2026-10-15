@@ -63,6 +63,7 @@ import type * as lib_deployment from "../lib/deployment.js";
 import type * as lib_enums from "../lib/enums.js";
 import type * as lib_fileTokens from "../lib/fileTokens.js";
 import type * as lib_functions from "../lib/functions.js";
+import type * as lib_inbox from "../lib/inbox.js";
 import type * as lib_mailConfig from "../lib/mailConfig.js";
 import type * as lib_oauth from "../lib/oauth.js";
 import type * as lib_oauthAdapter from "../lib/oauthAdapter.js";
@@ -208,6 +209,7 @@ declare const fullApi: ApiFromModules<{
   "lib/enums": typeof lib_enums;
   "lib/fileTokens": typeof lib_fileTokens;
   "lib/functions": typeof lib_functions;
+  "lib/inbox": typeof lib_inbox;
   "lib/mailConfig": typeof lib_mailConfig;
   "lib/oauth": typeof lib_oauth;
   "lib/oauthAdapter": typeof lib_oauthAdapter;

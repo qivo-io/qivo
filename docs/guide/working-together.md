@@ -126,7 +126,10 @@ with their assignee and do not hand over ([Task ownership](./how-work-is-organiz
 project and sub-project. New updates refresh that row and increase its unread
 counter. Opening the row or the task marks its messages read and leaves only
 the latest message in the inbox. The task's Activity keeps the history.
-Further updates start the unread counter again on the same row.
+Further updates start the unread counter again on the same row. A row keeps
+at most 50 unread updates. Beyond that, Qivo drops the oldest ones but keeps
+the first unread update and the newest mention, comment and change. The Inbox
+loads up to 500 messages, unread ones first.
 
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.
 Read state follows you across devices. Sort by newest or oldest, or filter for unread,

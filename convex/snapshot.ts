@@ -6,6 +6,7 @@ import { canSeeProject } from './lib/access'
 import { memberSeesActivity, withoutLegacySubtaskCount } from './lib/activityVisibility'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
+import { INBOX_LIMIT, loadInbox } from './lib/inbox'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
@@ -37,16 +38,19 @@ const orgRowFor = (doc: Doc<'organizations'>, isAdmin: boolean): OrgRow => {
   return isAdmin && billing !== undefined ? { ...rest, billing } : rest
 }
 
-// Unread first, then read_at ascending and created_at descending.
-const messageOrder = (a: Doc<'messages'>, b: Doc<'messages'>): number => {
-  if ((a.read_at === undefined) !== (b.read_at === undefined)) {
-    return a.read_at === undefined ? -1 : 1
-  }
-  if (a.read_at !== undefined && b.read_at !== undefined && a.read_at !== b.read_at) {
-    return a.read_at < b.read_at ? -1 : 1
-  }
+/* Newest first by created_at, the id breaking a tie, the total order the
+ * prune uses. */
+const newestFirst = (a: Doc<'messages'>, b: Doc<'messages'>): number => {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1
-  return 0
+  return a.id === b.id ? 0 : a.id < b.id ? 1 : -1
+}
+
+/* Most recently read first, then newestFirst. */
+const recentlyReadFirst = (a: Doc<'messages'>, b: Doc<'messages'>): number => {
+  const ra = a.read_at ?? ''
+  const rb = b.read_at ?? ''
+  if (ra !== rb) return ra < rb ? 1 : -1
+  return newestFirst(a, b)
 }
 
 const CAP = 500
@@ -78,7 +82,8 @@ export const forMe = authedQuery({
     const milestones: AppRow<'milestones'>[] = []
     const orgLoad: OrgLoadRow[] = []
     const activityDocs: Doc<'activity_events'>[] = []
-    const messageDocs: Doc<'messages'>[] = []
+    const unreadDocs: Doc<'messages'>[] = []
+    const readDocs: Doc<'messages'>[] = []
     const seenLinkIds = new Set<string>()
     /* Active tasks and project rows fill these caches below. Only an admin's
      * activity row about a task outside the active set needs a lookup; never
@@ -295,14 +300,16 @@ export const forMe = authedQuery({
         if (++kept >= CAP) break
       }
 
-      // The caller's inbox, limited to tasks in this working set; apply the
-      // blended cap below. Rows about a task the caller can no longer access
-      // stay stored and return if access does.
-      const inbox = await ctx.db
-        .query('messages')
-        .withIndex('by_recipient', (q) => q.eq('recipient_id', me.id))
-        .collect()
-      messageDocs.push(...aboutShownTasks(inbox, workingSet.shown))
+      // The caller's inbox, limited to tasks in this working set and read
+      // within lib/inbox.ts's bounds, so a backlog nobody clears cannot stop
+      // the app from loading; the blended cap applies below. The machine
+      // inbox reads with the same INBOX_LIMIT, so the rows this seat
+      // delivers are among the ones the API lists for it. Rows about a task
+      // the caller can no longer access stay stored and return if access
+      // does.
+      const inbox = await loadInbox(ctx, me.id, workingSet.shown, INBOX_LIMIT)
+      unreadDocs.push(...inbox.unread)
+      readDocs.push(...inbox.read)
 
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))
@@ -312,18 +319,22 @@ export const forMe = authedQuery({
     activityDocs.sort((a, b) => (a.ts === b.ts ? 0 : a.ts < b.ts ? 1 : -1))
     const activity = activityDocs.slice(0, CAP).map(rowOf)
 
-    messageDocs.sort(messageOrder)
+    // One cap across all organizations, unread rows first, newest first,
+    // then read rows, most recently read first, as the list shows them.
+    unreadDocs.sort(newestFirst)
+    readDocs.sort(recentlyReadFirst)
     // Cleanup must remain available when unread rows fill the client cap and
-    // hide every read notification. Count every deliverable read row across
-    // all seats, minus snoozed rows, which messages.removeRead leaves alone.
-    // removeRead also deletes read rows about tasks the caller can no longer
-    // access; they are not counted because the caller cannot see them.
-    const readMessageCount = messageDocs.reduce(
-      (count, message) =>
-        count + (message.read_at !== undefined && message.snoozed_until === undefined ? 1 : 0),
+    // hide every read notification. Count the read rows each seat's bounded
+    // read kept (at most INBOX_LIMIT per seat), before the cut, minus snoozed
+    // rows, which messages.removeRead leaves alone. The client only asks
+    // whether it is above zero. removeRead also deletes read rows about tasks
+    // the caller can no longer access; they are not counted because the
+    // caller cannot see them.
+    const readMessageCount = readDocs.reduce(
+      (count, message) => count + (message.snoozed_until === undefined ? 1 : 0),
       0,
     )
-    const messages = messageDocs.slice(0, CAP).map(rowOf)
+    const messages = [...unreadDocs, ...readDocs].slice(0, CAP).map(rowOf)
 
     return {
       auth_user_id: ctx.authUserId,
