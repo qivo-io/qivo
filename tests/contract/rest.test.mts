@@ -261,7 +261,7 @@ describe('method handling and CORS preflight', () => {
     expect(res.headers.get('allow')).toBe('GET,HEAD,POST,DELETE,PATCH,PUT,OPTIONS')
   })
 
-  test('PUT is registered to answer the deployed auth-then-404 behavior', async () => {
+  test('PUT answers the deployed auth-then-404 behavior outside the access routes', async () => {
     const bare = await call('PUT', '/v1/tasks/QN-1', { headers: {} })
     expect(bare.status).toBe(401)
     expect(await bare.text()).toBe(E401_MISSING)
@@ -279,7 +279,7 @@ describe('method handling and CORS preflight', () => {
       'authorization, x-api-key, content-type',
     )
     expect(res.headers.get('access-control-allow-methods')).toBe(
-      'GET, POST, PATCH, DELETE, OPTIONS',
+      'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     )
   })
 })

@@ -197,39 +197,64 @@ describe('removing someone who has work in the project', () => {
     expect(ids).toHaveLength(1) // the organization admin
   })
 
-  it('keeps a person as a Viewer with their tasks', async () => {
+  it('keeps a person as a Viewer with their tasks, in one server write', async () => {
     await load()
     const leo = P.accessRemoval(user('leo'))
     expect(await P.removeAccess(user('leo'), { keep: true }, leo.items)).toBe(true)
     expect(P.levelOn(work, 'leo')).toBe('viewer')
     expect(vm('t1').assignee).toBe('leo')
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(requests).toEqual([
+      {
+        name: 'projects:removeAccess',
+        args: {
+          org_id: expect.any(String),
+          id: work,
+          user_id: 'leo',
+          on_held_tasks: 'keep_as_viewer',
+        },
+      },
+    ])
   })
 
-  it('reassigns the reviewed tasks, then removes the grant once all are saved', async () => {
+  it('reassigns the tasks and removes the grant in one server write', async () => {
     await load()
     const leo = P.accessRemoval(user('leo'))
-    const removed = P.removeAccess(user('leo'), { to: 'dan' }, leo.items.slice(0, 1))
+    const removed = P.removeAccess(user('leo'), { to: 'dan' }, leo.items)
+    // painted at once; a refusal re-adopts the server's rows
     expect(vm('t1').assignee).toBe('dan')
-    expect(vm('t2').reviewer).toBe('leo') // not in the reviewed list
-    expect(P.levelOn(work, 'leo')).toBe('user') // waits for the server
-    expect(await removed).toBe(true)
+    expect(vm('t2').reviewer).toBe('dan')
     expect(P.levelOn(work, 'leo')).toBeNull()
+    expect(await removed).toBe(true)
     expect(vm('t3').assignee).toBe('leo') // Done stays
-    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'projects:update'])
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['projects:removeAccess', { reassign_to: 'dan' }],
+    ])
     // Unassigned clears them instead
     const crew = P.accessRemoval(crewGrant())
     expect(await P.removeAccess(crewGrant(), { to: null }, crew.items)).toBe(true)
     expect(vm('t4').assignee).toBeFalsy()
+    expect(requests.at(-1)?.args).toMatchObject({
+      team_id: 'crew',
+      on_held_tasks: { reassign_to: null },
+    })
   })
 
-  it('keeps the grant when the server refuses a reassignment', async () => {
+  it('removes a grant nobody loses work through without settling anything', async () => {
     await load()
-    refused.add('t2')
+    expect(await P.removeAccess(user('leo'), { to: null }, [])).toBe(true)
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['projects:removeAccess', 'leave'],
+    ])
+  })
+
+  it('keeps the grant and every task when the server refuses a reassignment', async () => {
+    await load()
+    refused.add(work)
     const leo = P.accessRemoval(user('leo'))
     expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
     expect(P.levelOn(work, 'leo')).toBe('user')
-    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'issues:update'])
+    expect(vm('t1').assignee).toBe('leo')
+    expect(requests.map((r) => r.name)).toEqual(['projects:removeAccess'])
     expect(window.showToast).toHaveBeenCalledWith(
       'Leo Person keeps access, because not every task could be reassigned.',
       'error',
@@ -250,9 +275,12 @@ describe('removing someone who has work in the project', () => {
     const crew = P.accessRemoval(crewGrant())
     expect(await P.removeAccess(crewGrant(), { keep: true }, crew.items)).toBe(true)
     expect(P.levelOn(work, 'ann')).toBe('viewer')
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(P.project(work)?.teamAccess?.crew).toBeUndefined()
+    expect(requests.map((r) => r.name)).toEqual(['projects:removeAccess'])
     expect(requests[0].args).toMatchObject({
-      patch: { access: { ann: 'viewer', leo: 'user', dan: 'user' }, team_access: {} },
+      id: work,
+      team_id: 'crew',
+      on_held_tasks: 'keep_as_viewer',
     })
   })
 
@@ -337,6 +365,19 @@ describe('removing someone who has work in the project', () => {
       "The Crew team can't be deleted, because it is the organization's last team.",
       'error',
     )
+  })
+
+  it('hands over the lead with the lead alone; the outgoing lead keeps User', async () => {
+    await load((snap) => {
+      snap.projects[0].lead_id = 'dan'
+    })
+    expect(await P.setProjectAccess(work, 'leo', 'lead')).toBe(true)
+    // the server applies the same rule (convex/lib/projectGrants.ts)
+    expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
+      ['projects:update', { lead_id: 'leo' }],
+    ])
+    expect(P.project(work)?.lead).toBe('leo')
+    expect(P.project(work)?.access).toEqual({ dan: 'user', leo: 'lead' })
   })
 
   it('tells whether the access is still there to remove', async () => {

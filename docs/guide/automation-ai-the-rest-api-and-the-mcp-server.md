@@ -9,6 +9,17 @@ Both work with the same tasks and permanent `QN-<number>` IDs, and both can
 create subtasks, move tasks between sub-projects, link tasks and add or
 remove labels by the same rules as the app.
 
+For projects, MCP offers `get_project`, `create_project`, `update_project`,
+`set_project_access`, `set_milestone` and `delete_milestone`, and REST uses
+`/v1/projects`, `/v1/projects/{ref}/access` and
+`/v1/projects/{ref}/milestones`. Both create projects and sub-projects,
+change their settings, archive and restore them, add and change milestones
+and change sharing one user or team at a time, by the same rules as the app
+([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
+Only a person can change sharing or hand over a lead; an agent cannot, even
+for a project it leads. Removing someone's access takes a choice for the
+open tasks they would lose sight of, like the app's removal window.
+
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
 project's review time unless the request supplies hours ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)). Assignee filters
@@ -41,8 +52,9 @@ own task event subscriptions.
 
 `GET /v1/me` says who the credential acts as, the organization's calendar
 settings and whether the credential can make changes. The API lists projects
-and users and supports task search, creation, updates, moves, subtasks,
-links, labels, deletion, archive/restore and comments. With an organization admin's or team leader's
+and users, manages projects, their sharing and milestones, and supports task
+search, creation, updates, moves, subtasks, links, labels, deletion,
+archive/restore and comments. With an organization admin's or team leader's
 token it also sets a person's plannable weekly hours. It checks field values,
 including the 80-character title limit and paired planning dates. An
 unreadable task returns 404, as does a nonexistent one. Changes name the agent
@@ -121,8 +133,9 @@ API.
 Organization admins can instead create an agent user with its own key ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 MCP tools say who the connection acts as and whether it can make changes;
-list teams, projects, users, project users and tasks; read and change tasks;
-read and add comments; and set plannable weekly hours. Request
+list teams, projects, users, project users and tasks; read and change tasks
+and projects, their sharing and milestones; read and add comments; and set
+plannable weekly hours. Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

@@ -241,9 +241,22 @@ describe('projects.create', () => {
         createArgs(f, { type: 'project' as const, parent_id: f.meta.id, key })
       const { id } = await as(t, f.user).mutation(api.projects.create, subArgs('SUB1'))
       expect((await projectRow(t, id))?.parent_id).toBe(f.meta.id)
-      // the right to create products gives no lead standing on a parent
+      // a parent the creator cannot see reads like a missing one
       await expectRefusal(
         as(t, selected).mutation(api.projects.create, subArgs('SUB2')),
+        'rule',
+        /^parent project not found$/,
+      )
+      // the right to create products gives no lead standing on a parent
+      await t.run((ctx) =>
+        ctx.db.insert('project_access', {
+          project_id: f.meta.id,
+          profile_id: selected.id,
+          level: 'user',
+        }),
+      )
+      await expectRefusal(
+        as(t, selected).mutation(api.projects.create, subArgs('SUB3')),
         'forbidden',
         /^requires lead access to this project$/,
       )

@@ -242,10 +242,20 @@ describe('project creation through the client store', () => {
       expect(P.seesNewProject({ lead: 'leo', teamAccess: { mine: 'viewer' } })).toBe(true)
     })
 
-    it('predicts that I lose sight of it otherwise', () => {
-      expect(P.seesNewProject({ lead: 'leo' })).toBe(false)
-      expect(P.seesNewProject({ lead: 'leo', access: { ingrid: 'viewer' } })).toBe(false)
-      expect(P.seesNewProject({ lead: 'leo', teamAccess: { crew: 'user' } })).toBe(false)
+    it('predicts the User grant the server gives me when someone else leads', () => {
+      expect(P.seesNewProject({ lead: 'leo' })).toBe(true)
+      const id = P.addProject({ type: 'meta', key: 'NEW', name: 'New', lead: 'leo' })!
+      expect(P.levelOn(id)).toBe('user')
+      expect(requests.at(-1)?.args).toMatchObject({ lead_id: 'leo', access: {} })
+    })
+
+    it('predicts that I lose sight of it once I decline my own entry', () => {
+      const none = { [me]: null }
+      expect(P.seesNewProject({ lead: 'leo', access: none })).toBe(false)
+      expect(P.seesNewProject({ lead: 'leo', access: { ...none, ingrid: 'viewer' } })).toBe(false)
+      expect(P.seesNewProject({ lead: 'leo', access: none, teamAccess: { crew: 'user' } })).toBe(
+        false,
+      )
     })
 
     it('lets an org admin see every project, and a viewer see one shared with their team', () => {
@@ -263,8 +273,9 @@ describe('project creation through the client store', () => {
       [
         'a share with a team I am not in',
         false,
-        () => ({ lead: 'leo', teamAccess: { crew: 'user' } }),
+        (me) => ({ lead: 'leo', access: { [me]: null }, teamAccess: { crew: 'user' } }),
       ],
+      ['no entry of mine', true, () => ({ lead: 'leo' })],
       ['my own Viewer entry', true, (me) => ({ lead: 'leo', access: { [me]: 'viewer' } })],
       ['a share with my team', true, () => ({ lead: 'leo', teamAccess: { mine: 'viewer' } })],
     ])('predicts what addProject paints for %s', (_label, expected, toDraft) => {

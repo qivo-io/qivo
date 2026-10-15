@@ -27,10 +27,13 @@ grant, so they keep the tasks and can read the project but cannot change it.
 For a team, the grant is on each project the team shared that holds the
 listed tasks. **Reassign** hands every listed task, reviewer roles included,
 to one person who keeps User or Lead access to those tasks, or to
-**Unassigned**, and removes the access once every task is saved. If a task or
-Viewer grant cannot be saved, the access stays, tasks already saved keep their
-new assignee, and the window lists what remains. Removing a person's grant
-that is already Viewer offers only the reassignment. Done tasks keep their
+**Unassigned**, and removes the access. Removing a person's or a team's grant
+saves the removal and the choice together: if a task cannot be reassigned,
+nothing changes and the window lists the tasks again. Removing a member from
+a team or deleting a team saves each task and Viewer grant first; if one
+cannot be saved, the access stays, tasks already saved keep their new
+assignee, and the window lists what remains. Removing a person's grant that
+is already Viewer offers only the reassignment. Done tasks keep their
 assignee and are not listed.
 
 A team leader who cannot share those projects and edit their tasks removes
@@ -38,12 +41,14 @@ the member at once. A message then says who can no longer see how many of
 their tasks, so a project lead can reassign them.
 
 Only organization admins and the named project lead can manage sharing and
-invitations. Renaming, archiving, deleting or changing project settings also
-requires Lead access, which organization admins have.
+invitations, and only people can change sharing, never agents. Renaming,
+archiving, deleting or changing project settings also requires Lead access,
+which organization admins have.
 
 Each project and sub-project has one named lead. Choosing a new lead changes
 the outgoing lead to **User**. An active guest with access to the project can
-become its lead.
+become its lead. Only a person can hand over a lead; an agent that leads a
+project keeps it until a person changes the lead.
 
 Parent **User** and **Viewer** grants apply to sub-projects at the same level.
 The parent lead has **User** access to a sub-project with a different lead.

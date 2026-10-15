@@ -155,8 +155,25 @@ const LABEL_ADMINS = 'only organization admins can rename, recolor or delete lab
 
 type Fx = Awaited<ReturnType<typeof fixture>>
 
+type Request = { path: string; body?: unknown }
+
+/* A fresh milestone on the fixture's top-level project, so each credential
+ * edits or deletes one that exists. */
+const plantMilestone = (fx: Fx): Promise<string> =>
+  fx.t.run(async (ctx) => {
+    const id = uuid()
+    await ctx.db.insert('milestones', {
+      id,
+      project_id: fx.f.meta.id,
+      name: 'Gate',
+      week: '2026-03-02',
+      created_at: NOW,
+    })
+    return id
+  })
+
 /* One concrete request per route; `task` is a fresh task in FW. */
-const REQUESTS: Record<string, (fx: Fx, task: string) => { path: string; body?: unknown }> = {
+const REQUESTS: Record<string, (fx: Fx, task: string) => Request | Promise<Request>> = {
   'GET me': () => ({ path: '/v1/me' }),
   'GET projects': () => ({ path: '/v1/projects' }),
   'GET projects/:ref': () => ({ path: '/v1/projects/FW' }),
@@ -190,6 +207,33 @@ const REQUESTS: Record<string, (fx: Fx, task: string) => { path: string; body?: 
     body: { name: `Token ${uuid().slice(0, 8)}`, color: '#123456' },
   }),
   'PATCH labels/:ref': (fx) => ({ path: `/v1/labels/${fx.label}`, body: { color: '#654321' } }),
+  'POST projects': () => ({ path: '/v1/projects', body: { name: 'Token project' } }),
+  'PATCH projects/:ref': () => ({ path: '/v1/projects/FW', body: { track_delay: true } }),
+  'PUT projects/:ref/access/users/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/users/${fx.f.guest.id}`,
+    body: { level: 'viewer' },
+  }),
+  'DELETE projects/:ref/access/users/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/users/${fx.f.guest.id}`,
+  }),
+  'PUT projects/:ref/access/teams/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/teams/${fx.f.team.id}`,
+    body: { level: 'viewer' },
+  }),
+  'DELETE projects/:ref/access/teams/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/teams/${fx.f.team.id}`,
+  }),
+  'POST projects/:ref/milestones': () => ({
+    path: '/v1/projects/FW/milestones',
+    body: { name: 'Token gate', date: '2026-04-06' },
+  }),
+  'PATCH projects/:ref/milestones/:milestone': async (fx) => ({
+    path: `/v1/projects/FW/milestones/${await plantMilestone(fx)}`,
+    body: { name: 'Moved gate' },
+  }),
+  'DELETE projects/:ref/milestones/:milestone': async (fx) => ({
+    path: `/v1/projects/FW/milestones/${await plantMilestone(fx)}`,
+  }),
 }
 
 const label = (route: { method: string; path: string }) => `${route.method} ${route.path}`
@@ -199,12 +243,32 @@ type Outcome = 'ok' | { status: number; error: string }
 
 /* A Viewer person may not write any project; a Standard user agent may, but
  * neither may set someone's plannable hours or edit a label (organization
- * admins only), and a Viewer person may not add a label either. */
-const refusedWrite = (route: { path: string }, kind: 'viewer' | 'agent'): Outcome => {
+ * admins only), and a Viewer person may not add a label either. Neither
+ * leads FW, neither may create a top-level project (an agent is no standard
+ * user there yet), and only a person who leads a project changes its access;
+ * a milestone needs User on the top-level project, which the agent holds. */
+const refusedWrite = (
+  route: { method: string; path: string },
+  kind: 'viewer' | 'agent',
+): Outcome => {
   if (route.path === 'users/:ref') return { status: 403, error: RIGHTS }
   if (route.path === 'labels/:ref') return { status: 403, error: LABEL_ADMINS }
   if (route.path === 'labels' && kind === 'viewer') {
     return { status: 403, error: 'no label access in this organization' }
+  }
+  if (route.path === 'projects') {
+    return { status: 403, error: 'only org admins and standard users can create projects' }
+  }
+  if (route.path === 'projects/:ref') {
+    return { status: 403, error: 'requires lead access to this project' }
+  }
+  if (route.path.startsWith('projects/:ref/access/')) {
+    return kind === 'viewer'
+      ? { status: 403, error: 'no permission to manage users on this project' }
+      : { status: 403, error: 'only people can change who has access, not agents' }
+  }
+  if (route.path.startsWith('projects/:ref/milestones') && kind === 'viewer') {
+    return { status: 403, error: 'no write access to this project' }
   }
   return kind === 'viewer' ? { status: 403, error: PERSON_NO_WRITE } : 'ok'
 }
@@ -226,7 +290,7 @@ describe('every organization route with a personal token', () => {
     for (const [who, credential, onWrite] of credentials) {
       for (const route of ROUTES) {
         const task = await plantIssue(fx.t, { org_id: fx.f.org.id, project_id: fx.f.sub.id })
-        const { path, body } = REQUESTS[label(route)](fx, `QN-${task.num}`)
+        const { path, body } = await REQUESTS[label(route)](fx, `QN-${task.num}`)
         const res = await call(fx.t, credential, route.method, path, body)
         const expected: Outcome = route.access === 'read' ? 'ok' : onWrite(route)
         if (expected === 'ok') {

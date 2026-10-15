@@ -22,7 +22,8 @@ team. Projects and sub-projects may be shared with several teams and users
 through explicit access grants. Team shares grant `user` or `viewer` to
 current members; the strongest direct or team grant wins under the
 organization-role ceiling. Manage team and individual sharing in the app's
-**Project access** list.
+**Project access** list or with the [project access routes](#project-access),
+one user or team at a time.
 The website, REST and MCP use **task** for one work item and **tasks** for
 collections. REST follows the collection convention: `/v1/tasks` lists or
 creates tasks, and `/v1/tasks/{ref}` addresses one task. Related records use
@@ -255,15 +256,21 @@ The response never contains a secret, a hash or a display identifier.
 ### Projects
 
 ```
-GET /v1/projects                → readable ACTIVE projects, with access flags
-GET /v1/projects?archived=true  → the archived ones instead (0106)
-GET /v1/projects/{id|num|KEY}   → one project (uuid, per-org number, or key);
-                                  an explicit ref resolves an archived
-                                  project too
-GET /v1/projects/{ref}/users    → users with access to that project, for
-                                  reporter, assignee and reviewer
-                                  selection
+GET   /v1/projects                → readable ACTIVE projects, with access flags
+GET   /v1/projects?archived=true  → the archived ones instead (0106)
+GET   /v1/projects/{id|num|KEY}   → one project (uuid, per-org number, or
+                                    key) with its lead, settings, milestones
+                                    and grants; an explicit ref resolves an
+                                    archived project too
+GET   /v1/projects/{ref}/users    → users with access to that project, for
+                                    reporter, assignee and reviewer
+                                    selection
+POST  /v1/projects                → create a project or sub-project (write)
+PATCH /v1/projects/{ref}          → change its settings or lead, archive or
+                                    restore it (write)
 ```
+
+A row of the list:
 
 ```json
 {
@@ -273,6 +280,38 @@ GET /v1/projects/{ref}/users    → users with access to that project, for
   "access": { "read": true, "write": false }
 }
 ```
+
+`GET /v1/projects/{ref}` answers the same row with these fields added:
+
+```json
+{
+  "lead_id": "…uuid…", "lead_name": "Leo Martins",
+  "review_hours": null, "effective_review_hours": 2, "track_delay": true,
+  "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
+  "grants": {
+    "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
+    "teams": [{ "id": "…uuid…", "name": "Hardware", "level": "viewer" }]
+  }
+}
+```
+
+- `lead_id` and `lead_name` name the project's lead. A sub-project without a
+  lead of its own is led by its parent's lead.
+- `review_hours` is the project's own **Review time**, or `null` when it uses
+  its parent's or the 2-hour default. `effective_review_hours` is the time a
+  task entering `review` gets.
+- `milestones` are the milestones of the top-level project, ordered by date.
+  A sub-project shows its parent's, because milestones live on the top-level
+  project's roadmap.
+- `grants` are the project's own individual and team grants, as its
+  **Project access** list shows them, ordered by name. A sub-project also
+  inherits its parent's grants, which the parent's own read lists. Anyone who
+  can read the project sees its grants, as in the app.
+
+The writes below, and the [project access](#project-access) and
+[milestone](#milestones) routes, answer `403` with the read-only sentence for
+a read-only credential before any reference is resolved, like every other
+write.
 
 `num` is the durable per-org project number (migration 0050) — it never
 changes. `key` is the short code the app shows. The app has no screen that
@@ -310,6 +349,158 @@ you ask for them, their tasks are absent from `GET /v1/tasks` unless you
 name the project (see below), and a `POST /v1/tasks` into one is a 400 that
 names the project to restore. `archived_at` is when it happened; `archived`
 is the same fact as a boolean.
+
+#### Creating a project or sub-project
+
+```
+POST /v1/projects  {"name": "Luma Mount", "parent": "SENS", "lead_id": "…uuid…",
+                    "description": "Housing and optics"}
+```
+
+Only `name` is required. Without `parent` the request creates a top-level
+project, and with `parent` (a project number, key or uuid) a sub-project
+under it. Qivo picks the id, the number, the key (from the name, as in the
+app) and the position in the list. The answer is the `201` single-project
+read, `access` flags included.
+
+- A top-level project follows the organization's **Who can create new
+  projects?** setting, the same rule as the app's **New project** button.
+  `GET /v1/me` reports it as `organization.can_create_projects`. A refusal
+  names the setting, for example `only org admins and standard users can
+  create projects`. Agents do not count as standard users for this setting.
+- A sub-project needs Lead access on its parent, whatever the setting, and the
+  parent must be an active top-level project. A parent the caller cannot read
+  answers `400` with `parent project not found`, exactly like an unknown one.
+- `lead_id` defaults to the caller. A lead must be an active admin, standard
+  user or guest of the organization; a Viewer is refused with `a viewer cannot
+  lead a project — make them a standard user first`. Only a person may name
+  someone else, so an agent leads every project it creates and is refused
+  with `only people can change who has access, not agents` otherwise.
+- A creator who is not an organization admin and names someone else as the
+  lead of a top-level project gets User access to it, as in the app, so the
+  project stays in their sight.
+- `name` is trimmed and may not be blank. `description` is at most 500
+  characters, and `null` means none.
+- The body takes no grants. `access` and `team_access` are refused with
+  `give access one user or team at a time, under /v1/projects/{ref}/access`,
+  and `key` with `a project's key comes from its name and cannot be written`.
+  Other unknown fields are ignored.
+
+#### Changing a project
+
+```
+PATCH /v1/projects/{ref}  {"name": "…", "description": "…", "review_hours": 3,
+                           "track_delay": false, "lead_id": "…uuid…",
+                           "archived": true}
+```
+
+Every field is optional, and the answer is the single-project read. Changing a
+project needs Lead access (`requires lead access to this project`), which
+organization admins have.
+
+- `review_hours` is a number of hours from 0 to 999, kept to 0.1 h, or `null`
+  to use the parent's or the default again.
+- `archived: true` archives the project, and a top-level project's active
+  sub-projects with it; `archived: false` restores it, with the sub-projects
+  archived along with it, and a sub-project's archived parent too (which
+  needs Lead on the parent). One request may restore and rename: Qivo restores
+  first, then changes the fields, and archives last.
+- `lead_id` hands over the lead. Only a person may do it; an agent is refused
+  with `only people can change who has access, not agents`. The outgoing lead
+  keeps User access, and the new lead's own grant goes, because the lead role
+  carries their access.
+- `key`, `parent`, `parent_id`, `type`, `access` and `team_access` are
+  refused. Other unknown fields are ignored, and a body with nothing to
+  change is a `400`.
+
+Each change writes the app's activity row (`created`, `renamed`, `changed the
+lead of`, `archived`, `restored`), signed with the provenance described under
+[Side effects and audit trail](#side-effects-and-audit-trail). Deleting a
+project, inviting a guest by email and changing a project's icon stay in the
+app.
+
+### Project access
+
+```
+PUT    /v1/projects/{ref}/access/users/{user}  {"level": "user" | "viewer"}
+DELETE /v1/projects/{ref}/access/users/{user}  [{"on_held_tasks": …}]
+PUT    /v1/projects/{ref}/access/teams/{team}  {"level": "user" | "viewer"}
+DELETE /v1/projects/{ref}/access/teams/{team}  [{"on_held_tasks": …}]
+```
+
+These give, change or remove one person's or one team's grant on a project
+or sub-project, as the app's **Project access** list does. `{user}` and
+`{team}` are uuids from `GET /v1/users` and MCP's `list_teams`; one outside the
+organization answers `404` (`user not found`, `team not found`).
+
+Only a person who is an organization admin or the project's lead may change
+access. Others get `no permission to manage users on this project`, and an
+agent gets `only people can change who has access, not agents`, whatever its
+grants. A Viewer can only receive a `viewer` grant. The lead's access comes
+with the lead role, so a grant for the lead is refused with `that user leads
+this project; hand the lead to someone else first`.
+
+`PUT` answers `{"project_id", "user" | "team": {"id", "name"}, "level",
+"changed"}`; giving the level someone already has changes nothing.
+
+Removing access can hide open tasks from the people working on them: the
+tasks of the project and its sub-projects that are not Done, whose assignee,
+or reviewer on a task without subtasks, could see them before and cannot
+after. `DELETE` takes an optional JSON body whose `on_held_tasks` decides
+what happens to them:
+
+- `"leave"` (the default, also for an empty body) removes the access and
+  lists those tasks as `stranded`. They keep their assignee and reviewer.
+- `"keep_as_viewer"` gives each of those people a Viewer grant on the
+  project, so they keep the tasks and can read the project but not change
+  it. Removing a person's grant that is already Viewer with this choice is
+  refused, because it would change nothing.
+- `{"reassign_to": "<user uuid>"}` hands every one of those tasks, in the role
+  that person had, to that user, and `{"reassign_to": null}` leaves them
+  unassigned. The new holder must be able to work on each task once the
+  access is gone, by the usual assignee rules.
+
+The removal and its choice land together or not at all: if any task cannot
+be reassigned, the access stays and nothing changes. The answer is
+`{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
+"reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
+"title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
+Viewer grant. Removing access that is not there answers `removed: false`.
+Every change writes one `changed access on` activity row.
+
+```sh
+# give Emil User on the PCB sub-project, then take it away and hand his
+# open tasks there to Leo
+curl -X PUT -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"level":"user"}' "$BASE/projects/PCB/access/users/<Emil's uuid>"
+curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"on_held_tasks":{"reassign_to":"<Leo's uuid>"}}' \
+  "$BASE/projects/PCB/access/users/<Emil's uuid>"
+```
+
+### Milestones
+
+```
+POST   /v1/projects/{ref}/milestones       {"name": "…", "date": "2026-11-02"}
+PATCH  /v1/projects/{ref}/milestones/{id}  {"name"?, "date"?}
+DELETE /v1/projects/{ref}/milestones/{id}
+```
+
+Milestones live on a top-level project's roadmap. Naming a sub-project in
+`{ref}` adds the milestone to its top-level project, as the app does, and a
+milestone id must belong to the top-level project of `{ref}`, else `404`
+`milestone not found`. Writing a milestone needs Edit (`user`) access on the
+top-level project, so a grant on a sub-project alone is refused with `no
+write access to this project`. An archived project takes no new milestones
+(`that project is archived — restore it first`).
+
+`date` is a real calendar day as `YYYY-MM-DD` (`date must be YYYY-MM-DD`,
+`date must be a valid calendar date`), usually the first day of a planning
+week. `name` is trimmed and may not be blank. `POST` answers `201` and
+`PATCH` `200` with `{"id", "name", "date", "project_id"}`, where `project_id`
+is the top-level project; `DELETE` answers `{"deleted": true, "id"}`.
+`GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
+`renamed milestone`, `moved milestone` or `deleted milestone`.
 
 ### Users
 

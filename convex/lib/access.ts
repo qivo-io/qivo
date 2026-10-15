@@ -219,6 +219,15 @@ export function canLeadTeams(me: Doc<'profiles'>): boolean {
   return isOrgStaff(me) && me.kind === 'person'
 }
 
+/* Only a person changes who sees what: project access grants, a project's
+ * lead and team membership and leadership. The kind is named positively, so
+ * agents and any future kind cannot, whatever their role and grants. */
+export function canChangeAccess(me: Pick<Doc<'profiles'>, 'kind'>): boolean {
+  return me.kind === 'person'
+}
+
+export const ACCESS_NEEDS_A_PERSON = 'only people can change who has access, not agents'
+
 /* Team leadership requires canLeadTeams and a same-org leader row; leader
  * rows held by guests, viewers or agents grant nothing. */
 export async function isTeamLeader(

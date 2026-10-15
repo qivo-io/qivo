@@ -126,9 +126,10 @@ import {
 } from '../model/links'
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
+import { PROJECT_TOOLS } from './projects'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
 
-/* ------------------------------------------------------------ the 16 tools
+/* --------------------------------------------------------------- the tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
  * read/write `access` flag, its `def` and the `run` that calls its internal
  * fn. tools/list answers the defs in this order. Titles, descriptions and
@@ -150,6 +151,8 @@ type SchemaProp = {
   items?: SchemaProp
   minItems?: number
   anyOf?: SchemaProp[]
+  properties?: Record<string, SchemaProp>
+  required?: string[]
 }
 
 /* The uuid pattern every uuid property of the tool schemas carries. */
@@ -849,6 +852,7 @@ export const TOOLS: McpTool[] = [
         ...(args as { label?: string; name?: string; color?: string }),
       }),
   },
+  ...PROJECT_TOOLS,
 ]
 
 const TOOL_DEFS: ToolDef[] = TOOLS.map((t) => t.def)

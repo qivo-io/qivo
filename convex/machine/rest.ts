@@ -134,9 +134,11 @@ import {
   restAuth401,
   sha256hex,
 } from './auth'
+import { PROJECT_ROUTES, restProjectDetail } from './projects'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
+type RestProjectDetailJson = Awaited<ReturnType<typeof restProjectDetail>>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 type RestTaskJson = RestIssueJson & TaskDetailJson
@@ -415,14 +417,16 @@ export const listProjects = internalQuery({
 })
 
 /* GET /v1/projects/{ref} — an explicit ref resolves an archived project too;
- * unknown OR unreadable answer the one 404 (NO oracle on GET, rest:341-347). */
+ * unknown OR unreadable answer the one 404 (NO oracle on GET, rest:341-347).
+ * The list row gains the single read's fields: lead, review time, delay
+ * tracking, milestones and grants (machine/projects.ts restProjectDetail). */
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, a): Promise<RestProjectJson> => {
+  handler: async (ctx, a): Promise<RestProjectDetailJson> => {
     const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
     if (p === undefined || !readable(p.id)) throw notFound('project not found')
-    return restProjectJson(p, flags.get(p.id) ?? { read: false, write: false })
+    return await restProjectDetail(ctx, p, flags.get(p.id) ?? { read: false, write: false })
   },
 })
 
@@ -985,7 +989,7 @@ export const updateLabel = internalMutation({
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-api-key, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
 }
 
 const json = (body: unknown, status: number): Response =>
@@ -1045,7 +1049,7 @@ type RouteInput<Name extends string> = Principal & {
 
 /** A route's fields besides its registry entry. */
 type RouteFields<Path extends string> = {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   path: Path
   status: 200 | 201
 }
@@ -1267,6 +1271,7 @@ export const ROUTES: RestRoute[] = [
         body,
       }),
   }),
+  ...PROJECT_ROUTES,
 ]
 
 /**
@@ -1448,9 +1453,10 @@ const restHandler = httpAction(async (ctx, req) => {
     const keyName = res.cred.isAgent ? res.cred.keyName : null
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
-    const body = req.method === 'POST' || req.method === 'PATCH' ? await req.text() : ''
-    // other methods on a known path (PATCH …/comments, PUT anything) fall to
-    // the unknown-route 404, as deployed
+    // every method but GET may carry a body; DELETE's is optional
+    const body = req.method === 'GET' ? '' : await req.text()
+    // other methods on a known path (PATCH …/comments, PUT on a task) fall
+    // to the unknown-route 404, as deployed
     const found = findRoute(req.method, seg.slice(1))
     if (found === null) return err('unknown route', 404)
     const result = await runEntry(ctx, found.route, {
@@ -1475,8 +1481,8 @@ const restHandler = httpAction(async (ctx, req) => {
 
 /* Registration — http.ts calls this ONCE at its bolt-on seam and is never
  * edited from here. Per-method routes: httpRouter has no wildcard method, and
- * pathPrefix '/v1/' does not match bare /v1. PUT is registered so it answers
- * the deployed auth-then-404 behavior; HEAD cannot be registered (accepted
+ * pathPrefix '/v1/' does not match bare /v1. PUT serves the project access
+ * routes and answers the deployed auth-then-404 everywhere else; HEAD cannot be registered (accepted
  * edge). Requests outside /v1/* get Convex's default 404, not the in-handler
  * sentence (accepted delta — no root catch-all, it would collide with the
  * auth + file-gateway prefixes). */

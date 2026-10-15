@@ -45,6 +45,11 @@ and `update_task` name any argument they do not know in
 `ignored_arguments`, so a client with an older catalogue sees what it sent
 in vain.
 
+Project parity added `get_project`, `create_project`, `update_project`,
+`set_project_access`, `set_milestone` and `delete_milestone`. A client
+holding an older catalogue does not see them until it refreshes its tool
+list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -104,7 +109,8 @@ inherit to its sub-projects; a child grant does not spill to siblings.
 Removing membership removes that access path while preserving
 any direct grant or access through another team. Sharing with a team's leader
 does not give them ownership rights over another team's project. Manage these
-grants in the app's **Project access** list; MCP's tool shapes are unchanged.
+grants in the app's **Project access** list or with `set_project_access`, one
+user or team at a time; only a person may change them, never an agent.
 Revoking a credential cuts access immediately — and so does switching the
 user to **Inactive**, which stops every key or token they hold at once
 without anything having to be revoked one by one: both the credential row
@@ -148,8 +154,8 @@ REST API and in the browser alike.
 
 Note that `viewer` is also the name of the lowest **project** role — a grant on
 one project. The two are the same idea one altitude apart, which is why they
-share a word; `list_users` reports the organization role as `org_role`, and no
-tool payload carries a project role at all.
+share a word; `list_users` reports the organization role as `org_role`, and
+`get_project` reports project roles as the `level` of each grant.
 
 **A token names one organization.** Since migration 0081 a login can hold a
 seat in several — its own, plus any that invited it as a guest on a project
@@ -651,8 +657,10 @@ anything stored), or a uuid.
 The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
-operations, `set_task_link` for links between tasks, and `list_labels` and
-`set_label` for the organization's labels. This pre-launch rename replaces the former tool names; clients
+operations, `set_task_link` for links between tasks, `list_labels` and
+`set_label` for the organization's labels, and `get_project`,
+`create_project`, `update_project`, `set_project_access`, `set_milestone` and
+`delete_milestone` for projects. This pre-launch rename replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
@@ -661,6 +669,12 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_teams` | Teams in your organization, as `id` and `name` — teams group users for project sharing and administration. MCP does not list team grants; `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
+| `get_project` | One readable `project` (number/key/uuid): the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `create_project` | Create a top-level project from `name`, or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
+| `update_project` | Change a project you lead: `name`, `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project` |
+| `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
+| `set_milestone` | Add a milestone (`name`, `date`) to a `project`'s top-level project, or with `milestone` rename or move one |
+| `delete_milestone` | Delete a `milestone` of a `project` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
@@ -723,6 +737,88 @@ with a cached tool catalogue must refresh discovery or reconnect.
 
 The answer never contains a secret, a hash or a display prefix. A read-only
 OAuth connection may call `get_me`, because it only reads.
+
+### Projects, access and milestones
+
+`get_project` answers the `list_projects` row with these fields added:
+
+```json
+{
+  "lead_id": "…uuid…", "lead_name": "Leo Martins",
+  "review_hours": null, "effective_review_hours": 2, "track_delay": true,
+  "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
+  "grants": {
+    "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
+    "teams": [{ "id": "…uuid…", "name": "Hardware", "level": "viewer" }]
+  }
+}
+```
+
+A sub-project without a lead of its own is led by its parent's lead.
+`review_hours` is the project's own review time, and `effective_review_hours`
+the time a task entering `review` gets. `milestones` belong to the top-level
+project, so a sub-project shows its parent's, ordered by date. `grants` are
+the project's own individual and team grants, as its **Project access** list
+shows them; a sub-project also inherits its parent's. A project you cannot
+read answers `project "<ref>" not found (or not visible to you)`, exactly
+like an unknown one.
+
+**Creating.** `create_project` without `parent` makes a top-level project,
+which follows the organization's **Who can create new projects?** setting
+(`get_me` reports it as `can_create_projects`; agents do not count as standard
+users for it). With `parent` it makes a sub-project, which needs Lead access
+on that parent; a parent you cannot read answers `parent project "<ref>" not
+found (or not visible to you)`. Qivo picks the number, the key (from the
+name) and the position. `lead_id` defaults to you, and only a person may name
+someone else: an agent always leads what it creates, and otherwise gets
+`only people can change who has access, not agents`. A creator who is not an
+organization admin and names someone else as lead of a top-level project
+gets User access to it, as in the app. The tool takes no grants; add them
+with `set_project_access`.
+
+**Changing.** `update_project` needs Lead access. In one call it restores
+first (`archived: false`), then applies the fields and the lead, and archives
+last (`archived: true`); archiving a top-level project carries its active
+sub-projects, and restoring brings back the ones archived with it. A lead
+handover keeps the outgoing lead as User and drops the new lead's own grant,
+and only a person may make one.
+
+**Access.** `set_project_access` names exactly one of `user_id` and
+`team_id` (uuids from `list_users` and `list_teams`). It needs a person who is
+an organization admin or the project's lead (`no permission to manage users
+on this project` otherwise; `only people can change who has access, not
+agents` for an agent). A Viewer only receives `viewer`, and the lead's access
+is the lead role (`that user leads this project; hand the lead to someone
+else first`). With a level the result is `{project, user | team, level,
+changed}`.
+
+With `level: null` it removes the grant. Open tasks of the project and its
+sub-projects that someone works on (as assignee, or reviewer of a task
+without subtasks) and can no longer see afterwards are settled by
+`on_held_tasks`:
+
+- `"leave"`, the default, removes the access and lists them as `stranded`;
+- `"keep_as_viewer"` gives those people a Viewer grant on the project, which
+  is refused for a person whose removed grant was already Viewer;
+- `{"reassign_to": "<user uuid>"}` hands each one over in the same role, and
+  `{"reassign_to": null}` unassigns them; the new holder must be able to work
+  on each task once the access is gone.
+
+The removal and its choice land together or not at all. The result adds
+`stranded`, `kept_as_viewer` and `reassigned`; `stranded` and `reassigned`
+list `{id, key, title, user_id, role}`. `changed` is `false` when there was
+no grant to remove. `on_held_tasks` with a level is refused.
+
+**Milestones.** `set_milestone` without `milestone` adds one from `name` and
+`date` (`YYYY-MM-DD`, a real calendar day) to the top-level project of
+`project`; with `milestone` (an id from `get_project`) it renames or moves it.
+`delete_milestone` removes one. A milestone that is not on the top-level
+project of `project` answers `milestone "<id>" not found (or not visible to
+you)`. Both need Edit access on the top-level project, and an archived
+project takes no new milestone. Results are `{id, name, date, project_id,
+created}` and `{deleted: true, id}`.
+
+Every change writes the app's activity row, signed `via MCP`.
 
 ### Task results
 

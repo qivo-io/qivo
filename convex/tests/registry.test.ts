@@ -3,13 +3,21 @@
  * to the kind of internal function its entry actually calls, prove a read
  * entry cannot reach a mutation at runtime, check that a garbled flag fails
  * closed, and pin the REST route matching rules. The OAuth step-up derived
- * from the flag is driven over HTTP in oauth.test.ts. */
+ * from the flag is driven over HTTP in oauth.test.ts.
+ *
+ * Entries call internal functions in their surface's module or in a domain
+ * module that declares entries for both surfaces (machine/projects.ts), so
+ * the kinds below cover every one of those modules. A domain module keeps
+ * each surface's functions apart, and one function may serve several routes
+ * that differ only in a fixed argument (PUT and DELETE on a project's user
+ * and team access). */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import * as mcp from '../machine/mcp'
+import * as projects from '../machine/projects'
 import {
   type MachineAccess,
   type MachineEntry,
@@ -75,10 +83,18 @@ type Entry = { label: string; access: MachineAccess; run: (ctx: Ctx) => Promise<
 
 type Surface = { module: string; kinds: Map<string, Kind>; entries: Entry[] }
 
+/* The registered kind of every function an entry may call, across the
+ * surface modules and the domain modules. */
+const KINDS = new Map<string, Kind>([
+  ...registeredKinds('machine/mcp', mcp),
+  ...registeredKinds('machine/rest', rest),
+  ...registeredKinds('machine/projects', projects),
+])
+
 const SURFACES: Surface[] = [
   {
     module: 'machine/mcp',
-    kinds: registeredKinds('machine/mcp', mcp),
+    kinds: KINDS,
     entries: mcp.TOOLS.map((tool) => ({
       label: tool.def.name,
       access: tool.access,
@@ -88,7 +104,7 @@ const SURFACES: Surface[] = [
   },
   {
     module: 'machine/rest',
-    kinds: registeredKinds('machine/rest', rest),
+    kinds: KINDS,
     entries: rest.ROUTES.map((route) => ({
       label: `${route.method} /v1/${route.path}`,
       access: route.access,
@@ -169,10 +185,28 @@ describe('the machine action registry', () => {
     }
   })
 
-  it('every internal function of a surface is reached by exactly one entry', async () => {
+  it('every internal function is reached, and by entries of one surface only', async () => {
+    const surfacesOf = new Map<string, Set<string>>()
     for (const surface of SURFACES) {
-      const reached = (await callsOf(surface)).flatMap(({ calls }) => calls.map((c) => c.name))
-      expect(reached.sort()).toEqual([...surface.kinds.keys()].sort())
+      for (const { calls } of await callsOf(surface)) {
+        for (const { name } of calls) {
+          surfacesOf.set(name, (surfacesOf.get(name) ?? new Set()).add(surface.module))
+        }
+      }
+    }
+    expect([...surfacesOf.keys()].sort()).toEqual([...KINDS.keys()].sort())
+    const shared = [...surfacesOf].filter(([, surfaces]) => surfaces.size > 1).map(([name]) => name)
+    expect(shared).toEqual([])
+  })
+
+  it('each surface module serves only its own surface', async () => {
+    for (const surface of SURFACES) {
+      for (const { label, calls } of await callsOf(surface)) {
+        for (const { name } of calls) {
+          const other = SURFACES.find((s) => s !== surface && name.startsWith(`${s.module}:`))
+          expect(other, `${label} runs ${name}`).toBeUndefined()
+        }
+      }
     }
   })
 
@@ -280,6 +314,17 @@ describe('REST route matching', () => {
       ref: 'FW',
     })
     expect(match('GET', 'users')).toEqual({ route: 'GET users' })
+    expect(match('POST', 'projects')).toEqual({ route: 'POST projects' })
+    expect(match('PUT', 'projects/FW/access/teams/t1')).toEqual({
+      route: 'PUT projects/:ref/access/teams/:subject',
+      ref: 'FW',
+      subject: 't1',
+    })
+    expect(match('DELETE', 'projects/FW/milestones/m1')).toEqual({
+      route: 'DELETE projects/:ref/milestones/:milestone',
+      ref: 'FW',
+      milestone: 'm1',
+    })
   })
 
   it('answers null (the unknown-route 404) for every other method or shape', () => {
@@ -291,7 +336,9 @@ describe('REST route matching', () => {
       ['PATCH', 'tasks'],
       ['GET', 'users/a/b'],
       ['GET', 'projects/FW/other'],
-      ['POST', 'projects'],
+      ['PUT', 'projects/FW'],
+      ['PUT', 'projects/FW/access/groups/g1'],
+      ['GET', 'projects/FW/milestones'],
       ['GET', '%70rojects'],
       ['GET', 'issues'],
       ['GET', 'webhooks'],
