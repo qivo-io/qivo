@@ -32,6 +32,18 @@ import {
 type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
 type Res = { status: number; body: Record<string, unknown> }
 
+/* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
+ * declare it. */
+declare class Blob {
+  constructor(parts: unknown[], options?: { type?: string })
+}
+
+/* An attachment read mints a download link, which needs the file token
+ * secret (lib/fileTokens.ts reads it lazily). */
+const g = globalThis as unknown as { process?: { env: Record<string, string | undefined> } }
+g.process ??= { env: {} }
+g.process.env.BETTER_AUTH_SECRET ??= 'test-files-secret'
+
 async function call(
   t: T,
   secret: string | null,
@@ -130,11 +142,31 @@ async function fixture() {
       created_at: NOW,
     }),
   )
+  // comments by someone else on that task: one to edit, and one for each
+  // credential's delete request
+  const comment = async () => {
+    const id = uuid()
+    await t.run((ctx) =>
+      ctx.db.insert('comments', {
+        id,
+        issue_id: other.id,
+        author: f.user.id,
+        body: 'Written by someone else',
+        created_at: NOW,
+      }),
+    )
+    return id
+  }
+  const editable = await comment()
+  const deletable: string[] = []
+  for (let n = 0; n < 5; n++) deletable.push(await comment())
   return {
     t,
     f,
     viewerAgent,
     other: `QN-${other.num}`,
+    editable,
+    deletable,
     label,
     writer: await plantToken(t, f.admin, { access: 'write' }),
     reader: await plantToken(t, f.admin, { access: 'read' }),
@@ -155,8 +187,6 @@ const LABEL_ADMINS = 'only organization admins can rename, recolor or delete lab
 
 type Fx = Awaited<ReturnType<typeof fixture>>
 
-type Request = { path: string; body?: unknown }
-
 /* A fresh milestone on the fixture's top-level project, so each credential
  * edits or deletes one that exists. */
 const plantMilestone = (fx: Fx): Promise<string> =>
@@ -172,8 +202,22 @@ const plantMilestone = (fx: Fx): Promise<string> =>
     return id
   })
 
-/* One concrete request per route; `task` is a fresh task in FW. */
-const REQUESTS: Record<string, (fx: Fx, task: string) => Request | Promise<Request>> = {
+/* A stored file of `bytes` bytes, as an upload to Convex storage leaves it. */
+const storeFile = (t: T, bytes: number) =>
+  t.run((ctx) => ctx.storage.store(new Blob([new Uint8Array(bytes)]) as never))
+
+/* One concrete request per route; `task` is a fresh task in FW, by key and
+ * as its row, and `as` is the profile the credential acts as. A request may
+ * plant what its route needs first. */
+const REQUESTS: Record<
+  string,
+  (
+    fx: Fx,
+    task: string,
+    row: Doc<'issues'>,
+    as: Doc<'profiles'>,
+  ) => { path: string; body?: unknown } | Promise<{ path: string; body?: unknown }>
+> = {
   'GET me': () => ({ path: '/v1/me' }),
   'GET projects': () => ({ path: '/v1/projects' }),
   'GET projects/:ref': () => ({ path: '/v1/projects/FW' }),
@@ -207,6 +251,63 @@ const REQUESTS: Record<string, (fx: Fx, task: string) => Request | Promise<Reque
     body: { name: `Token ${uuid().slice(0, 8)}`, color: '#123456' },
   }),
   'PATCH labels/:ref': (fx) => ({ path: `/v1/labels/${fx.label}`, body: { color: '#654321' } }),
+  'GET tasks/:ref/attachments': (_, task) => ({ path: `/v1/tasks/${task}/attachments` }),
+  'POST tasks/:ref/attachments': (_, task) => ({
+    path: `/v1/tasks/${task}/attachments`,
+    body: { name: 'notes.txt', content_type: 'text/plain', size: 5 },
+  }),
+  'POST tasks/:ref/attachments/:ticket': async (fx, task, row, as) => {
+    const ticket = uuid()
+    await fx.t.run((ctx) =>
+      ctx.db.insert('attachment_uploads', {
+        id: ticket,
+        org_id: row.org_id,
+        profile_id: as.id,
+        issue_id: row.id,
+        name: 'notes.txt',
+        size_bytes: 5,
+        expires_at: Date.now() + 60_000,
+      }),
+    )
+    // stored after the ticket, as the upload to its URL would be
+    const storage_id = await storeFile(fx.t, 5)
+    return { path: `/v1/tasks/${task}/attachments/${ticket}`, body: { storage_id } }
+  },
+  'DELETE tasks/:ref/attachments/:id': async (fx, task, row) => {
+    const storage_id = await storeFile(fx.t, 5)
+    const id = uuid()
+    await fx.t.run((ctx) =>
+      ctx.db.insert('issue_attachments', {
+        id,
+        org_id: row.org_id,
+        issue_id: row.id,
+        name: 'old.txt',
+        size_bytes: 5,
+        storage_id,
+        inline: false,
+        created_at: NOW,
+      }),
+    )
+    return { path: `/v1/tasks/${task}/attachments/${id}` }
+  },
+  'GET tasks/:ref/activity': (_, task) => ({ path: `/v1/tasks/${task}/activity` }),
+  'GET workload': () => ({ path: '/v1/workload' }),
+  'PATCH comments/:ref': (fx) => ({
+    path: `/v1/comments/${fx.editable}`,
+    body: { body: `Edited ${uuid().slice(0, 8)}` },
+  }),
+  // each credential's request takes its own comment
+  'DELETE comments/:ref': (fx) => ({ path: `/v1/comments/${fx.deletable.pop()}` }),
+  'GET inbox': () => ({ path: '/v1/inbox' }),
+  'POST inbox/read': (_, task) => ({ path: '/v1/inbox/read', body: { tasks: [task] } }),
+  'POST inbox/unread': (_, task) => ({ path: '/v1/inbox/unread', body: { tasks: [task] } }),
+  'POST inbox/remove': (_, task) => ({ path: '/v1/inbox/remove', body: { tasks: [task] } }),
+  'POST inbox/snooze': (_, task) => ({
+    path: '/v1/inbox/snooze',
+    body: { tasks: [task], until: new Date(Date.now() + 3_600_000).toISOString() },
+  }),
+  'PUT tasks/:ref/following': (_, task) => ({ path: `/v1/tasks/${task}/following` }),
+  'DELETE tasks/:ref/following': (_, task) => ({ path: `/v1/tasks/${task}/following` }),
   'POST projects': () => ({ path: '/v1/projects', body: { name: 'Token project' } }),
   'PATCH projects/:ref': () => ({ path: '/v1/projects/FW', body: { track_delay: true } }),
   'PUT projects/:ref/access/users/:subject': (fx) => ({
@@ -244,13 +345,21 @@ type Outcome = 'ok' | { status: number; error: string }
 /* A Viewer person may not write any project; a Standard user agent may, but
  * neither may set someone's plannable hours or edit a label (organization
  * admins only), and a Viewer person may not add a label either. Neither
- * leads FW, neither may create a top-level project (an agent is no standard
- * user there yet), and only a person who leads a project changes its access;
- * a milestone needs User on the top-level project, which the agent holds. */
+ * wrote the comment the comment routes name, nor leads its project. Both
+ * manage their own inbox and follows, as a Viewer person does in the app.
+ * Neither leads FW, neither may create a top-level project (an agent is no
+ * standard user there yet), and only a person who leads a project changes
+ * its access; a milestone needs User on the top-level project, which the
+ * agent holds. */
 const refusedWrite = (
   route: { method: string; path: string },
   kind: 'viewer' | 'agent',
 ): Outcome => {
+  if (route.path === 'comments/:ref') {
+    const verb = route.method === 'PATCH' ? 'edit' : 'delete'
+    return { status: 403, error: `only the author or a project lead can ${verb} this comment` }
+  }
+  if (route.path.startsWith('inbox/') || route.path === 'tasks/:ref/following') return 'ok'
   if (route.path === 'users/:ref') return { status: 403, error: RIGHTS }
   if (route.path === 'labels/:ref') return { status: 403, error: LABEL_ADMINS }
   if (route.path === 'labels' && kind === 'viewer') {
@@ -280,17 +389,27 @@ describe('every organization route with a personal token', () => {
 
   it('reads with every token; writes follow the credential and the role', async () => {
     const fx = await fixture()
-    const credentials: [string, string, (route: (typeof ROUTES)[number]) => Outcome][] = [
-      ['write token', fx.writer, () => 'ok'],
-      ['read-only token', fx.reader, () => ({ status: 403, error: READS_ONLY })],
-      ['Viewer person', fx.viewer, (route) => refusedWrite(route, 'viewer')],
-      ['Standard user agent', fx.agentKey, (route) => refusedWrite(route, 'agent')],
-      ['Viewer agent', fx.viewerKey, () => ({ status: 403, error: VIEWER_AGENT_READS_ONLY })],
+    const credentials: [
+      string,
+      string,
+      Doc<'profiles'>,
+      (route: (typeof ROUTES)[number]) => Outcome,
+    ][] = [
+      ['write token', fx.writer, fx.f.admin, () => 'ok'],
+      ['read-only token', fx.reader, fx.f.admin, () => ({ status: 403, error: READS_ONLY })],
+      ['Viewer person', fx.viewer, fx.f.viewer, (route) => refusedWrite(route, 'viewer')],
+      ['Standard user agent', fx.agentKey, fx.f.agent, (route) => refusedWrite(route, 'agent')],
+      [
+        'Viewer agent',
+        fx.viewerKey,
+        fx.viewerAgent,
+        () => ({ status: 403, error: VIEWER_AGENT_READS_ONLY }),
+      ],
     ]
-    for (const [who, credential, onWrite] of credentials) {
+    for (const [who, credential, as, onWrite] of credentials) {
       for (const route of ROUTES) {
         const task = await plantIssue(fx.t, { org_id: fx.f.org.id, project_id: fx.f.sub.id })
-        const { path, body } = await REQUESTS[label(route)](fx, `QN-${task.num}`)
+        const { path, body } = await REQUESTS[label(route)](fx, `QN-${task.num}`, task, as)
         const res = await call(fx.t, credential, route.method, path, body)
         const expected: Outcome = route.access === 'read' ? 'ok' : onWrite(route)
         if (expected === 'ok') {

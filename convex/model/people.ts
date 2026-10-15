@@ -4,6 +4,7 @@
  *
  *   address shape      the only address check the database ever had
  *   name shape         0116's normalization and its two sentences
+ *   avatar color       #rrggbb on write, gray on read for older values
  *   retention stamp    0112's sibling inheritance, stamped on every create
  *   viewer leads none  0102:391-411, checked before a seat becomes a viewer
  *   claim order        the order claiming adopts an address's pending seats
@@ -15,7 +16,8 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
-import { rule } from '../lib/functions'
+import { badRequest, rule } from '../lib/functions'
+import { isLabelColor } from './labels'
 
 /* invite_project_guest's regex, mirrored by the client's EMAIL_RE: something,
  * @, something, dot, something, no whitespace. The address is proved by
@@ -35,6 +37,25 @@ export const cleanName = (raw: string): string => raw.replace(/\s+/g, ' ').trim(
 export function assertNameShape(name: string): void {
   if (name === '') throw rule('a name cannot be blank')
   if ([...name].length > 80) throw rule('a name is at most 80 characters')
+}
+
+/** The avatar color as given, refused unless it is `#rrggbb`. Clients paint
+ * it as a CSS background like a label color, so it follows the label rule. */
+export function avatarColor(raw: string): string {
+  if (!isLabelColor(raw)) {
+    throw badRequest('an avatar color must be # followed by six hex digits, like #0F766E')
+  }
+  return raw
+}
+
+/** The gray a new guest seat gets, sent in place of a color that breaks the rule. */
+const FALLBACK_AVATAR_COLOR = '#8A8F98'
+
+/** The color to send a client. Seats created before the `#rrggbb` rule may
+ * hold any text, so every read that hands a profile to a client uses this and
+ * sends gray instead. The stored value stays as it is. */
+export function shownAvatarColor(stored: string): string {
+  return isLabelColor(stored) ? stored : FALLBACK_AVATAR_COLOR
 }
 
 export const byCreated = (a: Doc<'profiles'>, b: Doc<'profiles'>) =>
@@ -79,6 +100,24 @@ export const adminElsewhere = (email: string, org: Doc<'organizations'>) =>
     `${email} already belongs to ${org.name}, so they would join as a guest and could not manage this organization. Invite someone else as org admin.`,
   )
 
+/* How many days a new seat keeps read inbox messages when nothing else
+ * decides. It is the old column default, where the app's retention setting
+ * also starts. */
+export const DEFAULT_MESSAGE_RETENTION_DAYS = 7
+
+/**
+ * How many days `p` keeps read inbox messages before the nightly sweep
+ * removes them, or null to keep them. A stored period decides. Absent means
+ * Never for a person, who chose it in Settings. An agent has no settings
+ * page, so one without a stored period keeps them for the default.
+ */
+export function messageRetentionDays(
+  p: Pick<Doc<'profiles'>, 'kind' | 'message_retention_days'>,
+): number | null {
+  if (p.message_retention_days !== undefined) return p.message_retention_days
+  return p.kind === 'agent' ? DEFAULT_MESSAGE_RETENTION_DAYS : null
+}
+
 /* profiles_inherit_message_retention (0112): a new seat starts where the
  * person's other seats already are — matched on login OR address across every
  * org, oldest sibling wins, and the value copies even when it is Never
@@ -108,7 +147,7 @@ export async function inheritedRetention(
       if (!siblings.some((s) => s._id === p._id)) siblings.push(p)
     }
   }
-  if (siblings.length === 0) return 7
+  if (siblings.length === 0) return DEFAULT_MESSAGE_RETENTION_DAYS
   siblings.sort(byCreated)
   return siblings[0].message_retention_days
 }

@@ -21,14 +21,16 @@
  * an organization whose unarchived tasks outgrow one transaction, which also
  * breaks that organization's app snapshot. Isolating organizations needs
  * separately scheduled legs whose counts no longer meet in one audit row, so
- * build it when an organization nears the caps. The read-message sweep is
- * still one transaction; its escape hatch is the same self-continuation. */
+ * build it when an organization nears the caps. The read-message sweep runs
+ * in legs the same way, by profile and bounded by rows. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
+import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { wakeSnoozedItem } from './model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
+import { messageRetentionDays } from './model/people'
 import { emitTaskEvent } from './model/taskEvents'
 
 const DAY = 86_400_000
@@ -177,50 +179,114 @@ export const archiveDoneIssues = internalMutation({
   },
 })
 
-/* private.sweep_read_messages(null) (0110:88-102) — READ messages only, per
- * the recipient's own message_retention_days, measured from read_at, never
- * created_at: "An UNREAD message is never swept however old it is: nothing
- * here decides that news stopped mattering because it went unanswered."
- * Convex mapping: an absent message_retention_days means Never (schema.ts) —
- * those profiles are skipped entirely. Iterating from profiles is the SQL's
- * join (a message whose recipient row is gone is not swept here; teardown
- * removes those with the profile). The boot-time sweep_my_read_messages twin
- * is CUT — this nightly job is the one implementation. */
-export const sweepReadMessages = internalMutation({
-  args: {},
-  handler: async (ctx): Promise<{ deleted: number; woken: number }> => {
-    const nowMs = Date.now()
-    const now = new Date(nowMs).toISOString()
-    let deleted = 0
-    let woken = 0
+/* How many messages one sweep leg deletes or wakes at most, and how many
+ * profiles it visits at most. A larger backlog continues in the next leg of
+ * the same run. */
+export const SWEEP_BATCH = 500
+export const SWEEP_PROFILES = 100
 
-    const profiles = await ctx.db.query('profiles').withIndex('by_uuid').collect()
-    for (const p of profiles) {
-      const cutoff =
-        p.message_retention_days === undefined // absent = keep forever
-          ? null
-          : new Date(nowMs - p.message_retention_days * DAY).toISOString()
-      const messages = await ctx.db
-        .query('messages')
-        .withIndex('by_recipient', (q) => q.eq('recipient_id', p.id))
-        .collect()
-      // A snoozed row is a pending reminder: never swept, however long ago it
-      // was read. One whose instant has passed lost its scheduled wake
-      // somewhere — this is the fallback that still brings it back.
-      const overdue = new Set<string>()
-      for (const m of messages) {
-        if (m.snoozed_until !== undefined) {
-          if (m.snoozed_until <= now) overdue.add(m.issue_id)
-          continue
-        }
-        if (cutoff === null || m.read_at === undefined) continue
-        if (m.read_at > cutoff) continue
-        await ctx.db.delete(m._id)
-        deleted += 1
+const sweepLegRef = makeFunctionReference<
+  'mutation',
+  { from?: string; deleted?: number; woken?: number; now?: string },
+  null
+>('jobs:sweepReadMessages')
+
+/* One profile's share of a sweep leg, at most `budget` rows. It deletes
+ * READ rows read before the profile's retention period (model/people.ts
+ * messageRetentionDays), measured from read_at and never created_at, so an
+ * UNREAD message is never swept however old it is. Nothing here decides
+ * that news stopped mattering because it went unanswered. A snoozed row is
+ * a pending reminder and is never swept, however long ago it was read. One
+ * whose instant has passed lost its scheduled wake somewhere, and this is
+ * the fallback that still brings it back. Both reads are index ranges, so a
+ * long unread backlog costs nothing here. `used` counts the rows it deleted
+ * or found to wake, and `more` says rows remain for the next leg. */
+async function sweepProfileMessages(
+  ctx: MutationCtx,
+  p: Doc<'profiles'>,
+  now: string,
+  budget: number,
+): Promise<{ deleted: number; woken: number; used: number; more: boolean }> {
+  let deleted = 0
+  const days = messageRetentionDays(p)
+  if (days !== null) {
+    const cutoff = new Date(Date.parse(now) - days * DAY).toISOString()
+    const expired = await ctx.db
+      .query('messages')
+      .withIndex('by_recipient_read', (q) =>
+        q.eq('recipient_id', p.id).gt('read_at', undefined).lte('read_at', cutoff),
+      )
+      .filter((q) => q.eq(q.field('snoozed_until'), undefined))
+      .take(budget + 1)
+    for (const m of expired.slice(0, budget)) {
+      await ctx.db.delete(m._id)
+      deleted += 1
+    }
+    if (expired.length > budget) return { deleted, woken: 0, used: budget, more: true }
+  }
+  const room = budget - deleted
+  const overdue = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_snoozed', (q) =>
+      q.eq('recipient_id', p.id).gt('snoozed_until', undefined).lte('snoozed_until', now),
+    )
+    .take(room + 1)
+  const due = overdue.slice(0, room)
+  let woken = 0
+  for (const issue_id of new Set(due.map((m) => m.issue_id))) {
+    if (await wakeSnoozedItem(ctx, { recipient_id: p.id, issue_id }, now)) woken += 1
+  }
+  return { deleted, woken, used: deleted + due.length, more: overdue.length > room }
+}
+
+/* private.sweep_read_messages(null) (0110:88-102), one leg per call, so a
+ * run stays inside the transaction caps however many profiles and messages
+ * there are. The cron starts a run with no arguments. Each leg visits
+ * profiles in uuid order from `from`, at most SWEEP_PROFILES of them and
+ * SWEEP_BATCH rows, and schedules the next leg with the running counts and
+ * the run's `now`, staying on a profile while it has rows left. The leg with
+ * nothing left to schedule writes the counts-only audit row. Iterating from
+ * profiles is the SQL's join (a message whose recipient row is gone is not
+ * swept here; teardown removes those with the profile). The boot-time
+ * sweep_my_read_messages twin is CUT; this nightly job is the one
+ * implementation. A profile without a retention period keeps its read
+ * messages when it is a person (Never) and keeps them for
+ * DEFAULT_MESSAGE_RETENTION_DAYS when it is an agent, which has no settings
+ * page. */
+export const sweepReadMessages = internalMutation({
+  args: {
+    from: v.optional(v.string()),
+    deleted: v.optional(v.number()),
+    woken: v.optional(v.number()),
+    now: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? new Date().toISOString()
+    let deleted = a.deleted ?? 0
+    let woken = a.woken ?? 0
+    let budget = SWEEP_BATCH
+    let next: string | undefined
+    const profiles = await ctx.db
+      .query('profiles')
+      .withIndex('by_uuid', (q) => q.gte('id', a.from ?? ''))
+      .take(SWEEP_PROFILES + 1)
+    for (const [i, p] of profiles.entries()) {
+      if (i === SWEEP_PROFILES || budget === 0) {
+        next = p.id
+        break
       }
-      for (const issue_id of overdue) {
-        if (await wakeSnoozedItem(ctx, { recipient_id: p.id, issue_id }, now)) woken += 1
+      const leg = await sweepProfileMessages(ctx, p, now, budget)
+      deleted += leg.deleted
+      woken += leg.woken
+      budget -= leg.used
+      if (leg.more) {
+        next = p.id
+        break
       }
+    }
+    if (next !== undefined) {
+      await ctx.scheduler.runAfter(0, sweepLegRef, { from: next, deleted, woken, now })
+      return null
     }
 
     await ctx.db.insert('platform_audit_log', {
@@ -229,6 +295,6 @@ export const sweepReadMessages = internalMutation({
       action: 'sweep_read_messages',
       detail: { deleted, woken },
     })
-    return { deleted, woken }
+    return null
   },
 })

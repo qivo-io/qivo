@@ -28,6 +28,7 @@ import {
   type AccessCredential,
   cleanTokenExpiry,
   credentialAccess,
+  keepsInbox,
   tokenExpired,
 } from '../lib/access'
 import type { CredentialAccess } from '../lib/enums'
@@ -87,6 +88,19 @@ describe('credentialAccess', () => {
       expect(key(agentSeat(role)), role).toBe('read')
     }
     expect(key(PERSON)).toBe('read')
+  })
+
+  it('keepsInbox: every person, and an agent only while it is active and its key can write', () => {
+    const seat = (kind: string, org_role: string, active: boolean) =>
+      ({ kind, org_role, active }) as Pick<Doc<'profiles'>, 'kind' | 'org_role' | 'active'>
+    expect(keepsInbox(seat('person', 'viewer', true))).toBe(true)
+    expect(keepsInbox(seat('person', 'user', false))).toBe(true)
+    expect(keepsInbox(seat('agent', 'user', true))).toBe(true)
+    expect(keepsInbox(seat('agent', 'user', false))).toBe(false)
+    for (const role of ['viewer', 'admin', 'guest', 'owner', '']) {
+      expect(keepsInbox(seat('agent', role, true)), role).toBe(false)
+    }
+    expect(keepsInbox(seat('bot', 'user', true))).toBe(false)
   })
 
   it('an unknown credential kind reads', () => {

@@ -7,8 +7,9 @@
  * that machine/mcp.ts TOOLS and machine/rest.ts ROUTES spread in, so
  * tools/list, the OAuth step-up and REST routing treat them like the rest.
  * This module imports only types from those two, so neither is loaded
- * through it. machine/rest.ts uses restProjectDetail for GET
- * /v1/projects/{ref}.
+ * through it. The provenance, key name validator, body parsers and MCP text
+ * it shares with them come from machine/shared.ts. machine/rest.ts uses
+ * restProjectDetail for GET /v1/projects/{ref}.
  *
  * Each action is one shared model function the app runs too
  * (model/projects.ts createProjectCore, updateProjectCore, archiveProjectCore
@@ -25,7 +26,7 @@
  * changes one person or team at a time, and only a person may change it
  * (lib/access.ts canChangeAccess). */
 
-import { type ConvexError, v } from 'convex/values'
+import { type ConvexError, type ObjectType, v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import {
@@ -609,8 +610,6 @@ async function restSubject(
   return { team }
 }
 
-const vAccessKind = v.union(v.literal('users'), v.literal('teams'))
-
 /* ----------------------------------------------------- REST internal fns */
 
 /* POST /v1/projects {name, parent?, lead_id?, description?}. */
@@ -689,66 +688,84 @@ export const restUpdateProject = internalMutation({
   },
 })
 
-/* PUT /v1/projects/{ref}/access/{users|teams}/{id} {level}. */
-export const restSetAccess = internalMutation({
-  args: {
-    callerId: v.string(),
-    access: vCredentialAccess,
-    keyName: vKeyName,
-    ref: v.string(),
-    kind: vAccessKind,
-    subject: v.string(),
-    body: v.string(),
-  },
-  handler: async (ctx, a) => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const project = await restProject(ctx, me, a.ref)
-    const subject = await restSubject(ctx, me, a.kind, a.subject)
-    const level = restLevel(needJson(a.body))
-    const { changed } = await setProjectGrantCore(ctx, {
-      me,
-      project,
-      subject,
-      level,
-      now: new Date().toISOString(),
-      provenance: restProvenance(a.keyName),
-    })
-    return { project_id: project.id, ...subjectJson(subject), level, changed }
-  },
-})
+/* The arguments of each access route's function: the project and subject
+ * from the path, and the body ({level} on PUT, an optional {on_held_tasks}
+ * on DELETE). */
+const vRestAccessArgs = {
+  callerId: v.string(),
+  access: vCredentialAccess,
+  keyName: vKeyName,
+  ref: v.string(),
+  subject: v.string(),
+  body: v.string(),
+}
+
+type RestAccessArgs = ObjectType<typeof vRestAccessArgs>
+
+/* PUT /v1/projects/{ref}/access/{users|teams}/{id} {level}, which each
+ * kind's own internal function below runs, so every route reaches exactly
+ * one function. */
+async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
+  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const project = await restProject(ctx, me, a.ref)
+  const subject = await restSubject(ctx, me, kind, a.subject)
+  const level = restLevel(needJson(a.body))
+  const { changed } = await setProjectGrantCore(ctx, {
+    me,
+    project,
+    subject,
+    level,
+    now: new Date().toISOString(),
+    provenance: restProvenance(a.keyName),
+  })
+  return { project_id: project.id, ...subjectJson(subject), level, changed }
+}
 
 /* DELETE /v1/projects/{ref}/access/{users|teams}/{id}, with an optional
- * body {on_held_tasks}. */
-export const restRemoveAccess = internalMutation({
-  args: {
-    callerId: v.string(),
-    access: vCredentialAccess,
-    keyName: vKeyName,
-    ref: v.string(),
-    kind: vAccessKind,
-    subject: v.string(),
-    body: v.string(),
-  },
-  handler: async (ctx, a) => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const held: HeldTasks = parseHeldTasks(optionalJson(a.body).on_held_tasks)
-    const project = await restProject(ctx, me, a.ref)
-    const subject = await restSubject(ctx, me, a.kind, a.subject)
-    const removal = await removeProjectGrantCore(ctx, {
-      me,
-      project,
-      subject,
-      held,
-      now: new Date().toISOString(),
-      provenance: restProvenance(a.keyName),
-    })
-    return {
-      project_id: project.id,
-      ...subjectJson(subject),
-      removed: removal.removed,
-      ...removalJson(removal),
-    }
-  },
+ * body {on_held_tasks}, which each kind's own internal function below runs. */
+async function restRemoveAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
+  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const held: HeldTasks = parseHeldTasks(optionalJson(a.body).on_held_tasks)
+  const project = await restProject(ctx, me, a.ref)
+  const subject = await restSubject(ctx, me, kind, a.subject)
+  const removal = await removeProjectGrantCore(ctx, {
+    me,
+    project,
+    subject,
+    held,
+    now: new Date().toISOString(),
+    provenance: restProvenance(a.keyName),
+  })
+  return {
+    project_id: project.id,
+    ...subjectJson(subject),
+    removed: removal.removed,
+    ...removalJson(removal),
+  }
+}
+
+/* PUT /v1/projects/{ref}/access/users/{id}. */
+export const restSetUserAccess = internalMutation({
+  args: vRestAccessArgs,
+  handler: (ctx, a) => restSetAccess(ctx, a, 'users'),
+})
+
+/* PUT /v1/projects/{ref}/access/teams/{id}. */
+export const restSetTeamAccess = internalMutation({
+  args: vRestAccessArgs,
+  handler: (ctx, a) => restSetAccess(ctx, a, 'teams'),
+})
+
+/* DELETE /v1/projects/{ref}/access/users/{id}. */
+export const restRemoveUserAccess = internalMutation({
+  args: vRestAccessArgs,
+  handler: (ctx, a) => restRemoveAccess(ctx, a, 'users'),
+})
+
+/* DELETE /v1/projects/{ref}/access/teams/{id}. */
+export const restRemoveTeamAccess = internalMutation({
+  args: vRestAccessArgs,
+  handler: (ctx, a) => restRemoveAccess(ctx, a, 'teams'),
 })
 
 /* A REST milestone body's name and date: strings when present, `required`
@@ -1104,40 +1121,66 @@ export const PROJECT_ROUTES: RestRoute[] = [
         body,
       }),
   }),
-  ...(['users', 'teams'] as const).flatMap((kind) => [
-    route({
-      method: 'PUT',
-      path: `projects/:ref/access/${kind}/:subject`,
-      access: 'write',
-      status: 200,
-      run: (r, { callerId, access, keyName, param, body }) =>
-        r.runMutation(internal.machine.projects.restSetAccess, {
-          callerId,
-          access,
-          keyName,
-          ref: param('ref'),
-          kind,
-          subject: param('subject'),
-          body,
-        }),
-    }),
-    route({
-      method: 'DELETE',
-      path: `projects/:ref/access/${kind}/:subject`,
-      access: 'write',
-      status: 200,
-      run: (r, { callerId, access, keyName, param, body }) =>
-        r.runMutation(internal.machine.projects.restRemoveAccess, {
-          callerId,
-          access,
-          keyName,
-          ref: param('ref'),
-          kind,
-          subject: param('subject'),
-          body,
-        }),
-    }),
-  ]),
+  route({
+    method: 'PUT',
+    path: 'projects/:ref/access/users/:subject',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, keyName, param, body }) =>
+      r.runMutation(internal.machine.projects.restSetUserAccess, {
+        callerId,
+        access,
+        keyName,
+        ref: param('ref'),
+        subject: param('subject'),
+        body,
+      }),
+  }),
+  route({
+    method: 'DELETE',
+    path: 'projects/:ref/access/users/:subject',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, keyName, param, body }) =>
+      r.runMutation(internal.machine.projects.restRemoveUserAccess, {
+        callerId,
+        access,
+        keyName,
+        ref: param('ref'),
+        subject: param('subject'),
+        body,
+      }),
+  }),
+  route({
+    method: 'PUT',
+    path: 'projects/:ref/access/teams/:subject',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, keyName, param, body }) =>
+      r.runMutation(internal.machine.projects.restSetTeamAccess, {
+        callerId,
+        access,
+        keyName,
+        ref: param('ref'),
+        subject: param('subject'),
+        body,
+      }),
+  }),
+  route({
+    method: 'DELETE',
+    path: 'projects/:ref/access/teams/:subject',
+    access: 'write',
+    status: 200,
+    run: (r, { callerId, access, keyName, param, body }) =>
+      r.runMutation(internal.machine.projects.restRemoveTeamAccess, {
+        callerId,
+        access,
+        keyName,
+        ref: param('ref'),
+        subject: param('subject'),
+        body,
+      }),
+  }),
   route({
     method: 'POST',
     path: 'projects/:ref/milestones',

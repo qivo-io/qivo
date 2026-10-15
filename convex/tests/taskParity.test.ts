@@ -247,12 +247,15 @@ describe('the single-task read names only tasks the caller can read', () => {
     expect(rest).toMatchObject({ is_group: true, remaining_hours: 9, ...expected })
     const viaMcp = await mcp(fx, internal.machine.mcp.getIssue, { ref: parent.id })
     expect(viaMcp).toMatchObject(expected)
-    expect(Object.keys(viaMcp).slice(-5)).toEqual([
+    expect(Object.keys(viaMcp).slice(-8)).toEqual([
       'url',
       'group_remaining_hours',
       'labels',
       'subtasks',
       'links',
+      'following',
+      'followers',
+      'attachments',
     ])
     // an admin reads the hidden subtask and link too, and counts its hours
     const admin = await restGet(fx, parent.id, fx.admin.id)
@@ -1077,6 +1080,27 @@ describe('the shared cores the app runs too', () => {
     await link(id, 'blocks')
     expect(await activityFor(t, f.org.id)).toHaveLength(1)
     await expectRefusal(link(uuid(), 'relates'), 'bad_request', /^these tasks are already linked$/)
+  })
+
+  it('the app link: an id another link already has is refused', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const c = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const link = (id: string, target_id: string) =>
+      as(t, f.user).mutation(api.issues.addLink, {
+        org_id: f.org.id,
+        id,
+        source_id: a.id,
+        target_id,
+        type: 'relates',
+      })
+    const id = uuid()
+    await link(id, b.id)
+    await expectRefusal(link(id, c.id), 'bad_request', /^a link with this id already exists$/)
+    await link(uuid(), c.id)
+    expect(await activityFor(t, f.org.id)).toHaveLength(2)
   })
 
   it('namedTaskNums reads signed rows and still fails closed on other wording', () => {

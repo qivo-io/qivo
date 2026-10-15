@@ -32,7 +32,13 @@ crons.daily(
 )
 
 // was '15 3 * * *' (0110:124) — just after the archive sweep
-crons.daily('sweep-read-messages', { hourUTC: 3, minuteUTC: 15 }, internal.jobs.sweepReadMessages)
+// The empty arguments start a run; each leg schedules the next (jobs.ts).
+crons.daily(
+  'sweep-read-messages',
+  { hourUTC: 3, minuteUTC: 15 },
+  internal.jobs.sweepReadMessages,
+  {},
+)
 
 // was '0 3 * * 0' (0033:85) — self-audits (files.ts writes the reap_orphans row)
 crons.weekly(

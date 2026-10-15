@@ -56,7 +56,7 @@ const E401_PERSON_UNKNOWN = '{"error":"unknown personal access token"}'
  * as a SET: the value crosses the Convex function boundary before the
  * httpAction stringifies it, and Convex canonically sorts object keys there —
  * the live wire is alphabetical, so key ORDER is not contract, key PRESENCE
- * is (explicit null, never omitted). A list row leaves out the last four. */
+ * is (explicit null, never omitted). A list row leaves out the last seven. */
 const ISSUE_KEYS = [
   'archived',
   'archived_at',
@@ -93,6 +93,9 @@ const ISSUE_KEYS = [
   'labels',
   'subtasks',
   'links',
+  'following',
+  'followers',
+  'attachments',
 ].sort()
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/
@@ -261,7 +264,7 @@ describe('method handling and CORS preflight', () => {
     expect(res.headers.get('allow')).toBe('GET,HEAD,POST,DELETE,PATCH,PUT,OPTIONS')
   })
 
-  test('PUT answers the deployed auth-then-404 behavior outside the access routes', async () => {
+  test('PUT answers the deployed auth-then-404 behavior outside its routes', async () => {
     const bare = await call('PUT', '/v1/tasks/QN-1', { headers: {} })
     expect(bare.status).toBe(401)
     expect(await bare.text()).toBe(E401_MISSING)

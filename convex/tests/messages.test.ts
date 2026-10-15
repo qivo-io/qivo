@@ -32,6 +32,7 @@ import {
   plantIssue,
   plantMessage,
   plantProject,
+  plantSeat,
   plantSubscription,
   type T,
   tick,
@@ -688,6 +689,61 @@ describe('postMessage fence', () => {
     expect(await messagesFor(t, f.agent.id)).toHaveLength(0)
     expect(await messagesFor(t, f.otherAdmin.id)).toHaveLength(0)
     expect(await allMessages(t)).toHaveLength(1)
+  })
+})
+
+describe('agents without an inbox', () => {
+  /* A Viewer or Inactive agent can never mark a message read or remove it,
+   * so nothing would ever clear what it was sent (lib/access.ts keepsInbox). */
+  it('a Viewer or Inactive agent is neither messaged nor made a follower; a Standard user agent is', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const agent = (name: string, over: Partial<Doc<'profiles'>>) =>
+      plantSeat(t, { org_id: f.org.id, name, kind: 'agent', plannable_hours: undefined, ...over })
+    const ledger = await agent('Ledger', { org_role: 'viewer' })
+    const dormant = await agent('Dormant', { active: false })
+    await t.run(async (ctx) => {
+      for (const p of [f.agent, ledger, dormant]) {
+        await ctx.db.insert('project_access', {
+          project_id: f.meta.id,
+          profile_id: p.id,
+          level: 'user',
+        })
+      }
+    })
+    // Ledger followed the task before it was made a Viewer
+    await plantSubscription(t, { issue_id: issue.id, profile_id: ledger.id })
+    const mention = (p: Doc<'profiles'>) => `@[${p.name}](user:${p.id})`
+    await as(t, f.user).mutation(api.comments.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      issue_id: issue.id,
+      body: `${mention(f.agent)} ${mention(ledger)} ${mention(dormant)}`,
+    })
+    await update(t, f.user, issue.id, { priority: 'high' })
+
+    expect((await messagesFor(t, f.agent.id)).map((m) => m.detail)).toEqual([
+      'Mentioned you in a comment',
+      'Priority: Medium → High',
+    ])
+    expect(await messagesFor(t, ledger.id)).toEqual([])
+    expect(await messagesFor(t, dormant.id)).toEqual([])
+    const followers = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('issue_subscriptions')
+          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+          .collect()
+      ).map((row) => row.profile_id),
+    )
+    expect(followers).toContain(f.agent.id)
+    expect(followers).not.toContain(dormant.id)
+
+    // the rule follows the live role: back as a Standard user, Ledger hears again
+    await t.run((ctx) => ctx.db.patch(ledger._id, { org_role: 'user' }))
+    await update(t, f.user, issue.id, { priority: 'low' })
+    expect((await messagesFor(t, ledger.id)).map((m) => m.detail)).toEqual(['Priority: High → Low'])
   })
 })
 

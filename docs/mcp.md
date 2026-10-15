@@ -139,10 +139,12 @@ create, list and remove its own [webhook subscriptions](#task-events-and-webhook
 
 **The Viewer role.** A user whose **organization role** is `viewer`
 (migration 0102) holds a seat and signs in, reads exactly the projects they
-can access directly or through a team, and writes nothing. A Viewer person's
-credential may be able to make changes, but every writing tool still refuses
-with the same "your account has no write access to that project" a missing
-grant produces, and they are never handed a task. It is a ceiling, not a
+can access directly or through a team, and changes no project. A Viewer
+person's credential may be able to make changes, but every tool that changes
+a project still refuses with the same "your account has no write access to
+that project" a missing grant produces, and they are never handed a task. As
+in the app, a Viewer person may still follow tasks, manage their own inbox and
+edit or delete comments they wrote. It is a ceiling, not a
 grant. It opens no project and only stops any other path (an individual or
 team grant, a project-lead title, a team leadership) from exceeding read. An
 **agent** can be a viewer too, which is how a read-only key is made, with one
@@ -349,7 +351,7 @@ why. What changed, for anyone writing against the endpoint directly:
   `io.modelcontextprotocol/serverInfo`, since no client can be assumed to have
   asked. Every result carries a `resultType`, `"complete"` for all of ours.
 - **`tools/list` and `server/discover` are cacheable.** Both come back with
-  `ttlMs` (an hour) and `cacheScope: "private"` — the sixteen tools are
+  `ttlMs` (an hour) and `cacheScope: "private"` — the tools are
   identical for every credential, but the response sits behind a bearer
   token, so cache it per client and never in a shared cache. Stop re-listing
   on every turn.
@@ -368,7 +370,7 @@ why. What changed, for anyone writing against the endpoint directly:
 with `initialize`, so a request without the `protocolVersion` envelope is
 served by the revision's own backward-compatible leg: `initialize` (echoing
 a supported 2025-era revision), `ping` (answering `{}`), `tools/list` and
-`tools/call`, the same sixteen tools, one fresh server per request. That leg
+`tools/call`, the same tools, one fresh server per request. That leg
 also keeps the old framing: each response is a single SSE `event: message`
 frame, behind the Accept header the 2025 protocol required (it must name
 both `application/json` and `text/event-stream`, or the answer is `406`);
@@ -658,9 +660,13 @@ The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
 operations, `set_task_link` for links between tasks, `list_labels` and
-`set_label` for the organization's labels, and `get_project`,
-`create_project`, `update_project`, `set_project_access`, `set_milestone` and
-`delete_milestone` for projects. This pre-launch rename replaces the former tool names; clients
+`set_label` for the organization's labels, `delete_attachment` and
+`list_task_activity` for a task's files and history, `get_workload` for
+planned hours per person, `update_comment` and `delete_comment` for comments,
+`list_inbox` and `update_inbox` for your inbox, `set_following` to follow a
+task, and `get_project`, `create_project`, `update_project`,
+`set_project_access`, `set_milestone` and `delete_milestone` for projects.
+This pre-launch rename replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
 | Tool | What it does |
@@ -677,7 +683,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `delete_milestone` | Delete a `milestone` of a `project` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's discussion thread, oldest first, with author and edit attribution |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row — the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters. Returns `id` and `key`, plus `ignored_arguments` when you sent arguments the tool does not know |
@@ -686,6 +692,14 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
+| `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
+| `list_task_activity` | The task's history, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. See [Task activity](#task-activity) |
+| `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`. See [Workload](#workload) |
+| `update_comment` | Replace a comment's `body`; `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
+| `delete_comment` | Delete a comment, by the same rule as `update_comment` |
+| `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says older messages were not read |
+| `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
+| `set_following` | Follow a task (`following: true`) or stop following it |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
 
 ### Who am I
@@ -833,16 +847,23 @@ is `true`, so a subtask under a task hidden from you is not mistaken for a
 top-level task. A group's `start_week` and `end_week` come from the subtasks
 you can read, at any depth.
 
-`get_task` adds four fields, which name only tasks you can read:
+`get_task` adds seven fields, which name only tasks you can read:
 
 ```json
 {
   "group_remaining_hours": 6.5,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
-  "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }]
+  "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }],
+  "following": false,
+  "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
+  "attachments": [{ "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213, "…": "…" }]
 }
 ```
+
+`following` says whether you follow the task, and `followers` lists everyone
+who does, by name, as the app's follower list shows them. `attachments`
+lists the task's files, described under [Attachments](#attachments).
 
 `subtasks` are the direct subtasks you can read, by number: the active ones
 of an active task, and all of them for an archived task. `links` are the
@@ -886,6 +907,198 @@ One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
 `archive_reason`. Everything lands or nothing does, and each step writes its
 own activity row signed `via MCP`.
+
+### Attachments
+
+`get_task` lists every file of the task, oldest first, including the images
+inside its description:
+
+```json
+{
+  "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213,
+  "content_type": "application/pdf", "inline": false,
+  "uploaded_by_id": "…uuid…", "uploaded_by_name": "Priya Patel",
+  "created_at": "…",
+  "url": "https://api.qivo.io/files/…?e=…&m=…&t=…",
+  "url_expires_at": "…"
+}
+```
+
+`inline` is `true` for a description image, which the description names as
+`![alt](att:<id>)`. `url` downloads the file for 10 minutes
+(`url_expires_at`); call `get_task` again for a fresh link. Each download
+checks again that your user is active and can see the task's project, but
+not the credential, so a link fetched before a token was revoked works until
+it expires. Images open in the browser and other types download.
+
+`delete_attachment` deletes one file and writes a `removed an attachment
+from` activity row signed `via MCP`. Anyone with Edit access to the
+project may delete any file, not only their own. An id that is not a file of
+that task reads `attachment "<id>" not found on QN-<n>`. MCP does not
+upload files; scripts upload through the REST API. Description images stay
+with the app, so `delete_attachment` refuses one with `this image belongs to
+the task description; remove it by editing the description in the app`.
+When `update_task` rewrites a description, keep every `![alt](att:<id>)`
+reference whose image should stay. An image the description no longer names
+stays until someone next saves that task's description in the app. That
+save deletes the image at once if it was uploaded more than a day ago, so
+put a dropped reference back before then.
+
+### Task activity
+
+`list_task_activity` answers the task's history, oldest first, the rows the
+task window's **All** filter shows beside the comments (`list_comments` has
+those):
+
+```json
+[
+  {
+    "id": "…uuid…", "created_at": "…",
+    "actor_id": "…uuid…", "actor_name": "Leo Martins",
+    "verb": "changed", "detail": "(status To Do → In Progress) — via MCP"
+  }
+]
+```
+
+You receive the rows the app's activity feed would give you. Organization
+admins receive every row. Other users do not receive a row that names a
+project they cannot access, such as where the task was before a move, or
+another task they cannot read, such as the other end of a link. An
+archived task's history is answered too, by the same rule. `actor_id` and
+`actor_name` are `null` once the user who made the change has been removed
+from the organization. The organization keeps its newest 500 activity rows.
+
+### Workload
+
+`get_workload` answers each person's planned hours per week, as the
+Roadmap's Team strip and the planning panel count them:
+
+```json
+{
+  "week_starts": ["2026-10-12", "2026-10-19"],
+  "project": null,
+  "people": [
+    {
+      "id": "…uuid…", "name": "Leo Martins", "org_role": "user", "kind": "person",
+      "active": true, "plannable_hours": 32,
+      "hours": [30, 22], "hidden_hours": [4, 0]
+    }
+  ]
+}
+```
+
+- `from_week` is any day of the first week (`YYYY-MM-DD`), by default the
+  current week. Weeks begin on the organization's `week_start` from
+  `get_me`. `weeks` is 1 to 52, 8 by default.
+- `project` (number, key or uuid) limits the hours to that project and its
+  sub-projects; `project` names it in the result.
+- `hours[i]` is the week starting `week_starts[i]`, rounded to a tenth. A
+  task counts toward its owner (the reviewer while it is In Review with one,
+  else the assignee) when it is scheduled, not Done, not paused, has
+  remaining hours and is not archived. Its remaining hours spread evenly from
+  the week its estimate was saved, or its start week if later, through its
+  end week.
+- Compare `hours` with `plannable_hours`. An agent's is `null`, because
+  agents have no weekly limit.
+- Organization admins and Standard users also receive the hours of projects
+  they cannot see, in `hours` and `hidden_hours`, without naming the task or
+  project. `hidden_hours` is the part of `hours` from those projects, so do
+  not add the two. Viewers and guests receive only work they can see or own.
+  With `project`, `hidden_hours` is all zeros.
+- `people` lists every active user and agent, and any inactive one with hours
+  in the window, ordered by name.
+
+### Comments, inbox and following
+
+`update_comment` and `delete_comment` take the comment's `id` from
+`list_comments`. As in the app, the comment's author may edit or delete it,
+and so may a lead of the task's project (an organization admin leads every
+project); anyone else is refused with `only the author or a project lead can
+edit this comment` (or `delete`). A comment on a task you cannot read reads
+`comment "<id>" not found (or not visible to you)`, like an unknown one. The
+new body is trimmed and may not be blank. Sending the text the comment
+already has changes nothing, and the result's `changed` says so. An edit
+records `edited_at` and `edited_by_id`, and people it newly mentions follow
+the task and get an inbox message. Neither tool writes an activity row or a
+task event.
+
+`set_following` follows a task (`following: true`) or stops following it.
+Following needs only read access to the task, and the result's `changed`
+is `false` when nothing changed. Followers receive the task's updates in
+their inbox. Qivo also makes you follow a task when you are assigned or
+handed it, mentioned on it or comment on it. You can change only your own
+follow.
+
+`list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
+task, latest activity first:
+
+```json
+{
+  "items": [
+    {
+      "task": { "id": "…uuid…", "key": "QN-3", "title": "Fix hinge tolerance", "status": "progress" },
+      "unread_count": 1,
+      "latest_at": "2026-10-14T09:12:03.000Z",
+      "snoozed_until": null,
+      "messages": [
+        {
+          "id": "…uuid…", "kind": "comment", "detail": "New comment",
+          "actor_id": "…uuid…", "actor_name": "Priya Patel",
+          "created_at": "2026-10-14T09:12:03.000Z", "read_at": null
+        }
+      ]
+    }
+  ],
+  "truncated": false
+}
+```
+
+`task` is the task as it is now, its current title included. As in the app,
+items are listed only for active tasks you can read in active projects.
+Messages about a task you lost access to, an archived task or a task in an
+archived project stay stored and come back when the access or the task does,
+so the `Archived` message itself is not listed. `messages` run oldest first,
+`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
+shows. `latest_at` is the newest message's time, or the end of a snooze when
+that is later. Snoozed items are left out unless `include_snoozed` is `true`.
+
+One call reads your newest 1,000 messages. When you hold more, `truncated` is
+`true`. Older items are then missing, and the oldest items listed may lack
+their older messages. Marking items read keeps only each item's latest message, so
+`update_inbox` with `action: "read"` and `all: true`, repeated while
+`has_more` is `true`, shrinks the inbox until it fits.
+
+`update_inbox` applies `action` to your items about `tasks` (task refs), or
+with `all: true` to every item:
+
+- `read` marks the items read and, like opening an item in the app, keeps
+  only each item's latest message. With `all`, it marks every item read
+  except snoozed ones.
+- `unread` marks the items unread again.
+- `remove` removes the items. With `all`, it removes every read message
+  except snoozed ones and leaves unread messages alone.
+- `snooze` hides the items until `until`, an ISO date-time in the future and
+  at most a year ahead, and leaves them unread. `until: null` brings snoozed
+  items back now. A new update on the task brings its item back too.
+
+The result is `{ "action": "read", "tasks": ["QN-3"], "has_more": false }`,
+where `tasks` lists the items the call changed. With `all`, each call
+changes up to 256 messages; repeat it while `has_more` is `true`. Like the
+app's bulk actions, `all` also reaches messages about tasks you can no longer
+read, but the result names only tasks you can read. A task ref you cannot
+read refuses the whole call with `task "<ref>" not found (or not visible to
+you)`. Naming neither or both of `tasks` and `all`, `all` with `unread` or
+`snooze`, `until` on another action and `snooze` without `until` are refused.
+
+The nightly cleanup removes read messages after your retention period, which
+a person sets in the app. An agent has no settings page, so its read
+messages are removed after 7 days. Unread messages are never removed by it.
+
+Only an active Standard user agent has an inbox. A Viewer agent and an
+Inactive one cannot mark messages read or remove them, so Qivo sends them no
+messages and does not make them followers, whether by a mention, a comment,
+an assignment or a project lead. Messages they already hold stay, and they
+receive new ones again once the agent is an active Standard user.
 
 ### Import attribution
 
@@ -1020,14 +1233,15 @@ reviewer set (or a reviewer is set while it is there), who reads `Ready for
 your review`, and the assignee when it leaves `review` again. A reviewer set
 in any other status is not subscribed.
 
-There is no subscribe tool, and no tool argument is involved in any of this.
-Subscribing is a person's own notification preference, expressed in the app;
-this surface exposes no inbox to read one back, and no tool here writes into
-anybody else's personal space. The server does the rest, inside the same
+Following a task yourself is `set_following`, and you read and clear what
+arrives with `list_inbox` and `update_inbox` (see [Comments, inbox and
+following](#comments-inbox-and-following)). No tool reads or changes anybody
+else's inbox or follows; theirs change only through the messages and
+subscriptions described above. The server does the rest, inside the same
 transaction as the write.
-Unknown/out-of-org uuids and users without visibility into the project are
-silently skipped — a subscription never outlives the project access that
-justified it.
+Unknown/out-of-org uuids, users without visibility into the project and
+agents without an inbox (Viewer or Inactive agents) are silently skipped — a
+subscription never outlives the project access that justified it.
 
 Tool errors are readable sentences ("not found (or not visible to you)",
 "your account has no write access to that project") — a denial by the access
