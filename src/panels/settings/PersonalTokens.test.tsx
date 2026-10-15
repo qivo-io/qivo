@@ -269,6 +269,28 @@ describe('the token list', () => {
     expect(row.className).toContain('opacity-60')
     expect(row.querySelector('button')?.getAttribute('aria-label')).toBe('Delete expired token')
   })
+
+  it('times an expiry from the current clock when the list reloads hours later', async () => {
+    await render()
+    // seven hours on, creating a token reloads the list, which now holds a
+    // token that ends soon
+    const later = new Date(NOW.getTime() + 7 * 3_600_000)
+    vi.setSystemTime(later)
+    const ends = new Date(later.getTime() + 50)
+    tokens = [token('cursor', { expiresAt: ends.toISOString() })]
+    await openDialog()
+    await type('input[aria-label="Name"]', 'Raycast on my Mac')
+    await click(createButton())
+    await settle()
+    await click(button('Done'))
+    const row = find('[data-mcp-token="cursor"]')
+    expect(row.textContent).not.toContain('expired')
+
+    vi.setSystemTime(new Date(ends.getTime() + 10))
+    await act(async () => await new Promise((r) => setTimeout(r, 100)))
+    expect(row.textContent).toContain('cursorexpired')
+    expect(row.querySelector('button')?.getAttribute('aria-label')).toBe('Delete expired token')
+  })
 })
 
 describe('New token', () => {

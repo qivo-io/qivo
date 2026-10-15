@@ -58,17 +58,23 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => watchLocalDay(setNow), [])
   // A token created in another time zone expires during this viewer's day,
-  // so the clock also moves when the next listed token expires.
+  // so the clock also moves when the next listed token expires. The delay is
+  // measured from the clock, not from `now`, which can be hours old when the
+  // list reloads.
   useEffect(() => {
     if (!Array.isArray(tokens)) return
-    const delay = msUntilNextExpiry(tokens, now)
+    const delay = msUntilNextExpiry(tokens, new Date())
     if (delay === null) return
     const timer = setTimeout(() => setNow(new Date()), delay)
     return () => clearTimeout(timer)
   }, [tokens, now])
 
+  // A reload also renews the clock, so the rows it brings are labeled now.
   const reload = () => {
-    P.listMcpTokens().then((ts) => setTokens(ts === null ? false : ts))
+    P.listMcpTokens().then((ts) => {
+      setNow(new Date())
+      setTokens(ts === null ? false : ts)
+    })
   }
   useEffect(() => {
     reload()
