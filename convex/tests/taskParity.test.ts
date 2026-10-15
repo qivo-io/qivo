@@ -3,7 +3,8 @@
  *
  *   1. What a read says about other tasks: the parent, subtasks, links and a
  *      group's remaining hours name only tasks the caller can read
- *      (lib/workingSet.ts with the machine Shown), plus owner and link.
+ *      (lib/workingSet.ts with the machine Shown), plus owner and link. A
+ *      single-task read walks only the subtasks that can count.
  *   2. List filters: several statuses, the owner, MCP's offset.
  *   3. REST writes: a move with Edit on both ends, parent, labels, the
  *      archive reason, and the fields a body may not write.
@@ -17,11 +18,19 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { applyTaskUpdate } from '../lib/core'
+import {
+  applyTaskUpdate,
+  childIndexOf,
+  issueOut,
+  taskDetail,
+  taskOut,
+  taskRefOf,
+} from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
+import { taskAttachments } from '../model/attachments'
 import {
   ASSIGNEE_RULE,
   ASSIGNEE_SIGHT_RULE,
@@ -304,6 +313,173 @@ describe('the single-task read names only tasks the caller can read', () => {
     })
     // the admin sees the parent
     expect((await restGet(fx, underHidden.id, fx.admin.id)).parent_id).toBe(hiddenParent.id)
+  })
+})
+
+describe('a single-task read walks only the subtasks that can count', () => {
+  /* taskOut for `issue` read by `me`, its answer handed the organization's
+   * whole task index as the fallback read would (nothing pruned), and the
+   * transaction's read metrics. */
+  const readBoth = (fx: Fx, issue: Doc<'issues'>, me: Doc<'profiles'>, surface: 'rest' | 'mcp') =>
+    fx.t.run(async (ctx) => {
+      const out =
+        surface === 'rest'
+          ? await taskOut(ctx, issue, { surface, me })
+          : await taskOut(ctx, issue, { surface, me })
+      const metrics = await ctx.meta.getTransactionMetrics()
+      const project = (await byId(ctx, 'projects', issue.project_id)) as Doc<'projects'>
+      const children = childIndexOf(
+        await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
+          .collect(),
+      )
+      const row =
+        surface === 'rest'
+          ? await issueOut(ctx, issue, { surface, me, project, children })
+          : await issueOut(ctx, issue, { surface, me, project, children })
+      const detail = await taskDetail(ctx, me, issue, { project, isGroup: row.is_group, children })
+      const whole = { ...row, ...detail, attachments: await taskAttachments(ctx, me, issue) }
+      return { out, whole, metrics }
+    })
+
+  const scheduled = (start_week: string, end_week: string, remaining_hours: number) => ({
+    start_week,
+    end_week,
+    remaining_hours,
+  })
+
+  /* `count` tasks in FW in one transaction, numbered from `firstNum`. */
+  const plantMany = (fx: Fx, count: number, firstNum: number, over: Partial<Doc<'issues'>>) =>
+    fx.t.run(async (ctx) => {
+      for (let i = 0; i < count; i++) {
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          num: firstNum + i,
+          title: `Planted ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'low',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...over,
+        })
+      }
+    })
+
+  it('answers as a read of the whole organization does, on a mixed tree', async () => {
+    const fx = await setup()
+    const root = await task(fx, { title: 'Root', remaining_hours: 9 })
+    const leaf = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-16', 3) })
+    const hidden = await task(fx, {
+      parent_id: root.id,
+      project_id: fx.hiddenSub.id,
+      ...scheduled('2026-01-05', '2026-01-05', 7),
+    })
+    await task(fx, { parent_id: hidden.id, ...scheduled('2025-12-01', '2025-12-01', 2) })
+    const shelved = await task(fx, {
+      parent_id: root.id,
+      archived_at: NOW,
+      ...scheduled('2025-11-03', '2025-11-03', 4),
+    })
+    await task(fx, {
+      parent_id: shelved.id,
+      archived_at: NOW,
+      ...scheduled('2025-10-06', '2025-10-06', 1),
+    })
+    const nested = await task(fx, { parent_id: root.id, project_id: fx.sub2.id })
+    await task(fx, {
+      parent_id: nested.id,
+      project_id: fx.sub2.id,
+      ...scheduled('2026-05-04', '2026-06-01', 6),
+    })
+    await task(fx, {
+      parent_id: nested.id,
+      archived_at: NOW,
+      ...scheduled('2027-01-04', '2027-01-04', 5),
+    })
+    await task(fx, {
+      parent_id: nested.id,
+      project_id: fx.archivedSub.id,
+      ...scheduled('2027-02-01', '2027-02-01', 8),
+    })
+    await task(fx, {
+      parent_id: root.id,
+      project_id: fx.roSub.id,
+      status: 'done',
+      ...scheduled('2026-02-02', '2026-02-09', 1),
+    })
+    // an archived group counts its whole subtree, outside archived projects
+    const gone = await task(fx, { archived_at: NOW, title: 'Gone' })
+    for (const project_id of [fx.sub.id, fx.hiddenSub.id, fx.archivedSub.id]) {
+      await task(fx, {
+        parent_id: gone.id,
+        project_id,
+        archived_at: NOW,
+        ...scheduled('2026-07-06', '2026-07-13', 2),
+      })
+    }
+    for (const me of [fx.agent, fx.admin]) {
+      for (const issue of [root, leaf, hidden, shelved, nested, gone]) {
+        for (const surface of ['rest', 'mcp'] as const) {
+          const { out, whole } = await readBoth(fx, issue, me, surface)
+          expect(out, `${me.name} ${issue.title} ${surface}`).toEqual(whole)
+        }
+      }
+    }
+    // what the agent is told: the hidden branch, the archived ones, the
+    // archived project and the done leaf's hours stay out
+    expect((await readBoth(fx, root, fx.agent, 'rest')).out).toMatchObject({
+      is_group: true,
+      start_week: '2026-02-02',
+      end_week: '2026-06-01',
+      group_remaining_hours: 9,
+    })
+    expect((await readBoth(fx, root, fx.admin, 'rest')).out).toMatchObject({
+      start_week: '2025-12-01',
+      group_remaining_hours: 11,
+    })
+  })
+
+  it('does not read an archived branch under an active task, however large', async () => {
+    const fx = await setup()
+    const root = await task(fx, { title: 'Root' })
+    const leaf = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-02', 3) })
+    const shelved = await task(fx, { parent_id: root.id, archived_at: NOW })
+    await plantMany(fx, 1500, 100000, { parent_id: shelved.id, archived_at: NOW })
+    const { out, whole, metrics } = await readBoth(fx, root, fx.agent, 'rest')
+    expect(out).toEqual(whole)
+    expect(out).toMatchObject({ start_week: leaf.start_week, subtasks: [taskRefOf(leaf)] })
+    // the root's two subtasks and the leaf's none, not the 1,500 below
+    expect(metrics.documentsRead.used).toBeLessThan(100)
+    // an archived root reads them all, as it counts them
+    const archived = await readBoth(fx, shelved, fx.agent, 'rest')
+    expect(archived.out).toEqual(archived.whole)
+    expect(archived.out.subtasks).toHaveLength(1500)
+  })
+
+  it('keeps a mostly archived subtree off the organization-wide read', async () => {
+    const fx = await setup()
+    const root = await task(fx, { title: 'Root' })
+    const live = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-09', 3) })
+    // 1,100 archived subtasks, past the walk's budget of 1,000 reads
+    await plantMany(fx, 1100, 100000, { parent_id: root.id, archived_at: NOW })
+    // and 2,000 tasks elsewhere that only an organization-wide read touches
+    await plantMany(fx, 2000, 200000, {})
+    const { out, whole, metrics } = await readBoth(fx, root, fx.agent, 'rest')
+    expect(out).toEqual(whole)
+    expect(out).toMatchObject({
+      is_group: true,
+      start_week: live.start_week,
+      end_week: live.end_week,
+    })
+    expect(out.subtasks).toEqual([taskRefOf(live)])
+    // the root's 1,101 subtasks and a few by_parent reads, not 3,000 tasks
+    expect(metrics.documentsRead.used).toBeLessThan(1300)
+    expect(metrics.databaseQueries.used).toBeLessThan(50)
   })
 })
 
