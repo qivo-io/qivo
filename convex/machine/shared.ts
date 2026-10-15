@@ -1,6 +1,6 @@
 /* The wording and parsing that machine/rest.ts, machine/mcp.ts and the domain
  * modules declaring entries for both surfaces (machine/records.ts,
- * machine/discussion.ts) share.
+ * machine/discussion.ts, machine/projects.ts, machine/teams.ts) share.
  *
  * The surface modules spread a domain module's entries into TOOLS and
  * ROUTES, so a domain module that imported a value from them would close an
@@ -71,6 +71,11 @@ export function needJson(raw: string): Record<string, unknown> {
   if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
   return body as Record<string, unknown>
 }
+
+/** A REST request body that may be left out, such as a DELETE's. An empty
+ * body reads as {}, and any other body as needJson reads it. */
+export const optionalJson = (raw: string): Record<string, unknown> =>
+  raw.trim() === '' ? {} : needJson(raw)
 
 /** An MCP tool's result text, the deployed `text()` body. It is 2-space
  * pretty JSON, stringified inside the internal function so the projection's

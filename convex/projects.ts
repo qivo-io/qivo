@@ -1,8 +1,10 @@
 /* The project domain's public surface (phase 5): create / update /
- * archive / unarchive / deleteDeep / inviteGuest,
- * plus the milestones CRUD (there is no milestones.ts). Thin wrappers over lib/access,
- * model/orgs and model/cascade — orgMutation → resolve by uuid → access
- * predicate → guards → writes → narration, all under ONE `now`.
+ * removeAccess / archive / unarchive / deleteDeep / inviteGuest, plus the
+ * milestones CRUD (there is no milestones.ts). Thin wrappers over the shared
+ * cores REST and MCP use too (model/projects.ts, model/projectAccess.ts,
+ * model/milestones.ts) and over lib/access, model/orgs and model/cascade —
+ * orgMutation → resolve by uuid → core (access predicate → guards → writes →
+ * narration), all under ONE `now`.
  *
  * Refusal posture (the 0049/0056 no-oracle discipline):
  * - an unknown OR foreign-org project/milestone uuid reads `not_found`
@@ -31,87 +33,32 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
-import type { MutationCtx, QueryCtx } from './_generated/server'
-import {
-  canManageOwnProjectAccess,
-  canManageProjectTeams,
-  canManageProjectUsers,
-  hasProjectLevel,
-} from './lib/access'
+import type { MutationCtx } from './_generated/server'
+import { canManageOwnProjectAccess, canManageProjectUsers, hasProjectLevel } from './lib/access'
 import { markBillingMembershipChanged } from './lib/billableUsers'
-import { byId, insertUnique } from './lib/db'
+import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { type GrantLevel, vGrantLevel, vProjectType } from './lib/enums'
+import { vGrantLevel, vProjectType } from './lib/enums'
 import { badRequest, forbidden, notFound, orgMutation, require, rule } from './lib/functions'
-import { canCreateProjects, projectCreationRefusal } from './lib/projectCreators'
-import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from './lib/projectKeys'
 import { logActivity } from './model/activity'
 import { deleteProjectDeep } from './model/cascade'
-import { changeableMilestone, cleanMilestoneWeek, milestoneTarget } from './model/milestones'
-import { ICON_COLOR_SHAPE, newUuid, nextProjectNum, weekLabel } from './model/orgs'
-import { cleanReviewHours, projectDescription } from './model/projects'
+import {
+  addMilestoneCore,
+  changeableMilestone,
+  removeMilestoneCore,
+  updateMilestoneCore,
+} from './model/milestones'
+import { newUuid } from './model/orgs'
+import { type AccessSubject, removeProjectGrantCore, vHeldTasks } from './model/projectAccess'
+import {
+  archiveProjectCore,
+  assertGrantee,
+  createProjectCore,
+  unarchiveProjectCore,
+  updateProjectCore,
+} from './model/projects'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
-
-/* projects_key_ck (0001:62): 1–5 uppercase alphanumerics. Bare 23514/23505 in
- * SQL — badRequest lands in the client's same generic toast bucket. */
-function cleanKey(raw: string): string {
-  if (!PROJECT_KEY_SHAPE.test(raw)) {
-    throw badRequest('a project key is 1-5 uppercase letters or digits')
-  }
-  return raw
-}
-
-/** The project holding `key` in the organization, archived or not. */
-async function keyHolder(
-  ctx: QueryCtx,
-  orgId: string,
-  key: string,
-): Promise<Doc<'projects'> | null> {
-  return await ctx.db
-    .query('projects')
-    .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('key', key))
-    .first()
-}
-
-/* An explicit key change (update) is refused when another project holds the
- * key. The REST API already admits that a key exists (rest.ts's one
- * deliberate 403 oracle), so this sentence discloses nothing new. */
-async function assertKeyFree(
-  ctx: QueryCtx,
-  orgId: string,
-  key: string,
-  self: string,
-): Promise<void> {
-  const holder = await keyHolder(ctx, orgId, key)
-  if (holder !== null && holder.id !== self) {
-    throw badRequest('a project with that key already exists in this organization')
-  }
-}
-
-// Bounds the reads one create spends looking for a free key.
-const KEY_CANDIDATES = 500
-
-/* A new project keeps the key its client previewed while that key is free.
- * Archived projects and projects the caller cannot see keep their keys, and
- * the client never receives those, so a taken key is replaced by the first
- * free candidate derived from the name rather than refusing the project.
- * Concurrent creates of one key conflict and Convex retries the loser, which
- * then reads the winner's row. */
-async function allocateKey(
-  ctx: QueryCtx,
-  orgId: string,
-  suggested: string,
-  name: string,
-): Promise<string> {
-  if ((await keyHolder(ctx, orgId, suggested)) === null) return suggested
-  const base = projectKeyBase(name)
-  for (let n = 1; n <= KEY_CANDIDATES; n++) {
-    const key = projectKeyCandidate(base, n)
-    if (key !== suggested && (await keyHolder(ctx, orgId, key)) === null) return key
-  }
-  throw badRequest('no free project key is left for this name; choose another name')
-}
 
 /* Unknown and foreign-org rows are indistinguishable (0049/0056). The
  * sentence is delete_project's own (0081:479). */
@@ -121,68 +68,20 @@ async function myProject(ctx: MeCtx, id: string): Promise<Doc<'projects'>> {
   return project
 }
 
-/* projects_update is lead level (0106 left it as the rule — no RPC), so the
- * plain surfaces refuse as the silent 0-row did. */
-async function assertLead(ctx: MeCtx, projectId: string): Promise<void> {
-  if (!(await hasProjectLevel(ctx, ctx.me, projectId, 'lead'))) {
-    throw forbidden('requires lead access to this project')
-  }
-}
-
-/* project_lead_same_org (0102:311-329), on create and on an actual CHANGE of
- * lead. Only reachable for a profile in the caller's own organization, so the
- * viewer sentence says nothing a stranger could not already see. */
-async function assertLeadAllowed(ctx: MeCtx, leadId: string): Promise<void> {
-  const p = await byId(ctx, 'profiles', leadId)
-  if (p === null || p.org_id !== ctx.me.org_id) {
-    throw rule("the lead must be a member of the project's organization")
-  }
-  if (!p.active || (p.org_role !== 'admin' && p.org_role !== 'user' && p.org_role !== 'guest')) {
-    if (p.org_role === 'viewer') {
-      throw rule('a viewer cannot lead a project — make them a standard user first')
-    }
-    throw rule('the lead must be an active organization user')
-  }
-}
-
-/* pa_insert/pa_update's WITH CHECK (0081:275-283 + 0102:365-384): the grantee
- * holds a profile in the project's org (a guest qualifies — that is the whole
- * point), and a viewer-role grantee only ever receives a 'viewer' grant.
- * Refusing silently was the RLS behavior — surfaced as forbidden. */
-async function assertGrantee(
-  ctx: MeCtx,
-  project: Doc<'projects'>,
-  profileId: string,
-  level: GrantLevel,
-): Promise<void> {
-  const p = await byId(ctx, 'profiles', profileId)
-  if (p === null || p.org_id !== project.org_id) {
-    throw forbidden('the grantee must hold a profile in this organization')
-  }
-  if (level !== 'viewer' && p.org_role === 'viewer') {
-    throw forbidden('a viewer can only receive a viewer grant')
-  }
-}
-
 /* The access-map values a client may send: stored grants are vGrantLevel
  * only (project_access_level_ck, 0013→0098); 'lead' entries are legal on the
- * wire and DROPPED — the lead is carried by lead_id, never a grant row. */
+ * wire and DROPPED — the lead is carried by lead_id, never a grant row. On
+ * create, null names no grant, which for the creator also declines the User
+ * grant a creator who names someone else as lead gets by default
+ * (lib/projectGrants.ts creatorGrant). */
 const vAccessMap = v.record(v.string(), v.union(vGrantLevel, v.literal('lead')))
+const vCreateAccessMap = v.record(v.string(), v.union(vGrantLevel, v.literal('lead'), v.null()))
 const vTeamAccessMap = v.record(v.string(), vGrantLevel)
 
-async function assertTeamGrantee(ctx: MeCtx, project: Doc<'projects'>, teamId: string) {
-  const team = await byId(ctx, 'teams', teamId)
-  if (team === null || team.org_id !== project.org_id) {
-    throw forbidden('the team must belong to this organization')
-  }
-}
-
-const grantEntries = (map: Record<string, GrantLevel | 'lead'>): [string, GrantLevel][] =>
-  Object.entries(map).filter((e): e is [string, GrantLevel] => e[1] !== 'lead')
-
 /* ----------------------------------------------------------------- create
- * P.addProject. The client pre-generates the uuid and previews num and key;
- * it reconciles both from the returned values (allocateKey may replace a
+ * P.addProject, through model/projects.ts createProjectCore (the rule REST
+ * and MCP use too). The client pre-generates the uuid and previews num and
+ * key; it reconciles both from the returned values (the core may replace a
  * taken key). */
 export const create = orgMutation({
   args: {
@@ -198,127 +97,40 @@ export const create = orgMutation({
     description: v.optional(v.union(v.string(), v.null())),
     sort_order: v.number(),
     track_delay: v.optional(v.boolean()),
-    access: v.optional(vAccessMap),
+    access: v.optional(vCreateAccessMap),
     team_access: v.optional(vTeamAccessMap),
   },
   handler: async (ctx, args) => {
-    const now = new Date().toISOString()
-    const team_id = args.team_id ?? undefined
-    const parent_id = args.parent_id ?? undefined
-    const lead_id = args.lead_id ?? ctx.me.id
-    // Neither products nor sub-projects have an owning team. A parent is the
-    // only structural requirement for a sub-project; permissions are explicit
-    // grants below.
-    if (team_id !== undefined) {
+    if ((args.team_id ?? undefined) !== undefined) {
       throw badRequest('projects cannot belong to a team; use team access instead')
     }
-    const org = await byId(ctx, 'organizations', ctx.me.org_id)
-    require(org !== null, notFound('organization not found'))
-    if (args.type === 'meta') {
-      if (parent_id !== undefined) throw badRequest('a project cannot have a parent')
-      // The organization's project_creators setting decides who may create a
-      // product (lib/projectCreators.ts); its lead controls it afterwards.
-      if (!canCreateProjects(ctx.me, org.project_creators)) {
-        throw forbidden(projectCreationRefusal(org.project_creators))
-      }
-    } else {
-      if (parent_id === undefined) {
-        throw badRequest('a sub-project needs a parent')
-      }
-      // projects_hierarchy_guard (0078:341-349) + archive-parent guard
-      // (0106:68), fence first — a foreign parent reads like a missing one
-      const parent = await byId(ctx, 'projects', parent_id)
-      if (parent === null || parent.org_id !== ctx.me.org_id) {
-        throw rule('parent project not found')
-      }
-      if (parent.type !== 'meta') {
-        throw rule('sub-projects live directly under a project, never under another sub-project')
-      }
-      if (parent.archived_at !== undefined) {
-        throw rule('the project is archived — restore it first')
-      }
-      if (!(await hasProjectLevel(ctx, ctx.me, parent_id, 'lead'))) {
-        throw forbidden('requires lead access to this project')
-      }
-    }
-    if (args.type === 'project' && (args.icon != null || args.icon_color != null)) {
-      throw badRequest('sub-projects carry no icon')
-    }
-    const iconColor = args.icon_color === '' ? undefined : (args.icon_color ?? undefined)
-    if (iconColor !== undefined && !ICON_COLOR_SHAPE.test(iconColor)) {
-      throw badRequest('an icon color must be a #rrggbb hex')
-    }
-    const key = await allocateKey(ctx, ctx.me.org_id, cleanKey(args.key), args.name)
-    const description = projectDescription(args.description)
-    if (lead_id !== undefined) await assertLeadAllowed(ctx, lead_id)
-    const num = await nextProjectNum(ctx, org)
-    await insertUnique(
-      ctx,
-      'projects',
-      'by_uuid',
-      { id: args.id },
-      {
+    const project = await createProjectCore(ctx, {
+      me: ctx.me,
+      now: new Date().toISOString(),
+      project: {
         id: args.id,
-        org_id: ctx.me.org_id,
-        team_id: undefined,
         type: args.type,
-        parent_id: args.type === 'meta' ? undefined : parent_id,
-        key,
+        parent_id: args.parent_id ?? undefined,
         name: args.name,
-        icon: args.icon ?? undefined,
-        icon_color: iconColor,
-        lead_id,
-        description,
+        key: args.key,
+        lead_id: args.lead_id ?? undefined,
+        description: args.description,
+        icon: args.icon,
+        icon_color: args.icon_color,
         sort_order: args.sort_order,
-        num,
-        // Teamless projects use the neutral default unless explicitly set.
-        track_delay: args.track_delay ?? true,
-        created_at: now,
+        track_delay: args.track_delay,
+        access: args.access,
+        team_access: args.team_access,
       },
-      badRequest('a project with this id already exists'),
-    )
-    // Grant rows ride along on either project level. Root grants are inherited
-    // by children by the access helpers; child grants can further narrow a
-    // workstream without introducing an owning team.
-    if (args.access !== undefined) {
-      const project = (await byId(ctx, 'projects', args.id)) as Doc<'projects'>
-      for (const [uid, level] of grantEntries(args.access)) {
-        await assertGrantee(ctx, project, uid, level)
-        await ctx.db.insert('project_access', { project_id: project.id, profile_id: uid, level })
-      }
-    }
-    if (args.team_access !== undefined) {
-      const project = (await byId(ctx, 'projects', args.id)) as Doc<'projects'>
-      const shares = args.team_access ?? {}
-      for (const [sharedTeamId, level] of Object.entries(shares)) {
-        await assertTeamGrantee(ctx, project, sharedTeamId)
-        await ctx.db.insert('project_team_access', {
-          project_id: project.id,
-          team_id: sharedTeamId,
-          level,
-        })
-      }
-    }
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'created',
-      target_type: 'project',
-      target_id: args.id,
-      label: args.name,
-      project_id: args.id,
-      ts: now,
     })
-    return { id: args.id, num, key }
+    return { id: project.id, num: project.num, key: project.key }
   },
 })
 
 /* ----------------------------------------------------------------- update
- * P.updateProject / P.setProjectAccess. Field patch + access-map diff in ONE
- * mutation. Exactly one narration per call, else-if priority access > name >
- * lead; same-value name/lead writes are silent no-ops (the cross-cutting
- * rule), and icon/description/key/track_delay/review_hours alone narrate
- * nothing. KEY CHANGE IS ALLOWED — issue refs are QN-num since 0050 — with
+ * P.updateProject / P.setProjectAccess through model/projects.ts
+ * updateProjectCore: field patch + access-map diff in ONE mutation, one
+ * narration. KEY CHANGE IS ALLOWED — issue refs are QN-num since 0050 — with
  * shape and uniqueness revalidated. */
 export const update = orgMutation({
   args: {
@@ -337,241 +149,76 @@ export const update = orgMutation({
     }),
   },
   handler: async (ctx, { id, patch }) => {
-    const now = new Date().toISOString()
     const project = await myProject(ctx, id)
-    const managesUsers =
-      patch.access !== undefined || (project.type === 'meta' && patch.lead_id !== undefined)
-    const managesTeams = patch.team_access !== undefined
-    const editsSettings = Object.keys(patch).some(
-      (key) =>
-        key !== 'access' &&
-        key !== 'team_access' &&
-        !(key === 'lead_id' && project.type === 'meta'),
-    )
-    // Evaluate all capabilities against the pre-write state. A delegate may
-    // not attach a settings change to an access patch, or grant themselves
-    // lead standing first and use it for the rest of this same mutation.
-    if (editsSettings || (!managesUsers && !managesTeams)) await assertLead(ctx, id)
-    if (managesUsers && !(await canManageProjectUsers(ctx, ctx.me, project))) {
-      throw forbidden('no permission to manage users on this project')
-    }
-    const controlsOwnAccess = await canManageOwnProjectAccess(ctx, ctx.me, project)
-    if (managesTeams && !(await canManageProjectTeams(ctx, ctx.me, project))) {
-      throw forbidden('no permission to manage users on this project')
-    }
-    // projects_sub_no_icon (0069): the glyph/tint stays a meta feature
-    if (project.type === 'project' && (patch.icon != null || patch.icon_color != null)) {
-      throw badRequest('sub-projects carry no icon')
-    }
-    const db: Partial<Doc<'projects'>> = {}
-    if (patch.name !== undefined) db.name = patch.name
-    if (patch.icon !== undefined) db.icon = patch.icon ?? undefined
-    if (patch.icon_color !== undefined) {
-      const color =
-        patch.icon_color === null || patch.icon_color === '' ? undefined : patch.icon_color
-      if (color !== undefined && !ICON_COLOR_SHAPE.test(color)) {
-        throw badRequest('an icon color must be a #rrggbb hex')
-      }
-      db.icon_color = color
-    }
-    if (patch.description !== undefined) db.description = projectDescription(patch.description)
-    if (patch.track_delay !== undefined) db.track_delay = patch.track_delay
-    // null clears: undefined unsets the column through ctx.db.patch
-    if (patch.review_hours !== undefined) db.review_hours = cleanReviewHours(patch.review_hours)
-    if (patch.key !== undefined) {
-      const key = cleanKey(patch.key)
-      await assertKeyFree(ctx, ctx.me.org_id, key, id)
-      db.key = key
-    }
-    const prevLead = project.lead_id
-    const nextLead = patch.lead_id === undefined ? prevLead : (patch.lead_id ?? undefined)
-    const leadChanged = nextLead !== prevLead
-    const editsOwnLead =
-      nextLead === ctx.me.id || (prevLead === ctx.me.id && nextLead === undefined)
-    if (project.type === 'meta' && leadChanged && editsOwnLead && !controlsOwnAccess) {
-      throw forbidden(
-        'only organization admins or project leads can change their own project access',
-      )
-    }
-    if (patch.lead_id !== undefined) {
-      if (nextLead === undefined) throw badRequest('a project must have a lead')
-      // the 0102 trigger revalidates only an actual CHANGE to a non-null lead
-      if (leadChanged && nextLead !== undefined) await assertLeadAllowed(ctx, nextLead)
-      db.lead_id = nextLead
-    }
-    if (patch.access !== undefined) {
-      const next = new Map(grantEntries(patch.access))
-      const prev = await ctx.db
-        .query('project_access')
-        .withIndex('by_project', (q) => q.eq('project_id', id))
-        .collect()
-      const held = new Map(prev.map((r) => [r.profile_id, r]))
-      const selfChanged = held.get(ctx.me.id)?.level !== next.get(ctx.me.id)
-      // Lead handover may retain the outgoing lead as a User in the
-      // same atomic patch. Their previous effective Lead access is reduced,
-      // never elevated; other self edits remain reserved to the strict role.
-      const handsOverLead =
-        prevLead === ctx.me.id &&
-        leadChanged &&
-        nextLead !== undefined &&
-        next.get(ctx.me.id) === 'user'
-      if (selfChanged && !controlsOwnAccess && !handsOverLead) {
-        throw forbidden(
-          'only organization admins or project leads can change their own project access',
-        )
-      }
-      for (const [uid, level] of next) {
-        const row = held.get(uid)
-        if (row !== undefined && row.level === level) continue
-        await assertGrantee(ctx, project, uid, level)
-        if (row !== undefined) await ctx.db.patch(row._id, { level })
-        else await ctx.db.insert('project_access', { project_id: id, profile_id: uid, level })
-      }
-      for (const row of prev) {
-        if (!next.has(row.profile_id)) await ctx.db.delete(row._id)
-      }
-    }
-    if (patch.team_access !== undefined) {
-      const next = new Map(Object.entries(patch.team_access))
-      const prev = await ctx.db
-        .query('project_team_access')
-        .withIndex('by_project', (q) => q.eq('project_id', id))
-        .collect()
-      const held = new Map(prev.map((row) => [row.team_id, row]))
-      for (const [teamId, level] of next) {
-        await assertTeamGrantee(ctx, project, teamId)
-        const row = held.get(teamId)
-        if (row === undefined) {
-          await ctx.db.insert('project_team_access', { project_id: id, team_id: teamId, level })
-        } else if (row.level !== level) await ctx.db.patch(row._id, { level })
-      }
-      for (const row of prev) {
-        if (!next.has(row.team_id)) await ctx.db.delete(row._id)
-      }
-    }
-    if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
-    const name = db.name ?? project.name
-    const nameChanged = patch.name !== undefined && patch.name !== project.name
-    const event = {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      target_type: 'project' as const,
-      target_id: id,
-      label: name,
-      project_id: id,
-      ts: now,
-    }
-    if (patch.access !== undefined || patch.team_access !== undefined) {
-      await logActivity(ctx, { ...event, verb: 'changed access on' })
-    } else if (nameChanged) {
-      await logActivity(ctx, { ...event, verb: 'renamed', detail: `from “${project.name}”` })
-    } else if (leadChanged) {
-      const from = prevLead === undefined ? null : await byId(ctx, 'profiles', prevLead)
-      const to = nextLead === undefined ? null : await byId(ctx, 'profiles', nextLead)
-      await logActivity(ctx, {
-        ...event,
-        verb: to !== null ? 'changed the lead of' : 'removed the lead of',
-        detail:
-          to !== null
-            ? `to ${to.name}${from !== null ? ` (was ${from.name})` : ''}`
-            : from !== null
-              ? `(was ${from.name})`
-              : undefined,
-      })
-    }
+    await updateProjectCore(ctx, { me: ctx.me, project, patch, now: new Date().toISOString() })
     return null
   },
 })
 
+/* ----------------------------------------------------------- removeAccess
+ * The removal window's one write (P.removeAccess): one person's or one
+ * team's grant leaves the project, and the open tasks that would leave
+ * someone's sight are kept as Viewer, reassigned or left, all at once
+ * (model/projectAccess.ts removeProjectGrantCore, which REST and MCP use
+ * too). A person or team outside the organization reads as not found. */
+export const removeAccess = orgMutation({
+  args: {
+    id: v.string(),
+    user_id: v.optional(v.string()),
+    team_id: v.optional(v.string()),
+    on_held_tasks: vHeldTasks,
+  },
+  handler: async (ctx, a) => {
+    const project = await myProject(ctx, a.id)
+    const result = await removeProjectGrantCore(ctx, {
+      me: ctx.me,
+      project,
+      subject: await accessSubject(ctx, a),
+      held: a.on_held_tasks,
+      now: new Date().toISOString(),
+    })
+    return { removed: result.removed, stranded: result.stranded.length }
+  },
+})
+
+/* The one person or team an access write names, in the caller's
+ * organization. */
+async function accessSubject(
+  ctx: MeCtx,
+  a: { user_id?: string; team_id?: string },
+): Promise<AccessSubject> {
+  if (a.user_id !== undefined && a.team_id === undefined) {
+    const profile = await byId(ctx, 'profiles', a.user_id)
+    if (profile === null || profile.org_id !== ctx.me.org_id) throw notFound('user not found')
+    return { profile }
+  }
+  if (a.team_id !== undefined && a.user_id === undefined) {
+    const team = await byId(ctx, 'teams', a.team_id)
+    if (team === null || team.org_id !== ctx.me.org_id) throw notFound('team not found')
+    return { team }
+  }
+  throw badRequest('name exactly one of user_id and team_id')
+}
+
 /* ---------------------------------------------------------------- archive
- * P.archiveProject. Subtree-atomic (0106:86-91): a meta stamps its active
- * subs with the parent's OWN instant — that shared stamp is the only record
- * of "these came along", and unarchive reads it. Existing tasks are
- * untouched; the snapshot stops shipping them because its section filters on
- * project.archived_at. Already archived ⇒ silent no-op. */
+ * P.archiveProject (model/projects.ts archiveProjectCore). */
 export const archive = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    const now = new Date().toISOString()
     const project = await myProject(ctx, id)
-    await assertLead(ctx, id)
-    if (project.archived_at !== undefined) return null
-    let carried = 0
-    if (project.type === 'meta') {
-      const subs = await ctx.db
-        .query('projects')
-        .withIndex('by_parent', (q) => q.eq('parent_id', id))
-        .collect()
-      for (const s of subs) {
-        if (s.archived_at === undefined) {
-          await ctx.db.patch(s._id, { archived_at: now })
-          carried += 1
-        }
-      }
-    }
-    await ctx.db.patch(project._id, { archived_at: now })
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'archived',
-      target_type: 'project',
-      target_id: id,
-      label: project.name,
-      detail: carried > 0 ? `with ${carried} sub-project${carried > 1 ? 's' : ''}` : undefined,
-      project_id: id,
-      ts: now,
-    })
+    await archiveProjectCore(ctx, { me: ctx.me, project, now: new Date().toISOString() })
     return null
   },
 })
 
 /* -------------------------------------------------------------- unarchive
  * P.unarchiveProject — awaited by the client; the snapshot pulls the
- * restored rows back in reactively. Restore semantics 0106:92-107: restoring
- * a sub surfaces its parent (and nothing else — the parent's other subs stay
- * archived); restoring a meta directly also restores exactly the subs
- * carrying the meta's own archive stamp. Surfacing an archived parent is a
- * restore of that parent, so it needs lead on the parent as well; a
- * sub-project's own lead cannot bring back a project its lead archived.
- * Not archived ⇒ silent no-op. */
+ * restored rows back in reactively (model/projects.ts unarchiveProjectCore). */
 export const unarchive = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    const now = new Date().toISOString()
     const project = await myProject(ctx, id)
-    await assertLead(ctx, id)
-    if (project.archived_at === undefined) return null
-    const stamp = project.archived_at
-    // an active project never sits under an archived one
-    const parent =
-      project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
-    const parentArchived = parent !== null && parent.archived_at !== undefined
-    if (parentArchived && !(await hasProjectLevel(ctx, ctx.me, parent.id, 'lead'))) {
-      throw forbidden('requires lead access to the archived parent project')
-    }
-    await ctx.db.patch(project._id, { archived_at: undefined })
-    if (project.parent_id !== undefined) {
-      if (parentArchived) await ctx.db.patch(parent._id, { archived_at: undefined })
-    } else {
-      const subs = await ctx.db
-        .query('projects')
-        .withIndex('by_parent', (q) => q.eq('parent_id', id))
-        .collect()
-      for (const s of subs) {
-        if (s.archived_at === stamp) await ctx.db.patch(s._id, { archived_at: undefined })
-      }
-    }
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'restored',
-      target_type: 'project',
-      target_id: id,
-      label: project.name,
-      detail: 'from the archive',
-      project_id: id,
-      ts: now,
-    })
+    await unarchiveProjectCore(ctx, { me: ctx.me, project, now: new Date().toISOString() })
     return null
   },
 })
@@ -700,84 +347,40 @@ export const inviteGuest = orgMutation({
 })
 
 /* -------------------------------------------------------------- milestones
- * P.addMilestone / P.updateMilestone / P.removeMilestone. Visibility, the
- * top-level fold, User level on the project that stores the milestone and
- * the archive guard are the shared rules in model/milestones.ts, which the
- * roadmap batch also uses. week is a real calendar day, YYYY-MM-DD (the
- * client converts its week index). Narration details embed weekLabel
- * computed against the SUBJECT org's settings, frozen at write time (trap
- * T1). */
-
-async function orgSettings(ctx: MeCtx): Promise<Doc<'organizations'>> {
-  const org = await byId(ctx, 'organizations', ctx.me.org_id)
-  require(org !== null, notFound('organization not found'))
-  return org
-}
+ * P.addMilestone / P.updateMilestone / P.removeMilestone through the shared
+ * cores in model/milestones.ts (visibility, the top-level fold, User level on
+ * the project that stores the milestone, the archive guard and the
+ * narration), which the roadmap batch and the machine surfaces also use.
+ * week is a real calendar day, YYYY-MM-DD (the client converts its week
+ * index). */
 
 export const addMilestone = orgMutation({
   args: { id: v.string(), project_id: v.string(), name: v.string(), week: v.string() },
   handler: async (ctx, { id, project_id, name, week }) => {
-    const now = new Date().toISOString()
-    const home = await milestoneTarget(ctx, ctx.me, project_id)
-    const iso = cleanMilestoneWeek(week)
-    await insertUnique(
-      ctx,
-      'milestones',
-      'by_uuid',
-      { id },
-      { id, project_id: home.id, name, week: iso, created_at: now },
-      badRequest('a milestone with this id already exists'),
-    )
-    const org = await orgSettings(ctx)
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'added milestone',
-      target_type: 'milestone',
-      target_id: id,
-      label: name,
-      detail: `at ${weekLabel(iso, org)}`,
-      project_id: home.id,
-      ts: now,
+    await addMilestoneCore(ctx, {
+      me: ctx.me,
+      id,
+      projectId: project_id,
+      name,
+      week,
+      now: new Date().toISOString(),
     })
     return null
   },
 })
 
-/* The dialog always submits both fields, so the verb names what actually
- * CHANGED — a pure rename must not read as a move (bc022c2:3536-3562, trap
- * T15); a no-change submit still narrates the bare 'updated milestone'. */
 export const updateMilestone = orgMutation({
   args: {
     id: v.string(),
     patch: v.object({ name: v.optional(v.string()), week: v.optional(v.string()) }),
   },
   handler: async (ctx, { id, patch }) => {
-    const now = new Date().toISOString()
     const { milestone } = await changeableMilestone(ctx, ctx.me, id)
-    const db: Partial<Doc<'milestones'>> = {}
-    if (patch.name !== undefined) db.name = patch.name
-    if (patch.week !== undefined) db.week = cleanMilestoneWeek(patch.week)
-    const weekChanged = db.week !== undefined && db.week !== milestone.week
-    const renamed = db.name !== undefined && db.name !== milestone.name
-    if (Object.keys(db).length > 0) await ctx.db.patch(milestone._id, db)
-    const name = db.name ?? milestone.name
-    const org = await orgSettings(ctx)
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: weekChanged ? 'moved milestone' : renamed ? 'renamed milestone' : 'updated milestone',
-      target_type: 'milestone',
-      target_id: id,
-      label: name,
-      detail: weekChanged
-        ? `from ${weekLabel(milestone.week, org)} to ${weekLabel(db.week as string, org)}` +
-          (renamed ? ` (renamed from “${milestone.name}”)` : '')
-        : renamed
-          ? `from “${milestone.name}”`
-          : undefined,
-      project_id: milestone.project_id,
-      ts: now,
+    await updateMilestoneCore(ctx, {
+      me: ctx.me,
+      milestone,
+      patch,
+      now: new Date().toISOString(),
     })
     return null
   },
@@ -786,19 +389,8 @@ export const updateMilestone = orgMutation({
 export const removeMilestone = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    const now = new Date().toISOString()
     const { milestone } = await changeableMilestone(ctx, ctx.me, id)
-    await ctx.db.delete(milestone._id)
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'deleted milestone',
-      target_type: 'milestone',
-      target_id: id,
-      label: milestone.name,
-      project_id: milestone.project_id,
-      ts: now,
-    })
+    await removeMilestoneCore(ctx, { me: ctx.me, milestone, now: new Date().toISOString() })
     return null
   },
 })

@@ -213,8 +213,30 @@ describe('New project for a standard user', () => {
       (button) => button.textContent === 'Create project',
     )
     await act(async () => submit?.click())
+    // the automatic entry is the server's own rule, so the dialog sends none
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ lead: 'leo', access: { aisha: 'user' }, teamAccess: {} }),
+      expect.objectContaining({ lead: 'leo', access: {}, teamAccess: {} }),
+      { withStarter: false },
+    )
+  })
+
+  it('sends a removed entry as null, so the server adds no grant', async () => {
+    const onCreate = vi.fn()
+    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={onCreate} />)
+    await pickLead('leo')
+    await click('[data-new-project-access]')
+    await click('[data-project-access-user-option="aisha"]')
+    const name = find<HTMLInputElement>('input[aria-label="Name"]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'Mount')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const submit = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Create project',
+    )
+    await act(async () => submit?.click())
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ lead: 'leo', access: { aisha: null } }),
       { withStarter: false },
     )
   })

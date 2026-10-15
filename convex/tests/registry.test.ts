@@ -7,11 +7,11 @@
  *
  * Entries call internal functions in their surface's module or in a domain
  * module that declares entries for both surfaces (machine/records.ts,
- * machine/discussion.ts), so the kinds below cover every one of those
- * modules. A domain module keeps each surface's functions apart, and each
- * entry calls a function of its own, so routes that differ only in a fixed
- * argument (the inbox actions, PUT and DELETE on a task's following) each
- * have one. */
+ * machine/discussion.ts, machine/projects.ts, machine/teams.ts), so the
+ * kinds below cover every one of those modules. A domain module keeps each surface's
+ * functions apart, and each entry calls a function of its own, so routes
+ * that differ only in a fixed argument (the inbox actions, PUT and DELETE on
+ * a task's following, a project's user and team access) each have one. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
@@ -19,6 +19,7 @@ import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import * as discussion from '../machine/discussion'
 import * as mcp from '../machine/mcp'
+import * as projects from '../machine/projects'
 import * as records from '../machine/records'
 import {
   type MachineAccess,
@@ -30,6 +31,7 @@ import {
   writeRunner,
 } from '../machine/registry'
 import * as rest from '../machine/rest'
+import * as teams from '../machine/teams'
 
 type Kind = 'query' | 'mutation' | 'action'
 type Call = { via: Kind; name: string; args: unknown }
@@ -93,6 +95,8 @@ const KINDS = new Map<string, Kind>([
   ...registeredKinds('machine/rest', rest),
   ...registeredKinds('machine/records', records),
   ...registeredKinds('machine/discussion', discussion),
+  ...registeredKinds('machine/projects', projects),
+  ...registeredKinds('machine/teams', teams),
 ])
 
 const SURFACES: Surface[] = [
@@ -320,12 +324,23 @@ describe('REST route matching', () => {
       ticket: 'abc',
     })
     expect(match('GET', 'workload')).toEqual({ route: 'GET workload' })
-    // PUT has one route, and each inbox action is a literal segment
     expect(match('PUT', 'tasks/QN-1/following')).toEqual({
       route: 'PUT tasks/:ref/following',
       ref: 'QN-1',
     })
+    // each inbox action is a literal segment
     expect(match('POST', 'inbox/snooze')).toEqual({ route: 'POST inbox/snooze' })
+    expect(match('POST', 'projects')).toEqual({ route: 'POST projects' })
+    expect(match('PUT', 'projects/FW/access/teams/t1')).toEqual({
+      route: 'PUT projects/:ref/access/teams/:subject',
+      ref: 'FW',
+      subject: 't1',
+    })
+    expect(match('DELETE', 'projects/FW/milestones/m1')).toEqual({
+      route: 'DELETE projects/:ref/milestones/:milestone',
+      ref: 'FW',
+      milestone: 'm1',
+    })
   })
 
   it('answers null (the unknown-route 404) for every other method or shape', () => {
@@ -341,7 +356,9 @@ describe('REST route matching', () => {
       ['PATCH', 'tasks'],
       ['GET', 'users/a/b'],
       ['GET', 'projects/FW/other'],
-      ['POST', 'projects'],
+      ['PUT', 'projects/FW'],
+      ['PUT', 'projects/FW/access/groups/g1'],
+      ['GET', 'projects/FW/milestones'],
       ['GET', '%70rojects'],
       ['GET', 'issues'],
       ['PATCH', 'tasks/QN-1/attachments/abc'],

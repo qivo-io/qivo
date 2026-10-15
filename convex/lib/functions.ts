@@ -164,8 +164,10 @@ export const adminMutation = withDemoPayloadLimit(
  * here, so they can still shut out a leaked key or a departed person while
  * billing has made the organization read-only. Everyone else meets the gate
  * exactly as in orgMutation. Handlers keep their own admin rule and
- * sentences. Never build a write that adds seats, access or data on this
- * wrapper. */
+ * sentences. Never build a write that only adds seats, access or data on
+ * this wrapper. A handler that can also add them must call
+ * assertBillingWritable itself before those branches, as teams.removeMember
+ * does when it keeps the member as a Viewer or reassigns their tasks. */
 export const accessRemovalMutation = withDemoPayloadLimit(
   customMutation(mutation, {
     args: { org_id: v.string() },

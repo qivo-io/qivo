@@ -21,7 +21,12 @@ import {
   updateIssueCore,
 } from './model/issues'
 import { notifyIssueUpdate } from './model/messages'
-import { changeableMilestone, cleanMilestoneWeek, milestoneTarget } from './model/milestones'
+import {
+  changeableMilestone,
+  cleanMilestoneName,
+  cleanMilestoneWeek,
+  milestoneTarget,
+} from './model/milestones'
 import { weekLabel } from './model/orgs'
 
 type Context = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
@@ -251,7 +256,7 @@ export const change = authedMutation({
           const after = {
             id: op.id,
             project_id: project.id,
-            name: op.name,
+            name: cleanMilestoneName(op.name),
             week: cleanMilestoneWeek(op.week),
             created_at: now,
           }
@@ -275,6 +280,7 @@ export const change = authedMutation({
             await logMilestone(ctx, before, undefined, now)
           } else {
             const patch = { ...op.patch }
+            if (patch.name !== undefined) patch.name = cleanMilestoneName(patch.name)
             if (patch.week !== undefined) patch.week = cleanMilestoneWeek(patch.week)
             const after = { ...before, ...patch }
             if (same(before, after)) continue

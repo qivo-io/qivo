@@ -26,6 +26,7 @@ import {
   afterAccessChange,
   afterLeadChange,
   creatorNote,
+  requestedAccess,
 } from '../lib/newProjectAccess'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -430,9 +431,10 @@ function NameRow({ nameRef, name, setName, submit }) {
 /* New top-level project (program). A project is an organization-wide
    container, so it has a lead but no owning/managing team. Teams can still be
    added through the access picker below; sub-projects use the same model.
-   A creator who is not an org admin and picks someone else as lead is added
-   to Project access as User (lib/newProjectAccess.ts), and the footer says
-   who will manage the project or that the creator would not see it. */
+   A creator who is not an org admin and picks someone else as lead is shown
+   in Project access as User, the grant the server gives them
+   (lib/newProjectAccess.ts), and the footer says who will manage the project
+   or that the creator would not see it. */
 function NewProjectModal({
   init: _init = {},
   onClose,
@@ -468,7 +470,7 @@ function NewProjectModal({
   const note = creatorNote({
     creator,
     lead,
-    sees: P.seesNewProject({ lead, access, teamAccess }),
+    sees: P.seesNewProject({ lead, access: requestedAccess(draft, creator), teamAccess }),
   })
 
   const submit = () => {
@@ -481,7 +483,7 @@ function NewProjectModal({
         lead: lead || undefined,
         description: desc.trim() || undefined,
         teamAccess,
-        access,
+        access: requestedAccess(draft, creator),
       },
       { withStarter: false },
     )

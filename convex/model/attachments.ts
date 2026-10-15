@@ -34,7 +34,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId, insertUnique } from '../lib/db'
 import { attachmentFileUrl, FILE_TOKEN_TTL_SECONDS, mintFileToken } from '../lib/fileTokens'
 import { badRequest, notFound } from '../lib/functions'
-import { logActivity, machineDetail } from './activity'
+import { logActivity, signedDetail } from './activity'
 import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
 
@@ -172,7 +172,7 @@ export async function attachFileCore(
     target_type: 'issue',
     target_id: issue.id,
     label: issue.title,
-    detail: a.provenance === undefined ? a.name : machineDetail(a.name, a.provenance),
+    detail: signedDetail(a.name, a.provenance),
     project_id: issue.project_id,
     ts: a.now,
   })
@@ -208,8 +208,7 @@ export async function removeAttachmentCore(
     target_type: 'issue',
     target_id: issue.id,
     label: issue.title,
-    detail:
-      a.provenance === undefined ? attachment.name : machineDetail(attachment.name, a.provenance),
+    detail: signedDetail(attachment.name, a.provenance),
     project_id: issue.project_id,
     ts: a.now,
   })

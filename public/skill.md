@@ -57,10 +57,11 @@ A write also needs Edit access on the project, as described below.
   not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
-- **Browser:** Use it for project creation/sharing, project archive/restore,
-  images inside descriptions, and other actions absent from the machine
-  interfaces. Upload file attachments through REST. Enter at `https://qivo.io/app` and use the user's signed-in
-  session. Follow an explicitly requested interface when it supports the work.
+- **Browser:** Use it for images inside descriptions, guest invitations,
+  deleting a project, and other actions absent from the machine interfaces.
+  Upload file attachments through REST. Enter at `https://qivo.io/app` and
+  use the user's signed-in session. Follow an explicitly requested interface
+  when it supports the work.
 
 Task operations use these names (REST paths are relative to `https://api.qivo.io`):
 
@@ -250,6 +251,56 @@ Useful field rules:
   messages are removed after 7 days. A Viewer agent has no inbox and receives
   no messages.
 
+## Projects, access and milestones
+
+| Operation | MCP tool | REST request |
+| --- | --- | --- |
+| Read a project | `get_project` | `GET /v1/projects/{ref}` |
+| Create a project or sub-project | `create_project` | `POST /v1/projects` |
+| Change, archive or restore a project, hand over its lead | `update_project` | `PATCH /v1/projects/{ref}` |
+| Give, change or remove one user's or team's access | `set_project_access` | `PUT` and `DELETE /v1/projects/{ref}/access/users/{user}` or `…/teams/{team}` |
+| Add, rename or move a milestone | `set_milestone` | `POST /v1/projects/{ref}/milestones`, `PATCH …/milestones/{id}` |
+| Delete a milestone | `delete_milestone` | `DELETE /v1/projects/{ref}/milestones/{id}` |
+
+- **Create:** a top-level project follows the organization's project
+  creation setting; check `can_create_projects` in `get_me` or `GET /v1/me`
+  first. A Standard user agent counts as a standard user there. Create a
+  sub-project with `parent`, which needs Lead access on that parent. Tasks go
+  in sub-projects. The lead defaults to you, and an agent always leads what
+  it creates and cannot hand it over, so create a project only when the user
+  asks for one.
+- **Change:** settings, archive and restore need Lead access. Archiving a
+  project hides its tasks from default task lists; restore it before adding
+  tasks.
+- **Access and lead:** only a person who is an organization admin or the
+  project's lead may change who has access or hand over the lead. An agent's
+  credential is refused. Before removing someone, choose `on_held_tasks`:
+  `leave` (default) lists the open tasks they lose sight of, `keep_as_viewer`
+  keeps them as Viewers, and `{"reassign_to": user id or null}` hands those
+  tasks over. Confirm the choice with the user when it is not clear.
+- **Milestones:** they live on the top-level project; naming a sub-project
+  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them.
+
+## Teams
+
+| Operation | MCP tool | REST request |
+| --- | --- | --- |
+| List teams with their members and leaders | `list_teams` | `GET /v1/teams`, `GET /v1/teams/{id}` |
+| Create or rename a team | `set_team` | `POST /v1/teams`, `PATCH /v1/teams/{id}` |
+| Add a member, make or unmake a leader | `set_team_member` with `member: true` | `PUT /v1/teams/{id}/members/{user}` |
+| Remove a member | `set_team_member` with `member: false` | `DELETE /v1/teams/{id}/members/{user}` |
+
+- **Who may:** only organization admins create teams. An organization admin
+  or a leader of the team renames it and changes its members, and only a
+  person may change members, so an agent's credential is refused. Only
+  people lead teams.
+- **Removing:** choose `on_held_tasks` as for project access. `leave`
+  (default) lists the open tasks the member loses sight of,
+  `keep_as_viewer` keeps them as a Viewer of the project the team shared,
+  and `{"reassign_to": user id or null}` hands those tasks over. Confirm the
+  choice with the user when it is not clear.
+- Teams are named by uuid; two teams may share a name.
+
 ## Receive task events
 
 Use push delivery when the user requests ongoing task-change notifications.
@@ -382,7 +433,8 @@ archived tasks without restoring them.
 
 Archived projects are separate: use `list_projects` with `archived: true` to
 find them, then explicitly name one in the task query. They refuse new tasks;
-restore a project in the browser when that is part of the requested work.
+restore a project with `update_project` (`archived: false`) or PATCH when that
+is part of the requested work.
 A viewer can read but cannot write. A not-found response can also mean the
 credential cannot see the object. A read-only credential also prevents writes,
 and Qivo refuses its changes before looking up what you named. A read-only

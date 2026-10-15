@@ -17,7 +17,7 @@ import { insertUnique } from '../lib/db'
 import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
-import { logActivity, machineDetail } from './activity'
+import { logActivity, signedDetail } from './activity'
 import { assertLinkableIssues, linkAccess } from './issues'
 import { newUuid } from './orgs'
 
@@ -129,7 +129,7 @@ export async function addLinkCore(
     target_type: 'issue',
     target_id: source.id,
     label: source.title,
-    detail: a.provenance === undefined ? named : machineDetail(named, a.provenance),
+    detail: signedDetail(named, a.provenance),
     project_id: source.project_id,
     ts: now,
   })

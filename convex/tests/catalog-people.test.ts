@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import { AVATAR_COLORS } from '../lib/avatarColors'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
@@ -521,21 +522,38 @@ describe('profiles.update and the project-creation right', () => {
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
 
-  it('refuses the right for agents, viewers, guests and admins; turning it off is accepted', async () => {
+  it('gives the right to a Standard user agent like a person, and off is stored as absent', async () => {
     const t = newT()
     const f = await withOrg(t)
+    const update = (can_create_projects: boolean) =>
+      as(t, f.admin).mutation(api.profiles.update, {
+        org_id: f.org.id,
+        id: f.agent.id,
+        patch: { can_create_projects },
+      })
+    await update(true)
+    expect((await profileById(t, f.agent.id))?.can_create_projects).toBe(true)
+    await update(false)
+    expect(await profileById(t, f.agent.id)).not.toHaveProperty('can_create_projects')
+  })
+
+  it('refuses the right for viewers, Viewer agents, guests and admins; turning it off is accepted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const viewerAgent = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'Ledger',
+      kind: 'agent',
+      org_role: 'viewer',
+      plannable_hours: undefined,
+    })
     const update = (id: string, can_create_projects: boolean) =>
       as(t, f.admin).mutation(api.profiles.update, {
         org_id: f.org.id,
         id,
         patch: { can_create_projects },
       })
-    await expectRefusal(
-      update(f.agent.id, true),
-      'rule',
-      /^an agent cannot be allowed to create projects$/,
-    )
-    for (const p of [f.viewer, f.guest, f.admin]) {
+    for (const p of [f.viewer, viewerAgent, f.guest, f.admin]) {
       await expectRefusal(
         update(p.id, true),
         'rule',
@@ -543,7 +561,7 @@ describe('profiles.update and the project-creation right', () => {
       )
     }
     // a stale value planted raw, so turning it off has something to clear
-    const stale = [f.agent, f.viewer, f.guest, f.admin]
+    const stale = [viewerAgent, f.viewer, f.guest, f.admin]
     await t.run(async (ctx) => {
       for (const p of stale) await ctx.db.patch(p._id, { can_create_projects: true })
     })
@@ -1173,7 +1191,7 @@ describe('teams membership — the three verbs', () => {
     expect(events.map((e) => e.verb)).toEqual(['added', 'demoted'])
   })
 
-  it('an agent with a leader row cannot run the team; a person leader still can', async () => {
+  it('an agent with a leader row cannot run the team or change it; a person leader still can', async () => {
     const t = newT()
     const f = await withOrg(t)
     // Agents have no login. The planted one stands in for any surface that
@@ -1190,13 +1208,19 @@ describe('teams membership — the three verbs', () => {
     const args = { org_id: f.org.id, team_id: f.team.id, profile_id: f.viewer.id }
     const promoteAdmin = { ...args, profile_id: f.admin.id, is_leader: true }
     const RUNS = /^requires an organization admin or a leader of this team$/
-    await expectRefusal(as(t, agent).mutation(api.teams.addMember, args), 'forbidden', RUNS)
+    // membership decides who sees the team's projects, which only people change
+    const PERSON = new RegExp(`^${ACCESS_NEEDS_A_PERSON}$`)
+    await expectRefusal(as(t, agent).mutation(api.teams.addMember, args), 'forbidden', PERSON)
     await expectRefusal(
       as(t, agent).mutation(api.teams.removeMember, { ...args, profile_id: f.admin.id }),
       'forbidden',
-      RUNS,
+      PERSON,
     )
-    await expectRefusal(as(t, agent).mutation(api.teams.setLeader, promoteAdmin), 'forbidden', RUNS)
+    await expectRefusal(
+      as(t, agent).mutation(api.teams.setLeader, promoteAdmin),
+      'forbidden',
+      PERSON,
+    )
     await expectRefusal(
       as(t, agent).mutation(api.teams.update, {
         org_id: f.org.id,

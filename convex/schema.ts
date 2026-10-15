@@ -463,8 +463,9 @@ export default defineSchema({
     // sitting the day the page read from (YYYY-MM-DD); absent = the default.
     sync_at: v.optional(v.string()),
     sync_since: v.optional(v.string()),
-    // The per-person project-creation right. It only counts for a standard
-    // user who is a person while project_creators is 'selected'; absent = off.
+    // The per-user project-creation right. It only counts for a standard
+    // user, person or agent, while project_creators is 'selected'; absent =
+    // off.
     can_create_projects: v.optional(v.boolean()),
     created_at: v.string(),
     // uniqueness (mutation-checked): (org_id, email), (org_id, auth_user_id),
@@ -568,6 +569,8 @@ export default defineSchema({
     .index('by_org_archived', ['org_id', 'archived_at'])
     .index('by_org_num', ['org_id', 'num'])
     .index('by_project', ['project_id'])
+    // An access removal reads only the open tasks of the projects it touches.
+    .index('by_project_archived', ['project_id', 'archived_at'])
     .index('by_parent', ['parent_id'])
     // Profile refs — removeProfile's SET NULLs.
     .index('by_assignee', ['assignee_id'])

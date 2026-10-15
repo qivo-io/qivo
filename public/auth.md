@@ -186,7 +186,9 @@ and applicable leadership rights. Sub-projects inherit access from their
 meta-project. A project **Viewer** role permits reading; **User** and **Lead**
 permit task writes. An organization **Viewer** role caps every project at
 read-only and grants no project access by itself. Credential creation does
-not grant additional permissions.
+not grant additional permissions. Only a person changes who has access to a
+project, hands over its lead or changes a team's members and leaders, so an
+agent's key cannot grant access, even to itself.
 
 ## Revocation and connection failures
 

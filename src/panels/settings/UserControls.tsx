@@ -256,10 +256,11 @@ export function PlannableHoursInput({
 /* The roster's "Can create projects" column, shown only while the org's
    setting is Selected users. Every desktop row gets a cell of the same width
    right before the role select, so the column lines up under its one header
-   label. An active standard user who is a person gets a checkbox in it, and
-   an active org admin a ticked one that cannot be changed (projectRightBox).
-   The phone's user page shows a single row without the header, so there the
-   checkbox carries a visible label and the empty cell is left out. */
+   label. An active standard user, person or agent, gets a checkbox in it,
+   and an active org admin a ticked one that cannot be changed
+   (projectRightBox). The phone's user page shows a single row without the
+   header, so there the checkbox carries a visible label and the empty cell
+   is left out. */
 export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: boolean }) {
   const box = projectRightBox(user, P.org.projectCreators)
   if (labelled && box === null) return null

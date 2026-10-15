@@ -541,10 +541,17 @@ const MISSING_UUID = '00000000-0000-4000-8000-000000000000'
 
 type ToolDef = (typeof TOOLS)[number]['def']
 
+/* Optional arguments that keep a tool from finding anything, for a tool
+ * whose required arguments alone would name nothing and still write. */
+const MISSING_OPTIONAL: Record<string, Record<string, unknown>> = {
+  create_project: { parent: 'NOPE' },
+  set_team: { team_id: MISSING_UUID },
+}
+
 /* Arguments that pass a tool's schema and name nothing that exists. An
  * enum takes its first member, and every other string a ref to nothing. */
 function missingRefArgs(def: ToolDef): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
+  const out: Record<string, unknown> = { ...MISSING_OPTIONAL[def.name] }
   for (const key of def.inputSchema.required ?? []) {
     const prop = def.inputSchema.properties[key]
     const p = prop.anyOf?.[0] ?? prop
@@ -744,6 +751,11 @@ async function credentials() {
     t.run(async (ctx) => ({
       issues: (await ctx.db.query('issues').collect()).length,
       comments: (await ctx.db.query('comments').collect()).length,
+      projects: (await ctx.db.query('projects').collect()).length,
+      grants: (await ctx.db.query('project_access').collect()).length,
+      milestones: (await ctx.db.query('milestones').collect()).length,
+      teams: (await ctx.db.query('teams').collect()).length,
+      members: (await ctx.db.query('team_members').collect()).length,
     }))
   return {
     t,
@@ -853,6 +865,7 @@ describe('read-only credentials over HTTP', () => {
     const { token: readGrant } = await c.oauth(['qivo:read'])
     const args: Record<string, Record<string, unknown>> = {
       list_project_users: { project: c.f.sub.key },
+      get_project: { project: c.f.sub.key },
       get_task: { ref: MISSING_TASK },
       list_comments: { ref: MISSING_TASK },
     }

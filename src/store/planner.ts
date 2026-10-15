@@ -18,6 +18,7 @@ import {
   isProjectCreators,
   projectRightAfterUpdate,
 } from '../../convex/lib/projectCreators'
+import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
@@ -1657,12 +1658,136 @@ function keptOn(change: AccessRemoval, task: IssueVM): string {
   return p?.parent && !p.teamAccess?.[change.teamId] ? p.parent : task.project
 }
 /* The direct grant rows on a project, without the lead (projects.lead_id). */
-function grantsOn(projectId: string): Record<string, AccessLevel> {
-  const access: Record<string, AccessLevel> = {}
+function grantsOn(projectId: string): Record<string, GrantLevel> {
+  const access: Record<string, GrantLevel> = {}
   rows.access.forEach((a) => {
     if (a.project_id === projectId) access[a.profile_id] = a.level
   })
   return access
+}
+/* Removes a person's or a team's grant on one project, or a member from a
+   team, in one server write that settles the tasks it hides by `choice`
+   (projects.removeAccess, teams.removeMember), and paints the outcome at
+   once; a refusal re-adopts the server's rows. With nobody losing sight of a
+   task, the access just goes. Resolves whether the server accepted it. */
+function removeAtOnce(
+  change: Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' | 'teamMember' }>,
+  choice: { keep: true } | { to: string | null },
+  items: Holder[],
+  stays: string,
+): Promise<boolean> {
+  const orgId =
+    change.kind === 'teamMember'
+      ? rows.teams.get(change.teamId)?.org_id
+      : rows.projects.get(change.projectId)?.org_id
+  if (!orgId) return Promise.resolve(false)
+  const people = [...new Set(items.map((i) => i.uid))]
+  const held =
+    'keep' in choice
+      ? people.length > 0
+        ? ('keep_as_viewer' as const)
+        : ('leave' as const)
+      : items.length > 0
+        ? { reassign_to: choice.to }
+        : ('leave' as const)
+  const level = levelAfter(change)
+  if (typeof held === 'object') {
+    for (const i of items) {
+      const row = rows.issues.get(i.task.uuid)
+      if (row) {
+        applyIssuePatchToRow(
+          row,
+          i.role === 'assignee' ? { assignee: held.reassign_to } : { reviewer: held.reassign_to },
+        )
+      }
+    }
+  }
+  if (change.kind === 'userGrant') {
+    rows.access = rows.access.filter(
+      (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
+    )
+  } else if (change.kind === 'teamGrant') {
+    rows.teamAccess = rows.teamAccess.filter(
+      (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
+    )
+  } else {
+    rows.teamMembers = rows.teamMembers.filter(
+      (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
+    )
+  }
+  if (held === 'keep_as_viewer') {
+    // the server's Viewer grants: each project that showed a listed task
+    const kept = new Set<string>()
+    for (const i of items) {
+      const pid = keptOn(change, i.task)
+      if (kept.has(`${i.uid}:${pid}`) || level(i.uid, pid)) continue
+      kept.add(`${i.uid}:${pid}`)
+      rows.access.push({ project_id: pid, profile_id: i.uid, level: 'viewer' })
+    }
+  }
+  rebuild()
+  emit()
+  const op =
+    change.kind === 'teamMember'
+      ? write(api.teams.removeMember, {
+          org_id: orgId,
+          team_id: change.teamId,
+          profile_id: change.userId,
+          on_held_tasks: held,
+        })
+      : write(api.projects.removeAccess, {
+          org_id: orgId,
+          id: change.projectId,
+          ...(change.kind === 'userGrant'
+            ? { user_id: change.userId }
+            : { team_id: change.teamId }),
+          on_held_tasks: held,
+        })
+  return new Promise<boolean>((resolve) =>
+    run(
+      op,
+      () => resolve(true),
+      undefined,
+      (error) => {
+        // only a refused reassignment or Viewer grant (model/projectAccess.ts
+        // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
+        // pause or a lost connection says so itself
+        const settling = errData(error).reason === 'held_tasks'
+        if (settling && typeof held === 'object') {
+          toast(`${stays}, because not every task could be reassigned.`, 'error')
+        } else if (settling && held === 'keep_as_viewer' && change.kind === 'teamMember') {
+          toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
+        } else toastWriteError(error)
+        resolve(false)
+      },
+    ),
+  )
+}
+
+/* The individual grants a new project is stored with: the request's own,
+   and on a top-level project the one the server gives its creator by
+   itself (convex/lib/projectGrants.ts creatorGrant). */
+function newProjectGrants(
+  p: Pick<NewProjectInput, 'type' | 'access'>,
+  creator: string,
+  lead: string,
+): Record<string, GrantLevel> {
+  const grants: Record<string, GrantLevel> = {}
+  for (const [uid, level] of Object.entries(p.access || {})) {
+    if (level === 'user' || level === 'viewer') grants[uid] = level
+  }
+  if (p.type === 'meta' && creator) {
+    const own = p.access?.[creator]
+    const mine = creatorGrant({
+      admin: PLANNER.isAdmin(creator),
+      creator,
+      lead,
+      own: own === 'lead' ? undefined : own,
+    })
+    if (mine) grants[creator] = mine
+    else delete grants[creator]
+  }
+  return grants
 }
 function omitKey<T>(map: Record<string, T> | undefined, key: string): Record<string, T> {
   const next = { ...(map || {}) }
@@ -1785,6 +1910,8 @@ function applyIssuePatchToRow(row: Row<'issues'>, patch: IssuePatch) {
    widened column needs no edit here; null (or '') means clear. */
 /* grant levels + the 'lead' pseudo-entry the access maps surface */
 export type AccessLevel = Row<'project_access'>['level'] | 'lead'
+/** A level a grant row stores; the lead is projects.lead_id instead. */
+type GrantLevel = Row<'project_access'>['level']
 export type TeamAccessLevel = Row<'project_team_access'>['level']
 export type NewProjectInput = {
   type: Row<'projects'>['type']
@@ -1795,7 +1922,10 @@ export type NewProjectInput = {
   iconColor?: string | null
   lead?: string | null
   description?: string
-  access?: Record<string, AccessLevel>
+  /** Individual grants. null names no grant, which for the creator also
+      declines the grant the server gives a creator by itself
+      (convex/lib/projectGrants.ts creatorGrant). */
+  access?: Record<string, AccessLevel | null>
   teamAccess?: Record<string, TeamAccessLevel>
 }
 /** A project and the project that owns it, for labels such as "Website,
@@ -2075,9 +2205,15 @@ export const PLANNER = {
     draft: Pick<NewProjectInput, 'lead' | 'access' | 'teamAccess'>,
     uid?: string,
   ): boolean => {
-    // addProject makes the creator the lead when none is named
-    const lead = draft.lead || profileIn(HOME_ORG) || undefined
-    const access: Record<string, string> = { ...draft.access }
+    // addProject makes the creator the lead when none is named, and the
+    // server may give the creator a grant by itself
+    const creator = profileIn(HOME_ORG)
+    const lead = draft.lead || creator || undefined
+    const access: Record<string, string> = newProjectGrants(
+      { type: 'meta', access: draft.access },
+      creator,
+      lead || '',
+    )
     if (lead) access[lead] = 'lead'
     const teamAccess = draft.teamAccess || {}
     return (
@@ -2439,10 +2575,13 @@ export const PLANNER = {
   /* Apply the removal with the choice made in the removal window, for the
      `items` the person reviewed there: keep their holders as Viewers (a
      direct Viewer grant each on the listed projects), or hand every item to
-     `to` (null clears it). The access goes once the server has accepted every
-     reassignment, and for a team member or a deleted team, every Viewer
-     grant. If one is refused the access stays, so nobody is left holding a
-     task they cannot see. Resolves whether the server accepted the removal. */
+     `to` (null clears it). A person's or a team's grant, or a member leaving
+     a team, goes in one server write that settles the tasks too
+     (projects.removeAccess, teams.removeMember, the rules REST and MCP use),
+     so a refusal changes nothing. For a deleted team, the access goes once
+     the server has accepted every reassignment and every Viewer grant. If one
+     is refused the team stays, so nobody is left holding a task they cannot
+     see. Resolves whether the server accepted the removal. */
   removeAccess: async (
     change: AccessRemoval,
     choice: { keep: true } | { to: string | null },
@@ -2460,8 +2599,9 @@ export const PLANNER = {
           : change.kind === 'teamMember'
             ? `${person} stays in the ${named}`
             : `The ${named} stays`
+    if (change.kind !== 'deleteTeam') return removeAtOnce(change, choice, items, stays)
     // the server refuses to delete the last team: say so before anything is saved
-    if (change.kind === 'deleteTeam' && team && !PLANNER.canDeleteTeam(change.teamId)) {
+    if (team && !PLANNER.canDeleteTeam(change.teamId)) {
       toast(`The ${named} can't be deleted, because it is the organization's last team.`, 'error')
       return false
     }
@@ -2490,18 +2630,6 @@ export const PLANNER = {
       for (const uid of people) if (!level(uid, pid)) access[uid] = 'viewer'
       return access
     }
-    if (change.kind === 'userGrant')
-      return PLANNER.setProjectAccess(change.projectId, change.userId, keep ? 'viewer' : null)
-    if (change.kind === 'teamGrant') {
-      const teamAccess = omitKey(PLANNER.project(change.projectId)?.teamAccess, change.teamId)
-      // one write: the team leaves and the people who would lose sight stay as Viewers
-      return keep
-        ? PLANNER.updateProject(change.projectId, {
-            access: withViewers(change.projectId),
-            teamAccess,
-          })
-        : PLANNER.setProjectTeamAccess(change.projectId, change.teamId, null)
-    }
     // the Viewer grants are saved before the team changes
     if (keep) {
       const projects = [...new Set(items.map((i) => keptOn(change, i.task)))]
@@ -2513,7 +2641,6 @@ export const PLANNER = {
         return false
       }
     }
-    if (change.kind === 'teamMember') return PLANNER.removeTeamMember(change.teamId, change.userId)
     const deleted = await PLANNER.removeTeam(change.teamId)
     if (deleted && team) toast(`Team “${team.name}” deleted`, 'success')
     return deleted
@@ -2624,7 +2751,7 @@ export const PLANNER = {
     const actor = actorIn(HOME_ORG, uid)
     if (!actor?.active) return false
     return canCreateProjects(
-      { org_role: actor.orgRole, kind: actor.kind, can_create_projects: actor.canCreateProjects },
+      { org_role: actor.orgRole, can_create_projects: actor.canCreateProjects },
       homeRow()?.project_creators,
     )
   },
@@ -4132,10 +4259,11 @@ export const PLANNER = {
       created_at: new Date().toISOString(),
     }
     rows.projects.set(uuid, row)
-    // honor an access map passed by the caller; 'lead' entries are carried
-    // by lead_id, never stored as grant rows
-    Object.entries(p.access || {}).forEach(([uid, level]) => {
-      if (level !== 'lead') rows.access.push({ project_id: uuid, profile_id: uid, level })
+    // the grant rows the server stores: the caller's map ('lead' entries are
+    // carried by lead_id, null ones name no grant) and the creator's own
+    const grants = newProjectGrants(p, profileIn(orgRow.id), row.lead_id || '')
+    Object.entries(grants).forEach(([uid, level]) => {
+      rows.access.push({ project_id: uuid, profile_id: uid, level })
     })
     const teamAccess = p.teamAccess ?? {}
     Object.entries(teamAccess).forEach(([teamId, level]) => {
@@ -4212,6 +4340,15 @@ export const PLANNER = {
         const ex = rows.access.find((a) => a.project_id === id && a.profile_id === uid)
         if (ex) ex.level = next[uid]
         else rows.access.push({ project_id: id, profile_id: uid, level: next[uid] })
+      })
+    }
+    // a lead handover without an access map: the server keeps the outgoing
+    // lead as User and drops the incoming lead's own grant
+    if ('lead' in patch && !('access' in patch) && patch.lead && patch.lead !== row.lead_id) {
+      const after = grantsAfterHandover(grantsOn(id), row.lead_id, patch.lead)
+      rows.access = rows.access.filter((a) => a.project_id !== id)
+      Object.entries(after).forEach(([uid, level]) => {
+        rows.access.push({ project_id: id, profile_id: uid, level })
       })
     }
     const db: Partial<Row<'projects'>> = {}
@@ -4499,26 +4636,6 @@ export const PLANNER = {
     emit()
     run(
       write(api.teams.addMember, {
-        org_id: team.org_id,
-        team_id: teamId,
-        profile_id: uid,
-      }),
-    )
-  },
-
-  /* Resolves whether the server removed the membership; false when there
-     was none to remove. */
-  removeTeamMember: (teamId: string, uid: string): Promise<boolean> => {
-    const team = rows.teams.get(teamId)
-    if (!team || !rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid))
-      return Promise.resolve(false)
-    rows.teamMembers = rows.teamMembers.filter(
-      (m) => !(m.team_id === teamId && m.profile_id === uid),
-    )
-    rebuild()
-    emit()
-    return runSaved(
-      write(api.teams.removeMember, {
         org_id: team.org_id,
         team_id: teamId,
         profile_id: uid,
@@ -4908,11 +5025,11 @@ export const PLANNER = {
     if (!m) return Promise.resolve(false)
     // row-level grants only — the 'lead' entry in m.access mirrors lead_id
     const acc = grantsOn(metaId)
+    // a handover: the server keeps the outgoing lead as User
+    // (convex/lib/projectGrants.ts grantsAfterHandover)
     if (role === 'lead') {
       if (m.lead === userId) return Promise.resolve(true)
-      delete acc[userId]
-      if (m.lead) acc[m.lead] = 'user'
-      return PLANNER.updateProject(metaId, { access: acc, lead: userId })
+      return PLANNER.updateProject(metaId, { lead: userId })
     }
     if (role) acc[userId] = role
     else delete acc[userId]

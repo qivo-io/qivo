@@ -1,4 +1,5 @@
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -25,8 +26,9 @@ const NOW = '2026-09-14T08:00:00.000Z'
 describe('removing someone who has work in the project', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
-  // tasks, projects and team members whose write the server refuses
+  // tasks, projects and team members whose write the server refuses, and how
   let refused: Set<string>
+  let refusal: unknown
   let work: string
 
   async function load(change?: (snap: Snapshot, task: Task) => void) {
@@ -100,13 +102,15 @@ describe('removing someone who has work in the project', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     requests = []
     refused = new Set()
+    // what the server answers when settling the held tasks fails
+    refusal = new ConvexError({ code: 'rule', message: 'refused', reason: 'held_tasks' })
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation((ref, args) => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
       requests.push({ name, args })
       return refused.has(args.id ?? args.profile_id)
-        ? Promise.reject(new Error('refused'))
+        ? Promise.reject(refusal)
         : Promise.resolve(null)
     })
   })
@@ -197,43 +201,102 @@ describe('removing someone who has work in the project', () => {
     expect(ids).toHaveLength(1) // the organization admin
   })
 
-  it('keeps a person as a Viewer with their tasks', async () => {
+  it('keeps a person as a Viewer with their tasks, in one server write', async () => {
     await load()
     const leo = P.accessRemoval(user('leo'))
     expect(await P.removeAccess(user('leo'), { keep: true }, leo.items)).toBe(true)
     expect(P.levelOn(work, 'leo')).toBe('viewer')
     expect(vm('t1').assignee).toBe('leo')
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(requests).toEqual([
+      {
+        name: 'projects:removeAccess',
+        args: {
+          org_id: expect.any(String),
+          id: work,
+          user_id: 'leo',
+          on_held_tasks: 'keep_as_viewer',
+        },
+      },
+    ])
   })
 
-  it('reassigns the reviewed tasks, then removes the grant once all are saved', async () => {
+  it('reassigns the tasks and removes the grant in one server write', async () => {
     await load()
     const leo = P.accessRemoval(user('leo'))
-    const removed = P.removeAccess(user('leo'), { to: 'dan' }, leo.items.slice(0, 1))
+    const removed = P.removeAccess(user('leo'), { to: 'dan' }, leo.items)
+    // painted at once; a refusal re-adopts the server's rows
     expect(vm('t1').assignee).toBe('dan')
-    expect(vm('t2').reviewer).toBe('leo') // not in the reviewed list
-    expect(P.levelOn(work, 'leo')).toBe('user') // waits for the server
-    expect(await removed).toBe(true)
+    expect(vm('t2').reviewer).toBe('dan')
     expect(P.levelOn(work, 'leo')).toBeNull()
+    expect(await removed).toBe(true)
     expect(vm('t3').assignee).toBe('leo') // Done stays
-    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'projects:update'])
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['projects:removeAccess', { reassign_to: 'dan' }],
+    ])
     // Unassigned clears them instead
     const crew = P.accessRemoval(crewGrant())
     expect(await P.removeAccess(crewGrant(), { to: null }, crew.items)).toBe(true)
     expect(vm('t4').assignee).toBeFalsy()
+    expect(requests.at(-1)?.args).toMatchObject({
+      team_id: 'crew',
+      on_held_tasks: { reassign_to: null },
+    })
   })
 
-  it('keeps the grant when the server refuses a reassignment', async () => {
+  it('removes a grant nobody loses work through without settling anything', async () => {
     await load()
-    refused.add('t2')
+    expect(await P.removeAccess(user('leo'), { to: null }, [])).toBe(true)
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['projects:removeAccess', 'leave'],
+    ])
+  })
+
+  it('keeps the grant and every task when the server refuses a reassignment', async () => {
+    await load()
+    refused.add(work)
     const leo = P.accessRemoval(user('leo'))
     expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
     expect(P.levelOn(work, 'leo')).toBe('user')
-    expect(requests.map((r) => r.name)).toEqual(['issues:update', 'issues:update'])
+    expect(vm('t1').assignee).toBe('leo')
+    expect(requests.map((r) => r.name)).toEqual(['projects:removeAccess'])
     expect(window.showToast).toHaveBeenCalledWith(
       'Leo Person keeps access, because not every task could be reassigned.',
       'error',
     )
+  })
+
+  it('names the reason when the server refuses the removal itself', async () => {
+    await load()
+    refused.add(work)
+    const leo = P.accessRemoval(user('leo'))
+    refusal = new ConvexError({
+      code: 'forbidden',
+      message: 'no permission to manage users on this project',
+    })
+    expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      "You don't have permission for that — reverted",
+      'error',
+    )
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. — reverted',
+      'error',
+    )
+    refusal = new Error('network down')
+    expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith("Couldn't save — reverted", 'error')
+    expect(window.showToast).not.toHaveBeenCalledWith(
+      'Leo Person keeps access, because not every task could be reassigned.',
+      'error',
+    )
+    expect(P.levelOn(work, 'leo')).toBe('user')
+    expect(vm('t1').assignee).toBe('leo')
   })
 
   it('keeps the grant and the window when the server refuses the Viewer grant', async () => {
@@ -250,9 +313,12 @@ describe('removing someone who has work in the project', () => {
     const crew = P.accessRemoval(crewGrant())
     expect(await P.removeAccess(crewGrant(), { keep: true }, crew.items)).toBe(true)
     expect(P.levelOn(work, 'ann')).toBe('viewer')
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(P.project(work)?.teamAccess?.crew).toBeUndefined()
+    expect(requests.map((r) => r.name)).toEqual(['projects:removeAccess'])
     expect(requests[0].args).toMatchObject({
-      patch: { access: { ann: 'viewer', leo: 'user', dan: 'user' }, team_access: {} },
+      id: work,
+      team_id: 'crew',
+      on_held_tasks: 'keep_as_viewer',
     })
   })
 
@@ -277,28 +343,70 @@ describe('removing someone who has work in the project', () => {
     expect(P.reassignChoices(deleteCrew, all.items).map((u) => u.id)).not.toContain('dan')
   })
 
-  it('saves the Viewer grants before a member leaves the team', async () => {
+  it('keeps a member leaving a team as a Viewer, in one server write', async () => {
     await load(inPlan(false))
     const ann = P.accessRemoval(leaving('ann'))
     expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(true)
-    expect(requests.map((r) => r.name)).toEqual(['projects:update', 'teams:removeMember'])
-    expect(requests[0].args).toMatchObject({ id: 'plan', patch: { access: { ann: 'viewer' } } })
+    expect(requests).toEqual([
+      {
+        name: 'teams:removeMember',
+        args: {
+          org_id: expect.any(String),
+          team_id: 'crew',
+          profile_id: 'ann',
+          on_held_tasks: 'keep_as_viewer',
+        },
+      },
+    ])
+    // painted where the server puts it: Plan, the project Crew shared
+    expect(P.levelOn('plan', 'ann')).toBe('viewer')
     expect(P.levelOn(work, 'ann')).toBe('viewer')
     expect(P.user('ann')?.teams).toEqual([])
     expect(vm('t4').assignee).toBe('ann')
   })
 
-  it('keeps the member in the team when a Viewer grant is refused', async () => {
+  it('reassigns the tasks of a member leaving a team in the same write', async () => {
     await load(inPlan(false))
-    refused.add('plan')
+    const ann = P.accessRemoval(leaving('ann'))
+    expect(await P.removeAccess(leaving('ann'), { to: 'dan' }, ann.items)).toBe(true)
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['teams:removeMember', { reassign_to: 'dan' }],
+    ])
+    expect(vm('t4').assignee).toBe('dan')
+    expect(P.user('ann')?.teams).toEqual([])
+  })
+
+  it('keeps the member in the team and every task when the server refuses', async () => {
+    await load(inPlan(false))
+    refused.add('ann')
     const ann = P.accessRemoval(leaving('ann'))
     expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(requests.map((r) => r.name)).toEqual(['teams:removeMember'])
     expect(P.user('ann')?.teams).toEqual(['crew'])
+    expect(P.project('plan')?.access?.ann).toBeUndefined() // no Viewer grant either
     expect(window.showToast).toHaveBeenCalledWith(
       'Ann Person stays in the Crew team, because not every Viewer grant could be saved.',
       'error',
     )
+    expect(await P.removeAccess(leaving('ann'), { to: 'dan' }, ann.items)).toBe(false)
+    expect(vm('t4').assignee).toBe('ann')
+    expect(P.user('ann')?.teams).toEqual(['crew'])
+    expect(window.showToast).toHaveBeenCalledWith(
+      'Ann Person stays in the Crew team, because not every task could be reassigned.',
+      'error',
+    )
+    // a billing pause refuses the removal itself, so it names the pause
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. — reverted',
+      'error',
+    )
+    expect(P.user('ann')?.teams).toEqual(['crew'])
   })
 
   it('keeps a deleted team as Viewers without lowering a grant someone keeps', async () => {
@@ -337,6 +445,19 @@ describe('removing someone who has work in the project', () => {
       "The Crew team can't be deleted, because it is the organization's last team.",
       'error',
     )
+  })
+
+  it('hands over the lead with the lead alone; the outgoing lead keeps User', async () => {
+    await load((snap) => {
+      snap.projects[0].lead_id = 'dan'
+    })
+    expect(await P.setProjectAccess(work, 'leo', 'lead')).toBe(true)
+    // the server applies the same rule (convex/lib/projectGrants.ts)
+    expect(requests.map((r) => [r.name, r.args.patch])).toEqual([
+      ['projects:update', { lead_id: 'leo' }],
+    ])
+    expect(P.project(work)?.lead).toBe('leo')
+    expect(P.project(work)?.access).toEqual({ dan: 'user', leo: 'lead' })
   })
 
   it('tells whether the access is still there to remove', async () => {
@@ -383,6 +504,10 @@ describe('removing someone who has work in the project', () => {
     refused.clear()
     expect(P.startRemoval(leaving('ann'))).toBe(false)
     await vi.waitFor(() => expect(window.showToast).toHaveBeenCalledWith(notice, 'info'))
-    expect(requests.map((r) => r.name)).toEqual(['teams:removeMember', 'teams:removeMember'])
+    // nothing to settle for a leader without that authority: the tasks stay
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['teams:removeMember', 'leave'],
+      ['teams:removeMember', 'leave'],
+    ])
   })
 })

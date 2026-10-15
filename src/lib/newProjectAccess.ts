@@ -1,8 +1,12 @@
 /* The create dialogs' rules for a creator who is not an org admin: when the
-   New project dialog adds the creator to Project access by itself, when it
-   takes that entry away again, which note the footer shows, and what follows
-   once the project is saved. Pure functions of plain inputs, so they test
+   New project dialog shows the creator in Project access by itself, when it
+   takes that entry away again, what the dialog sends, which note the footer
+   shows, and what follows once the project is saved. The server stores the
+   creator's grant by the shared rule (convex/lib/projectGrants.ts
+   creatorGrant); the dialog shows that grant before saving and sends only
+   what the creator changed. Pure functions of plain inputs, so they test
    without the store or a render. */
+import { creatorGrant } from '../../convex/lib/projectGrants'
 import type { AccessLevel, NewProjectInput } from '../store/planner'
 
 /** Where the creator's own Project access entry came from: 'none' while
@@ -34,10 +38,28 @@ export function afterLeadChange(draft: AccessDraft, lead: string, creator: Creat
     return { access, self: 'none' }
   }
   if (draft.self === 'none' && !access[creator.id]) {
-    access[creator.id] = 'user'
-    return { access, self: 'auto' }
+    // the grant the server gives the creator when they send none
+    const level = creatorGrant({ admin: false, creator: creator.id, lead, own: undefined })
+    if (level !== null) {
+      access[creator.id] = level
+      return { access, self: 'auto' }
+    }
   }
   return { access, self: draft.self }
+}
+
+/** The Project access the New project dialog sends. The entry the dialog
+ * added for the creator by itself is left out, because the server adds the
+ * same grant by its own rule, and an entry the creator removed goes as null,
+ * so the server adds none. */
+export function requestedAccess(
+  draft: AccessDraft,
+  creator: Creator,
+): Record<string, AccessLevel | null> {
+  const access: Record<string, AccessLevel | null> = { ...draft.access }
+  if (draft.self === 'auto') delete access[creator.id]
+  else if (draft.self === 'own' && !access[creator.id]) access[creator.id] = null
+  return access
 }
 
 /** The draft after the access picker sets a user's level, or clears it with

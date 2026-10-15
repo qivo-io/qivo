@@ -5,6 +5,7 @@ import {
   afterLeadChange,
   afterProjectSaved,
   creatorNote,
+  requestedAccess,
 } from './newProjectAccess'
 
 const me = { id: 'aisha', admin: false }
@@ -76,6 +77,31 @@ describe('afterAccessChange', () => {
     const auto = afterLeadChange(empty, 'leo', me)
     expect(afterAccessChange(auto, 'aisha', 'user', me).self).toBe('own')
     expect(afterAccessChange(auto, 'ben', 'user', me).self).toBe('auto')
+  })
+})
+
+describe('requestedAccess', () => {
+  it('leaves the automatic entry to the server, which stores the same grant', () => {
+    const auto = afterLeadChange(empty, 'leo', me)
+    expect(requestedAccess(auto, me)).toEqual({})
+    expect(requestedAccess({ access: { ben: 'viewer', aisha: 'user' }, self: 'auto' }, me)).toEqual(
+      {
+        ben: 'viewer',
+      },
+    )
+  })
+
+  it('sends an entry the creator removed as null and one they changed as it is', () => {
+    const auto = afterLeadChange(empty, 'leo', me)
+    expect(requestedAccess(afterAccessChange(auto, 'aisha', null, me), me)).toEqual({ aisha: null })
+    expect(requestedAccess(afterAccessChange(auto, 'aisha', 'viewer', me), me)).toEqual({
+      aisha: 'viewer',
+    })
+  })
+
+  it('sends nothing for the creator who never had an entry', () => {
+    expect(requestedAccess(empty, me)).toEqual({})
+    expect(requestedAccess(afterLeadChange(empty, 'leo', admin), admin)).toEqual({})
   })
 })
 

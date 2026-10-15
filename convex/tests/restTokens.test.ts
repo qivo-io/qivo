@@ -187,6 +187,21 @@ const LABEL_ADMINS = 'only organization admins can rename, recolor or delete lab
 
 type Fx = Awaited<ReturnType<typeof fixture>>
 
+/* A fresh milestone on the fixture's top-level project, so each credential
+ * edits or deletes one that exists. */
+const plantMilestone = (fx: Fx): Promise<string> =>
+  fx.t.run(async (ctx) => {
+    const id = uuid()
+    await ctx.db.insert('milestones', {
+      id,
+      project_id: fx.f.meta.id,
+      name: 'Gate',
+      week: '2026-03-02',
+      created_at: NOW,
+    })
+    return id
+  })
+
 /* A stored file of `bytes` bytes, as an upload to Convex storage leaves it. */
 const storeFile = (t: T, bytes: number) =>
   t.run((ctx) => ctx.storage.store(new Blob([new Uint8Array(bytes)]) as never))
@@ -293,6 +308,43 @@ const REQUESTS: Record<
   }),
   'PUT tasks/:ref/following': (_, task) => ({ path: `/v1/tasks/${task}/following` }),
   'DELETE tasks/:ref/following': (_, task) => ({ path: `/v1/tasks/${task}/following` }),
+  'POST projects': () => ({ path: '/v1/projects', body: { name: 'Token project' } }),
+  'PATCH projects/:ref': () => ({ path: '/v1/projects/FW', body: { track_delay: true } }),
+  'PUT projects/:ref/access/users/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/users/${fx.f.guest.id}`,
+    body: { level: 'viewer' },
+  }),
+  'DELETE projects/:ref/access/users/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/users/${fx.f.guest.id}`,
+  }),
+  'PUT projects/:ref/access/teams/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/teams/${fx.f.team.id}`,
+    body: { level: 'viewer' },
+  }),
+  'DELETE projects/:ref/access/teams/:subject': (fx) => ({
+    path: `/v1/projects/FW/access/teams/${fx.f.team.id}`,
+  }),
+  'POST projects/:ref/milestones': () => ({
+    path: '/v1/projects/FW/milestones',
+    body: { name: 'Token gate', date: '2026-04-06' },
+  }),
+  'PATCH projects/:ref/milestones/:milestone': async (fx) => ({
+    path: `/v1/projects/FW/milestones/${await plantMilestone(fx)}`,
+    body: { name: 'Moved gate' },
+  }),
+  'DELETE projects/:ref/milestones/:milestone': async (fx) => ({
+    path: `/v1/projects/FW/milestones/${await plantMilestone(fx)}`,
+  }),
+  'GET teams': () => ({ path: '/v1/teams' }),
+  'GET teams/:ref': (fx) => ({ path: `/v1/teams/${fx.f.team.id}` }),
+  'POST teams': () => ({ path: '/v1/teams', body: { name: 'Token team' } }),
+  'PATCH teams/:ref': (fx) => ({ path: `/v1/teams/${fx.f.team.id}`, body: { name: 'Hardware' } }),
+  'PUT teams/:ref/members/:user': (fx) => ({
+    path: `/v1/teams/${fx.f.team.id}/members/${fx.f.viewer.id}`,
+  }),
+  'DELETE teams/:ref/members/:user': (fx) => ({
+    path: `/v1/teams/${fx.f.team.id}/members/${fx.f.viewer.id}`,
+  }),
 }
 
 const label = (route: { method: string; path: string }) => `${route.method} ${route.path}`
@@ -304,7 +356,13 @@ type Outcome = 'ok' | { status: number; error: string }
  * neither may set someone's plannable hours or edit a label (organization
  * admins only), and a Viewer person may not add a label either. Neither
  * wrote the comment the comment routes name, nor leads its project. Both
- * manage their own inbox and follows, as a Viewer person does in the app. */
+ * manage their own inbox and follows, as a Viewer person does in the app.
+ * Neither leads FW, and only a person who leads a project changes its
+ * access. The agent creates a top-level project like any standard user under
+ * the default setting, which a Viewer never may; a milestone needs User on
+ * the top-level project, which the agent holds. Only organization admins
+ * create teams, neither leads Hardware, and only a person changes its
+ * members. */
 const refusedWrite = (
   route: { method: string; path: string },
   kind: 'viewer' | 'agent',
@@ -318,6 +376,31 @@ const refusedWrite = (
   if (route.path === 'labels/:ref') return { status: 403, error: LABEL_ADMINS }
   if (route.path === 'labels' && kind === 'viewer') {
     return { status: 403, error: 'no label access in this organization' }
+  }
+  if (route.path === 'projects' && kind === 'viewer') {
+    return { status: 403, error: 'only org admins and standard users can create projects' }
+  }
+  if (route.path === 'projects/:ref') {
+    return { status: 403, error: 'requires lead access to this project' }
+  }
+  if (route.path.startsWith('projects/:ref/access/')) {
+    return kind === 'viewer'
+      ? { status: 403, error: 'no permission to manage users on this project' }
+      : { status: 403, error: 'only people can change who has access, not agents' }
+  }
+  if (route.path.startsWith('projects/:ref/milestones') && kind === 'viewer') {
+    return { status: 403, error: 'no write access to this project' }
+  }
+  if (route.path === 'teams') {
+    return { status: 403, error: 'only organization admins can create teams' }
+  }
+  if (route.path === 'teams/:ref') {
+    return { status: 403, error: 'requires an organization admin or a leader of this team' }
+  }
+  if (route.path === 'teams/:ref/members/:user') {
+    return kind === 'viewer'
+      ? { status: 403, error: 'requires an organization admin or a leader of this team' }
+      : { status: 403, error: 'only people can change who has access, not agents' }
   }
   return kind === 'viewer' ? { status: 403, error: PERSON_NO_WRITE } : 'ok'
 }
