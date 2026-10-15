@@ -5,7 +5,8 @@
  * (machine/registry.ts) that machine/mcp.ts TOOLS and machine/rest.ts ROUTES
  * spread in, so tools/list, the OAuth step-up and REST routing treat them
  * like the rest. This module imports only types from those two, so neither
- * is loaded through it.
+ * is loaded through it. The body parser and MCP text it shares with them
+ * come from machine/shared.ts.
  *
  * Each action is one shared model function the app runs too
  * (model/comments.ts editComment and deleteComment, model/messages.ts
@@ -67,6 +68,7 @@ import {
 } from '../model/messages'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
+import { needJson, pretty } from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -75,27 +77,11 @@ type RestRoute = (typeof ROUTES)[number]
  * Only its type is imported, so this module does not load rest.ts. */
 const route: typeof restRoute = (declared) => declared
 
-/* MCP's result text: 2-space pretty JSON, stringified inside the internal
- * function so the projection's key order is the wire's. */
-const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
-
 /* MCP's uniform not-found sentences. */
 const mcpTaskMissing = (ref: string): ConvexError<Refusal> =>
   notFound(`task "${ref}" not found (or not visible to you)`)
 const mcpCommentMissing = (ref: string): ConvexError<Refusal> =>
   notFound(`comment "${ref}" not found (or not visible to you)`)
-
-/* A REST request body, parsed like machine/rest.ts needJson. */
-function jsonBody(raw: string): Record<string, unknown> {
-  let body: unknown = null
-  try {
-    body = JSON.parse(raw)
-  } catch {
-    body = null
-  }
-  if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
-  return body as Record<string, unknown>
-}
 
 /* --------------------------------------------------------------- comments */
 
@@ -506,7 +492,7 @@ export const restUpdateComment = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const found = await findComment(ctx, me, a.ref)
     if (found === null) throw notFound('comment not found')
-    const b = jsonBody(a.body)
+    const b = needJson(a.body)
     if (typeof b.body !== 'string') throw badRequest('body must be a non-empty string')
     const now = new Date().toISOString()
     const { comment } = await editComment(ctx, { me, ...found, body: b.body, now })
@@ -560,7 +546,7 @@ async function restChangeInbox(
   action: InboxAction,
 ): Promise<InboxChangeJson> {
   const me = await asMachineCaller(ctx, a.callerId, a.access)
-  const req = inboxRequest(action, jsonBody(a.body))
+  const req = inboxRequest(action, needJson(a.body))
   return await changeInbox(ctx, me, action, req, () =>
     badRequest('tasks must name tasks by key, number or uuid'),
   )
