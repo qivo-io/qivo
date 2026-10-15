@@ -101,6 +101,8 @@ export async function wakeSnoozedItem(
         : { snoozed_until: undefined, read_at: undefined, woke_at: now },
     )
   }
+  // read rows now, so keep the item to its newest one like a mark read does
+  if (archived) await pruneReadMessages(ctx, a)
   return true
 }
 

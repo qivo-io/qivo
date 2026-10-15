@@ -246,14 +246,23 @@ describe('archiving a task', () => {
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
     const until = '2026-01-05T00:00:00.000Z'
+    // snoozed before the archive step reached it: unread rows and one read
+    const base = { org_id: f.org.id, recipient_id: f.admin.id, issue_id: task.id }
     await plantMessage(t, {
-      org_id: f.org.id,
-      recipient_id: f.admin.id,
-      issue_id: task.id,
-      detail: 'snoozed',
+      ...base,
+      detail: 'older',
+      created_at: '2026-01-01T00:00:00.000Z',
       read_at: '2026-01-02T00:00:00.000Z',
       snoozed_until: until,
     })
+    for (const n of [2, 3]) {
+      await plantMessage(t, {
+        ...base,
+        detail: `unread ${n}`,
+        created_at: `2026-01-0${n}T00:00:00.000Z`,
+        snoozed_until: until,
+      })
+    }
 
     await t.mutation(internal.messages.wake, {
       recipient_id: f.admin.id,
@@ -261,10 +270,12 @@ describe('archiving a task', () => {
       until,
     })
 
-    const [row] = await messagesFor(t, f.admin.id, task.id)
-    expect(row.read_at).toBe('2026-01-02T00:00:00.000Z')
-    expect(row.snoozed_until).toBeUndefined()
-    expect(row.woke_at).toBeUndefined()
+    // read and pruned to the newest, like a mark read; no snooze, no wake
+    const rows = await messagesFor(t, f.admin.id, task.id)
+    expect(rows.map((row) => row.detail)).toEqual(['unread 3'])
+    expect(rows[0].read_at).toBeDefined()
+    expect(rows[0].snoozed_until).toBeUndefined()
+    expect(rows[0].woke_at).toBeUndefined()
   })
 })
 
