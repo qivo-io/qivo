@@ -296,10 +296,11 @@ type UpdateInput = Pick<
 > & { archived?: boolean }
 
 /**
- * Applies an update in one transaction: a restore first, so the rest lands
- * on an active project, then the fields and lead (updateProjectCore), then an
- * archive. Each step keeps its own rule and activity row. Returns the project
- * as stored.
+ * Applies an update in one transaction. The restore or archive runs first,
+ * while the caller still holds the Lead access that a lead handover in the
+ * same update gives away, so a restore also lets the rest land on an active
+ * project. The fields and the lead follow (updateProjectCore). Each step keeps
+ * its own rule and activity row. Returns the project as stored.
  */
 async function applyUpdate(
   ctx: MutationCtx,
@@ -310,18 +311,15 @@ async function applyUpdate(
 ): Promise<Doc<'projects'>> {
   const now = new Date().toISOString()
   const { archived, ...patch } = input
-  const reload = async (p: Doc<'projects'>) => (await ctx.db.get(p._id)) ?? p
   let current = project
-  if (archived === false) {
-    await unarchiveProjectCore(ctx, { me, project: current, now, provenance })
-    current = await reload(current)
+  if (archived !== undefined) {
+    const step = { me, project: current, now, provenance }
+    if (archived) await archiveProjectCore(ctx, step)
+    else await unarchiveProjectCore(ctx, step)
+    current = (await ctx.db.get(current._id)) ?? current
   }
   if (Object.keys(patch).length > 0) {
     current = await updateProjectCore(ctx, { me, project: current, patch, now, provenance })
-  }
-  if (archived === true) {
-    await archiveProjectCore(ctx, { me, project: current, now, provenance })
-    current = await reload(current)
   }
   return current
 }
@@ -583,6 +581,8 @@ async function restProject(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<
   return project
 }
 
+const PARENT_AT_CREATION = "a project's parent is set when it is created, with parent"
+
 /* Fields a project body may not write, each refused with where to go
  * instead rather than ignored. */
 function refuseProjectFields(b: Record<string, unknown>): void {
@@ -590,9 +590,7 @@ function refuseProjectFields(b: Record<string, unknown>): void {
     throw badRequest('give access one user or team at a time, under /v1/projects/{ref}/access')
   }
   if ('key' in b) throw badRequest("a project's key comes from its name and cannot be written")
-  if ('parent_id' in b || 'type' in b) {
-    throw badRequest("a project's parent is set when it is created, with parent")
-  }
+  if ('parent_id' in b || 'type' in b) throw badRequest(PARENT_AT_CREATION)
 }
 
 /* A REST body's lead_id: a profile uuid in the organization, lowercased. */
@@ -684,6 +682,8 @@ export const restUpdateProject = internalMutation({
     const project = await restProject(ctx, me, a.ref)
     const b = jsonBody(a.body)
     refuseProjectFields(b)
+    // POST takes `parent`; a project keeps the parent it was created with
+    if ('parent' in b) throw badRequest(PARENT_AT_CREATION)
     const input: UpdateInput = {}
     if ('name' in b) {
       if (typeof b.name !== 'string') throw badRequest('name must be a string')

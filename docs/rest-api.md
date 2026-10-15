@@ -403,8 +403,9 @@ organization admins have.
 - `archived: true` archives the project, and a top-level project's active
   sub-projects with it; `archived: false` restores it, with the sub-projects
   archived along with it, and a sub-project's archived parent too (which
-  needs Lead on the parent). One request may restore and rename: Qivo restores
-  first, then changes the fields, and archives last.
+  needs Lead on the parent). Qivo archives or restores before it changes the
+  other fields, so one request may restore and rename, or archive and hand
+  over the lead.
 - `lead_id` hands over the lead. Only a person may do it; an agent is refused
   with `only people can change who has access, not agents`. The outgoing lead
   keeps User access, and the new lead's own grant goes, because the lead role

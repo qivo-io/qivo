@@ -384,6 +384,13 @@ describe('changing a project', () => {
       'bad_request',
       "a project's parent is set when it is created, with parent",
     )
+    // `parent` is create's field; on a change it is refused, never dropped
+    await refused(
+      patch(fx.user, { parent: 'SKNK', name: 'Moved' }),
+      'bad_request',
+      "a project's parent is set when it is created, with parent",
+    )
+    expect((await projectRow(fx.t, fx.meta.id))?.name).toBe('Testbed')
     expect((await patch(fx.user, { review_hours: null })).review_hours).toBeNull()
   })
 
@@ -449,6 +456,33 @@ describe('changing a project', () => {
     })
     expect(grantsAfterHandover({ a: 'viewer', b: 'viewer' }, 'a', 'b')).toEqual({ a: 'user' })
     expect(grantsAfterHandover({ a: 'viewer' }, 'a', 'a')).toEqual({ a: 'viewer' })
+  })
+
+  it('a lead who is not an admin archives and hands over the lead in one call', async () => {
+    const fx = await setup()
+    const out = await parsed(
+      fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+        ...as_(fx.user),
+        project: 'TBED',
+        lead_id: fx.pia.id,
+        archived: true,
+      }),
+    )
+    expect(out).toMatchObject({ lead_id: fx.pia.id })
+    expect(out.archived_at).not.toBeNull()
+    expect((await grants(fx.t, fx.meta.id))[fx.user.id]).toBe('user')
+    const verbs = (await activityFor(fx.t, fx.org.id)).slice(-2).map((e) => e.verb)
+    expect(verbs).toEqual(['archived', 'changed the lead of'])
+    // the outgoing lead holds User now, so restoring is no longer theirs
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+        ...as_(fx.user),
+        project: 'TBED',
+        archived: false,
+      }),
+      'forbidden',
+      'requires lead access to this project',
+    )
   })
 
   it('only a person may hand over the lead', async () => {

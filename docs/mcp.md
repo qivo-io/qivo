@@ -777,9 +777,10 @@ gets User access to it, as in the app. The tool takes no grants; add them
 with `set_project_access`.
 
 **Changing.** `update_project` needs Lead access. In one call it restores
-first (`archived: false`), then applies the fields and the lead, and archives
-last (`archived: true`); archiving a top-level project carries its active
-sub-projects, and restoring brings back the ones archived with it. A lead
+(`archived: false`) or archives (`archived: true`) first, then applies the
+fields and the lead, so a lead can archive a project and hand it over
+together. Archiving a top-level project carries its active sub-projects, and
+restoring brings back the ones archived with it. A lead
 handover keeps the outgoing lead as User and drops the new lead's own grant,
 and only a person may make one.
 
