@@ -32,6 +32,7 @@ import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/p
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
 import { logActivity, signedDetail } from './activity'
+import { scheduleArchivedReads } from './messages'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
 
 /** Preserve the supplied text; null/omitted create values mean no description. */
@@ -612,8 +613,10 @@ async function writeGrants(
  * (0106:86-91): a meta stamps its active subs with the parent's OWN instant,
  * which is the only record of "these came along" and what restoring reads.
  * Existing tasks are untouched; the snapshot stops shipping them because its
- * section filters on project.archived_at. Already archived is a silent no-op.
- * Returns whether it archived anything.
+ * section filters on project.archived_at. Their inbox messages are marked
+ * read for every recipient in the background (model/messages.ts
+ * scheduleArchivedReads). Already archived is a silent no-op. Returns
+ * whether it archived anything.
  */
 export async function archiveProjectCore(
   ctx: MutationCtx,
@@ -622,7 +625,7 @@ export async function archiveProjectCore(
   const { me, project, now } = a
   await assertLead(ctx, me, project.id)
   if (project.archived_at !== undefined) return false
-  let carried = 0
+  const archived = [project.id]
   if (project.type === 'meta') {
     const subs = await ctx.db
       .query('projects')
@@ -631,11 +634,13 @@ export async function archiveProjectCore(
     for (const s of subs) {
       if (s.archived_at === undefined) {
         await ctx.db.patch(s._id, { archived_at: now })
-        carried += 1
+        archived.push(s.id)
       }
     }
   }
+  const carried = archived.length - 1
   await ctx.db.patch(project._id, { archived_at: now })
+  await scheduleArchivedReads(ctx, { projects: archived })
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,

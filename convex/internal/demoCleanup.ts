@@ -105,7 +105,7 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       !(await drain(ctx, budget, (n) =>
         ctx.db
           .query('messages')
-          .withIndex('by_issue', (q) => q.eq('issue_id', id))
+          .withIndex('by_issue_read', (q) => q.eq('issue_id', id))
           .take(n),
       ))
     )

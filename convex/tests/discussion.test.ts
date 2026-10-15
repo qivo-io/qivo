@@ -572,10 +572,18 @@ describe('reading the inbox', () => {
     }
     await as(fx.t, fx.user).mutation(api.issues.archive, { org_id: fx.org.id, id: archived.id })
     await as(fx.t, fx.admin).mutation(api.projects.archive, { org_id: fx.org.id, id: fx.sub2.id })
-    // the admin holds messages about all three, the Archived notice included
-    expect((await messagesFor(fx.t, fx.admin.id, archived.id)).map((m) => m.detail)).toContain(
-      'Archived',
-    )
+    // the background steps that mark the hidden tasks' messages read
+    await fx.t.finishAllScheduledFunctions(() => {})
+    // the admin keeps messages about all three, read for the hidden two. The
+    // Archived notice arrived read and replaced the read priority change.
+    const held = async (task: Doc<'issues'>) =>
+      (await messagesFor(fx.t, fx.admin.id, task.id)).map((m) => [
+        m.detail,
+        m.read_at !== undefined,
+      ])
+    expect(await held(fx.task)).toEqual([['Priority: Medium → High', false]])
+    expect(await held(archived)).toEqual([['Archived', true]])
+    expect(await held(shelved)).toEqual([['Priority: Medium → High', true]])
     const listed = async () =>
       (await listMcp(fx, { include_snoozed: true }, fx.admin.id)).map((i) => i.task.id).sort()
     const inApp = async () => {
@@ -590,8 +598,10 @@ describe('reading the inbox', () => {
     })
     expect(rest.items.map((i) => i.task.id)).toEqual([fx.task.id])
     // a named change still reaches an archived task the caller can read
-    const read = await updateMcp(fx, { action: 'read', tasks: [key(archived)] }, fx.admin.id)
-    expect(read.tasks).toEqual([key(archived)])
+    for (const action of ['unread', 'read']) {
+      const changed = await updateMcp(fx, { action, tasks: [key(archived)] }, fx.admin.id)
+      expect(changed.tasks).toEqual([key(archived)])
+    }
     // a restore brings the item back on both, with its stored messages
     await as(fx.t, fx.user).mutation(api.issues.unarchive, { org_id: fx.org.id, id: archived.id })
     await as(fx.t, fx.admin).mutation(api.projects.unarchive, {

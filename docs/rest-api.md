@@ -1274,10 +1274,24 @@ POST /v1/inbox/snooze          { "tasks": ["QN-3"], "until": "2026-11-02T08:00:0
 items are listed only for active tasks the caller can read in active
 projects. Messages about a task it has lost access to, an archived task or a
 task in an archived project stay stored and come back when the access or the
-task does, so the `Archived` message itself is not listed. `messages` run
-oldest first; `kind` is `mention`, `comment` or `change`, and `detail` is
-the line the app shows. `latest_at` is the newest message's time, or the end
-of a snooze when that is later, and orders the list.
+task does, unless they were removed meanwhile. `messages` run oldest first;
+`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
+shows. `latest_at` is the newest message's time, or the end of a snooze when
+that is later, and orders the list.
+
+Archiving a task marks every message about it and the subtasks archived
+with it read, for every recipient, shortly after the archive. Archiving a
+project does the same for the tasks of the project and its sub-projects. A
+snoozed item loses its snooze. A snooze set on such an item later ends without making it unread. Messages that arrive while the task or its
+project is archived, including the `Archived` message, mentions and
+comments, are stored read. As with any read message, the nightly cleanup
+removes them after the recipient's retention period, and
+`POST /v1/inbox/remove` with `"all": true` removes them too. A restore
+brings back the items still stored, with their messages read. A restore
+that comes before the marking leaves the messages as they were. Other
+followers of a restored task also receive an unread `Restored` message,
+which replaces the item's read messages as any new message does. Deleting a
+task or a project deletes the messages about its tasks.
 
 One request lists up to 500 of the caller's unread messages (newest first)
 and up to 500 read ones (most recently read first). It looks at no more than
@@ -1309,10 +1323,11 @@ changes nothing. Name the items with `tasks`, or send `"all": true` instead:
   task also brings its item back.
 
 With `all`, repeat the call while `has_more` is `true`. Like the app's bulk
-actions, `all` also reaches messages about tasks the caller can no longer
-read, but `tasks` names only readable ones. Other bodies are `400`: neither
-or both of `tasks` and `all`, `all` with `unread` or `snooze`, `until` on
-another action, or `snooze` without `until`.
+actions, `all` also reaches messages about tasks that are not listed,
+archived ones and those the caller can no longer read, but `tasks` names
+only readable ones. Other bodies are `400`: neither or both of `tasks` and
+`all`, `all` with `unread` or `snooze`, `until` on another action, or
+`snooze` without `until`.
 
 The nightly cleanup removes an item's read messages after the caller's
 retention period, which a person sets in the app. An agent has no settings

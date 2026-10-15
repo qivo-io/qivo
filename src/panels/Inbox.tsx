@@ -333,8 +333,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const [, setNoteN] = useState(0) // re-render after a permission grant
   const [menu, setMenu] = useState(null as { x: number; y: number; id: string | null } | null) // right-click menu
   const [bulkAction, setBulkAction] = useState<'read' | 'remove' | null>(null)
-  const hasReadMessages = P.readMessageCount > 0
-  const hasUnreadMessages = P.unreadMessages > 0
+  // also true while the server's bounded read left rows unexamined, which
+  // these actions still reach (P.canMarkAllRead, P.canRemoveRead)
+  const hasReadMessages = P.canRemoveRead
+  const hasUnreadMessages = P.canMarkAllRead
   const runBulkAction = async (action: 'read' | 'remove') => {
     if (bulkAction || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
     setMenu(null)

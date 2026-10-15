@@ -212,6 +212,13 @@ const rows = {
 // Read notifications outside the snapshot's 500-row display window still
 // participate in Inbox cleanup. Loaded rows contribute their optimistic state.
 let hiddenReadMessages = 0
+// Whether the server's bounded inbox read left unread (read) rows that Mark
+// all as read (Remove all read) reaches undelivered (snapshot unreadTruncated,
+// readTruncated). Such rows may exist without any loaded row or count showing
+// them. Rows left that are all snoozed do not count, because neither action
+// touches a snoozed row.
+let unexaminedUnread = false
+let unexaminedRead = false
 
 /* issue uuid → projected-delay info, rebuilt with every snapshot */
 let delayMap = new Map<string, DelayInfo>()
@@ -259,9 +266,11 @@ let announcedMessages: Map<string, string | undefined> | null = null // id → w
 // the server time of the previous snapshot; older messages on a task that
 // newly enters the working set are history, not news
 let lastDeliveryAt: string | null = null
-/* A restore reintroduces the task's historical inbox rows. Keep those rows
-   from looking like new arrivals when the next snapshot admits the restored
-   task (and any ancestors restored with it). */
+/* A restore reintroduces the task's historical inbox rows. The server marks
+   an archived task's messages read in the background, so they usually come
+   back read, but a restore that beats that step brings them back unread.
+   Either way, keep them from looking like new arrivals when the next
+   snapshot admits the restored task (and any ancestors restored with it). */
 const pendingRestoreIssueIds = new Set<string>()
 /* An optimistic archive can finish before another write refuses. Keep its
    root here so that rollback from the stale server snapshot cannot briefly
@@ -1519,6 +1528,10 @@ function rebuild(now = new Date()) {
   P.readMessageCount =
     hiddenReadMessages +
     P.messages.filter((message) => message.read && message.snoozedUntil === null).length
+  // Mark all as read and Remove all read also reach rows the snapshot never
+  // examined, so they stay available while such rows may exist
+  P.canMarkAllRead = P.unreadMessages > 0 || unexaminedUnread
+  P.canRemoveRead = P.readMessageCount > 0 || unexaminedRead
 
   P.CURRENT_USER = CURRENT_USER
 
@@ -2145,6 +2158,9 @@ export const PLANNER = {
   messageGroups: [] as MessageGroupVM[],
   unreadMessages: 0, // own inbox (0074), folded per task (0088)
   readMessageCount: 0, // includes read notifications beyond the displayed snapshot
+  // whether the Inbox's Mark all as read and Remove all read have rows to act on
+  canMarkAllRead: false,
+  canRemoveRead: false,
   loaded: false,
 
   project: (id: string | null | undefined): ProjectVM | undefined =>
@@ -3866,13 +3882,14 @@ export const PLANNER = {
      snapshot cap and notifications in other organization seats. The server
      returns a fixed cutoff per seat, so new arrivals stay unread. */
   markAllMessagesRead: async (): Promise<void> => {
-    if (!PLANNER.unreadMessages) return
+    if (!PLANNER.canMarkAllRead) return
     const epoch = storeEpoch
     const orgs = [...myProfiles.keys()]
     const ids = PLANNER.messages
       .filter((message) => !message.read && message.snoozedUntil === null)
       .map((message) => message.id)
     markLoadedMessagesRead(ids, new Date().toISOString())
+    unexaminedUnread = false
     rebuild()
     emit()
     const operations = orgs.map(async (org) => {
@@ -3926,7 +3943,7 @@ export const PLANNER = {
      so unread arrivals and messages reopened on another device survive.
      Completion means all writes settled; run handles refusal/rollback. */
   deleteReadMessages: async (): Promise<void> => {
-    if (!PLANNER.readMessageCount) return
+    if (!PLANNER.canRemoveRead) return
     const epoch = storeEpoch
     const orgs = [...myProfiles.keys()]
     const ids = PLANNER.messages
@@ -3936,6 +3953,7 @@ export const PLANNER = {
       rows.messages.delete(id)
     })
     hiddenReadMessages = 0
+    unexaminedRead = false
     rebuild()
     emit()
     const operations = orgs.map(async (org) => {
@@ -5386,6 +5404,8 @@ export function disposeDemoStore() {
   }
   rows.billing = null
   hiddenReadMessages = 0
+  unexaminedUnread = false
+  unexaminedRead = false
   HOME_ORG = ''
   CURRENT_USER = ''
   myProfiles.clear()
@@ -5429,9 +5449,9 @@ function adopt(source: Snapshot) {
   const restoreDelivery = [...pendingRestoreIssueIds].some((id) => newlyVisibleIssueIds.has(id))
   if (restoreDelivery) {
     /* A child restore can also surface archived ancestors. Suppress every
-       task that entered with that delivery so historical unread messages do
-       not trigger desktop notifications. New messages on already-visible
-       tasks remain eligible for notification. */
+       task that entered with that delivery so historical messages that are
+       still unread do not trigger desktop notifications. New messages on
+       already-visible tasks remain eligible for notification. */
     const restoredIds = new Set(newlyVisibleIssueIds)
     if (announcedMessages !== null) {
       for (const message of snap.messages) {
@@ -5504,6 +5524,8 @@ function adopt(source: Snapshot) {
     (message) => message.read_at !== undefined && message.snoozed_until === undefined,
   ).length
   hiddenReadMessages = Math.max(0, (snap.readMessageCount ?? loadedReadCount) - loadedReadCount)
+  unexaminedUnread = snap.unreadTruncated === true
+  unexaminedRead = snap.readTruncated === true
   // ALWAYS after the messages section lands: the null-primed first call is
   // what keeps sign-in from replaying the stored inbox as OS notifications
   announceNewMessages()

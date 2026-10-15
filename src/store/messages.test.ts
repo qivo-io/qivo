@@ -73,6 +73,8 @@ function fixture(): Snapshot {
     attachments: [],
     orgLoad: [],
     readMessageCount: notifications.filter((notification) => notification.read).length,
+    unreadTruncated: false,
+    readTruncated: false,
     delivered_at: '2026-09-15T08:00:00.000Z',
     messages: notifications.map(({ seat, task, read }) => ({
       id: crypto.randomUUID(),
@@ -207,8 +209,36 @@ describe('bulk notification actions through the client store', () => {
   it.each(['empty', 'read only'])('does not mark notifications for an %s inbox', async (state) => {
     snap.messages = state === 'empty' ? [] : snap.messages.filter((message) => message.read_at)
     publish(structuredClone(snap))
+    expect(P.canMarkAllRead).toBe(false)
     await expect(P.markAllMessagesRead()).resolves.toBeUndefined()
     expect(requests).toEqual([])
+  })
+
+  it('keeps Mark all as read available while the server left unread rows unexamined', async () => {
+    // hidden rows used up the server's unread walk, so nothing unread is loaded
+    snap.messages = snap.messages.filter((message) => message.read_at)
+    snap.unreadTruncated = true
+    publish(structuredClone(snap))
+    expect(P.unreadMessages).toBe(0)
+    expect(P.canMarkAllRead).toBe(true)
+
+    const marking = P.markAllMessagesRead()
+    expect(P.canMarkAllRead).toBe(false)
+    expect(requests.map((request) => request.name)).toEqual([
+      'messages:markAllRead',
+      'messages:markAllRead',
+    ])
+    // a refused seat restores the server's view, flag included
+    requests[0].reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
+    expect(P.canMarkAllRead).toBe(true)
+    requests[1].resolve({ marked: 3, hasMore: false, before: 20 })
+    await marking
+
+    // once the walk reaches every row, the action has nothing left to do
+    snap.unreadTruncated = false
+    publish(structuredClone(snap))
+    expect(P.canMarkAllRead).toBe(false)
   })
 
   it('restores refused reads and keeps another seat’s completed reads from the latest snapshot', async () => {
@@ -346,12 +376,32 @@ describe('bulk notification actions through the client store', () => {
     snap.messages = state === 'empty' ? [] : snap.messages.filter((message) => !message.read_at)
     snap.readMessageCount = 0
     publish(structuredClone(snap))
+    expect(P.canRemoveRead).toBe(false)
     const before = structuredClone(P.messages)
 
     await expect(P.deleteReadMessages()).resolves.toBeUndefined()
 
     expect(requests).toEqual([])
     expect(P.messages).toEqual(before)
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it('keeps Remove all read available while the server left read rows unexamined', async () => {
+    snap.messages = snap.messages.filter((message) => !message.read_at)
+    snap.readMessageCount = 0
+    snap.readTruncated = true
+    publish(structuredClone(snap))
+    expect(P.readMessageCount).toBe(0)
+    expect(P.canRemoveRead).toBe(true)
+
+    const removal = P.deleteReadMessages()
+    expect(P.canRemoveRead).toBe(false)
+    expect(requests.map((request) => request.name)).toEqual([
+      'messages:removeRead',
+      'messages:removeRead',
+    ])
+    for (const request of requests) request.resolve({ removed: 0, hasMore: false })
+    await removal
     expect(showToast).not.toHaveBeenCalled()
   })
 

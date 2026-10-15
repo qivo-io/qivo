@@ -1146,11 +1146,23 @@ task, latest activity first:
 items are listed only for active tasks you can read in active projects.
 Messages about a task you lost access to, an archived task or a task in an
 archived project stay stored and come back when the access or the task does,
-so the `Archived` message itself is not listed. `messages` run oldest first,
-`kind` is `mention`, `comment` or `change`, and `detail` is the line the app
-shows. `latest_at` is the newest message's time, or the end of a snooze when
-that is later. Snoozed items are left out unless `include_snoozed` is `true`.
-An item keeps at most 50 unread messages. When more arrive, Qivo drops the
+unless they were removed meanwhile. Archiving a task marks every message
+about it and the subtasks archived with it read, for every recipient,
+shortly after the archive, and archiving a project does the same for its
+tasks. A snoozed item loses its snooze. A snooze set on such an item later ends without making it unread. Messages that arrive while the task
+or its project is archived, including the `Archived` message, mentions and
+comments, are stored read. As with any read message, the nightly cleanup
+removes them after the recipient's retention period, and `update_inbox`
+with `action: "remove"` and `all: true` removes them too. A restore brings
+back the items still stored, with their messages read. A restore that comes
+before the marking leaves the messages as they were. Other followers of a
+restored task also receive an unread `Restored` message, which replaces the
+item's read messages as any new message does. Deleting a task or a project
+deletes the messages about its tasks. `messages` run oldest first, `kind` is
+`mention`, `comment` or `change`, and `detail` is the line the app shows.
+`latest_at` is the newest message's time, or the end of a snooze when that
+is later. Snoozed items are left out unless `include_snoozed` is `true`. An
+item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
 message of each `kind`.
 
@@ -1182,11 +1194,12 @@ with `all: true` to every item:
 The result is `{ "action": "read", "tasks": ["QN-3"], "has_more": false }`,
 where `tasks` lists the items the call changed. With `all`, each call
 changes up to 256 messages; repeat it while `has_more` is `true`. Like the
-app's bulk actions, `all` also reaches messages about tasks you can no longer
-read, but the result names only tasks you can read. A task ref you cannot
-read refuses the whole call with `task "<ref>" not found (or not visible to
-you)`. Naming neither or both of `tasks` and `all`, `all` with `unread` or
-`snooze`, `until` on another action and `snooze` without `until` are refused.
+app's bulk actions, `all` also reaches messages about tasks that are not
+listed, archived ones and those you can no longer read, but the result names
+only tasks you can read. A task ref you cannot read refuses the whole call
+with `task "<ref>" not found (or not visible to you)`. Naming neither or
+both of `tasks` and `all`, `all` with `unread` or `snooze`, `until` on
+another action and `snooze` without `until` are refused.
 
 The nightly cleanup removes read messages after your retention period, which
 a person sets in the app. An agent has no settings page, so its read

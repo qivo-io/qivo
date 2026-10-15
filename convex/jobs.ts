@@ -28,7 +28,7 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
-import { wakeSnoozedItem } from './model/messages'
+import { scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
 import { messageRetentionDays } from './model/people'
 import { emitTaskEvent } from './model/taskEvents'
@@ -68,6 +68,13 @@ const archiveLegRef = makeFunctionReference<
  * taken per organization. When a backlog spans several legs, the tasks earlier
  * legs archived carry this run's stamp and still count as unarchived children.
  * No activity rows — the SQL wrote none.
+ *
+ * No inbox message either. The sweep never calls notifyIssueUpdate, so
+ * followers are not told. Keep it that way, because an Archived notice for
+ * every follower of every Done task would only add rows that arrive read.
+ * The leg schedules the background steps that mark the messages already
+ * stored about its tasks read (model/messages.ts scheduleArchivedReads), as
+ * every archive path does.
  *
  * `now` is the run's stamp and clock, shared by every leg. Returns how many
  * tasks this leg archived and whether due tasks remain in the organization. */
@@ -132,6 +139,7 @@ async function archiveOrgDoneIssues(
       now,
     })
   }
+  await scheduleArchivedReads(ctx, { issues: batch.map((i) => i.id) })
   return { archived: batch.length, more: candidates.length > batch.length }
 }
 

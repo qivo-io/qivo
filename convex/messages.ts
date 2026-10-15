@@ -14,7 +14,9 @@
  * statement trigger fired once per pair. markUnread prunes nothing.
  * markAllRead visits bounded batches beyond the snapshot cap, keeping the
  * first batch's server-selected cutoff. There is no boot
- * sweep_my_read_messages; the nightly sweep is phase 9's cron. */
+ * sweep_my_read_messages; the nightly sweep is phase 9's cron. The internal
+ * readArchivedTasks and readArchivedProject steps mark an archived task's
+ * messages read for every recipient. */
 
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
@@ -24,6 +26,8 @@ import {
   markMessagesRead,
   markMessagesUnread,
   ownMessages,
+  readArchivedProjectMessages,
+  readArchivedTaskMessages,
   removeMessages,
   removeReadMessages,
   snoozeMessages,
@@ -105,6 +109,33 @@ export const wake = internalMutation({
   args: { recipient_id: v.string(), issue_id: v.string(), until: v.string() },
   handler: async (ctx, a) => {
     await wakeSnoozedItem(ctx, a, new Date().toISOString())
+    return null
+  },
+})
+
+/* One background step that marks archived tasks' messages read for every
+ * recipient, scheduled by name from the archive paths and from itself
+ * (model/messages.ts scheduleArchivedReads). `batch` lowers the rows per
+ * step in tests. */
+export const readArchivedTasks = internalMutation({
+  args: { issues: v.array(v.string()), batch: v.optional(v.number()) },
+  handler: async (ctx, a) => {
+    await readArchivedTaskMessages(ctx, { ...a, now: new Date().toISOString() })
+    return null
+  },
+})
+
+/* The same for the active tasks of an archived project, one page per step
+ * from `cursor`, a pagination cursor. `tasks` lowers the page size in tests. */
+export const readArchivedProject = internalMutation({
+  args: {
+    project_id: v.string(),
+    cursor: v.optional(v.string()),
+    batch: v.optional(v.number()),
+    tasks: v.optional(v.number()),
+  },
+  handler: async (ctx, a) => {
+    await readArchivedProjectMessages(ctx, { ...a, now: new Date().toISOString() })
     return null
   },
 })

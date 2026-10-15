@@ -15,7 +15,7 @@ import { convexTest } from 'convex-test'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { INBOX_LIMIT } from '../lib/inbox'
+import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
 import schema from '../schema'
 import {
   as,
@@ -745,6 +745,9 @@ describe('messages', () => {
     const snap = await snapFor(f.user)
     expect(snap.messages.map((m) => m.id)).toEqual(ids)
     expect(snap.readMessageCount).toBe(1)
+    // both walks reached every row, so the bulk actions need no flag
+    expect(snap.unreadTruncated).toBe(false)
+    expect(snap.readTruncated).toBe(false)
   })
 
   it('answers over a backlog larger than one transaction may read; visible rows past the bound wait', async () => {
@@ -773,6 +776,10 @@ describe('messages', () => {
     expect(snap.messages).toEqual([])
     expect(snap.readMessageCount).toBe(0)
     expect(snap.issues.map((i) => i.id)).toContain(visibleTask.id)
+    // nothing visible was kept, but rows were left unexamined, so the app
+    // keeps Mark all as read and Remove all read available
+    expect(snap.unreadTruncated).toBe(true)
+    expect(snap.readTruncated).toBe(true)
   })
 
   it('lists read rows even while hidden rows leave unread ones unexamined, as the machine inbox does', async () => {
@@ -793,6 +800,8 @@ describe('messages', () => {
     // surface, so both show the task as read
     expect(snap.messages.map((m) => m.id)).toEqual([visible.read.id])
     expect(snap.readMessageCount).toBe(1)
+    expect(snap.unreadTruncated).toBe(true)
+    expect(snap.readTruncated).toBe(false)
     expect(await machineInbox(f.user)).toEqual({
       items: { [issueVis.id]: [visible.read.id] },
       truncated: true,
@@ -811,12 +820,100 @@ describe('messages', () => {
     snap = await snapFor(f.user)
     expect(snap.messages.map((m) => m.id)).toEqual([visible.unread.id, visible.read.id])
     expect(snap.readMessageCount).toBe(1)
+    expect(snap.unreadTruncated).toBe(false)
     // the machine inbox runs an item's messages oldest first, and these
     // share created_at, so their ids order them
     expect(await machineInbox(f.user)).toEqual({
       items: { [issueVis.id]: [visible.unread.id, visible.read.id].sort() },
       truncated: false,
     })
+  })
+
+  it('reads past a stopped walk for a row the bulk actions reach, passing at most `peek` snoozed rows', async () => {
+    const until = '2027-01-01T00:00:00.000Z'
+    const ids = await t.run(async (ctx) => {
+      const inserted = []
+      // oldest first, one row that is not snoozed and then three snoozed ones
+      for (const snoozed of [false, true, true, true]) {
+        const row = msg(f.user.id, NOW)
+        inserted.push(
+          await ctx.db.insert('messages', snoozed ? { ...row, snoozed_until: until } : row),
+        )
+      }
+      return inserted
+    })
+    // keeps one row, the newest, then reads on past the snoozed ones
+    const load = (peek?: number) => t.run((ctx) => loadInbox(ctx, f.user.id, () => true, 1, peek))
+
+    // two snoozed rows, then the oldest one, which Mark all as read reaches
+    expect(await load(3)).toMatchObject({ unreadTruncated: true, truncated: true })
+    await t.run((ctx) => ctx.db.patch(ids[0], { snoozed_until: until }))
+    // every row past the stop is snoozed, which neither action touches
+    expect(await load(3)).toMatchObject({
+      unreadTruncated: false,
+      readTruncated: false,
+      truncated: true,
+    })
+    // after two snoozed rows another follows, so it stops reading and counts
+    // one as possible
+    expect(await load(2)).toMatchObject({ unreadTruncated: true, truncated: true })
+    // without a peek the flag is the walk's truncation, as the machine inbox reads
+    expect(await load()).toMatchObject({ unreadTruncated: true, truncated: true })
+  })
+
+  it('does not flag a backlog past the bound when every row left is snoozed', async () => {
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const until = '2027-01-01T00:00:00.000Z'
+    const oldestId = await t.run(async (ctx) => {
+      // the oldest row, about a task the caller is not shown
+      const oldest = await ctx.db.insert('messages', {
+        ...msg(f.user.id, NOW, undefined, hiddenTask.id),
+        snoozed_until: until,
+      })
+      // more snoozed unread rows than one walk keeps
+      for (let i = 0; i < INBOX_LIMIT + 20; i++) {
+        await ctx.db.insert('messages', { ...msg(f.user.id, NOW), snoozed_until: until })
+      }
+      return oldest
+    })
+    let snap = await snapFor(f.user)
+    expect(snap.messages).toHaveLength(INBOX_LIMIT)
+    expect(snap.unreadTruncated).toBe(false)
+    // the machine inbox still reports rows it did not look at
+    expect((await machineInbox(f.user)).truncated).toBe(true)
+
+    // once that row is no longer snoozed, Mark all as read has it to reach
+    await t.run((ctx) => ctx.db.patch(oldestId, { snoozed_until: undefined }))
+    snap = await snapFor(f.user)
+    expect(snap.unreadTruncated).toBe(true)
+  })
+
+  it('flags unread rows of another seat that the shared cap drops behind snoozed ones', async () => {
+    const seat = await guestSeatOfUser()
+    const until = '2027-01-01T00:00:00.000Z'
+    const otherId = await t.run(async (ctx) => {
+      // older than every row of the first seat, so the cut drops it
+      const other = await ctx.db.insert('messages', {
+        ...msg(seat.profile.id, '2025-12-31T00:00:00.000Z', undefined, seat.task.id),
+        org_id: f.otherOrg.id,
+        snoozed_until: until,
+      })
+      // exactly as many as one walk keeps, so no walk stops early
+      for (let i = 0; i < INBOX_LIMIT; i++) {
+        await ctx.db.insert('messages', { ...msg(f.user.id, NOW), snoozed_until: until })
+      }
+      return other
+    })
+    let snap = await snapFor(f.user)
+    expect(snap.messages).toHaveLength(INBOX_LIMIT)
+    expect(snap.messages.every((m) => m.snoozed_until === until)).toBe(true)
+    expect(snap.unreadTruncated).toBe(false)
+
+    await t.run((ctx) => ctx.db.patch(otherId, { snoozed_until: undefined }))
+    snap = await snapFor(f.user)
+    // still cut, but now a row Mark all as read reaches
+    expect(snap.messages.map((m) => m.recipient_id)).not.toContain(seat.profile.id)
+    expect(snap.unreadTruncated).toBe(true)
   })
 
   it('keeps recent unread and read rows ahead of an old unread backlog about archived tasks', async () => {

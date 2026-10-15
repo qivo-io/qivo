@@ -12,8 +12,8 @@
  * limits (32,000 documents scanned, 16 MiB read) and fail the whole read,
  * which for the snapshot means the app cannot load at all. This read never
  * collects the recipient's rows. It walks two index ranges newest first and
- * stops at fixed bounds, so its cost depends on `limit`, never on the size
- * of the inbox. */
+ * stops at fixed bounds, so its cost depends on `limit` and `peek`, never on
+ * the size of the inbox. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -24,7 +24,9 @@ import type { QueryCtx } from '../_generated/server'
  * it, so the two surfaces select alike.
  *
  * Each walk examines at most 2 * INBOX_LIMIT rows plus one that shows it
- * stopped early, so one read fetches at most 2,002 messages. The machine
+ * stopped early, so one read fetches at most 2,002 messages. The snapshot
+ * also looks past a walk's stop at up to INBOX_LIMIT snoozed rows (loadInbox
+ * `peek`), so its read fetches at most 3,002. The machine
  * inbox reads a task for each new task id among the examined rows, so at
  * most 2,000 task lookups, plus a handful of access lookups per distinct
  * project, each project checked once. That stays well under Convex's 4,096
@@ -43,28 +45,48 @@ export type InboxLoad = {
   unread: Doc<'messages'>[]
   /** read rows about shown tasks, most recently read first */
   read: Doc<'messages'>[]
-  /** whether some of the recipient's rows were left unexamined */
+  /** whether the unread walk left unexamined rows that Mark all as read
+   * (markAllMessagesRead) reaches. That action skips snoozed rows, so this
+   * is false when every row left is snoozed, unless more than `peek` are. */
+  unreadTruncated: boolean
+  /** the same for the read walk and Remove all read (removeReadMessages),
+   * which skips snoozed rows too */
+  readTruncated: boolean
+  /** whether some of the recipient's rows were left unexamined (either walk),
+   * snoozed ones included */
   truncated: boolean
 }
 
 /* Keeps rows about shown tasks from `rows` until `limit` are kept, examining
  * at most `budget` of them, so rows about hidden or archived tasks cannot
  * make the walk unbounded. `truncated` is true when a row was left
- * unexamined; seeing that costs one extra row read. */
+ * unexamined; seeing that costs one extra row read. `actionable` narrows it
+ * to an unexamined row that is not snoozed, the kind the bulk actions
+ * reach. To tell, the walk reads on past up to `peek` snoozed rows. Once it
+ * has passed that many and another row follows, it reports one as possible
+ * without reading further. */
 async function keepShown(
   rows: AsyncIterable<Doc<'messages'>>,
   isShown: InboxShown,
   limit: number,
   budget: number,
-): Promise<{ kept: Doc<'messages'>[]; truncated: boolean }> {
+  peek: number,
+): Promise<{ kept: Doc<'messages'>[]; truncated: boolean; actionable: boolean }> {
   const kept: Doc<'messages'>[] = []
   let examined = 0
+  let snoozedPast = 0
   for await (const row of rows) {
-    if (kept.length >= limit || examined >= budget) return { kept, truncated: true }
-    examined += 1
-    if (await isShown(row.issue_id)) kept.push(row)
+    if (kept.length < limit && examined < budget) {
+      examined += 1
+      if (await isShown(row.issue_id)) kept.push(row)
+      continue
+    }
+    if (row.snoozed_until === undefined || snoozedPast >= peek) {
+      return { kept, truncated: true, actionable: true }
+    }
+    snoozedPast += 1
   }
-  return { kept, truncated: false }
+  return { kept, truncated: snoozedPast > 0, actionable: false }
 }
 
 /**
@@ -82,16 +104,25 @@ async function keepShown(
  * is the accepted cost of the bound.
  *
  * The walks are bounded separately, so a backlog in one never hides the
- * other. A person with a thousand old unread rows about archived tasks
- * still gets their recent read rows. The cost is that a read row can come
- * back while an older unread row about the same task was not reached, and
- * then both surfaces show that task as read, alike.
+ * other. A person with a thousand old unread rows about tasks they lost
+ * access to still gets their recent read rows. Archiving a task marks its
+ * rows read (model/messages.ts), so those count toward the read walk. The
+ * cost is that a read row can come back while an older unread row about the
+ * same task was not reached, and then both surfaces show that task as read,
+ * alike.
+ *
+ * `peek` (0 by default) is how many snoozed rows a walk that stopped early
+ * reads past its stop, looking for one the bulk actions reach, which decides
+ * unreadTruncated and readTruncated. The snapshot passes INBOX_LIMIT, so a
+ * backlog of snoozed rows alone does not keep those actions available. With
+ * 0 they equal each walk's truncation, at no extra read.
  */
 export async function loadInbox(
   ctx: QueryCtx,
   recipientId: string,
   isShown: InboxShown,
   limit: number,
+  peek = 0,
 ): Promise<InboxLoad> {
   const unread = await keepShown(
     ctx.db
@@ -103,6 +134,7 @@ export async function loadInbox(
     isShown,
     limit,
     2 * limit,
+    peek,
   )
   const read = await keepShown(
     ctx.db
@@ -114,10 +146,13 @@ export async function loadInbox(
     isShown,
     limit,
     2 * limit,
+    peek,
   )
   return {
     unread: unread.kept,
     read: read.kept,
+    unreadTruncated: unread.actionable,
+    readTruncated: read.actionable,
     truncated: unread.truncated || read.truncated,
   }
 }

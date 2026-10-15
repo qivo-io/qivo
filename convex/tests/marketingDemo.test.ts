@@ -591,20 +591,37 @@ describe('marketing demo rebuild ownership', () => {
       }
       // A reply reaches the followers above and authors who have already joined
       // the dated conversation, never its own author or a later participant.
+      // Messages about an archived task arrive read, so the prune keeps one
+      // per participant; the exact list covers the active tasks.
+      const archived = new Set(tasks.filter((task) => task.archived_at).map((task) => task.id))
+      const archivedItems = new Set<string>()
       for (const comment of comments.toSorted((a, b) => a.created_at.localeCompare(b.created_at))) {
         if (comment.author === undefined) throw new Error('Seeded comment is missing its author')
         const participants = expectedRecipients.get(comment.issue_id)!
         participants.add(comment.author)
         for (const participant of participants) {
-          if (participant !== comment.author)
+          if (participant === comment.author) continue
+          if (archived.has(comment.issue_id)) {
+            archivedItems.add(JSON.stringify([comment.issue_id, participant]))
+          } else {
             expectedMessages.push(
               JSON.stringify([comment.issue_id, comment.author, participant, comment.created_at]),
             )
+          }
         }
+      }
+      expect(archivedItems.size).toBeGreaterThan(0)
+      for (const key of archivedItems) {
+        const [issueId, recipientId] = JSON.parse(key) as [string, string]
+        const item = messages.filter(
+          (message) => message.issue_id === issueId && message.recipient_id === recipientId,
+        )
+        expect(item, key).toHaveLength(1)
+        expect(item[0].read_at, key).toBeDefined()
       }
       expect(
         messages
-          .filter((message) => message.kind === 'comment')
+          .filter((message) => message.kind === 'comment' && !archived.has(message.issue_id))
           .map((message) =>
             JSON.stringify([
               message.issue_id,
@@ -918,7 +935,19 @@ describe('marketing demo rebuild ownership', () => {
           table,
         ).toBe(false)
       }
-      expect(after.messages.every((message) => message.read_at === undefined)).toBe(true)
+      // the reset restores the seed's read state, where only messages about
+      // archived tasks are read, because they arrive read
+      const archivedTasks = new Set(
+        (await t.run(async (ctx) => ctx.db.query('issues').collect()))
+          .filter((issue) => issue.archived_at)
+          .map((issue) => issue.id),
+      )
+      expect(archivedTasks.size).toBeGreaterThan(0)
+      for (const message of after.messages) {
+        expect(message.read_at !== undefined, message.detail).toBe(
+          archivedTasks.has(message.issue_id),
+        )
+      }
       const conversation = (rows: Doc<'comments'>[]) =>
         rows
           .map((comment) => ({
