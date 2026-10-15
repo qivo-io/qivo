@@ -53,7 +53,8 @@ import {
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
-import { aboutShownTasks, inWorkingSet, type Shown } from '../lib/workingSet'
+import { loadInbox } from '../lib/inbox'
+import { inWorkingSet } from '../lib/workingSet'
 import { deleteComment, editComment } from '../model/comments'
 import {
   followTask,
@@ -136,44 +137,64 @@ type InboxPageJson = { items: InboxItemJson[]; truncated: boolean }
 const newerThan = (a: Doc<'messages'>, b: Doc<'messages'>): boolean =>
   a.created_at > b.created_at || (a.created_at === b.created_at && a.id > b.id)
 
-/* The most messages one inbox read folds, newest first, so a backlog that
- * nobody clears cannot push the read past Convex's transaction limits. */
+/* The most messages one inbox read folds, unread ones first (lib/inbox.ts
+ * loadInbox), so a backlog that nobody clears cannot push the read past
+ * Convex's transaction limits. */
 export const INBOX_SCAN = 1000
 
 /**
- * The Shown of the inbox over these tasks: the ones in the caller's working
- * set (lib/workingSet.ts inWorkingSet), which are its organization's active
- * tasks in active projects it can see, as the app's snapshot shows them.
+ * The inbox's Shown for the caller, asked one task id at a time while
+ * lib/inbox.ts reads the inbox. A task is shown when it is in the caller's
+ * working set (lib/workingSet.ts inWorkingSet), which holds its
+ * organization's active tasks in active projects it can see, as the app's
+ * snapshot shows them. Each task and project is read once, and `tasks`
+ * keeps the shown tasks for the fold.
  */
-async function inboxShown(
+function inboxShown(
   ctx: QueryCtx,
   me: Caller,
-  tasks: Iterable<Doc<'issues'>>,
-): Promise<Shown> {
+): { shown: (taskId: string) => Promise<boolean>; tasks: Map<string, Doc<'issues'>> } {
   const sight = new Map<string, Promise<{ project?: Doc<'projects'>; visible: boolean }>>()
-  const ids = new Set<string>()
-  for (const task of tasks) {
-    if (task.org_id !== me.org_id || task.archived_at !== undefined) continue
-    let seen = sight.get(task.project_id)
+  const answers = new Map<string, Promise<boolean>>()
+  const tasks = new Map<string, Doc<'issues'>>()
+  const projectSight = (projectId: string) => {
+    let seen = sight.get(projectId)
     if (seen === undefined) {
-      seen = byId(ctx, 'projects', task.project_id).then(async (p) =>
+      seen = byId(ctx, 'projects', projectId).then(async (p) =>
         p === null ? { visible: false } : { project: p, visible: await canSeeProject(ctx, me, p) },
       )
-      sight.set(task.project_id, seen)
+      sight.set(projectId, seen)
     }
-    const { project, visible } = await seen
-    if (inWorkingSet(task, project, visible)) ids.add(task.id)
+    return seen
   }
-  return (taskId) => ids.has(taskId)
+  const shown = (taskId: string): Promise<boolean> => {
+    let answer = answers.get(taskId)
+    if (answer === undefined) {
+      answer = byId(ctx, 'issues', taskId).then(async (task) => {
+        if (task === null || task.org_id !== me.org_id || task.archived_at !== undefined) {
+          return false
+        }
+        const { project, visible } = await projectSight(task.project_id)
+        if (!inWorkingSet(task, project, visible)) return false
+        tasks.set(task.id, task)
+        return true
+      })
+      answers.set(taskId, answer)
+    }
+    return answer
+  }
+  return { shown, tasks }
 }
 
 /**
  * The caller's inbox items, the latest activity first, as the app folds its
  * messages into items (src/store/viewModels.ts shapeMessageGroup). Like the
  * app, it lists only tasks in the caller's working set (inboxShown). Rows
- * about other tasks stay stored and come back if the task does. It folds
- * the newest INBOX_SCAN messages only and says `truncated` when there were
- * more. Older items are then missing, and the oldest listed may lack older
+ * about other tasks stay stored and come back if the task does. It folds at
+ * most INBOX_SCAN messages, chosen like the app's (lib/inbox.ts loadInbox),
+ * unread ones newest first, then read ones most recently read first. It
+ * says `truncated` when some messages were not read. Items whose messages
+ * were not read are then missing, and an item listed may lack older
  * messages. A snoozed item is left out unless `includeSnoozed`, and
  * `unreadOnly` keeps items with an unread message.
  */
@@ -182,20 +203,10 @@ async function inboxItems(
   me: Caller,
   o: { unreadOnly: boolean; includeSnoozed: boolean; limit: number; offset: number },
 ): Promise<InboxPageJson> {
-  const scanned = await ctx.db
-    .query('messages')
-    .withIndex('by_recipient', (q) => q.eq('recipient_id', me.id))
-    .order('desc')
-    .take(INBOX_SCAN + 1)
-  const rows = scanned.slice(0, INBOX_SCAN)
-  const tasks = new Map<string, Doc<'issues'>>()
-  for (const id of new Set(rows.map((row) => row.issue_id))) {
-    const task = await byId(ctx, 'issues', id)
-    if (task !== null) tasks.set(id, task)
-  }
-  const shown = await inboxShown(ctx, me, tasks.values())
+  const { shown, tasks } = inboxShown(ctx, me)
+  const inbox = await loadInbox(ctx, me.id, shown, INBOX_SCAN, { shared: true })
   const byTask = new Map<string, Doc<'messages'>[]>()
-  for (const row of aboutShownTasks(rows, shown)) {
+  for (const row of [...inbox.unread, ...inbox.read]) {
     const list = byTask.get(row.issue_id)
     if (list === undefined) byTask.set(row.issue_id, [row])
     else list.push(row)
@@ -239,10 +250,7 @@ async function inboxItems(
         ? 1
         : -1,
   )
-  return {
-    items: items.slice(o.offset, o.offset + o.limit),
-    truncated: scanned.length > INBOX_SCAN,
-  }
+  return { items: items.slice(o.offset, o.offset + o.limit), truncated: inbox.truncated }
 }
 
 /** What an inbox change does to the items it names. */
@@ -668,7 +676,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'list_inbox',
       title: 'List inbox',
-      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. \`truncated: true\` means only your newest ${INBOX_SCAN} messages were read; mark items read to shrink the inbox.`,
+      description: `Your inbox as the app shows it: \`items\`, one per active task you can read, with its unread count and messages (oldest first), latest activity first. \`unread_only\` keeps items with unread messages. Snoozed items are left out unless \`include_snoozed\`. \`limit\` (50 by default) and \`offset\` page through the items. One call reads up to ${INBOX_SCAN} of your messages, unread ones first (newest first), then read ones (most recently read first); \`truncated: true\` means more were not read. Mark items read to shrink the inbox.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

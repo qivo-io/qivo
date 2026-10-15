@@ -1,6 +1,6 @@
 /* The inbox: subscriptions, the single message insert path, the pair-item
- * prune, the snooze wake, mention extraction and the notify fan-outs:
- * postMessage, pruneReadMessages, wakeSnoozedItem, subscribeToIssue,
+ * prune and unread cap, the snooze wake, mention extraction and the notify
+ * fan-outs: postMessage, pruneReadMessages, wakeSnoozedItem, subscribeToIssue,
  * extractMentions, notifyIssueInsert, notifyIssueUpdate, notifyCommentInsert
  * and notifyCommentUpdate. Also one's own follows (followTask, unfollowTask,
  * followersOf) and inbox writes (mark read or unread, remove, snooze), which
@@ -54,7 +54,8 @@ const fmtDayMon = (iso: string): string => {
  * Math.round (half toward +∞) matches. */
 const fmtHours = (n: number): string => String(Math.round(n))
 
-/* Every message of one inbox item — the (recipient, issue) pair. */
+/* Every message of one inbox item, the (recipient, issue) pair. The item
+ * cap (ITEM_UNREAD_CAP) keeps this read small. */
 const pairRows = (
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },
@@ -88,6 +89,12 @@ export async function wakeSnoozedItem(
   return rows.length > 0
 }
 
+/* Oldest first by (created_at, id), the total order the prune uses too. */
+function oldestFirst(a: Doc<'messages'>, b: Doc<'messages'>): number {
+  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1
+  return a.id === b.id ? 0 : a.id < b.id ? -1 : 1
+}
+
 /* ------------------------------------------------------------------- prune
  * 0109's invariant, kept at both ends (postMessage and messages.markRead):
  * "an item holds every UNREAD message it has been sent, plus its newest
@@ -95,7 +102,8 @@ export async function wakeSnoozedItem(
  * (recipient, issue) pair except the pair's newest message, read or not.
  * Newest = max by (created_at desc, id desc) — raw string compare, the same
  * total order as the client's isNewer mirror (planner.ts), so client and
- * server keep the same survivor. */
+ * server keep the same survivor. The one exception to "every UNREAD
+ * message" is the item cap below (trimUnreadMessages). */
 export async function pruneReadMessages(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },
@@ -114,6 +122,45 @@ export async function pruneReadMessages(
   }
   for (const r of rows) {
     if (r._id !== newest._id && r.read_at !== undefined) await ctx.db.delete(r._id)
+  }
+}
+
+/* -------------------------------------------------------------- item cap
+ * The most UNREAD messages one inbox item keeps. Every pair-level operation
+ * reads the whole item: pairRows in postMessage (on every comment and
+ * change to the task), snooze, wake, the prune after mark read and the
+ * machine inbox's item actions (itemMessages). Without a cap, a follower or
+ * an agent that never reads its inbox would grow one item on a busy task
+ * without limit, until each new comment or change to that task read more
+ * than one transaction allows and failed for everybody, and snoozing or
+ * marking the item read failed too. Only arrivals add rows, and the prune
+ * keeps at most one read row, so from its next arrival on an item holds at
+ * most ITEM_UNREAD_CAP + 1 rows. */
+export const ITEM_UNREAD_CAP = 50
+
+/* Collapses an oversized item. When `rows` (the whole item, as postMessage
+ * read it after its insert) holds more than ITEM_UNREAD_CAP unread rows, it
+ * deletes the oldest unread rows, by (created_at, id) like the prune, until
+ * the item holds the cap. It never deletes the item's oldest unread row,
+ * which marks where the unread run starts (src/lib/spine.ts firstUnreadTs
+ * puts the New divider there), nor the newest unread row of each kind, so
+ * the Inbox kind filter still finds the item. This is separate from
+ * retention, and the nightly sweep still never deletes an unread row. */
+async function trimUnreadMessages(
+  ctx: MutationCtx,
+  rows: readonly Doc<'messages'>[],
+): Promise<void> {
+  const unread = rows.filter((r) => r.read_at === undefined).sort(oldestFirst)
+  let excess = unread.length - ITEM_UNREAD_CAP
+  if (excess <= 0) return
+  const newestOfKind = new Map<MessageKind, Doc<'messages'>>()
+  for (const r of unread) newestOfKind.set(r.kind, r)
+  const kept = new Set([unread[0]._id, ...[...newestOfKind.values()].map((r) => r._id)])
+  for (const r of unread) {
+    if (excess === 0) break
+    if (kept.has(r._id)) continue
+    await ctx.db.delete(r._id)
+    excess -= 1
   }
 }
 
@@ -161,7 +208,8 @@ async function recipientCanSee(
  * recipient who cannot see the project are all skipped without a trace — a
  * mention must not leak a hidden project's existence (0074), and a
  * subscription can never outlive the access that justified it (0114:40-42).
- * Returns whether a row was inserted.
+ * After the insert it wakes a snoozed item, prunes its read rows and trims
+ * its unread rows to ITEM_UNREAD_CAP. Returns whether a row was inserted.
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
  * are read by uuid. `visibility` is a seed's memo (NotifyPreload), never
@@ -211,6 +259,9 @@ export async function postMessage(
     if (r.snoozed_until !== undefined) await ctx.db.patch(r._id, { snoozed_until: undefined })
   }
   await pruneReadMessages(ctx, pair, rows)
+  // The prune deletes read rows only, so the unread rows read above are
+  // still the item's.
+  await trimUnreadMessages(ctx, rows)
   return true
 }
 

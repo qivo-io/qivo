@@ -651,6 +651,96 @@ describe('reading the inbox', () => {
     expect(rest).toEqual({ items: [page.items[0]], truncated: true })
   })
 
+  it('reads unread messages first, then the most recently read, as the app does', async () => {
+    const fx = await setup()
+    const busy = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    // the n-th message, created n ms and read n s after the start of its day
+    const row = (issue: Doc<'issues'>, n: number, read: boolean) => ({
+      id: uuid(),
+      org_id: fx.org.id,
+      recipient_id: fx.agent.id,
+      issue_id: issue.id,
+      issue_title: 'Backlog',
+      kind: 'change' as const,
+      detail: `n${n}`,
+      created_at: new Date(Date.parse('2026-01-01T00:00:00.000Z') + n).toISOString(),
+      ...(read
+        ? { read_at: new Date(Date.parse('2026-02-01T00:00:00.000Z') + n * 1000).toISOString() }
+        : {}),
+    })
+    // three old unread messages, then newer unread ones about a hidden task,
+    // then a full scan of newer read messages about another task
+    await fx.t.run(async (ctx) => {
+      for (let n = 0; n < 3; n++) await ctx.db.insert('messages', row(fx.task, n, false))
+      for (let n = 0; n < 5; n++) await ctx.db.insert('messages', row(fx.secret, n, false))
+      for (let n = 0; n < INBOX_SCAN; n++) await ctx.db.insert('messages', row(busy, n, true))
+    })
+    const counts = (page: Awaited<ReturnType<typeof pageMcp>>) =>
+      page.items.map((i) => [i.task.key, i.unread_count, i.messages.length])
+    let page = await pageMcp(fx)
+    // the newest read messages fill what the unread ones left
+    expect(counts(page)).toEqual([
+      [key(busy), 0, INBOX_SCAN - 3],
+      [key(fx.task), 3, 3],
+    ])
+    expect(page.items[0].messages.at(-1)?.detail).toBe(`n${INBOX_SCAN - 1}`)
+    expect(page.items[0].messages.map((m) => m.detail)).not.toContain('n2')
+    expect(page.truncated).toBe(true)
+    const unread = await listMcp(fx, { unread_only: true })
+    expect(unread.map((i) => i.task.key)).toEqual([key(fx.task)])
+
+    // with the three least recently read gone, everything fits in one read
+    await fx.t.run(async (ctx) => {
+      for (const m of await ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', fx.agent.id).eq('issue_id', busy.id),
+        )
+        .collect()) {
+        if (['n0', 'n1', 'n2'].includes(m.detail)) await ctx.db.delete(m._id)
+      }
+    })
+    page = await pageMcp(fx)
+    expect(counts(page)).toEqual([
+      [key(busy), 0, INBOX_SCAN - 3],
+      [key(fx.task), 3, 3],
+    ])
+    expect(page.truncated).toBe(false)
+  })
+
+  it('unread and read messages share one examination bound, so hidden rows cannot widen the read', async () => {
+    // Examining up to 2 * INBOX_SCAN rows per walk would pass this limit.
+    const fx = await setup(
+      convexTest({
+        schema,
+        modules: import.meta.glob('../**/*.*s'),
+        transactionLimits: { documentsRead: 2 * INBOX_SCAN + 200 },
+      }),
+    )
+    const base = { org_id: fx.org.id, recipient_id: fx.agent.id, issue_title: 'T' }
+    await fx.t.run(async (ctx) => {
+      const read = (n: number) => new Date(Date.parse(NOW) + n * 1000).toISOString()
+      const row = (issue: Doc<'issues'>, read_at?: string) => ({
+        ...base,
+        id: uuid(),
+        issue_id: issue.id,
+        kind: 'change' as const,
+        detail: 'd',
+        created_at: NOW,
+        ...(read_at === undefined ? {} : { read_at }),
+      })
+      // the visible message was read before every hidden one
+      await ctx.db.insert('messages', row(fx.task, read(0)))
+      for (let n = 1; n <= 1500; n++) {
+        await ctx.db.insert('messages', row(fx.secret))
+        await ctx.db.insert('messages', row(fx.secret, read(n)))
+      }
+    })
+    // 1,500 hidden unread rows leave 500 to examine among the read ones, all
+    // hidden, so the visible one is not reached
+    expect(await pageMcp(fx)).toEqual({ items: [], truncated: true })
+  })
+
   it("lists only the caller's own rows", async () => {
     const fx = await setup()
     await plantMessage(fx.t, {

@@ -1232,7 +1232,9 @@ or comments on it, as described under [Comments](#comments).
 
 The caller's own inbox, with the same items the app's **Inbox** shows. Each
 item is one active task the caller can read and holds the messages about
-that task the caller has not removed.
+that task the caller has not removed. An item keeps at most 50 unread
+messages. When more arrive, Qivo drops the oldest unread ones but keeps the
+item's first unread message and the newest message of each `kind`.
 
 ```
 GET  /v1/inbox                 items, latest activity first (read)
@@ -1276,11 +1278,13 @@ oldest first; `kind` is `mention`, `comment` or `change`, and `detail` is
 the line the app shows. `latest_at` is the newest message's time, or the end
 of a snooze when that is later, and orders the list.
 
-One request reads the caller's newest 1,000 messages. When it holds more,
-`truncated` is `true`. Older items are then missing, and the oldest items
-listed may lack their older messages. Marking items read keeps only each item's
-latest message, so `POST /v1/inbox/read` with `{"all": true}`, repeated
-while `has_more` is `true`, shrinks the inbox until it fits.
+One request reads up to 1,000 of the caller's messages, unread ones first
+(newest first), then read ones (most recently read first). When it holds
+more, `truncated` is `true`. Items whose messages were not read are then
+missing, and an item listed may lack its older messages. Marking items read
+keeps only each item's latest message, so `POST /v1/inbox/read` with
+`{"all": true}`, repeated while `has_more` is `true`, shrinks the inbox until
+it fits.
 
 The `POST` routes change the caller's own items and answer `{ "action":
 "read", "tasks": ["QN-3"], "has_more": false }`, where `tasks` lists the

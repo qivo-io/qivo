@@ -719,7 +719,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`. See [Workload](#workload) |
 | `update_comment` | Replace a comment's `body`; `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `delete_comment` | Delete a comment, by the same rule as `update_comment` |
-| `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says older messages were not read |
+| `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says some messages were not read |
 | `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
 | `set_following` | Follow a task (`following: true`) or stop following it |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
@@ -1150,12 +1150,17 @@ so the `Archived` message itself is not listed. `messages` run oldest first,
 `kind` is `mention`, `comment` or `change`, and `detail` is the line the app
 shows. `latest_at` is the newest message's time, or the end of a snooze when
 that is later. Snoozed items are left out unless `include_snoozed` is `true`.
+An item keeps at most 50 unread messages. When more arrive, Qivo drops the
+oldest unread ones but keeps the item's first unread message and the newest
+message of each `kind`.
 
-One call reads your newest 1,000 messages. When you hold more, `truncated` is
-`true`. Older items are then missing, and the oldest items listed may lack
-their older messages. Marking items read keeps only each item's latest message, so
-`update_inbox` with `action: "read"` and `all: true`, repeated while
-`has_more` is `true`, shrinks the inbox until it fits.
+One call reads up to 1,000 of your messages, unread ones first (newest
+first), then read ones (most recently read first). When you hold more,
+`truncated` is `true`. Items whose messages were not read are then missing,
+and an item listed may lack its older messages. Marking items read keeps
+only each item's latest message, so `update_inbox` with `action: "read"` and
+`all: true`, repeated while `has_more` is `true`, shrinks the inbox until it
+fits.
 
 `update_inbox` applies `action` to your items about `tasks` (task refs), or
 with `all: true` to every item:

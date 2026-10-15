@@ -8,10 +8,14 @@
  *   assertions need (admin sees everything, so f.hidden can't test it)
  * - issueVis: scheduled+estimated work in f.sub, the identified control row */
 
+/// <reference types="vite/client" />
+
 import type { WithoutSystemFields } from 'convex/server'
+import { convexTest } from 'convex-test'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import schema from '../schema'
 import {
   as,
   expectRefusal,
@@ -580,6 +584,31 @@ describe('messages', () => {
     ...(read_at === undefined ? {} : { read_at }),
   })
 
+  /* A second seat of user's login: a guest in the other organization with
+   * access to one task there. */
+  const guestSeatOfUser = async () => {
+    const profile = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      auth_user_id: f.user.auth_user_id,
+      org_role: 'guest',
+      email: 'user@testbed.test',
+    })
+    const otherSub = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    const task = await plantIssue(t, { org_id: f.otherOrg.id, project_id: otherSub.id })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.otherProject.id,
+        profile_id: profile.id,
+        level: 'user',
+      }),
+    )
+    return { profile, task }
+  }
+
   it('own inbox only', async () => {
     const mine = await t.run(async (ctx) => {
       const _id = await ctx.db.insert('messages', msg(f.guest.id, NOW))
@@ -609,7 +638,7 @@ describe('messages', () => {
     expect(snap.messages.map((m) => m.id)).not.toContain(ids.archived)
   })
 
-  it('caps at 500 with unread rows sorted in first — a long absence cannot push unread past the cap', async () => {
+  it('caps at 500 with unread rows first, then the most recently read, so a long absence cannot push unread past the cap', async () => {
     const base = Date.parse('2026-01-02T00:00:00.000Z')
     const day = 86_400_000
     await t.run(async (ctx) => {
@@ -630,37 +659,109 @@ describe('messages', () => {
     })
     const snap = await snapFor(f.user)
     expect(snap.messages).toHaveLength(500)
-    expect(snap.readMessageCount).toBe(501)
+    // the bounded read keeps at most 500 read rows per seat, so the count
+    // stops there; the client only asks whether it is above zero
+    expect(snap.readMessageCount).toBe(500)
     // the three old unread rows survive, ahead of every read row
     expect(snap.messages.slice(0, 3).every((m) => m.read_at === undefined)).toBe(true)
     expect(snap.messages.filter((m) => m.read_at === undefined)).toHaveLength(3)
-    // unread tiebreak is created_at desc
+    // unread rows run newest first
     expect(snap.messages[0]?.created_at).toBe(new Date(base - day).toISOString())
-    // read survivors are the 497 EARLIEST read_at rows (read_at asc after nulls)
+    // read survivors are the 497 most recently read, newest read first, the
+    // ones the list shows at the top
+    expect(snap.messages[3]?.read_at).toBe(new Date(base + (500 + 600) * 1000).toISOString())
     const lastKept = snap.messages[snap.messages.length - 1]
-    expect(lastKept?.read_at).toBe(new Date(base + (496 + 600) * 1000).toISOString())
+    expect(lastKept?.read_at).toBe(new Date(base + (4 + 600) * 1000).toISOString())
+  })
+
+  it('across seats: unread rows newest first (id breaks a tie), then read rows most recently read first', async () => {
+    const seat = await guestSeatOfUser()
+    const at = (minute: number) => `2026-01-02T00:${String(minute).padStart(2, '0')}:00.000Z`
+    const ids = await t.run(async (ctx) => {
+      const rows = {
+        u1: msg(f.user.id, at(1)),
+        u2: { ...msg(seat.profile.id, at(2), undefined, seat.task.id), org_id: f.otherOrg.id },
+        u3a: { ...msg(f.user.id, at(3)), id: 'aaaaaaaa-0000-4000-8000-000000000000' },
+        u3b: {
+          ...msg(seat.profile.id, at(3), undefined, seat.task.id),
+          org_id: f.otherOrg.id,
+          id: 'bbbbbbbb-0000-4000-8000-000000000000',
+        },
+        // created late, read early
+        r1: msg(f.user.id, at(9), at(10)),
+        r2: { ...msg(seat.profile.id, at(0), at(20), seat.task.id), org_id: f.otherOrg.id },
+        r3: msg(f.user.id, at(0), at(30)),
+      }
+      for (const row of Object.values(rows)) await ctx.db.insert('messages', row)
+      return Object.fromEntries(Object.entries(rows).map(([name, row]) => [row.id, name]))
+    })
+    const snap = await snapFor(f.user)
+    expect(snap.messages.map((m) => ids[m.id])).toEqual([
+      'u3b',
+      'u3a',
+      'u2',
+      'u1',
+      'r3',
+      'r2',
+      'r1',
+    ])
+    expect(snap.readMessageCount).toBe(3)
+  })
+
+  it('skips rows about tasks the caller is not shown, within the scan bound', async () => {
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden2Sub.id })
+    const archived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+    })
+    const ids = await t.run(async (ctx) => {
+      const visible = [msg(f.user.id, NOW), msg(f.user.id, NOW, NOW)]
+      for (const row of visible) await ctx.db.insert('messages', row)
+      // newer rows about hidden and archived tasks, fewer than the bound
+      for (let i = 0; i < 400; i++) {
+        await ctx.db.insert('messages', msg(f.user.id, NOW, undefined, hiddenTask.id))
+        await ctx.db.insert('messages', msg(f.user.id, NOW, undefined, archived.id))
+        await ctx.db.insert('messages', msg(f.user.id, NOW, NOW, hiddenTask.id))
+      }
+      return visible.map((row) => row.id)
+    })
+    const snap = await snapFor(f.user)
+    expect(snap.messages.map((m) => m.id)).toEqual(ids)
+    expect(snap.readMessageCount).toBe(1)
+  })
+
+  it('answers over a backlog larger than one transaction may read; visible rows past the bound wait', async () => {
+    // The old full read of the inbox scanned every row and failed here.
+    t = convexTest({
+      schema,
+      modules: import.meta.glob('../**/*.*s'),
+      transactionLimits: { documentsRead: 2600 },
+    })
+    f = await withOrg(t)
+    const hidden = await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hidden.id })
+    const visibleTask = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      // older visible rows first, then a newer backlog about a hidden task
+      await ctx.db.insert('messages', msg(f.user.id, NOW, undefined, visibleTask.id))
+      await ctx.db.insert('messages', msg(f.user.id, NOW, NOW, visibleTask.id))
+      for (let i = 0; i < 1500; i++) {
+        await ctx.db.insert('messages', msg(f.user.id, NOW, undefined, hiddenTask.id))
+        await ctx.db.insert('messages', msg(f.user.id, NOW, NOW, hiddenTask.id))
+      }
+    })
+    const snap = await snapFor(f.user)
+    // each walk examines at most 1,000 rows, all hidden here, so the older
+    // visible rows are not reached: the accepted cost of the bound
+    expect(snap.messages).toEqual([])
+    expect(snap.readMessageCount).toBe(0)
+    expect(snap.issues.map((i) => i.id)).toContain(visibleTask.id)
   })
 
   it('counts read messages across own seats even when 500 unread messages hide every read row', async () => {
-    const seat = await plantSeat(t, {
-      org_id: f.otherOrg.id,
-      auth_user_id: f.user.auth_user_id,
-      org_role: 'guest',
-      email: 'user@testbed.test',
-    })
-    // the second seat's messages are about a task it can access
-    const otherSub = await plantProject(t, {
-      org_id: f.otherOrg.id,
-      type: 'project',
-      parent_id: f.otherProject.id,
-    })
-    const otherTask = await plantIssue(t, { org_id: f.otherOrg.id, project_id: otherSub.id })
+    const { profile: seat, task: otherTask } = await guestSeatOfUser()
     await t.run(async (ctx) => {
-      await ctx.db.insert('project_access', {
-        project_id: f.otherProject.id,
-        profile_id: seat.id,
-        level: 'user',
-      })
       for (let i = 0; i < 500; i++) {
         await ctx.db.insert('messages', msg(f.user.id, NOW))
       }

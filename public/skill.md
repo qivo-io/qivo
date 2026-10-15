@@ -246,15 +246,18 @@ Useful field rules:
 - **Read your inbox:** `list_inbox` or `GET /v1/inbox` answers `items`, one
   per active task you can read, latest activity first, with its unread count
   and messages. Use `unread_only` to see what is new. The task title shown is
-  the current one. `truncated: true` means only your newest 1,000 messages
-  were read; mark everything read to shrink the inbox.
+  the current one. One call reads up to 1,000 of your messages, unread ones
+  first (newest first), then read ones (most recently read first);
+  `truncated: true` means more were not read, so mark everything read to
+  shrink the inbox. An item keeps at most 50 unread messages, dropping the
+  oldest except its first unread one and the newest of each kind.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
   `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
   `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
   `remove` removes every read item; repeat while `has_more` is `true`.
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
   items back). Mark items read once you have handled them, so new updates
-  stand out. Unread messages are never removed automatically; an agent's read
+  stand out. Retention never removes unread messages, and an agent's read
   messages are removed after 7 days. A Viewer agent receives no new messages
   and cannot clear its inbox, but can still read the messages it holds.
 

@@ -1,7 +1,8 @@
-/* model/messages — the inbox fan-outs, fences and the pair prune — driven
- * through the public issue mutations wherever one exists (create / update /
- * move / archive / unarchive / subscribe) and through t.run + model functions
- * for the phase-5 surfaces (comments, markRead's prune contract).
+/* model/messages, the inbox fan-outs, fences, the pair prune and the item
+ * unread cap, driven through the public issue mutations wherever one exists
+ * (create / update / move / archive / unarchive / subscribe) and through
+ * t.run + model functions for the phase-5 surfaces (comments, markRead's
+ * prune contract, the item cap's arrivals).
  *
  * Template sentences are asserted BYTE for byte: the client toasts/renders
  * them raw, Inbox.tsx string-rewrites 'a task in another project', and the
@@ -15,11 +16,14 @@ import type { FunctionArgs } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { MessageKind } from '../lib/enums'
 import {
   extractMentions,
+  ITEM_UNREAD_CAP,
   type NotifyPreload,
   notifyCommentInsert,
   notifyIssueUpdate,
+  postMessage,
   pruneReadMessages,
 } from '../model/messages'
 import {
@@ -29,6 +33,7 @@ import {
   messagesFor,
   NOW,
   newT,
+  type OrgFixture,
   plantIssue,
   plantMessage,
   plantProject,
@@ -847,6 +852,111 @@ describe('pruneReadMessages — the 0109 pair invariant', () => {
     )
     expect((await messagesFor(t, f.guest.id, issueC)).map((m) => m.id)).toEqual([c2.id])
     expect((await messagesFor(t, f.admin.id, issueA)).map((m) => m.id)).toEqual([d1.id])
+  })
+})
+
+describe('the item cap keeps at most ITEM_UNREAD_CAP unread messages per item', () => {
+  /* `kinds.length` arrivals on one item through postMessage, the n-th at
+   * second `from + n`, so (created_at, id) order is arrival order. */
+  const arrive = (
+    t: T,
+    f: OrgFixture,
+    to: { recipient: Doc<'profiles'>; issue: Doc<'issues'> },
+    kinds: MessageKind[],
+    from = 0,
+  ) =>
+    t.run(async (ctx) => {
+      for (const [n, kind] of kinds.entries()) {
+        const s = from + n
+        await postMessage(ctx, {
+          org_id: f.org.id,
+          recipient_id: to.recipient.id,
+          issue_id: to.issue.id,
+          kind,
+          body: `arrival ${s}`,
+          actor_id: f.user.id,
+          now: new Date(Date.parse('2026-03-01T00:00:00.000Z') + s * 1000).toISOString(),
+        })
+      }
+    })
+  const details = async (t: T, recipient: Doc<'profiles'>, issue: Doc<'issues'>) =>
+    (await messagesFor(t, recipient.id, issue.id)).map((m) => m.detail)
+  const arrivals = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `arrival ${from + i}`)
+  // the oldest is a change, the only comment and the only mention come next,
+  // then 57 more changes
+  const SIXTY: MessageKind[] = [
+    'change',
+    'comment',
+    'mention',
+    ...Array.from({ length: 57 }, () => 'change' as const),
+  ]
+
+  it('60 arrivals leave 50: the oldest unread and the newest of each kind stay, other items are untouched', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    expect(ITEM_UNREAD_CAP).toBe(50)
+
+    await arrive(t, f, { recipient: f.guest, issue: other }, ['change', 'mention'])
+    await arrive(t, f, { recipient: f.admin, issue }, ['change', 'change', 'change'])
+    await arrive(t, f, { recipient: f.guest, issue }, SIXTY)
+
+    const kept = await details(t, f.guest, issue)
+    expect(kept).toHaveLength(ITEM_UNREAD_CAP)
+    // the ten oldest changes after the protected three are the ones dropped
+    expect(kept).toEqual([...arrivals(0, 2), ...arrivals(13, 59)])
+    const rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(new Set(rows.map((m) => m.kind))).toEqual(new Set(['change', 'comment', 'mention']))
+    expect(rows.every((m) => m.read_at === undefined)).toBe(true)
+    // another item of the same recipient, and the same task in someone else's
+    // inbox, keep every message
+    expect(await details(t, f.guest, other)).toEqual(arrivals(0, 1))
+    expect(await details(t, f.admin, issue)).toEqual(arrivals(0, 2))
+  })
+
+  it('an item at the cap keeps every message', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await arrive(t, f, { recipient: f.guest, issue }, Array(ITEM_UNREAD_CAP).fill('change'))
+    expect(await details(t, f.guest, issue)).toEqual(arrivals(0, ITEM_UNREAD_CAP - 1))
+  })
+
+  it('a capped item still reads down to one row, snoozes whole and wakes on news, then trims', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const guest = as(t, f.guest)
+    const ids = async () => (await messagesFor(t, f.guest.id, issue.id)).map((m) => m.id)
+
+    await arrive(t, f, { recipient: f.guest, issue }, SIXTY)
+    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: await ids() })
+    let rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows.map((m) => m.detail)).toEqual(['arrival 59'])
+    expect(rows[0].read_at).toBeDefined()
+
+    // refill past the cap, then snooze the whole item from one id
+    await arrive(t, f, { recipient: f.guest, issue }, SIXTY, 60)
+    const until = new Date(Date.now() + 3_600_000).toISOString()
+    await guest.mutation(api.messages.snooze, {
+      org_id: f.org.id,
+      ids: [(await ids())[0]],
+      until,
+    })
+    rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows).toHaveLength(ITEM_UNREAD_CAP)
+    expect(rows.every((m) => m.snoozed_until === until && m.read_at === undefined)).toBe(true)
+
+    // news wakes it first, then the trim keeps the item at the cap
+    await arrive(t, f, { recipient: f.guest, issue }, ['change'], 120)
+    rows = await messagesFor(t, f.guest.id, issue.id)
+    expect(rows).toHaveLength(ITEM_UNREAD_CAP)
+    expect(rows.every((m) => m.snoozed_until === undefined)).toBe(true)
+    // the oldest unread (60), the only comment (61) and mention (62) stay;
+    // the oldest other row (73) makes way for the arrival
+    expect(rows.map((m) => m.detail)).toEqual([...arrivals(60, 62), ...arrivals(74, 120)])
   })
 })
 
