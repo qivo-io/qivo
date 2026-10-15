@@ -81,8 +81,10 @@ safe display identifier (for an agent key the first 7 and last 5 characters,
 such as `qva_012...abcde`) are stored. A revoked key or token stops working
 immediately, and so does **every** credential of a user switched to Inactive.
 A personal token with an expiry is refused from that instant on, like a
-revoked one. In the app, **New token** offers **Never** or a last day, and a
-token with a last day expires when that day ends in the creator's time zone.
+revoked one. A request already accepted when its credential is revoked or
+expires can still finish. In the app, **New token** offers **Never** or a
+last day, and a token with a last day expires when that day ends in the
+creator's time zone.
 `GET /v1/me` reports which credential a request used and what it may do.
 
 `401` means the credential is missing, unknown, revoked, expired or belongs to

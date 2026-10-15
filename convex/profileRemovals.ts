@@ -46,9 +46,11 @@ import { estimateDocumentBytes } from './model/demoMetrics'
 export const STALLED_MS = 60_000
 
 const RECOVER_BATCH = 32
-/* The most stalled rows one recovery looks at. Rows whose step still waits
- * are skipped without counting toward RECOVER_BATCH, so a queue backlog of
- * old waiting rows cannot hide a failed one behind them. */
+/* The most stalled rows one recovery looks at, oldest progress first. Rows
+ * whose step still waits are skipped without counting toward RECOVER_BATCH,
+ * so waiting rows hide a failed one only while RECOVER_SCAN or more of them
+ * are older. Such a backlog only delays its restart, because each waiting
+ * step that runs moves its row's progress_at past the failed row's. */
 const RECOVER_SCAN = 512
 
 const stepRef = makeFunctionReference<'mutation', { profile_id: string }, null>(
