@@ -47,6 +47,7 @@ import type * as issues from "../issues.js";
 import type * as jobs from "../jobs.js";
 import type * as labels from "../labels.js";
 import type * as lib_access from "../lib/access.js";
+import type * as lib_avatarColors from "../lib/avatarColors.js";
 import type * as lib_backgroundPreviews from "../lib/backgroundPreviews.js";
 import type * as lib_billableUsers from "../lib/billableUsers.js";
 import type * as lib_billingAccess from "../lib/billingAccess.js";
@@ -179,6 +180,7 @@ declare const fullApi: ApiFromModules<{
   jobs: typeof jobs;
   labels: typeof labels;
   "lib/access": typeof lib_access;
+  "lib/avatarColors": typeof lib_avatarColors;
   "lib/backgroundPreviews": typeof lib_backgroundPreviews;
   "lib/billableUsers": typeof lib_billableUsers;
   "lib/billingAccess": typeof lib_billingAccess;

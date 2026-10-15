@@ -11,6 +11,7 @@ import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, type Shown, workingSetOf } from './lib/workingSet'
 import { namedTaskNums } from './model/activity'
 import { shownLabelColor } from './model/labels'
+import { shownAvatarColor } from './model/people'
 import { type OrgLoadRow, orgLoadRows } from './planning'
 
 type AppRow<T extends TableNames> = Omit<Doc<T>, '_id' | '_creationTime'>
@@ -227,13 +228,15 @@ export const forMe = authedQuery({
       }
 
       // Include inactive, agent and unclaimed profiles in the org roster.
+      // Clients paint the avatar color as a CSS background, so an older
+      // non-hex value goes out as gray.
       const orgProfiles = await ctx.db
         .query('profiles')
         .withIndex('by_org', (q) => q.eq('org_id', orgId))
         .collect()
       const orgProfileIds = new Set<string>()
       for (const p of orgProfiles) {
-        profiles.push(rowOf(p))
+        profiles.push({ ...rowOf(p), color: shownAvatarColor(p.color) })
         orgProfileIds.add(p.id)
       }
 

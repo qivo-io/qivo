@@ -44,6 +44,7 @@ import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import { type InviteResult, sendInvites } from './invites'
+import { AVATAR_COLORS } from './lib/avatarColors'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import {
@@ -89,20 +90,6 @@ type Actor = Infer<typeof vActor>
 
 /* People per request. Their mail sends share one time budget (sendInvites). */
 const MAX_PEOPLE = 50
-
-/* Data, not tokens. The same palette the planner's add-user flow writes. */
-const AVATAR_COLORS = [
-  '#0F766E',
-  '#B45309',
-  '#1D4ED8',
-  '#6D28D9',
-  '#9333EA',
-  '#0891B2',
-  '#BE123C',
-  '#4D7C0F',
-  '#A16207',
-  '#0E7490',
-]
 
 /* ----------------------------------------------------------------- lookups */
 
