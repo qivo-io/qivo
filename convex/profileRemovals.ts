@@ -46,6 +46,10 @@ import { estimateDocumentBytes } from './model/demoMetrics'
 export const STALLED_MS = 60_000
 
 const RECOVER_BATCH = 32
+/* The most stalled rows one recovery looks at. Rows whose step still waits
+ * are skipped without counting toward RECOVER_BATCH, so a queue backlog of
+ * old waiting rows cannot hide a failed one behind them. */
+const RECOVER_SCAN = 512
 
 const stepRef = makeFunctionReference<'mutation', { profile_id: string }, null>(
   'profileRemovals:step',
@@ -172,6 +176,7 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
           .query('issue_attachments')
           .withIndex('by_uploaded_by', (q) => q.eq('uploaded_by', profileId)),
       clear: (ctx, attachment) => ctx.db.patch(attachment._id, { uploaded_by: undefined }),
+      large: true, // file names have no size cap
     }),
   ],
   agent_keys: [
@@ -179,6 +184,7 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       range: (ctx, profileId) =>
         ctx.db.query('agent_keys').withIndex('by_created_by', (q) => q.eq('created_by', profileId)),
       clear: (ctx, key) => ctx.db.patch(key._id, { created_by: undefined }),
+      large: true, // key names have no size cap
     }),
   ],
   oauth: [oauthEdge],
@@ -263,10 +269,13 @@ export const recover = internalMutation({
       .withIndex('by_progress', (q) =>
         q.lt('progress_at', new Date(now - STALLED_MS).toISOString()),
       )
-      .take(RECOVER_BATCH)
+      .take(RECOVER_SCAN)
+    let restarted = 0
     for (const job of stalled) {
+      if (restarted === RECOVER_BATCH) break
       const next = job.scheduled_id === undefined ? null : await ctx.db.system.get(job.scheduled_id)
       if (next?.state.kind === 'pending' || next?.state.kind === 'inProgress') continue
+      restarted += 1
       const scheduled_id = await ctx.scheduler.runAfter(0, stepRef, { profile_id: job.profile_id })
       await ctx.db.patch(job._id, { progress_at: new Date(now).toISOString(), scheduled_id })
       console.warn('Profile removal resumed', {

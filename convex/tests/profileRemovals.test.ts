@@ -16,7 +16,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { mcpResource } from '../lib/oauth'
-import { deleteOrgDeep, REMOVAL_BUDGET, removeProfile } from '../model/cascade'
+import { deleteOrgDeep, REMOVAL_BUDGET, REVOKE_AT_ONCE, removeProfile } from '../model/cascade'
 import { STALLED_MS } from '../profileRemovals'
 import schema from '../schema'
 import {
@@ -847,5 +847,110 @@ describe('the reserved id and its end states', () => {
     const cleared = await shown()
     expect(cleared?.assignee_id).toBeUndefined()
     expect(cleared?.updated_at).toBe(new Date(later).toISOString())
+  })
+})
+
+describe('bounds a long credential and file history', () => {
+  it('revokes at most REVOKE_AT_ONCE connections at once and deletes every one in the steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < REVOKE_AT_ONCE + 44; i++) {
+        await ctx.db.insert('oauth_connections', {
+          id: uuid(),
+          authorization_hash: uuid(),
+          auth_user_id: f.user.auth_user_id ?? 'login',
+          profile_id: f.user.id,
+          org_id: f.org.id,
+          client_id: 'client',
+          client_name: 'Client',
+          resource: 'https://some.convex.site/mcp',
+          requested_scopes: ['qivo:read'],
+          scopes: ['qivo:read'],
+          created_at: NOW,
+          authorization_expires_at: NOW,
+          approved_at: NOW,
+        })
+      }
+    })
+    await remove(t, f.user)
+    const left = await t.run((ctx) => ctx.db.query('oauth_connections').collect())
+    expect(left.filter((c) => c.revocation_reason === 'deleted')).toHaveLength(REVOKE_AT_ONCE)
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await t.run((ctx) => ctx.db.query('oauth_connections').collect())).toHaveLength(0)
+    expect(await jobOf(t, f.user.id)).toBeNull()
+  })
+
+  it('clears attachments with very large names in small reads under real limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 25 names of 800 KiB pass the 16 MiB read limit if read in one go
+    const name = 'n'.repeat(800 * 1024)
+    for (let chunk = 0; chunk < 5; chunk++) {
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 5; i++) {
+          await ctx.db.insert('issue_attachments', {
+            org_id: f.org.id,
+            id: uuid(),
+            issue_id: task.id,
+            name,
+            size_bytes: 4,
+            storage_id: await ctx.storage.store(new Blob(['file']) as never),
+            inline: false,
+            uploaded_by: f.user.id,
+            created_at: NOW,
+          })
+        }
+      })
+    }
+    await remove(t, f.user)
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    expect(await jobOf(t, f.user.id)).toBeNull()
+    // reading the files back whole would pass the limit too, so ask the index
+    const still = await t.run((ctx) =>
+      ctx.db
+        .query('issue_attachments')
+        .withIndex('by_uploaded_by', (q) => q.eq('uploaded_by', f.user.id))
+        .first(),
+    )
+    expect(still).toBeNull()
+  })
+
+  it('restarts a failed removal that waits behind more than a batch of waiting ones', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT()
+    const iso = (ms: number) => new Date(ms).toISOString()
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 40; i++) {
+        const profile_id = `waiting-${i}`
+        const scheduled_id = await ctx.scheduler.runAfter(
+          100 * STALLED_MS,
+          internal.profileRemovals.step,
+          { profile_id },
+        )
+        await ctx.db.insert('profile_removals', {
+          profile_id,
+          removed_at: iso(START),
+          phase: 'tasks',
+          progress_at: iso(START + i),
+          scheduled_id,
+        })
+      }
+      await ctx.db.insert('profile_removals', {
+        profile_id: 'failed',
+        removed_at: iso(START),
+        phase: 'tasks',
+        progress_at: iso(START + 100),
+      })
+    })
+    vi.setSystemTime(START + STALLED_MS + 1000)
+    await t.mutation(internal.profileRemovals.recover, {})
+
+    expect((await jobOf(t, 'failed'))?.scheduled_id).toBeDefined()
+    // the waiting rows keep their step and their place
+    expect((await jobOf(t, 'waiting-0'))?.progress_at).toBe(iso(START))
   })
 })

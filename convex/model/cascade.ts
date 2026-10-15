@@ -251,6 +251,10 @@ export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
  * add at most three such documents to what a transaction reads. */
 export const LARGE_ROWS_PER_READ = 4
 
+/** The most OAuth connections removeProfile revokes itself. The background
+ * step deletes the rest, which can no longer be used anyway. */
+export const REVOKE_AT_ONCE = 256
+
 export type RemovalBudget = { rows: number; bytes: number }
 
 export const budgetSpent = (budget: RemovalBudget): boolean => budget.rows <= 0 || budget.bytes <= 0
@@ -388,10 +392,15 @@ export async function removeProfile(
     .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
   for await (const t of tokens) await ctx.db.delete(t._id)
   // The background step deletes the connections with their replay hashes.
+  // Every OAuth path already refuses once the profile row is gone, so this
+  // only hides the newest connections from the person's own list at once;
+  // every authorization adds a row and revoked ones stay, so the rest wait
+  // for the step instead of making this transaction unbounded.
   const connections = await ctx.db
     .query('oauth_connections')
     .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
-    .collect()
+    .order('desc')
+    .take(REVOKE_AT_ONCE)
   for (const connection of connections) {
     if (connection.revoked_at !== undefined && connection.revocation_reason === 'deleted') continue
     await ctx.db.patch(connection._id, {
