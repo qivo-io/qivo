@@ -80,10 +80,10 @@ The secret is shown exactly once, at creation. Only its SHA-256 digest and a
 safe display identifier (for an agent key the first 7 and last 5 characters,
 such as `qva_012...abcde`) are stored. A revoked key or token stops working
 immediately, and so does **every** credential of a user switched to Inactive.
-A personal token with an expiry date is refused after that date, like a
-revoked one. The app does not offer an expiry date yet, so every token created
-there today never expires; a choice is planned. `GET /v1/me` reports which
-credential a request used and what it may do.
+A personal token with an expiry is refused from that instant on, like a
+revoked one. In the app, **New token** offers **Never** or a last day, and a
+token with a last day expires when that day ends in the creator's time zone.
+`GET /v1/me` reports which credential a request used and what it may do.
 
 `401` means the credential is missing, unknown, revoked, expired or belongs to
 a deactivated user. The sentence depends on the credential:
@@ -125,8 +125,9 @@ A readable project the user cannot write answers `403` with
 only read, by the same rule as on MCP (`credentialAccess` in
 `convex/lib/access.ts`). A personal token can make changes only when it has
 change access and has not expired; a token stored without an access setting
-can only read. Every token created in the app today has change access and
-never expires, and a choice of read-only access and an expiry date is planned.
+can only read. The app asks for both when a token is created: **Allow
+changes** (on by default) gives change access, and the expiry is **Never**
+unless the person picks a last day. Neither can be changed later.
 An agent key can make changes only when its agent's organization role is
 `user`. A read-only credential still reads everything its user can, and every
 project comes back `"access": { "read": …, "write": false }`. Every `POST`,
@@ -259,9 +260,9 @@ be refused.
   rule that refuses writes (see Authentication). A write still needs Edit
   access on the project and an organization that billing does not pause.
 - `credential.kind` is `agent_key` or `personal_token`, and `name` is the
-  key's or token's name. `expires_at` is a personal token's expiry date, or
-  `null`. It is `null` for an agent key, which never expires, and for every
-  token created in the app today.
+  key's or token's name. `expires_at` is the instant a personal token stops
+  working, or `null`. It is `null` for an agent key, which never expires, and
+  for a token created to never expire.
 
 The response never contains a secret, a hash or a display identifier.
 

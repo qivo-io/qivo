@@ -30,8 +30,9 @@ whether billing has paused changes, and what this credential may do:
 
 - `credential.access` is `write` when the credential can make changes and
   `read` when it can only read. Do not plan changes with a read-only
-  credential. Personal tokens created in the app today can make changes and
-  never expire; a choice of read-only access and an expiry date is planned.
+  credential. A person chooses a personal token's access and optional expiry
+  when creating it, and neither can change. If the work needs changes, ask
+  for a new token created with **Allow changes**.
 - `billing.read_only: true` means every change is refused until an
   organization admin restores billing; `billing.reason` says so.
 - `organization.week_start` is the first day of every planning week, `0`

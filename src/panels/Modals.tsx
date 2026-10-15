@@ -73,6 +73,7 @@ function ModalShell({
   footerLeft,
   footer,
   focusAfterClose,
+  keepOnOutsideClick = false,
   children,
 }: {
   icon: string
@@ -91,6 +92,10 @@ function ModalShell({
   footerLeft?: ReactNodeM
   footer?: ReactNodeM
   focusAfterClose?: () => HTMLElement | null
+  /** ignore clicks outside the dialog, for content an accidental close would
+   * lose for good (a secret shown once). Close, Escape and the footer still
+   * close it */
+  keepOnOutsideClick?: boolean
   children?: ReactNodeM
 }) {
   // A create/edit dialog also holds non-text draft choices and staged files.
@@ -133,6 +138,7 @@ function ModalShell({
           event.preventDefault()
           restoreFocus(focusAfterClose?.() ?? returnFocusRef.current)
         }}
+        onInteractOutside={keepOnOutsideClick ? (event) => event.preventDefault() : undefined}
         onEscapeKeyDown={(event) => {
           // The shell owns this key even when it closes. Without stopping the
           // native event, page-level Escape handlers (Inbox/Settings/task)
@@ -1744,6 +1750,7 @@ export {
   CreateOrgModal,
   DeleteTaskModal,
   fmtSize,
+  MField,
   MilestoneModal,
   ModalShell,
   MoveIssueModal,

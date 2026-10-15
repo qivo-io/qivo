@@ -1980,6 +1980,12 @@ export type UserPatch = Partial<{
   plannableHours: number | string
   canCreateProjects: boolean
 }>
+/** What a new personal token may do and the instant it stops working (UTC
+    ISO 8601). Both are fixed when it is created; no expiresAt means never. */
+export type McpTokenChoice = {
+  access: FunctionArgs<typeof api.tokens.createMcpToken>['access']
+  expiresAt?: string
+}
 
 /* The toolbar filter row's state — one shape for every view that renders it
    and for P.passesFilters, the one predicate they share. `mine` and
@@ -4183,22 +4189,23 @@ export const PLANNER = {
     }
   },
 
-  createMcpToken: withUpdateBlock(async (name: string) => {
+  /** Mints a personal token in the browser and stores only its hash. Returns
+      the secret once, or null when the server refused it. */
+  createMcpToken: withUpdateBlock(async (name: string, { access, expiresAt }: McpTokenChoice) => {
     const bytes = crypto.getRandomValues(new Uint8Array(24))
     const secret = `qvt_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
     const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
     const id = crypto.randomUUID()
     try {
-      // Until the token form offers a choice, every token it creates can make
-      // changes and never expires.
       await write(api.tokens.createMcpToken, {
         id,
         profile_id: CURRENT_USER,
         name,
         token_prefix: secret.slice(0, 11),
         token_hash: hash,
-        access: 'write',
+        access,
+        ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
       })
     } catch (e) {
       console.error('[qivo] mcp token create failed:', e)

@@ -84,12 +84,13 @@ requested manual setup; agent keys give automation its own identity.
   stored as SHA-256 + display prefix, migration 0030) maps to that account,
   and the client then acts as them. Personal tokens remain a secondary option
   below the OAuth setup and its copyable MCP server address. Each token
-  records whether it can make changes or only read, and may record an expiry
-  date, both fixed when it is created. Today every token the settings page
-  creates can make changes and never expires; a choice of read-only access
-  and an expiry date is planned for that page. A token stored without an
-  access setting, created before tokens had one, can only read. After its
-  expiry date a token is refused exactly like a revoked one. The same token
+  records whether it can make changes or only read, and may record an expiry,
+  both fixed when it is created. The settings page's **New token** asks for a
+  name, **Allow changes** (on by default) and an optional last day; a token
+  with a last day expires when that day ends in the creator's time zone. A
+  token stored without an access setting, created before tokens had one, can
+  only read. From its expiry a token is refused exactly like a revoked one,
+  and it stays listed until its owner deletes it. The same token
   also authenticates the [organization REST API](rest-api.md) as that person.
 - **An agent's key.** An agent is a user of the organization that is not a
   person — no email, no password — created by an org admin under **Settings →
@@ -135,8 +136,8 @@ only read. One shared rule decides it (`credentialAccess` in
 it. `get_me` reports the result as `credential.access`:
 
 - A personal token can make changes only when it has change access and has
-  not expired. Every token the settings page creates today has change access
-  and no expiry date, as described above.
+  not expired. The settings page sets both when the token is created, as
+  described above.
 - An OAuth connection can make changes only with both `qivo:read` and
   `qivo:write`.
 - An agent key can make changes only when its agent's organization role is
@@ -769,9 +770,8 @@ with a cached tool catalogue must refresh discovery or reconnect.
   **Read-only credentials** above). A change still needs the user's project
   permission and an organization that billing does not pause. `name` is the
   token's or key's name, or the connected app's name for OAuth. `expires_at`
-  is a personal token's expiry date, and `null` for a token without one, an
-  OAuth connection or an agent key. Every token the settings page creates
-  today has no expiry date.
+  is the instant a personal token stops working, and `null` for a token
+  without an expiry, an OAuth connection or an agent key.
 
 The answer never contains a secret, a hash or a display prefix. A read-only
 OAuth connection may call `get_me`, because it only reads.

@@ -2,7 +2,8 @@
    every desktop rule and every existing permission gate in place. */
 .settings-mobile-only,
 .settings-menu-chevron,
-.settings-mobile-people-jump {
+.settings-mobile-people-jump,
+[data-mcp-token-summary] {
   display: none;
 }
 
@@ -267,6 +268,14 @@
   }
   .settings-content-scroll [data-fresh-key] {
     flex-basis: 100%;
+  }
+  /* The personal token columns do not fit a phone, so each row says its
+     access, expiry and last use in a line under its name instead. */
+  .settings-content-scroll :is([data-mcp-token-columns], [data-mcp-token-cell]) {
+    display: none;
+  }
+  .settings-content-scroll [data-mcp-token-summary] {
+    display: block;
   }
   .settings-danger-zone div:has(> button) {
     flex-direction: column;
