@@ -21,6 +21,13 @@ support, or when the user explicitly requests it. An agent key is for
 automation acting as a named agent user. REST accepts personal tokens and
 agent keys. Use an existing working connection for the requested task.
 
+If Microsoft work or school sign-in shows **Need admin approval**, direct the
+user and their Microsoft administrator to
+[Microsoft sign-in and administrator approval](https://qivo.io/docs/microsoft-sign-in-and-administrator-approval/)
+for Qivo's organization approval link. Resume connection setup after the
+administrator grants consent. Microsoft approval does not grant Qivo project
+access or replace the person's approval of the assistant's connection.
+
 ## Learn who you are first
 
 Call `get_me` over MCP, or `GET /v1/me` over REST, before other work. It
