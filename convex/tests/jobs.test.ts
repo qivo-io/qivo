@@ -19,9 +19,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { ARCHIVE_BATCH, SWEEP_BATCH, SWEEP_PROFILES } from '../jobs'
+import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, messageRetentionDays } from '../model/people'
 import {
+  messagesFor,
   NOW,
   newT,
   plantIssue,
@@ -600,6 +602,117 @@ describe('sweepReadMessages — retention follows the person', () => {
     }
     const rows = await auditRows(t, 'sweep_read_messages')
     expect(rows.map((r) => r.detail)).toEqual([{ deleted: SWEEP_PROFILES + 5, woken: 0 }])
+  })
+
+  it('a wake answers how many rows it wrote, each written once, for a live or an archived task', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const live = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const shelved = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+    })
+    // full items whose wakes were lost, read once before the snooze
+    for (const task of [live, shelved]) {
+      await t.run(async (ctx) => {
+        for (let n = 0; n <= ITEM_UNREAD_CAP; n++) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: f.org.id,
+            recipient_id: f.admin.id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: `change ${n}`,
+            created_at: `2026-01-01T00:00:${String(n).padStart(2, '0')}.000Z`,
+            read_at: n === 0 ? NOW : undefined,
+            snoozed_until: ago(1),
+          })
+        }
+      })
+    }
+    const wake = (issue_id: string) =>
+      t.run(async (ctx) => {
+        const written = await wakeSnoozedItem(ctx, { recipient_id: f.admin.id, issue_id }, 'now')
+        return { written, used: (await ctx.meta.getTransactionMetrics()).documentsWritten.used }
+      })
+    for (const task of [live, shelved]) {
+      expect(await wake(task.id)).toEqual({
+        written: ITEM_UNREAD_CAP + 1,
+        used: ITEM_UNREAD_CAP + 1,
+      })
+    }
+    // the live item comes back whole and unread, the archived one keeps only
+    // its newest row, read
+    const back = await messagesFor(t, f.admin.id, live.id)
+    expect(back).toHaveLength(ITEM_UNREAD_CAP + 1)
+    for (const m of back) {
+      expect([m.snoozed_until, m.read_at, m.woke_at]).toEqual([undefined, undefined, 'now'])
+    }
+    const kept = await messagesFor(t, f.admin.id, shelved.id)
+    expect(kept.map((m) => [m.detail, m.read_at !== undefined, m.snoozed_until])).toEqual([
+      [`change ${ITEM_UNREAD_CAP}`, true, undefined],
+    ])
+    // nothing left to wake writes nothing
+    expect(await wake(live.id)).toEqual({ written: 0, used: 0 })
+  })
+
+  it('wakes overdue items in legs within the budget, each once, and still sweeps later profiles', async () => {
+    // a leg with its whole budget can always wake one full item
+    expect(SWEEP_BATCH).toBeGreaterThanOrEqual(ITEM_UNREAD_CAP + 1)
+    // a leg's budget plus the run's audit row; waking every item that one
+    // leg's sample of overdue rows touches would write far more
+    const t = limitedT({ documentsWritten: SWEEP_BATCH + 1 })
+    const f = await withOrg(t)
+    const agent = (id: string, name: string) =>
+      plantSeat(t, { org_id: f.org.id, id, kind: 'agent', name, plannable_hours: undefined })
+    // first in uuid order, so every other profile waits for its legs
+    const snoozer = await agent('00000000-0000-4000-8000-000000000000', 'Snoozer')
+    // last in uuid order, with a read message past its retention
+    const last = await agent('ffffffff-ffff-4fff-bfff-ffffffffffff', 'Last')
+    const stale = await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: last.id,
+      issue_id: uuid(),
+      read_at: ago(DEFAULT_MESSAGE_RETENTION_DAYS + 1),
+    })
+    // full items whose wakes were lost, their rows interleaved in creation
+    // order, so the first overdue rows of the range belong to every item
+    const items = Array.from({ length: 25 }, () => uuid())
+    for (let n = 0; n <= ITEM_UNREAD_CAP; n++) {
+      await t.run(async (ctx) => {
+        for (const issue_id of items) {
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: f.org.id,
+            recipient_id: snoozer.id,
+            issue_id,
+            issue_title: 'Busy task',
+            kind: 'comment',
+            detail: 'New comment',
+            created_at: NOW,
+            snoozed_until: ago(1),
+          })
+        }
+      })
+    }
+
+    expect(await runSweep(t)).toEqual({ deleted: 1, woken: items.length })
+
+    const rows = await messagesFor(t, snoozer.id)
+    expect(rows).toHaveLength(items.length * (ITEM_UNREAD_CAP + 1))
+    expect(rows.filter((m) => m.snoozed_until !== undefined || m.read_at !== undefined)).toEqual([])
+    // one stamp, the run's, on every row
+    expect(new Set(rows.map((m) => m.woke_at)).size).toBe(1)
+    expect(rows[0].woke_at).toBeDefined()
+    expect(await messagesFor(t, last.id)).not.toContainEqual(stale)
+    // a leg wakes whole items while one more could fit its budget
+    const perLeg = Math.floor(SWEEP_BATCH / (ITEM_UNREAD_CAP + 1))
+    const legs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    expect(legs.filter((job) => job.name.includes('sweepReadMessages'))).toHaveLength(
+      Math.ceil(items.length / perLeg) - 1,
+    )
   })
 })
 

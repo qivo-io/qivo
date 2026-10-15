@@ -214,6 +214,8 @@ describe('creating projects and sub-projects', () => {
       type: 'meta',
       parent_id: null,
       description: 'Housing',
+      archived: false,
+      access: { read: true, write: true },
       lead_id: fx.admin.id,
       lead_name: 'admin',
       milestones: [],
@@ -598,6 +600,7 @@ describe('changing a project', () => {
       )
     const archived = await update({ archived: true })
     expect(archived.archived_at).not.toBeNull()
+    expect(archived).toMatchObject({ archived: true, access: { read: true, write: true } })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBe(archived.archived_at)
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'archived',
@@ -605,7 +608,7 @@ describe('changing a project', () => {
     })
     // one call restores first, so the rename lands on the active project
     const back = await update({ archived: false, name: 'Back' })
-    expect(back).toMatchObject({ archived_at: null, name: 'Back' })
+    expect(back).toMatchObject({ archived: false, archived_at: null, name: 'Back' })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
     const verbs = (await activityFor(fx.t, fx.org.id)).slice(-2).map((e) => e.verb)
     expect(verbs).toEqual(['restored', 'renamed'])

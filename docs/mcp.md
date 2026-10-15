@@ -128,7 +128,8 @@ user or team at a time; only a person may change them, never an agent.
 Revoking a credential cuts access immediately — and so does switching the
 user to **Inactive**, which stops every key or token they hold at once
 without anything having to be revoked one by one: both the credential row
-and the profile behind it are read fresh on every request.
+and the profile behind it are read fresh on every request. A request already
+accepted when its credential is revoked or expires can still finish.
 
 **Read-only credentials.** Every credential either can make changes or can
 only read. One shared rule decides it (`credentialAccess` in
@@ -149,12 +150,15 @@ agent key gets `this agent is a Viewer and can only read` and a personal
 token gets `this credential can only read`, both as the tool's error result.
 A read-only OAuth connection gets the HTTP 403 `insufficient_scope` challenge
 described under [OAuth protocol and deployment](#oauth-protocol-and-deployment).
-A read-only credential still reads everything its user can, and it can still
-create, list and remove its own [webhook subscriptions](#task-events-and-webhook-delivery).
+A read-only credential still reads everything its user can, and
+`list_projects` and `get_project` show `access.write` as `false` on every
+project. It can still create, list and remove its own
+[webhook subscriptions](#task-events-and-webhook-delivery).
 
 **The Viewer role.** A user whose **organization role** is `viewer`
 (migration 0102) holds a seat and signs in, reads exactly the projects they
-can access directly or through a team, and changes no project. A Viewer
+can access directly or through a team, and changes no project, so every
+project shows `access.write` as `false`. A Viewer
 person's credential may be able to make changes, but every change to a task,
 and every new comment, link or attachment, still refuses with the same `your
 account has no write access to that project` a missing grant produces, and
@@ -694,7 +698,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 |---|---|
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
-| `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
+| `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name`, or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
@@ -777,6 +781,29 @@ The answer never contains a secret, a hash or a display prefix. A read-only
 OAuth connection may call `get_me`, because it only reads.
 
 ### Projects, access and milestones
+
+A `list_projects` row:
+
+```json
+{
+  "id": "…uuid…", "key": "ENC", "num": 2, "name": "Enclosure", "type": "project",
+  "parent_id": "…uuid…", "team_id": null, "description": "",
+  "archived": false, "archived_at": null,
+  "access": { "read": true, "write": false }
+}
+```
+
+- `access` is what you hold on the project, by the same rule as REST's
+  project rows. `read` is `true` on every row these tools return. `write` is
+  `true` when you may create, edit and delete tasks in the project and
+  comment on them. It needs Edit (`user`) or Lead access there and a
+  credential that can make changes, so a read-only credential and a Viewer
+  get `false` on every project. Changing the project's settings or its
+  access needs Lead access, which `access` does not show.
+- `write` does not look at archiving or billing, so an archived project
+  still takes no new tasks and a billing pause still refuses changes.
+- `archived` is `true` when `archived_at` is set, the instant the project
+  was put away.
 
 `get_project` answers the `list_projects` row with these fields added:
 
@@ -974,7 +1001,8 @@ refused with `your account has no write access to that project`, and one you
 cannot read reads `project "<ref>" not found (or not visible to you)`. The
 task's assignee, and the reviewer of a task without subtasks, must be able to
 work in the destination, and everyone working on its active subtasks must be
-able to see it. A new `assignee_id` or `reviewer_id` in the same call is
+able to see it. An `assignee_id` or `reviewer_id` in the same call, null
+included, takes the place of the current one in this check, and a new one is
 checked against the destination. A moved task keeps its key, labels, links
 and subtasks.
 
@@ -985,7 +1013,8 @@ cannot read reads `parent task "<ref>" not found (or not visible to you)`.
 The task cannot become its own parent or a subtask of one of its subtasks,
 an active task cannot go under an archived parent, and chains stop at 20
 tasks. Everyone assigned to or reviewing the task or its subtasks must be
-able to see the new parent.
+able to see the new parent. An `assignee_id` or `reviewer_id` in the same
+call, null included, counts in place of the current one.
 
 `add_labels` and `remove_labels` take label ids or names in any case from
 `list_labels`. Labels change one at a time, never as a replacement list, and
@@ -1177,12 +1206,16 @@ keeps only each item's latest message, so `update_inbox` with
 `action: "read"` and `all: true`, repeated while `has_more` is `true`,
 shrinks the inbox until it fits.
 
-`update_inbox` applies `action` to your items about `tasks` (task refs), or
-with `all: true` to every item:
+`update_inbox` applies `action` to your items about `tasks`, at most 100
+task refs per call with repeats counted (a longer list is refused), or with
+`all: true` to every item:
 
 - `read` marks the items read and, like opening an item in the app, keeps
   only each item's latest message. With `all`, it marks every item read
-  except snoozed ones.
+  except snoozed ones, and the result adds `before`, a number. Pass it back
+  unchanged as `before` on each later call, so messages that arrive
+  meanwhile stay unread. `before` with `tasks` or another action is
+  refused.
 - `unread` marks the items unread again.
 - `remove` removes the items. With `all`, it removes every read message
   except snoozed ones and leaves unread messages alone.

@@ -3,7 +3,8 @@
  *
  *   1. What a read says about other tasks: the parent, subtasks, links and a
  *      group's remaining hours name only tasks the caller can read
- *      (lib/workingSet.ts with the machine Shown), plus owner and link.
+ *      (lib/workingSet.ts with the machine Shown), plus owner and link. A
+ *      single-task read walks only the subtasks that can count.
  *   2. List filters: several statuses, the owner, MCP's offset.
  *   3. REST writes: a move with Edit on both ends, parent, labels, the
  *      archive reason, and the fields a body may not write.
@@ -17,12 +18,26 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { applyTaskUpdate } from '../lib/core'
+import {
+  applyTaskUpdate,
+  childIndexOf,
+  issueOut,
+  taskDetail,
+  taskOut,
+  taskRefOf,
+} from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
-import type { IssuePatch } from '../model/issues'
+import { taskAttachments } from '../model/attachments'
+import {
+  ASSIGNEE_RULE,
+  ASSIGNEE_SIGHT_RULE,
+  HOLDER_SIGHT_RULE,
+  type IssuePatch,
+  MOVE_HOLDER_RULE,
+} from '../model/issues'
 import {
   activityFor,
   as,
@@ -301,6 +316,173 @@ describe('the single-task read names only tasks the caller can read', () => {
   })
 })
 
+describe('a single-task read walks only the subtasks that can count', () => {
+  /* taskOut for `issue` read by `me`, its answer handed the organization's
+   * whole task index as the fallback read would (nothing pruned), and the
+   * transaction's read metrics. */
+  const readBoth = (fx: Fx, issue: Doc<'issues'>, me: Doc<'profiles'>, surface: 'rest' | 'mcp') =>
+    fx.t.run(async (ctx) => {
+      const out =
+        surface === 'rest'
+          ? await taskOut(ctx, issue, { surface, me })
+          : await taskOut(ctx, issue, { surface, me })
+      const metrics = await ctx.meta.getTransactionMetrics()
+      const project = (await byId(ctx, 'projects', issue.project_id)) as Doc<'projects'>
+      const children = childIndexOf(
+        await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
+          .collect(),
+      )
+      const row =
+        surface === 'rest'
+          ? await issueOut(ctx, issue, { surface, me, project, children })
+          : await issueOut(ctx, issue, { surface, me, project, children })
+      const detail = await taskDetail(ctx, me, issue, { project, isGroup: row.is_group, children })
+      const whole = { ...row, ...detail, attachments: await taskAttachments(ctx, me, issue) }
+      return { out, whole, metrics }
+    })
+
+  const scheduled = (start_week: string, end_week: string, remaining_hours: number) => ({
+    start_week,
+    end_week,
+    remaining_hours,
+  })
+
+  /* `count` tasks in FW in one transaction, numbered from `firstNum`. */
+  const plantMany = (fx: Fx, count: number, firstNum: number, over: Partial<Doc<'issues'>>) =>
+    fx.t.run(async (ctx) => {
+      for (let i = 0; i < count; i++) {
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          num: firstNum + i,
+          title: `Planted ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'low',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...over,
+        })
+      }
+    })
+
+  it('answers as a read of the whole organization does, on a mixed tree', async () => {
+    const fx = await setup()
+    const root = await task(fx, { title: 'Root', remaining_hours: 9 })
+    const leaf = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-16', 3) })
+    const hidden = await task(fx, {
+      parent_id: root.id,
+      project_id: fx.hiddenSub.id,
+      ...scheduled('2026-01-05', '2026-01-05', 7),
+    })
+    await task(fx, { parent_id: hidden.id, ...scheduled('2025-12-01', '2025-12-01', 2) })
+    const shelved = await task(fx, {
+      parent_id: root.id,
+      archived_at: NOW,
+      ...scheduled('2025-11-03', '2025-11-03', 4),
+    })
+    await task(fx, {
+      parent_id: shelved.id,
+      archived_at: NOW,
+      ...scheduled('2025-10-06', '2025-10-06', 1),
+    })
+    const nested = await task(fx, { parent_id: root.id, project_id: fx.sub2.id })
+    await task(fx, {
+      parent_id: nested.id,
+      project_id: fx.sub2.id,
+      ...scheduled('2026-05-04', '2026-06-01', 6),
+    })
+    await task(fx, {
+      parent_id: nested.id,
+      archived_at: NOW,
+      ...scheduled('2027-01-04', '2027-01-04', 5),
+    })
+    await task(fx, {
+      parent_id: nested.id,
+      project_id: fx.archivedSub.id,
+      ...scheduled('2027-02-01', '2027-02-01', 8),
+    })
+    await task(fx, {
+      parent_id: root.id,
+      project_id: fx.roSub.id,
+      status: 'done',
+      ...scheduled('2026-02-02', '2026-02-09', 1),
+    })
+    // an archived group counts its whole subtree, outside archived projects
+    const gone = await task(fx, { archived_at: NOW, title: 'Gone' })
+    for (const project_id of [fx.sub.id, fx.hiddenSub.id, fx.archivedSub.id]) {
+      await task(fx, {
+        parent_id: gone.id,
+        project_id,
+        archived_at: NOW,
+        ...scheduled('2026-07-06', '2026-07-13', 2),
+      })
+    }
+    for (const me of [fx.agent, fx.admin]) {
+      for (const issue of [root, leaf, hidden, shelved, nested, gone]) {
+        for (const surface of ['rest', 'mcp'] as const) {
+          const { out, whole } = await readBoth(fx, issue, me, surface)
+          expect(out, `${me.name} ${issue.title} ${surface}`).toEqual(whole)
+        }
+      }
+    }
+    // what the agent is told: the hidden branch, the archived ones, the
+    // archived project and the done leaf's hours stay out
+    expect((await readBoth(fx, root, fx.agent, 'rest')).out).toMatchObject({
+      is_group: true,
+      start_week: '2026-02-02',
+      end_week: '2026-06-01',
+      group_remaining_hours: 9,
+    })
+    expect((await readBoth(fx, root, fx.admin, 'rest')).out).toMatchObject({
+      start_week: '2025-12-01',
+      group_remaining_hours: 11,
+    })
+  })
+
+  it('does not read an archived branch under an active task, however large', async () => {
+    const fx = await setup()
+    const root = await task(fx, { title: 'Root' })
+    const leaf = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-02', 3) })
+    const shelved = await task(fx, { parent_id: root.id, archived_at: NOW })
+    await plantMany(fx, 1500, 100000, { parent_id: shelved.id, archived_at: NOW })
+    const { out, whole, metrics } = await readBoth(fx, root, fx.agent, 'rest')
+    expect(out).toEqual(whole)
+    expect(out).toMatchObject({ start_week: leaf.start_week, subtasks: [taskRefOf(leaf)] })
+    // the root's two subtasks and the leaf's none, not the 1,500 below
+    expect(metrics.documentsRead.used).toBeLessThan(100)
+    // an archived root reads them all, as it counts them
+    const archived = await readBoth(fx, shelved, fx.agent, 'rest')
+    expect(archived.out).toEqual(archived.whole)
+    expect(archived.out.subtasks).toHaveLength(1500)
+  })
+
+  it('keeps a mostly archived subtree off the organization-wide read', async () => {
+    const fx = await setup()
+    const root = await task(fx, { title: 'Root' })
+    const live = await task(fx, { parent_id: root.id, ...scheduled('2026-03-02', '2026-03-09', 3) })
+    // 1,100 archived subtasks, past the walk's budget of 1,000 reads
+    await plantMany(fx, 1100, 100000, { parent_id: root.id, archived_at: NOW })
+    // and 2,000 tasks elsewhere that only an organization-wide read touches
+    await plantMany(fx, 2000, 200000, {})
+    const { out, whole, metrics } = await readBoth(fx, root, fx.agent, 'rest')
+    expect(out).toEqual(whole)
+    expect(out).toMatchObject({
+      is_group: true,
+      start_week: live.start_week,
+      end_week: live.end_week,
+    })
+    expect(out.subtasks).toEqual([taskRefOf(live)])
+    // the root's 1,101 subtasks and a few by_parent reads, not 3,000 tasks
+    expect(metrics.documentsRead.used).toBeLessThan(1300)
+    expect(metrics.databaseQueries.used).toBeLessThan(50)
+  })
+})
+
 /* --------------------------------------------------------- 2. list filters */
 
 describe('list filters', () => {
@@ -401,6 +583,72 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     const t3 = await task(fx, { project_id: fx.sub2.id, assignee_id: pcbOnly.id })
     await expectRefusal(restPatch(fx, t3.id, { project: 'FW', title: 'Renamed' }), 'rule')
     expect(await row(fx.t, t3.id)).toMatchObject({ project_id: fx.sub2.id, title: t3.title })
+  })
+
+  it('a move or a parent with new people checks the people the task ends up with', async () => {
+    const fx = await setup()
+    const { fwOnly, fwOther, pcbOnly, pcbParent } = await handover(fx)
+    // only the new assignee or reviewer can work in PCB
+    const moved = await task(fx, { assignee_id: fwOnly.id })
+    expect(
+      await restPatch(fx, moved.id, { project: 'PCB', assignee_id: pcbOnly.id }),
+    ).toMatchObject({ project_key: 'PCB', assignee_id: pcbOnly.id })
+    expect((await activityFor(fx.t, fx.org.id)).map((e) => e.verb)).toEqual(['moved', 'changed'])
+    const reviewed = await task(fx, { reviewer_id: fwOnly.id })
+    expect(
+      await restPatch(fx, reviewed.id, { project: 'PCB', reviewer_id: pcbOnly.id }),
+    ).toMatchObject({ project_key: 'PCB', reviewer_id: pcbOnly.id })
+    // unassigning in the same request lets the task go
+    const cleared = await task(fx, { assignee_id: fwOnly.id, reviewer_id: fwOnly.id })
+    expect(
+      await restPatch(fx, cleared.id, { project: 'PCB', assignee_id: null, reviewer_id: null }),
+    ).toMatchObject({ project_key: 'PCB', assignee_id: null, reviewer_id: null })
+    // a final assignee who cannot work there is refused, and so is the move
+    // alone while the current one cannot
+    const stays = await task(fx, { assignee_id: fwOnly.id })
+    await refused(
+      restPatch(fx, stays.id, { project: 'PCB', assignee_id: fwOther.id }),
+      'bad_request',
+      `user "${fwOther.id}" has no access to this project`,
+    )
+    await refused(restPatch(fx, stays.id, { project: 'PCB' }), 'rule', ASSIGNEE_RULE)
+    await refused(
+      restPatch(fx, stays.id, { project: 'PCB', assignee_id: fwOnly.id }),
+      'rule',
+      ASSIGNEE_RULE,
+    )
+    // a new parent only the new assignee can see
+    const child = await task(fx, { assignee_id: fwOnly.id })
+    expect(
+      await restPatch(fx, child.id, { parent: pcbParent.id, assignee_id: fx.guest.id }),
+    ).toMatchObject({ parent_id: pcbParent.id, assignee_id: fx.guest.id })
+    const blind = await task(fx, { assignee_id: fwOnly.id })
+    await refused(
+      restPatch(fx, blind.id, { parent: pcbParent.id, assignee_id: fwOther.id }),
+      'rule',
+      ASSIGNEE_SIGHT_RULE,
+    )
+    await refused(restPatch(fx, blind.id, { parent: pcbParent.id }), 'rule', HOLDER_SIGHT_RULE)
+    expect(
+      await restPatch(fx, blind.id, { parent: pcbParent.id, assignee_id: null }),
+    ).toMatchObject({ parent_id: pcbParent.id, assignee_id: null })
+    // whoever works on a subtask still has to see the destination and the parent
+    const top = await task(fx, { assignee_id: fwOnly.id })
+    await task(fx, { parent_id: top.id, assignee_id: fwOnly.id })
+    await refused(
+      restPatch(fx, top.id, { project: 'PCB', assignee_id: pcbOnly.id }),
+      'rule',
+      MOVE_HOLDER_RULE,
+    )
+    await refused(
+      restPatch(fx, top.id, { parent: pcbParent.id, assignee_id: fx.guest.id }),
+      'rule',
+      HOLDER_SIGHT_RULE,
+    )
+    for (const t of [stays, blind, top]) {
+      expect(await row(fx.t, t.id)).toMatchObject({ project_id: fx.sub.id })
+    }
+    expect((await row(fx.t, top.id)).parent_id).toBeUndefined()
   })
 
   it('sets and clears the parent through the app rules, narrated with the task keys', async () => {
@@ -526,6 +774,19 @@ async function withSeat(fx: Fx, name: string): Promise<Doc<'profiles'>> {
     })
     return (await ctx.db.get(_id)) as Doc<'profiles'>
   })
+}
+
+/* People who can work only in FW or only in PCB, and a parent task in PCB
+ * that only the guest (Edit on the whole TBED project) and PCB people can
+ * see among them. */
+async function handover(fx: Fx) {
+  const fwOnly = await withSeat(fx, 'fw only')
+  const fwOther = await withSeat(fx, 'fw other')
+  const pcbOnly = await withSeat(fx, 'pcb only')
+  for (const seat of [fwOnly, fwOther]) await grant(fx.t, fx.sub.id, seat.id, 'user')
+  await grant(fx.t, fx.sub2.id, pcbOnly.id, 'user')
+  const pcbParent = await task(fx, { project_id: fx.sub2.id, title: 'PCB parent' })
+  return { fwOnly, fwOther, pcbOnly, pcbParent }
 }
 
 /* ------------------------------------------------- 4. REST links and labels */
@@ -815,6 +1076,52 @@ describe('MCP task parity', () => {
     const t4 = await task(fx, { project_id: fx.sub2.id, assignee_id: pcbOnly.id })
     await expectRefusal(update({ ref: t4.id, project: 'FW', title: 'Renamed' }), 'rule')
     expect(await row(fx.t, t4.id)).toMatchObject({ project_id: fx.sub2.id, title: t4.title })
+  })
+
+  it('update_task with a move or a parent and new people checks the people the task ends up with', async () => {
+    const fx = await setup()
+    const { fwOnly, fwOther, pcbOnly, pcbParent } = await handover(fx)
+    const update = (args: Record<string, unknown>) =>
+      mcpWrite(fx, internal.machine.mcp.updateIssue, args)
+    const moved = await task(fx, { assignee_id: fwOnly.id, reviewer_id: fwOnly.id })
+    await update({
+      ref: moved.id,
+      project: 'PCB',
+      assignee_id: pcbOnly.id,
+      reviewer_id: pcbOnly.id,
+    })
+    expect(await row(fx.t, moved.id)).toMatchObject({
+      project_id: fx.sub2.id,
+      assignee_id: pcbOnly.id,
+      reviewer_id: pcbOnly.id,
+    })
+    const cleared = await task(fx, { assignee_id: fwOnly.id })
+    await update({ ref: cleared.id, project: 'PCB', assignee_id: null })
+    expect(await row(fx.t, cleared.id)).toMatchObject({ project_id: fx.sub2.id })
+    expect((await row(fx.t, cleared.id)).assignee_id).toBeUndefined()
+    const stays = await task(fx, { assignee_id: fwOnly.id })
+    await refused(
+      update({ ref: stays.id, project: 'PCB', assignee_id: fwOther.id }),
+      'bad_request',
+      `user "${fwOther.id}" has no access to this project`,
+    )
+    await refused(update({ ref: stays.id, project: 'PCB' }), 'rule', ASSIGNEE_RULE)
+    const child = await task(fx, { assignee_id: fwOnly.id })
+    await update({ ref: child.id, parent: pcbParent.id, assignee_id: fx.guest.id })
+    expect(await row(fx.t, child.id)).toMatchObject({
+      parent_id: pcbParent.id,
+      assignee_id: fx.guest.id,
+    })
+    await refused(
+      update({ ref: stays.id, parent: pcbParent.id, assignee_id: fwOther.id }),
+      'rule',
+      ASSIGNEE_SIGHT_RULE,
+    )
+    await refused(update({ ref: stays.id, parent: pcbParent.id }), 'rule', HOLDER_SIGHT_RULE)
+    expect(await row(fx.t, stays.id)).toMatchObject({
+      project_id: fx.sub.id,
+      assignee_id: fwOnly.id,
+    })
   })
 
   it('reports arguments the schema does not know instead of dropping them silently', async () => {

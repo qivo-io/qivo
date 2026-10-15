@@ -21,7 +21,7 @@ import { WorkspaceToolbar } from '../components/WorkspaceShell'
 import { groupSpan } from '../lib/issueGroups'
 import { autoMoves, dependencyPairs } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
-import { committedByWeek, fitEndWeek, type LoadItem, plannableHoursOf } from '../lib/workload'
+import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
 import { UpdateEstimateModal } from '../panels/UpdateEstimate'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
@@ -571,12 +571,7 @@ function Roadmap({
       // measured (never before the dragged start) — the same anchor the delay
       // projection walks from, so the fitted end and the status agree
       const from = it.remainingSet != null ? Math.max(l.start, it.remainingSet) : l.start
-      const end = fitEndWeek(
-        from,
-        it.remaining,
-        capacityFor(it),
-        committedByWeek(sess.load, it.uuid),
-      )
+      const end = fitEndWeekAgainst(sess.load, it.uuid, from, it.remaining, capacityFor(it))
       if (l.start !== it.start || end !== it.end) P.updateIssue(id, { start: l.start, end })
       return
     }
@@ -683,7 +678,7 @@ function Roadmap({
     const from = rs != null ? Math.max(startW, rs) : startW
     P.updateIssue(id, {
       start: startW,
-      end: fitEndWeek(from, remaining, capacity, committedByWeek(load, uuid)),
+      end: fitEndWeekAgainst(load, uuid, from, remaining, capacity),
     })
   }
   const receivePlanningLoad = (s: PlanSession, load: LoadItem[] | null) => {

@@ -7,8 +7,9 @@
  *      expired token like a revoked one, and those two are the only paths
  *      that insert mcp_tokens rows.
  *   3. A static walk: every exported internal mutation and action of the
- *      machine surfaces and webhooks, plus every one the machine HTTP actions
- *      call, takes the required `access` argument or is a named exemption
+ *      machine surfaces and webhooks, every one the machine HTTP actions
+ *      call, and every one reached from those through the code an action
+ *      runs, takes the required `access` argument or is a named exemption
  *      with its reason. A call the walk cannot resolve fails it.
  *   4. Over HTTP: every write entry of the registry refuses a read-only
  *      personal token, a read-only OAuth grant (MCP; REST takes OAuth on its
@@ -361,8 +362,12 @@ type Registered = {
   exportArgs?: () => string
 }
 
+type Modules = Record<string, Record<string, unknown>>
+type Sources = Record<string, string>
+
 /* Every module that can register a function, so an `internal.…` reference
- * resolves wherever its target lives. */
+ * resolves wherever its target lives, and the source of each, so the walk
+ * can follow the code an action runs. */
 const modules = import.meta.glob(
   [
     '../**/*.ts',
@@ -374,59 +379,221 @@ const modules = import.meta.glob(
     '!../env.d.ts',
   ],
   { eager: true },
-) as Record<string, Record<string, unknown>>
+) as Modules
 
-const machineSources = import.meta.glob('../machine/*.ts', {
-  eager: true,
-  query: '?raw',
-  import: 'default',
-}) as Record<string, string>
+const sources = import.meta.glob(
+  [
+    '../**/*.ts',
+    '!../_generated/**',
+    '!../betterAuth/**',
+    '!../tests/**',
+    '!../convex.config.ts',
+    '!../auth.config.ts',
+    '!../env.d.ts',
+  ],
+  { eager: true, query: '?raw', import: 'default' },
+) as Sources
 
-/** The registered function behind a "module:export" name, if any. */
-function registered(name: string): Registered | undefined {
-  const [module, fn] = name.split(':')
-  const value = modules[`../${module}.ts`]?.[fn] as Registered | undefined
-  return value?.exportArgs === undefined ? undefined : value
+/** Every `internal.…` reference in some code, as "module:export". */
+function refsIn(code: string): string[] {
+  return [...code.matchAll(/\binternal\.((?:\w+\.)+\w+)/g)].map(([, ref]) => {
+    const parts = ref.split('.')
+    return `${parts.slice(0, -1).join('/')}:${parts.at(-1)}`
+  })
 }
 
-const writes = (fn: Registered | undefined): boolean =>
-  fn?.isInternal === true && (fn.isMutation === true || fn.isAction === true)
+/** Runner and scheduler calls in some code given anything but an
+ * `internal.…` reference (a variable, makeFunctionReference, a public api
+ * reference), which hide their target from the walk. The lookahead also
+ * refuses whitespace, so a reference on the next line is not read as the
+ * line break before it. */
+function indirectIn(code: string): string[] {
+  return [
+    ...code.matchAll(/\brun(?:Query|Mutation|Action)\(\s*(?!\s|internal\.)([^,)]*)/g),
+    ...code.matchAll(/\bscheduler\.run(?:After|At)\([^,]*,\s*(?!\s|internal\.)([^,)]*)/g),
+  ].map(([, arg]) => arg.trim())
+}
 
-/* Every `internal.…` reference in the machine sources, as "module:export". */
-function machineRefs(): string[] {
-  const names = new Set<string>()
-  for (const src of Object.values(machineSources)) {
-    for (const [, ref] of src.matchAll(/\binternal\.((?:\w+\.)+\w+)/g)) {
-      const parts = ref.split('.')
-      names.add(`${parts.slice(0, -1).join('/')}:${parts.at(-1)}`)
+/* A top-level declaration. Biome starts every one at column 0, so each runs
+ * to the next. */
+const DECLARATION =
+  /^(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
+
+/** Where a name a module uses comes from, a declaration in another module,
+ * or null when the walk cannot read it (a default or namespace import, or a
+ * module outside the glob). */
+type Binding = { path: string; name: string } | null
+
+/** A module's code by top-level declaration, and where its imported and
+ * re-exported names come from. */
+type ModuleCode = {
+  declared: Map<string, string>
+  imported: Map<string, Binding>
+  reexported: Map<string, Binding>
+}
+
+/**
+ * The walk over a set of modules and their sources, which finds the internal
+ * mutations and actions the machine surfaces can reach. It starts from every
+ * exported internal mutation and action of the machine and webhook modules
+ * and every `internal.…` reference in the machine sources. Then it follows
+ * each action it reaches through the code that action runs, which is its own
+ * declaration and every declaration that code names, in its module or
+ * imported from another, and so on by name. A query cannot write, and a
+ * mutation it reaches is checked itself, so only actions are followed. A
+ * reference or an import the walk cannot resolve throws, so a call it cannot
+ * follow fails every test that uses the walk instead of dropping out of it.
+ */
+function walker(modules: Modules, sources: Sources) {
+  const registered = (name: string): Registered | undefined => {
+    const [module, fn] = name.split(':')
+    const value = modules[`../${module}.ts`]?.[fn] as Registered | undefined
+    return value?.exportArgs === undefined ? undefined : value
+  }
+  const writes = (fn: Registered | undefined): boolean =>
+    fn?.isInternal === true && (fn.isMutation === true || fn.isAction === true)
+  const machineSources = Object.fromEntries(
+    Object.entries(sources).filter(([path]) => /^\.\.\/machine\/[^/]+\.ts$/.test(path)),
+  )
+  const machineRefs = (): string[] =>
+    [...new Set(Object.values(machineSources).flatMap(refsIn))].sort()
+
+  /** The module a relative import names, or undefined for generated code. */
+  const resolve = (from: string, spec: string): string | undefined => {
+    const parts = from.split('/').slice(0, -1)
+    for (const part of spec.split('/')) {
+      if (part === '..') parts.pop()
+      else if (part !== '.') parts.push(part)
     }
+    const path = `${parts.join('/')}.ts`
+    return path.includes('/_generated/') ? undefined : path
   }
-  return [...names].sort()
+
+  const parsed = new Map<string, ModuleCode>()
+  const codeOf = (path: string): ModuleCode => {
+    const known = parsed.get(path)
+    if (known !== undefined) return known
+    const src = sources[path]
+    if (src === undefined) throw new Error(`the walk cannot read ${path}`)
+    const declared = new Map<string, string>()
+    const starts = [...src.matchAll(DECLARATION)]
+    starts.forEach((m, i) => {
+      const text = src.slice(m.index, starts[i + 1]?.index ?? src.length)
+      declared.set(m[1], (declared.get(m[1]) ?? '') + text) // overloads add up
+    })
+    const imported = new Map<string, Binding>()
+    const reexported = new Map<string, Binding>()
+    const bindings =
+      /^(import|export)\s+(type\s+)?((?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\}|\*\s+as\s+[A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*)\s+from\s+['"]([^'"]+)['"]/gm
+    for (const [, kind, typeOnly, clause, spec] of src.matchAll(bindings)) {
+      if (typeOnly !== undefined || !spec.startsWith('.')) continue
+      const target = resolve(path, spec)
+      if (target === undefined) continue
+      const into = kind === 'import' ? imported : reexported
+      const named = /\{([^}]*)\}/.exec(clause)
+      for (const part of named?.[1].split(',') ?? []) {
+        const [name, local = name] = part.trim().split(/\s+as\s+/)
+        if (name === '' || name.startsWith('type ')) continue
+        into.set(local, target in sources ? { path: target, name } : null)
+      }
+      // a default or namespace import binds a whole module
+      for (const local of clause.replace(/\{[^}]*\}/, '').match(/[A-Za-z_$][\w$]*/g) ?? []) {
+        if (local !== 'as') into.set(local, null)
+      }
+    }
+    // `export { name }` passes on what the module imported
+    for (const [, list] of src.matchAll(/^export\s+\{([^}]*)\}\s*$/gm)) {
+      for (const part of list.split(',')) {
+        const [name, local = name] = part.trim().split(/\s+as\s+/)
+        if (imported.has(name)) reexported.set(local, imported.get(name) ?? null)
+      }
+    }
+    const code = { declared, imported, reexported }
+    parsed.set(path, code)
+    return code
+  }
+
+  /** The declaration behind `name` as `path` exports it. */
+  const declarationOf = (path: string, name: string): { path: string; name: string } => {
+    const code = codeOf(path)
+    if (code.declared.has(name)) return { path, name }
+    const via = code.reexported.get(name)
+    if (via === undefined || via === null) {
+      throw new Error(`the walk cannot follow ${name} from ${path}`)
+    }
+    return declarationOf(via.path, via.name)
+  }
+
+  /** The code the registered function `name` runs. */
+  const codeRunBy = (name: string): string[] => {
+    const [module, fn] = name.split(':')
+    const seen = new Set<string>()
+    const out: string[] = []
+    const queue = [{ path: `../${module}.ts`, name: fn }]
+    for (let at = queue.pop(); at !== undefined; at = queue.pop()) {
+      const key = `${at.path}#${at.name}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const code = codeOf(at.path)
+      const text = code.declared.get(at.name)
+      if (text === undefined) throw new Error(`the walk cannot find ${key}`)
+      out.push(text)
+      for (const [word] of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
+        if (code.declared.has(word)) queue.push({ path: at.path, name: word })
+        const via = code.imported.get(word)
+        if (via === null) throw new Error(`${key} uses ${word}, which the walk cannot follow`)
+        if (via !== undefined) queue.push(declarationOf(via.path, via.name))
+      }
+    }
+    return out
+  }
+
+  /** Every internal mutation and action the walk reaches, as "module:export". */
+  const guarded = (): string[] => {
+    const names = new Set<string>()
+    const reach = (name: string, from: string): void => {
+      if (names.has(name)) return
+      const fn = registered(name)
+      if (fn === undefined)
+        throw new Error(`${from} calls internal ${name}, which is not registered`)
+      if (!writes(fn)) return
+      names.add(name)
+      if (fn.isAction !== true) return
+      for (const code of codeRunBy(name)) {
+        const indirect = indirectIn(code)
+        if (indirect.length > 0) {
+          throw new Error(`${name} runs ${indirect.join(', ')}, which the walk cannot follow`)
+        }
+        for (const ref of refsIn(code)) reach(ref, name)
+      }
+    }
+    for (const [path, mod] of Object.entries(modules)) {
+      const module = path.replace(/^\.\.\//, '').replace(/\.ts$/, '')
+      if (!module.startsWith('machine/') && module !== 'webhooks' && module !== 'webhookActions')
+        continue
+      for (const fn of Object.keys(mod)) {
+        if (writes(registered(`${module}:${fn}`))) reach(`${module}:${fn}`, module)
+      }
+    }
+    for (const name of machineRefs()) reach(name, 'a machine source')
+    return [...names].sort()
+  }
+
+  /** The guarded functions without the required `access` argument that
+   * `exempt` does not name. */
+  const missingAccess = (exempt: Record<string, string>): string[] =>
+    guarded().filter((name) => {
+      if (exempt[name] !== undefined) return false
+      const args = JSON.parse(registered(name)?.exportArgs?.() ?? '{}') as {
+        value?: Record<string, unknown>
+      }
+      return JSON.stringify(args.value?.access) !== ACCESS_ARG
+    })
+
+  return { registered, machineSources, machineRefs, codeRunBy, guarded, missingAccess }
 }
 
-/* What the walk covers: every exported internal mutation and action of the
- * machine modules and the webhook modules, plus every one the machine HTTP
- * actions call by `internal.…` reference, wherever it lives. A reference the
- * walk cannot resolve throws, so a call it cannot follow fails every test
- * that uses the walk instead of dropping out of it. */
-function guarded(): string[] {
-  const names = new Set<string>()
-  for (const [path, mod] of Object.entries(modules)) {
-    const module = path.replace(/^\.\.\//, '').replace(/\.ts$/, '')
-    if (!module.startsWith('machine/') && module !== 'webhooks' && module !== 'webhookActions')
-      continue
-    for (const fn of Object.keys(mod)) {
-      if (writes(registered(`${module}:${fn}`))) names.add(`${module}:${fn}`)
-    }
-  }
-  for (const name of machineRefs()) {
-    const fn = registered(name)
-    if (fn === undefined)
-      throw new Error(`machine source calls internal ${name}, which is not registered`)
-    if (writes(fn)) names.add(name)
-  }
-  return [...names].sort()
-}
+const walk = walker(modules, sources)
 
 /* Each exemption names why the function needs no `access` argument. */
 const EXEMPT: Record<string, string> = {
@@ -473,45 +640,105 @@ const ACCESS_ARG = JSON.stringify({
 
 describe('every machine write takes the credential access', () => {
   it('positive control: the walk sees the machine writes and the HTTP bookkeeping', () => {
-    const names = guarded()
+    const names = walk.guarded()
     expect(names).toContain('machine/mcp:createIssue')
     expect(names).toContain('machine/rest:addComment')
     expect(names).toContain('billingMetering:ingress')
     expect(names).toContain('oauthConnections:touch')
+    // an action is followed into its own code and the helpers it imports
+    const delivery = walk.codeRunBy('webhookActions:deliver').join('\n')
+    expect(delivery).toContain('export async function postWebhook(')
+    expect(refsIn(delivery)).toEqual(expect.arrayContaining(['webhooks:claim', 'webhooks:finish']))
   })
 
   it('every function call in the machine sources is an internal reference the walk resolves', () => {
-    // A runner given anything else (a variable, makeFunctionReference, a
-    // public api reference) hides its target from the walk.
-    const indirect = Object.entries(machineSources).flatMap(([path, src]) =>
-      [...src.matchAll(/\brun(?:Query|Mutation|Action)\(\s*(?!internal\.)([^,)]*)/g)].map(
-        ([, arg]) => `${path}: ${arg.trim()}`,
-      ),
+    const indirect = Object.entries(walk.machineSources).flatMap(([path, src]) =>
+      indirectIn(src).map((arg) => `${path}: ${arg}`),
     )
     expect(indirect).toEqual([])
-    expect(machineRefs().filter((name) => registered(name) === undefined)).toEqual([])
+    expect(walk.machineRefs().filter((name) => walk.registered(name) === undefined)).toEqual([])
     // the resolver reaches a module outside the two directories the walk owns
-    expect(registered('internal/operator:provisionOperator')?.isInternal).toBe(true)
+    expect(walk.registered('internal/operator:provisionOperator')?.isInternal).toBe(true)
   })
 
   it('each one takes the required access argument or is a named exemption', () => {
-    const missing: string[] = []
-    for (const name of guarded()) {
-      if (EXEMPT[name] !== undefined) continue
-      const args = JSON.parse(registered(name)?.exportArgs?.() ?? '{}') as {
-        value?: Record<string, unknown>
-      }
-      if (JSON.stringify(args.value?.access) !== ACCESS_ARG) missing.push(name)
-    }
-    expect(missing).toEqual([])
+    expect(walk.missingAccess(EXEMPT)).toEqual([])
   })
 
   it('every exemption still names a guarded function and gives a reason', () => {
-    const names = new Set(guarded())
+    const names = new Set(walk.guarded())
     for (const [name, reason] of Object.entries(EXEMPT)) {
       expect(names.has(name), `${name} is exempt but not guarded`).toBe(true)
       expect(reason.length, name).toBeGreaterThan(10)
     }
+  })
+
+  it('follows an action to the writes it reaches through helpers in any module', () => {
+    const args = (access: boolean) => () =>
+      `{"type":"object","value":{${access ? `"access":${ACCESS_ARG}` : ''}}}`
+    const action = { isAction: true, isInternal: true, exportArgs: args(false) }
+    const mutation = { isMutation: true, isInternal: true, exportArgs: args(false) }
+    const gated = { isMutation: true, isInternal: true, exportArgs: args(true) }
+    const fakeModules: Modules = {
+      '../machine/fake.ts': { handler: {} },
+      '../relay.ts': { pass: action, unrelated: mutation },
+      '../lib/records.ts': {},
+      '../store.ts': { gated, open: mutation, elsewhere: mutation },
+    }
+    const fakeSources: Sources = {
+      '../machine/fake.ts': [
+        "import { internal } from '../_generated/api'",
+        'export const handler = httpAction(async (ctx) => {',
+        '  await ctx.runAction(internal.relay.pass, {})',
+        '})',
+      ].join('\n'),
+      '../relay.ts': [
+        "import { internal } from './_generated/api'",
+        "import { record as note } from './lib/records'",
+        'export const pass = internalAction({',
+        '  handler: async (ctx) => {',
+        '    await stamp(ctx)',
+        '    await note(ctx)',
+        '  },',
+        '})',
+        'async function stamp(ctx) {',
+        '  await ctx.runMutation(internal.store.gated, {})',
+        '}',
+        'export const unrelated = internalMutation({',
+        '  handler: async (ctx) => {',
+        '    await ctx.scheduler.runAfter(0, internal.store.elsewhere, {})',
+        '  },',
+        '})',
+      ].join('\n'),
+      // a reference on its own line is still a reference
+      '../lib/records.ts': [
+        "import { internal } from '../_generated/api'",
+        'export async function record(ctx) {',
+        '  await ctx.runMutation(',
+        '    internal.store.open,',
+        '    {},',
+        '  )',
+        '}',
+      ].join('\n'),
+      '../store.ts': '',
+    }
+    const fake = walker(fakeModules, fakeSources)
+    // the imported helper's write is reached; the other function of the
+    // action's module and what it schedules are not
+    expect(fake.guarded()).toEqual(['relay:pass', 'store:gated', 'store:open'])
+    expect(fake.missingAccess({ 'relay:pass': 'a relay the test exempts' })).toEqual(['store:open'])
+    // a target the walk cannot see fails it
+    const hidden = (code: string) =>
+      walker(fakeModules, { ...fakeSources, '../lib/records.ts': code }).guarded()
+    expect(() =>
+      hidden('export async function record(ctx) {\n  await ctx.runMutation(ref, {})\n}'),
+    ).toThrow('relay:pass runs ref, which the walk cannot follow')
+    expect(() =>
+      hidden('export async function record(ctx) {\n  await ctx.runMutation(internal.nope.gone)\n}'),
+    ).toThrow('relay:pass calls internal nope:gone, which is not registered')
+    expect(() =>
+      hidden("import helpers from '../store'\nexport const record = helpers.write"),
+    ).toThrow('uses helpers, which the walk cannot follow')
   })
 })
 
@@ -876,6 +1103,15 @@ describe('read-only credentials over HTTP', () => {
         const { text } = toolText(res.body)
         expect(text, tool.def.name).not.toBe(CREDENTIAL_READS_ONLY)
         expect(text, tool.def.name).not.toBe(VIEWER_AGENT_READS_ONLY)
+        // a project row never offers a write this credential cannot make
+        if (tool.def.name === 'list_projects' || tool.def.name === 'get_project') {
+          const rows = [JSON.parse(text)].flat() as { access: { write: boolean } }[]
+          expect(rows.length, tool.def.name).toBeGreaterThan(0)
+          expect(
+            rows.map((row) => row.access.write),
+            tool.def.name,
+          ).not.toContain(true)
+        }
       }
     }
     for (const path of ['/v1/me', '/v1/projects', '/v1/tasks', '/v1/users']) {
@@ -890,6 +1126,12 @@ describe('read-only credentials over HTTP', () => {
     const { token: writeGrant } = await c.oauth(['qivo:read', 'qivo:write'])
     const before = await c.counts()
     for (const secret of [c.writeToken, writeGrant, c.agentKey]) {
+      const listed = await callTool(c.t, secret, 'list_projects', {})
+      const rows = JSON.parse(toolText(listed.body).text) as {
+        key: string
+        access: { write: boolean }
+      }[]
+      expect(rows.find((row) => row.key === c.f.sub.key)?.access.write).toBe(true)
       const res = await callTool(c.t, secret, 'create_task', {
         project: c.f.sub.key,
         title: 'Written',
