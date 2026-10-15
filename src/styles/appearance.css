@@ -1,13 +1,13 @@
 /* Put prefixed backdrop-filter before the standard property: production CSS
    optimization can otherwise leave only the spelling Chromium ignores.
    Every planner theme uses the same structure over the Canvas image. Only
-   the material changes: tokens.css supplies each palette's panels, cards,
-   windows and menus, tinted glass while a Canvas image is painted and solid
-   with No image or before one loads.
+   the material changes. tokens.css supplies each palette's panels, cards,
+   windows and menus, as tinted glass while a Canvas image is painted and
+   solid with No image or before one loads.
    A backdrop-filter reaches back only to the nearest ancestor with its own
    backdrop-filter, filter, opacity below 1, mask, clip-path or blend mode
    (its Backdrop Root). A blurred surface must therefore never sit inside
-   another one: windows stand beside their backdrop, and the cards and
+   another one. Windows stand beside their backdrop, and the cards and
    controls on a blurred panel take a tint only.
    Scope these rules to the authenticated planner, leaving the operator UI alone. */
 html[data-appearance] {
@@ -93,8 +93,8 @@ html[data-appearance] .planner-sidebar {
 /* Tailwind's bare border uses currentColor. Menu outlines must use the theme's
    float rim (--float-border, which falls back to the subdued --border of
    their triggers) instead of white/black text ink. The search palette,
-   dialogs and task windows keep their --border rim: their backdrop already
-   sets them off the page. */
+   dialogs and task windows keep their --border rim, since their backdrop
+   already sets them off the page. */
 html[data-appearance]
 :is(
   [data-slot="popover-content"],
@@ -145,10 +145,10 @@ html[data-appearance][data-background-state="ready"]
   backdrop-filter: var(--float-blur);
 }
 
-/* A Command inherits its parent's glass: its bg-popover would make the
-   palette appear more opaque, and be an opaque block inside a translucent
-   picker: a desktop Popover, or the landscape roadmap's AnchoredPop, whose
-   Popover wraps it in a role="dialog" div. */
+/* A Command inherits its parent's glass. Its bg-popover would make the
+   palette appear more opaque, and would be an opaque block inside a
+   translucent picker, such as a desktop Popover or the landscape roadmap's
+   AnchoredPop, whose Popover wraps it in a role="dialog" div. */
 html[data-appearance][data-background-state="ready"]
   :is(
     [data-slot="dialog-content"],
@@ -286,7 +286,7 @@ html[data-appearance] .board-status-panel[data-board-fused="true"] {
 html[data-appearance] .board-card {
   background: transparent;
   border-radius: var(--r-md);
-  /* The enclosing lane supplies the tint and blur once for all its cards. */
+  /* The enclosing lane supplies the blur once for all its cards. */
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -425,10 +425,11 @@ html[data-appearance] .mobile-task-tools [data-on] {
   background-image: linear-gradient(var(--lit), var(--lit));
 }
 
-/* The palette's esc key rests on its rim alone: its --background would be a
-   hole in the palette's floating fill, darker in Dark and greyer in Light. Hovered, it keeps the bare hover ink over the palette. The search
-   rule under the palette and picker inputs is the theme border, not
-   currentColor text ink. */
+/* The palette's esc key rests on its rim alone. Its --background would be a
+   hole in the palette's floating fill, darker in Dark and greyer in Light.
+   Hovered, it keeps the bare hover ink over the palette. The search rule
+   under the palette and picker inputs is the theme border, not currentColor
+   text ink. */
 html[data-appearance] [data-palette-close]:not(:hover) {
   background-color: transparent;
 }

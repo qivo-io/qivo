@@ -83,7 +83,10 @@ export function BackgroundBoardPreview({
                 </div>
                 <div className="space-y-2">
                   {column.tasks.map((title, index) => (
-                    <div key={title} className="rounded-md border border-[var(--border)] p-3">
+                    <div
+                      key={title}
+                      className="rounded-md border border-[var(--border)] bg-[var(--board-card-fill)] p-3"
+                    >
                       <div className="mb-2 text-[10px] text-[var(--text-2)]">
                         Firmware · {index + 1}
                       </div>

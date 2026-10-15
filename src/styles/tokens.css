@@ -3,7 +3,8 @@
    every page without data-appearance (the operator UI, and the sign-in
    screens before a theme is known), with two neutral fills: --bg is the page
    ground; --surface-1 is every solid UI surface, including controls and
-   floating panels. The planner's Dark and Light blocks below override it. Personal appearance is applied on <html> so portals inherit the same
+   floating panels. The planner's Dark and Light blocks below override it.
+   Personal appearance is applied on <html> so portals inherit the same
    tokens. */
 :root {
   --sans: "Instrument Sans", system-ui, -apple-system, sans-serif;
@@ -55,7 +56,6 @@
   --qivo-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --qivo-shadow-hover: 0 6px 18px rgba(0, 0, 0, 0.45);
   --qivo-shadow-pop: 0 16px 44px rgba(0, 0, 0, 0.55);
-  --scrim: rgba(13, 15, 17, 0.6);
   --image-control-bg: var(--surface-1);
   --checkbox-bg: var(--surface-1);
   --board-parent-text: #dfebff;
@@ -351,7 +351,8 @@
    palette's own fills: panels at 90% (each theme's tint follows), board
    cards at 50% of the control fill, windows at 95% of the sheet fill, and
    menus and tooltips at 95% of the floating fill, each blurring what lies
-   behind it by 20px. Controls and the lit chip stay opaque. With No image,
+   behind it by 20px. Controls stay opaque, and so does Dark's lit chip.
+   With No image,
    or before one loads, every surface keeps its solid fill and nothing
    blurs. appearance.css paints the layers. */
 :root[data-appearance][data-background-state="ready"],

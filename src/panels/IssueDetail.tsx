@@ -13,6 +13,7 @@ import React, {
   useRef as useRefID,
   useState as useStateID,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -242,7 +243,10 @@ function FocusWindow({
       window.removeEventListener('keydown', hb, false)
     }
   }, [onClose])
-  return (
+  // Drawn in #root, not where the task is. The desktop Inbox draws its task in
+  // a pane that blurs the photo, and that pane would clip this fixed window
+  // and cut off its blur. Menus opened inside it portal to <body>, above #root.
+  return createPortal(
     <div
       data-modal-shell
       data-focus-window={name}
@@ -263,7 +267,8 @@ function FocusWindow({
           it, so the window's own blur still reaches the page (appearance.css).
           Last, so the phone rules for the shell's first child keep the window. */}
       <div data-scrim aria-hidden="true" className="[position:fixed] [inset:0] [z-index:-1]" />
-    </div>
+    </div>,
+    document.getElementById('root') ?? document.body,
   )
 }
 
@@ -1641,8 +1646,8 @@ function IssueDetail({
      they are written once here and called from whichever is mounted. Never
      both: two copies of the description would be two drafts of one field, and
      two composers two drafts of one reply. The column simply stops rendering
-     its copy while the window is up, which nobody sees, because the window's
-     own scrim is over it.
+     its copy while the window is up. The window covers most of the gap, and
+     its backdrop blurs the rest.
      `capped` is the whole difference. In the column the field stops at a
      fraction of the viewport and scrolls inside itself, leaving room for
      everything under it; popped out it IS the window, so it fills it. */
@@ -2033,13 +2038,14 @@ function IssueDetail({
     </div>
   )
 
-  // close only when the CLICK also STARTED on the scrim: releasing a text
-  // drag (title/description selection) past the modal edge fires a click on
-  // the scrim as the common ancestor and must not nuke the draft
+  // close only when the CLICK also STARTED on the frame around the window.
+  // Releasing a text drag (title/description selection) past the modal edge
+  // fires a click on the frame as the common ancestor and must not nuke the
+  // draft
   const scrimDownRef = useRefID(false)
   // The backdrop fades with the window, and so does a phone's full-screen
-  // frame. The desktop frame never fades: an opacity below 1 would cut the
-  // window's blur off from the page for the length of the fade.
+  // frame. The desktop frame never fades, because an opacity below 1 would
+  // cut the window's blur off from the page for the length of the fade.
   const fade: React.CSSProperties = {
     opacity: open ? 1 : 0,
     transition: reduceMotion ? 'none' : 'opacity var(--dur-mid) var(--ease-out)',
@@ -2070,7 +2076,7 @@ function IssueDetail({
         // A press that dismisses an open menu must not also close the window
         // (layered dismissal): Radix portals a field select's list and a
         // popover outside this tree, and the pointer-events:none it puts on
-        // <body> stops at this scrim, which sets its own. Read on pointerdown,
+        // <body> stops at this frame, which sets its own. Read on pointerdown,
         // which reaches this handler before Radix's document-level listener
         // dismisses the menu — so the menu is still in the DOM to be found.
         onPointerDown={
@@ -3000,9 +3006,10 @@ function IssueDetail({
         </div>
       </div>
       {/* One half of the task, alone, in a window standing on this one. Both
-          are rendered here for the same reason the pickers below are: a
-          fixed-position layer inside the scaled/blurred card would take the
-          card as its containing block. */}
+          are rendered outside the card for the same reason the pickers below
+          are, a fixed-position layer inside the scaled or blurred card would
+          take the card as its containing block. FocusWindow portals to #root
+          for the Inbox pane, which blurs too. */}
       {/* Each one is the task window showing a single section: the SAME two
           heading lines (breadcrumb, then the task name), then the section's
           own heading exactly as the column draws it — minus the pop-out
