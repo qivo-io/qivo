@@ -128,7 +128,8 @@ user or team at a time; only a person may change them, never an agent.
 Revoking a credential cuts access immediately — and so does switching the
 user to **Inactive**, which stops every key or token they hold at once
 without anything having to be revoked one by one: both the credential row
-and the profile behind it are read fresh on every request.
+and the profile behind it are read fresh on every request. A request already
+accepted when its credential is revoked or expires can still finish.
 
 **Read-only credentials.** Every credential either can make changes or can
 only read. One shared rule decides it (`credentialAccess` in
