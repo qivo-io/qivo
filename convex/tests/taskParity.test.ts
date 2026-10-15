@@ -22,7 +22,13 @@ import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
-import type { IssuePatch } from '../model/issues'
+import {
+  ASSIGNEE_RULE,
+  ASSIGNEE_SIGHT_RULE,
+  HOLDER_SIGHT_RULE,
+  type IssuePatch,
+  MOVE_HOLDER_RULE,
+} from '../model/issues'
 import {
   activityFor,
   as,
@@ -403,6 +409,72 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     expect(await row(fx.t, t3.id)).toMatchObject({ project_id: fx.sub2.id, title: t3.title })
   })
 
+  it('a move or a parent with new people checks the people the task ends up with', async () => {
+    const fx = await setup()
+    const { fwOnly, fwOther, pcbOnly, pcbParent } = await handover(fx)
+    // only the new assignee or reviewer can work in PCB
+    const moved = await task(fx, { assignee_id: fwOnly.id })
+    expect(
+      await restPatch(fx, moved.id, { project: 'PCB', assignee_id: pcbOnly.id }),
+    ).toMatchObject({ project_key: 'PCB', assignee_id: pcbOnly.id })
+    expect((await activityFor(fx.t, fx.org.id)).map((e) => e.verb)).toEqual(['moved', 'changed'])
+    const reviewed = await task(fx, { reviewer_id: fwOnly.id })
+    expect(
+      await restPatch(fx, reviewed.id, { project: 'PCB', reviewer_id: pcbOnly.id }),
+    ).toMatchObject({ project_key: 'PCB', reviewer_id: pcbOnly.id })
+    // unassigning in the same request lets the task go
+    const cleared = await task(fx, { assignee_id: fwOnly.id, reviewer_id: fwOnly.id })
+    expect(
+      await restPatch(fx, cleared.id, { project: 'PCB', assignee_id: null, reviewer_id: null }),
+    ).toMatchObject({ project_key: 'PCB', assignee_id: null, reviewer_id: null })
+    // a final assignee who cannot work there is refused, and so is the move
+    // alone while the current one cannot
+    const stays = await task(fx, { assignee_id: fwOnly.id })
+    await refused(
+      restPatch(fx, stays.id, { project: 'PCB', assignee_id: fwOther.id }),
+      'bad_request',
+      `user "${fwOther.id}" has no access to this project`,
+    )
+    await refused(restPatch(fx, stays.id, { project: 'PCB' }), 'rule', ASSIGNEE_RULE)
+    await refused(
+      restPatch(fx, stays.id, { project: 'PCB', assignee_id: fwOnly.id }),
+      'rule',
+      ASSIGNEE_RULE,
+    )
+    // a new parent only the new assignee can see
+    const child = await task(fx, { assignee_id: fwOnly.id })
+    expect(
+      await restPatch(fx, child.id, { parent: pcbParent.id, assignee_id: fx.guest.id }),
+    ).toMatchObject({ parent_id: pcbParent.id, assignee_id: fx.guest.id })
+    const blind = await task(fx, { assignee_id: fwOnly.id })
+    await refused(
+      restPatch(fx, blind.id, { parent: pcbParent.id, assignee_id: fwOther.id }),
+      'rule',
+      ASSIGNEE_SIGHT_RULE,
+    )
+    await refused(restPatch(fx, blind.id, { parent: pcbParent.id }), 'rule', HOLDER_SIGHT_RULE)
+    expect(
+      await restPatch(fx, blind.id, { parent: pcbParent.id, assignee_id: null }),
+    ).toMatchObject({ parent_id: pcbParent.id, assignee_id: null })
+    // whoever works on a subtask still has to see the destination and the parent
+    const top = await task(fx, { assignee_id: fwOnly.id })
+    await task(fx, { parent_id: top.id, assignee_id: fwOnly.id })
+    await refused(
+      restPatch(fx, top.id, { project: 'PCB', assignee_id: pcbOnly.id }),
+      'rule',
+      MOVE_HOLDER_RULE,
+    )
+    await refused(
+      restPatch(fx, top.id, { parent: pcbParent.id, assignee_id: fx.guest.id }),
+      'rule',
+      HOLDER_SIGHT_RULE,
+    )
+    for (const t of [stays, blind, top]) {
+      expect(await row(fx.t, t.id)).toMatchObject({ project_id: fx.sub.id })
+    }
+    expect((await row(fx.t, top.id)).parent_id).toBeUndefined()
+  })
+
   it('sets and clears the parent through the app rules, narrated with the task keys', async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Parent', remaining_hours: 4 })
@@ -526,6 +598,19 @@ async function withSeat(fx: Fx, name: string): Promise<Doc<'profiles'>> {
     })
     return (await ctx.db.get(_id)) as Doc<'profiles'>
   })
+}
+
+/* People who can work only in FW or only in PCB, and a parent task in PCB
+ * that only the guest (Edit on the whole TBED project) and PCB people can
+ * see among them. */
+async function handover(fx: Fx) {
+  const fwOnly = await withSeat(fx, 'fw only')
+  const fwOther = await withSeat(fx, 'fw other')
+  const pcbOnly = await withSeat(fx, 'pcb only')
+  for (const seat of [fwOnly, fwOther]) await grant(fx.t, fx.sub.id, seat.id, 'user')
+  await grant(fx.t, fx.sub2.id, pcbOnly.id, 'user')
+  const pcbParent = await task(fx, { project_id: fx.sub2.id, title: 'PCB parent' })
+  return { fwOnly, fwOther, pcbOnly, pcbParent }
 }
 
 /* ------------------------------------------------- 4. REST links and labels */
@@ -815,6 +900,52 @@ describe('MCP task parity', () => {
     const t4 = await task(fx, { project_id: fx.sub2.id, assignee_id: pcbOnly.id })
     await expectRefusal(update({ ref: t4.id, project: 'FW', title: 'Renamed' }), 'rule')
     expect(await row(fx.t, t4.id)).toMatchObject({ project_id: fx.sub2.id, title: t4.title })
+  })
+
+  it('update_task with a move or a parent and new people checks the people the task ends up with', async () => {
+    const fx = await setup()
+    const { fwOnly, fwOther, pcbOnly, pcbParent } = await handover(fx)
+    const update = (args: Record<string, unknown>) =>
+      mcpWrite(fx, internal.machine.mcp.updateIssue, args)
+    const moved = await task(fx, { assignee_id: fwOnly.id, reviewer_id: fwOnly.id })
+    await update({
+      ref: moved.id,
+      project: 'PCB',
+      assignee_id: pcbOnly.id,
+      reviewer_id: pcbOnly.id,
+    })
+    expect(await row(fx.t, moved.id)).toMatchObject({
+      project_id: fx.sub2.id,
+      assignee_id: pcbOnly.id,
+      reviewer_id: pcbOnly.id,
+    })
+    const cleared = await task(fx, { assignee_id: fwOnly.id })
+    await update({ ref: cleared.id, project: 'PCB', assignee_id: null })
+    expect(await row(fx.t, cleared.id)).toMatchObject({ project_id: fx.sub2.id })
+    expect((await row(fx.t, cleared.id)).assignee_id).toBeUndefined()
+    const stays = await task(fx, { assignee_id: fwOnly.id })
+    await refused(
+      update({ ref: stays.id, project: 'PCB', assignee_id: fwOther.id }),
+      'bad_request',
+      `user "${fwOther.id}" has no access to this project`,
+    )
+    await refused(update({ ref: stays.id, project: 'PCB' }), 'rule', ASSIGNEE_RULE)
+    const child = await task(fx, { assignee_id: fwOnly.id })
+    await update({ ref: child.id, parent: pcbParent.id, assignee_id: fx.guest.id })
+    expect(await row(fx.t, child.id)).toMatchObject({
+      parent_id: pcbParent.id,
+      assignee_id: fx.guest.id,
+    })
+    await refused(
+      update({ ref: stays.id, parent: pcbParent.id, assignee_id: fwOther.id }),
+      'rule',
+      ASSIGNEE_SIGHT_RULE,
+    )
+    await refused(update({ ref: stays.id, parent: pcbParent.id }), 'rule', HOLDER_SIGHT_RULE)
+    expect(await row(fx.t, stays.id)).toMatchObject({
+      project_id: fx.sub.id,
+      assignee_id: fwOnly.id,
+    })
   })
 
   it('reports arguments the schema does not know instead of dropping them silently', async () => {

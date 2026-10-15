@@ -36,6 +36,7 @@ import { postArchiveReason } from '../model/comments'
 import {
   assertLive,
   type IssuePatch,
+  type LaterPeople,
   metaNeedsSub,
   moveIssueCore,
   pairRule,
@@ -1109,7 +1110,10 @@ export function destinationOf(
  * the task's state change nothing. Each step that changes something writes
  * its own activity row signed with `provenance`, and each runs the model's
  * own rules and write gate, so a refusal at any step undoes the whole
- * update. Answers the task as written.
+ * update. The move and the parent are checked with the assignee and
+ * reviewer the task ends up with, so the ones `patch` sets or clears take
+ * the place of the current ones (model/issues.ts LaterPeople). Answers the
+ * task as written.
  */
 export async function applyTaskUpdate(
   ctx: MutationCtx,
@@ -1129,6 +1133,10 @@ export async function applyTaskUpdate(
   const { me, now, provenance } = a
   const archives = a.archive === true && a.issue.archived_at === undefined
   const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)
+  // the people the field patch sets, which that write checks itself
+  const later: LaterPeople = {}
+  if ('assignee_id' in a.patch) later.assignee_id = a.patch.assignee_id
+  if ('reviewer_id' in a.patch) later.reviewer_id = a.patch.reviewer_id
   let task = a.issue
   if (a.destination !== undefined) {
     task = await moveIssueCore(ctx, {
@@ -1136,7 +1144,7 @@ export async function applyTaskUpdate(
       issue: task,
       project_id: a.destination.id,
       now,
-      machine: { provenance },
+      machine: { provenance, later },
     })
   }
   if (a.parent !== undefined && (a.parent ?? undefined) !== task.parent_id) {
@@ -1145,7 +1153,7 @@ export async function applyTaskUpdate(
       issue: task,
       patch: { parent_id: a.parent },
       now,
-      machine: { provenance, appGrammar: true },
+      machine: { provenance, appGrammar: true, later },
     })
   }
   // one row write, one notify fan-out and one activity row for the fields

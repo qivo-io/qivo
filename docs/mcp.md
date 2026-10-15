@@ -974,7 +974,8 @@ refused with `your account has no write access to that project`, and one you
 cannot read reads `project "<ref>" not found (or not visible to you)`. The
 task's assignee, and the reviewer of a task without subtasks, must be able to
 work in the destination, and everyone working on its active subtasks must be
-able to see it. A new `assignee_id` or `reviewer_id` in the same call is
+able to see it. An `assignee_id` or `reviewer_id` in the same call, null
+included, takes the place of the current one in this check, and a new one is
 checked against the destination. A moved task keeps its key, labels, links
 and subtasks.
 
@@ -985,7 +986,8 @@ cannot read reads `parent task "<ref>" not found (or not visible to you)`.
 The task cannot become its own parent or a subtask of one of its subtasks,
 an active task cannot go under an archived parent, and chains stop at 20
 tasks. Everyone assigned to or reviewing the task or its subtasks must be
-able to see the new parent.
+able to see the new parent. An `assignee_id` or `reviewer_id` in the same
+call, null included, counts in place of the current one.
 
 `add_labels` and `remove_labels` take label ids or names in any case from
 `list_labels`. Labels change one at a time, never as a replacement list, and

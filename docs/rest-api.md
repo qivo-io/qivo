@@ -886,17 +886,20 @@ answers like an unknown one. An archived destination is a `400`. The task's
 assignee, and the reviewer of a task without subtasks, must be able to work in
 the destination, and everyone assigned to or reviewing its active subtasks
 must be able to see it; otherwise the PATCH is a `400` and nothing changes. A
-group's own reviewer who cannot work there is cleared. A new `assignee_id` or
-`reviewer_id` in the same PATCH is checked against the destination. A moved
-task keeps its number, its labels, its links and its subtasks, which stay in
-their own sub-projects. Naming the current sub-project changes nothing.
+group's own reviewer who cannot work there is cleared. An `assignee_id` or
+`reviewer_id` in the same PATCH, `null` included, takes the place of the
+current one in this check, and a new one is checked against the destination.
+A moved task keeps its number, its labels, its links and its subtasks, which
+stay in their own sub-projects. Naming the current sub-project changes
+nothing.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
 and `null` detaches it. The rules are those of `parent` on POST. Setting the
 parent to the task itself or to one of its own subtasks is a `400`, and so
 is a parent that is archived while the task is active. A new parent must be
 visible to the task's assignee and reviewer and to everyone working on its
-subtasks.
+subtasks. An `assignee_id` or `reviewer_id` in the same PATCH, `null`
+included, counts in place of the current one.
 
 **Labels.** `add_labels` and `remove_labels` are arrays of label ids or
 names (any case) from `GET /v1/labels`. A task's labels change one label at
