@@ -95,7 +95,7 @@ function AdminBrand({ compact = false }: { compact?: boolean }) {
   return (
     <div className={compact ? 'min-w-0' : 'min-w-0 border-b border-border px-6 py-6'}>
       <div className="text-base font-semibold tracking-tight">
-        <span className="wordmark">qivo</span> Admin
+        <span className="wordmark">Qivo</span> Admin
       </div>
       {!compact && <div className="mt-1 text-xs text-text-2">Platform operations</div>}
     </div>

@@ -1,7 +1,7 @@
 /* Shared Airspace typography, palette and navigation for the public website.
    The locally hosted fonts and product captures make no third-party requests.
    Manrope sets the text. Every page preloads it, and browsers cache it for a
-   year (see FONTS). The "qivo" wordmark uses Rubik 700, embedded in the
+   year (see FONTS). The "Qivo" wordmark uses Rubik 700, embedded in the
    stylesheet (see WORDMARK_FONT). The signed-in application keeps its own
    appearance system. */
 import { createHash } from 'node:crypto'
@@ -33,7 +33,7 @@ export const FONTS = {
   manrope: font('manrope-normal-latin'),
 }
 
-/** The "qivo" wordmark font: Google's Rubik 700 subset with only q, i, v and
+/** The "Qivo" wordmark font: Google's Rubik 700 subset with only Q, i, v and
     o (about 1.2 KB), the same file the application embeds. It is embedded in
     the stylesheet, so the wordmark never waits for a download or a cache
     check. It is not published as a separate file. */
@@ -578,7 +578,7 @@ const esc = (s) =>
 export function header(current) {
   const at = (href) => (href === current ? ' aria-current="page"' : '')
   return `<header class="top"><div class="wrap">
-<a class="brand" href="/" aria-label="Qivo homepage">qivo</a>
+<a class="brand" href="/" aria-label="Qivo homepage">Qivo</a>
 <nav aria-label="Qivo website">
   <a class="features-link" href="/#features">Features</a>
   <a href="/docs/"${at('/docs/')}>Docs</a>
@@ -590,7 +590,7 @@ export function header(current) {
 
 export function footer() {
   return `<footer class="site"><div class="wrap">
-<a class="brand" href="/" aria-label="Qivo homepage">qivo</a>
+<a class="brand" href="/" aria-label="Qivo homepage">Qivo</a>
 <p>Work orchestration for people and AI agents.</p>
 <div class="footerlinks">
 <a href="/docs/">Documentation</a>
