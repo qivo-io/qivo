@@ -139,6 +139,11 @@ Use **OAuth** when your assistant supports it:
    for read-only access.
 4. Choose **Connect** to approve or **Cancel** to refuse.
 
+If Microsoft sign-in asks for admin approval, send your Microsoft
+administrator the [Microsoft sign-in and administrator approval guide](./microsoft-sign-in-and-administrator-approval.md).
+After approval, restart the assistant's connection flow. Microsoft approval
+and the assistant's Qivo access approval are separate steps.
+
 The default request includes reading, changes and automatic renewal. Approve
 only a connection you started in the intended assistant; the client supplies
 its displayed app name.
