@@ -667,7 +667,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links`, `following`, `followers` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's discussion thread, oldest first, with author and edit attribution |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row — the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters. Returns `id` and `key`, plus `ignored_arguments` when you sent arguments the tool does not know |
@@ -1029,14 +1029,15 @@ reviewer set (or a reviewer is set while it is there), who reads `Ready for
 your review`, and the assignee when it leaves `review` again. A reviewer set
 in any other status is not subscribed.
 
-There is no subscribe tool, and no tool argument is involved in any of this.
-Subscribing is a person's own notification preference, expressed in the app;
-this surface exposes no inbox to read one back, and no tool here writes into
-anybody else's personal space. The server does the rest, inside the same
+Following a task yourself is `set_following`, and you read and clear what
+arrives with `list_inbox` and `update_inbox` (see [Comments, inbox and
+following](#comments-inbox-and-following)). No tool reads or changes anybody
+else's inbox or follows; theirs change only through the messages and
+subscriptions described above. The server does the rest, inside the same
 transaction as the write.
-Unknown/out-of-org uuids and users without visibility into the project are
-silently skipped — a subscription never outlives the project access that
-justified it.
+Unknown/out-of-org uuids, users without visibility into the project and
+agents without an inbox (Viewer or Inactive agents) are silently skipped — a
+subscription never outlives the project access that justified it.
 
 Tool errors are readable sentences ("not found (or not visible to you)",
 "your account has no write access to that project") — a denial by the access
