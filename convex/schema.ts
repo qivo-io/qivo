@@ -46,6 +46,7 @@ import {
   vProfileKind,
   vProjectCreators,
   vProjectType,
+  vRemovalPhase,
 } from './lib/enums'
 import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
@@ -480,6 +481,22 @@ export default defineSchema({
     // files.ts cross-reference fence + reapOrphans' avatar reference set
     .index('by_avatar', ['avatar_storage_id']),
 
+  // A removed profile whose history still names it. removeProfile deletes
+  // the profile and its access in one transaction and inserts this row;
+  // bounded background steps (profileRemovals.ts) clear the rest, then
+  // delete it. Until then the row reserves the id, so profiles.create cannot
+  // give it to a new seat. It has no org_id, because a removal also finishes
+  // after its organization is deleted.
+  profile_removals: defineTable({
+    profile_id: v.string(),
+    removed_at: v.string(),
+    phase: vRemovalPhase,
+    progress_at: v.string(), // the last committed step; recovery restarts a stalled row
+    scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+  })
+    .index('by_profile', ['profile_id'])
+    .index('by_progress', ['progress_at']),
+
   projects: defineTable({
     id: v.string(),
     org_id: v.string(),
@@ -572,11 +589,13 @@ export default defineSchema({
     // An access removal reads only the open tasks of the projects it touches.
     .index('by_project_archived', ['project_id', 'archived_at'])
     .index('by_parent', ['parent_id'])
-    // Profile refs — removeProfile's SET NULLs.
-    .index('by_assignee', ['assignee_id'])
-    .index('by_reviewer', ['reviewer_id'])
-    .index('by_created_by', ['created_by'])
-    .index('by_reporter', ['reporter_id']),
+    // Profile refs for removeProfile's SET NULLs. The removal transaction
+    // reads only open tasks (archived_at absent), the background steps the
+    // whole range.
+    .index('by_assignee_archived', ['assignee_id', 'archived_at'])
+    .index('by_reviewer_archived', ['reviewer_id', 'archived_at'])
+    .index('by_created_by_archived', ['created_by', 'archived_at'])
+    .index('by_reporter_archived', ['reporter_id', 'archived_at']),
 
   issue_links: defineTable({
     org_id: v.optional(v.string()),
@@ -641,7 +660,8 @@ export default defineSchema({
     .index('by_org', ['org_id'])
     .index('by_uuid', ['id'])
     .index('by_issue', ['issue_id'])
-    .index('by_storage', ['storage_id']),
+    .index('by_storage', ['storage_id'])
+    .index('by_uploaded_by', ['uploaded_by']), // removeProfile's SET NULL
 
   // A REST upload in progress (model/attachments.ts). It names the caller
   // that asked for the upload URL, the task it attaches to and when it
@@ -866,7 +886,8 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     .index('by_profile', ['profile_id'])
-    .index('by_hash', ['key_hash']),
+    .index('by_hash', ['key_hash'])
+    .index('by_created_by', ['created_by']), // removeProfile's SET NULL
 
   mcp_tokens: defineTable({
     id: v.string(),

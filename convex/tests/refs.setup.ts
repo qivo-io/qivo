@@ -145,6 +145,10 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'demo_uploads.storage_id',
   // Opaque sampler delivery fence, not a reference to another database row.
   'demo_metrics_scans.run_id',
+  // A pending removal names the profile that is already gone, until its
+  // background cleanup deletes the row (profileRemovals.ts).
+  'profile_removals.profile_id',
+  'profile_removals.scheduled_id',
   // Binds a private local credentials file; not the id of a database row.
   'marketing_demo.credential_set_id',
   // dangles by design: the feed renders dead issue targets as plain text (0026)

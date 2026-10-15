@@ -1,4 +1,4 @@
-/* The fourteen closed value sets the schema and the wire share.
+/* The fifteen closed value sets of the schema, all but one also on the wire.
  * Each exports the `as const` member list, a literals() validator for
  * schema.ts / args validators, and the TS union type. */
 
@@ -67,5 +67,21 @@ export type ProjectCreators = (typeof PROJECT_CREATORS)[number]
 export const CREDENTIAL_ACCESS = ['read', 'write'] as const
 export const vCredentialAccess = literals(...CREDENTIAL_ACCESS)
 export type CredentialAccess = (typeof CREDENTIAL_ACCESS)[number]
+
+/* The background steps of a profile removal, in the order they run
+ * (profileRemovals.ts). Stored on profile_removals only, never on the wire. */
+export const REMOVAL_PHASES = [
+  'tasks',
+  'comments',
+  'sent_messages',
+  'inbox',
+  'subscriptions',
+  'attachments',
+  'agent_keys',
+  'oauth',
+  'finish',
+] as const
+export const vRemovalPhase = literals(...REMOVAL_PHASES)
+export type RemovalPhase = (typeof REMOVAL_PHASES)[number]
 
 export const LEVEL_RANK: Record<AccessLevel, number> = { admin: 3, lead: 3, user: 2, viewer: 1 }
