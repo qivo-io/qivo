@@ -136,6 +136,7 @@ import {
 } from './auth'
 import { PROJECT_ROUTES, restProjectDetail } from './projects'
 import { type MachineEntry, type Principal, runEntry } from './registry'
+import { TEAM_ROUTES } from './teams'
 
 type RestProjectJson = ReturnType<typeof restProjectJson>
 type RestProjectDetailJson = Awaited<ReturnType<typeof restProjectDetail>>
@@ -1272,6 +1273,7 @@ export const ROUTES: RestRoute[] = [
       }),
   }),
   ...PROJECT_ROUTES,
+  ...TEAM_ROUTES,
 ]
 
 /**

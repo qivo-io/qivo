@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'b4ba14de11e5894e44f595c3791e2baa1f4f43fd42d4d9df83efcd22a20f5f24'
-const SHA_TOOLS_MODERN = '42f5b6dc49157037c56515ca4f33cb5fee9d69b01232d97cc62d1e20c4ff3a6e'
+const SHA_TOOLS_LEGACY = 'bc7c1a30974867d1b317e15fd69c4c112cbb9268e6ba50d885e79b40fe39d56f'
+const SHA_TOOLS_MODERN = 'cee06bf622120e8fe5d8c9c7a1071c303b9ea9e0ba68171976e8fa0e1098c7c3'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -483,6 +483,8 @@ describe('body shape and leg selection', () => {
       'set_project_access',
       'set_milestone',
       'delete_milestone',
+      'set_team',
+      'set_team_member',
     ])
     expect(JSON.stringify(catalogue.result.tools)).not.toMatch(/\bissues?\b|_issues?\b/)
     expect(await sha256hex(dataJson)).toBe(SHA_TOOLS_LEGACY)
@@ -888,7 +890,16 @@ describe('read tools', () => {
     const teams = JSON.parse(
       await fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.admin.id, access: 'read' }),
     )
-    expect(teams).toEqual([{ id: fx.team.id, name: 'Hardware' }])
+    expect(teams).toEqual([
+      {
+        id: fx.team.id,
+        name: 'Hardware',
+        members: [
+          { id: fx.admin.id, name: 'admin', leader: false },
+          { id: fx.user.id, name: 'user', leader: true },
+        ],
+      },
+    ])
 
     // guest reads only the granted meta tree; admin reads all four
     const guestProjects = JSON.parse(

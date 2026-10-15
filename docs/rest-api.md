@@ -437,7 +437,7 @@ DELETE /v1/projects/{ref}/access/teams/{team}  [{"on_held_tasks": …}]
 
 These give, change or remove one person's or one team's grant on a project
 or sub-project, as the app's **Project access** list does. `{user}` and
-`{team}` are uuids from `GET /v1/users` and MCP's `list_teams`; one outside the
+`{team}` are uuids from `GET /v1/users` and `GET /v1/teams`; one outside the
 organization answers `404` (`user not found`, `team not found`).
 
 Only a person who is an organization admin or the project's lead may change
@@ -508,6 +508,77 @@ week. `name` is trimmed and may not be blank. `POST` answers `201` and
 is the top-level project; `DELETE` answers `{"deleted": true, "id"}`.
 `GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
 `renamed milestone`, `moved milestone` or `deleted milestone`.
+
+### Teams
+
+```
+GET    /v1/teams                      → every team, with its members
+GET    /v1/teams/{id}                 → one team
+POST   /v1/teams                      {"name": "…"}
+PATCH  /v1/teams/{id}                 {"name": "…"}
+PUT    /v1/teams/{id}/members/{user}  [{"leader": true | false}]
+DELETE /v1/teams/{id}/members/{user}  [{"on_held_tasks": …}]
+```
+
+A team is `{"id", "name", "members"}`, and `members` lists `{"id", "name",
+"leader"}` by name. Everyone in the organization reads every team and its
+members, as in the app. `leader` is `true` for a person who leads the team.
+Only people with the organization admin or Standard user role lead teams, so
+an agent, a Viewer or a guest never reads `true`. Teams are named by uuid
+only, because two teams may share a name. An unknown uuid, or one from
+another organization, answers `404` `team not found`, and a `{user}` outside
+the organization answers `404` `user not found`.
+
+Only organization admins create teams; anyone else gets `only organization
+admins can create teams`. An organization admin or a leader of the team
+renames it with `PATCH`, and anyone else gets `requires an organization admin
+or a leader of this team`. `name` is trimmed and may not be blank (`a team
+name cannot be blank`). `PATCH` changes only `name`, and a body without it is
+a `400` (`no recognized fields to update`). The team's other settings and
+deleting a team stay in the app. `POST` answers `201` and `PATCH` `200` with
+the team. Neither writes an activity row, as in the app.
+
+Members decide who sees the projects shared with the team, so changing them
+needs a person who is an organization admin or a leader of the team. An agent
+is refused with `only people can change who has access, not agents`, whatever
+its role. `PUT` adds the user as a plain member when they are not one yet,
+and `leader` makes or unmakes them a leader. A guest is never a member (`a
+guest is never a team member`). Making an agent or a Viewer a leader is
+refused (`an agent cannot lead a team`, `a viewer is never a team leader`),
+and then nobody is added. `PUT` answers `{"team_id", "user": {"id", "name"},
+"leader", "changed"}`; a call that changes nothing answers `changed: false`.
+
+`DELETE` removes the member, leadership included. Their open tasks in the
+projects the team shares, and in those projects' sub-projects, that they can
+no longer see afterwards are settled by `on_held_tasks`, as for [project
+access](#project-access):
+
+- `"leave"` (the default, also for an empty body) lists them as `stranded`.
+- `"keep_as_viewer"` gives the person a Viewer grant on the project the team
+  shared that showed each task, which is the task's own sub-project when the
+  team shares it and otherwise its top-level project. This needs the right to manage that
+  project's users (an organization admin or its lead), so a team leader
+  without it is refused with `no permission to manage users on this project`
+  and can still leave the tasks.
+- `{"reassign_to": "<user uuid>"}` or `{"reassign_to": null}` hands the tasks
+  over, by the usual assignee rules.
+
+The removal and its choice land together or not at all. The answer is
+`{"team_id", "user", "removed", "stranded", "kept_as_viewer",
+"reassigned"}`, shaped as for project access; removing someone who is not a
+member answers `removed: false`. Each change writes the app's activity row
+(`added`, `removed`, `made` a leader, `demoted`), signed as described under
+[Side effects and audit trail](#side-effects-and-audit-trail), and a Viewer
+grant also writes `changed access on` for its project.
+
+```sh
+# make Leo a leader of the team, then remove Emil and hand his open tasks to Leo
+curl -X PUT -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"leader":true}' "$BASE/teams/<team uuid>/members/<Leo's uuid>"
+curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
+  -d '{"on_held_tasks":{"reassign_to":"<Leo's uuid>"}}' \
+  "$BASE/teams/<team uuid>/members/<Emil's uuid>"
+```
 
 ### Users
 

@@ -566,11 +566,26 @@ describe('admin actions that take access away during read-only access', () => {
         await ctx.db.insert('team_members', { team_id, profile_id, is_leader: false })
       }
     })
+    // keeping a member as a Viewer or reassigning their tasks writes more
+    // than a removal, so it stays behind the gate, even for an admin
+    for (const on_held_tasks of ['keep_as_viewer', { reassign_to: null }] as const) {
+      await expectRefusal(
+        as(t, f.admin).mutation(api.teams.removeMember, {
+          org_id,
+          team_id,
+          profile_id: f.viewer.id,
+          on_held_tasks,
+        }),
+        'forbidden',
+        /read-only/,
+      )
+    }
     await expect(
       as(t, f.admin).mutation(api.teams.removeMember, {
         org_id,
         team_id,
         profile_id: f.viewer.id,
+        on_held_tasks: 'leave',
       }),
     ).resolves.toBeNull()
     await expectRefusal(

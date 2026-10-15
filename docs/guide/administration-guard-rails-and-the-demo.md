@@ -114,7 +114,7 @@ access. Paused editing leaves existing readable work and personal settings
 available. Admins can still take access away while editing is paused. They
 can revoke or delete agent keys, make users **Inactive**, remove users and
 remove users from teams. A team removal that asks about open tasks waits,
-because both of its choices first save Viewer grants or reassigned tasks.
+because both of its choices also save Viewer grants or reassigned tasks.
 Reactivating users and every other change wait until billing is active again.
 
 Each organization keeps its assigned plan version. New plans do not change

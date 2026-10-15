@@ -1,5 +1,6 @@
 /* The wording and parsing that machine/rest.ts, machine/mcp.ts and the domain
- * modules declaring entries for both surfaces (machine/projects.ts) share.
+ * modules declaring entries for both surfaces (machine/projects.ts,
+ * machine/teams.ts) share.
  *
  * The surface modules spread a domain module's entries into TOOLS and
  * ROUTES, so a domain module that imported a value from them would close an

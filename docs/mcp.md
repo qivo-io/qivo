@@ -50,6 +50,11 @@ Project parity added `get_project`, `create_project`, `update_project`,
 holding an older catalogue does not see them until it refreshes its tool
 list.
 
+Team parity added `set_team` and `set_team_member`, and `list_teams` now
+answers each team's `members`. A client holding an older catalogue still
+reads the new field, but does not see the two tools until it refreshes its
+tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -666,7 +671,7 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | Tool | What it does |
 |---|---|
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
-| `list_teams` | Teams in your organization, as `id` and `name` — teams group users for project sharing and administration. MCP does not list team grants; `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078) |
+| `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `get_project` | One readable `project` (number/key/uuid): the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
@@ -675,6 +680,8 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
 | `set_milestone` | Add a milestone (`name`, `date`) to a `project`'s top-level project, or with `milestone` rename or move one |
 | `delete_milestone` | Delete a `milestone` of a `project` |
+| `set_team` | Without `team_id`, create a team called `name` (organization admins only); with `team_id`, rename it (an organization admin or a leader of the team). Answers the `list_teams` row with `created` |
+| `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links` and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
@@ -825,6 +832,56 @@ project takes no new milestone. Results are `{id, name, date, project_id,
 created}` and `{deleted: true, id}`.
 
 Every change writes the app's activity row, signed `via MCP`.
+
+### Teams
+
+`list_teams` answers every team of your organization, by name, as
+`{id, name, members}`. Everyone in the organization reads every team and its
+members, as in the app. `members` lists `{id, name, leader}` by name, where
+`leader` is `true` for a person who leads the team. Only people with the
+organization admin or Standard user role lead teams, so an agent, a Viewer or
+a guest never reads `true`. Teams are named by `team_id`, a uuid from
+`list_teams`, because two teams may share a name. One outside your
+organization answers `team "<id>" not found in your organization`.
+
+**Creating and renaming.** `set_team` without `team_id` creates a team from
+`name`, which only an organization admin may do (`only organization admins
+can create teams`). With `team_id` it renames that team, which an
+organization admin or a leader of the team may do (`requires an organization
+admin or a leader of this team` otherwise). `name` is trimmed and may not be
+blank. The result is the `list_teams` row plus `created`. Neither writes an
+activity row, as in the app. The team's other settings and deleting a team
+stay in the app.
+
+**Members and leaders.** `set_team_member` changes one `user_id` in a team.
+Members decide who sees the projects shared with the team, so it needs a
+person who is an organization admin or a leader of the team; an agent gets
+`only people can change who has access, not agents`, whatever its role.
+
+- `member: true` adds the user as a plain member when they are not one yet,
+  and `leader: true` or `false` makes or unmakes them a leader. A guest is
+  never a member, and making an agent or a Viewer a leader is refused (`an
+  agent cannot lead a team`, `a viewer is never a team leader`), in which
+  case nobody is added. The result is `{team, user, member: true, leader,
+  changed}`, with `team` and `user` as `{id, name}`.
+- `member: false` removes the user, leadership included. Their open tasks in
+  the projects the team shares, and in those projects' sub-projects, that
+  they can no longer see afterwards are settled by `on_held_tasks`, as for
+  `set_project_access`: `"leave"` (the default) lists them as `stranded`,
+  `"keep_as_viewer"` gives the user a Viewer grant on the project the team
+  shared that showed each task (the task's own sub-project when the team
+  shares it, else its top-level project), and `{"reassign_to": user id or
+  null}` hands them over. Keeping someone as a Viewer needs the right to
+  manage that project's users, so a team leader without it is refused with
+  `no permission to manage users on this project` and can still leave the
+  tasks. The removal and its choice land together or not at all. The result
+  is `{team, user, member: false, leader: false, changed}` plus `stranded`,
+  `kept_as_viewer` and `reassigned`; `changed` is `false` when the user was
+  not a member.
+
+`leader` with `member: false`, and `on_held_tasks` with `member: true`, are
+refused. Every membership change writes the app's activity row, signed `via
+MCP`.
 
 ### Task results
 

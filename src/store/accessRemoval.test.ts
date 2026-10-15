@@ -305,26 +305,56 @@ describe('removing someone who has work in the project', () => {
     expect(P.reassignChoices(deleteCrew, all.items).map((u) => u.id)).not.toContain('dan')
   })
 
-  it('saves the Viewer grants before a member leaves the team', async () => {
+  it('keeps a member leaving a team as a Viewer, in one server write', async () => {
     await load(inPlan(false))
     const ann = P.accessRemoval(leaving('ann'))
     expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(true)
-    expect(requests.map((r) => r.name)).toEqual(['projects:update', 'teams:removeMember'])
-    expect(requests[0].args).toMatchObject({ id: 'plan', patch: { access: { ann: 'viewer' } } })
+    expect(requests).toEqual([
+      {
+        name: 'teams:removeMember',
+        args: {
+          org_id: expect.any(String),
+          team_id: 'crew',
+          profile_id: 'ann',
+          on_held_tasks: 'keep_as_viewer',
+        },
+      },
+    ])
+    // painted where the server puts it: Plan, the project Crew shared
+    expect(P.levelOn('plan', 'ann')).toBe('viewer')
     expect(P.levelOn(work, 'ann')).toBe('viewer')
     expect(P.user('ann')?.teams).toEqual([])
     expect(vm('t4').assignee).toBe('ann')
   })
 
-  it('keeps the member in the team when a Viewer grant is refused', async () => {
+  it('reassigns the tasks of a member leaving a team in the same write', async () => {
     await load(inPlan(false))
-    refused.add('plan')
+    const ann = P.accessRemoval(leaving('ann'))
+    expect(await P.removeAccess(leaving('ann'), { to: 'dan' }, ann.items)).toBe(true)
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['teams:removeMember', { reassign_to: 'dan' }],
+    ])
+    expect(vm('t4').assignee).toBe('dan')
+    expect(P.user('ann')?.teams).toEqual([])
+  })
+
+  it('keeps the member in the team and every task when the server refuses', async () => {
+    await load(inPlan(false))
+    refused.add('ann')
     const ann = P.accessRemoval(leaving('ann'))
     expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(requests.map((r) => r.name)).toEqual(['teams:removeMember'])
     expect(P.user('ann')?.teams).toEqual(['crew'])
+    expect(P.project('plan')?.access?.ann).toBeUndefined() // no Viewer grant either
     expect(window.showToast).toHaveBeenCalledWith(
       'Ann Person stays in the Crew team, because not every Viewer grant could be saved.',
+      'error',
+    )
+    expect(await P.removeAccess(leaving('ann'), { to: 'dan' }, ann.items)).toBe(false)
+    expect(vm('t4').assignee).toBe('ann')
+    expect(P.user('ann')?.teams).toEqual(['crew'])
+    expect(window.showToast).toHaveBeenCalledWith(
+      'Ann Person stays in the Crew team, because not every task could be reassigned.',
       'error',
     )
   })
@@ -424,6 +454,10 @@ describe('removing someone who has work in the project', () => {
     refused.clear()
     expect(P.startRemoval(leaving('ann'))).toBe(false)
     await vi.waitFor(() => expect(window.showToast).toHaveBeenCalledWith(notice, 'info'))
-    expect(requests.map((r) => r.name)).toEqual(['teams:removeMember', 'teams:removeMember'])
+    // nothing to settle for a leader without that authority: the tasks stay
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['teams:removeMember', 'leave'],
+      ['teams:removeMember', 'leave'],
+    ])
   })
 })

@@ -22,6 +22,14 @@ allows it, and a **Viewer** agent never does. Only a person can change
 sharing or hand over a lead; an agent cannot, even for a project it leads. Removing someone's access takes a choice for the
 open tasks they would lose sight of, like the app's removal window.
 
+For teams, MCP offers `list_teams`, `set_team` and `set_team_member`, and
+REST uses `/v1/teams` and `/v1/teams/{id}/members`. Both list teams with their
+members and leaders, create and rename teams, and add or remove members and
+leaders by the same rules as the app
+([Planning hours and teams](./organization-and-team-settings.md#planning-hours-and-teams)).
+Only a person changes a team's members. Removing a member takes the same
+choice for their open tasks.
+
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
 project's review time unless the request supplies hours ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)). Assignee filters
@@ -53,8 +61,9 @@ when it was created without change access, and every change then returns
 own task event subscriptions.
 
 `GET /v1/me` says who the credential acts as, the organization's calendar
-settings and whether the credential can make changes. The API lists projects
-and users, manages projects, their sharing and milestones, and supports task
+settings and whether the credential can make changes. The API lists projects,
+users and teams, manages projects, their sharing and milestones and teams,
+and supports task
 search, creation, updates, moves, subtasks, links, labels, deletion,
 archive/restore and comments. With an organization admin's or team leader's
 token it also sets a person's plannable weekly hours. It checks field values,
@@ -136,8 +145,8 @@ Organization admins can instead create an agent user with its own key ([Agent us
 
 MCP tools say who the connection acts as and whether it can make changes;
 list teams, projects, users, project users and tasks; read and change tasks
-and projects, their sharing and milestones; read and add comments; and set
-plannable weekly hours. Request
+and projects, their sharing and milestones; manage teams and their members;
+read and add comments; and set plannable weekly hours. Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

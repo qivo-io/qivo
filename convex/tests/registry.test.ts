@@ -28,6 +28,7 @@ import {
   writeRunner,
 } from '../machine/registry'
 import * as rest from '../machine/rest'
+import * as teams from '../machine/teams'
 
 type Kind = 'query' | 'mutation' | 'action'
 type Call = { via: Kind; name: string; args: unknown }
@@ -89,6 +90,7 @@ const KINDS = new Map<string, Kind>([
   ...registeredKinds('machine/mcp', mcp),
   ...registeredKinds('machine/rest', rest),
   ...registeredKinds('machine/projects', projects),
+  ...registeredKinds('machine/teams', teams),
 ])
 
 const SURFACES: Surface[] = [

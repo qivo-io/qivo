@@ -1664,19 +1664,22 @@ function grantsOn(projectId: string): Record<string, GrantLevel> {
   })
   return access
 }
-/* Removes a person's or a team's grant on one project in one server write
-   (projects.removeAccess) that settles the tasks it hides by `choice`, and
-   paints the outcome at once; a refusal re-adopts the server's rows. With
-   nobody losing sight of a task, the grant just goes. Resolves whether the
-   server accepted it. */
-function removeGrant(
-  change: Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' }>,
+/* Removes a person's or a team's grant on one project, or a member from a
+   team, in one server write that settles the tasks it hides by `choice`
+   (projects.removeAccess, teams.removeMember), and paints the outcome at
+   once; a refusal re-adopts the server's rows. With nobody losing sight of a
+   task, the access just goes. Resolves whether the server accepted it. */
+function removeAtOnce(
+  change: Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' | 'teamMember' }>,
   choice: { keep: true } | { to: string | null },
   items: Holder[],
   stays: string,
 ): Promise<boolean> {
-  const project = rows.projects.get(change.projectId)
-  if (!project) return Promise.resolve(false)
+  const orgId =
+    change.kind === 'teamMember'
+      ? rows.teams.get(change.teamId)?.org_id
+      : rows.projects.get(change.projectId)?.org_id
+  if (!orgId) return Promise.resolve(false)
   const people = [...new Set(items.map((i) => i.uid))]
   const held =
     'keep' in choice
@@ -1702,35 +1705,53 @@ function removeGrant(
     rows.access = rows.access.filter(
       (a) => !(a.project_id === change.projectId && a.profile_id === change.userId),
     )
-  } else {
+  } else if (change.kind === 'teamGrant') {
     rows.teamAccess = rows.teamAccess.filter(
       (a) => !(a.project_id === change.projectId && a.team_id === change.teamId),
     )
+  } else {
+    rows.teamMembers = rows.teamMembers.filter(
+      (m) => !(m.team_id === change.teamId && m.profile_id === change.userId),
+    )
   }
   if (held === 'keep_as_viewer') {
-    for (const uid of people) {
-      if (!level(uid, change.projectId)) {
-        rows.access.push({ project_id: change.projectId, profile_id: uid, level: 'viewer' })
-      }
+    // the server's Viewer grants: each project that showed a listed task
+    const kept = new Set<string>()
+    for (const i of items) {
+      const pid = keptOn(change, i.task)
+      if (kept.has(`${i.uid}:${pid}`) || level(i.uid, pid)) continue
+      kept.add(`${i.uid}:${pid}`)
+      rows.access.push({ project_id: pid, profile_id: i.uid, level: 'viewer' })
     }
   }
   rebuild()
   emit()
-  const subject =
-    change.kind === 'userGrant' ? { user_id: change.userId } : { team_id: change.teamId }
+  const op =
+    change.kind === 'teamMember'
+      ? write(api.teams.removeMember, {
+          org_id: orgId,
+          team_id: change.teamId,
+          profile_id: change.userId,
+          on_held_tasks: held,
+        })
+      : write(api.projects.removeAccess, {
+          org_id: orgId,
+          id: change.projectId,
+          ...(change.kind === 'userGrant'
+            ? { user_id: change.userId }
+            : { team_id: change.teamId }),
+          on_held_tasks: held,
+        })
   return new Promise<boolean>((resolve) =>
     run(
-      write(api.projects.removeAccess, {
-        org_id: project.org_id,
-        id: change.projectId,
-        ...subject,
-        on_held_tasks: held,
-      }),
+      op,
       () => resolve(true),
       undefined,
       (error) => {
         if (typeof held === 'object') {
           toast(`${stays}, because not every task could be reassigned.`, 'error')
+        } else if (held === 'keep_as_viewer' && change.kind === 'teamMember') {
+          toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
         } else toastWriteError(error)
         resolve(false)
       },
@@ -2549,13 +2570,13 @@ export const PLANNER = {
   /* Apply the removal with the choice made in the removal window, for the
      `items` the person reviewed there: keep their holders as Viewers (a
      direct Viewer grant each on the listed projects), or hand every item to
-     `to` (null clears it). A person's or a team's grant goes in one server
-     write that settles the tasks too (projects.removeAccess, the rule REST
-     and MCP use), so a refusal changes nothing. For a team member or a
-     deleted team, the access goes once the server has accepted every
-     reassignment and every Viewer grant. If one is refused the access stays,
-     so nobody is left holding a task they cannot see. Resolves whether the
-     server accepted the removal. */
+     `to` (null clears it). A person's or a team's grant, or a member leaving
+     a team, goes in one server write that settles the tasks too
+     (projects.removeAccess, teams.removeMember, the rules REST and MCP use),
+     so a refusal changes nothing. For a deleted team, the access goes once
+     the server has accepted every reassignment and every Viewer grant. If one
+     is refused the team stays, so nobody is left holding a task they cannot
+     see. Resolves whether the server accepted the removal. */
   removeAccess: async (
     change: AccessRemoval,
     choice: { keep: true } | { to: string | null },
@@ -2573,11 +2594,9 @@ export const PLANNER = {
           : change.kind === 'teamMember'
             ? `${person} stays in the ${named}`
             : `The ${named} stays`
-    if (change.kind === 'userGrant' || change.kind === 'teamGrant') {
-      return removeGrant(change, choice, items, stays)
-    }
+    if (change.kind !== 'deleteTeam') return removeAtOnce(change, choice, items, stays)
     // the server refuses to delete the last team: say so before anything is saved
-    if (change.kind === 'deleteTeam' && team && !PLANNER.canDeleteTeam(change.teamId)) {
+    if (team && !PLANNER.canDeleteTeam(change.teamId)) {
       toast(`The ${named} can't be deleted, because it is the organization's last team.`, 'error')
       return false
     }
@@ -2617,7 +2636,6 @@ export const PLANNER = {
         return false
       }
     }
-    if (change.kind === 'teamMember') return PLANNER.removeTeamMember(change.teamId, change.userId)
     const deleted = await PLANNER.removeTeam(change.teamId)
     if (deleted && team) toast(`Team “${team.name}” deleted`, 'success')
     return deleted
@@ -4613,26 +4631,6 @@ export const PLANNER = {
     emit()
     run(
       write(api.teams.addMember, {
-        org_id: team.org_id,
-        team_id: teamId,
-        profile_id: uid,
-      }),
-    )
-  },
-
-  /* Resolves whether the server removed the membership; false when there
-     was none to remove. */
-  removeTeamMember: (teamId: string, uid: string): Promise<boolean> => {
-    const team = rows.teams.get(teamId)
-    if (!team || !rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid))
-      return Promise.resolve(false)
-    rows.teamMembers = rows.teamMembers.filter(
-      (m) => !(m.team_id === teamId && m.profile_id === uid),
-    )
-    rebuild()
-    emit()
-    return runSaved(
-      write(api.teams.removeMember, {
         org_id: team.org_id,
         team_id: teamId,
         profile_id: uid,

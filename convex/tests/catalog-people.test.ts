@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import { newOrgDefaults } from '../model/orgs'
 import {
   activityFor,
@@ -1161,7 +1162,7 @@ describe('teams membership — the three verbs', () => {
     expect(events.map((e) => e.verb)).toEqual(['added', 'demoted'])
   })
 
-  it('an agent with a leader row cannot run the team; a person leader still can', async () => {
+  it('an agent with a leader row cannot run the team or change it; a person leader still can', async () => {
     const t = newT()
     const f = await withOrg(t)
     // Agents have no login. The planted one stands in for any surface that
@@ -1178,13 +1179,19 @@ describe('teams membership — the three verbs', () => {
     const args = { org_id: f.org.id, team_id: f.team.id, profile_id: f.viewer.id }
     const promoteAdmin = { ...args, profile_id: f.admin.id, is_leader: true }
     const RUNS = /^requires an organization admin or a leader of this team$/
-    await expectRefusal(as(t, agent).mutation(api.teams.addMember, args), 'forbidden', RUNS)
+    // membership decides who sees the team's projects, which only people change
+    const PERSON = new RegExp(`^${ACCESS_NEEDS_A_PERSON}$`)
+    await expectRefusal(as(t, agent).mutation(api.teams.addMember, args), 'forbidden', PERSON)
     await expectRefusal(
       as(t, agent).mutation(api.teams.removeMember, { ...args, profile_id: f.admin.id }),
       'forbidden',
-      RUNS,
+      PERSON,
     )
-    await expectRefusal(as(t, agent).mutation(api.teams.setLeader, promoteAdmin), 'forbidden', RUNS)
+    await expectRefusal(
+      as(t, agent).mutation(api.teams.setLeader, promoteAdmin),
+      'forbidden',
+      PERSON,
+    )
     await expectRefusal(
       as(t, agent).mutation(api.teams.update, {
         org_id: f.org.id,

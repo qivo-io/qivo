@@ -1,6 +1,6 @@
 /* The team domain's public surface: create / settings /
- * delete + the three membership verbs. Thin wrappers over lib/access,
- * model/orgs and model/cascade.
+ * delete + the three membership verbs. Thin wrappers over model/teams (the
+ * rules REST and MCP share), model/orgs and model/cascade.
  *
  * Ported predicates (final SQL state):
  *   teams_insert            is_org_admin (0081:218)
@@ -12,7 +12,8 @@
  *                           (0081:223-251); a leader is never a viewer
  *                           (0102:334-359 — WITH CHECK, no sentence: forbidden)
  *                           and never an agent (lib/access canLeadTeams,
- *                           a rule sentence)
+ *                           a rule sentence); only a person changes
+ *                           membership (lib/access canChangeAccess)
  *
  * Narration is asymmetric BY DESIGN: create/update/delete write NO
  * activity; the membership verbs write three ('added'/'removed'/'made'/
@@ -22,26 +23,25 @@
  * Settings clamps mirror the old client's write path (bc022c2:3098-3126).
  * The SQL CHECKs behind them (0011/0018/0044/0070) raised bare 23514s — no
  * verbatim sentences exist in this family; out-of-range numbers clamp like
- * the client's, malformed icon strings read badRequest. */
+ * the client's, malformed icon strings read badRequest. Team names are
+ * trimmed and may not be blank. */
 
-import type { WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { canLeadTeams, isTeamLeader } from './lib/access'
-import { byId, insertUnique } from './lib/db'
-import {
-  accessRemovalMutation,
-  adminMutation,
-  badRequest,
-  forbidden,
-  notFound,
-  orgMutation,
-  rule,
-} from './lib/functions'
-import { logActivity } from './model/activity'
+import { assertBillingWritable } from './lib/billingAccess'
+import { byId } from './lib/db'
+import { accessRemovalMutation, adminMutation, notFound, orgMutation, rule } from './lib/functions'
 import { deleteTeamDeep } from './model/cascade'
-import { assertNotLastTeam, ICON_COLOR_SHAPE, newTeamDefaults } from './model/orgs'
+import { assertNotLastTeam } from './model/orgs'
+import { vHeldTasks } from './model/projectAccess'
+import {
+  addTeamMemberCore,
+  createTeamCore,
+  removeTeamMemberCore,
+  setTeamLeaderCore,
+  updateTeamCore,
+} from './model/teams'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
@@ -54,40 +54,13 @@ async function myTeam(ctx: MeCtx, id: string): Promise<Doc<'teams'>> {
   return team
 }
 
-/* teams_update / tm_* rights: org admin, or leader of THIS team. Only
- * people lead teams (lib/access isTeamLeader), so an agent's leader row
- * grants nothing here. */
-async function assertRunsTeam(ctx: MeCtx, team: Doc<'teams'>): Promise<void> {
-  if (ctx.me.org_role === 'admin') return
-  if (await isTeamLeader(ctx, ctx.me, team.id)) return
-  throw forbidden('requires an organization admin or a leader of this team')
-}
-
-const membership = (ctx: MeCtx, teamId: string, profileId: string) =>
-  ctx.db
-    .query('team_members')
-    .withIndex('by_team_profile', (q) => q.eq('team_id', teamId).eq('profile_id', profileId))
-    .unique()
-
-/* The old client's whole-number clamp (Math.round + range), range per column. */
-const clamp = (n: number, lo: number, hi: number) =>
-  Math.max(lo, Math.min(hi, Math.round(Number(n) || 0)))
-
 /* ----------------------------------------------------------------- create
  * P.addTeam — admin only; the client pre-generates the uuid; defaults are
  * newTeamDefaults (stale 120, archive 30, delay true). */
 export const create = adminMutation({
   args: { id: v.string(), name: v.string() },
   handler: async (ctx, { id, name }) => {
-    const now = new Date().toISOString()
-    await insertUnique(
-      ctx,
-      'teams',
-      'by_uuid',
-      { id },
-      { id, org_id: ctx.me.org_id, name, ...newTeamDefaults(now) },
-      badRequest('a team with this id already exists'),
-    )
+    await createTeamCore(ctx, { me: ctx.me, id, name, now: new Date().toISOString() })
     return null
   },
 })
@@ -108,39 +81,7 @@ export const update = orgMutation({
     }),
   },
   handler: async (ctx, { id, patch }) => {
-    const team = await myTeam(ctx, id)
-    await assertRunsTeam(ctx, team)
-    const upd: Partial<WithoutSystemFields<Doc<'teams'>>> = {}
-    if (patch.name !== undefined && patch.name !== team.name) upd.name = patch.name
-    if (patch.icon !== undefined) {
-      const icon = patch.icon === null || patch.icon === '' ? undefined : patch.icon
-      if (icon !== undefined && [...icon].length > 40)
-        throw badRequest('an icon is at most 40 characters')
-      if (icon !== team.icon) upd.icon = icon
-    }
-    if (patch.icon_color !== undefined) {
-      const color =
-        patch.icon_color === null || patch.icon_color === '' ? undefined : patch.icon_color
-      if (color !== undefined && !ICON_COLOR_SHAPE.test(color)) {
-        throw badRequest('an icon color must be a #rrggbb hex')
-      }
-      if (color !== team.icon_color) upd.icon_color = color
-    }
-    if (patch.stale_days !== undefined) {
-      const d = clamp(patch.stale_days, 1, 3650)
-      if (d !== team.stale_days) upd.stale_days = d
-    }
-    if (patch.archive_days !== undefined) {
-      const d = clamp(patch.archive_days, 1, 3650)
-      if (d !== team.archive_days) upd.archive_days = d
-    }
-    if (
-      patch.track_delay_default !== undefined &&
-      patch.track_delay_default !== team.track_delay_default
-    ) {
-      upd.track_delay_default = patch.track_delay_default
-    }
-    if (Object.keys(upd).length > 0) await ctx.db.patch(team._id, upd)
+    await updateTeamCore(ctx, { me: ctx.me, team: await myTeam(ctx, id), patch })
     return null
   },
 })
@@ -171,63 +112,41 @@ export const deleteDeep = orgMutation({
 export const addMember = orgMutation({
   args: { team_id: v.string(), profile_id: v.string() },
   handler: async (ctx, { team_id, profile_id }) => {
-    const now = new Date().toISOString()
-    const team = await myTeam(ctx, team_id)
-    await assertRunsTeam(ctx, team)
-    const grantee = await byId(ctx, 'profiles', profile_id)
-    if (grantee === null || grantee.org_id !== ctx.me.org_id) throw notFound('user not found')
-    if (grantee.org_role === 'guest') throw forbidden('a guest is never a team member')
-    if ((await membership(ctx, team.id, grantee.id)) !== null) return null
-    await ctx.db.insert('team_members', {
-      team_id: team.id,
-      profile_id: grantee.id,
-      is_leader: false,
-    })
-    await logActivity(ctx, {
-      org_id: team.org_id,
-      actor_id: ctx.me.id,
-      verb: 'added',
-      target_type: 'user',
-      target_id: grantee.id,
-      label: grantee.name,
-      detail: `to ${team.name}`,
-      team_id: team.id,
-      ts: now,
+    await addTeamMemberCore(ctx, {
+      me: ctx.me,
+      team: await myTeam(ctx, team_id),
+      profileId: profile_id,
+      now: new Date().toISOString(),
     })
     return null
   },
 })
 
 /* ----------------------------------------------------------- removeMember
- * P.removeTeamMember. A missing membership is a silent no-op (the SQL delete
- * matched 0 rows). Removing a leader drops the leadership with the row.
- * Removal only takes access away (the projects shared with the team), so an
- * organization admin can still run it while billing has made the
- * organization read-only (accessRemovalMutation). A team leader who is not an
- * admin still meets the billing gate, and adding members stays behind it. */
+ * P.removeAccess for a member leaving a team. A missing membership is a
+ * silent no-op (the SQL delete matched 0 rows). Removing a leader drops the
+ * leadership with the row. The open tasks the member can no longer see are
+ * settled by `on_held_tasks` (absent means 'leave') in the same write, the
+ * rule REST and MCP use (model/teams.ts removeTeamMemberCore), so a refused
+ * reassignment or Viewer grant leaves the member in the team.
+ * Leaving the tasks only takes access away (the projects shared with the
+ * team), so an organization admin can still do it while billing has made the
+ * organization read-only (accessRemovalMutation). Keeping the member as a
+ * Viewer or reassigning their tasks writes more than that, so it meets the
+ * billing gate like any other change, and so does a team leader who is not
+ * an admin. Adding members stays behind the gate. */
 export const removeMember = accessRemovalMutation({
-  args: { team_id: v.string(), profile_id: v.string() },
-  handler: async (ctx, { team_id, profile_id }) => {
-    const now = new Date().toISOString()
-    const team = await myTeam(ctx, team_id)
-    await assertRunsTeam(ctx, team)
-    const row = await membership(ctx, team.id, profile_id)
-    if (row === null) return null
-    await ctx.db.delete(row._id)
-    const gone = await byId(ctx, 'profiles', profile_id)
-    if (gone !== null) {
-      await logActivity(ctx, {
-        org_id: team.org_id,
-        actor_id: ctx.me.id,
-        verb: 'removed',
-        target_type: 'user',
-        target_id: gone.id,
-        label: gone.name,
-        detail: `from ${team.name}`,
-        team_id: team.id,
-        ts: now,
-      })
-    }
+  args: { team_id: v.string(), profile_id: v.string(), on_held_tasks: v.optional(vHeldTasks) },
+  handler: async (ctx, { team_id, profile_id, on_held_tasks }) => {
+    const held = on_held_tasks ?? 'leave'
+    if (held !== 'leave') await assertBillingWritable(ctx, ctx.me.org_id)
+    await removeTeamMemberCore(ctx, {
+      me: ctx.me,
+      team: await myTeam(ctx, team_id),
+      profileId: profile_id,
+      held,
+      now: new Date().toISOString(),
+    })
     return null
   },
 })
@@ -236,8 +155,9 @@ export const removeMember = accessRemovalMutation({
  * P.setTeamLeader. Same-value and missing-row calls are silent no-ops (T15 —
  * the old client pre-checked; the SQL update matched 0 changed rows).
  * Only people lead teams (lib/access canLeadTeams), so promoting an agent is
- * refused with a rule sentence the app toasts. An agent's older leader row
- * grants nothing and can still be demoted.
+ * refused with a rule sentence the app toasts to a stale client that still
+ * offers the Leader box for an agent. An agent's older leader row grants
+ * nothing and can still be demoted.
  * Promoting a viewer is refused — "a viewer is never a team leader" (0102's
  * WITH CHECK; no sentence existed, so forbidden). Promoting a guest left
  * with a stale membership is refused too. Demoting stays allowed, so stale
@@ -246,36 +166,13 @@ export const removeMember = accessRemovalMutation({
 export const setLeader = orgMutation({
   args: { team_id: v.string(), profile_id: v.string(), is_leader: v.boolean() },
   handler: async (ctx, { team_id, profile_id, is_leader }) => {
-    const now = new Date().toISOString()
-    const team = await myTeam(ctx, team_id)
-    await assertRunsTeam(ctx, team)
-    const row = await membership(ctx, team.id, profile_id)
-    if (row === null || row.is_leader === is_leader) return null
-    const member = await byId(ctx, 'profiles', profile_id)
-    if (is_leader && member !== null && !canLeadTeams(member)) {
-      // A rule, so the app shows the sentence verbatim to a stale client
-      // that still offers the Leader box for an agent.
-      if (member.kind === 'agent') throw rule('an agent cannot lead a team')
-      throw forbidden(
-        member.org_role === 'viewer'
-          ? 'a viewer is never a team leader'
-          : 'a guest is never a team member',
-      )
-    }
-    await ctx.db.patch(row._id, { is_leader })
-    if (member !== null) {
-      await logActivity(ctx, {
-        org_id: team.org_id,
-        actor_id: ctx.me.id,
-        verb: is_leader ? 'made' : 'demoted',
-        target_type: 'user',
-        target_id: member.id,
-        label: member.name,
-        detail: `${is_leader ? 'a leader of ' : 'from leader of '}${team.name}`,
-        team_id: team.id,
-        ts: now,
-      })
-    }
+    await setTeamLeaderCore(ctx, {
+      me: ctx.me,
+      team: await myTeam(ctx, team_id),
+      profileId: profile_id,
+      isLeader: is_leader,
+      now: new Date().toISOString(),
+    })
     return null
   },
 })

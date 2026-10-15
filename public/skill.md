@@ -217,6 +217,26 @@ Useful field rules:
 - **Milestones:** they live on the top-level project; naming a sub-project
   adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them.
 
+## Teams
+
+| Operation | MCP tool | REST request |
+| --- | --- | --- |
+| List teams with their members and leaders | `list_teams` | `GET /v1/teams`, `GET /v1/teams/{id}` |
+| Create or rename a team | `set_team` | `POST /v1/teams`, `PATCH /v1/teams/{id}` |
+| Add a member, make or unmake a leader | `set_team_member` with `member: true` | `PUT /v1/teams/{id}/members/{user}` |
+| Remove a member | `set_team_member` with `member: false` | `DELETE /v1/teams/{id}/members/{user}` |
+
+- **Who may:** only organization admins create teams. An organization admin
+  or a leader of the team renames it and changes its members, and only a
+  person may change members, so an agent's credential is refused. Only
+  people lead teams.
+- **Removing:** choose `on_held_tasks` as for project access. `leave`
+  (default) lists the open tasks the member loses sight of,
+  `keep_as_viewer` keeps them as a Viewer of the project the team shared,
+  and `{"reassign_to": user id or null}` hands those tasks over. Confirm the
+  choice with the user when it is not clear.
+- Teams are named by uuid; two teams may share a name.
+
 ## Receive task events
 
 Use push delivery when the user requests ongoing task-change notifications.
