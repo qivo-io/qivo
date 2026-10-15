@@ -113,10 +113,12 @@ const removeMember = (
     provenance: a.provenance,
   })
 
+/* A team or person as results name them, by id and name only. */
 const named = (row: { id: string; name: string }) => ({ id: row.id, name: row.name })
 
 /* --------------------------------------------------------- MCP internals */
 
+/* MCP's sentences for a team or user ref that matches nothing in the caller's organization. */
 const mcpTeamMissing = (ref: string): ConvexError<Refusal> =>
   notFound(`team "${ref}" not found in your organization`)
 const mcpUserMissing = (ref: string): ConvexError<Refusal> =>
