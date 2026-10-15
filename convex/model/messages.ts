@@ -716,30 +716,43 @@ const stepLimit = (limit: number | undefined, fallback: number): number =>
 
 /* Marks up to `budget` of the task's unread or snoozed rows read, for every
  * recipient, and keeps the prune's invariant on each item it touched. A row
- * already read keeps its stamp and only loses its snooze. A read row that is
- * not snoozed is skipped in the scan; the invariant keeps those to one per
- * recipient. `more` says rows remain for the next step. */
+ * already read keeps its stamp and only loses its snooze. Both index ranges
+ * hold only rows that need a change (by_issue_read with no read_at, then
+ * by_issue_snoozed), so the rows already read, one per recipient after the
+ * prune, are never scanned and the step reads at most about `budget` rows
+ * however many people follow the task. `more` says rows remain for the next
+ * step. */
 async function readTaskMessages(
   ctx: MutationCtx,
   issueId: string,
   now: string,
   budget: number,
 ): Promise<{ marked: number; more: boolean }> {
-  const rows = await ctx.db
+  const unread = await ctx.db
     .query('messages')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-    .filter((q) =>
-      q.or(q.eq(q.field('read_at'), undefined), q.neq(q.field('snoozed_until'), undefined)),
-    )
+    .withIndex('by_issue_read', (q) => q.eq('issue_id', issueId).eq('read_at', undefined))
     .take(budget + 1)
-  const batch = rows.slice(0, budget)
+  const batch = unread.slice(0, budget)
+  let more = unread.length > budget
+  if (!more && batch.length < budget) {
+    // unread snoozed rows were just read above; what is left in this range
+    // is a read row that kept a snooze
+    const snoozed = await ctx.db
+      .query('messages')
+      .withIndex('by_issue_snoozed', (q) =>
+        q.eq('issue_id', issueId).gt('snoozed_until', undefined),
+      )
+      .take(budget - batch.length + 1)
+    more = snoozed.length > budget - batch.length
+    batch.push(...snoozed.slice(0, budget - batch.length))
+  }
   for (const row of batch) {
     await ctx.db.patch(row._id, { read_at: row.read_at ?? now, snoozed_until: undefined })
   }
   for (const recipient_id of new Set(batch.map((row) => row.recipient_id))) {
     await pruneStampedItem(ctx, { recipient_id, issue_id: issueId }, budget)
   }
-  return { marked: batch.length, more: rows.length > budget }
+  return { marked: batch.length, more }
 }
 
 /**

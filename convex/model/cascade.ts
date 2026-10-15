@@ -76,7 +76,9 @@ export async function deleteIssueDeep(
   for await (const s of subs) await ctx.db.delete(s._id)
   const comments = ctx.db.query('comments').withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
   for await (const c of comments) await ctx.db.delete(c._id)
-  const messages = ctx.db.query('messages').withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+  const messages = ctx.db
+    .query('messages')
+    .withIndex('by_issue_read', (q) => q.eq('issue_id', issue.id))
   for await (const m of messages) await ctx.db.delete(m._id)
   // attachment rows AND their bytes — ctx.storage.delete is transactional,
   // so a rolled-back mutation reaps nothing (the SQL client's bytes-first

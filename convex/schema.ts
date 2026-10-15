@@ -837,7 +837,11 @@ export default defineSchema({
       'created_at',
       'id',
     ])
-    .index('by_issue', ['issue_id'])
+    // a task's messages; also the unread ones alone (read_at absent), which
+    // the archive steps mark read without scanning rows already read
+    .index('by_issue_read', ['issue_id', 'read_at'])
+    // the snoozed ones, which an archive step also releases
+    .index('by_issue_snoozed', ['issue_id', 'snoozed_until'])
     .index('by_actor', ['actor_id']) // messages_actor_idx — removeProfile's SET NULL
     // the nightly sweep's fallback wake finds a recipient's overdue snoozes
     .index('by_recipient_snoozed', ['recipient_id', 'snoozed_until']),

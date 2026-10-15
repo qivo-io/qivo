@@ -395,6 +395,40 @@ describe('the background steps', () => {
     expect(await allMessages(t)).toEqual(before)
   })
 
+  it('mark only the rows that need a change when hundreds of followers already read the task', async () => {
+    // One read row per follower stays after the prune. The step selects the
+    // unread rows by index instead of scanning these (convex-test counts only
+    // returned rows, so the scan itself cannot be measured here).
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: 'x' })
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 300; n++) {
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: uuid(),
+          issue_id: task.id,
+          issue_title: 'Planted task',
+          kind: 'change',
+          detail: `read ${n}`,
+          created_at: '2026-01-01T00:00:00.000Z',
+          read_at: '2026-01-02T00:00:00.000Z',
+        })
+      }
+    })
+    const base = { org_id: f.org.id, recipient_id: f.admin.id, issue_id: task.id }
+    await plantMessage(t, { ...base, detail: 'u1', created_at: '2026-01-03T00:00:00.000Z' })
+    await plantMessage(t, { ...base, detail: 'u2', created_at: '2026-01-04T00:00:00.000Z' })
+
+    await t.mutation(internal.messages.readArchivedTasks, { issues: [task.id] })
+
+    expect(await item(t, f.admin, task.id)).toEqual([{ detail: 'u2', read: true }])
+    const others = (await allMessages(t)).filter((m) => m.recipient_id !== f.admin.id)
+    expect(others).toHaveLength(300)
+    expect(others.every((m) => m.read_at === '2026-01-02T00:00:00.000Z')).toBe(true)
+  })
+
   it('walk an archived project from where the last step stopped', async () => {
     const t = newT()
     const f = await withOrg(t)
