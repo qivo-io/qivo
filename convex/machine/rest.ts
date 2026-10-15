@@ -59,14 +59,15 @@ import {
   issueOut,
   listCommentsCore,
   listIssuesCore,
+  listProjectsCore,
   listProjectUsersCore,
   listUsersCore,
   loadCatalogue,
   type MeJson,
   meCore,
+  projectJson,
   type RestCommentJson,
   type RestIssueJson,
-  restProjectJson,
   type TaskAttachmentsJson,
   type TaskDetailJson,
   type TaskRefJson,
@@ -130,14 +131,14 @@ import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model
 import { cleanRemaining, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
-import { PROJECT_ROUTES, restProjectDetail } from './projects'
+import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 import { REST_CALLER as CALLER, needJson, restProvenance as provenanceOf, vKeyName } from './shared'
 import { TEAM_ROUTES } from './teams'
 
-type RestProjectJson = ReturnType<typeof restProjectJson>
-type RestProjectDetailJson = Awaited<ReturnType<typeof restProjectDetail>>
+type RestProjectJson = ReturnType<typeof projectJson>
+type RestProjectDetailJson = Awaited<ReturnType<typeof projectDetailJson>>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
@@ -360,24 +361,23 @@ export const listProjects = internalQuery({
     if (a.archived !== undefined && a.archived !== 'true' && a.archived !== 'false') {
       throw badRequest('archived must be true or false')
     }
-    return cat.projects
-      .filter((p) => readable(p.id) && (p.archived_at !== undefined) === (a.archived === 'true'))
-      .sort((x, y) => x.key.localeCompare(y.key))
-      .map((p) => restProjectJson(p, flags.get(p.id) ?? { read: false, write: false }))
+    return listProjectsCore(cat, a.archived === 'true', readable).map((p) =>
+      projectJson(p, flags.get(p.id) ?? { read: false, write: false }),
+    )
   },
 })
 
 /* GET /v1/projects/{ref} — an explicit ref resolves an archived project too;
  * unknown OR unreadable answer the one 404 (NO oracle on GET, rest:341-347).
  * The list row gains the single read's fields: lead, review time, delay
- * tracking, milestones and grants (machine/projects.ts restProjectDetail). */
+ * tracking, milestones and grants (machine/projects.ts projectDetailJson). */
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectDetailJson> => {
     const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
     if (p === undefined || !readable(p.id)) throw notFound('project not found')
-    return await restProjectDetail(ctx, p, flags.get(p.id) ?? { read: false, write: false })
+    return await projectDetailJson(ctx, p, flags.get(p.id) ?? { read: false, write: false })
   },
 })
 
@@ -1435,12 +1435,12 @@ const restHandler = httpAction(async (ctx, req) => {
 
 /* Registration — http.ts calls this ONCE at its bolt-on seam and is never
  * edited from here. Per-method routes: httpRouter has no wildcard method, and
- * pathPrefix '/v1/' does not match bare /v1. PUT serves the following and
- * project access routes and answers the deployed auth-then-404 everywhere
- * else; HEAD cannot be registered (accepted edge). Requests outside /v1/* get
- * Convex's default 404, not the in-handler sentence (an accepted delta,
- * because a root catch-all would collide with the auth + file-gateway
- * prefixes). */
+ * pathPrefix '/v1/' does not match bare /v1. PUT serves the task following,
+ * project access and team member routes and answers the deployed
+ * auth-then-404 everywhere else; HEAD cannot be registered (accepted edge).
+ * Requests outside /v1/* get Convex's default 404, not the in-handler
+ * sentence (an accepted delta, because a root catch-all would collide with
+ * the auth + file-gateway prefixes). */
 export function registerRestRoutes(http: HttpRouter): void {
   for (const method of ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS', 'PUT'] as const) {
     http.route({ path: '/v1', method, handler: restHandler })
