@@ -1,26 +1,27 @@
-/* Attachments, task activity and workload over REST and MCP: a task's files,
- * its history, and each person's planned hours per week.
+/* Attachments, task activity and workload over REST and MCP. A caller reads
+ * a task's files and history, and each person's planned hours per week.
  *
  * RECORD_TOOLS and RECORD_ROUTES are registry entries (machine/registry.ts)
  * that machine/mcp.ts TOOLS and machine/rest.ts ROUTES spread in, so
  * tools/list, the OAuth step-up and REST routing treat them like the rest.
  * This module imports only types from those two, so neither is loaded
- * through it.
+ * through it. The refusal sentences, provenance, key name validator, body
+ * parser and MCP text it shares with them come from machine/shared.ts.
  *
- * Each action is one shared function the app's rule lives in:
- * model/attachments.ts (listing with download links, removing, the REST
- * upload's start and confirm, the app's files.ts runs the same attach and
- * remove), lib/activityVisibility.ts taskActivity (the app's activity rule)
- * and planning.ts workloadCore (the app's org load and its anonymization).
- * The internal functions below are thin per-surface wrappers, `mcp*` and
- * `rest*`: each starts from asMachineCaller, which refuses a read-only
- * credential before anything resolves, parses its surface's input, calls
- * the shared function and encodes the result. MCP answers pretty-printed
- * text, stringified here so the key order survives the function boundary;
- * REST answers objects.
+ * Each action is one shared function that holds the app's rule.
+ * model/attachments.ts lists attachments with download links, removes them
+ * and runs the REST upload's start and confirm, and the app's files.ts runs
+ * the same attach and remove. lib/activityVisibility.ts taskActivity is the
+ * app's activity rule, and planning.ts workloadCore is the app's org load
+ * with its anonymization. The internal functions below are thin per-surface
+ * wrappers named `mcp*` and `rest*`. Each starts from asMachineCaller, which
+ * refuses a read-only credential before anything resolves, then parses its
+ * surface's input, calls the shared function and encodes the result. MCP
+ * answers pretty-printed text, stringified here so the key order survives
+ * the function boundary, and REST answers objects.
  *
  * A task the caller cannot read answers like an unknown one, before any
- * write check. Uploads are REST only; inline description images stay
+ * write check. Uploads are REST only. Inline description images stay
  * app-only, so neither surface deletes one. */
 
 import { type ConvexError, v } from 'convex/values'
@@ -31,7 +32,7 @@ import { canSeeProject, hasProjectLevel } from '../lib/access'
 import { taskActivity } from '../lib/activityVisibility'
 import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } from '../lib/core'
 import { byId } from '../lib/db'
-import { type ProfileKind, vCredentialAccess } from '../lib/enums'
+import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import {
   type AttachmentJson,
@@ -46,6 +47,15 @@ import { calendarDay } from '../model/taskValues'
 import { type WorkloadJson, workloadCore } from '../planning'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
+import {
+  MCP_NO_WRITE,
+  MCP_PROVENANCE,
+  needJson,
+  pretty,
+  REST_CALLER,
+  restProvenance,
+  vKeyName,
+} from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -54,45 +64,10 @@ type RestRoute = (typeof ROUTES)[number]
  * Only its type is imported, so this module does not load rest.ts. */
 const route: typeof restRoute = (declared) => declared
 
-/* MCP's result text: 2-space pretty JSON, stringified inside the internal
- * function so the projection's key order is the wire's. */
-const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
-
-/* machine/mcp.ts PROVENANCE, and machine/rest.ts provenanceOf: an agent
- * key's writes name the key, a personal token's writes name no token. */
-const MCP_PROVENANCE = 'via MCP'
-const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
-
-/* The write refusal for a readable task the caller cannot edit, as
- * machine/rest.ts CALLER and machine/mcp.ts noWrite word it. The agent
- * sentence is REST's pinned agent form. */
-const REST_NO_WRITE = {
-  agent: 'this agent has no write access to that project',
-  person: 'your account has no write access to that project',
-} as const satisfies Record<ProfileKind, string>
-const MCP_NO_WRITE = 'your account has no write access to that project'
-
 /* An attachment's description image is the description's to remove, by an
  * edit in the app, so the machine surfaces leave it alone. */
 const INLINE_STAYS =
   'this image belongs to the task description; remove it by editing the description in the app'
-
-/* The agent key's name for its writes' provenance, or null for a personal
- * token (machine/rest.ts vKeyName). */
-const vKeyName = v.union(v.string(), v.null())
-
-/* A REST request body, parsed like machine/rest.ts needJson. */
-function jsonBody(raw: string): Record<string, unknown> {
-  let body: unknown = null
-  try {
-    body = JSON.parse(raw)
-  } catch {
-    body = null
-  }
-  if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
-  return body as Record<string, unknown>
-}
 
 /* --------------------------------------------------------- attachments */
 
@@ -157,17 +132,17 @@ export const restListAttachments = internalQuery({
 })
 
 /* POST /v1/tasks/{ref}/attachments {name, content_type?, size} starts an
- * upload (model/attachments.ts startAttachmentUpload): Edit on the task and
- * a declared size within the organization's cap, then an upload URL and the
- * ticket that the confirm call names. */
+ * upload (model/attachments.ts startAttachmentUpload). It needs Edit on the
+ * task and a declared size within the organization's cap, then answers an
+ * upload URL and the ticket that the confirm call names. */
 export const restStartUpload = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<{ ticket: string; upload_url: string; expires_at: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_NO_WRITE[me.kind])
-    const fields = uploadFields(jsonBody(a.body))
+    if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
+    const fields = uploadFields(needJson(a.body))
     const { ticket, uploadUrl } = await startAttachmentUpload(ctx, {
       me,
       issue,
@@ -199,8 +174,8 @@ export const restConfirmUpload = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_NO_WRITE[me.kind])
-    const b = jsonBody(a.body)
+    if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
+    const b = needJson(a.body)
     if (typeof b.storage_id !== 'string') {
       throw badRequest('storage_id must be the storageId the upload answered')
     }
@@ -218,8 +193,8 @@ export const restConfirmUpload = internalMutation({
 })
 
 /* DELETE /v1/tasks/{ref}/attachments/{id} removes a file attachment, row
- * and bytes (model/attachments.ts removeAttachmentCore, the app's rule:
- * anyone with Edit on the task's project). */
+ * and bytes (model/attachments.ts removeAttachmentCore). By the app's rule,
+ * anyone with Edit on the task's project may remove it. */
 export const restDeleteAttachment = internalMutation({
   args: {
     callerId: v.string(),
@@ -232,7 +207,7 @@ export const restDeleteAttachment = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_NO_WRITE[me.kind])
+    if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
     const attachment = await attachmentOf(ctx, issue, a.id)
     if (attachment === null) throw notFound('attachment not found')
     if (attachment.inline) throw badRequest(INLINE_STAYS)
@@ -350,8 +325,9 @@ const WORKLOAD_WEEKS = 8
 const WORKLOAD_WEEKS_MAX = 52
 const weeksSentence = `weeks must be a whole number from 1 to ${WORKLOAD_WEEKS_MAX}`
 
-/* The workload window: `from_week` (any day of the first week) or the week
- * of `now`, the request's clock, and the number of weeks. */
+/* The workload window, which starts at `from_week` (any day of the first
+ * week) or else the week of `now`, the request's clock, and runs for the
+ * number of weeks. */
 function workloadWindow(
   now: string,
   from: string | undefined,

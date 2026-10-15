@@ -128,6 +128,7 @@ import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
+import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty } from './shared'
 
 /* --------------------------------------------------------------- the tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
@@ -866,7 +867,6 @@ const CORS = {
   'Access-Control-Expose-Headers': 'WWW-Authenticate',
 }
 
-const PROVENANCE = 'via MCP'
 const SERVER_INFO = { name: 'qivo', version: '1.0.0' }
 const SERVER_META = { 'io.modelcontextprotocol/serverInfo': SERVER_INFO }
 const META_PV = 'io.modelcontextprotocol/protocolVersion'
@@ -1424,17 +1424,16 @@ async function orgNames(ctx: QueryCtx, me: Caller): Promise<Map<string, string>>
   return new Map(rows.map((p) => [p.id, p.name]))
 }
 
-const noWrite = (): ConvexError<Refusal> =>
-  forbidden('your account has no write access to that project')
+const noWrite = (): ConvexError<Refusal> => forbidden(MCP_NO_WRITE)
 
 const mustWrite = async (ctx: QueryCtx, me: Caller, projectId: string): Promise<void> => {
   if (!(await hasProjectLevel(ctx, me, projectId, 'user'))) throw noWrite()
 }
 
-/* The deployed `text()` body: 2-space pretty JSON, stringified INSIDE the
- * function so the projections' insertion key order survives the Convex value
- * boundary (which sorts object keys). Every fn below returns these bytes. */
-const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
+/* The deployed `text()` body is machine/shared.ts pretty, stringified INSIDE
+ * the function so the projections' insertion key order survives the Convex
+ * value boundary (which sorts object keys). Every fn below returns these
+ * bytes. */
 
 /* --------------------------------------------------- the tool internal fns
  * One per tool, `callerId` and `access` first (the profile uuid the auth
