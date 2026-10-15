@@ -267,11 +267,10 @@ async function updateProfile(
   if (row.kind === 'agent' && newRole === 'guest') {
     throw badRequest('an agent is user or viewer — never a guest')
   }
-  // The project-creation right belongs to a standard user who is a person
+  // The project-creation right belongs to a standard user, person or agent
   // (lib/projectCreators.ts). Turning it off is always accepted.
-  if (patch.can_create_projects === true) {
-    if (row.kind !== 'person') throw rule('an agent cannot be allowed to create projects')
-    if (newRole !== 'user') throw rule('only a standard user can be allowed to create projects')
+  if (patch.can_create_projects === true && newRole !== 'user') {
+    throw rule('only a standard user can be allowed to create projects')
   }
 
   const upd: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}

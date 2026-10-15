@@ -129,8 +129,9 @@ describe('project creation through the client store', () => {
 
   describe('canCreateProject', () => {
     /* Me (the fixture's org admin) beside one seat of each kind in the home
-       org. Every seat but `plain` carries the right, which only counts for an
-       active standard user who is a person while the setting is 'selected'. */
+       org. Every seat but `plain` and `agent` carries the right, which only
+       counts for an active standard user, person or agent, while the setting
+       is 'selected'. */
     const seat = (id: string, org_role: Profile['org_role'], extra: Partial<Profile> = {}) => ({
       id,
       org_id: snap.orgs[0].id,
@@ -147,7 +148,16 @@ describe('project creation through the client store', () => {
     const ask = (setting: Setting) => {
       snap.orgs[0].project_creators = setting
       deliver(structuredClone(snap))
-      const ids = ['plain', 'flagged', 'viewer', 'guest', 'inactive', 'agent']
+      const ids = [
+        'plain',
+        'flagged',
+        'viewer',
+        'guest',
+        'inactive',
+        'agent',
+        'flaggedAgent',
+        'viewerAgent',
+      ]
       return {
         me: P.canCreateProject(),
         ...Object.fromEntries(ids.map((id) => [id, P.canCreateProject(id)])),
@@ -161,7 +171,9 @@ describe('project creation through the client store', () => {
         seat('viewer', 'viewer'),
         seat('guest', 'guest'),
         seat('inactive', 'user', { active: false }),
-        seat('agent', 'user', { kind: 'agent' }),
+        seat('agent', 'user', { kind: 'agent', can_create_projects: undefined }),
+        seat('flaggedAgent', 'user', { kind: 'agent' }),
+        seat('viewerAgent', 'viewer', { kind: 'agent' }),
       )
     })
 
@@ -172,16 +184,30 @@ describe('project creation through the client store', () => {
       guest: false,
       inactive: false,
       agent: false,
+      flaggedAgent: false,
+      viewerAgent: false,
     }
 
-    it('lets every active standard user who is a person create while the setting is missing or users', () => {
+    it('lets every active standard user, person or agent, create while the setting is missing or users', () => {
       for (const setting of [undefined, 'users'] as const) {
-        expect(ask(setting)).toEqual({ ...nobodyElse, me: true, plain: true, flagged: true })
+        expect(ask(setting)).toEqual({
+          ...nobodyElse,
+          me: true,
+          plain: true,
+          flagged: true,
+          agent: true,
+          flaggedAgent: true,
+        })
       }
     })
 
     it('needs the right under selected users', () => {
-      expect(ask('selected')).toEqual({ ...nobodyElse, me: true, flagged: true })
+      expect(ask('selected')).toEqual({
+        ...nobodyElse,
+        me: true,
+        flagged: true,
+        flaggedAgent: true,
+      })
     })
 
     it('lets only org admins create under admins or a setting it does not know', () => {

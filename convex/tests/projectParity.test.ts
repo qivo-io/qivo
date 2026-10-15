@@ -113,6 +113,44 @@ const setCreators = (fx: Fx, setting: 'admins' | 'users' | 'selected') =>
     await ctx.db.patch(fx.org._id, { project_creators: setting })
   })
 
+/* Ledger, a Viewer agent beside the fixture's Standard user agent Relay. */
+const plantViewerAgent = (fx: Fx) =>
+  plantSeat(fx.t, {
+    org_id: fx.org.id,
+    name: 'Ledger',
+    kind: 'agent',
+    org_role: 'viewer',
+    plannable_hours: undefined,
+  })
+
+/* POST /v1/projects {name} over HTTP with a new key of `agent`. */
+async function restCreate(fx: Fx, agent: Doc<'profiles'>, name: string) {
+  const key = `qva_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
+  await fx.t.run(async (ctx) => {
+    await ctx.db.insert('agent_keys', {
+      id: uuid(),
+      profile_id: agent.id,
+      name: 'CI key',
+      key_prefix: key.slice(0, 11),
+      key_hash: await sha256hex(key),
+      created_at: NOW,
+    })
+  })
+  const res = await (
+    fx.t as unknown as {
+      fetch(
+        path: string,
+        init: { method: string; headers: Record<string, string>; body: string },
+      ): Promise<{ status: number; text(): Promise<string> }>
+    }
+  ).fetch('/v1/projects', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return { status: res.status, body: JSON.parse(await res.text()) as Json }
+}
+
 /* ---------------------------------------------------- 1. creating projects */
 
 describe('creating projects and sub-projects', () => {
@@ -160,31 +198,135 @@ describe('creating projects and sub-projects', () => {
     },
     { setting: 'admins', user: false, refusal: 'only org admins can create projects' },
   ] as const) {
-    it(`under ${setting}, admins${user ? ' and standard users' : ''} create projects; agents and viewers do not`, async () => {
+    it(`under ${setting}, admins${user ? ', standard users and Standard user agents' : ''} create projects; viewers never do`, async () => {
       const fx = await setup()
       await setCreators(fx, setting)
+      const viewerAgent = await plantViewerAgent(fx)
       const create = (p: Doc<'profiles'>, name: string) =>
         fx.t.mutation(internal.machine.projects.mcpCreateProject, { ...as_(p), name })
       expect((await parsed(create(fx.admin, 'By admin'))).lead_id).toBe(fx.admin.id)
-      if (user) expect((await parsed(create(fx.user, 'By user'))).lead_id).toBe(fx.user.id)
-      else await refused(create(fx.user, 'By user'), 'forbidden', refusal)
-      // an agent counts as no standard user here, and a viewer never creates
-      await refused(create(fx.agent, 'By agent'), 'forbidden', refusal)
+      // a Standard user agent counts as a standard user, over REST as over MCP
+      if (user) {
+        expect((await parsed(create(fx.user, 'By user'))).lead_id).toBe(fx.user.id)
+        const byAgent = await parsed(create(fx.agent, 'By agent'))
+        expect(byAgent).toMatchObject({ lead_id: fx.agent.id, lead_name: 'Relay' })
+        expect(await grants(fx.t, byAgent.id as string)).toEqual({})
+        expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
+          actor_id: fx.agent.id,
+          verb: 'created',
+          target_id: byAgent.id,
+          detail: 'via MCP',
+        })
+        const res = await restCreate(fx, fx.agent, 'By agent over REST')
+        expect(res.status).toBe(201)
+        expect(res.body).toMatchObject({ lead_id: fx.agent.id, type: 'meta' })
+      } else {
+        await refused(create(fx.user, 'By user'), 'forbidden', refusal)
+        await refused(create(fx.agent, 'By agent'), 'forbidden', refusal)
+        expect(await restCreate(fx, fx.agent, 'By agent over REST')).toEqual({
+          status: 403,
+          body: { error: refusal },
+        })
+      }
+      // a viewer never creates, person or agent, even with the right on;
+      // a Viewer agent's key can only read (lib/projectCreators.ts refuses
+      // its role too, see projectCreators.test.ts)
+      await fx.t.run(async (ctx) => {
+        await ctx.db.patch(fx.viewer._id, { can_create_projects: true })
+        await ctx.db.patch(viewerAgent._id, { can_create_projects: true })
+      })
       await refused(create(fx.viewer, 'By viewer'), 'forbidden', refusal)
+      await refused(
+        create(viewerAgent, 'By Viewer agent'),
+        'forbidden',
+        'this agent is a Viewer and can only read',
+      )
+      expect(await restCreate(fx, viewerAgent, 'By Viewer agent over REST')).toEqual({
+        status: 403,
+        body: { error: 'this agent is a Viewer and can only read' },
+      })
     })
   }
 
-  it('a standard user ticked under selected creates projects', async () => {
+  it('a standard user or Standard user agent ticked under selected creates projects', async () => {
     const fx = await setup()
     await setCreators(fx, 'selected')
-    await fx.t.run((ctx) => ctx.db.patch(fx.user._id, { can_create_projects: true }))
+    for (const p of [fx.user, fx.agent]) {
+      await fx.t.run((ctx) => ctx.db.patch(p._id, { can_create_projects: true }))
+      const out = await parsed(
+        fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+          ...as_(p),
+          name: `Ticked ${p.name}`,
+        }),
+      )
+      expect(out.lead_id).toBe(p.id)
+    }
+    // unticking takes the right away again
+    await fx.t.run((ctx) => ctx.db.patch(fx.agent._id, { can_create_projects: undefined }))
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        ...as_(fx.agent),
+        name: 'Unticked',
+      }),
+      'forbidden',
+      'only org admins and selected standard users can create projects',
+    )
+  })
+
+  it('an agent leads what it creates, cannot hand it over, and must hand nothing to become a Viewer', async () => {
+    const fx = await setup()
     const out = await parsed(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
-        ...as_(fx.user),
-        name: 'Ticked',
+        ...as_(fx.agent),
+        name: 'Bot home',
       }),
     )
-    expect(out.lead_id).toBe(fx.user.id)
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+        ...as_(fx.agent),
+        project: out.key as string,
+        lead_id: fx.user.id,
+      }),
+      'forbidden',
+      ACCESS_NEEDS_A_PERSON,
+    )
+    // the Viewer switch waits for a person to hand the project over
+    await expectRefusal(
+      as(fx.t, fx.admin).mutation(api.profiles.update, {
+        org_id: fx.org.id,
+        id: fx.agent.id,
+        patch: { org_role: 'viewer' },
+      }),
+      'rule',
+      /^Relay leads 1 project\(s\) — hand those over before making them a viewer$/,
+    )
+    // Inactive stops it at once, while it still leads the project
+    await as(fx.t, fx.admin).mutation(api.profiles.deactivate, {
+      org_id: fx.org.id,
+      id: fx.agent.id,
+    })
+    await refused(
+      fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+        ...as_(fx.agent),
+        project: out.key as string,
+        name: 'Still here',
+      }),
+      'forbidden',
+      'this agent has been deactivated',
+    )
+    expect((await projectRow(fx.t, out.id as string))?.lead_id).toBe(fx.agent.id)
+    // once a person hands the project over, the agent can become a Viewer
+    await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+      ...as_(fx.admin),
+      project: out.key as string,
+      lead_id: fx.user.id,
+    })
+    await as(fx.t, fx.admin).mutation(api.profiles.update, {
+      org_id: fx.org.id,
+      id: fx.agent.id,
+      patch: { org_role: 'viewer' },
+    })
+    expect((await projectRow(fx.t, out.id as string))?.lead_id).toBe(fx.user.id)
   })
 
   it('a sub-project needs Lead on a top-level parent the caller can read', async () => {

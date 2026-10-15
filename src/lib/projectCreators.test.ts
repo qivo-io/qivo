@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Row } from '../store/rows'
 import { shapeUser } from '../store/viewModels'
-import { namePhrase, projectCreatorsIn, projectRightBox } from './projectCreators'
+import { creatorName, namePhrase, projectCreatorsIn, projectRightBox } from './projectCreators'
 
 /* A home-org member as the roster holds it; a standard user who is an active
-   person unless `extra` says otherwise. */
+   person unless `extra` says otherwise. An agent has no login or email. */
 const member = (name: string, extra: Partial<Row<'profiles'>> = {}) =>
   shapeUser(
     {
@@ -26,7 +26,16 @@ const member = (name: string, extra: Partial<Row<'profiles'>> = {}) =>
     false,
   )
 
+/* The extra fields of an agent row: no login, no email. */
+const agent = (extra: Partial<Row<'profiles'>> = {}): Partial<Row<'profiles'>> => ({
+  kind: 'agent',
+  auth_user_id: undefined,
+  email: undefined,
+  ...extra,
+})
+
 const names = (users: { name: string }[]) => users.map((user) => user.name)
+const roster3 = [member('Leo'), member('Nora', { org_role: 'admin' }), member('Atlas', agent())]
 const phrase = (list: string[]) =>
   namePhrase(list)
     .map((part) => part.text)
@@ -40,32 +49,54 @@ describe('projectCreatorsIn', () => {
     member('Mira', { auth_user_id: undefined, can_create_projects: true }),
     member('Emil', { active: false, can_create_projects: true }),
     member('Ingrid', { org_role: 'viewer', can_create_projects: true }),
-    member('Atlas', { kind: 'agent', can_create_projects: true }),
+    member('Atlas', agent({ can_create_projects: true })),
+    member('Relay', agent()),
+    member('Ledger', agent({ org_role: 'viewer', can_create_projects: true })),
     member('Gus', { org_role: 'guest' }),
     member('Ola', { org_role: 'admin' }),
   ]
 
-  it('names org admins first, then every active standard user who is a person', () => {
+  it('names org admins first, then every active standard user, people and agents alike', () => {
     expect(names(projectCreatorsIn(roster, 'users'))).toEqual([
       'Nora',
       'Ola',
       'Leo',
       'Aisha',
       'Mira',
+      'Atlas',
+      'Relay',
     ])
   })
 
   it('names only the selected standard users beside the admins, pending invitations included', () => {
-    expect(names(projectCreatorsIn(roster, 'selected'))).toEqual(['Nora', 'Ola', 'Aisha', 'Mira'])
+    expect(names(projectCreatorsIn(roster, 'selected'))).toEqual([
+      'Nora',
+      'Ola',
+      'Aisha',
+      'Mira',
+      'Atlas',
+    ])
   })
 
   it('names only org admins under admins', () => {
     expect(names(projectCreatorsIn(roster, 'admins'))).toEqual(['Nora', 'Ola'])
   })
 
-  it('never names inactive members, viewers, agents or guests', () => {
-    const left = names(projectCreatorsIn(roster, 'users'))
-    for (const name of ['Emil', 'Ingrid', 'Atlas', 'Gus']) expect(left).not.toContain(name)
+  it('never names inactive members, viewers, Viewer agents or guests', () => {
+    for (const setting of ['users', 'selected'] as const) {
+      const left = names(projectCreatorsIn(roster, setting))
+      for (const name of ['Emil', 'Ingrid', 'Ledger', 'Gus']) expect(left).not.toContain(name)
+    }
+  })
+})
+
+describe('creatorName', () => {
+  it('marks agents and leaves people as they are', () => {
+    expect(creatorName(member('Atlas', agent()))).toBe('Atlas (agent)')
+    expect(creatorName(member('Leo'))).toBe('Leo')
+    expect(phrase(projectCreatorsIn(roster3, 'users').map(creatorName))).toBe(
+      'Nora, Leo and Atlas (agent)',
+    )
   })
 })
 
@@ -93,11 +124,12 @@ describe('namePhrase', () => {
 })
 
 describe('projectRightBox', () => {
-  it('gives active standard users who are people a checkbox under Selected users', () => {
+  it('gives active standard users, people and agents, a checkbox under Selected users', () => {
     expect(projectRightBox(member('Leo'), 'selected')).toBe('editable')
     expect(projectRightBox(member('Mira', { auth_user_id: undefined }), 'selected')).toBe(
       'editable',
     )
+    expect(projectRightBox(member('Atlas', agent()), 'selected')).toBe('editable')
   })
 
   it('gives active org admins a locked one, pending invitations included', () => {
@@ -113,12 +145,13 @@ describe('projectRightBox', () => {
     }
   })
 
-  it('gives no viewer, guest, agent or inactive member one', () => {
+  it('gives no viewer, Viewer agent, guest or inactive member one', () => {
     for (const extra of [
       { org_role: 'viewer' },
+      agent({ org_role: 'viewer' }),
       { org_role: 'guest' },
-      { kind: 'agent' },
       { active: false },
+      agent({ active: false }),
       { org_role: 'admin', active: false },
     ] as const) {
       expect(projectRightBox(member('Leo', extra), 'selected')).toBeNull()

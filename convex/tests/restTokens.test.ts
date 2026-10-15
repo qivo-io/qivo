@@ -244,9 +244,10 @@ type Outcome = 'ok' | { status: number; error: string }
 /* A Viewer person may not write any project; a Standard user agent may, but
  * neither may set someone's plannable hours or edit a label (organization
  * admins only), and a Viewer person may not add a label either. Neither
- * leads FW, neither may create a top-level project (an agent is no standard
- * user there yet), and only a person who leads a project changes its access;
- * a milestone needs User on the top-level project, which the agent holds. */
+ * leads FW, and only a person who leads a project changes its access. The
+ * agent creates a top-level project like any standard user under the default
+ * setting, which a Viewer never may; a milestone needs User on the top-level
+ * project, which the agent holds. */
 const refusedWrite = (
   route: { method: string; path: string },
   kind: 'viewer' | 'agent',
@@ -256,7 +257,7 @@ const refusedWrite = (
   if (route.path === 'labels' && kind === 'viewer') {
     return { status: 403, error: 'no label access in this organization' }
   }
-  if (route.path === 'projects') {
+  if (route.path === 'projects' && kind === 'viewer') {
     return { status: 403, error: 'only org admins and standard users can create projects' }
   }
   if (route.path === 'projects/:ref') {

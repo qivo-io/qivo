@@ -53,8 +53,8 @@ export const shapeUser = (
   kind: u.kind,
   isAgent: u.kind === 'agent',
   active: u.active,
-  // the per-person project-creation right; it only counts for a standard
-  // user who is a person while the org's setting is 'selected'
+  // the per-user project-creation right; it only counts for a standard
+  // user, person or agent, while the org's setting is 'selected'
   canCreateProjects: u.can_create_projects === true,
   // days a READ inbox message is kept before the sweep takes it (0110);
   // null is "Never", and has to survive as null — 0 would be a period

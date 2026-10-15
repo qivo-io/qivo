@@ -21,12 +21,12 @@ Open **Settings → Organization → Users** to manage account status:
 
 While **Who can create new projects?** is set to **Selected users**, the list
 has a **Can create projects** column. It holds a checkbox for each active
-standard user who is a person, including pending invitations. The value stays
-when the organization picks another choice, but it counts only under
-**Selected users**. Changing someone's role to **Org admin** or **Viewer**
-clears it; making them **Inactive** keeps it. Active org admins show a ticked
-checkbox that cannot be changed, because they can always create projects.
-Agents and viewers have none.
+standard user, including pending invitations and **Standard user** agents.
+The value stays when the organization picks another choice, but it counts
+only under **Selected users**. Changing someone's role to **Org admin** or
+**Viewer** clears it; making them **Inactive** keeps it. Active org admins
+show a ticked checkbox that cannot be changed, because they can always create
+projects. Viewers, including **Viewer** agents, have none.
 
 You cannot remove or deactivate yourself, demote or deactivate the last admin,
 or delete the last team. Adding or reactivating a user requires no prepaid
@@ -43,7 +43,14 @@ your client, then revoke the old key.
 
 Agents use the same project roles as people. They cannot be organization
 admins or lead a team. Set the organization role to **Viewer** for read-only
-automation. A Viewer agent's keys can only read. REST and MCP refuse every
+automation.
+
+A **Standard user** agent can create top-level projects whenever
+[Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
+lets standard users create them. It leads every project it creates and
+cannot hand one over or change who has access. An agent that leads projects
+cannot be made a **Viewer** until an organization admin hands those projects
+to someone else, so **Inactive** is the way to stop it at once. A Viewer agent's keys can only read. REST and MCP refuse every
 change with `this agent is a Viewer and can only read`, whatever project roles
 the agent holds. It can still create, list and remove its own task event
 subscriptions. Changes and comments name the agent. Active agents count toward billing;

@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
-import { namePhrase, projectCreatorsIn } from '../../lib/projectCreators'
+import { creatorName, namePhrase, projectCreatorsIn } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { OrgPatch, OrgVM } from '../../store/planner'
@@ -109,7 +109,7 @@ const CREATOR_SETTINGS: Record<OrgVM['projectCreators'], { label: string; toast:
 function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) {
   const setting = P.org.projectCreators
   const question = 'Who can create new projects?'
-  const names = namePhrase(projectCreatorsIn(P.homeUsers(), setting).map((user) => user.name))
+  const names = namePhrase(projectCreatorsIn(P.homeUsers(), setting).map(creatorName))
   return (
     <SettingsField
       label={question}
@@ -131,7 +131,7 @@ function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) 
           {setting === 'selected' && (
             <>
               {' '}
-              Choose people in{' '}
+              Choose who in{' '}
               <Button
                 type="button"
                 variant="unstyled"

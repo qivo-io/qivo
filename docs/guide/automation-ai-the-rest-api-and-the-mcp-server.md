@@ -16,8 +16,10 @@ For projects, MCP offers `get_project`, `create_project`, `update_project`,
 change their settings, archive and restore them, add and change milestones
 and change sharing one user or team at a time, by the same rules as the app
 ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
-Only a person can change sharing or hand over a lead; an agent cannot, even
-for a project it leads. Removing someone's access takes a choice for the
+A **Standard user** agent creates top-level projects like a standard user
+when [Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
+allows it, and a **Viewer** agent never does. Only a person can change
+sharing or hand over a lead; an agent cannot, even for a project it leads. Removing someone's access takes a choice for the
 open tasks they would lose sight of, like the app's removal window.
 
 Both APIs support `reviewer_id` with the same eligibility rules as

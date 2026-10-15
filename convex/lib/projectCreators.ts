@@ -1,8 +1,10 @@
 /* The one definition of who may create a top-level project, shared by the
- * server (projects.create) and the browser (P.canCreateProject, which shows
- * every New project button), so the button appears exactly when the server
- * would accept the create. Sub-projects follow lead access on the parent
- * instead. It also holds the rule for what a profile update stores in
+ * server (createProjectCore behind projects.create, REST and MCP, and the
+ * get_me flag) and the browser (P.canCreateProject, which shows every New
+ * project button), so the button appears exactly when the server would
+ * accept the create. The rule reads the organization role, never whether the
+ * profile is a person or an agent. Sub-projects follow lead access on the
+ * parent instead. It also holds the rule for what a profile update stores in
  * can_create_projects, shared by profiles.update and P.updateUser. src/
  * imports this module, so it must stay free of server runtime and import
  * only types. */
@@ -27,16 +29,18 @@ export function isProjectCreators(value: unknown): value is ProjectCreators {
   return typeof value === 'string' && Object.hasOwn(REFUSALS, value)
 }
 
-/* May this profile create a top-level project under the setting? Org admins
- * always can. Otherwise only a standard user who is a person qualifies: every
- * one under 'users', only those with can_create_projects under 'selected', and
- * nobody under 'admins' or a value this code does not know. */
+/* May this profile create a top-level project under the setting? The rule
+ * reads the role only, so a Standard user agent counts like a standard user
+ * who is a person. Org admins always can. Otherwise only a standard user
+ * qualifies: every one under 'users', only those with can_create_projects
+ * under 'selected', and nobody under 'admins' or a value this code does not
+ * know. Viewers, guests and unknown roles never do. */
 export function canCreateProjects(
-  me: Pick<Doc<'profiles'>, 'org_role' | 'kind' | 'can_create_projects'>,
+  me: Pick<Doc<'profiles'>, 'org_role' | 'can_create_projects'>,
   setting: Setting,
 ): boolean {
   if (me.org_role === 'admin') return true
-  if (me.org_role !== 'user' || me.kind !== 'person') return false
+  if (me.org_role !== 'user') return false
   switch (setting ?? 'users') {
     case 'users':
       return true
@@ -51,20 +55,18 @@ export function canCreateProjects(
  * profiles.update and the planner's optimistic updateUser. An update that
  * neither changes the role nor names the right keeps the current value, so
  * deactivating keeps it. Otherwise the right is on only when the update
- * turns it on for a standard user who is a person, so a role change clears
+ * turns it on for a standard user, person or agent, so a role change clears
  * it. Off is stored as absent. profiles.update refuses turning it on for
  * anyone else before it gets here. Callers write the result when it differs
  * from the row. */
 export function projectRightAfterUpdate(
-  row: Pick<Doc<'profiles'>, 'org_role' | 'kind' | 'can_create_projects'>,
+  row: Pick<Doc<'profiles'>, 'org_role' | 'can_create_projects'>,
   update: { org_role?: OrgRole; can_create_projects?: boolean },
 ): boolean | undefined {
   const roleChanges = update.org_role !== undefined && update.org_role !== row.org_role
   if (!roleChanges && update.can_create_projects === undefined) return row.can_create_projects
   const role = update.org_role ?? row.org_role
-  return (
-    (update.can_create_projects === true && role === 'user' && row.kind === 'person') || undefined
-  )
+  return (update.can_create_projects === true && role === 'user') || undefined
 }
 
 /* The sentence projects.create refuses with: it says who can create projects

@@ -304,8 +304,9 @@ describe('get_me and GET /v1/me', () => {
         plannable_hours: null,
         email: null,
       },
-      // agents never create projects under any setting today
-      organization: orgBlock(f, false),
+      // a Standard user agent counts as a standard user, and the setting is
+      // unset (Standard users)
+      organization: orgBlock(f, true),
       billing: NOT_PAUSED,
       credential: { kind: 'agent_key', access: 'write', expires_at: null, name: 'CI key' },
     })
@@ -383,29 +384,41 @@ describe('get_me and GET /v1/me', () => {
       })
       return (await ctx.db.get(_id)) as Doc<'profiles'>
     })
+    // a Standard user agent ticked like `selected`, and a Viewer agent with
+    // the right planted raw, which its role never lets it use
+    const selectedAgent = await plantViewerAgent(t, f.org.id)
+    await t.run((ctx) =>
+      ctx.db.patch(selectedAgent._id, { org_role: 'user', can_create_projects: true }),
+    )
+    const viewerAgent = await plantViewerAgent(t, f.org.id)
+    await t.run((ctx) => ctx.db.patch(viewerAgent._id, { can_create_projects: true }))
     const seats = {
       admin: await plantToken(t, f.admin, { name: 'a', access: 'write' }),
       user: await plantToken(t, f.user, { name: 'u', access: 'write' }),
       selected: await plantToken(t, selected, { name: 's', access: 'write' }),
       viewer: await plantToken(t, f.viewer, { name: 'v', access: 'write' }),
       agent: await plantKey(t, f.agent, 'k'),
+      selectedAgent: await plantKey(t, selectedAgent, 'k'),
+      viewerAgent: await plantKey(t, viewerAgent, 'k'),
     }
-    const expected: Record<ProjectCreators | 'unset', Record<keyof typeof seats, boolean>> = {
-      unset: { admin: true, user: true, selected: true, viewer: false, agent: false },
-      users: { admin: true, user: true, selected: true, viewer: false, agent: false },
-      selected: { admin: true, user: false, selected: true, viewer: false, agent: false },
-      admins: { admin: true, user: false, selected: false, viewer: false, agent: false },
+    type Seat = keyof typeof seats
+    // the seats that may create under each setting; viewers never may
+    const users: Seat[] = ['admin', 'user', 'selected', 'agent', 'selectedAgent']
+    const creators: Record<ProjectCreators | 'unset', Seat[]> = {
+      unset: users,
+      users,
+      selected: ['admin', 'selected', 'selectedAgent'],
+      admins: ['admin'],
     }
-    for (const [setting, bySeat] of Object.entries(expected)) {
+    for (const [setting, allowed] of Object.entries(creators)) {
       await t.run((ctx) =>
         ctx.db.patch(f.org._id, {
           project_creators: setting === 'unset' ? undefined : (setting as ProjectCreators),
         }),
       )
-      for (const [seat, can] of Object.entries(bySeat)) {
-        const { organization } = JSON.parse(
-          (await getMe(t, seats[seat as keyof typeof seats])).text,
-        )
+      for (const [seat, credential] of Object.entries(seats)) {
+        const can = allowed.includes(seat as Seat)
+        const { organization } = JSON.parse((await getMe(t, credential)).text)
         expect(organization.project_creators, `${setting} ${seat}`).toBe(
           setting === 'unset' ? 'users' : setting,
         )

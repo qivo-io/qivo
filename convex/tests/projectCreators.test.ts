@@ -17,15 +17,20 @@ import {
 
 type Setting = Doc<'organizations'>['project_creators']
 type Creator = Pick<Doc<'profiles'>, 'org_role' | 'kind' | 'can_create_projects'>
+type Kind = Creator['kind']
 
 const UNKNOWN = 'everyone' as unknown as Setting
 const SETTINGS: Setting[] = [undefined, ...PROJECT_CREATORS, UNKNOWN]
 
-const person = (org_role: OrgRole, can_create_projects?: boolean): Creator => ({
+const seat = (kind: Kind, org_role: OrgRole, can_create_projects?: boolean): Creator => ({
   org_role,
-  kind: 'person',
+  kind,
   can_create_projects,
 })
+const person = (org_role: OrgRole, can_create_projects?: boolean) =>
+  seat('person', org_role, can_create_projects)
+const agent = (org_role: OrgRole, can_create_projects?: boolean) =>
+  seat('agent', org_role, can_create_projects)
 
 describe('canCreateProjects', () => {
   it('an org admin may create under every setting, unknown ones included', () => {
@@ -34,30 +39,40 @@ describe('canCreateProjects', () => {
     }
   })
 
-  it('a standard user follows the setting; missing reads as users', () => {
-    const plain = person('user')
-    const flagged = person('user', true)
-    expect(canCreateProjects(plain, undefined)).toBe(true)
-    expect(canCreateProjects(plain, 'users')).toBe(true)
-    expect(canCreateProjects(flagged, 'users')).toBe(true)
-    expect(canCreateProjects(plain, 'selected')).toBe(false)
-    expect(canCreateProjects(person('user', false), 'selected')).toBe(false)
-    expect(canCreateProjects(flagged, 'selected')).toBe(true)
-    expect(canCreateProjects(plain, 'admins')).toBe(false)
-    expect(canCreateProjects(flagged, 'admins')).toBe(false)
+  it('a standard user, person or agent, follows the setting; missing reads as users', () => {
+    for (const kind of ['person', 'agent'] as const) {
+      const plain = seat(kind, 'user')
+      const flagged = seat(kind, 'user', true)
+      expect(canCreateProjects(plain, undefined), kind).toBe(true)
+      expect(canCreateProjects(plain, 'users'), kind).toBe(true)
+      expect(canCreateProjects(flagged, 'users'), kind).toBe(true)
+      expect(canCreateProjects(plain, 'selected'), kind).toBe(false)
+      expect(canCreateProjects(seat(kind, 'user', false), 'selected'), kind).toBe(false)
+      expect(canCreateProjects(flagged, 'selected'), kind).toBe(true)
+      expect(canCreateProjects(plain, 'admins'), kind).toBe(false)
+      expect(canCreateProjects(flagged, 'admins'), kind).toBe(false)
+    }
   })
 
   it('an unknown setting lets nobody but admins create', () => {
-    expect(canCreateProjects(person('user'), UNKNOWN)).toBe(false)
-    expect(canCreateProjects(person('user', true), UNKNOWN)).toBe(false)
+    for (const creator of [person('user'), person('user', true), agent('user', true)]) {
+      expect(canCreateProjects(creator, UNKNOWN)).toBe(false)
+    }
   })
 
-  it('viewers, guests, agents and unknown roles never qualify, even with the right on', () => {
-    const agent: Creator = { org_role: 'user', kind: 'agent', can_create_projects: true }
-    const unknownRole = person('superuser' as OrgRole, true)
+  it('viewers, Viewer agents, guests and unknown roles never qualify, even with the right on', () => {
+    const never = [
+      person('viewer', true),
+      agent('viewer', true),
+      person('guest', true),
+      person('superuser' as OrgRole, true),
+      agent('superuser' as OrgRole, true),
+    ]
     for (const setting of SETTINGS) {
-      for (const creator of [person('viewer', true), person('guest', true), agent, unknownRole]) {
-        expect(canCreateProjects(creator, setting)).toBe(false)
+      for (const creator of never) {
+        expect(canCreateProjects(creator, setting), `${creator.kind} ${creator.org_role}`).toBe(
+          false,
+        )
       }
     }
   })
@@ -91,11 +106,13 @@ describe('isProjectCreators', () => {
 })
 
 describe('projectRightAfterUpdate', () => {
-  it('turns the right on and off for a standard user who is a person', () => {
-    expect(projectRightAfterUpdate(person('user'), { can_create_projects: true })).toBe(true)
-    expect(
-      projectRightAfterUpdate(person('user', true), { can_create_projects: false }),
-    ).toBeUndefined()
+  it('turns the right on and off for a standard user, person or agent', () => {
+    for (const kind of ['person', 'agent'] as const) {
+      expect(projectRightAfterUpdate(seat(kind, 'user'), { can_create_projects: true })).toBe(true)
+      expect(
+        projectRightAfterUpdate(seat(kind, 'user', true), { can_create_projects: false }),
+      ).toBeUndefined()
+    }
     // a stored false is off too, and the next write stores it as absent
     expect(
       projectRightAfterUpdate(person('user', false), { can_create_projects: false }),
@@ -125,9 +142,10 @@ describe('projectRightAfterUpdate', () => {
     ).toBe(true)
   })
 
-  it('never stores the right on an agent or a non-standard role', () => {
-    const agent: Creator = { org_role: 'user', kind: 'agent', can_create_projects: true }
-    expect(projectRightAfterUpdate(agent, { can_create_projects: true })).toBeUndefined()
+  it('never stores the right on a Viewer agent or another non-standard role', () => {
+    expect(projectRightAfterUpdate(agent('viewer'), { can_create_projects: true })).toBeUndefined()
+    // making a Standard user agent a Viewer clears its right
+    expect(projectRightAfterUpdate(agent('user', true), { org_role: 'viewer' })).toBeUndefined()
     for (const org_role of ['admin', 'viewer', 'guest'] as const) {
       expect(
         projectRightAfterUpdate(person(org_role), { can_create_projects: true }),
