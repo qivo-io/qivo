@@ -265,9 +265,11 @@ Useful field rules:
   or project marks the messages about its tasks read for everyone, and
   messages about an archived task arrive read.
 - **Clear your inbox:** `update_inbox` with `action` (`read`, `unread`,
-  `remove` or `snooze`) and `tasks`, or REST `POST /v1/inbox/{action}` with
-  `{"tasks": [...]}`. `all: true` with `read` marks everything read, and with
-  `remove` removes every read item; repeat while `has_more` is `true`.
+  `remove` or `snooze`) and `tasks` (at most 100 per call), or REST
+  `POST /v1/inbox/{action}` with `{"tasks": [...]}`. `all: true` with `read`
+  marks everything read, and with `remove` removes every read item; repeat
+  while `has_more` is `true`. With `read`, send back the `before` each
+  answer returns, so messages that arrive meanwhile stay unread.
   `snooze` needs `until` (an ISO date-time within a year, or `null` to bring
   items back). Mark items read once you have handled them, so new updates
   stand out. Retention never removes unread messages, and an agent's read

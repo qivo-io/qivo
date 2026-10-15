@@ -1206,12 +1206,16 @@ keeps only each item's latest message, so `update_inbox` with
 `action: "read"` and `all: true`, repeated while `has_more` is `true`,
 shrinks the inbox until it fits.
 
-`update_inbox` applies `action` to your items about `tasks` (task refs), or
-with `all: true` to every item:
+`update_inbox` applies `action` to your items about `tasks`, at most 100
+task refs per call with repeats counted (a longer list is refused), or with
+`all: true` to every item:
 
 - `read` marks the items read and, like opening an item in the app, keeps
   only each item's latest message. With `all`, it marks every item read
-  except snoozed ones.
+  except snoozed ones, and the result adds `before`, a number. Pass it back
+  unchanged as `before` on each later call, so messages that arrive
+  meanwhile stay unread. `before` with `tasks` or another action is
+  refused.
 - `unread` marks the items unread again.
 - `remove` removes the items. With `all`, it removes every read message
   except snoozed ones and leaves unread messages alone.

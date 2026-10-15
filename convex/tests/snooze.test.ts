@@ -99,13 +99,13 @@ describe('messages.snooze — the item, stamped alike, unread, woken by the serv
 
     const pair = { recipient_id: f.guest.id, issue_id }
     const stale = await t.run((ctx) => wakeSnoozedItem(ctx, { ...pair, until: first }, 'now'))
-    expect(stale).toBe(false)
+    expect(stale).toBe(0)
     let [row] = await messagesFor(t, f.guest.id, issue_id)
     expect(row.snoozed_until).toBe(second)
     expect(row.woke_at).toBeUndefined()
 
     const live = await t.run((ctx) => wakeSnoozedItem(ctx, { ...pair, until: second }, 'now'))
-    expect(live).toBe(true)
+    expect(live).toBe(1)
     ;[row] = await messagesFor(t, f.guest.id, issue_id)
     expect(row.snoozed_until).toBeUndefined()
     expect(row.woke_at).toBe('now')
