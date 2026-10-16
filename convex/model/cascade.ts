@@ -2,7 +2,9 @@
  * spelled out. This file is phase 5's home for deleteProjectDeep /
  * deleteTeamDeep / removeProfile; deleteIssueDeep is pulled forward because
  * phase 4's issues.deleteDeep must not ship without the message/subscription/
- * link edges.
+ * link edges. The app's deletes now move tasks and projects to Deleted items
+ * instead (model/deletedItems.ts); these hard deletes remain for the REST and
+ * MCP task deletes and the Northstar wipe.
  *
  * deleteIssueDeep deletes ONE issue. It does NOT delete the subtree:
  * issues.parent_id is `on delete set null` (0001:95) — deleting a parent
@@ -111,9 +113,9 @@ export async function deleteIssueDeep(
  * Activity rows are KEPT with project_id nulled (0001:155 SET NULL) —
  * "History survives its subjects" (0001:144). Without a project, the snapshot
  * sends those rows to org admins only, except the rows of a task that moved
- * out before the delete (snapshot.ts memberSeesActivity). The caller
- * (projects.deleteDeep) writes the 'deleted' narration AFTER this returns,
- * hung on the parent/team branch — the project the event names is gone. */
+ * out before the delete (snapshot.ts memberSeesActivity). Its one caller is
+ * the Northstar wipe (internal/marketingDemo.ts clearWork); the app's project
+ * delete moves the project to Deleted items (model/deletedItems.ts). */
 export async function deleteProjectDeep(
   ctx: MutationCtx,
   a: { project: Doc<'projects'>; actor: Doc<'profiles'>; now: string },

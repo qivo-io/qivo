@@ -40,6 +40,11 @@ crons.daily(
   {},
 )
 
+// After the other nightly jobs. Purges Deleted items whose 30 days are over;
+// the empty arguments start a run and each run schedules the next
+// (deletedItems.ts).
+crons.daily('expire-deleted-items', { hourUTC: 3, minuteUTC: 45 }, internal.deletedItems.expire, {})
+
 // was '0 3 * * 0' (0033:85)
 // The empty arguments start a run; each leg schedules the next, and the last
 // leg writes the reap_orphans row (files.ts).
@@ -86,6 +91,9 @@ crons.interval('organization retention', { hours: 1 }, internal.orgRemovals.swee
 
 // Restarts organization deletions whose step stopped (orgRemovals.ts).
 crons.interval('organization removal recovery', { minutes: 10 }, internal.orgRemovals.recover)
+
+// Restarts Deleted items steps that stopped, at half the budget (deletedItems.ts).
+crons.interval('deleted item recovery', { minutes: 1 }, internal.deletedItems.recover)
 
 crons.interval(
   'webhook event recovery',

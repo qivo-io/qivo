@@ -1,5 +1,5 @@
-/* The fifteen closed value sets of the schema, all but one also on the wire.
- * Each exports the `as const` member list, a literals() validator for
+/* The closed value sets of the schema, most of them also on the wire. Each
+ * exports the `as const` member list, a literals() validator for
  * schema.ts / args validators, and the TS union type. */
 
 import { literals } from 'convex-helpers/validators'
@@ -105,5 +105,60 @@ export const ORG_REMOVAL_PHASES = [
 ] as const
 export const vOrgRemovalPhase = literals(...ORG_REMOVAL_PHASES)
 export type OrgRemovalPhase = (typeof ORG_REMOVAL_PHASES)[number]
+
+/* Deleted items (model/deletedItems.ts). A deletion moves the rows of these
+ * ten tables into deleted_rows; messages are deleted instead. */
+export const STORED_TABLES = [
+  'issues',
+  'comments',
+  'issue_labels',
+  'issue_subscriptions',
+  'issue_attachments',
+  'issue_links',
+  'projects',
+  'milestones',
+  'project_access',
+  'project_team_access',
+] as const
+export const vStoredTable = literals(...STORED_TABLES)
+export type StoredTable = (typeof STORED_TABLES)[number]
+
+/** Whether deleted_rows stores rows of `table`. */
+export const isStoredTable = (table: string): table is StoredTable =>
+  (STORED_TABLES as readonly string[]).includes(table)
+
+export const DELETED_ITEM_KINDS = ['task', 'project'] as const
+export const vDeletedItemKind = literals(...DELETED_ITEM_KINDS)
+export type DeletedItemKind = (typeof DELETED_ITEM_KINDS)[number]
+
+/* moving and restoring items still have background steps to run; purging
+ * ones are being deleted for good; stuck ones stopped after their retries
+ * and wait for an organization admin's Delete now. */
+export const DELETED_ITEM_STATES = ['moving', 'ready', 'restoring', 'purging', 'stuck'] as const
+export const vDeletedItemState = literals(...DELETED_ITEM_STATES)
+export type DeletedItemState = (typeof DELETED_ITEM_STATES)[number]
+
+/* The phases of a deleted item's background steps, in the order each kind of
+ * work runs them (model/deletedItems.ts). Stored on deleted_item_jobs only,
+ * never on the wire. */
+export const TRASH_PHASES = [
+  'move_edges',
+  'move_tasks',
+  'move_drain',
+  'move_finish',
+  'purge_dependents',
+  'purge_live',
+  'purge_rows',
+  'purge_activity',
+  'purge_projects',
+  'purge_finish',
+] as const
+export const vTrashPhase = literals(...TRASH_PHASES)
+export type TrashPhase = (typeof TRASH_PHASES)[number]
+
+/* The credential a REST or MCP delete came through (deleted_items.via). */
+export const CREDENTIAL_TABLES = ['agent_keys', 'mcp_tokens', 'oauth_connections'] as const
+export const vCredentialTable = literals(...CREDENTIAL_TABLES)
+export type CredentialTable = (typeof CREDENTIAL_TABLES)[number]
 
 export const LEVEL_RANK: Record<AccessLevel, number> = { admin: 3, lead: 3, user: 2, viewer: 1 }
