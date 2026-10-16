@@ -164,6 +164,55 @@ describe('files.attach', () => {
     expect(events[events.length - 1].verb).toBe('added an image to')
   })
 
+  it("stores the task's organization and project on the row, and neither the answer nor the snapshot shows them", async () => {
+    const { t, fx, issue } = await setup()
+    const sid = await storeBlob(t, 64, 'application/pdf')
+    const result = await attachAs(t, fx, fx.user, issue, sid)
+    if ('refused' in result) throw new Error(`unexpected refusal: ${result.refused.message}`)
+    const [row] = await attachmentRows(t)
+    expect(row).toMatchObject({ org_id: fx.org.id, project_id: fx.sub.id, issue_id: issue.id })
+    const snap = await as(t, fx.user).query(api.snapshot.forMe, {})
+    const shown = snap?.attachments.find((a) => a.id === row.id)
+    expect(shown).toMatchObject({ issue_id: issue.id, name: 'spec.pdf', size_bytes: 64 })
+    for (const answer of [result.attachment, shown]) {
+      expect(answer).not.toHaveProperty('org_id')
+      expect(answer).not.toHaveProperty('project_id')
+    }
+  })
+
+  it('trims the name and refuses an empty or longer name or media type before any write', async () => {
+    const { t, fx, issue } = await setup()
+    const NAME = /^name must be a file name of 1 to 255 characters$/
+    const TYPE = /^the file's media type must be at most 255 characters$/
+    const cases = [
+      { name: '   ', refusal: NAME },
+      { name: 'x'.repeat(256), refusal: NAME },
+      { name: 'a.bin', mime: `application/${'x'.repeat(244)}`, refusal: TYPE },
+      // a type the upload stored, when the client sends none
+      { name: 'a.bin', stored: `application/${'x'.repeat(244)}`, refusal: TYPE },
+    ]
+    for (const c of cases) {
+      const sid = await storeBlob(t, 8, c.stored)
+      await expectRefusal(attachAs(t, fx, fx.user, issue, sid, c), 'bad_request', c.refusal)
+      // the bytes stay for the weekly sweep
+      expect(await storageExists(t, sid)).toBe(true)
+    }
+    expect(await attachmentRows(t)).toEqual([])
+    expect(await activityFor(t, fx.org.id)).toEqual([])
+
+    // 255 characters of either pass, counted as characters, not code units
+    for (const name of [` ${'x'.repeat(255)} `, '📎'.repeat(255)]) {
+      const result = await attachAs(t, fx, fx.user, issue, await storeBlob(t, 8), {
+        name,
+        mime: `application/${'x'.repeat(243)}`,
+      })
+      if ('refused' in result) throw new Error(`unexpected refusal: ${result.refused.message}`)
+      expect(result.attachment.name).toBe(name.trim())
+      expect(result.attachment.mime).toHaveLength(255)
+    }
+    expect((await activityFor(t, fx.org.id)).at(-2)?.detail).toBe('x'.repeat(255))
+  })
+
   it('the wire has no size slot — a client-sent size is rejected by the validator', async () => {
     const { t, fx, issue } = await setup()
     const sid = await storeBlob(t, 32)

@@ -37,7 +37,10 @@
  * link end; task and mark for follows). A row they change leaves the range
  * they read, so a step that continues needs no cursor and reads no row twice.
  * Rows stored without org_id are outside those ranges and never marked.
- * Deleting a task or a profile deletes rows, which needs nothing here. */
+ * internal/attachmentScopeBackfill gives older attachment rows their
+ * organization unmarked, and schedules these mark steps for the archived
+ * tasks among theirs. Deleting a task or a profile deletes rows, which needs
+ * nothing here. */
 
 import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'

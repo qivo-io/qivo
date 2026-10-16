@@ -170,6 +170,19 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
   }
 }
 
+/**
+ * The attachment bytes an organization stores, in total and per project,
+ * largest first. Counts every attachment and description image of its
+ * tasks, archived ones included, whose project still exists, so a task left
+ * under a removed project is not counted. Reads the organization's
+ * attachment rows in one index range and groups them by the project each
+ * row carries. A row stored before rows carried their project takes its
+ * task's. A row stored before rows carried their organization is in no
+ * organization's range, so every such row in the deployment is read too and
+ * counts when its task belongs to this organization. Each task is read at
+ * most once. internal/attachmentScopeBackfill fills both fields, after which
+ * only rows whose task is gone lack them, and those count nowhere.
+ */
 export async function storageUsage(ctx: QueryCtx, orgId: string) {
   const projects = await ctx.db
     .query('projects')
@@ -178,17 +191,34 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
   const totals = new Map(
     projects.map((p) => [p.id, { project_id: p.id, name: p.name, storage_bytes: 0 }]),
   )
-  let bytes = 0
-  const issues = ctx.db.query('issues').withIndex('by_org', (q) => q.eq('org_id', orgId))
-  for await (const issue of issues) {
-    const files = ctx.db
-      .query('issue_attachments')
-      .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-    for await (const file of files) {
-      bytes += file.size_bytes
-      const project = totals.get(issue.project_id)
-      if (project) project.storage_bytes += file.size_bytes
+  const tasks = new Map<string, Doc<'issues'> | null>()
+  const taskOf = async (issueId: string): Promise<Doc<'issues'> | null> => {
+    let task = tasks.get(issueId)
+    if (task === undefined) {
+      task = await byId(ctx, 'issues', issueId)
+      tasks.set(issueId, task)
     }
+    return task
+  }
+  let bytes = 0
+  const add = (projectId: string | undefined, size: number) => {
+    const project = projectId === undefined ? undefined : totals.get(projectId)
+    if (project === undefined) return
+    project.storage_bytes += size
+    bytes += size
+  }
+  const own = ctx.db
+    .query('issue_attachments')
+    .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', orgId))
+  for await (const file of own) {
+    add(file.project_id ?? (await taskOf(file.issue_id))?.project_id, file.size_bytes)
+  }
+  const unscoped = ctx.db
+    .query('issue_attachments')
+    .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', undefined))
+  for await (const file of unscoped) {
+    const task = await taskOf(file.issue_id)
+    if (task?.org_id === orgId) add(task.project_id, file.size_bytes)
   }
   return {
     bytes,

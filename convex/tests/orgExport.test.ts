@@ -181,6 +181,7 @@ describe('organization export', () => {
       const attachmentId = uuid()
       await ctx.db.insert('issue_attachments', {
         org_id: task.org_id,
+        project_id: task.project_id,
         id: attachmentId,
         issue_id: task.id,
         name: 'evidence.txt',
@@ -287,6 +288,14 @@ describe('organization export', () => {
       storage_id: ids.storageId,
       inline: true,
     })
+    // its organization and project copy the task's for index reads, while a
+    // task keeps its own project
+    expect(exported.issue_attachments[0]).not.toHaveProperty('org_id')
+    expect(exported.issue_attachments[0]).not.toHaveProperty('project_id')
+    expect(exported.issues.find((row) => row.id === task.id)).toHaveProperty(
+      'project_id',
+      task.project_id,
+    )
     expect(exported.issue_links).toHaveLength(1)
     expect(exported.issue_links[0].id).toBe(ids.linkId)
     expect(exported.agent_keys[0]).toMatchObject({

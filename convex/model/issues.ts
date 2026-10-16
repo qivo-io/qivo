@@ -1282,7 +1282,8 @@ export async function updateIssueCore(
  * calling this, and the write gate here checks them again before any guard,
  * so these guards only ever describe a destination the caller can write. A
  * machine update that also sets the assignee or reviewer (MachineMove.later)
- * is checked with the people the task ends up with. */
+ * is checked with the people the task ends up with. The task's attachment
+ * rows take the new project too. */
 export async function moveIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1338,6 +1339,13 @@ export async function moveIssueCore(
   const source = await byId(ctx, 'projects', issue.project_id)
   const before = { ...issue }
   await ctx.db.patch(issue._id, w)
+  // Attachment rows carry their task's project for the storage totals
+  // (model/billing.ts storageUsage), so they move with the task.
+  for (const file of await ctx.db
+    .query('issue_attachments')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+    .collect())
+    await ctx.db.patch(file._id, { project_id })
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // a group stays with its assignee: clearing its reviewer hands nothing over
   await notifyIssueUpdate(ctx, { before, after, actor: me, now, isGroup })

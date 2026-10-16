@@ -36,6 +36,7 @@ import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as identity from "../identity.js";
 import type * as internal_archivedReadsBackfill from "../internal/archivedReadsBackfill.js";
+import type * as internal_attachmentScopeBackfill from "../internal/attachmentScopeBackfill.js";
 import type * as internal_demoCleanup from "../internal/demoCleanup.js";
 import type * as internal_demoMetrics from "../internal/demoMetrics.js";
 import type * as internal_demoTest from "../internal/demoTest.js";
@@ -189,6 +190,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   identity: typeof identity;
   "internal/archivedReadsBackfill": typeof internal_archivedReadsBackfill;
+  "internal/attachmentScopeBackfill": typeof internal_attachmentScopeBackfill;
   "internal/demoCleanup": typeof internal_demoCleanup;
   "internal/demoMetrics": typeof internal_demoMetrics;
   "internal/demoTest": typeof internal_demoTest;

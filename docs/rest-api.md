@@ -1442,9 +1442,12 @@ the upload started. Any other value, including a file stored earlier,
 answers `400` (`storage_id must be the storageId the upload answered`). The
 stored file must have exactly the declared number of bytes. A file of
 another size answers `400` (`the uploaded file has 99 bytes, not the 100
-declared`), Qivo keeps it, and the ticket stays usable. If the organization
-lowered its per-file limit after the upload started and the file now
-exceeds it, Qivo deletes the file, answers `400` and spends the ticket.
+declared`), Qivo keeps it, and the ticket stays usable. Without a
+`content_type`, the attachment takes the upload's `Content-Type`, and one
+over 255 characters answers `400` (`the file's media type must be at most 255
+characters`). If the organization lowered its per-file limit after the upload
+started and the file now exceeds it, Qivo deletes the file, answers `400` and
+spends the ticket.
 Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
 Attaching writes an `attached a file to` activity row with the file name and
 the provenance.
