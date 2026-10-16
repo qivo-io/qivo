@@ -36,7 +36,8 @@
  * subscribed: exp comes from Date.now(), which is not a reactive dependency —
  * a subscription would pin a stale exp forever. */
 
-import { v } from 'convex/values'
+import { makeFunctionReference } from 'convex/server'
+import { type Infer, type ObjectType, v } from 'convex/values'
 import { components } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
@@ -338,63 +339,130 @@ export const gatewayAvatar = internalQuery({
 })
 
 /* ------------------------------------------------------------ reapOrphans
- * Uploaded-never-attached bytes (an app upload never attached, a REST upload
- * never confirmed) are referenced by NOTHING. Reference points
- * are issue_attachments.storage_id, profiles.avatar_storage_id and
- * panorama_images/custom_backgrounds originals and preview_storage_id. Runnable
- * via `npx convex run files:reapOrphans` until phase 9's cron schedules it.
- * The 60-min floor (0033:34-38): a sweep must never race an upload whose
- * attach is seconds away. Component storage (Better Auth) is isolated from
- * this _storage table. */
+ * Deletes bytes nothing references: an app upload never attached, a REST
+ * upload never confirmed, and the private backgrounds of a login that no
+ * longer exists. The references are issue_attachments.storage_id,
+ * profiles.avatar_storage_id and the panorama_images and custom_backgrounds
+ * originals and previews (model/attachments.ts storageIdInUse). Component
+ * storage (Better Auth) is isolated from this _storage table.
+ *
+ * The weekly cron (crons.ts) starts a run with empty arguments, and so does
+ * `npx convex run files:reapOrphans`, which returns when the first leg ends.
+ * A run has three phases: expired upload tickets, then account appearance
+ * rows, then every stored file in creation order. Each leg is one
+ * transaction that handles at most one REAP_PAGES page of its phase and
+ * schedules the next leg with the running counts. The leg with nothing left
+ * writes the run's one reap_orphans audit row.
+ *
+ * The 60-minute floor (0033:34-38) keeps a sweep from racing an upload whose
+ * attach is seconds away. It is measured from the run's start, which every
+ * leg shares, so a late leg never treats a file as older than it was when
+ * the run began. A file's reference check and its delete happen in one leg,
+ * so a file attached before its leg runs is kept. An attach racing the leg
+ * that checks its file makes one of the two transactions retry. The leg
+ * then keeps the file, or the attach finds the bytes gone and refuses. A
+ * file that loses its last reference after its leg survives until the next
+ * run. As in jobs.ts, a failed leg ends the run without an audit row and
+ * earlier legs stay committed, so a missing weekly reap_orphans row in
+ * Admin › Audit is the signal. */
+
+/** The most rows one reapOrphans leg handles in each phase. A stored file
+ * older than the floor costs storageIdInUse's index ranges, six today, so a
+ * files leg reads about 1,500 of Convex's 4,096 and has room for more
+ * references. A tickets leg reads two ranges and deletes at most two pages.
+ * An account costs a Better Auth lookup and, for a removed login, its
+ * cleanup. Tests lower these. */
+export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
+
+/* A sweep never deletes a file younger than this when its run starts. REST
+ * tickets live exactly this long (model/attachments.ts
+ * UPLOAD_TICKET_TTL_MS), so no sweep deletes a file while the ticket it was
+ * uploaded for can still confirm it. */
+const REAP_FLOOR_MS = 60 * 60 * 1000
+
+const vReapCounts = v.object({
+  deleted: v.number(), // unreferenced files deleted
+  kept: v.number(), // files kept, in use or younger than the floor
+  tickets: v.number(), // expired upload tickets deleted
+  accounts: v.number(), // removed logins whose appearance and backgrounds were cleared
+})
+
+/** The counts a reapOrphans run records in its reap_orphans audit row. */
+export type ReapCounts = Infer<typeof vReapCounts>
+
+const reapArgs = {
+  phase: v.optional(v.union(v.literal('tickets'), v.literal('accounts'), v.literal('files'))),
+  cursor: v.optional(v.string()), // the phase's page cursor
+  now: v.optional(v.number()), // the run's start, epoch milliseconds
+  counts: v.optional(vReapCounts),
+}
+type ReapLeg = ObjectType<typeof reapArgs>
+
+const reapLegRef = makeFunctionReference<'mutation', ReapLeg, null>('files:reapOrphans')
+
+/* One leg of the orphan sweep (header above). Empty arguments start a run. */
 export const reapOrphans = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const now = Date.now()
-    const cutoff = now - 60 * 60 * 1000
-    let deleted = 0
-    let kept = 0
-    // Tickets own no bytes until the receiver commits the completed upload.
-    // Bound each ticket sweep; the next run resumes from the oldest expiry.
-    for (const ticket of await ctx.db
-      .query('background_uploads')
-      .withIndex('by_expiry', (q) => q.lte('expires_at', now))
-      .take(1000))
-      await ctx.db.delete(ticket._id)
-    // Expired REST attachment upload tickets (model/attachments.ts); their
-    // unconfirmed bytes are unreferenced and fall to the sweep below.
-    for (const ticket of await ctx.db
-      .query('attachment_uploads')
-      .withIndex('by_expiry', (q) => q.lte('expires_at', now))
-      .take(1000))
-      await ctx.db.delete(ticket._id)
-    // Raw component/CLI deletion can bypass the auth API hook. Preserve a
-    // banned user's preferences; only an absent login makes them orphaned.
-    for (const settings of await ctx.db.query('account_appearance').collect()) {
-      const user = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-        model: 'user',
-        where: [{ field: '_id', value: settings.auth_user_id }],
-      })
-      if (!user) await clearAccountAppearance(ctx, settings.auth_user_id)
+  args: reapArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? Date.now()
+    const counts = a.counts ?? { deleted: 0, kept: 0, tickets: 0, accounts: 0 }
+    let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
+    if ((a.phase ?? 'tickets') === 'tickets') {
+      // Tickets own no bytes until the receiver commits the completed upload,
+      // and an expired REST ticket's unconfirmed bytes fall to the files phase.
+      let more = false
+      for (const table of ['background_uploads', 'attachment_uploads'] as const) {
+        const expired = await ctx.db
+          .query(table)
+          .withIndex('by_expiry', (q) => q.lte('expires_at', now))
+          .take(REAP_PAGES.tickets + 1)
+        for (const ticket of expired.slice(0, REAP_PAGES.tickets)) await ctx.db.delete(ticket._id)
+        counts.tickets += Math.min(expired.length, REAP_PAGES.tickets)
+        more ||= expired.length > REAP_PAGES.tickets
+      }
+      next = { phase: more ? 'tickets' : 'accounts' }
+    } else if (a.phase === 'accounts') {
+      // Raw component/CLI deletion can bypass the auth API hook. Preserve a
+      // banned user's preferences; only an absent login makes them orphaned.
+      const page = await ctx.db
+        .query('account_appearance')
+        .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.accounts })
+      for (const settings of page.page) {
+        const user = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+          model: 'user',
+          where: [{ field: '_id', value: settings.auth_user_id }],
+        })
+        if (user) continue
+        await clearAccountAppearance(ctx, settings.auth_user_id)
+        counts.accounts += 1
+      }
+      next = page.isDone ? { phase: 'files' } : { phase: 'accounts', cursor: page.continueCursor }
+    } else {
+      const cutoff = now - REAP_FLOOR_MS
+      const page = await ctx.db.system
+        .query('_storage')
+        .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.files })
+      for (const file of page.page) {
+        if (file._creationTime > cutoff || (await storageIdInUse(ctx, file._id))) {
+          counts.kept += 1
+          continue
+        }
+        await ctx.storage.delete(file._id)
+        counts.deleted += 1
+      }
+      if (!page.isDone) next = { phase: 'files', cursor: page.continueCursor }
     }
-    for (const file of await ctx.db.system.query('_storage').collect()) {
-      if (file._creationTime > cutoff) {
-        kept += 1
-        continue
-      }
-      if (await storageIdInUse(ctx, file._id)) {
-        kept += 1
-        continue
-      }
-      await ctx.storage.delete(file._id)
-      deleted += 1
+    if (next !== null) {
+      await ctx.scheduler.runAfter(0, reapLegRef, { ...next, now, counts })
+      return null
     }
     await ctx.db.insert('platform_audit_log', {
       ts: new Date(now).toISOString(),
       actor_email: 'system',
       action: 'reap_orphans',
-      detail: { deleted, kept },
+      detail: counts,
     })
-    return { deleted, kept }
+    return null
   },
 })
 

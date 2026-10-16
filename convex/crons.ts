@@ -2,8 +2,8 @@
  * cron args are hourUTC/minuteUTC BY DEFINITION — UTC by construction, which
  * is exactly what pg_cron ran, so do not "fix" 02:30 to local time. The whole
  * pg_net/Vault/cron-secret/Monday-sentinel apparatus is cut: failures appear
- * in the Convex dashboard logs, and each job's final act is one
- * platform_audit_log row written in the same transaction (jobs.ts;
+ * in the Convex dashboard logs, and each run's final act is one
+ * platform_audit_log row written by its last leg (jobs.ts;
  * files.reapOrphans writes its own). */
 
 import { cronJobs, makeFunctionReference } from 'convex/server'
@@ -40,11 +40,14 @@ crons.daily(
   {},
 )
 
-// was '0 3 * * 0' (0033:85) — self-audits (files.ts writes the reap_orphans row)
+// was '0 3 * * 0' (0033:85)
+// The empty arguments start a run; each leg schedules the next, and the last
+// leg writes the reap_orphans row (files.ts).
 crons.weekly(
   'reap-orphan-files',
   { dayOfWeek: 'sunday', hourUTC: 3, minuteUTC: 0 },
   internal.files.reapOrphans,
+  {},
 )
 
 // These handlers are no-ops outside the dedicated demo deployment. Admission

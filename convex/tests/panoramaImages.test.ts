@@ -7,7 +7,17 @@ import { api, components, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import * as panoramaModule from '../panoramaImages'
-import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  plantIssue,
+  reap,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -660,7 +670,7 @@ describe('storage ownership', () => {
     const orphan = await storage(t)
     vi.setSystemTime(Date.now() + 61 * 60_000)
     const fresh = await storage(t)
-    expect(await t.mutation(internal.files.reapOrphans, {})).toEqual({ deleted: 1, kept: 3 })
+    expect(await reap(t)).toEqual({ deleted: 1, kept: 3, tickets: 0, accounts: 0 })
     expect(await exists(t, orphan)).toBe(false)
     for (const id of [a.storage_id, b.storage_id, fresh]) expect(await exists(t, id)).toBe(true)
   })
