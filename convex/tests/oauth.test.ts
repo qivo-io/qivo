@@ -1162,6 +1162,20 @@ describe('OAuth revocation, replay and live account checks', () => {
       }
     }
   })
+
+  it('refuses to refresh tokens for a banned login', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    await f.t.mutation(components.betterAuth.adapter.updateOne, {
+      input: {
+        model: 'user',
+        where: [{ field: '_id', value: f.userId }],
+        update: { banned: true, banExpires: null },
+      },
+    })
+    await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
+    await deniedAccess(f, c.access_token)
+  })
 })
 
 describe('Convex refresh-token compare-and-set adapter', () => {

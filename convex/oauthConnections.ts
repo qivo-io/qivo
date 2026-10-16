@@ -246,6 +246,10 @@ export const claimIssuance = internalMutation({
       profile.org_id !== row.org_id
     )
       return false
+    // A banned login gets no new access or refresh tokens, so a ban stops
+    // issuance as well as use (lookupAccess).
+    const user = await findAuthUser(ctx, row.auth_user_id)
+    if (!user || loginBanned(user, Date.now())) return false
     const used = await ctx.db
       .query('oauth_credential_uses')
       .withIndex('by_hash', (q) =>
