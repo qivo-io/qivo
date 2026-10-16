@@ -8,13 +8,13 @@ import { loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
 const env = { QIVO_ENVIRONMENT: 'development', CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-key' }
 const folders = []
-function fixture() {
+function fixture(base = env) {
   const cwd = mkdtempSync(join(tmpdir(), 'qivo-browser-demo-'))
   const directory = mkdtempSync(join(tmpdir(), 'qivo-browser-credentials-'))
   folders.push(cwd, directory)
-  const target = resolveTarget({ target: 'dev' }, env)
+  const target = resolveTarget({ target: 'dev' }, base)
   loadCredentials(directory, target, { create: true })
-  return { cwd, env: { ...env, QIVO_FIXTURE_CREDENTIALS_DIR: directory } }
+  return { cwd, env: { ...base, QIVO_FIXTURE_CREDENTIALS_DIR: directory } }
 }
 afterEach(() => {
   vi.restoreAllMocks()
@@ -62,6 +62,12 @@ describe('Northstar browser fixture', () => {
         env: { ...options.env, CONVEX_DEPLOY_KEY: 'dev:other-otter-13|test-key' },
       }),
     ).toThrow(/credentials are missing/)
+  })
+
+  it('accepts a local app configured for the regional URL of its dev credentials', () => {
+    const VITE_CONVEX_URL = 'https://tidy-otter-12.eu-west-1.convex.cloud'
+    const options = fixture({ ...env, VITE_CONVEX_URL })
+    expect(loadBrowserDemo('http://localhost:5199', options).target.url).toBe(VITE_CONVEX_URL)
   })
 
   it('refuses a local app configured for a different backend than its dev credentials', () => {
