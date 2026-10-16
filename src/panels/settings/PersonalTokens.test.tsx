@@ -4,12 +4,14 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { CONFIRM_IGNORE_MS } from '../../lib/useConfirmArm'
 import { plannerFixture } from '../../store/plannerFixture.setup'
 
 /* The token list and the New token dialog on the real store. The network
    answers the token list and records the create call; the clock is fixed at
    15 Oct 2026 in local time, so every date below reads the same in any time
-   zone. */
+   zone. A click that confirms moves the clock past CONFIRM_IGNORE_MS first,
+   because the clock does not move on its own. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
@@ -232,8 +234,16 @@ describe('the token list', () => {
     await click(button('Cancel'))
     expect(revoke.getAttribute('aria-label')).toBe('Revoke this token')
 
-    // the second click revokes once; a click while that runs only arms again
+    // a double click only arms it
     await click(revoke)
+    await click(revoke)
+    expect(mutations()).not.toContain('tokens:revokeMcpToken')
+    expect(revoke.getAttribute('aria-label')).toBe(
+      'Confirm revocation, connected clients lose access immediately',
+    )
+
+    // a later click revokes once; a click while that runs only arms again
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
     await click(revoke)
     expect(mutations().filter((n) => n === 'tokens:revokeMcpToken')).toHaveLength(1)
     expect(revoke.getAttribute('aria-label')).toBe('Revoke this token')
@@ -249,6 +259,7 @@ describe('the token list', () => {
     expect(remove.getAttribute('aria-label')).toBe('Confirm token deletion')
     // armed, it stays an icon, so the cells keep their columns
     expect(remove.textContent).toBe('')
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
     await click(remove)
     await click(remove)
     expect(mutations().filter((n) => n === 'tokens:deleteMcpToken')).toHaveLength(1)

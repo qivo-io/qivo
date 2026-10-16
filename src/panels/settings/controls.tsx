@@ -8,6 +8,7 @@ import { Icon } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { WORKSPACE_SIGNUP_URL } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
+import { useConfirmArm } from '../../lib/useConfirmArm'
 
 /* ---------- shared page atoms ---------- */
 export function DemoCapabilityNotice({ children }: { children: React.ReactNode }) {
@@ -107,7 +108,9 @@ export function TextField({
   )
 }
 
-// Confirmation disarms after 3.5 seconds; reversible actions may use neutral color.
+// The second click confirms only after a short pause, and the arm lapses after
+// 3.5 seconds or when the button turns disabled (lib/useConfirmArm).
+// Reversible actions may use neutral color.
 export function ConfirmButton({
   label,
   confirmLabel,
@@ -128,12 +131,11 @@ export function ConfirmButton({
   // the callers' data-* probes ride through `rest` onto the button
   [dataAttr: `data-${string}`]: string | undefined
 }) {
-  const [arm, setArm] = useStateS(false)
+  const { armed, press, disarm } = useConfirmArm<'confirm'>()
+  const arm = armed !== null
   useEffectS(() => {
-    if (!arm) return
-    const t = setTimeout(() => setArm(false), 3500)
-    return () => clearTimeout(t)
-  }, [arm])
+    if (disabled) disarm()
+  }, [disabled, disarm])
   const tone = danger ? 'var(--danger)' : 'var(--text-1)'
   return (
     <Button
@@ -145,14 +147,7 @@ export function ConfirmButton({
         borderColor: arm ? tone : 'var(--border)',
         background: arm ? (danger ? 'var(--danger-soft)' : 'var(--surface-2)') : 'var(--surface-1)',
       }}
-      onClick={() => {
-        if (!arm) {
-          setArm(true)
-          return
-        }
-        setArm(false)
-        onConfirm()
-      }}
+      onClick={() => press('confirm', onConfirm)}
     >
       <Icon name={icon} size={16} />
       {arm ? confirmLabel : label}

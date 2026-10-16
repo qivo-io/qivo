@@ -106,11 +106,13 @@ Approval requires a Microsoft Entra administrator with consent permissions;
 a Qivo organization admin role alone is not enough.
 
 Destructive controls ask for a second click. Compact trash buttons first
-expand to **Delete?**; larger controls state what will be removed. Timed
-confirmations expire if unused. Deleting a parent project also deletes its
-sub-projects and tasks. Deleting a team removes memberships and sharing grants
-but preserves project work. If members would lose sight of open tasks they
-work on, Qivo first asks whether to keep them as Viewers or reassign the tasks.
+expand to **Delete?**; larger controls state what will be removed. The second
+click must come after a short pause, so a double click does not confirm. Every
+confirmation expires after a few seconds if unused. Deleting a parent project
+also deletes its sub-projects and tasks. Deleting a team removes memberships
+and sharing grants but preserves project work. If members would lose sight of
+open tasks they work on, Qivo first asks whether to keep them as Viewers or
+reassign the tasks.
 
 Users without management access see read-only team and project settings.
 Organization General, Users, Labels and Billing require an organization admin.

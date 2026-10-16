@@ -208,6 +208,8 @@ try {
 
   // ---- Delete arms, then confirms, then the row is gone
   await editor().getByRole('button', { name: 'Delete', exact: true }).click()
+  // the app ignores a second click within 500 ms of arming (lib/useConfirmArm)
+  await page.waitForTimeout(600)
   await editor().getByRole('button', { name: 'Confirm delete', exact: true }).click()
   await editor().waitFor({ state: 'detached' })
   assert.equal(await editButton(`${prefix} B`).count(), 0, 'Deleted milestone still listed')

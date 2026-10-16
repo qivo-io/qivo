@@ -8,6 +8,7 @@ import { Avatar, Icon, Seg } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
+import { useConfirmArm } from '../../lib/useConfirmArm'
 import type { NewUserInput, UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { BackLink, DemoCapabilityNotice } from './controls'
@@ -40,7 +41,7 @@ function AgentKeyPanel({
   const [name, setName] = useStateS('')
   const [fresh, setFresh] = useStateS<{ secret: string } | null>(null)
   const [busy, setBusy] = useStateS(false)
-  const [confirm, setConfirm] = useStateS<string | null>(null)
+  const confirm = useConfirmArm<string>()
   useUpdateBlocker(!!name || !!fresh || busy)
   const mine = (keys || []).filter((k) => k.agentId === agent.id)
   const mint = async () => {
@@ -84,7 +85,7 @@ function AgentKeyPanel({
           </div>
         )}
         {mine.map((k) => {
-          const arm = confirm === k.id
+          const arm = confirm.armed === k.id
           return (
             <div
               key={k.id}
@@ -132,18 +133,17 @@ function AgentKeyPanel({
                       ? 'Confirm revocation — this key loses access immediately'
                       : 'Revoke this key'
                 }
-                onClick={async () => {
-                  if (!arm) {
-                    setConfirm(k.id)
-                    return
-                  }
-                  setConfirm(null)
-                  const ok = k.revokedAt
-                    ? await P.deleteAgentKey(k.id)
-                    : await P.revokeAgentKey(k.id)
-                  if (ok) window.showToast?.(k.revokedAt ? 'Key deleted' : `“${k.name}” revoked`)
-                  else window.showToast?.("That didn't go through", 'error')
-                  reload()
+                onClick={() => {
+                  // press disarms before the request, so a click while it
+                  // runs arms the button again instead of sending it twice
+                  confirm.press(k.id, async () => {
+                    const ok = k.revokedAt
+                      ? await P.deleteAgentKey(k.id)
+                      : await P.revokeAgentKey(k.id)
+                    if (ok) window.showToast?.(k.revokedAt ? 'Key deleted' : `“${k.name}” revoked`)
+                    else window.showToast?.("That didn't go through", 'error')
+                    reload()
+                  })
                 }}
               >
                 <Icon name={k.revokedAt ? 'trash' : 'blocked'} size={16} />
@@ -192,7 +192,7 @@ export function OrgUsersPage({
   const [addEmail, setAddEmail] = useStateS('')
   const [addRole, setAddRole] = useStateS<NewUserInput['orgRole']>('user')
   const [addKind, setAddKind] = useStateS<NonNullable<NewUserInput['kind']>>('person')
-  const [confirm, setConfirm] = useStateS<string | null>(null)
+  const confirm = useConfirmArm<string>()
   const [keys, setKeys] = useStateS<Awaited<ReturnType<typeof P.listAgentKeys>>>(null)
   const [openKeys, setOpenKeys] = useStateS<string | null>(null)
   const [freshAgent, setFreshAgent] = useStateS<{ name: string; secret: string } | null>(null)
@@ -316,7 +316,7 @@ export function OrgUsersPage({
             const lastAdmin = u.orgRole === 'admin' && u.active && admins.length <= 1
             const isSelf = u.id === P.CURRENT_USER
             const blocked = isSelf || lastAdmin
-            const arm = confirm === `u:${u.id}`
+            const arm = confirm.armed === `u:${u.id}`
             const activeKeys = (keys || []).filter((k) => k.agentId === u.id && !k.revokedAt)
             const shownKey = activeKeys[0]
             return (
@@ -401,13 +401,10 @@ export function OrgUsersPage({
                     }
                     onClick={() => {
                       if (blocked) return
-                      if (!arm) {
-                        setConfirm(`u:${u.id}`)
-                        return
-                      }
-                      P.removeUser(u.id)
-                      setConfirm(null)
-                      window.showToast?.(`${u.name} removed from the organization`)
+                      confirm.press(`u:${u.id}`, () => {
+                        P.removeUser(u.id)
+                        window.showToast?.(`${u.name} removed from the organization`)
+                      })
                     }}
                   >
                     <Icon name="trash" size={16} />
@@ -526,7 +523,7 @@ export function OrgUsersPage({
           <div data-org-guests className="[display:flex] [flex-direction:column] [gap:6px]">
             {guests.map((g) => {
               const on = P.guestProjects(g.id)
-              const arm = confirm === `g:${g.id}`
+              const arm = confirm.armed === `g:${g.id}`
               return (
                 <div
                   key={g.id}
@@ -566,15 +563,12 @@ export function OrgUsersPage({
                         ? 'Click again to remove this guest'
                         : 'Remove guest — they lose every project shared with them'
                     }
-                    onClick={() => {
-                      if (!arm) {
-                        setConfirm(`g:${g.id}`)
-                        return
-                      }
-                      P.removeUser(g.id)
-                      setConfirm(null)
-                      window.showToast?.(`${g.email || g.name} no longer has access`)
-                    }}
+                    onClick={() =>
+                      confirm.press(`g:${g.id}`, () => {
+                        P.removeUser(g.id)
+                        window.showToast?.(`${g.email || g.name} no longer has access`)
+                      })
+                    }
                   >
                     <Icon name="trash" size={16} />
                     {arm && 'Delete?'}

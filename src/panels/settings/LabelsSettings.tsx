@@ -7,6 +7,7 @@ import { Icon, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { LABEL_COLORS } from '../../lib/labelColors'
 import { useUpdateBlocker } from '../../lib/updateSafety'
+import { useConfirmArm } from '../../lib/useConfirmArm'
 import type { LabelVM } from '../../store/planner'
 import { P } from '../../store/planner'
 
@@ -14,14 +15,13 @@ function LabelRow({
   label,
   canEdit,
   armed,
-  onArm,
-  onDisarm,
+  onPress,
 }: {
   label: LabelVM
   canEdit: boolean
   armed: boolean
-  onArm: () => void
-  onDisarm: () => void
+  // the page's useConfirmArm press for this row, which arms it or runs `action`
+  onPress: (action: () => void) => void
 }) {
   const [name, setName] = useStateS(label.name)
   useUpdateBlocker(canEdit && name !== label.name)
@@ -128,15 +128,12 @@ function LabelRow({
                 : 'Click again to confirm'
               : 'Delete label'
           }
-          onClick={() => {
-            if (!armed) {
-              onArm()
-              return
-            }
-            P.removeLabel(label.id)
-            onDisarm()
-            window.showToast?.(`Label “${label.name}” deleted`)
-          }}
+          onClick={() =>
+            onPress(() => {
+              P.removeLabel(label.id)
+              window.showToast?.(`Label “${label.name}” deleted`)
+            })
+          }
         >
           <Icon name="trash" size={16} />
           {armed && 'Delete?'}
@@ -154,7 +151,7 @@ export function OrgLabelsPage() {
   const canEdit = P.isAdmin()
   const [newLabel, setNewLabel] = useStateS('')
   useUpdateBlocker(!!newLabel)
-  const [confirm, setConfirm] = useStateS<string | null>(null)
+  const confirm = useConfirmArm<string>()
   const dup = labels.some((l) => l.name.toLowerCase() === newLabel.trim().toLowerCase())
   const addLabel = () => {
     const v = newLabel.trim()
@@ -173,9 +170,8 @@ export function OrgLabelsPage() {
               key={l.id}
               label={l}
               canEdit={canEdit}
-              armed={confirm === `l:${l.id}`}
-              onArm={() => setConfirm(`l:${l.id}`)}
-              onDisarm={() => setConfirm(null)}
+              armed={confirm.armed === `l:${l.id}`}
+              onPress={(action) => confirm.press(`l:${l.id}`, action)}
             />
           ))}
           {labels.length === 0 && (
