@@ -64,7 +64,6 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
       }}
       title="Search tasks and projects"
       description="Search visible Qivo tasks and projects"
-      overlayClassName="bg-[var(--scrim)] backdrop-blur-[6px]"
       className="top-[13vh] w-[580px] max-w-[93vw] translate-y-0 gap-0 overflow-hidden rounded-xl border-border bg-popover p-0 shadow-pop"
     >
       <CommandInput

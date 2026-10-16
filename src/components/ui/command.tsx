@@ -34,7 +34,6 @@ function CommandDialog({
   shouldFilter,
   onOpenAutoFocus,
   onCloseAutoFocus,
-  overlayClassName,
   ...props
 }: React.ComponentProps<typeof Dialog> & {
   title?: string
@@ -44,7 +43,6 @@ function CommandDialog({
   shouldFilter?: React.ComponentProps<typeof CommandPrimitive>['shouldFilter']
   onOpenAutoFocus?: React.ComponentProps<typeof DialogContent>['onOpenAutoFocus']
   onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>['onCloseAutoFocus']
-  overlayClassName?: string
 }) {
   return (
     <Dialog {...props}>
@@ -55,7 +53,6 @@ function CommandDialog({
       <DialogContent
         className={cn('overflow-hidden p-0', className)}
         showCloseButton={showCloseButton}
-        overlayClassName={overlayClassName}
         onOpenAutoFocus={onOpenAutoFocus}
         onCloseAutoFocus={onCloseAutoFocus}
         onEscapeKeyDown={(event) => {

@@ -1,20 +1,12 @@
 /* Native radios cover the entire preview card, retaining browser keyboard
    behavior and the same input hooks as the compact theme selector. */
 .theme-selector {
-  container-type: inline-size;
   min-width: 0;
 }
 .theme-choice-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-}
-/* On the narrowest phones three cards leave no room for the theme icon
-   beside the name and the check mark. */
-@container (max-width: 300px) {
-  .theme-choice-label > svg:first-child {
-    display: none;
-  }
 }
 .theme-choice {
   position: relative;

@@ -199,11 +199,12 @@ export default defineSchema({
   // rows and files never enter an org snapshot or the public image library.
   account_appearance: defineTable({
     auth_user_id: v.string(),
-    // 'image' is the retired Canvas theme (deviation #302). Demo visitor or
-    // production rows written before it may still hold it, so the schema
-    // accepts it for deploys; appearanceSettings reads it as 'blue' and every
-    // save writes a current mode. Drop it once no deployment holds one.
-    mode: v.union(vAppearanceMode, v.literal('image')),
+    // 'image' is the retired Canvas theme (deviation #302) and 'blue' the
+    // retired Blue theme. Demo visitor or production rows written before they
+    // retired may still hold them, so the schema accepts them for deploys;
+    // appearanceSettings reads both as 'dark' and every save writes a current
+    // mode. Drop them once no deployment holds one.
+    mode: v.union(vAppearanceMode, v.literal('blue'), v.literal('image')),
     image_source: vImageSource,
     custom_image_id: v.optional(v.string()),
     revision: v.string(), // upload replacement/removal fence, not a theme version

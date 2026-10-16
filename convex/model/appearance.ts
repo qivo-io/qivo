@@ -62,7 +62,8 @@ export async function appearanceSettings(
   const previewVersion =
     image && image.auth_user_id === authId ? await customPreviewVersion(ctx, image) : null
   return {
-    mode: !settings || settings.mode === 'image' ? 'blue' : settings.mode,
+    // Dark is the default, and it stands in for the retired Blue and Canvas themes.
+    mode: settings?.mode === 'light' ? 'light' : 'dark',
     image_source: settings?.image_source ?? 'daily',
     custom_image:
       image && image.auth_user_id === authId

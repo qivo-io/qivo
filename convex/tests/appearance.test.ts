@@ -31,7 +31,7 @@ declare class Request {
 }
 type Caller = ReturnType<T['withIdentity']>
 
-const DEFAULT = { mode: 'blue', image_source: 'daily', custom_image: null }
+const DEFAULT = { mode: 'dark', image_source: 'daily', custom_image: null }
 const headers = { 'Content-Type': 'image/jpeg', Origin: 'http://localhost:5199' }
 
 function jpeg(width = 1920, height = 1080, tag = 0) {
@@ -274,15 +274,28 @@ describe('account appearance preferences', () => {
     },
   )
 
-  it('reads a stored retired Canvas theme as Blue until the next save replaces it', async () => {
+  it.each(['blue', 'image'] as const)(
+    'reads a stored retired %s theme as Dark until the next save replaces it',
+    async (retired) => {
+      const { t, owner } = await setup()
+      await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'custom' })
+      await t.run(async (ctx) => {
+        const [row] = await ctx.db.query('account_appearance').collect()
+        await ctx.db.patch(row._id, { mode: retired })
+      })
+      expect(await settings(owner.caller)).toMatchObject({ mode: 'dark', image_source: 'custom' })
+      await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'custom' })
+      const [row] = await t.run((ctx) => ctx.db.query('account_appearance').collect())
+      expect(row.mode).toBe('light')
+    },
+  )
+
+  it('saves Blue from a tab loaded before Blue retired as Dark', async () => {
     const { t, owner } = await setup()
-    await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'custom' })
-    await t.run(async (ctx) => {
-      const [row] = await ctx.db.query('account_appearance').collect()
-      await ctx.db.patch(row._id, { mode: 'image' })
-    })
-    expect(await settings(owner.caller)).toMatchObject({ mode: 'blue', image_source: 'custom' })
-    await owner.caller.mutation(api.appearance.save, { mode: 'dark', image_source: 'custom' })
+    await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'none' })
+    expect(
+      await owner.caller.mutation(api.appearance.save, { mode: 'blue', image_source: 'custom' }),
+    ).toMatchObject({ mode: 'dark', image_source: 'custom' })
     const [row] = await t.run((ctx) => ctx.db.query('account_appearance').collect())
     expect(row.mode).toBe('dark')
   })
@@ -495,7 +508,7 @@ describe('private custom background uploads', () => {
   it('keeps the uploaded image when switching mode or image source', async () => {
     const { t, owner } = await setup()
     const { image } = await upload(t, owner.caller)
-    for (const mode of ['blue', 'dark', 'light'] as const) {
+    for (const mode of ['dark', 'light'] as const) {
       for (const image_source of ['daily', 'custom', 'none'] as const) {
         await owner.caller.mutation(api.appearance.save, { mode, image_source })
         expect(await settings(owner.caller)).toMatchObject({

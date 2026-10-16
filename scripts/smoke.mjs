@@ -359,11 +359,12 @@ async function checkCompressedCanvas(page) {
       const style = getComputedStyle(card)
       return { background: style.backgroundColor, blur: style.backdropFilter }
     })
+    // Over the photo every theme's windows are 95% glass with a 20px blur.
     if (
-      startupMaterial?.background !== 'rgba(16, 26, 36, 0.81)' ||
-      startupMaterial?.blur !== 'blur(10px)'
+      !/[,/]\s*0\.95\)$/.test(startupMaterial?.background ?? '') ||
+      startupMaterial?.blur !== 'blur(20px)'
     )
-      await fail('The startup card does not use the translucent Blue window material')
+      await fail('The startup card does not use the translucent window material')
     await page.screenshot({ path: `${SHOTS}/smoke-loading-full.png` })
     await page.evaluate(() => window.__smokeWorkspaceBoot.releaseSnapshot())
     await page.waitForFunction(() => window.__smokeWorkspaceBoot.prefsHeld)
@@ -505,7 +506,7 @@ async function checkCompressedCanvas(page) {
     // image: switching theme keeps the painted image with no new request.
     const themeImage = await page.locator('[data-appearance-background]').elementHandle()
     const themeRequests = requests.length
-    for (const mode of ['dark', 'light', 'blue']) {
+    for (const mode of ['dark', 'light']) {
       await page.evaluate(
         (mode) => window.PLANNER.setAppearance({ mode, image_source: 'custom' }),
         mode,
@@ -854,7 +855,7 @@ try {
   await closeTip.waitFor({ state: 'detached', timeout: 5000 })
   log('A: Search has clickable esc and preserves Home/End, arrows, Enter and one-press Escape')
 
-  // Appearance applies immediately and persists. Blue, Dark and Light keep the
+  // Appearance applies immediately and persists. Dark and Light keep the
   // Canvas controls enabled and paint the chosen Canvas image behind them; No
   // image paints and requests nothing. Restore the demo account's original
   // choice after the check.
@@ -862,7 +863,7 @@ try {
     waitUntil: 'domcontentloaded',
   })
   await pageA.locator('[data-appearance-settings]').waitFor({ timeout: 30000 })
-  await pageA.locator('[data-appearance-mode="blue"]').waitFor()
+  await pageA.locator('[data-appearance-mode="dark"]').waitFor()
   const accountAppearance = () =>
     pageA.evaluate(async () => {
       const { convex } = await import('/src/lib/convex.ts')
@@ -952,7 +953,7 @@ try {
         1,
     )
     if (alpha === 1 && blur === 'none') return 'solid'
-    if (alpha > 0 && alpha < 1 && blur === 'blur(10px)') return 'translucent'
+    if (alpha > 0 && alpha < 1 && blur === 'blur(20px)') return 'translucent'
     return `${background} with ${blur}`
   }
   // Canvas image traffic: custom originals and previews, and the week's
@@ -984,7 +985,7 @@ try {
     : null
   const themeRequests = canvasRequests.length
   const modeBackgrounds = new Map()
-  for (const mode of ['dark', 'light', 'blue']) {
+  for (const mode of ['dark', 'light']) {
     await chooseTheme(mode)
     const paint = await settledCanvas({
       source: 'daily',
@@ -1010,25 +1011,19 @@ try {
   if (modeBackgrounds.get('light') === modeBackgrounds.get('dark')) {
     await fail('Light and Dark did not apply different palettes')
   }
-  if (
-    modeBackgrounds.get('blue') === modeBackgrounds.get('dark') ||
-    modeBackgrounds.get('blue') === modeBackgrounds.get('light')
-  ) {
-    await fail('Blue did not apply its own palette')
-  }
   await pageA.reload({ waitUntil: 'domcontentloaded' })
-  await waitChecked('[data-appearance-mode="blue"]')
-  const restored = await settledCanvas({ source: 'daily', state: weeklyState, mode: 'blue' })
+  await waitChecked('[data-appearance-mode="light"]')
+  const restored = await settledCanvas({ source: 'daily', state: weeklyState, mode: 'light' })
   if (
-    restored.mode !== 'blue' ||
-    restored.cached !== 'blue' ||
+    restored.mode !== 'light' ||
+    restored.cached !== 'light' ||
     (painted && (restored.state !== 'ready' || restored.images !== 1))
   )
-    await fail('Blue did not survive reload with its Canvas image')
+    await fail('Light did not survive reload with its Canvas image')
   log(
     painted
-      ? 'A: Blue/Dark/Light keep the painted Canvas image, its controls and translucent panels'
-      : 'A: Blue/Dark/Light keep the Canvas controls and solid panels without an image',
+      ? 'A: Dark/Light keep the painted Canvas image, its controls and translucent panels'
+      : 'A: Dark/Light keep the Canvas controls and solid panels without an image',
   )
 
   // No image paints and requests nothing, including after a fresh visit, and
@@ -1037,7 +1032,7 @@ try {
   await pageA.locator('[data-appearance-source="none"]').click()
   await waitChecked('[data-appearance-source="none"]')
   await settledCanvas({ source: 'none', state: 'none' })
-  for (const mode of ['dark', 'light', 'blue']) {
+  for (const mode of ['dark', 'light']) {
     await chooseTheme(mode)
     const paint = await settledCanvas({ source: 'none', state: 'none', mode })
     const material = panelMaterial(paint.panel)
@@ -1045,7 +1040,7 @@ try {
   }
   await pageA.reload({ waitUntil: 'domcontentloaded' })
   await waitChecked('[data-appearance-source="none"]')
-  await settledCanvas({ source: 'none', state: 'none', mode: 'blue' })
+  await settledCanvas({ source: 'none', state: 'none', mode: 'light' })
   await pageA.waitForLoadState('networkidle', { timeout: 10000 })
   if (
     canvasRequests.length !== noneRequests ||
@@ -1063,7 +1058,7 @@ try {
   await pageA.waitForFunction(
     () => document.querySelector('[data-appearance-source="custom"]')?.checked,
   )
-  if (!(await pageA.locator('[data-appearance-mode="blue"]').isChecked())) {
+  if (!(await pageA.locator('[data-appearance-mode="light"]').isChecked())) {
     await fail('Appearance choice did not survive reload')
   }
   await checkCompressedCanvas(pageA)
@@ -1072,7 +1067,7 @@ try {
     await convex.mutation('appearance:save', original)
   }, appearanceBefore)
   appearanceNeedsRestore = false
-  log('A: Blue/Dark/Light and the Canvas image choices apply and persist')
+  log('A: Dark/Light and the Canvas image choices apply and persist')
 
   // Phone navigation keeps daily work reachable and gives each full-page
   // layer one Back step. This leg is read-only and preserves the task view.
@@ -1191,7 +1186,7 @@ try {
   await palette.waitFor({ state: 'detached', timeout: 5000 })
   const phoneTask = pageA.locator('[data-mobile-task-frame] [role="dialog"][aria-label="Task"]')
   await phoneTask.waitFor({ state: 'visible', timeout: 10000 })
-  // Probed as Blue over a painted image: with No image its window is solid.
+  // Probed as Dark over a painted image: with No image its window is solid.
   const phoneWindowMaterial = await phoneTask.evaluate((element) => {
     const html = document.documentElement
     const original = {
@@ -1199,7 +1194,7 @@ try {
       backgroundState: html.dataset.backgroundState,
     }
     try {
-      html.dataset.appearance = 'blue'
+      html.dataset.appearance = 'dark'
       html.dataset.backgroundState = 'ready'
       const style = getComputedStyle(element)
       const frame = getComputedStyle(element.closest('[data-mobile-task-frame]'))
@@ -1215,11 +1210,11 @@ try {
     }
   })
   if (
-    phoneWindowMaterial.background !== 'rgba(16, 26, 36, 0.81)' ||
-    phoneWindowMaterial.blur !== 'blur(10px)' ||
+    !/[,/]\s*0\.95\)$/.test(phoneWindowMaterial.background) ||
+    phoneWindowMaterial.blur !== 'blur(20px)' ||
     phoneWindowMaterial.frame !== 'rgba(0, 0, 0, 0)'
   )
-    await fail('The Blue phone task window is hidden behind an opaque frame')
+    await fail('The phone task window is hidden behind an opaque frame')
   if ((await phoneTask.locator('[data-issue-key]').textContent()).trim() !== enterTarget.key)
     await fail('Phone Search opened a different task than the selected result')
   await pageA.goBack()

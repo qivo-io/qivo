@@ -117,7 +117,7 @@ const read = (name, args = {}) => {
     case 'prefs:get':
       return null
     case 'appearance:get':
-      return { mode: 'blue', image_source: 'none', custom_image: null }
+      return { mode: 'dark', image_source: 'none', custom_image: null }
     case 'appearance:dailyImage':
       return null
     case 'billing:status':

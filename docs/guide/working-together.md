@@ -50,10 +50,10 @@ author or agent's name without a separate API label.
 
 ## Appearance preferences. Themes and the Canvas background
 
-Choose **Blue**, **Dark** or **Light** under
-**Settings → Your preferences → Appearance → UI theme**. Blue is the default.
+Choose **Dark** or **Light** under
+**Settings → Your preferences → Appearance → UI theme**. Dark is the default.
 Your choice saves automatically and follows your account across organizations
-and devices.
+and devices. If you had chosen the former Blue theme, Qivo shows Dark.
 
 **Canvas** controls the workspace background independently of the theme:
 
@@ -62,6 +62,9 @@ and devices.
   Qivo uses its configured default.
 - **Custom image** uses your uploaded image.
 - **No image** uses the theme's solid background without requesting an image.
+
+Over an image, panels, cards, windows and menus are tinted glass that lets
+the image show through. With **No image** they are solid.
 
 The settings page shows a preview and any available title, location and
 creator information for the weekly image.

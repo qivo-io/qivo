@@ -142,7 +142,7 @@ appearance:get query public {"type":"object","value":{}}
 appearance:mintCustomUrl query public {"type":"object","value":{}}
 appearance:publicCanvas query internal {"type":"object","value":{"date":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:removeCustom mutation public {"type":"object","value":{}}
-appearance:save mutation public {"type":"object","value":{"mode":{"fieldType":{"type":"union","value":[{"type":"literal","value":"blue"},{"type":"literal","value":"dark"},{"type":"literal","value":"light"}]},"optional":false},"image_source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"daily"},{"type":"literal","value":"custom"},{"type":"literal","value":"none"}]},"optional":false}}}
+appearance:save mutation public {"type":"object","value":{"mode":{"fieldType":{"type":"union","value":[{"type":"literal","value":"dark"},{"type":"literal","value":"light"},{"type":"literal","value":"blue"}]},"optional":false},"image_source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"daily"},{"type":"literal","value":"custom"},{"type":"literal","value":"none"}]},"optional":false}}}
 appearance:uploadContext query internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"exp":{"fieldType":{"type":"number"},"optional":false}}}
 archiveMarks:clearTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 archiveMarks:markTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
@@ -656,7 +656,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     get: 'authedQuery',
     // Approved calendar image and retained credit for the signed-in renderer.
     dailyImage: 'authedQuery',
-    // The Blue theme persists Canvas's image-free palette as an account choice.
+    // Saves the theme and the Canvas background choice for the signed-in login.
     save: 'authedMutation',
     createUpload: 'authedMutation',
     cancelUpload: 'authedMutation',

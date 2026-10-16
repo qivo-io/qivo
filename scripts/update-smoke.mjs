@@ -311,8 +311,8 @@ try {
   await assertHeld(initialLoads, 'Blurred new-task draft')
   // Inspect the actual production stylesheet, including the notice's portal
   // outside the app root. Theme probes change only this browser's DOM, over a
-  // painted Canvas image: Dark and Light panels turn translucent then, but
-  // their floating windows stay solid.
+  // painted Canvas image: every theme floats the notice on 95% glass with a
+  // 20px blur.
   const materials = await notice.evaluate((element) => {
     const html = document.documentElement
     const original = {
@@ -322,7 +322,7 @@ try {
     const results = {}
     try {
       html.dataset.backgroundState = 'ready'
-      for (const mode of ['blue', 'dark', 'light']) {
+      for (const mode of ['dark', 'light']) {
         html.dataset.appearance = mode
         const style = getComputedStyle(element)
         results[mode] = { background: style.backgroundColor, blur: style.backdropFilter }
@@ -334,17 +334,13 @@ try {
     }
     return results
   })
-  assert.deepEqual(
-    materials.blue,
-    {
-      background: 'rgba(26, 42, 56, 0.88)',
-      blur: 'blur(10px)',
-    },
-    'blue: update notice must use the translucent floating material',
-  )
   for (const mode of ['dark', 'light']) {
-    assert.equal(materials[mode].blur, 'none', `${mode}: update notice must retain a solid surface`)
-    assert.match(materials[mode].background, /^rgb\(/, `${mode}: update notice must be opaque`)
+    assert.equal(materials[mode].blur, 'blur(20px)', `${mode}: update notice must blur the photo`)
+    assert.match(
+      materials[mode].background,
+      /[,/]\s*0\.95\)$/,
+      `${mode}: update notice must use the 95% floating glass`,
+    )
   }
   assert.equal(await title.inputValue(), draftTitle, 'The new-task title was lost')
   await page.screenshot({

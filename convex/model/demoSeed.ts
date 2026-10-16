@@ -368,7 +368,7 @@ export async function provisionPublicDemo(
   await ctx.db.patch(docId, { max_attachment_mb: 5 })
   await ctx.db.insert('account_appearance', {
     auth_user_id: authUser._id,
-    mode: 'blue',
+    mode: 'dark',
     image_source: 'daily',
     revision: receipt.id,
     updated_at: now,
