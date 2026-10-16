@@ -142,6 +142,7 @@ export function parseArgs(args, now = new Date()) {
   return options
 }
 
+/** Resolve an isolated fixture backend without redirecting its deployment key. */
 export function resolveTarget(options, env, requireKey = true) {
   const target = options.target ?? 'dev'
   if (!['dev', 'staging'].includes(target))
@@ -186,8 +187,25 @@ export function resolveTarget(options, env, requireKey = true) {
   if (target === 'dev' && !/^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(siteUrl)) {
     throw new DemoCliError('Development demo writes require a localhost site URL.')
   }
-  // An explicit URL must match the key and cannot redirect admin auth.
-  const urlValue = options.url ?? (match ? `https://${match[2]}.convex.cloud` : env.VITE_CONVEX_URL)
+  // An explicit URL must match the key and cannot redirect admin auth. A key
+  // names no region, so an app URL for the key's own deployment supplies it.
+  const appUrl = URL.canParse(env.VITE_CONVEX_URL) ? new URL(env.VITE_CONVEX_URL) : undefined
+  if (
+    target === 'dev' &&
+    options.url === undefined &&
+    match &&
+    appUrl &&
+    appUrl.hostname.split('.')[0] !== match[2]
+  ) {
+    throw new DemoCliError(
+      'The configured deployment URL does not match the deploy key. Refusing to contact a different deployment.',
+    )
+  }
+  const urlValue =
+    options.url ??
+    (match && appUrl?.hostname.split('.')[0] !== match[2]
+      ? `https://${match[2]}.convex.cloud`
+      : env.VITE_CONVEX_URL)
   let url
   if (urlValue) {
     try {
@@ -196,16 +214,19 @@ export function resolveTarget(options, env, requireKey = true) {
       throw new DemoCliError('The deployment URL must be a canonical HTTPS Convex cloud origin.')
     }
     if (
+      (urlValue !== url.origin && urlValue !== `${url.origin}/`) ||
       url.username ||
       url.password ||
       url.search ||
       url.hash ||
       url.pathname !== '/' ||
-      !/^https:\/\/[a-z][a-z0-9-]*-[0-9]+\.convex\.cloud\/$/.test(url.href)
+      !/^https:\/\/[a-z][a-z0-9-]*-[0-9]+\.(?:[a-z]+-[a-z]+-[0-9]+\.)?convex\.cloud\/$/.test(
+        url.href,
+      )
     ) {
       throw new DemoCliError('The deployment URL must be a canonical HTTPS Convex cloud origin.')
     }
-    if (match && url.hostname !== `${match[2]}.convex.cloud`) {
+    if (match && url.hostname.split('.')[0] !== match[2]) {
       throw new DemoCliError(
         'The deployment URL does not match the deploy key. No credentials were sent.',
       )

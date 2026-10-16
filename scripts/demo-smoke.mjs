@@ -10,6 +10,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { chromium } from 'playwright'
 
+/** Validate isolated demo origins and derive the matching Convex HTTP origin. */
 export function demoSmokeConfiguration(env) {
   const browserOrigin = (value) => {
     const origin = new URL(value)
@@ -69,22 +70,22 @@ export function demoSmokeConfiguration(env) {
       canvasFeed: canvasFeed(),
     }
   }
-  const match = url?.match(/^https:\/\/([a-z0-9-]+)\.convex\.cloud\/?$/)
-  if (!match || !key.startsWith(`dev:${match[1]}|`) || !key.split('|')[1])
+  // [1] is the host stem with any region label, e.g. name.eu-west-1.convex; [2] the deployment.
+  const match = url?.match(
+    /^https:\/\/(([a-z0-9-]+)\.(?:[a-z]+-[a-z]+-[0-9]+\.)?convex)\.cloud\/?$/,
+  )
+  if (!match || !key.startsWith(`dev:${match[2]}|`) || !key.split('|')[1])
     throw new Error(
       'Set QIVO_DEMO_CONVEX_URL and the matching dedicated QIVO_DEMO_DEPLOY_KEY (dev key only).',
     )
-  if (
-    env.QIVO_DEMO_CONVEX_SITE_URL &&
-    env.QIVO_DEMO_CONVEX_SITE_URL !== `https://${match[1]}.convex.site`
-  )
+  if (env.QIVO_DEMO_CONVEX_SITE_URL && env.QIVO_DEMO_CONVEX_SITE_URL !== `https://${match[1]}.site`)
     throw new Error('The demo site URL must belong to the selected cloud deployment.')
   return {
     base,
     browserBase,
     local: false,
-    url: `https://${match[1]}.convex.cloud`,
-    site: `https://${match[1]}.convex.site`,
+    url: `https://${match[1]}.cloud`,
+    site: `https://${match[1]}.site`,
     key,
     canvasFeed: canvasFeed(),
   }

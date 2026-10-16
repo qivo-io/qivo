@@ -106,6 +106,28 @@ describe('date and command safety', () => {
 })
 
 describe('target selection never redirects a deploy key', () => {
+  it('rejects an implicit dev deployment mismatch before client creation', async () => {
+    const factory = vi.fn()
+    for (const VITE_CONVEX_URL of [
+      'https://happy-wolf-34.convex.cloud',
+      'https://happy-wolf-34.eu-west-1.convex.cloud',
+    ]) {
+      const env = { ...DEV_ENV, VITE_CONVEX_URL }
+      await expect(
+        runMarketingDemo(['seed', '--dev'], {
+          cwd: folder(),
+          env,
+          clientFactory: factory,
+        }),
+      ).rejects.toThrow(/does not match the deploy key/)
+      expect(factory).not.toHaveBeenCalled()
+      expect(
+        resolveTarget({ target: 'dev', url: 'https://tidy-otter-12.eu-west-1.convex.cloud' }, env)
+          .url,
+      ).toBe('https://tidy-otter-12.eu-west-1.convex.cloud')
+    }
+  })
+
   it('refuses environment/flag and explicit URL/key mismatches before client creation', async () => {
     const factory = vi.fn()
     await expect(
@@ -177,6 +199,76 @@ describe('target selection never redirects a deploy key', () => {
     expect(() =>
       resolveTarget({ target: 'staging', siteUrl: 'http://preview.qivo.io' }, STAGING_ENV),
     ).toThrow(/HTTPS/)
+  })
+
+  it('keeps a regional URL for the key deployment and refuses look-alike hosts', async () => {
+    const regional = 'https://tidy-otter-12.eu-west-1.convex.cloud'
+    for (const env of [DEV_ENV, { ...DEV_ENV, VITE_CONVEX_URL: regional }]) {
+      expect(resolveTarget({ target: 'dev', url: regional }, env)).toMatchObject({
+        deployment: 'tidy-otter-12',
+        url: regional,
+      })
+    }
+    expect(resolveTarget({ target: 'dev' }, { ...DEV_ENV, VITE_CONVEX_URL: regional }).url).toBe(
+      regional,
+    )
+    expect(resolveTarget({ target: 'dev' }, { VITE_CONVEX_URL: regional }, false)).toMatchObject({
+      deployment: 'tidy-otter-12',
+      url: regional,
+    })
+    expect(() =>
+      resolveTarget(
+        { target: 'dev', url: 'https://happy-wolf-34.eu-west-1.convex.cloud' },
+        DEV_ENV,
+      ),
+    ).toThrow(/does not match/)
+    for (const url of [
+      'http://tidy-otter-12.eu-west-1.convex.cloud',
+      'https://user:password@tidy-otter-12.eu-west-1.convex.cloud',
+      'https://tidy-otter-12.user:password@happy-wolf-34.convex.cloud',
+      'https://tidy-otter-12.eu-west-1.convex.cloud.example.com',
+      'https://tidy-otter-12.eu-west-1.convex.cloud.',
+      'https://tidy-otter-12.eu-west-1.convex.cloud:8443',
+      'https://tidy-otter-12.eu-west-1.convex.cloud:443',
+      'https://tidy-otter-12.eu-west-1.convex.cloud/path/..',
+      'https://tidy-otter-12.eu-west-1.convex.cloud?',
+      'https://tidy-otter-12.eu-west-1.convex.cloud#',
+      ' https://tidy-otter-12.eu-west-1.convex.cloud',
+      'https://tidy-otter-12.eu-west-1.extra.convex.cloud',
+      'https://tidy-otter-12.example.convex.cloud',
+      'https://tidy-otter-12.eu-west-1.convex.site',
+      'https://api.qivo.io',
+    ]) {
+      expect(() => resolveTarget({ target: 'dev', url }, DEV_ENV), url).toThrow(/canonical HTTPS/)
+    }
+    // An app URL naming the key's deployment on a foreign host fails closed.
+    expect(() =>
+      resolveTarget(
+        { target: 'dev' },
+        { ...DEV_ENV, VITE_CONVEX_URL: 'https://tidy-otter-12.convex.cloud.example.com' },
+      ),
+    ).toThrow(/canonical HTTPS/)
+    const stop = new Error('client stopped before network')
+    const factory = vi.fn(() => {
+      throw stop
+    })
+    await expect(
+      runMarketingDemo(['seed', '--dev'], {
+        cwd: folder(),
+        env: { ...DEV_ENV, VITE_CONVEX_URL: regional },
+        clientFactory: factory,
+      }),
+    ).rejects.toBe(stop)
+    expect(factory).toHaveBeenCalledWith(regional)
+    factory.mockClear()
+    await expect(
+      runMarketingDemo(['seed', '--dev', '--url', 'https://tidy-otter-12.example.convex.cloud'], {
+        cwd: folder(),
+        env: DEV_ENV,
+        clientFactory: factory,
+      }),
+    ).rejects.toThrow(/canonical HTTPS/)
+    expect(factory).not.toHaveBeenCalled()
   })
 
   it('allows a fully offline plan without a deploy key and writes nothing', async () => {

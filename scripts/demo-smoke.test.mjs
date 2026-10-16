@@ -39,6 +39,55 @@ describe('isolated public-demo smoke target', () => {
     })
   })
 
+  it('keeps the region of a regional deployment and refuses look-alike hosts', () => {
+    const regional = {
+      ...target,
+      QIVO_DEMO_CONVEX_URL: 'https://demo-dev-fixture-123.eu-west-1.convex.cloud',
+    }
+    const site = 'https://demo-dev-fixture-123.eu-west-1.convex.site'
+    for (const env of [regional, { ...regional, QIVO_DEMO_CONVEX_SITE_URL: site }]) {
+      expect(demoSmokeConfiguration(env)).toMatchObject({
+        url: regional.QIVO_DEMO_CONVEX_URL,
+        site,
+      })
+    }
+    const config = demoSmokeConfiguration(regional)
+    expect(
+      demoSmokeRequestAllowed(config, 'wss://demo-dev-fixture-123.eu-west-1.convex.cloud/api/sync'),
+    ).toBe(true)
+    expect(
+      demoSmokeRequestAllowed(config, 'https://demo-dev-fixture-123.convex.site/api/auth/ok'),
+    ).toBe(false)
+    for (const QIVO_DEMO_CONVEX_SITE_URL of [
+      'https://demo-dev-fixture-123.convex.site',
+      'https://api.qivo.io',
+    ])
+      expect(() => demoSmokeConfiguration({ ...regional, QIVO_DEMO_CONVEX_SITE_URL })).toThrow(
+        /must belong/,
+      )
+    for (const QIVO_DEMO_CONVEX_URL of [
+      'http://demo-dev-fixture-123.eu-west-1.convex.cloud',
+      'https://user:secret@demo-dev-fixture-123.eu-west-1.convex.cloud',
+      'https://demo-dev-fixture-123.user:secret@normal-fixture-123.convex.cloud',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud.example.com',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud:8443',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud:443',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud/path/..',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud?',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud#',
+      ' https://demo-dev-fixture-123.eu-west-1.convex.cloud',
+      'https://demo-dev-fixture-123.eu-west-1.convex.cloud/api',
+      'https://demo-dev-fixture-123.eu-west-1.extra.convex.cloud',
+      'https://demo-dev-fixture-123.example.convex.cloud',
+      'https://demo-dev-fixture-123.eu-west-1.convex.site',
+      'https://normal-fixture-123.eu-west-1.convex.cloud',
+    ])
+      expect(
+        () => demoSmokeConfiguration({ ...regional, QIVO_DEMO_CONVEX_URL }),
+        QIVO_DEMO_CONVEX_URL,
+      ).toThrow(/dedicated/)
+  })
+
   it('never falls back to the existing app deployment environment', () => {
     expect(() =>
       demoSmokeConfiguration({
