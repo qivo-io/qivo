@@ -14,7 +14,12 @@ bootstrap, worktree environment access and production authorization rules.
 Run commands needing credentials from the current checkout/worktree through
 `"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-env"`.
 It reads the one shared private env file without copying it here and without
-selecting a default production/development deployment. To verify access, run
+selecting a default production/development deployment. Run a Convex command
+against a deployment through
+`"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" TARGET COMMAND`,
+which refuses a missing key, rather than exporting `CONVEX_DEPLOY_KEY` by
+hand. An empty key makes the Convex CLI fall back to the deployment in
+`.env.local`. To verify access, run
 `python3 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/check-env-access.py"`.
 
 Never copy credential values into this repository, patches, build artifacts,
