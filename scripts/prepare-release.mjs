@@ -72,7 +72,18 @@ function changes(from, to, note = '') {
 }
 
 /**
- * The explanation at the top of the draft. It must stay accurate for the owner. Changes are
+ * What the owner does with the draft. It goes to the Actions run summary and the dry-run
+ * log, never into the release body, because publishing keeps the body and these steps
+ * stop being true once the release is published.
+ */
+export const DRAFT_STEPS =
+  "Review the draft's commit on https://preview.qivo.io, then publish the draft. " +
+  "Do not change the draft's tag or target. To ship something else, run Prepare release " +
+  'again. It replaces the draft.'
+
+/**
+ * The first section of the release body. Publishing keeps the body, so it holds only facts
+ * that stay true afterwards; the steps for the draft are in DRAFT_STEPS. Changes are
  * linked from the commit production serves. If qivo.io does not report it, the link
  * starts at the previous version tag instead.
  */
@@ -92,10 +103,7 @@ export function releaseHeader({ appSha, stagedAt, stagingRunId, previousTag, pro
     `Changes since production: ${changed}`,
     '',
     `Deploy staging verified this commit on https://preview.qivo.io at ${new Date(stagedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC ` +
-      `([staging run](https://github.com/${REPOSITORY}/actions/runs/${stagingRunId})). ` +
-      'Review it there before you publish.',
-    '',
-    "Do not change this draft's tag or target. To ship something else, delete this draft and run Prepare release again.",
+      `([staging run](https://github.com/${REPOSITORY}/actions/runs/${stagingRunId})).`,
   ].join('\n')
 }
 
@@ -103,7 +111,9 @@ export function releaseHeader({ appSha, stagedAt, stagingRunId, previousTag, pro
  * Create (or with dryRun, describe) the draft. Throws with an explanation when staging has
  * not verified main or the version is unusable. Then deletes the older drafts this workflow
  * created, because each targets an older commit and publishing it later would deploy that
- * commit. They are kept if the new draft cannot be created.
+ * commit. They are kept if the new draft cannot be created. With `summaryFile` (the Actions
+ * run summary), it appends the draft link, DRAFT_STEPS and the header there as soon as the
+ * draft exists, so the owner gets the steps even if removing an older draft then fails.
  */
 export async function prepareRelease({
   github,
@@ -111,6 +121,7 @@ export async function prepareRelease({
   dryRun = false,
   log = console.log,
   fetchImpl = fetch,
+  summaryFile,
 }) {
   const main = (await github(`${prefix}/commits/main`)).sha
   const receipt = await findStagingReceipt(github, { sha: main })
@@ -155,6 +166,7 @@ export async function prepareRelease({
       `Dry run. Would prepare ${version}${staleDrafts.length ? ` and delete ${staleDrafts.length} older draft(s)` : ''}.`,
     )
     log(body)
+    log(`The run summary would add: ${DRAFT_STEPS}`)
     return plan
   }
 
@@ -174,23 +186,24 @@ export async function prepareRelease({
     prerelease: false,
   })
   log(`Prepared draft ${version}: ${draft.html_url}`)
+  if (summaryFile)
+    appendFileSync(
+      summaryFile,
+      `Draft release [${version}](${draft.html_url}) is ready. ${DRAFT_STEPS}\n\n${body}\n`,
+    )
   for (const stale of staleDrafts) {
     await github(`${prefix}/releases/${stale.id}`, 'DELETE')
     log(`Deleted the older draft ${stale.tag_name} (${stale.id}).`)
   }
-  return { ...plan, url: draft.html_url, body }
+  return { ...plan, url: draft.html_url }
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   if (!process.env.GH_TOKEN) throw new Error('GH_TOKEN is required.')
-  const plan = await prepareRelease({
+  await prepareRelease({
     github: apiClient('https://api.github.com', process.env.GH_TOKEN),
     requestedVersion: process.env.QIVO_RELEASE_VERSION,
     dryRun: process.argv.includes('--dry-run'),
+    summaryFile: process.env.GITHUB_STEP_SUMMARY,
   })
-  if (process.env.GITHUB_STEP_SUMMARY && plan.url)
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `Draft release [${plan.version}](${plan.url}) is ready. Open it, check preview.qivo.io, then publish.\n\n${plan.body}\n`,
-    )
 }

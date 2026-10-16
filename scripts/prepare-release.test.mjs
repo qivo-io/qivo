@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { nextVersion, prepareRelease, releaseHeader } from './prepare-release.mjs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { DRAFT_STEPS, nextVersion, prepareRelease, releaseHeader } from './prepare-release.mjs'
 
 const MAIN = 'a'.repeat(40)
 const OLD_APP = 'd'.repeat(40)
@@ -19,6 +22,7 @@ function github(change = {}) {
         if (change.createFails) throw new Error('GitHub API 502')
         return { html_url: 'https://github.com/qivo-io/qivo/releases/tag/draft' }
       }
+      if (method === 'DELETE' && change.deleteFails) throw new Error('GitHub API 503')
       return null
     }
     if (path.endsWith('/commits/main')) return { sha: MAIN }
@@ -79,6 +83,16 @@ const live =
     return Response.json({ commit })
   }
 const unavailable = async () => new Response('unavailable', { status: 503 })
+const folders = []
+/** A path for the Actions run summary in a new temporary folder. The file does not exist yet. */
+function summaryPath() {
+  const folder = mkdtempSync(join(tmpdir(), 'qivo-release-summary-'))
+  folders.push(folder)
+  return join(folder, 'summary.md')
+}
+afterEach(() => {
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
+})
 
 describe('version choice', () => {
   it('defaults to the next patch and accepts a newer explicit version', () => {
@@ -95,7 +109,8 @@ describe('version choice', () => {
 describe('preparing a draft', () => {
   it('creates a draft for the staged main commit with the change link', async () => {
     const { api, writes } = github()
-    const plan = await prepareRelease({ github: api, log: quiet, fetchImpl: live() })
+    const summaryFile = summaryPath()
+    const plan = await prepareRelease({ github: api, log: quiet, fetchImpl: live(), summaryFile })
     expect(plan).toMatchObject({ version: 'v0.1.10', appSha: MAIN, previousTag: 'v0.1.9' })
     expect(writes.map((write) => write.path)).toEqual([
       '/repos/qivo-io/qivo/releases/generate-notes',
@@ -116,15 +131,35 @@ describe('preparing a draft', () => {
     expect(draft.body).toContain(`qivo/compare/${OLD_APP}...${MAIN})`)
     expect(draft.body).toContain('including the website and docs')
     expect(draft.body).toContain('## Changes\n- One fix')
+    // Publishing keeps the body, so the steps for the draft go to the run summary only.
+    expect(draft.body).not.toContain('before you publish')
+    expect(draft.body).not.toContain('Do not change')
+    const header = draft.body.replace('\n\n## Changes\n- One fix', '')
+    expect(readFileSync(summaryFile, 'utf8')).toBe(
+      `Draft release [v0.1.10](https://github.com/qivo-io/qivo/releases/tag/draft) is ready. ${DRAFT_STEPS}\n\n${header}\n`,
+    )
+    expect(DRAFT_STEPS).toContain("Do not change the draft's tag or target.")
   })
-  it('writes nothing in a dry run', async () => {
+  it('writes nothing in a dry run and logs the steps apart from the body', async () => {
     const { api, writes } = github()
+    const logged = []
+    const summaryFile = summaryPath()
     await expect(
-      prepareRelease({ github: api, dryRun: true, log: quiet, fetchImpl: live() }),
+      prepareRelease({
+        github: api,
+        dryRun: true,
+        log: (line) => logged.push(line),
+        fetchImpl: live(),
+        summaryFile,
+      }),
     ).resolves.toMatchObject({
       version: 'v0.1.10',
     })
     expect(writes).toEqual([])
+    expect(existsSync(summaryFile)).toBe(false)
+    const body = logged.find((line) => line.startsWith('## What publishing ships'))
+    expect(body).toMatch(/\/actions\/runs\/100\)\)\.$/)
+    expect(logged.at(-1)).toBe(`The run summary would add: ${DRAFT_STEPS}`)
   })
   it('refuses while preview does not serve main yet', async () => {
     const { api, writes } = github({ staging: [] })
@@ -182,10 +217,30 @@ describe('preparing a draft', () => {
         { id: 2, tag_name: 'v0.1.10', draft: true, author: BOT },
       ],
     })
-    await expect(prepareRelease({ github: api, log: quiet, fetchImpl: live() })).rejects.toThrow(
-      /502/,
-    )
+    const summaryFile = summaryPath()
+    await expect(
+      prepareRelease({ github: api, log: quiet, fetchImpl: live(), summaryFile }),
+    ).rejects.toThrow(/502/)
     expect(writes.some((write) => write.method === 'DELETE')).toBe(false)
+    // No draft exists, so the run summary must not announce one.
+    expect(existsSync(summaryFile)).toBe(false)
+  })
+  it('writes the run summary before it removes older drafts', async () => {
+    const { api } = github({
+      deleteFails: true,
+      releases: [
+        { id: 1, tag_name: 'v0.1.9', draft: false, prerelease: false },
+        { id: 2, tag_name: 'v0.1.10', draft: true, author: BOT },
+      ],
+    })
+    const summaryFile = summaryPath()
+    await expect(
+      prepareRelease({ github: api, log: quiet, fetchImpl: live(), summaryFile }),
+    ).rejects.toThrow(/503/)
+    // The new draft exists, so the owner still gets its link and the steps.
+    expect(readFileSync(summaryFile, 'utf8')).toContain(
+      `[v0.1.10](https://github.com/qivo-io/qivo/releases/tag/draft) is ready. ${DRAFT_STEPS}`,
+    )
   })
   it('starts the notes at the version production serves, not a newer tag that never deployed', async () => {
     const tags = ['v0.1.8', 'v0.1.9', 'v0.1.10']
@@ -223,7 +278,8 @@ describe('draft text', () => {
     const header = releaseHeader({ ...base, previousTag: 'v0.1.9', productionApp: OLD_APP })
     expect(header).toContain('deploys commit [`aaaaaaa`]')
     expect(header).toContain('2026-10-12 11:00 UTC')
-    expect(header).toContain('/actions/runs/100')
+    // The body ends with the staging run link. Steps for the draft do not belong in it.
+    expect(header).toMatch(/\/actions\/runs\/100\)\)\.$/)
     const first = releaseHeader({ ...base, previousTag: undefined, productionApp: null })
     expect(first).toContain('Changes since production: First release')
   })
