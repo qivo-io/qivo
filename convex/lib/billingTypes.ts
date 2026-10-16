@@ -88,13 +88,19 @@ export type BillingSummary = {
   sync_error: string | null
 }
 
+/* `period_kind` says which usage bucket the report shows: `paid` is the live
+ * provider period, `pending` the interval after it while a renewal is
+ * unconfirmed (no end yet), and `month` a UTC calendar month, used whenever
+ * there is no live paid period. Month dates are UTC days; the end is the
+ * month's last day. Allowances are null when no plan exists. */
 export type BillingUsage = {
-  period_start: string | null
+  period_kind: 'paid' | 'pending' | 'month'
+  period_start: string
   period_end: string | null
   calls: number
-  included_calls: number
+  included_calls: number | null
   storage_bytes: number
-  included_storage_bytes: number
+  included_storage_bytes: number | null
   api_overage_cents: number
   storage_overage_cents: number
   waived: boolean

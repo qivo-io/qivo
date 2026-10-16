@@ -218,11 +218,13 @@ before authentication. Both limits use fixed minute windows. MCP limits apply
 to POST requests; CORS preflights do not consume them.
 
 Rate limiting returns HTTP `429` with `Retry-After: 60`. Wait 60 seconds before
-retrying. Each authenticated POST that passes rate limiting counts once toward
-the organization's pooled API allowance during a recorded billing period,
-including discovery, invalid tool arguments, permission refusals and other
-protocol or routing errors. A batch is still one HTTP request. Missing or
-invalid credentials and rate-limited requests do not add billable calls. OAuth
+retrying. Each authenticated POST that passes rate limiting counts as one API
+call, including discovery, invalid tool arguments, permission refusals and
+other protocol or routing errors. A batch is still one HTTP request. During a
+paid billing period, calls count toward the organization's pooled API
+allowance. Without a paid billing period, calls are counted per calendar month
+(UTC) and are never charged. Missing or invalid credentials and rate-limited
+requests are not counted. OAuth
 MCP requests follow the same metering and limits as personal tokens and agent
 keys; this does not meter authorization or token-exchange endpoints as tool
 calls.

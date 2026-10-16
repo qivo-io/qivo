@@ -146,10 +146,14 @@ Billing lists active and inactive accounts and guests with their own billing.
 It also shows shared storage and API allowances, API usage by account and
 credential, and storage by project. **Refresh** reads current usage.
 
-API calls accumulate during the subscription period. Qivo samples storage at
-the start of the period and collects its extra charge, plus API overages, on
+API calls accumulate during each paid subscription period. Qivo samples storage
+at the start of the period and collects its extra charge, plus API overages, on
 the following renewal invoice. Current storage can differ from that sample.
 Polar handles checkout taxes and recurring payments.
+
+Without a paid billing period, for example during free access, before you
+subscribe or after a subscription ends, Billing counts API calls per calendar
+month (UTC). These calls are never charged.
 
 An operator can grant **six calendar months free**, including user charges and
 storage/API overages, without a card. Admins receive expiry reminders and can

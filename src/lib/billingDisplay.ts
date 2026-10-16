@@ -15,13 +15,16 @@ export function billingMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(cents / 100)
 }
 
-export function billingDate(value: string | number | null | undefined): string {
+/** A short local date such as "1 Oct 2026". Pass `'UTC'` for dates that name
+ * a UTC day, such as the bounds of a calendar-month usage period. */
+export function billingDate(value: string | number | null | undefined, timeZone?: string): string {
   return value == null
     ? '—'
     : new Date(value).toLocaleDateString(undefined, {
         day: 'numeric',
         month: 'short',
         year: 'numeric',
+        timeZone,
       })
 }
 
