@@ -57,6 +57,8 @@ const EXCLUDED_TABLES = [
   'mcp_tokens',
   // Cleanup progress of a profile that is already removed.
   'profile_removals',
+  // Cleanup progress of a label that is already deleted.
+  'label_removals',
   // Personal callback destinations and encrypted secrets are not portable work.
   'webhook_events',
   'webhook_health',

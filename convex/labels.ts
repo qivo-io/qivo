@@ -19,8 +19,13 @@ import type { MutationCtx } from './_generated/server'
 import { hasProjectLevel } from './lib/access'
 import { byId } from './lib/db'
 import { forbidden, notFound, orgMutation, rule } from './lib/functions'
-import { logActivity } from './model/activity'
-import { assertLabelManager, createLabelCore, setTaskLabel, updateLabelCore } from './model/labels'
+import {
+  assertLabelManager,
+  createLabelCore,
+  deleteLabelCore,
+  setTaskLabel,
+  updateLabelCore,
+} from './model/labels'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
@@ -62,29 +67,18 @@ export const update = orgMutation({
 })
 
 /* ----------------------------------------------------------------- remove
- * P.removeLabel, for org admins only. The issue_labels FK cascade, spelled
- * out (by_label), then the row; 'deleted label' narrated like the old
- * client's. */
+ * P.removeLabel, for org admins only, checked before the lookup. It deletes
+ * the row and narrates 'deleted label' like the old client. The
+ * issue_labels FK cascade runs in this transaction up to a bound and in
+ * background steps past it (model/labels.ts deleteLabelCore,
+ * labelRemovals.ts). */
 export const remove = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
     const now = new Date().toISOString()
     assertLabelManager(ctx.me)
     const label = await myLabel(ctx, id)
-    const attached = ctx.db
-      .query('issue_labels')
-      .withIndex('by_label', (q) => q.eq('label_id', label.id))
-    for await (const il of attached) await ctx.db.delete(il._id)
-    await ctx.db.delete(label._id)
-    await logActivity(ctx, {
-      org_id: ctx.me.org_id,
-      actor_id: ctx.me.id,
-      verb: 'deleted label',
-      target_type: 'org',
-      target_id: label.id,
-      label: label.name,
-      ts: now,
-    })
+    await deleteLabelCore(ctx, { me: ctx.me, label, now })
     return null
   },
 })

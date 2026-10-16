@@ -663,6 +663,19 @@ export default defineSchema({
     .index('by_label', ['label_id'])
     .index('by_issue_label', ['issue_id', 'label_id']),
 
+  // A deleted label whose task assignments background steps still remove
+  // (labelRemovals.ts). The row reserves the id, so labels.create cannot
+  // give it to a new label. It has no org_id, because a removal also
+  // finishes after its organization is deleted, as profile_removals does.
+  label_removals: defineTable({
+    label_id: v.string(),
+    removed_at: v.string(),
+    progress_at: v.string(), // the last committed step; recovery restarts a stalled row
+    scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+  })
+    .index('by_label', ['label_id'])
+    .index('by_progress', ['progress_at']),
+
   issue_subscriptions: defineTable({
     issue_id: v.string(),
     profile_id: v.string(), // recipient must be able to see the project

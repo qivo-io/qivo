@@ -48,6 +48,7 @@ import type * as internal_operator from "../internal/operator.js";
 import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
 import type * as jobs from "../jobs.js";
+import type * as labelRemovals from "../labelRemovals.js";
 import type * as labels from "../labels.js";
 import type * as lib_access from "../lib/access.js";
 import type * as lib_activityVisibility from "../lib/activityVisibility.js";
@@ -200,6 +201,7 @@ declare const fullApi: ApiFromModules<{
   invites: typeof invites;
   issues: typeof issues;
   jobs: typeof jobs;
+  labelRemovals: typeof labelRemovals;
   labels: typeof labels;
   "lib/access": typeof lib_access;
   "lib/activityVisibility": typeof lib_activityVisibility;
