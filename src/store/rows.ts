@@ -8,6 +8,10 @@ type InternalFields<T extends TableNames> =
   | '_id'
   | '_creationTime'
   | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' ? 'org_id' : never)
+  | (T extends 'issue_links' | 'issue_labels' | 'issue_attachments' | 'issue_subscriptions'
+      ? 'task_archived'
+      : never)
+  | (T extends 'issues' ? 'relations_marked' : never)
   | (T extends 'organizations' ? 'activity_count' : never)
 
 export type Row<T extends TableNames> = Omit<Doc<T>, InternalFields<T>>

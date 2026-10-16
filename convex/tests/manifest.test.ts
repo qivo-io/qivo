@@ -144,6 +144,8 @@ appearance:publicCanvas query internal {"type":"object","value":{"date":{"fieldT
 appearance:removeCustom mutation public {"type":"object","value":{}}
 appearance:save mutation public {"type":"object","value":{"mode":{"fieldType":{"type":"union","value":[{"type":"literal","value":"dark"},{"type":"literal","value":"light"},{"type":"literal","value":"blue"}]},"optional":false},"image_source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"daily"},{"type":"literal","value":"custom"},{"type":"literal","value":"none"}]},"optional":false}}}
 appearance:uploadContext query internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"exp":{"fieldType":{"type":"number"},"optional":false}}}
+archiveMarks:clearTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+archiveMarks:markTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 backgroundPreviewProcessor:generate action internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"attempt":{"fieldType":{"type":"number"},"optional":true}}}
 backgroundPreviews:attach mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"preview_storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"preview_version":{"fieldType":{"type":"number"},"optional":false},"demo_ticket_id":{"fieldType":{"type":"string"},"optional":true}}}
 backgroundPreviews:backfill mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
@@ -616,7 +618,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // removeRead clears current read rows in bounded batches beyond the Inbox display limit.
   // markAllRead reaches all own unread rows beyond the display cap and preserves later arrivals.
   // snooze hides an own item until a server-scheduled wake (messages:wake, internal).
-  // Archiving schedules messages:readArchivedTasks and readArchivedProject (internal).
+  // Archiving schedules messages:readArchivedTasks and readArchivedProject (internal), and
+  // a task archive also archiveMarks:markTasks; a restore archiveMarks:clearTasks (internal).
   messages: {
     markAllRead: 'orgMutation',
     markRead: 'orgMutation',

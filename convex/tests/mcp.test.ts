@@ -1426,7 +1426,7 @@ describe('write tools', () => {
       async (ctx) =>
         await ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', i1.id))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', i1.id))
           .collect(),
     )
     expect(subs.map((s) => s.profile_id).sort()).toEqual([fx.agent.id, fx.user.id].sort())

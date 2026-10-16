@@ -1,10 +1,12 @@
-/* A one-time backfill that marks read the inbox messages about tasks
- * archived, or in projects archived, before archiving did that itself
- * (model/messages.ts "archived tasks"). Since then every archive path
- * schedules those steps and mark unread and snooze refuse an archived task,
- * so only older data needs this. No inbox lists such a task, and its unread
- * rows fill the bounded unread walk (lib/inbox.ts) until visible messages
- * drop out of it.
+/* A one-time backfill for tasks archived, or in projects archived, before
+ * archiving did two things itself. It marks read the inbox messages about
+ * them (model/messages.ts "archived tasks"), and it marks the relation rows
+ * of the archived tasks so the app snapshot skips them
+ * (model/archiveMarks.ts). Since then every archive path schedules both and
+ * mark unread and snooze refuse an archived task, so only older data needs
+ * this. No inbox lists such a task, and its unread rows fill the bounded
+ * unread walk (lib/inbox.ts) until visible messages drop out of it. Its
+ * unmarked rows cost the snapshot reads but are never shown.
  *
  * `start` reads one page of organizations and schedules `org` for each, then
  * the next page. `org` reads one page of the organization's archived tasks
@@ -12,12 +14,15 @@
  * ones, and passes each page to scheduleArchivedReads, the call every
  * archive path makes. Each step schedules the next until the organization
  * is done and then logs 'Archived reads backfill scheduled' with its counts.
- * The steps scheduleArchivedReads starts mark the messages read in the
- * background shortly after.
+ * The steps scheduleArchivedReads starts mark the messages read, and the
+ * archived tasks' rows, in the background shortly after. A project archive
+ * marks no relation row, so the tasks of an archived project that are not
+ * archived themselves keep theirs.
  *
  * Running it twice, or while it runs, is safe. The steps change only rows
- * that are still unread or snoozed, so a second run finds nothing to change,
- * and an overlap with a live archive is harmless. A task or project restored
+ * that are still unread or snoozed, or still unmarked on a task that is
+ * archived when the step runs, so a second run finds nothing to change, and
+ * an overlap with a live archive is harmless. A task or project restored
  * before its step runs is left alone. An empty deployment schedules nothing.
  *
  * Run it once per deployment and only with the user's approval. From a Qivo

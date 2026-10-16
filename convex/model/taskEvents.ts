@@ -149,7 +149,8 @@ export async function emitTaskEvent(
   const changed = a.before
     ? Array.from(new Set([...Object.keys(a.issue), ...Object.keys(a.before)])).filter(
         (key) =>
-          !['_id', '_creationTime', 'updated_at'].includes(key) &&
+          // relations_marked is the archive steps' bookkeeping, never news
+          !['_id', '_creationTime', 'updated_at', 'relations_marked'].includes(key) &&
           JSON.stringify(a.issue[key as keyof Doc<'issues'>]) !==
             JSON.stringify(a.before?.[key as keyof Doc<'issues'>]),
       )

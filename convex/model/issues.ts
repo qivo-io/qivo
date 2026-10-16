@@ -35,8 +35,13 @@
  * nothing else, so their notify is skipped outright; restored-up ancestors
  * pass notifyIssueUpdate's suppressNotify. Both archive writers (the core
  * and the machine toggle) schedule the background steps that mark every
- * message about the archived subtree read (model/messages.ts
- * scheduleArchivedReads).
+ * message about the archived subtree read and the subtree's relation rows
+ * for the app snapshot (model/messages.ts scheduleArchivedReads). Both
+ * restore writers schedule the steps that clear those marks again for every
+ * task they restore, the row itself and each archived ancestor
+ * (model/archiveMarks.ts scheduleMarkClears). The snapshot reads such a task
+ * through its own indexes until they finish, so a restore writes no relation
+ * row.
  *
  * Every core that changes a task (create, update, move on both ends,
  * archive, restore, delete) first runs the write gate, assertCanEdit, which
@@ -65,6 +70,7 @@ import { badRequest, forbidden, notFound, require, rule } from '../lib/functions
 import { reviewStamp } from '../lib/review'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { issueChanges, logActivity, machineDetail } from './activity'
+import { scheduleMarkClears } from './archiveMarks'
 import { deleteIssueDeep } from './cascade'
 import { notifyIssueInsert, notifyIssueUpdate, scheduleArchivedReads } from './messages'
 import { nextIssueNum } from './orgs'
@@ -1172,9 +1178,11 @@ export async function updateIssueCore(
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // -- cascade, then clear-on-attach
   if (toggle === 'restored') {
-    // the restore cascade: surface the ancestor chain (suppressed echoes),
-    // as unarchiveIssueCore does
-    await restoreAncestors(ctx, { row: after, actor: me, now })
+    // the restore cascade: the ancestor chain surfaces (suppressed echoes),
+    // and the marks on the restored tasks' relation rows are cleared in the
+    // background, as unarchiveIssueCore does
+    const restored = await restoreAncestors(ctx, { row: after, actor: me, now })
+    await scheduleMarkClears(ctx, [after, ...restored])
   } else if (toggle === 'archived') {
     // archive branch: descendants stamped, never notified (their only change
     // is the suppressed Archived line, archiveIssueCore's walk), and every
@@ -1440,14 +1448,16 @@ export async function archiveIssueCore(
  * the chain above it never was archived. */
 /* The ancestor walk, shared with updateIssueCore's folded machine toggle:
  * restores/clears the chain above `row` (each echo notified with the Restored
- * line suppressed). The row itself is the caller's to notify. An ancestor it
- * would change in a project the actor cannot edit refuses the restore. */
+ * line suppressed) and returns the ancestors it restored from the archive.
+ * The row itself is the caller's to notify. An ancestor it would change in a
+ * project the actor cannot edit refuses the restore. */
 async function restoreAncestors(
   ctx: MutationCtx,
   a: { row: Doc<'issues'>; actor: Doc<'profiles'>; now: string },
-): Promise<void> {
+): Promise<Doc<'issues'>[]> {
   const { actor, now } = a
   const editable = editableBy(ctx, actor)
+  const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
   const seen = new Set<string>([a.row.id])
   for (let depth = 0; cur.parent_id !== undefined; depth++) {
@@ -1472,6 +1482,7 @@ async function restoreAncestors(
       updated_at: now,
     })
     const pAfter = (await ctx.db.get(parent._id)) as Doc<'issues'>
+    if (wasArchived) restored.push(pAfter)
     // cascade echo: only the Restored line is suppressed — a cleared
     // remaining still narrates to this ancestor's subscribers
     await notifyIssueUpdate(ctx, {
@@ -1484,6 +1495,7 @@ async function restoreAncestors(
     if (!wasArchived) break
     cur = pAfter
   }
+  return restored
 }
 
 export async function unarchiveIssueCore(
@@ -1500,7 +1512,10 @@ export async function unarchiveIssueCore(
     updated_at: now,
   })
   const rootAfter = (await ctx.db.get(issue._id)) as Doc<'issues'>
-  await restoreAncestors(ctx, { row: rootAfter, actor: me, now })
+  const restored = await restoreAncestors(ctx, { row: rootAfter, actor: me, now })
+  // the relation rows' marks are cleared in the background; the snapshot
+  // reads these tasks through their own indexes until then
+  await scheduleMarkClears(ctx, [rootAfter, ...restored])
   await notifyIssueUpdate(ctx, { before, after: rootAfter, actor: me, now }) // 'Restored'
   const event = {
     org_id: issue.org_id,

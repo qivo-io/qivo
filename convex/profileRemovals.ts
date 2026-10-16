@@ -170,7 +170,7 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       range: (ctx, profileId) =>
         ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+          .withIndex('by_profile_task_archived', (q) => q.eq('profile_id', profileId)),
       clear: (ctx, subscription) => ctx.db.delete(subscription._id),
     }),
   ],

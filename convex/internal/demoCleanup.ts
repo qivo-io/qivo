@@ -87,7 +87,7 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       !(await drain(ctx, budget, (n) =>
         ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', id))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
           .take(n),
       ))
     )
@@ -254,7 +254,7 @@ async function profileRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
       !(await drain(ctx, budget, (n) =>
         ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_profile', (q) => q.eq('profile_id', id))
+          .withIndex('by_profile_task_archived', (q) => q.eq('profile_id', id))
           .take(n),
       ))
     )

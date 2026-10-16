@@ -376,7 +376,7 @@ describe('notifyIssueInsert via issues.create', () => {
     const subs = await t.run(async (ctx) =>
       ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', id))
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
         .collect(),
     )
     expect(subs.map((s) => s.profile_id)).toEqual([f.admin.id])
@@ -397,7 +397,7 @@ describe('notifyIssueInsert via issues.create', () => {
     const subs = await t.run(async (ctx) =>
       ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', id))
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', id))
         .collect(),
     )
     expect(subs.map((s) => s.profile_id)).toEqual([f.user.id])
@@ -412,7 +412,7 @@ describe('reviewer notifications', () => {
       await t.run(async (ctx) =>
         ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
           .collect(),
       )
     ).map((s) => s.profile_id)
@@ -747,7 +747,7 @@ describe('agents without an inbox', () => {
       (
         await ctx.db
           .query('issue_subscriptions')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+          .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
           .collect()
       ).map((row) => row.profile_id),
     )
@@ -1071,7 +1071,7 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     const subs = await t.run(async (ctx) =>
       ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
         .collect(),
     )
     expect(subs.map((s) => s.profile_id).sort()).toEqual(

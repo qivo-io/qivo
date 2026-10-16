@@ -14,6 +14,7 @@ import {
 } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
+import { markArchivedTask } from './archiveMarks'
 import { type NotifyPreload, notifyCommentInsert, notifyIssueInsert } from './messages'
 import { assertSlugAvailable, newOrgDefaults, newTeamDefaults } from './orgs'
 import { projectDescription } from './projects'
@@ -173,7 +174,8 @@ export async function writeNorthstarWork(
       color: l.color,
       created_at: now,
     })
-  // Tasks as inserted, for the comment loop; nothing below patches them.
+  // Tasks as inserted, for the comment loop and the archive marks; nothing
+  // below patches them.
   const issueDocs = new Map<string, Doc<'issues'>>()
   for (const [index, i] of data.issues.entries()) {
     const created = `${marketingDate(anchor, -21)}T09:00:00.000Z`
@@ -292,6 +294,11 @@ export async function writeNorthstarWork(
       preload,
       skipTaskEvent: true,
     })
+  }
+  // The archived tasks' labels, links and follows carry the mark the archive
+  // steps leave (model/archiveMarks.ts), as in an organization in use.
+  for (const issue of issueDocs.values()) {
+    await markArchivedTask(ctx, issue, Number.POSITIVE_INFINITY)
   }
 }
 

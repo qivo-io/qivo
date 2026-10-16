@@ -32,6 +32,7 @@ import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { scheduleArchiveMarks } from './archiveMarks'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
@@ -414,7 +415,7 @@ export async function followersOf(
   const out: Doc<'profiles'>[] = []
   const rows = ctx.db
     .query('issue_subscriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
   for await (const row of rows) {
     const profile = await byId(ctx, 'profiles', row.profile_id)
     if (profile !== null && profile.org_id === issue.org_id) out.push(profile)
@@ -741,7 +742,9 @@ export async function snoozeMessages(
  * ITEM_UNREAD_CAP + 1 rows each, so a big subtree, a project or a nightly
  * leg could pass the archiving transaction's write limit. Each step marks
  * at most ARCHIVED_READ_BATCH rows, visits at most ARCHIVED_READ_TASKS tasks
- * and schedules the rest.
+ * and schedules the rest. The same call schedules the steps that mark the
+ * archived tasks' relation rows for the app snapshot (model/archiveMarks.ts),
+ * so no task archive path can leave one out.
  *
  * A step checks each task when it runs and leaves one that is no longer
  * archived alone, so a restore before the step runs keeps that task's
@@ -781,9 +784,12 @@ const readArchivedProjectRef = makeFunctionReference<
 >('messages:readArchivedProject')
 
 /**
- * Schedules the background steps that mark every message about the archived
- * `issues`, and about the active tasks of the archived `projects`, read. The
- * archive paths call it in the transaction that archives.
+ * Schedules the background steps that follow an archive. They mark every
+ * message about the archived `issues`, and about the active tasks of the
+ * archived `projects`, read. For the `issues` alone they also mark the
+ * relation rows the app snapshot then skips (model/archiveMarks.ts). A
+ * project archive stamps no task, so its tasks keep theirs. The archive
+ * paths call it in the transaction that archives.
  */
 export async function scheduleArchivedReads(
   ctx: MutationCtx,
@@ -795,6 +801,7 @@ export async function scheduleArchivedReads(
       issues: issues.slice(i, i + ARCHIVED_READ_TASKS),
     })
   }
+  await scheduleArchiveMarks(ctx, issues)
   for (const project_id of a.projects ?? []) {
     await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
   }
@@ -998,7 +1005,7 @@ const orgProfilesOf = (ctx: MutationCtx, orgId: string): Promise<Doc<'profiles'>
 const subscribersOf = (ctx: MutationCtx, issueId: string): Promise<Doc<'issue_subscriptions'>[]> =>
   ctx.db
     .query('issue_subscriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
     .collect()
 
 /* ---------------------------------------------------------- notify: insert

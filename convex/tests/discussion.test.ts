@@ -107,7 +107,7 @@ const follows = (t: T, issueId: string) =>
     (
       await ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
         .collect()
     ).map((row) => row.profile_id),
   )

@@ -61,8 +61,9 @@ import { followTask, subscribeToIssue, unfollowTask } from './model/messages'
 type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* System fields stay internal; optional columns come back ABSENT, like the
- * snapshot's rows. */
-const pub = ({ _id, _creationTime, ...row }: Doc<'issues'>) => row
+ * snapshot's rows. relations_marked only steers the snapshot's relation
+ * reads, so it stays internal too. */
+const pub = ({ _id, _creationTime, relations_marked: _marks, ...row }: Doc<'issues'>) => row
 
 /* A returned row names its parent only when the caller can see the parent's
  * project, so no hidden task id leaves a read or a write's result (the
@@ -415,7 +416,7 @@ export const subscribers = orgQuery({
     const canManage = await canManageOwnProjectAccess(ctx, ctx.me, project)
     const rows = await ctx.db
       .query('issue_subscriptions')
-      .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
       .collect()
     const subscribed = new Set(rows.map((row) => row.profile_id))
     const profiles = await ctx.db

@@ -1,5 +1,35 @@
-// Reactive active working set across the caller's organizations. Archives and
-// comments load on demand; rows omit Convex system fields and internal counters.
+/* Reactive active working set across the caller's organizations. Archives and
+ * comments load on demand; rows omit Convex system fields and internal
+ * counters.
+ *
+ * forMe reads every seat in one transaction, so the sum must stay within
+ * Convex's limits of 4,096 index ranges, 32,000 documents and 16 MiB. Besides
+ * one range for the caller's seats, each seat reads 12 ranges plus:
+ * - one per team (its members), and two per team the seat belongs to
+ *   (lib/access.ts projectLevelsForOrg);
+ * - up to three per visible project, archived ones included (grants, team
+ *   grants, and the milestones of an active one);
+ * - the relation rows (lib/snapshotRelations.ts). A view whose tables stay in
+ *   bulk takes six ranges; a restricted or dense one is read task by task, up
+ *   to 4 ranges per visible task, never more than 3 ranges above the rule
+ *   this replaced and only while those reads fit 4,096 ranges;
+ * - five per visible task restored so recently that its relation rows still
+ *   carry archive marks (model/archiveMarks.ts), its own relation reads and
+ *   follow. Background steps clear the marks moments after the restore;
+ * - one per task an activity row is about, or names by number, that is not
+ *   among the active tasks. The organization keeps 500 rows
+ *   (model/activity.ts), so that is at most 500 for an admin, who reads the
+ *   task each row is about, and at most 1,000 for a member, who reads up to
+ *   two numbered tasks a row names.
+ * A seat whose relation tables stay in bulk therefore reads at most about
+ * 1,020 ranges plus three per team and per visible project, and a person's
+ * seats add up. Teams and projects are few beside tasks. A view read task by
+ * task adds its 4 ranges per task, as the rule this replaced did, which a
+ * view of about 1,000 tasks or more cannot afford. Documents read follow the
+ * active tasks and their unmarked relation rows (model/archiveMarks.ts marks
+ * the rows of archived tasks), the organization's people, projects, teams and
+ * labels, at most 500 activity rows, and at most 3,002 messages per seat
+ * (lib/inbox.ts). */
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import { canSeeProject } from './lib/access'
@@ -23,8 +53,14 @@ function rowOf<D extends { _id: unknown; _creationTime: number }>(
   return row
 }
 
-function relationRow<D extends { _id: unknown; _creationTime: number; org_id?: string }>(doc: D) {
-  const { org_id: _orgId, ...row } = rowOf(doc)
+/* A relation row as the app receives it, without the organization id and
+ * the archive mark, which only serve the snapshot's index reads. */
+type RelationRow<T extends TableNames> = Omit<AppRow<T>, 'org_id' | 'task_archived'>
+
+function relationRow<
+  D extends { _id: unknown; _creationTime: number; org_id?: string; task_archived?: true },
+>(doc: D) {
+  const { org_id: _orgId, task_archived: _mark, ...row } = rowOf(doc)
   return row
 }
 
@@ -70,15 +106,15 @@ export const forMe = authedQuery({
     const projects: AppRow<'projects'>[] = []
     const access: AppRow<'project_access'>[] = []
     const teamAccess: AppRow<'project_team_access'>[] = []
-    const issues: (AppRow<'issues'> & {
+    const issues: (Omit<AppRow<'issues'>, 'relations_marked'> & {
       has_hidden_subtasks: boolean
       has_hidden_parent: boolean
     })[] = []
-    const links: Omit<AppRow<'issue_links'>, 'org_id'>[] = []
+    const links: RelationRow<'issue_links'>[] = []
     const labels: AppRow<'labels'>[] = []
-    const issueLabels: Omit<AppRow<'issue_labels'>, 'org_id'>[] = []
-    const issueSubs: AppRow<'issue_subscriptions'>[] = []
-    const attachments: Omit<AppRow<'issue_attachments'>, 'org_id'>[] = []
+    const issueLabels: RelationRow<'issue_labels'>[] = []
+    const issueSubs: RelationRow<'issue_subscriptions'>[] = []
+    const attachments: RelationRow<'issue_attachments'>[] = []
     const milestones: AppRow<'milestones'>[] = []
     const orgLoad: OrgLoadRow[] = []
     const activityDocs: Doc<'activity_events'>[] = []
@@ -190,7 +226,8 @@ export const forMe = authedQuery({
       const workingSet = workingSetOf(activeOrgIssues, view)
       const fenceIssues = workingSet.tasks
       for (const issue of fenceIssues) {
-        const { parent_id: _parentId, ...row } = rowOf(issue)
+        // relations_marked only steers the relation reads below
+        const { parent_id: _parentId, relations_marked: _marks, ...row } = rowOf(issue)
         issues.push({
           ...row,
           ...parentLink(issue, workingSet.shown),
@@ -224,7 +261,11 @@ export const forMe = authedQuery({
         }
       }
 
-      const relatedRows = await snapshotRelations(ctx, org, fenceIssues.length)
+      const relatedRows = await snapshotRelations(ctx, {
+        orgId,
+        tasks: fenceIssues,
+        active: activeOrgIssues.length,
+      })
       for (const issue of fenceIssues) {
         const [asSource, asTarget, ils, atts] = await relatedRows(issue.id)
         // Both ends must be in this working set. The other end may be
@@ -254,12 +295,29 @@ export const forMe = authedQuery({
 
       // Only the caller's subscriptions, across all seats, and only for tasks
       // in this working set. A subscription outlives access so a manager can
-      // still remove it, but its task id must not leave this query.
+      // still remove it, but its task id must not leave this query. Follows
+      // of archived tasks are marked in the background (model/archiveMarks.ts)
+      // and skipped by index; an unmarked one is filtered here. They stay
+      // stored, still bring news and return with a restore. A visible task
+      // restored before its marks were cleared (relations_marked) has its
+      // follow read by its own index, and every follow goes out in creation
+      // order, the order of the caller's index.
       const mySubs = await ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+        .withIndex('by_profile_task_archived', (q) =>
+          q.eq('profile_id', me.id).eq('task_archived', undefined),
+        )
         .collect()
-      for (const s of aboutShownTasks(mySubs, workingSet.shown)) issueSubs.push(rowOf(s))
+      for (const issue of fenceIssues) {
+        if (issue.relations_marked !== true) continue
+        const follow = await ctx.db
+          .query('issue_subscriptions')
+          .withIndex('by_issue_profile', (q) => q.eq('issue_id', issue.id).eq('profile_id', me.id))
+          .unique()
+        if (follow?.task_archived === true) mySubs.push(follow)
+      }
+      mySubs.sort((x, y) => x._creationTime - y._creationTime)
+      for (const s of aboutShownTasks(mySubs, workingSet.shown)) issueSubs.push(relationRow(s))
 
       // Activity: org admins receive every row except those about archived
       // tasks or tasks in archived projects; other members receive only the

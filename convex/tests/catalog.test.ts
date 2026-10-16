@@ -402,7 +402,7 @@ describe('comments — create/update/remove', () => {
     const subscribed = await t.run(async (ctx) =>
       ctx.db
         .query('issue_subscriptions')
-        .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
         .collect(),
     )
     expect(new Set(subscribed.map((s) => s.profile_id))).toEqual(

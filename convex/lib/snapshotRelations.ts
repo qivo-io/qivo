@@ -12,92 +12,241 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   return groups
 }
 
-// The allocation counter bounds the org's task count without reading its
-// archive. Small/restricted/archive-heavy views keep selective issue indexes.
-// Cap each bulk read so an unusually dense relation table also falls back.
+/** When a view's relation reads go task by task. A view of at most `tasks`
+ * tasks that holds under 1 / `ratio` of the organization's active tasks is
+ * read wholly task by task. In any other view, a table over its bulk cap is
+ * read task by task while the reads task by task so far fit `ranges`, which
+ * is Convex's limit per transaction. Tests change these to force a read. */
+export const RELATION_READ = { tasks: 512, ratio: 2, ranges: 4096 }
+
+/* The rows a bulk read of one table takes, per range its read task by task
+ * would cost (one per task for labels and attachments, two for links),
+ * before it reads that table task by task instead. Convex allows about 8
+ * documents per index range (32,000 to 4,096), and half that leaves room for
+ * the other tables and the rest of the snapshot. With all three tables at
+ * their caps, a view reads at most 16 rows per visible task. */
+const BULK_ROWS_PER_RANGE = 4
+
+/* One task's links as source and as target, label assignments and
+ * attachments. */
+type TaskRows = [
+  Doc<'issue_links'>[],
+  Doc<'issue_links'>[],
+  Doc<'issue_labels'>[],
+  Doc<'issue_attachments'>[],
+]
+
+/* One table's rows grouped by task, or null when it is read task by task. */
+type Groups<Row> = Map<string, Row[]> | null
+
+/* The task's rows from its own indexes, marked rows included. */
+const readTask = (ctx: QueryCtx, issueId: string): Promise<TaskRows> =>
+  Promise.all([
+    ctx.db
+      .query('issue_links')
+      .withIndex('by_source', (q) => q.eq('source_id', issueId))
+      .collect(),
+    ctx.db
+      .query('issue_links')
+      .withIndex('by_target', (q) => q.eq('target_id', issueId))
+      .collect(),
+    ctx.db
+      .query('issue_labels')
+      .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+      .collect(),
+    ctx.db
+      .query('issue_attachments')
+      .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+      .collect(),
+  ])
+
+const byCreation = <Row extends { _creationTime: number }>(rows: Row[]): Row[] =>
+  rows.sort((a, b) => a._creationTime - b._creationTime)
+
+/**
+ * Reads the relation rows of a member's visible tasks (`tasks`, the working
+ * set) in one organization and returns a lookup that gives one task's links
+ * as source and as target, label assignments and attachments, each in
+ * creation order. `active` is the number of the organization's tasks that are
+ * not archived.
+ *
+ * A view of at most RELATION_READ.tasks tasks (512) that holds under half the
+ * active tasks is read task by task, four ranges per task, the cheapest read
+ * for a restricted view in a large organization.
+ *
+ * Any other view reads each table in bulk, the organization's rows without
+ * the archive mark (by_org_task_archived_*). Background steps mark the rows
+ * of each task once it is archived (model/archiveMarks.ts), so these reads
+ * follow the active tasks, not everything ever archived. The tables go
+ * cheapest first, labels, attachments, then links. A bulk read stops after
+ * BULK_ROWS_PER_RANGE rows per range the table's read task by task would
+ * cost, and a table with more is read task by task while the reads task by
+ * task so far fit RELATION_READ.ranges, else in full. A table kept in bulk is
+ * then probed for rows stored without org_id, which the organization's range
+ * cannot hold. While an unmarked one exists anywhere, that table is read task
+ * by task as before. No writer stores such rows any more, none rewrites
+ * them, and the archive steps never mark one.
+ *
+ * A task restored from the archive keeps marked rows until background steps
+ * clear them, and carries relations_marked meanwhile. Each such visible task
+ * is read through its own indexes, which include marked rows, before the
+ * tables are, at four ranges each. Its links, marked ones included, are also
+ * listed for their other end, so every task gets the rows its own indexes
+ * would give.
+ *
+ * The rule this replaced read a view task by task unless the view held half
+ * the tasks ever created, and otherwise each table in bulk up to 2 rows per
+ * visible task (at most 4,096), task by task past that, after probing all
+ * three tables. Not counting restored tasks, this rule costs at most 3
+ * ranges more than that one did:
+ * - A view it read task by task cost one range per task for labels and
+ *   attachments and two for links. Here it is read the same way, or each
+ *   table costs its capped read plus either its probe or those ranges, which
+ *   is at most one range more per table. In a view of 4 tasks or more, a
+ *   table kept in bulk saves at least what the other two can add.
+ * - A view it read in bulk: these caps are at least its caps and count only
+ *   unmarked rows, so a table read task by task here was read so there too,
+ *   at the same cost, and it probed every table. It costs at most as much.
+ * - A table is read in full only when reading it task by task would take the
+ *   reads task by task past 4,096 ranges. The old read included those
+ *   ranges, so it had passed the limit.
+ * In documents, a table under its cap reads at most its cap, and one over it
+ * reads its cap plus one before the visible tasks' own rows, which the old
+ * rule read too. A table read in full reads every unmarked row of the
+ * organization's table.
+ *
+ * Both rules fail for a restricted view of about 1,000 tasks whose three
+ * tables are all dense, where these reads alone take about 4,000 ranges. A
+ * larger view fails here only if reading a dense table in full passes 32,000
+ * documents, and the old rule could not read such a view at all.
+ */
 export async function snapshotRelations(
   ctx: QueryCtx,
-  org: Doc<'organizations'>,
-  visibleTaskCount: number,
-) {
-  const bulk = visibleTaskCount >= 32 && visibleTaskCount * 2 >= org.next_issue_num
-  const limit = Math.min(4096, visibleTaskCount * 2)
-  // Existing deployments can contain unscoped rows. A bounded probe keeps
-  // their original indexed read path until those rows are replaced/deleted.
-  // A foreign org's legacy row conservatively disables batching too.
-  const legacy = bulk
-    ? await Promise.all(
-        (['issue_links', 'issue_labels', 'issue_attachments'] as const).map((table) =>
-          ctx.db
-            .query(table)
-            .withIndex('by_org', (q) => q.eq('org_id', undefined))
-            .first(),
-        ),
-      )
-    : null
-  const [links, labels, attachments] = bulk
-    ? await Promise.all([
-        legacy?.[0] === null
-          ? ctx.db
-              .query('issue_links')
-              .withIndex('by_org', (q) => q.eq('org_id', org.id))
-              .take(limit + 1)
-          : null,
-        legacy?.[1] === null
-          ? ctx.db
-              .query('issue_labels')
-              .withIndex('by_org', (q) => q.eq('org_id', org.id))
-              .take(limit + 1)
-          : null,
-        legacy?.[2] === null
-          ? ctx.db
-              .query('issue_attachments')
-              .withIndex('by_org', (q) => q.eq('org_id', org.id))
-              .take(limit + 1)
-          : null,
-      ])
-    : [null, null, null]
-  const sources =
-    links !== null && links.length <= limit ? groupBy(links, (row) => row.source_id) : null
-  const targets =
-    links !== null && links.length <= limit ? groupBy(links, (row) => row.target_id) : null
-  const issueLabels =
-    labels !== null && labels.length <= limit ? groupBy(labels, (row) => row.issue_id) : null
-  const issueAttachments =
-    attachments !== null && attachments.length <= limit
-      ? groupBy(attachments, (row) => row.issue_id)
-      : null
-  // Both index forms preserve creation order within an issue. Returning rows
-  // issue by issue preserves the snapshot's existing stable array ordering.
+  a: { orgId: string; tasks: readonly Doc<'issues'>[]; active: number },
+): Promise<(issueId: string) => Promise<TaskRows>> {
+  const visible = a.tasks.length
+  const perTask = (issueId: string) => readTask(ctx, issueId)
+  if (visible <= RELATION_READ.tasks && RELATION_READ.ratio * visible < a.active) {
+    return perTask
+  }
+
+  // Restored tasks whose marks are not cleared yet, read through their own
+  // indexes before the tables, so the ranges spent are known.
+  const restored = new Map<string, TaskRows>()
+  for (const task of a.tasks) {
+    if (task.relations_marked === true) restored.set(task.id, await readTask(ctx, task.id))
+  }
+  let budget = RELATION_READ.ranges - 4 * restored.size
+  const others = visible - restored.size
+  /* One table's unmarked rows in bulk, or null to read it task by task
+   * (`cost` ranges per task). `legacy` finds a row of the table stored
+   * without org_id, which only a read task by task reaches. */
+  const bulk = async <Row>(
+    rows: { take(n: number): Promise<Row[]>; collect(): Promise<Row[]> },
+    legacy: { first(): Promise<unknown> },
+    cost: number,
+  ): Promise<Row[] | null> => {
+    if (others === 0) return null
+    const ranges = cost * others
+    const taskByTask = () => {
+      budget -= ranges
+      return null
+    }
+    if (ranges > budget) {
+      return (await legacy.first()) === null ? await rows.collect() : taskByTask()
+    }
+    const cap = BULK_ROWS_PER_RANGE * ranges
+    const capped = await rows.take(cap + 1)
+    if (capped.length > cap || (await legacy.first()) !== null) return taskByTask()
+    return capped
+  }
+  const labels = await bulk(
+    ctx.db
+      .query('issue_labels')
+      .withIndex('by_org_task_archived_issue', (q) =>
+        q.eq('org_id', a.orgId).eq('task_archived', undefined),
+      ),
+    ctx.db
+      .query('issue_labels')
+      .withIndex('by_org_task_archived_issue', (q) =>
+        q.eq('org_id', undefined).eq('task_archived', undefined),
+      ),
+    1,
+  )
+  const attachments = await bulk(
+    ctx.db
+      .query('issue_attachments')
+      .withIndex('by_org_task_archived_issue', (q) =>
+        q.eq('org_id', a.orgId).eq('task_archived', undefined),
+      ),
+    ctx.db
+      .query('issue_attachments')
+      .withIndex('by_org_task_archived_issue', (q) =>
+        q.eq('org_id', undefined).eq('task_archived', undefined),
+      ),
+    1,
+  )
+  const links = await bulk(
+    ctx.db
+      .query('issue_links')
+      .withIndex('by_org_task_archived_source', (q) =>
+        q.eq('org_id', a.orgId).eq('task_archived', undefined),
+      ),
+    ctx.db
+      .query('issue_links')
+      .withIndex('by_org_task_archived_source', (q) =>
+        q.eq('org_id', undefined).eq('task_archived', undefined),
+      ),
+    2,
+  )
+  const issueLabels: Groups<Doc<'issue_labels'>> = labels && groupBy(labels, (row) => row.issue_id)
+  const issueAttachments: Groups<Doc<'issue_attachments'>> =
+    attachments && groupBy(attachments, (row) => row.issue_id)
+  let sources: Groups<Doc<'issue_links'>> = null
+  let targets: Groups<Doc<'issue_links'>> = null
+  if (links !== null) {
+    // A restored task's links, marked or not, also belong to the other end.
+    const seen = new Set(links.map((link) => link._id))
+    for (const [asSource, asTarget] of restored.values()) {
+      for (const link of [...asSource, ...asTarget]) {
+        if (seen.has(link._id)) continue
+        seen.add(link._id)
+        links.push(link)
+      }
+    }
+    sources = groupBy(links, (row) => row.source_id)
+    targets = groupBy(links, (row) => row.target_id)
+    for (const group of [...sources.values(), ...targets.values()]) byCreation(group)
+  }
+  // Rows grouped from one index range keep its creation order within a task,
+  // and merged links are sorted by it, so every task gets its rows in the
+  // order its own indexes give.
   return async (issueId: string) =>
+    restored.get(issueId) ??
     Promise.all([
-      sources?.get(issueId) ??
-        (sources === null
-          ? ctx.db
-              .query('issue_links')
-              .withIndex('by_source', (q) => q.eq('source_id', issueId))
-              .collect()
-          : []),
-      targets?.get(issueId) ??
-        (targets === null
-          ? ctx.db
-              .query('issue_links')
-              .withIndex('by_target', (q) => q.eq('target_id', issueId))
-              .collect()
-          : []),
-      issueLabels?.get(issueId) ??
-        (issueLabels === null
-          ? ctx.db
-              .query('issue_labels')
-              .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-              .collect()
-          : []),
-      issueAttachments?.get(issueId) ??
-        (issueAttachments === null
-          ? ctx.db
-              .query('issue_attachments')
-              .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-              .collect()
-          : []),
+      sources === null
+        ? ctx.db
+            .query('issue_links')
+            .withIndex('by_source', (q) => q.eq('source_id', issueId))
+            .collect()
+        : (sources.get(issueId) ?? []),
+      targets === null
+        ? ctx.db
+            .query('issue_links')
+            .withIndex('by_target', (q) => q.eq('target_id', issueId))
+            .collect()
+        : (targets.get(issueId) ?? []),
+      issueLabels === null
+        ? ctx.db
+            .query('issue_labels')
+            .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+            .collect()
+        : (issueLabels.get(issueId) ?? []),
+      issueAttachments === null
+        ? ctx.db
+            .query('issue_attachments')
+            .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+            .collect()
+        : (issueAttachments.get(issueId) ?? []),
     ])
 }
