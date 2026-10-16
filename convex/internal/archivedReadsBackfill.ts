@@ -26,21 +26,15 @@
  * before its step runs is left alone. An empty deployment schedules nothing.
  *
  * Run it once per deployment and only with the user's approval. From a Qivo
- * checkout, the private helper loads the keys and the command chooses the
- * deployment, for example development:
+ * checkout, the private helper names the deployment and refuses to run
+ * without its key, for example development:
  *
- *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-env" \
- *     sh -c 'export CONVEX_DEPLOY_KEY="$CONVEX_DEPLOY_KEY_DEVELOPMENT"; exec npx convex run internal/archivedReadsBackfill:start'
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     development npx convex run internal/archivedReadsBackfill:start
  *
- * Production uses CONVEX_DEPLOY_KEY_PRODUCTION and the demo backend
- * CONVEX_DEPLOY_KEY_DEMO_PRODUCTION in the same command. Staging's key is
- * loaded by the staging helper, which also selects it:
- *
- *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
- *     npx convex run internal/archivedReadsBackfill:start
- *
- * The command returns once the first page is scheduled. Follow the progress
- * in the deployment's logs. */
+ * The other targets are staging, production and demo, the demo backend. The
+ * command returns once the first page is scheduled. Follow the progress in
+ * the deployment's logs. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'

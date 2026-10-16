@@ -10,9 +10,10 @@
  * Run it once per deployment, reading the dry run first:
  *   npx convex run internal/guestTeams:repair '{"dry_run": true}'
  *   npx convex run internal/guestTeams:repair '{"dry_run": false}'
- * Name the deployment with its key in CONVEX_DEPLOY_KEY, as the private
- * scripts/with-staging helper does for staging. Without a key the CLI runs
- * against the deployment in .env.local. The result holds counts only.
+ * Name the deployment with the private scripts/with-deployment helper, for
+ * example `with-deployment staging npx convex run ...`. It refuses to run
+ * without the target's key, because without a key the CLI runs against the
+ * deployment in .env.local. The result holds counts only.
  * Re-running is safe, and a clean deployment reports zeros. Like
  * leaveAllTeams it writes no activity. A team whose only leader was a guest
  * is left without one; its organization's admins run it. */
