@@ -73,15 +73,18 @@ export function usagePeriod(sub: Doc<'billing_subscriptions'> | null, now: numbe
   return monthPeriod(date.getUTCFullYear(), date.getUTCMonth())
 }
 
-/** Display dates for any stored usage key, for listing past periods.
+/** Display dates for any stored usage key of organization `orgId`, for
+ * listing past periods.
  * - A month key maps to its UTC month (`kind: 'month'`).
- * - An ISO key maps to the subscription's recorded `billing_periods` row, or
- *   to its current period (`kind: 'paid'`).
+ * - An ISO key maps to the organization's recorded `billing_periods` row,
+ *   including rows of a provider subscription that has since been replaced,
+ *   or to `sub`'s current period (`kind: 'paid'`).
  * - Anything else, such as an old free-access bucket keyed by
  *   `complimentary_start` or a pending interval that was never adopted, has a
  *   known start only (`kind: 'open'`, `end: null`). */
 export async function usageKeyRange(
   ctx: QueryCtx,
+  orgId: string,
   sub: Doc<'billing_subscriptions'> | null,
   key: string,
 ): Promise<{ kind: 'month' | 'paid' | 'open'; start: string; end: string | null }> {
@@ -90,19 +93,15 @@ export async function usageKeyRange(
     const { start, end } = monthPeriod(Number(month[1]), Number(month[2]) - 1)
     return { kind: 'month', start, end }
   }
-  const subscriptionId = sub?.polar_subscription_id
-  if (subscriptionId) {
-    const period = await ctx.db
-      .query('billing_periods')
-      .withIndex('by_subscription_period', (q) =>
-        q.eq('subscription_id', subscriptionId).eq('period_start', key),
-      )
-      .unique()
-    if (period?.org_id === sub.org_id)
-      return { kind: 'paid', start: period.period_start, end: period.period_end }
-    if (sub.current_period_start === key && sub.current_period_end)
-      return { kind: 'paid', start: key, end: sub.current_period_end }
-  }
+  // One row per provider period, so an organization has few of them.
+  const periods = await ctx.db
+    .query('billing_periods')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  const period = periods.find((row) => row.period_start === key)
+  if (period) return { kind: 'paid', start: period.period_start, end: period.period_end }
+  if (sub?.org_id === orgId && sub.current_period_start === key && sub.current_period_end)
+    return { kind: 'paid', start: key, end: sub.current_period_end }
   return { kind: 'open', start: key, end: null }
 }
 

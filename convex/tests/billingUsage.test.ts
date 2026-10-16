@@ -402,34 +402,52 @@ describe('usage key ranges', () => {
   it('maps month, recorded, current and open-ended keys to display dates', async () => {
     const t = newT()
     const f = await fixture(t)
+    const replaced = '2026-06-15T12:00:00.000Z'
     const previous = '2026-08-15T12:00:00.000Z'
-    await t.run((ctx) =>
-      ctx.db.insert('billing_periods', {
-        org_id: f.org.id,
-        subscription_id: 'provider-sub',
-        plan_id: f.sub.plan_id,
-        period_start: previous,
-        period_end: PERIOD,
-        seats: 2,
-        profile_ids: [],
-        storage_bytes: 0,
-        storage_blocks: 0,
-        created_at: previous,
-      }),
-    )
+    const period = (subscription_id: string, period_start: string, period_end: string) =>
+      t.run((ctx) =>
+        ctx.db.insert('billing_periods', {
+          org_id: f.org.id,
+          subscription_id,
+          plan_id: f.sub.plan_id,
+          period_start,
+          period_end,
+          seats: 2,
+          profile_ids: [],
+          storage_bytes: 0,
+          storage_blocks: 0,
+          created_at: period_start,
+        }),
+      )
+    await period('provider-sub', previous, PERIOD)
+    // a period of the provider subscription this one replaced
+    await period('replaced-sub', replaced, '2026-07-15T12:00:00.000Z')
     const range = (key: string, sub: Doc<'billing_subscriptions'> | null = f.sub) =>
-      t.run((ctx) => usageKeyRange(ctx, sub, key))
+      t.run((ctx) => usageKeyRange(ctx, f.org.id, sub, key))
     expect(await range('month:2028-02')).toEqual({
       kind: 'month',
       start: '2028-02-01T00:00:00.000Z',
       end: '2028-02-29T00:00:00.000Z',
     })
     expect(await range(previous)).toEqual({ kind: 'paid', start: previous, end: PERIOD })
+    expect(await range(replaced)).toEqual({
+      kind: 'paid',
+      start: replaced,
+      end: '2026-07-15T12:00:00.000Z',
+    })
     expect(await range(PERIOD)).toEqual({ kind: 'paid', start: PERIOD, end: END })
     // A pending interval and an old free-access bucket have no known end.
     for (const key of [END, '2026-03-02T08:00:00.000Z', 'month:2026-13'])
       expect(await range(key)).toEqual({ kind: 'open', start: key, end: null })
-    expect(await range(previous, null)).toEqual({ kind: 'open', start: previous, end: null })
+    // Recorded periods resolve without a subscription; the current one needs it.
+    expect(await range(previous, null)).toEqual({ kind: 'paid', start: previous, end: PERIOD })
+    expect(await range(PERIOD, null)).toEqual({ kind: 'open', start: PERIOD, end: null })
+    // Another organization's periods never match.
+    expect(await t.run((ctx) => usageKeyRange(ctx, 'another-org', null, previous))).toEqual({
+      kind: 'open',
+      start: previous,
+      end: null,
+    })
   })
 })
 
