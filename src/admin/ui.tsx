@@ -1,9 +1,10 @@
 /* Small shared pieces for the operator views — table, badges, headings. */
-import { type ReactNode, type Ref, useEffect, useState } from 'react'
+import { type ReactNode, type Ref, useEffect } from 'react'
 import { Badge as UiBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useUpdateBlocker } from '@/lib/updateSafety'
+import { useConfirmArm } from '@/lib/useConfirmArm'
 import { cn } from '@/lib/utils'
 
 /* `headingRef` lets a view move focus to its title when it opens in place
@@ -175,8 +176,9 @@ export function StableLabel({ labels, current }: { labels: readonly string[]; cu
 /* A destructive action that takes a second click, the app's settings
    ConfirmButton pattern (src/panels/settings/controls.tsx). That component
    draws its icon through the planner store, so the console keeps this small
-   copy. The first click arms the button and swaps in `confirmLabel`. It
-   disarms after 3.5 seconds. `busyLabel` shows while the action runs.
+   copy. The first click arms the button and swaps in `confirmLabel`. The
+   second click confirms only after a short pause, and the arm lapses after
+   3.5 seconds (lib/useConfirmArm). `busyLabel` shows while the action runs.
    `blockedReason` turns the action off but keeps the button focusable, so
    the reason in its tooltip reaches the keyboard too. */
 export function ConfirmAction({
@@ -196,16 +198,12 @@ export function ConfirmAction({
   blockedReason?: string
   onConfirm: () => void
 }) {
-  const [armed, setArmed] = useState(false)
+  const { armed: armedKey, press, disarm } = useConfirmArm<'confirm'>()
+  const armed = armedKey !== null
   const blocked = !!blockedReason
   useEffect(() => {
-    if (!armed) return
-    const timer = setTimeout(() => setArmed(false), 3500)
-    return () => clearTimeout(timer)
-  }, [armed])
-  useEffect(() => {
-    if (disabled || busy || blocked) setArmed(false)
-  }, [disabled, busy, blocked])
+    if (disabled || busy || blocked) disarm()
+  }, [disabled, busy, blocked, disarm])
   return (
     <Button
       type="button"
@@ -219,13 +217,7 @@ export function ConfirmAction({
         armed && 'border-danger bg-danger-soft hover:bg-danger-soft',
       )}
       onClick={() => {
-        if (blocked) return
-        if (!armed) {
-          setArmed(true)
-          return
-        }
-        setArmed(false)
-        onConfirm()
+        if (!blocked) press('confirm', onConfirm)
       }}
     >
       <StableLabel

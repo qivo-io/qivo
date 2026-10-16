@@ -25,6 +25,7 @@ import {
   isExpired,
   msUntilNextExpiry,
 } from '../../lib/tokenExpiry'
+import { useConfirmArm } from '../../lib/useConfirmArm'
 import { type McpTokenChoice, P } from '../../store/planner'
 import { MField, ModalShell } from '../Modals'
 
@@ -52,7 +53,7 @@ const claudeCommand = (mcpUrl: string, secret: string) =>
 /** The Personal access tokens group: the token list and New token. */
 export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
   const [tokens, setTokens] = useState<Token[] | false | null>(null)
-  const [confirm, setConfirm] = useState<string | null>(null)
+  const confirm = useConfirmArm<string>()
   const [creating, setCreating] = useState(false)
   // Labels such as "Today" follow the calendar day without a reload.
   const [now, setNow] = useState(() => new Date())
@@ -112,9 +113,8 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
               key={t.id}
               token={t}
               now={now}
-              armed={confirm === t.id}
-              onArm={() => setConfirm(t.id)}
-              onDisarm={() => setConfirm(null)}
+              armed={confirm.armed === t.id}
+              onPress={(action) => confirm.press(t.id, action)}
               onChanged={reload}
             />
           ))}
@@ -126,7 +126,7 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
           data-mcp-new-token=""
           onClick={() => {
             // an armed Delete or Revoke must not survive a trip through the dialog
-            setConfirm(null)
+            confirm.disarm()
             setCreating(true)
           }}
         >
@@ -149,15 +149,14 @@ function TokenRow({
   token: t,
   now,
   armed,
-  onArm,
-  onDisarm,
+  onPress,
   onChanged,
 }: {
   token: Token
   now: Date
   armed: boolean
-  onArm: () => void
-  onDisarm: () => void
+  // the list's useConfirmArm press for this row, which arms it or runs `action`
+  onPress: (action: () => void) => void
   onChanged: () => void
 }) {
   const revoked = !!t.revokedAt
@@ -236,18 +235,15 @@ function TokenRow({
         className={cn('[flex-shrink:0]', armed && 'text-danger')}
         aria-label={action}
         title={action}
-        onClick={async () => {
-          if (!armed) {
-            onArm()
-            return
-          }
-          // Disarm before the request, so a click while it runs arms the
-          // button again instead of sending it twice.
-          onDisarm()
-          const ok = ended ? await P.deleteMcpToken(t.id) : await P.revokeMcpToken(t.id)
-          if (ok) window.showToast?.(ended ? 'MCP token deleted' : `“${t.name}” revoked`)
-          else window.showToast?.("That didn't go through", 'error')
-          onChanged()
+        onClick={() => {
+          // press disarms before the request, so a click while it runs arms
+          // the button again instead of sending it twice
+          onPress(async () => {
+            const ok = ended ? await P.deleteMcpToken(t.id) : await P.revokeMcpToken(t.id)
+            if (ok) window.showToast?.(ended ? 'MCP token deleted' : `“${t.name}” revoked`)
+            else window.showToast?.("That didn't go through", 'error')
+            onChanged()
+          })
         }}
       >
         <Icon name={ended ? 'trash' : 'blocked'} size={16} />

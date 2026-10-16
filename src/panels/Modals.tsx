@@ -29,6 +29,7 @@ import {
   requestedAccess,
 } from '../lib/newProjectAccess'
 import { useUpdateBlocker } from '../lib/updateSafety'
+import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { exactWeekForDate } from '../lib/weekDrafts'
 import {
@@ -1614,24 +1615,17 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
     window.showToast?.('Milestone updated')
     onClose()
   }
-  // two-click arm-then-confirm with the app-wide 3.5s self-disarm (the
-  // Settings ConfirmButton pattern — not imported: Settings already imports
-  // from this module, and the row keeps its ghost style)
-  const [armDel, setArmDel] = useStateM(false)
-  useEffectM(() => {
-    if (!armDel) return
-    const t = setTimeout(() => setArmDel(false), 3500)
-    return () => clearTimeout(t)
-  }, [armDel])
-  const remove = () => {
-    if (!armDel) {
-      setArmDel(true)
-      return
-    }
-    P.removeMilestone(m.id)
-    window.showToast?.('Milestone removed')
-    onClose()
-  }
+  // Two-click arm-then-confirm with the app-wide timing (lib/useConfirmArm).
+  // It does not use the Settings ConfirmButton, because Settings already
+  // imports from this module and the row keeps its ghost style.
+  const deletion = useConfirmArm<'delete'>()
+  const armDel = deletion.armed !== null
+  const remove = () =>
+    deletion.press('delete', () => {
+      P.removeMilestone(m.id)
+      window.showToast?.('Milestone removed')
+      onClose()
+    })
   return (
     <div
       ref={rootRef}

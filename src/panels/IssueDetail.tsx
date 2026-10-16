@@ -51,6 +51,7 @@ import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
 import { useUpdateBlocker } from '../lib/updateSafety'
+import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile } from '../lib/useMobile'
 import '../styles/mobile-issue.css'
 import {
@@ -299,12 +300,8 @@ function hasReadOnlySubtask(root: IssueVM): boolean {
 }
 
 function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }) {
-  const [arm, setArm] = useStateID(false)
-  useEffectID(() => {
-    if (!arm) return
-    const t = setTimeout(() => setArm(false), 3500)
-    return () => clearTimeout(t)
-  }, [arm])
+  const removal = useConfirmArm<'remove'>()
+  const arm = removal.armed !== null
   const openIt = async (download: boolean) => {
     const url = await P.attachmentUrl(att.id, download)
     if (!url) return
@@ -351,13 +348,7 @@ function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }
           className="w-control-sm h-control-sm [flex-shrink:0]"
           aria-label={arm ? 'Confirm removal' : 'Remove attachment'}
           title={arm ? 'Confirm removal' : 'Remove attachment'}
-          onClick={() => {
-            if (!arm) {
-              setArm(true)
-              return
-            }
-            P.removeAttachment(att.id)
-          }}
+          onClick={() => removal.press('remove', () => P.removeAttachment(att.id))}
         >
           <Icon name={arm ? 'trash' : 'close'} size={16} />
         </Button>
@@ -856,12 +847,8 @@ function CommentRow({
   onDoneEdit: () => void
 }) {
   const [hover, setHover] = useStateID(false)
-  const [armDel, setArmDel] = useStateID(false)
-  useEffectID(() => {
-    if (!armDel) return
-    const t = setTimeout(() => setArmDel(false), 3500)
-    return () => clearTimeout(t)
-  }, [armDel])
+  const deletion = useConfirmArm<'delete'>()
+  const armDel = deletion.armed !== null
   // mine = authored by ANY of my seats (0081): a comment I left in a
   // foreign project is authored by my guest profile there, not CURRENT_USER
   const own = !!c.author && P.myProfileIds.includes(c.author)
@@ -919,13 +906,7 @@ function CommentRow({
                 className="w-control-sm h-control-sm [border-radius:var(--r-sm)]"
                 aria-label={armDel ? 'Confirm delete' : 'Delete comment'}
                 title={armDel ? 'Confirm delete' : 'Delete comment'}
-                onClick={() => {
-                  if (!armDel) {
-                    setArmDel(true)
-                    return
-                  }
-                  P.deleteComment(c.id)
-                }}
+                onClick={() => deletion.press('delete', () => P.deleteComment(c.id))}
               >
                 <Icon name={armDel ? 'trash' : 'close'} size={16} />
               </Button>
@@ -1040,7 +1021,9 @@ function IssueDetail({
   const [parentAnchor, setParentAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [linkAnchor, setLinkAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [linkType, setLinkType] = useStateID('blocked_by')
-  const [confirmDel, setConfirmDel] = useStateID(false)
+  // Delete task in the task menu, for a task without subtasks
+  const deletion = useConfirmArm<'delete'>()
+  const confirmDel = deletion.armed !== null
   const [moveOpen, setMoveOpen] = useStateID(false)
   const [archiveOpen, setArchiveOpen] = useStateID(false)
   const [deleteOpen, setDeleteOpen] = useStateID(false)
@@ -1105,7 +1088,7 @@ function IssueDetail({
     setParentAnchor(null)
     setLinkAnchor(null)
     setLinkType('blocked_by')
-    setConfirmDel(false)
+    deletion.disarm()
     setMoveOpen(false)
     setArchiveOpen(false)
     setDeleteOpen(false)
@@ -2183,7 +2166,7 @@ function IssueDetail({
                           size="icon"
                           className="w-control-sm h-control-sm"
                           onClick={() => {
-                            setConfirmDel(false)
+                            deletion.disarm()
                             t()
                           }}
                           aria-label="Task actions"
@@ -2287,16 +2270,14 @@ function IssueDetail({
                                     setDeleteOpen(true)
                                     return
                                   }
-                                  if (!confirmDel) {
-                                    setConfirmDel(true)
-                                    return
-                                  }
-                                  const id = it.id
-                                  const shown = it.key
-                                  close()
-                                  onClose()
-                                  P.deleteIssue(id)
-                                  window.showToast?.(`Deleted ${shown}`)
+                                  deletion.press('delete', () => {
+                                    const id = it.id
+                                    const shown = it.key
+                                    close()
+                                    onClose()
+                                    P.deleteIssue(id)
+                                    window.showToast?.(`Deleted ${shown}`)
+                                  })
                                 }}
                               >
                                 <Icon name="trash" size={14} />

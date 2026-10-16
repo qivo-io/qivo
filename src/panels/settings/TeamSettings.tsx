@@ -13,6 +13,7 @@ import {
   SettingsSection,
 } from '../../components/settingsPage'
 import { useUpdateBlocker } from '../../lib/updateSafety'
+import { useConfirmArm } from '../../lib/useConfirmArm'
 import { type AccessRemoval, P } from '../../store/planner'
 import { AccessRemovalModal } from '../Modals'
 import { BackLink, TextField } from './controls'
@@ -31,7 +32,7 @@ export function TeamPage({
   const teamName = P.teamById(teamId)?.name || ''
   const ws = teamId // the update calls below all take the team id
   const canManage = P.isTeamLeader(teamId) // team leader or org admin
-  const [confirm, setConfirm] = useStateS<string | null>(null)
+  const confirm = useConfirmArm<string>()
   /* Removing a member who would lose sight of tasks they work on first asks
      whether to keep them as Viewers or reassign their tasks. */
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
@@ -76,7 +77,7 @@ export function TeamPage({
             const isLeader = (u.teamLeads || []).includes(ws)
             // Viewers and agents never lead; an old agent leader row can still be cleared.
             const leaderLocked = u.orgRole === 'viewer' || (u.isAgent && !isLeader)
-            const arm = confirm === `m:${u.id}`
+            const arm = confirm.armed === `m:${u.id}`
             return (
               <div
                 key={u.id}
@@ -144,15 +145,12 @@ export function TeamPage({
                     className="w-control-sm h-control-sm"
                     aria-label={arm ? 'Click again to confirm' : `Remove ${u.name} from this team`}
                     title={arm ? 'Click again to confirm' : `Remove ${u.name} from this team`}
-                    onClick={() => {
-                      if (!arm) {
-                        setConfirm(`m:${u.id}`)
-                        return
-                      }
-                      const change = { kind: 'teamMember', teamId: ws, userId: u.id } as const
-                      if (P.startRemoval(change)) setRemoval(change)
-                      setConfirm(null)
-                    }}
+                    onClick={() =>
+                      confirm.press(`m:${u.id}`, () => {
+                        const change = { kind: 'teamMember', teamId: ws, userId: u.id } as const
+                        if (P.startRemoval(change)) setRemoval(change)
+                      })
+                    }
                   >
                     <Icon name="close" size={16} />
                   </Button>
@@ -215,7 +213,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const admin = P.isAdmin()
   const [teamName, setTeamName] = useStateS('')
   useUpdateBlocker(!!teamName)
-  const [confirm, setConfirm] = useStateS<string | null>(null)
+  const confirm = useConfirmArm<string>()
   // deleting a team whose members would lose sight of their tasks asks first
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
   const homeTeams = P.teams.filter((t) => t.org === P.homeOrg)
@@ -240,7 +238,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             const memberCount = P.homeUsers().filter((u) => (u.teams || []).includes(t.id)).length
             // Count home teams only; P.teams also contains foreign teams.
             const last = homeTeams.length <= 1
-            const arm = confirm === `t:${t.id}`
+            const arm = confirm.armed === `t:${t.id}`
             return (
               <div
                 key={t.id}
@@ -283,13 +281,10 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                     }
                     onClick={() => {
                       if (last) return
-                      if (!arm) {
-                        setConfirm(`t:${t.id}`)
-                        return
-                      }
-                      const change = { kind: 'deleteTeam', teamId: t.id } as const
-                      if (P.startRemoval(change)) setRemoval(change)
-                      setConfirm(null)
+                      confirm.press(`t:${t.id}`, () => {
+                        const change = { kind: 'deleteTeam', teamId: t.id } as const
+                        if (P.startRemoval(change)) setRemoval(change)
+                      })
                     }}
                   >
                     <Icon name="trash" size={16} />
