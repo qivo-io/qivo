@@ -65,6 +65,19 @@ describe('useConfirmArm', () => {
     expect(isArmed('a')).toBe(true)
   })
 
+  it('treats an arm past its lapse as gone even when the timer runs late', async () => {
+    await render()
+    await click('a')
+    // the clock passes the lapse without the timer firing, as in a throttled tab
+    await act(async () => vi.setSystemTime(Date.now() + CONFIRM_DISARM_MS))
+    await click('a')
+    expect(action).not.toHaveBeenCalled()
+    expect(isArmed('a')).toBe(true)
+    await wait(CONFIRM_IGNORE_MS)
+    await click('a')
+    expect(action).toHaveBeenCalledExactlyOnceWith('a')
+  })
+
   it('confirms once on a click when the pause ends', async () => {
     await render()
     await click('a')

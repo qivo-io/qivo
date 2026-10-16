@@ -13,7 +13,8 @@ export const CONFIRM_DISARM_MS = 3500
     ignored and leaves it armed. A later click disarms and then runs
     `action`, so a click while an async action runs arms the key again
     instead of sending the action twice. Every arm lapses CONFIRM_DISARM_MS
-    after it was set. One hook holds one armed key, so rows that share it
+    after it was set, and a click after that arms again even when the lapse
+    timer has not run yet. One hook holds one armed key, so rows that share it
     disarm each other, and a single button passes a constant key. `disarm`
     drops the arm when something else happens first. `press` and `disarm`
     keep their identity across renders. */
@@ -39,11 +40,14 @@ export function useConfirmArm<K extends string>() {
 
   const press = useCallback(
     (key: K, action: () => void) => {
-      if (current.current !== key) {
+      const held = Date.now() - armedAt.current
+      // A browser can run the lapse timer late, for example in a background
+      // tab, so an arm older than CONFIRM_DISARM_MS counts as lapsed here too.
+      if (current.current !== key || held >= CONFIRM_DISARM_MS) {
         set(key)
         return
       }
-      if (Date.now() - armedAt.current < CONFIRM_IGNORE_MS) return
+      if (held < CONFIRM_IGNORE_MS) return
       set(null)
       action()
     },
