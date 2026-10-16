@@ -142,6 +142,10 @@ const APP_OWNED: TableNames[] = [
   'account_appearance',
   'custom_backgrounds',
   'background_uploads',
+  'deleted_items',
+  'deleted_item_jobs',
+  'deleted_rows',
+  'deleted_tasks',
 ]
 const APP_SHARED = [
   'webhook_workers', // shared background reservations contain no tenant data

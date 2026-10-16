@@ -97,6 +97,11 @@ const EXCLUDED_TABLES = [
   'org_counters',
   // Background trim bookkeeping for activity retention.
   'activity_retention',
+  // Deleted items are not exported: restore an item to include its work.
+  'deleted_items',
+  'deleted_item_jobs',
+  'deleted_rows',
+  'deleted_tasks',
 ] as const
 
 async function readAll(

@@ -1833,14 +1833,16 @@ export async function unarchiveIssueCore(
 }
 
 /* ----------------------------------------------------------- delete core
- * One task deleted with its 'deleted' activity row, shared by the app's
- * delete (each chosen subtask, then the task) and the machine deletes.
+ * One task deleted for good with its 'deleted' activity row, for the REST
+ * and MCP deletes. The app's delete moves tasks to Deleted items instead
+ * (model/deletedItems.ts moveTasksToTrash), which the machine deletes are
+ * meant to call too, with their credential as `via`.
  * model/cascade.ts deleteIssueDeep does the deleting. It detaches, touches
  * and notifies the direct subtasks and removes the task's links, labels,
  * follows, comments, messages and attachments. Activity rows stay. The
- * row's detail is the machine provenance, or none for the app.
- * deleteIssueDeep itself stays ungated, because a project delete runs it
- * for every task after checking the project. */
+ * row's detail is the machine provenance. deleteIssueDeep itself stays
+ * ungated, because a project delete runs it for every task after checking
+ * the project. */
 export async function deleteIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string; provenance?: string },
