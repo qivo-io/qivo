@@ -1,10 +1,11 @@
 /* Operator organization creation and invitations (adminOrgs.ts). Covers the
- * fail-closed gate on every public door, the one-transaction create with its
- * address, starter team, billing plan and months free, the admin-first and
- * home-organization rules, invitation email delivery and its audit record,
- * resend, cancel and role changes, and how the invited roles survive the
- * first sign-in. Runs against the local Better Auth component so logins,
- * operator emails and the sign-in or sign-up link choice are real. */
+ * fail-closed gate on every public door, the demo refusal in the internal
+ * writers behind them, the one-transaction create with its address, starter
+ * team, billing plan and months free, the admin-first and home-organization
+ * rules, invitation email delivery and its audit record, resend, cancel and
+ * role changes, and how the invited roles survive the first sign-in. Runs
+ * against the local Better Auth component so logins, operator emails and the
+ * sign-in or sign-up link choice are real. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -162,6 +163,79 @@ describe('the operator gate', () => {
       await expectRefusal(DOORS[door](as(t, f.admin)), 'forbidden')
     },
   )
+})
+
+/* The internal mutations behind createOrganization, invitePeople and
+ * editInvite. The dashboard and deploy keys can run them without a door, so
+ * each refuses a demo deployment itself. */
+describe('the internal writers behind the doors', () => {
+  const actor = { auth_user_id: 'operator-login', email: 'operator@platform.test' }
+  type Fixture = { t: T; orgId: string; pending: Doc<'profiles'> }
+  const WRITERS: Record<string, { audit: string; run: (f: Fixture) => Promise<unknown> }> = {
+    insertOrganization: {
+      audit: 'create_org',
+      run: ({ t }) =>
+        t.mutation(internal.adminOrgs.insertOrganization, {
+          name: 'Probe Co',
+          people: [{ name: 'Elin Strand', email: 'elin@probe.test', role: 'admin' }],
+          actor,
+        }),
+    },
+    insertPeople: {
+      audit: 'invite_member',
+      run: ({ t, orgId }) =>
+        t.mutation(internal.adminOrgs.insertPeople, {
+          org_id: orgId,
+          people: [{ name: 'Nils Holm', email: 'nils@testbed.test', role: 'user' }],
+          actor,
+        }),
+    },
+    updateInvite: {
+      audit: 'edit_invite',
+      run: ({ t, pending }) =>
+        t.mutation(internal.adminOrgs.updateInvite, {
+          profile_id: pending.id,
+          name: 'Pending Seat',
+          email: 'pending.seat@testbed.test',
+          actor,
+        }),
+    },
+  }
+
+  /* An organization with an active org admin and one pending seat. */
+  async function fixture(): Promise<Fixture> {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const pending = await plantSeat(t, {
+      org_id: f.org.id,
+      name: 'Pending',
+      email: 'pending@testbed.test',
+    })
+    return { t, orgId: f.org.id, pending }
+  }
+
+  const rows = (t: T) =>
+    t.run(async (ctx) => ({
+      organizations: await ctx.db.query('organizations').collect(),
+      profiles: await ctx.db.query('profiles').collect(),
+    }))
+
+  it.each(Object.keys(WRITERS))('%s refuses a demo deployment and writes nothing', async (name) => {
+    const f = await fixture()
+    const before = await rows(f.t)
+    vi.stubEnv('APP_MODE', 'demo')
+    await expectRefusal(WRITERS[name].run(f), 'forbidden', /requires a regular workspace/)
+    expect(await rows(f.t)).toEqual(before)
+    expect(await auditFor(f.t, WRITERS[name].audit)).toEqual([])
+  })
+
+  it.each(Object.keys(WRITERS))('%s writes on a regular deployment', async (name) => {
+    const f = await fixture()
+    const before = await rows(f.t)
+    await WRITERS[name].run(f)
+    expect(await rows(f.t)).not.toEqual(before)
+    expect(await auditFor(f.t, WRITERS[name].audit)).toHaveLength(1)
+  })
 })
 
 describe('createOrganization', () => {
