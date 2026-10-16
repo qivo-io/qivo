@@ -106,6 +106,28 @@ describe('date and command safety', () => {
 })
 
 describe('target selection never redirects a deploy key', () => {
+  it('rejects an implicit dev deployment mismatch before client creation', async () => {
+    const factory = vi.fn()
+    for (const VITE_CONVEX_URL of [
+      'https://happy-wolf-34.convex.cloud',
+      'https://happy-wolf-34.eu-west-1.convex.cloud',
+    ]) {
+      const env = { ...DEV_ENV, VITE_CONVEX_URL }
+      await expect(
+        runMarketingDemo(['seed', '--dev'], {
+          cwd: folder(),
+          env,
+          clientFactory: factory,
+        }),
+      ).rejects.toThrow(/does not match the deploy key/)
+      expect(factory).not.toHaveBeenCalled()
+      expect(
+        resolveTarget({ target: 'dev', url: 'https://tidy-otter-12.eu-west-1.convex.cloud' }, env)
+          .url,
+      ).toBe('https://tidy-otter-12.eu-west-1.convex.cloud')
+    }
+  })
+
   it('refuses environment/flag and explicit URL/key mismatches before client creation', async () => {
     const factory = vi.fn()
     await expect(

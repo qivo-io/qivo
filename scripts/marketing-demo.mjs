@@ -142,6 +142,7 @@ export function parseArgs(args, now = new Date()) {
   return options
 }
 
+/** Resolve an isolated fixture backend without redirecting its deployment key. */
 export function resolveTarget(options, env, requireKey = true) {
   const target = options.target ?? 'dev'
   if (!['dev', 'staging'].includes(target))
@@ -189,6 +190,17 @@ export function resolveTarget(options, env, requireKey = true) {
   // An explicit URL must match the key and cannot redirect admin auth. A key
   // names no region, so an app URL for the key's own deployment supplies it.
   const appUrl = URL.canParse(env.VITE_CONVEX_URL) ? new URL(env.VITE_CONVEX_URL) : undefined
+  if (
+    target === 'dev' &&
+    options.url === undefined &&
+    match &&
+    appUrl &&
+    appUrl.hostname.split('.')[0] !== match[2]
+  ) {
+    throw new DemoCliError(
+      'The configured deployment URL does not match the deploy key. Refusing to contact a different deployment.',
+    )
+  }
   const urlValue =
     options.url ??
     (match && appUrl?.hostname.split('.')[0] !== match[2]

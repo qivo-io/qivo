@@ -8,6 +8,7 @@ import { loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
 const env = { QIVO_ENVIRONMENT: 'development', CONVEX_DEPLOY_KEY: 'dev:tidy-otter-12|test-key' }
 const folders = []
+/** Create private credentials for a local browser demo fixture. */
 function fixture(base = env) {
   const cwd = mkdtempSync(join(tmpdir(), 'qivo-browser-demo-'))
   const directory = mkdtempSync(join(tmpdir(), 'qivo-browser-credentials-'))
@@ -77,7 +78,7 @@ describe('Northstar browser fixture', () => {
         ...options,
         env: { ...env, VITE_CONVEX_URL: 'https://happy-wolf-34.convex.cloud' },
       }),
-    ).toThrow(/does not match the development credential deployment/)
+    ).toThrow(/does not match the deploy key/)
   })
 
   it('checks readiness and the credential receipt without writing or resetting the demo', async () => {

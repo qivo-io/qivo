@@ -10,6 +10,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { chromium } from 'playwright'
 
+/** Validate isolated demo origins and derive the matching Convex HTTP origin. */
 export function demoSmokeConfiguration(env) {
   const browserOrigin = (value) => {
     const origin = new URL(value)
