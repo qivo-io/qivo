@@ -11,6 +11,7 @@ import type {
 } from 'convex/server'
 import type { ConvexError, Value } from 'convex/values'
 import type { DataModel, Doc, Id, TableNames } from '../_generated/dataModel'
+import { isStoredTable } from './enums'
 import type { Refusal } from './functions'
 
 /* Tables that declare .index('by_uuid', ['id']) — the app-key tables.
@@ -47,7 +48,10 @@ type EqChain = { eq: (field: string, value: Value | undefined) => EqChain }
 
 /* Insert doc unless a row already matches keyFields on the named index; on a
  * match, throw err instead. keyFields' entries MUST follow the index's declared
- * field order (the runtime builder refuses out-of-order eq chains). */
+ * field order (the runtime builder refuses out-of-order eq chains). A uuid of a
+ * table that Deleted items stores (lib/enums.ts STORED_TABLES) is also taken
+ * while a deleted_rows row holds it, so a restore never meets a new row with
+ * its id; the refusal is the same err. */
 export async function insertUnique<T extends TableNames>(
   ctx: WriterCtx,
   table: T,
@@ -67,5 +71,13 @@ export async function insertUnique<T extends TableNames>(
     })
     .first()
   if (existing !== null) throw err
+  if (indexName === 'by_uuid' && isStoredTable(table) && typeof keyFields.id === 'string') {
+    const id = keyFields.id
+    const held = await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', table).eq('row_id', id))
+      .first()
+    if (held !== null) throw err
+  }
   return await ctx.db.insert(table, doc)
 }

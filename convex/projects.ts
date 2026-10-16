@@ -41,7 +41,7 @@ import { refuseDemoFeature } from './lib/demo'
 import { vGrantLevel, vProjectType } from './lib/enums'
 import { badRequest, forbidden, notFound, orgMutation, require, rule } from './lib/functions'
 import { logActivity } from './model/activity'
-import { deleteProjectDeep } from './model/cascade'
+import { cleanReason, moveProjectToTrash } from './model/deletedItems'
 import {
   addMilestoneCore,
   changeableMilestone,
@@ -224,23 +224,26 @@ export const unarchive = orgMutation({
 })
 
 /* ------------------------------------------------------------- deleteDeep
- * P.removeProject → delete_project (0081:473-488; wording 0078:399).
- * model/cascade owns the FK edges. Deleting an ARCHIVED project is allowed
- * (0106 deliberately left the delete policies alone). The 'deleted' event is
- * written AFTER the cascade and hangs on the parent (for a sub) or the team
- * (for a meta) — the project it names is gone, which is exactly why
- * (bc022c2:2952-2958). Members receive a sub's event only with access to the
- * parent beyond navigation, and a meta's reaches org admins only
- * (snapshot.ts memberSeesActivity). */
+ * P.removeProject → delete_project (0081:473-488; wording 0078:399). The
+ * project, its sub-projects and every task in them move to Deleted items as
+ * one item (model/deletedItems.ts moveProjectToTrash): this transaction
+ * hides the projects, and bounded steps move the tasks. Deleting an ARCHIVED
+ * project is allowed (0106 deliberately left the delete policies alone).
+ * `reason` is shown in Deleted items: trimmed, at most 500 characters. The
+ * 'deleted' event is written AFTER the move and hangs on the parent (for a
+ * sub) or the team (for a meta) — the project it names is gone, which is
+ * exactly why (bc022c2:2952-2958). Members receive a sub's event only with
+ * access to the parent beyond navigation, and a meta's reaches org admins
+ * only (snapshot.ts memberSeesActivity). */
 export const deleteDeep = orgMutation({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
+  args: { id: v.string(), reason: v.optional(v.string()) },
+  handler: async (ctx, { id, reason }) => {
     const now = new Date().toISOString()
     const project = await myProject(ctx, id)
     if (!(await hasProjectLevel(ctx, ctx.me, id, 'lead'))) {
       throw rule('requires the project lead')
     }
-    await deleteProjectDeep(ctx, { project, actor: ctx.me, now })
+    await moveProjectToTrash(ctx, { actor: ctx.me, project, now, reason: cleanReason(reason) })
     await logActivity(ctx, {
       org_id: ctx.me.org_id,
       actor_id: ctx.me.id,

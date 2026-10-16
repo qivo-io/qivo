@@ -511,7 +511,11 @@ export const adoptAvatar = internalMutation({
       .query('issue_attachments')
       .withIndex('by_storage', (q) => q.eq('storage_id', args.storage_id))
       .first()
-    require(other === null && attachment === null, badRequest(
+    const trashed = await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_storage', (q) => q.eq('storage_id', args.storage_id))
+      .first()
+    require(other === null && attachment === null && trashed === null, badRequest(
       'marketing demo: avatar bytes already belong to another record',
     ))
     await ctx.db.patch(profile._id, { avatar_storage_id: args.storage_id })

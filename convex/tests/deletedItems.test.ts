@@ -1,0 +1,1123 @@
+/* Deleted items: storage, reservations, the step machine, moving and purging
+ * (model/deletedItems.ts, deletedItems.ts).
+ *
+ * Deleting moves rows out of the live tables into deleted_rows, so a test
+ * reads both sides: the live tables must no longer hold what was deleted,
+ * and the trash must hold every original document unchanged. Fake timers
+ * keep every scheduled step from running until a test releases it, so the
+ * bounded steps can be driven one at a time. Budgets are lowered so that
+ * many-step paths run on small data. */
+/// <reference types="vite/client" />
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { api, internal } from '../_generated/api'
+import type { Doc, Id, TableNames } from '../_generated/dataModel'
+import { byId } from '../lib/db'
+import type { EventOwner } from '../lib/taskEvents'
+import { storageIdInUse } from '../model/attachments'
+import { storageUsage } from '../model/billing'
+import {
+  EXPIRY,
+  RETRY,
+  STALLED_MS,
+  STORED_ROW_MAX_BYTES,
+  sameReference,
+  startPurge,
+  TRASH_BUDGET,
+  TRASH_DAYS,
+  whereIsTask,
+} from '../model/deletedItems'
+import { estimateDocumentBytes } from '../model/demoMetrics'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantIssue,
+  plantProject,
+  plantSubscription,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
+import { assertNoDanglingRefs } from './refs.setup'
+
+declare class Blob {
+  constructor(parts: string[])
+}
+
+const START = Date.parse('2026-05-04T10:00:00.000Z')
+const DAY = 86_400_000
+const HOUR = 3_600_000
+const DEFAULT_BUDGET = { ...TRASH_BUDGET }
+const DEFAULT_RETRY = { ...RETRY }
+const DEFAULT_EXPIRY = { ...EXPIRY }
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(START)
+})
+afterEach(() => {
+  Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+  Object.assign(RETRY, DEFAULT_RETRY)
+  Object.assign(EXPIRY, DEFAULT_EXPIRY)
+  vi.clearAllTimers()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  vi.unstubAllEnvs()
+})
+
+const runSteps = (t: T) => t.finishAllScheduledFunctions(vi.runAllTimers)
+const step = (t: T, item_id: string) => t.mutation(internal.deletedItems.step, { item_id })
+
+const itemFor = async (t: T, targetId: string): Promise<Doc<'deleted_items'>> => {
+  const item = await t.run((ctx) =>
+    ctx.db
+      .query('deleted_items')
+      .withIndex('by_target', (q) => q.eq('target_id', targetId))
+      .unique(),
+  )
+  if (item === null) throw new Error(`nothing in Deleted items for ${targetId}`)
+  return item
+}
+const itemById = (t: T, id: string) => t.run((ctx) => byId(ctx, 'deleted_items', id))
+const jobFor = (t: T, itemId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('deleted_item_jobs')
+      .withIndex('by_item', (q) => q.eq('item_id', itemId))
+      .unique(),
+  )
+const storedRows = (t: T, itemId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_owner', (q) => q.eq('item_id', itemId))
+      .collect(),
+  )
+const storedTasks = (t: T, itemId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_item', (q) => q.eq('item_id', itemId))
+      .collect(),
+  )
+/** The stored task `id` as deleted_rows keeps it, or undefined. */
+const storedIssue = async (t: T, id: string) => {
+  const row = await t.run((ctx) =>
+    ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', id))
+      .unique(),
+  )
+  return row?.row.table === 'issues' ? row.row.doc : undefined
+}
+/** Whether deleted_rows holds the comment `id`. */
+const commentStored = async (t: T, id: string) =>
+  (await t.run((ctx) =>
+    ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', 'comments').eq('row_id', id))
+      .unique(),
+  )) !== null
+const liveTask = (t: T, id: string) => t.run((ctx) => byId(ctx, 'issues', id))
+const blobExists = (t: T, id: Id<'_storage'>) =>
+  t.run(async (ctx) => (await ctx.storage.get(id)) !== null)
+const deleteTask = (t: T, f: OrgFixture, id: string, extra: object = {}) =>
+  as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id, ...extra })
+const deleteProject = (t: T, f: OrgFixture, id: string) =>
+  as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id })
+
+async function attach(t: T, task: Doc<'issues'>, size = 5): Promise<Doc<'issue_attachments'>> {
+  return await t.run(async (ctx) => {
+    const storage_id = await ctx.storage.store(new Blob(['x'.repeat(size)]) as never)
+    const _id = await ctx.db.insert('issue_attachments', {
+      org_id: task.org_id,
+      id: uuid(),
+      issue_id: task.id,
+      name: 'notes.txt',
+      size_bytes: size,
+      storage_id,
+      inline: false,
+      created_at: NOW,
+    })
+    return (await ctx.db.get(_id)) as Doc<'issue_attachments'>
+  })
+}
+
+async function comment(t: T, task: Doc<'issues'>, body = 'Looks good'): Promise<Doc<'comments'>> {
+  return await t.run(async (ctx) => {
+    const _id = await ctx.db.insert('comments', {
+      id: uuid(),
+      issue_id: task.id,
+      body,
+      created_at: NOW,
+    })
+    return (await ctx.db.get(_id)) as Doc<'comments'>
+  })
+}
+
+/** A live document tagged with its table, as deleted_rows stores it. */
+type Tagged = { table: string; doc: { _id: Id<TableNames>; _creationTime: number } }
+
+/* One row of every stored kind for `task` (a comment, a label assignment, a
+ * follow, an attachment with bytes, a link out to `to` and a link in from
+ * `from`) plus an inbox message about it. Returns the live documents. */
+async function plantRows(
+  t: T,
+  f: OrgFixture,
+  task: Doc<'issues'>,
+  ends: { to: Doc<'issues'>; from: Doc<'issues'> },
+) {
+  const attachment = await attach(t, task)
+  return await t.run(async (ctx) => {
+    const org_id = f.org.id
+    const labelId = uuid()
+    await ctx.db.insert('labels', {
+      id: labelId,
+      org_id,
+      name: 'Field',
+      name_lower: 'field',
+      color: '#ffcc00',
+      created_at: NOW,
+    })
+    const link = (source: Doc<'issues'>, target: Doc<'issues'>) =>
+      ctx.db.insert('issue_links', {
+        org_id,
+        id: uuid(),
+        source_id: source.id,
+        target_id: target.id,
+        type: 'blocks',
+        pair_key: [source.id, target.id].sort().join(':'),
+        created_at: NOW,
+      })
+    const ids: [string, Id<'comments' | 'issue_labels' | 'issue_subscriptions' | 'issue_links'>][] =
+      [
+        [
+          'comments',
+          await ctx.db.insert('comments', {
+            id: uuid(),
+            issue_id: task.id,
+            author: f.admin.id,
+            body: 'Measured 3.7 V',
+            created_at: NOW,
+          }),
+        ],
+        [
+          'issue_labels',
+          await ctx.db.insert('issue_labels', { org_id, issue_id: task.id, label_id: labelId }),
+        ],
+        [
+          'issue_subscriptions',
+          await ctx.db.insert('issue_subscriptions', {
+            issue_id: task.id,
+            profile_id: f.admin.id,
+            created_at: NOW,
+          }),
+        ],
+        ['issue_links', await link(task, ends.to)],
+        ['issue_links', await link(ends.from, task)],
+      ]
+    const rows: Tagged[] = [{ table: 'issue_attachments', doc: attachment }]
+    for (const [table, id] of ids) {
+      const doc = await ctx.db.get(id)
+      if (doc === null) throw new Error(`planted ${table} row vanished`)
+      rows.push({ table, doc })
+    }
+    const message = await ctx.db.insert('messages', {
+      id: uuid(),
+      org_id,
+      recipient_id: f.admin.id,
+      issue_id: task.id,
+      issue_title: task.title,
+      kind: 'change',
+      detail: 'Status: To do → In progress',
+      created_at: NOW,
+    })
+    return { rows, message, attachment, labelId }
+  })
+}
+
+/** What deleted_rows must hold for a live document that travels with `owner`. */
+function expectedRow(live: Tagged, owner: string) {
+  const { _id, _creationTime, ...doc } = live.doc as Tagged['doc'] & Record<string, unknown>
+  // objectContaining needs absent fields left out, not set to undefined
+  return {
+    table: live.table,
+    owner_id: owner,
+    created_ts: _creationTime,
+    row: { table: live.table, doc },
+    ...(typeof doc.id === 'string' ? { row_id: doc.id } : {}),
+    ...(live.table === 'issue_attachments' ? { storage_id: doc.storage_id } : {}),
+  }
+}
+
+describe('moving a task to Deleted items', () => {
+  it('stores the task with every row that travels with it and deletes its messages', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Battery level' })
+    const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const from = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const planted = await plantRows(t, f, task, { to, from })
+
+    await deleteTask(t, f, task.id, { reason: '  Duplicate of the charger task  ' })
+
+    const item = await itemFor(t, task.id)
+    expect(item).toMatchObject({
+      org_id,
+      kind: 'task',
+      num: task.num,
+      name: 'Battery level',
+      status: 'todo',
+      archived: false,
+      project_id: f.sub.id,
+      parent_project_id: f.meta.id,
+      path: ['Testbed platform', 'Firmware'],
+      projects: [
+        { id: f.sub.id, name: 'Firmware', key: 'FW', type: 'project', tasks: 1, archived_tasks: 0 },
+      ],
+      counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+      deleted_at: new Date(START).toISOString(),
+      deleted_by: f.user.id,
+      reason: 'Duplicate of the charger task',
+      state: 'ready',
+    })
+    expect(item.purge_after).toBe(START + TRASH_DAYS * DAY)
+    expect(await jobFor(t, item.id)).toBeNull()
+
+    // every original document, unchanged, travels with the task
+    const stored = await storedRows(t, item.id)
+    const expected = [
+      expectedRow({ table: 'issues', doc: task }, task.id),
+      ...planted.rows.map((row) => expectedRow(row, task.id)),
+    ]
+    expect(stored).toHaveLength(expected.length)
+    for (const row of expected) expect(stored).toContainEqual(expect.objectContaining(row))
+    for (const row of stored) {
+      const { _id, _creationTime, ...doc } = row
+      expect(estimateDocumentBytes(doc)).toBeLessThanOrEqual(STORED_ROW_MAX_BYTES)
+    }
+    expect(await storedTasks(t, item.id)).toEqual([
+      expect.objectContaining({
+        org_id,
+        task_id: task.id,
+        num: task.num,
+        title: 'Battery level',
+        project_id: f.sub.id,
+        archived: false,
+      }),
+    ])
+
+    // the live tables no longer hold any of it, and the message is gone
+    await t.run(async (ctx) => {
+      expect(await byId(ctx, 'issues', task.id)).toBeNull()
+      for (const row of planted.rows) expect(await ctx.db.get(row.doc._id)).toBeNull()
+      expect(await ctx.db.get(planted.message)).toBeNull()
+      // the other ends and the label stay
+      expect(await byId(ctx, 'issues', to.id)).not.toBeNull()
+      expect(await byId(ctx, 'labels', planted.labelId)).not.toBeNull()
+    })
+    expect(await blobExists(t, planted.attachment.storage_id)).toBe(true)
+    const activity = await t.run((ctx) => ctx.db.query('activity_events').collect())
+    expect(activity.map((e) => [e.verb, e.target_id, e.project_id])).toEqual([
+      ['deleted', task.id, f.sub.id],
+    ])
+    await assertNoDanglingRefs(t, 'after a task moved to Deleted items')
+  })
+
+  it('keeps a chosen subtask under its parent and detaches the children left behind', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const a = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
+    const aa = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: a.id })
+    const kept = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
+    await plantSubscription(t, { issue_id: kept.id, profile_id: f.guest.id })
+
+    await deleteTask(t, f, root.id, { subtask_ids: [a.id, aa.id] })
+
+    const item = await itemFor(t, root.id)
+    expect(item.counts).toEqual({ tasks: 3, archived_tasks: 0, subtasks: 2, sub_projects: 0 })
+    expect(item.projects.map((p) => [p.id, p.tasks])).toEqual([
+      [f.sub.id, 2],
+      [f.sub2.id, 1],
+    ])
+    expect((await storedIssue(t, root.id))?.parent_id).toBeUndefined()
+    expect((await storedIssue(t, a.id))?.parent_id).toBe(root.id)
+    expect((await storedIssue(t, aa.id))?.parent_id).toBe(a.id)
+    expect(await storedTasks(t, item.id)).toHaveLength(3)
+    // the child left behind is detached, touched and announced
+    const left = await liveTask(t, kept.id)
+    expect(left?.parent_id).toBeUndefined()
+    expect(left?.updated_at).toBe(new Date(START).toISOString())
+    const notices = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', f.guest.id).eq('issue_id', kept.id),
+        )
+        .collect(),
+    )
+    expect(notices.map((m) => [m.detail, m.actor_id])).toEqual([
+      ['Detached from its parent', f.user.id],
+    ])
+  })
+
+  it('refuses a reason longer than 500 characters and stores a blank one as none', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await expectRefusal(
+      deleteTask(t, f, task.id, { reason: 'é'.repeat(501) }),
+      'rule',
+      /a reason can be at most 500 characters/,
+    )
+    expect(await liveTask(t, task.id)).not.toBeNull()
+    await deleteTask(t, f, task.id, { reason: 'é'.repeat(500) })
+    expect((await itemFor(t, task.id)).reason).toHaveLength(500)
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, f, other.id, { reason: '   ' })
+    expect((await itemFor(t, other.id)).reason).toBeUndefined()
+  })
+
+  it('deletes a row too large to store instead, and counts it', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    // the wrapped comment adds a few hundred bytes to its body
+    const fits = await comment(t, task, 'x'.repeat(STORED_ROW_MAX_BYTES - 1000))
+    const tooLarge = await comment(t, task, 'x'.repeat(STORED_ROW_MAX_BYTES))
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    expect(item.state).toBe('ready')
+    expect(item.dropped_rows).toBe(1)
+    expect(item.counts.tasks).toBe(1)
+    expect(await commentStored(t, fits.id)).toBe(true)
+    expect(await commentStored(t, tooLarge.id)).toBe(false)
+    expect(await t.run((ctx) => ctx.db.get(tooLarge._id))).toBeNull()
+    for (const row of await storedRows(t, item.id)) {
+      const { _id, _creationTime, ...doc } = row
+      expect(estimateDocumentBytes(doc)).toBeLessThanOrEqual(STORED_ROW_MAX_BYTES)
+    }
+    expect(error).toHaveBeenCalledWith(
+      'A deleted item dropped a row too large to store',
+      expect.objectContaining({ item_id: item.id, table: 'comments' }),
+    )
+
+    // a task too large to store goes for good with its rows, as before
+    const huge = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      description: 'x'.repeat(STORED_ROW_MAX_BYTES),
+    })
+    const note = await comment(t, huge)
+    const file = await attach(t, huge)
+    await deleteTask(t, f, huge.id)
+    const hugeItem = await itemFor(t, huge.id)
+    expect(hugeItem).toMatchObject({ state: 'ready', dropped_rows: 1 })
+    expect(hugeItem.counts.tasks).toBe(0)
+    expect(await storedRows(t, hugeItem.id)).toEqual([])
+    expect(await liveTask(t, huge.id)).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(note._id))).toBeNull()
+    expect(await blobExists(t, file.storage_id)).toBe(false)
+    await assertNoDanglingRefs(t, 'after rows too large to store')
+  })
+})
+
+describe('webhook events', () => {
+  async function subscribe(t: T, f: OrgFixture) {
+    const owner = await t.run(async (ctx): Promise<EventOwner> => {
+      const id = uuid()
+      const row = await ctx.db.insert('mcp_tokens', {
+        id,
+        profile_id: f.admin.id,
+        name: 'Trash events',
+        token_prefix: 'qvt_test',
+        token_hash: uuid(),
+        access: 'read',
+        created_at: NOW,
+      })
+      return {
+        profile_id: f.admin.id,
+        credential_table: 'mcp_tokens',
+        credential_id: id,
+        credential_row_id: row,
+      }
+    })
+    for (const name of ['task.updated', 'task.deleted'] as const)
+      await t.mutation(internal.webhooks.save, {
+        owner,
+        id: uuid(),
+        name,
+        filters: {},
+        url: 'https://receiver.example/events',
+        encrypted_secret: 'test-only',
+      })
+  }
+  const events = (t: T) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query('webhook_events').collect()).map((e) => [e.name, e.task_id]),
+    )
+
+  it('sends task.deleted for the tasks of a task item and none for those of a project item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await subscribe(t, f)
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const sub = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })
+    await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
+    expect(await events(t)).toEqual([
+      ['task.deleted', sub.id],
+      ['task.deleted', root.id],
+    ])
+    await t.run(async (ctx) => {
+      for (const e of await ctx.db.query('webhook_events').collect()) await ctx.db.delete(e._id)
+    })
+
+    const inside = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: inside.id })
+    await deleteProject(t, f, f.sub2.id)
+    expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
+    // the detached child outside is the only news
+    expect(await events(t)).toEqual([['task.updated', outside.id]])
+  })
+})
+
+describe('moving a project to Deleted items', () => {
+  it('hides the projects at once, moves the tasks people see first, and finishes in bounded steps', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT({ transactionLimits: { databaseQueries: 150 } })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('milestones', {
+        id: uuid(),
+        project_id: f.meta.id,
+        name: 'EVT',
+        week: '2026-05-04',
+        created_at: NOW,
+      })
+    })
+    // inside: tasks across both sub-projects, a third archived, each with a comment
+    const inside: Doc<'issues'>[] = []
+    for (let i = 0; i < 30; i++) {
+      const task = await plantIssue(t, {
+        org_id,
+        project_id: i % 2 ? f.sub2.id : f.sub.id,
+        archived_at: i % 3 === 0 ? NOW : undefined,
+      })
+      await comment(t, task)
+      inside.push(task)
+    }
+    const group = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const member = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: group.id })
+    const chatty = await plantIssue(t, { org_id, project_id: f.sub.id })
+    for (let i = 0; i < 7; i++) await comment(t, chatty)
+    const file = await attach(t, chatty)
+    // planted last, so a move in index order would reach them last
+    const outsideParent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
+    const inChild = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: outsideParent.id,
+    })
+    const inParent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const outChild = await plantIssue(t, {
+      org_id,
+      project_id: hiddenSub.id,
+      parent_id: inParent.id,
+    })
+    await plantSubscription(t, { issue_id: outChild.id, profile_id: f.admin.id })
+    const edges = [inChild, inParent]
+    const others = [...inside, group, member, chatty]
+    const all = [...others, ...edges]
+
+    Object.assign(TRASH_BUDGET, { rows: 6, tasks: 4, ranges: 50 })
+    await deleteProject(t, f, f.meta.id)
+
+    // the projects are hidden at once, with their milestone and grants
+    const item = await itemFor(t, f.meta.id)
+    expect(item).toMatchObject({ kind: 'project', state: 'moving', key: 'TBED', path: [] })
+    await t.run(async (ctx) => {
+      for (const p of [f.meta, f.sub, f.sub2]) expect(await byId(ctx, 'projects', p.id)).toBeNull()
+      expect(await ctx.db.query('milestones').collect()).toEqual([])
+      expect(await ctx.db.query('project_access').collect()).toEqual([])
+    })
+    expect(await jobFor(t, item.id)).not.toBeNull()
+
+    // a step without a range budget passes the limit; with one it fits
+    Object.assign(TRASH_BUDGET, { rows: 1000, tasks: 1000, ranges: 1_000_000 })
+    await expect(step(t, item.id)).rejects.toThrow(/Too many index ranges/)
+    Object.assign(TRASH_BUDGET, { rows: 6, tasks: 4, ranges: 50 })
+
+    const stillLive = async (tasks: Doc<'issues'>[]) =>
+      (await Promise.all(tasks.map((task) => liveTask(t, task.id)))).filter((x) => x !== null)
+        .length
+    /* No other task moves before both edge tasks have: checked after the
+     * user's transaction and after every step. */
+    const edgesFirst = async () => {
+      if ((await stillLive(others)) < others.length) expect(await stillLive(edges)).toBe(0)
+    }
+    await edgesFirst()
+    let steps = 0
+    let sawSplit = false
+    let sawTasksPhase = false
+    for (;;) {
+      const before = (await storedRows(t, item.id)).length
+      await step(t, item.id)
+      steps++
+      const moved = (await storedRows(t, item.id)).length - before
+      expect(moved, `step ${steps}`).toBeLessThanOrEqual(TRASH_BUDGET.rows + 1)
+      await edgesFirst()
+      const job = await jobFor(t, item.id)
+      if (job === null) break
+      if (job.phase === 'move_tasks' && !sawTasksPhase) {
+        // the edges phase ended: the edge task's child outside is detached
+        expect(await stillLive(edges)).toBe(0)
+        expect((await liveTask(t, outChild.id))?.parent_id).toBeUndefined()
+        expect(await stillLive(others)).toBeGreaterThan(0)
+        sawTasksPhase = true
+      }
+      const chattyStored = (await storedRows(t, item.id)).filter(
+        (r) => r.owner_id === chatty.id && r.table === 'comments',
+      ).length
+      if ((await liveTask(t, chatty.id)) !== null && chattyStored > 0 && chattyStored < 7)
+        sawSplit = true
+      expect(steps).toBeLessThan(200)
+    }
+    expect(sawTasksPhase).toBe(true)
+    expect(sawSplit).toBe(true)
+    expect(steps).toBeGreaterThan(5)
+
+    const ready = await itemFor(t, f.meta.id)
+    const archived = inside.filter((task) => task.archived_at !== undefined).length
+    expect(ready).toMatchObject({
+      state: 'ready',
+      counts: { tasks: all.length, archived_tasks: archived, subtasks: 0, sub_projects: 2 },
+    })
+    expect(ready.projects.map((p) => [p.id, p.tasks + p.archived_tasks > 0])).toEqual([
+      [f.meta.id, false],
+      [f.sub.id, true],
+      [f.sub2.id, true],
+    ])
+    expect(ready.projects.reduce((n, p) => n + p.tasks, 0)).toBe(all.length)
+    expect(await storedTasks(t, item.id)).toHaveLength(all.length)
+    expect(await stillLive(all)).toBe(0)
+    // the hierarchy inside is kept, and so is a parent outside
+    expect((await storedIssue(t, member.id))?.parent_id).toBe(group.id)
+    expect((await storedIssue(t, inChild.id))?.parent_id).toBe(outsideParent.id)
+    expect(await blobExists(t, file.storage_id)).toBe(true)
+    const notices = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', f.admin.id).eq('issue_id', outChild.id),
+        )
+        .collect(),
+    )
+    expect(notices.map((m) => m.detail)).toEqual(['Detached from its parent'])
+    await assertNoDanglingRefs(t, 'after a project moved in steps')
+  }, 120_000)
+
+  it('stops a step on its range budget, which every read it makes spends', async () => {
+    // each bare task costs one row but about eight index ranges to move
+    const t = newT({ transactionLimits: { databaseQueries: 150 } })
+    const f = await withOrg(t)
+    for (let i = 0; i < 40; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 300, tasks: 100, ranges: 60 })
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    expect(item.state).toBe('moving')
+    // the row and task budgets alone would let one step take every task
+    TRASH_BUDGET.ranges = 1_000_000
+    await expect(step(t, item.id)).rejects.toThrow(/Too many index ranges/)
+    TRASH_BUDGET.ranges = 60
+    let steps = 0
+    while ((await jobFor(t, item.id)) !== null) {
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(50)
+    }
+    expect(steps).toBeGreaterThan(2)
+    expect(await storedTasks(t, item.id)).toHaveLength(40)
+  })
+
+  it('detaches without an actor once the deleter is gone', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    await plantSubscription(t, { issue_id: child.id, profile_id: f.admin.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    expect(await liveTask(t, parent.id)).not.toBeNull()
+    await t.run((ctx) => ctx.db.delete(f.user._id))
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await runSteps(t)
+    expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
+    expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
+    const notices = await t.run((ctx) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', f.admin.id).eq('issue_id', child.id),
+        )
+        .collect(),
+    )
+    expect(notices.map((m) => [m.detail, m.actor_id])).toEqual([
+      ['Detached from its parent', undefined],
+    ])
+  })
+})
+
+describe('reservations while items are in Deleted items', () => {
+  it('keeps the uuids of stored rows taken, with the sentences of a live duplicate', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const id = uuid()
+    const caller = as(t, f.user)
+    await caller.mutation(api.issues.create, {
+      org_id: f.org.id,
+      id,
+      project_id: f.sub.id,
+      title: 'Short-lived',
+    })
+    const commentId = uuid()
+    await caller.mutation(api.comments.create, {
+      org_id: f.org.id,
+      id: commentId,
+      issue_id: id,
+      body: 'first',
+    })
+    await deleteTask(t, f, id)
+    await expectRefusal(
+      caller.mutation(api.issues.create, {
+        org_id: f.org.id,
+        id,
+        project_id: f.sub.id,
+        title: 'Squatter',
+      }),
+      'bad_request',
+      /^a task with this id already exists$/,
+    )
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await expectRefusal(
+      caller.mutation(api.comments.create, {
+        org_id: f.org.id,
+        id: commentId,
+        issue_id: other.id,
+        body: 'squatter',
+      }),
+      'bad_request',
+      /^a comment with this id already exists$/,
+    )
+    // a fresh id is fine
+    await caller.mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      project_id: f.sub.id,
+      title: 'New',
+    })
+  })
+
+  it('keeps a deleted project key and uuid reserved until the project is purged', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await deleteProject(t, f, f.sub2.id)
+    const create = (key: string, id = uuid()) =>
+      as(t, f.admin).mutation(api.projects.create, {
+        org_id: f.org.id,
+        id,
+        type: 'project',
+        parent_id: f.meta.id,
+        key,
+        name: 'Board rev 2',
+        sort_order: 9,
+      })
+    // a new project previewing the key gets another one
+    expect((await create('PCB')).key).not.toBe('PCB')
+    await expectRefusal(
+      create('PCB2', f.sub2.id),
+      'bad_request',
+      /^a project with this id already exists$/,
+    )
+    const rekey = (who: Doc<'profiles'>) =>
+      as(t, who).mutation(api.projects.update, {
+        org_id: f.org.id,
+        id: f.sub.id,
+        patch: { key: 'PCB' },
+      })
+    await expectRefusal(
+      rekey(f.admin),
+      'bad_request',
+      /^A project in Deleted items has that key\.$/,
+    )
+    // anyone else reads the sentence of a live holder, which discloses nothing
+    await expectRefusal(
+      rekey(f.user),
+      'bad_request',
+      /^a project with that key already exists in this organization$/,
+    )
+    await t.run(async (ctx) => {
+      const item = await ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', f.sub2.id))
+        .unique()
+      await startPurge(ctx, item as Doc<'deleted_items'>, { inline: true })
+    })
+    await rekey(f.user)
+    expect((await t.run((ctx) => byId(ctx, 'projects', f.sub.id)))?.key).toBe('PCB')
+  })
+})
+
+describe('bytes in Deleted items', () => {
+  it('fences trashed bytes from the orphan sweep and bills only live projects', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const live = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await attach(t, live, 5)
+    const trashed = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const trashedFile = await attach(t, trashed, 11)
+    await deleteTask(t, f, trashed.id)
+    expect(await t.run((ctx) => storageIdInUse(ctx, trashedFile.storage_id))).toBe(true)
+    // a project still moving: its tasks are stranded under the absent project
+    for (let i = 0; i < 2; i++) {
+      const stranded = await plantIssue(t, { org_id, project_id: f.sub2.id })
+      await attach(t, stranded, 7)
+    }
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    expect((await itemFor(t, f.sub2.id)).state).toBe('moving')
+    const usage = await t.run((ctx) => storageUsage(ctx, org_id))
+    expect(usage).toEqual({
+      bytes: 5,
+      projects: [{ project_id: f.sub.id, name: 'Firmware', storage_bytes: 5 }],
+    })
+
+    const orphan = await t.run((ctx) => ctx.storage.store(new Blob(['orphan']) as never))
+    vi.setSystemTime(START + 2 * HOUR)
+    await t.mutation(internal.files.reapOrphans, {})
+    expect(await blobExists(t, orphan)).toBe(false)
+    expect(await blobExists(t, trashedFile.storage_id)).toBe(true)
+  })
+})
+
+describe('purging', () => {
+  it('deletes every stored row with its bytes in bounded steps, then the item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const to = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const from = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const planted = await plantRows(t, f, task, { to, from })
+    for (let i = 0; i < 5; i++) await comment(t, task)
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    const rows = (await storedRows(t, item.id)).length
+
+    TRASH_BUDGET.rows = 2
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    expect((await itemById(t, item.id))?.state).toBe('purging')
+    let steps = 0
+    while ((await jobFor(t, item.id)) !== null) {
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(50)
+    }
+    expect(steps).toBeGreaterThanOrEqual(Math.ceil(rows / 2))
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await storedRows(t, item.id)).toEqual([])
+    expect(await storedTasks(t, item.id)).toEqual([])
+    expect(await blobExists(t, planted.attachment.storage_id)).toBe(false)
+    await t.run(async (ctx) => {
+      expect(await byId(ctx, 'labels', planted.labelId)).not.toBeNull()
+      expect(await byId(ctx, 'issues', to.id)).not.toBeNull()
+    })
+    await assertNoDanglingRefs(t, 'after a purge')
+  })
+
+  it('purges a project item with the items that need it to come back, and clears its activity', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const early = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await deleteTask(t, f, early.id)
+    const earlyItem = await itemFor(t, early.id)
+    const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    const elsewhere = await plantIssue(t, { org_id, project_id: hiddenSub.id })
+    await deleteTask(t, f, elsewhere.id)
+    const kept = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const keptFile = await attach(t, kept)
+    // a sub-project deleted before its parent is an item of its own
+    await deleteProject(t, f, f.sub2.id)
+    const subItem = await itemFor(t, f.sub2.id)
+    await deleteProject(t, f, f.meta.id)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.projects.map((p) => p.id)).toEqual([f.meta.id, f.sub.id])
+    const filedUnder = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('activity_events').collect()).filter((e) => e.project_id === f.sub.id),
+      )
+    // the activity keeps the trashed project's id until the purge
+    expect(await filedUnder()).toHaveLength(1)
+    await assertNoDanglingRefs(t, 'while a project is in Deleted items')
+
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    // the task item whose project was in it, and the sub-project item whose
+    // parent was, could never come back
+    expect(await itemById(t, earlyItem.id)).toBeNull()
+    expect(await storedRows(t, earlyItem.id)).toEqual([])
+    expect(await itemById(t, subItem.id)).toBeNull()
+    expect(await blobExists(t, keptFile.storage_id)).toBe(false)
+    // a task item from another project stays
+    expect((await itemFor(t, elsewhere.id)).state).toBe('ready')
+    expect(await filedUnder()).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('deleted_rows').collect())).toHaveLength(1)
+    await assertNoDanglingRefs(t, 'after a project purge')
+  })
+
+  it('expires ready items after 30 days in bounded batches that chain', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const old = [
+      await plantIssue(t, { org_id, project_id: f.sub.id }),
+      await plantIssue(t, { org_id, project_id: f.sub.id }),
+    ]
+    for (const task of old) await deleteTask(t, f, task.id)
+    const oldItems = await Promise.all(old.map((task) => itemFor(t, task.id)))
+    vi.setSystemTime(START + 20 * DAY)
+    const recent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await deleteTask(t, f, recent.id)
+
+    EXPIRY.batch = 1
+    vi.setSystemTime(START + TRASH_DAYS * DAY - 1)
+    await t.mutation(internal.deletedItems.expire, {})
+    await runSteps(t)
+    for (const item of oldItems) expect((await itemById(t, item.id))?.state).toBe('ready')
+
+    vi.setSystemTime(START + TRASH_DAYS * DAY)
+    await t.mutation(internal.deletedItems.expire, {})
+    await runSteps(t)
+    for (const item of oldItems) expect(await itemById(t, item.id)).toBeNull()
+    expect((await itemFor(t, recent.id)).state).toBe('ready')
+    const runs = await t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter((job) =>
+        job.name.includes('deletedItems:expire'),
+      ),
+    )
+    // two due items, one per batch: each full batch chains the next run
+    expect(runs.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('purges a stuck project item with the tasks it left in the live tables', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const stranded = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const strandedFile = await attach(t, stranded)
+    await comment(t, stranded)
+    const child = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: stranded.id })
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    // its job gave up: the item is stuck with live rows left behind
+    await t.run(async (ctx) => {
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job?.scheduled_id !== undefined) await ctx.scheduler.cancel(job.scheduled_id)
+      if (job !== null) await ctx.db.delete(job._id)
+      await ctx.db.patch(item._id, { state: 'stuck' })
+    })
+    expect(await liveTask(t, stranded.id)).not.toBeNull()
+
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    await t.run(async (ctx) => {
+      expect(
+        await ctx.db
+          .query('issues')
+          .withIndex('by_project', (q) => q.eq('project_id', f.sub2.id))
+          .collect(),
+      ).toEqual([])
+      expect(await ctx.db.query('comments').collect()).toEqual([])
+      expect(await ctx.db.query('deleted_rows').collect()).toEqual([])
+    })
+    expect(await blobExists(t, strandedFile.storage_id)).toBe(false)
+    expect((await liveTask(t, child.id))?.parent_id).toBeUndefined()
+    await assertNoDanglingRefs(t, 'after a stuck item was purged')
+  })
+})
+
+describe('recovery', () => {
+  it('restarts a stalled job at half the budget each time and makes the item stuck after its last retry', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    // a step that failed leaves its job at the last committed progress
+    const fail = async () => {
+      const job = (await jobFor(t, item.id))!
+      await t.run((ctx) => ctx.scheduler.cancel(job.scheduled_id!))
+      return job
+    }
+    let job = await fail()
+    expect(job).toMatchObject({ attempts: 0, budget_scale: 1 })
+    let now = START
+    await t.mutation(internal.deletedItems.recover, {})
+    expect(await jobFor(t, item.id)).toEqual(job)
+    const scales: number[] = []
+    for (;;) {
+      now += STALLED_MS + 1
+      vi.setSystemTime(now)
+      await t.mutation(internal.deletedItems.recover, {})
+      const next = await jobFor(t, item.id)
+      if (next === null) break
+      expect(next.attempts).toBe(job.attempts + 1)
+      expect(next.scheduled_id).not.toBe(job.scheduled_id)
+      scales.push(next.budget_scale)
+      job = await fail()
+      expect(scales.length).toBeLessThan(20)
+    }
+    expect(scales).toEqual([1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 16, 1 / 16, 1 / 16, 1 / 16, 1 / 16])
+    expect((await itemById(t, item.id))?.state).toBe('stuck')
+    expect(error).toHaveBeenCalledWith(
+      'A deleted item is stuck',
+      expect.objectContaining({ item_id: item.id }),
+    )
+    // a stuck item can still be purged
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', item.id))!))
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+  })
+
+  it('lets a step that fails at full budget finish at half, and a committed step resets the retries', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT({ transactionLimits: { documentsWritten: 60 } })
+    const f = await withOrg(t)
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 40; i++)
+      tasks.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }))
+    TRASH_BUDGET.rows = 4
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    // each moved task writes three documents, so 30 of them pass the limit
+    TRASH_BUDGET.rows = 30
+    const seen: number[] = []
+    let now = START
+    for (let round = 0; round < 20; round++) {
+      await runSteps(t)
+      const job = await jobFor(t, item.id)
+      if (job === null) break
+      now += STALLED_MS + 1
+      vi.setSystemTime(now)
+      await t.mutation(internal.deletedItems.recover, {})
+      const resumed = await jobFor(t, item.id)
+      if (resumed !== null) seen.push(resumed.budget_scale)
+    }
+    expect(seen).toContain(1 / 2)
+    expect(seen).not.toContain(1 / 4)
+    expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
+    expect(await storedTasks(t, item.id)).toHaveLength(tasks.length)
+  }, 60_000)
+
+  it('does nothing for an item that is gone, and leaves a deleting demo organization alone', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    const before = await storedRows(t, item.id)
+
+    // a demo organization being deleted: its cleanup owns the rows
+    vi.stubEnv('APP_MODE', 'demo')
+    await t.run(async (ctx) => {
+      await ctx.db.insert('demo_sessions', {
+        id: uuid(),
+        auth_user_id: 'demo-visitor',
+        org_id: f.org.id,
+        created_at: START,
+        expires_at: START,
+        status: 'deleting',
+      })
+    })
+    const job = await jobFor(t, item.id)
+    await step(t, item.id)
+    expect(await jobFor(t, item.id)).toEqual(job)
+    expect(await storedRows(t, item.id)).toEqual(before)
+    vi.unstubAllEnvs()
+
+    // an item deleted under its job: the step deletes the job and stops
+    await t.run(async (ctx) => ctx.db.delete(item._id))
+    await step(t, item.id)
+    expect(await jobFor(t, item.id)).toBeNull()
+    expect(await storedRows(t, item.id)).toEqual(before)
+    await step(t, uuid())
+  })
+})
+
+describe('references and liveness', () => {
+  it('a stored reference holds only for the same row', () => {
+    const item = { org_id: 'org', deleted_at: '2026-05-04T10:00:00.000Z' }
+    const before = '2026-05-01T00:00:00.000Z'
+    const after = '2026-05-05T00:00:00.000Z'
+    expect(sameReference({ org_id: 'org', created_at: before }, item)).toBe(true)
+    expect(sameReference({ org_id: 'org', created_at: item.deleted_at }, item)).toBe(true)
+    expect(sameReference(null, item)).toBe(false)
+    expect(sameReference({ org_id: 'elsewhere', created_at: before }, item)).toBe(false)
+    // a uuid reused after the deletion names something else
+    expect(sameReference({ org_id: 'org', created_at: after }, item)).toBe(false)
+    const project = (type: 'meta' | 'project') => ({ org_id: 'org', created_at: before, type })
+    expect(sameReference(project('project'), item, 'project')).toBe(true)
+    expect(sameReference(project('meta'), item, 'project')).toBe(false)
+    expect(sameReference(project('meta'), item, 'meta')).toBe(true)
+  })
+
+  it('tells live, trashed and gone tasks apart', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const live = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const deleted = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await deleteTask(t, f, deleted.id)
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const stranded = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    const where = (id: string) => t.run(async (ctx) => (await whereIsTask(ctx, id)).where)
+    expect(await where(live.id)).toBe('live')
+    expect(await where(deleted.id)).toBe('trash')
+    // still in issues, but under a project that moved to Deleted items
+    expect(await where(stranded.id)).toBe('trash')
+    expect(await where(uuid())).toBe('gone')
+    const item = await itemFor(t, deleted.id)
+    await t.run((ctx) => ctx.db.patch(item._id, { state: 'purging' }))
+    expect(await where(deleted.id)).toBe('gone')
+  })
+})

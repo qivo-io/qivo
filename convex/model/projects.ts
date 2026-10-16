@@ -90,29 +90,42 @@ function cleanKey(raw: string): string {
   return raw
 }
 
-/** The project holding `key` in the organization, archived or not. */
+/** The project holding `key` in the organization, archived or not, or
+ * 'trash' when a project in Deleted items holds it: its key stays reserved
+ * until it is purged, so a restore gets it back (deleted_rows.by_org_key). */
 async function keyHolder(
   ctx: QueryCtx,
   orgId: string,
   key: string,
-): Promise<Doc<'projects'> | null> {
-  return await ctx.db
+): Promise<Doc<'projects'> | 'trash' | null> {
+  const live = await ctx.db
     .query('projects')
     .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('key', key))
     .first()
+  if (live !== null) return live
+  const trashed = await ctx.db
+    .query('deleted_rows')
+    .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('project_key', key))
+    .first()
+  return trashed === null ? null : 'trash'
 }
 
 /* An explicit key change (update) is refused when another project holds the
  * key. The REST API already admits that a key exists (rest.ts's one
- * deliberate 403 oracle), so this sentence discloses nothing new. */
+ * deliberate 403 oracle), so this sentence discloses nothing new. A key held
+ * in Deleted items reads the same for everyone but organization admins, who
+ * see every deleted item and so learn nothing from their own sentence. */
 async function assertKeyFree(
   ctx: QueryCtx,
-  orgId: string,
+  me: Doc<'profiles'>,
   key: string,
   self: string,
 ): Promise<void> {
-  const holder = await keyHolder(ctx, orgId, key)
-  if (holder !== null && holder.id !== self) {
+  const holder = await keyHolder(ctx, me.org_id, key)
+  if (holder === 'trash' && me.org_role === 'admin') {
+    throw badRequest('A project in Deleted items has that key.')
+  }
+  if (holder !== null && (holder === 'trash' || holder.id !== self)) {
     throw badRequest('a project with that key already exists in this organization')
   }
 }
@@ -494,7 +507,7 @@ export async function updateProjectCore(
   if (patch.review_hours !== undefined) db.review_hours = cleanReviewHours(patch.review_hours)
   if (patch.key !== undefined) {
     const key = cleanKey(patch.key)
-    await assertKeyFree(ctx, me.org_id, key, id)
+    await assertKeyFree(ctx, me, key, id)
     db.key = key
   }
   const editsOwnLead = nextLead === me.id || (prevLead === me.id && nextLead === undefined)

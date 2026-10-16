@@ -92,6 +92,11 @@ const EXCLUDED_TABLES = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // Deleted items are not exported: restore an item to include its work.
+  'deleted_items',
+  'deleted_item_jobs',
+  'deleted_rows',
+  'deleted_tasks',
 ] as const
 
 async function readAll(
