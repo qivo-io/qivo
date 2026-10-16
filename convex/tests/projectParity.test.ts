@@ -1260,6 +1260,8 @@ describe('reading one project', () => {
     expect(out).toMatchObject({
       key: 'FW',
       type: 'project',
+      // the agent's User grant on the parent reaches the sub-project
+      access: { read: true, write: true },
       // a sub-project without a lead of its own is led by its parent's
       lead_id: fx.user.id,
       lead_name: 'user',
