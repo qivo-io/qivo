@@ -8,6 +8,7 @@ import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
+import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { expectRefusal, newT, plantIssue, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
@@ -1118,6 +1119,47 @@ describe('OAuth revocation, replay and live account checks', () => {
       await f.t.run((ctx) => ctx.db.patch(f.profile._id, change))
       await deniedAccess(f, c.access_token)
       await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
+    }
+  })
+
+  it('refuses access and webhook ownership while a platform ban is in force, until its banExpires', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const grant = await f.t.query(internal.oauthConnections.lookupAccess, {
+      tokenHash: await sha256hex(c.access_token.slice(4)),
+      resource: RESOURCE,
+    })
+    const owner = {
+      profile_id: grant!.profileId,
+      credential_table: 'oauth_connections' as const,
+      credential_id: grant!.connectionId,
+      credential_row_id: grant!.connectionRowId,
+    }
+    for (const [banned, banExpires, allowed] of [
+      [true, null, false],
+      [true, Date.now() + 60_000, false],
+      // Better Auth clears an expired ban only at the next sign-in
+      [true, Date.now() - 1, true],
+      [false, null, true],
+    ] as const) {
+      await f.t.mutation(components.betterAuth.adapter.updateOne, {
+        input: {
+          model: 'user',
+          where: [{ field: '_id', value: f.userId }],
+          update: { banned, banExpires },
+        },
+      })
+      if (allowed) {
+        expect(await toolData(await mcp(f, c.access_token, 'list_projects'))).toBeInstanceOf(Array)
+        expect(await f.t.query(internal.webhooks.list, { owner })).toEqual([])
+      } else {
+        await deniedAccess(f, c.access_token)
+        await expectRefusal(
+          f.t.query(internal.webhooks.list, { owner }),
+          'forbidden',
+          /Credential is no longer valid/,
+        )
+      }
     }
   })
 })

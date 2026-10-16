@@ -2,7 +2,7 @@ import { v } from 'convex/values'
 import { components } from './_generated/api'
 import { internalMutation, internalQuery } from './_generated/server'
 import { createAuth } from './auth'
-import { credentialAccess } from './lib/access'
+import { credentialAccess, findAuthUser, loginBanned } from './lib/access'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { authedMutation, authedQuery, badRequest, notFound } from './lib/functions'
@@ -323,16 +323,13 @@ export const lookupAccess = internalQuery({
       model: 'oauthClient',
       where: [{ field: 'clientId', value: row.client_id }],
     })) as { disabled?: boolean } | null
-    const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'user',
-      where: [{ field: '_id', value: row.auth_user_id }],
-    })) as { banned?: boolean } | null
+    const user = await findAuthUser(ctx, row.auth_user_id)
     const profile = await byId(ctx, 'profiles', row.profile_id)
     if (
       !client ||
       client.disabled ||
       !user ||
-      user.banned ||
+      loginBanned(user, Date.now()) ||
       !profile?.active ||
       profile.kind !== 'person' ||
       profile.auth_user_id !== row.auth_user_id ||

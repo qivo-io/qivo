@@ -1,8 +1,8 @@
 /* Account ownership and cleanup shared by settings, the storage gateway,
  * login deletion, and the orphan sweep. No organization seat grants access. */
-import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { findAuthUser, loginBanned } from '../lib/access'
 import type { AppearanceMode, ImageSource } from '../lib/enums'
 import { forbidden } from '../lib/functions'
 
@@ -18,11 +18,8 @@ export const customBackgroundFor = (ctx: QueryCtx, id: string) =>
     .unique()
 
 export async function appearanceAccountExists(ctx: QueryCtx, authId: string): Promise<boolean> {
-  const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-    model: 'user',
-    where: [{ field: '_id', value: authId }],
-  })) as { banned?: boolean; banExpires?: number | null } | null
-  return !!user && !(user.banned && (user.banExpires == null || user.banExpires > Date.now()))
+  const user = await findAuthUser(ctx, authId)
+  return !!user && !loginBanned(user, Date.now())
 }
 
 export async function requireAppearanceAccount(ctx: QueryCtx, authId: string) {

@@ -24,7 +24,13 @@ import { v } from 'convex/values'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
-import { credentialAccess, liveCredentialRow, tokenExpired } from '../lib/access'
+import {
+  credentialAccess,
+  findAuthUser,
+  liveCredentialRow,
+  loginBanned,
+  tokenExpired,
+} from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import type { CredentialAccess } from '../lib/enums'
@@ -55,7 +61,10 @@ export const sha256hex = async (text: string): Promise<string> => {
  *               seat is actually claimed (an unclaimed profile has no login
  *               to impersonate)
  *   inactive    profile switched off — the profile IS the credential's state:
- *               a switched-off user needs no key revoked to go quiet */
+ *               a switched-off user needs no key revoked to go quiet. A
+ *               person's token also answers inactive while a platform ban
+ *               on the person's login is in force (lib/access.ts
+ *               loginBanned), so lifting the ban restores it unchanged */
 export type AuthFail = 'missing' | 'unknown' | 'revoked' | 'inactive' | 'wrong_kind'
 
 export type MachineCredential = {
@@ -118,6 +127,16 @@ export const lookupCredential = internalQuery({
       profile !== null && (isAgent ? profile.kind === 'agent' : profile.auth_user_id !== undefined)
     if (profile === null || !shapeOk) return { ok: false, why: 'wrong_kind', isAgent }
     if (!profile.active) return { ok: false, why: 'inactive', isAgent }
+    // A personal token acts as its person's login, so a platform ban stops
+    // it here, before touchCredential stamps or meters anything. This costs
+    // one Better Auth user read per personal token request, made last so
+    // refused tokens never pay it. A login Better Auth no longer has is left
+    // to the checks above. Agent keys belong to no login, so a ban cannot
+    // reach them and they skip the read; the agent's active flag stops them.
+    if (personal !== null && profile.auth_user_id !== undefined) {
+      const user = await findAuthUser(ctx, profile.auth_user_id)
+      if (user !== null && loginBanned(user, nowMs)) return { ok: false, why: 'inactive', isAgent }
+    }
     return {
       ok: true,
       cred: {

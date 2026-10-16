@@ -15,6 +15,7 @@ import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
 import { onTestFinished, TestRunner } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import authSchema from '../betterAuth/schema'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import schema from '../schema'
@@ -28,7 +29,13 @@ export type T = TestConvex<typeof schema>
  * Suites build every convex-test instance here. One created in a test or a
  * beforeEach is settled (settleScheduled) when that test finishes. One
  * created in a beforeAll is shared by several tests, so its suite settles it
- * after each of them. */
+ * after each of them.
+ *
+ * Every instance has the Better Auth component, empty, as every deployment
+ * has it. Personal token lookup and webhook ownership read the owner's login
+ * for a platform ban. withOrg's logins have no Better Auth user, which reads
+ * as not banned. A suite that registers the component again right after
+ * newT just starts from another empty one. */
 export const newT = (
   options: Pick<Parameters<typeof convexTest>[0], 'transactionLimits'> = {},
 ): T => {
@@ -37,6 +44,7 @@ export const newT = (
     modules: import.meta.glob('../**/*.*s'),
     ...options,
   })
+  t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   if (TestRunner.getCurrentTest() !== undefined) onTestFinished(() => settleScheduled(t))
   return t
 }
