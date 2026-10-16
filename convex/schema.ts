@@ -321,6 +321,10 @@ export default defineSchema({
     .index('by_subscription_period', ['subscription_id', 'period_start'])
     .index('by_org', ['org_id']),
 
+  // API calls per credential and bucket. `period_start` is the bucket key
+  // chosen by `usagePeriod` (model/billingUsage.ts): a paid period's ISO start,
+  // a pending interval's ISO start, or `month:YYYY-MM` for a UTC calendar month
+  // without a paid period. Older rows may be keyed by `complimentary_start`.
   billing_usage: defineTable({
     org_id: v.string(),
     profile_id: v.string(),

@@ -11,6 +11,7 @@ import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTy
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
 import { polarConfigured } from '../lib/polar'
+import { usagePeriod } from './billingUsage'
 import { newUuid } from './orgs'
 
 export const GB = 1_000_000_000
@@ -197,17 +198,21 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
   }
 }
 
+/** The admin Billing page's usage report. It reads the same bucket the
+ * API-call writer is filling now (`usagePeriod`): the live paid period, the
+ * pending interval after it, or the current UTC calendar month. Allowances
+ * come from the subscription's plan, or the default plan before enrollment,
+ * and are null when there is no plan. A calendar month is always waived. */
 export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
   const sub = await subscriptionFor(ctx, orgId)
   const plan = sub ? await byId(ctx, 'billing_plans', sub.plan_id) : await defaultPlan(ctx)
   const count = await getBillableUsers(ctx, orgId)
-  const period = sub?.current_period_start ?? sub?.complimentary_start ?? null
-  const rows = period
-    ? await ctx.db
-        .query('billing_usage')
-        .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
-        .collect()
-    : []
+  const now = Date.now()
+  const period = usagePeriod(sub, now)
+  const rows = await ctx.db
+    .query('billing_usage')
+    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period.key))
+    .collect()
   const users = new Map<string, BillingUsage['users'][number]>()
   for (const row of rows) {
     let user = users.get(row.profile_id)
@@ -226,16 +231,16 @@ export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<Billin
   }
   const calls = rows.reduce((total, row) => total + row.calls, 0)
   const seats = sub?.billed_seats || Math.max(plan?.minimum_seats ?? 5, count.total)
-  const includedCalls = seats * (plan?.api_calls_per_seat ?? 25_000)
-  const includedBytes =
-    Math.max(plan?.minimum_storage_gb ?? 5, seats * (plan?.storage_gb_per_seat ?? 1)) * GB
+  const includedCalls = plan ? seats * plan.api_calls_per_seat : null
+  const includedBytes = plan
+    ? Math.max(plan.minimum_storage_gb, seats * plan.storage_gb_per_seat) * GB
+    : null
   const storage = await storageUsage(ctx, orgId)
-  const events = period
-    ? await ctx.db
-        .query('billing_events')
-        .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
-        .collect()
-    : []
+  // A calendar month never has billing events, so this finds none for it.
+  const events = await ctx.db
+    .query('billing_events')
+    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period.key))
+    .collect()
   const apiBlocks = events
     .filter((event) => event.kind === 'api' && (!event.abandoned_at || event.attempts > 0))
     .reduce((total, event) => total + event.units, 0)
@@ -243,12 +248,14 @@ export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<Billin
     .filter((event) => event.kind === 'storage' && (!event.abandoned_at || event.attempts > 0))
     .reduce((total, event) => total + event.units, 0)
   const waived =
+    period.kind === 'month' ||
     !billingEnabled() ||
     !sub?.polar_subscription_id ||
-    (!!sub.complimentary_until && Date.parse(sub.complimentary_until) > Date.now())
+    (!!sub.complimentary_until && Date.parse(sub.complimentary_until) > now)
   return {
-    period_start: period,
-    period_end: sub?.current_period_end ?? sub?.complimentary_until ?? null,
+    period_kind: period.kind,
+    period_start: period.start,
+    period_end: period.end,
     calls,
     included_calls: includedCalls,
     storage_bytes: storage.bytes,

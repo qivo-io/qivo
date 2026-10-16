@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { internal } from '../_generated/api'
+import { api, internal } from '../_generated/api'
+import type { Doc } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
-import { consumeMachineRequest, recordApiCall } from '../model/billingUsage'
-import { newT, type T, uuid, withOrg } from './helpers.setup'
+import { consumeMachineRequest, recordApiCall, usageKeyRange } from '../model/billingUsage'
+import { as, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
 const PERIOD = '2026-09-15T12:00:00.000Z'
 const END = '2026-10-15T12:00:00.000Z'
 const NOW = Date.parse('2026-09-20T12:00:00.000Z')
+const SEPTEMBER = 'month:2026-09'
+const OCTOBER = 'month:2026-10'
 
 beforeEach(() => {
   vi.stubEnv('BILLING_ENABLED', 'true')
@@ -65,6 +68,26 @@ const call = (t: T, profileId: string, credential = 'key') =>
   )
 const totals = (t: T) => t.run((ctx) => ctx.db.query('billing_usage_totals').collect())
 const events = (t: T) => t.run((ctx) => ctx.db.query('billing_events').collect())
+/* [period_start, calls] for every pooled bucket, sorted. */
+const buckets = async (t: T) =>
+  (await totals(t)).map((row) => [row.period_start, row.calls] as const).sort()
+/* The admin Billing page's usage report at the mocked clock. */
+const report = (t: T, f: Pick<OrgFixture, 'admin' | 'org'>) =>
+  as(t, f.admin).query(api.billing.usage, { org_id: f.org.id })
+const at = (iso: string) => vi.mocked(Date.now).mockReturnValue(Date.parse(iso))
+const patchSub = (
+  t: T,
+  sub: Doc<'billing_subscriptions'>,
+  fields: Partial<Doc<'billing_subscriptions'>>,
+) => t.run((ctx) => ctx.db.patch(sub._id, fields))
+/* A subscription that never had a provider period, as enrollment leaves it. */
+const withoutPeriod = {
+  status: 'pending',
+  polar_subscription_id: undefined,
+  current_period_start: undefined,
+  current_period_end: undefined,
+  billed_seats: 0,
+} as const
 
 describe('pooled API usage', () => {
   it('keeps usage separate when a deleted credential id is reused by another organization', async () => {
@@ -161,56 +184,252 @@ describe('pooled API usage', () => {
       ['oauth-connection', 1],
       ['personal-token', 2],
     ])
+    expect(await report(t, f)).toMatchObject({
+      period_kind: 'paid',
+      period_start: PERIOD,
+      period_end: END,
+      calls: 7,
+      api_overage_cents: 200,
+      waived: false,
+    })
   })
 
-  it('free usage stays visible and waived after the complimentary interval ends', async () => {
+  it('a paid period consumes blocks waived by complimentary access and charges only later blocks', async () => {
     const t = newT()
     const f = await fixture(t)
-    await t.run((ctx) =>
-      ctx.db.patch(f.sub._id, { complimentary_start: PERIOD, complimentary_until: END }),
-    )
+    await patchSub(t, f.sub, { complimentary_start: PERIOD, complimentary_until: END })
     for (let n = 0; n < 6; n++) await call(t, f.agent.id)
     expect(await events(t)).toHaveLength(0)
     expect(await totals(t)).toMatchObject([{ calls: 6, reported_api_blocks: 1 }])
-    await t.run((ctx) =>
-      ctx.db.patch(f.sub._id, { complimentary_until: new Date(NOW - 1).toISOString() }),
-    )
+    await patchSub(t, f.sub, { complimentary_until: new Date(NOW - 1).toISOString() })
     await call(t, f.agent.id)
     expect(await events(t)).toMatchObject([{ id: `${f.sub.id}:${PERIOD}:api:2`, units: 1 }])
   })
 
-  it('disabled billing counts usage without adding charges, and unknown orgs do not get usage rows', async () => {
+  it('free months count per calendar month, never charge and keep counting after the grant ends', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    await patchSub(t, f.sub, {
+      ...withoutPeriod,
+      next_seats: 1,
+      complimentary_start: '2026-09-02T08:00:00.000Z',
+      complimentary_until: '2026-11-02T08:00:00.000Z',
+    })
+    // Six calls exceed the plan's allowance for one seat, yet no block is counted.
+    for (let n = 0; n < 6; n++) await call(t, f.agent.id)
+    expect(await report(t, f)).toMatchObject({
+      period_kind: 'month',
+      period_start: '2026-09-01T00:00:00.000Z',
+      period_end: '2026-09-30T00:00:00.000Z',
+      calls: 6,
+      waived: true,
+    })
+    at('2026-10-10T12:00:00.000Z')
+    await call(t, f.agent.id)
+    at('2026-11-20T12:00:00.000Z')
+    await call(t, f.agent.id)
+    expect(await buckets(t)).toEqual([
+      [SEPTEMBER, 6],
+      [OCTOBER, 1],
+      ['month:2026-11', 1],
+    ])
+    expect(await totals(t)).toMatchObject([
+      { reported_api_blocks: 0 },
+      { reported_api_blocks: 0 },
+      { reported_api_blocks: 0 },
+    ])
+    expect(await events(t)).toHaveLength(0)
+  })
+
+  it('disabled billing counts usage without adding charges, also for an organization without a subscription', async () => {
     const t = newT()
     const f = await fixture(t)
     vi.stubEnv('BILLING_ENABLED', 'false')
     for (let n = 0; n < 5; n++) await call(t, f.agent.id)
     await call(t, f.otherAdmin.id)
     expect(await events(t)).toHaveLength(0)
-    expect(await totals(t)).toMatchObject([{ org_id: f.org.id, calls: 5 }])
-    expect(await totals(t)).toHaveLength(1)
+    expect(
+      (await totals(t)).map((row) => [row.org_id, row.period_start, row.calls]).sort(),
+    ).toEqual(
+      [
+        [f.org.id, PERIOD, 5],
+        [f.otherOrg.id, SEPTEMBER, 1],
+      ].sort(),
+    )
   })
 
   it('late renewal confirmation never meters calls into the closed invoice', async () => {
     const t = newT()
     const f = await fixture(t)
     await call(t, f.agent.id)
-    vi.mocked(Date.now).mockReturnValue(Date.parse(END))
+    at(END)
     for (let n = 0; n < 5; n++) await call(t, f.agent.id)
-    expect((await totals(t)).map((row) => [row.period_start, row.calls]).sort()).toEqual([
+    expect(await buckets(t)).toEqual([
       [PERIOD, 1],
       [END, 5],
     ])
     expect(await events(t)).toHaveLength(0)
-    await t.run((ctx) =>
-      ctx.db.patch(f.sub._id, {
-        current_period_start: END,
-        current_period_end: '2026-11-15T12:00:00.000Z',
-      }),
-    )
+    // The page shows the pending interval the writer is filling, not the closed period.
+    expect(await report(t, f)).toMatchObject({
+      period_kind: 'pending',
+      period_start: END,
+      period_end: null,
+      calls: 5,
+      waived: false,
+    })
+    await patchSub(t, f.sub, {
+      current_period_start: END,
+      current_period_end: '2026-11-15T12:00:00.000Z',
+    })
     await call(t, f.agent.id)
     expect(await events(t)).toHaveLength(0) // the started block was waived while unconfirmed
     await call(t, f.agent.id)
     expect(await events(t)).toMatchObject([{ period_start: END, units: 1 }])
+    expect(await report(t, f)).toMatchObject({
+      period_kind: 'paid',
+      period_start: END,
+      period_end: '2026-11-15T12:00:00.000Z',
+      calls: 7,
+    })
+  })
+})
+
+describe('usage buckets without a live paid period', () => {
+  it('counts calls without a subscription or plan per UTC calendar month', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    at('2026-09-30T23:59:59.999Z')
+    await call(t, f.agent.id)
+    expect(await report(t, f)).toMatchObject({
+      period_kind: 'month',
+      period_start: '2026-09-01T00:00:00.000Z',
+      period_end: '2026-09-30T00:00:00.000Z',
+      calls: 1,
+      included_calls: null,
+      included_storage_bytes: null,
+      waived: true,
+    })
+    at('2026-10-01T00:00:00.000Z')
+    await call(t, f.agent.id)
+    await call(t, f.user.id, 'personal-token')
+    expect(await buckets(t)).toEqual([
+      [SEPTEMBER, 1],
+      [OCTOBER, 2],
+    ])
+    const october = await report(t, f)
+    expect(october).toMatchObject({
+      period_start: '2026-10-01T00:00:00.000Z',
+      period_end: '2026-10-31T00:00:00.000Z',
+      calls: 2,
+    })
+    expect(october.users.map((user) => user.profile_id).sort()).toEqual(
+      [f.agent.id, f.user.id].sort(),
+    )
+    expect(await events(t)).toHaveLength(0)
+  })
+
+  it('a subscription without a provider period counts per month against its plan allowance', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    await patchSub(t, f.sub, withoutPeriod)
+    for (let n = 0; n < 3; n++) await call(t, f.agent.id)
+    expect(await buckets(t)).toEqual([[SEPTEMBER, 3]])
+    const usage = await report(t, f)
+    expect(usage).toMatchObject({ period_kind: 'month', calls: 3, waived: true })
+    expect(usage.included_calls).toBeGreaterThan(0)
+  })
+
+  // [status, subscription fields, bucket before the period end, bucket at it, charged]
+  it.each([
+    ['active', {}, PERIOD, END, true],
+    ['trialing', { status: 'trialing' }, PERIOD, END, false],
+    ['past due', { status: 'past_due', past_due_at: PERIOD }, PERIOD, END, true],
+    [
+      'canceled at period end',
+      { status: 'canceled', cancel_at_period_end: true },
+      PERIOD,
+      OCTOBER,
+      false,
+    ],
+    ['canceled', { status: 'canceled' }, SEPTEMBER, OCTOBER, false],
+    ['ended', { status: 'active', ended_at: PERIOD }, SEPTEMBER, OCTOBER, false],
+    ['unpaid', { status: 'unpaid' }, SEPTEMBER, OCTOBER, false],
+    ['paused', { status: 'paused' }, SEPTEMBER, OCTOBER, false],
+    ['incomplete', { status: 'pending' }, SEPTEMBER, OCTOBER, false],
+  ] as const)(
+    'a provider subscription that is %s records calls in the bucket the page shows',
+    async (_, fields, before, after, charged) => {
+      const t = newT()
+      const f = await fixture(t)
+      await patchSub(t, f.sub, fields)
+      // Six calls exceed the paid period's four included calls by one block.
+      for (let n = 0; n < 6; n++) await call(t, f.agent.id)
+      expect((await report(t, f)).calls).toBe(6)
+      at(END)
+      await call(t, f.agent.id)
+      expect(await buckets(t)).toEqual([
+        [before, 6],
+        [after, 1],
+      ])
+      expect((await report(t, f)).calls).toBe(1)
+      expect((await events(t)).map((event) => event.period_start)).toEqual(charged ? [PERIOD] : [])
+    },
+  )
+
+  it('a missing plan row never drops calls', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    await t.run(async (ctx) => {
+      const plan = await ctx.db
+        .query('billing_plans')
+        .withIndex('by_uuid', (q) => q.eq('id', f.sub.plan_id))
+        .unique()
+      await ctx.db.delete(plan!._id)
+    })
+    for (let n = 0; n < 6; n++) await call(t, f.agent.id)
+    await patchSub(t, f.sub, withoutPeriod)
+    await call(t, f.agent.id)
+    expect(await buckets(t)).toEqual([
+      [PERIOD, 6],
+      [SEPTEMBER, 1],
+    ])
+    expect(await events(t)).toHaveLength(0)
+    expect(await report(t, f)).toMatchObject({ calls: 1, included_calls: null })
+  })
+})
+
+describe('usage key ranges', () => {
+  it('maps month, recorded, current and open-ended keys to display dates', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    const previous = '2026-08-15T12:00:00.000Z'
+    await t.run((ctx) =>
+      ctx.db.insert('billing_periods', {
+        org_id: f.org.id,
+        subscription_id: 'provider-sub',
+        plan_id: f.sub.plan_id,
+        period_start: previous,
+        period_end: PERIOD,
+        seats: 2,
+        profile_ids: [],
+        storage_bytes: 0,
+        storage_blocks: 0,
+        created_at: previous,
+      }),
+    )
+    const range = (key: string, sub: Doc<'billing_subscriptions'> | null = f.sub) =>
+      t.run((ctx) => usageKeyRange(ctx, sub, key))
+    expect(await range('month:2028-02')).toEqual({
+      kind: 'month',
+      start: '2028-02-01T00:00:00.000Z',
+      end: '2028-02-29T00:00:00.000Z',
+    })
+    expect(await range(previous)).toEqual({ kind: 'paid', start: previous, end: PERIOD })
+    expect(await range(PERIOD)).toEqual({ kind: 'paid', start: PERIOD, end: END })
+    // A pending interval and an old free-access bucket have no known end.
+    for (const key of [END, '2026-03-02T08:00:00.000Z', 'month:2026-13'])
+      expect(await range(key)).toEqual({ kind: 'open', start: key, end: null })
+    expect(await range(previous, null)).toEqual({ kind: 'open', start: previous, end: null })
   })
 })
 

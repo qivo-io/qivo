@@ -2,15 +2,29 @@ import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/comp
 import { billingBytes, billingDate, billingMoney } from '@/lib/billingDisplay'
 import type { BillingUsage as BillingUsageData } from '../../convex/lib/billingTypes'
 
+/** The period line: a paid period's dates, a UTC calendar month, or the start
+ * of an interval whose end is not known yet. */
+function periodLabel(usage: BillingUsageData): string {
+  if (usage.period_kind === 'month')
+    return `${billingDate(usage.period_start, 'UTC')} – ${billingDate(usage.period_end, 'UTC')}`
+  return usage.period_end
+    ? `${billingDate(usage.period_start)} – ${billingDate(usage.period_end)}`
+    : `From ${billingDate(usage.period_start)}`
+}
+
+/** Usage for the bucket API calls are recorded in now. `currency` is the
+ * plan's; amounts are only shown for a charged period, which always has one. */
 export function BillingUsage({
   usage,
   currency,
   measuredAt,
 }: {
   usage: BillingUsageData
-  currency: string
+  currency: string | undefined
   measuredAt: number
 }) {
+  const month = usage.period_kind === 'month'
+  const charged = !usage.waived && currency !== undefined
   return (
     <SettingsSection
       title="Usage"
@@ -26,31 +40,40 @@ export function BillingUsage({
         </SettingsField>
       )}
       <SettingsField label="Current period" width={550}>
-        <p className="text-base">
-          {usage.period_start && usage.period_end
-            ? `${billingDate(usage.period_start)} – ${billingDate(usage.period_end)}`
-            : 'No paid billing period yet'}
-        </p>
+        <p className="text-base">{periodLabel(usage)}</p>
+        {month && <FieldHint>Calendar month in UTC, used while there is no paid period.</FieldHint>}
+        {usage.period_kind === 'pending' && (
+          <FieldHint>Waiting for the renewal to be confirmed.</FieldHint>
+        )}
       </SettingsField>
       <SettingsField label="API calls" width={550}>
         <p className="text-base">
-          {usage.calls.toLocaleString()} of {usage.included_calls.toLocaleString()} included calls
+          {usage.calls.toLocaleString()}
+          {usage.included_calls === null
+            ? ' calls'
+            : ` of ${usage.included_calls.toLocaleString()} included calls`}
         </p>
         <FieldHint>
-          {usage.waived
-            ? 'API usage is covered by free access. It will not be charged later.'
-            : `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to your next renewal invoice.`}
+          {month
+            ? 'API calls are not charged without a paid period.'
+            : charged
+              ? `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to your next renewal invoice.`
+              : 'API usage is covered by free access. It will not be charged later.'}
         </FieldHint>
       </SettingsField>
       <SettingsField label="Attachment storage" width={550}>
         <p className="text-base">
-          {billingBytes(usage.storage_bytes)} of {billingBytes(usage.included_storage_bytes)}{' '}
-          included
+          {billingBytes(usage.storage_bytes)}
+          {usage.included_storage_bytes === null
+            ? ' stored'
+            : ` of ${billingBytes(usage.included_storage_bytes)} included`}
         </p>
         <FieldHint>
-          {usage.waived
-            ? 'Storage is covered by free access. It will not be charged later.'
-            : `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to your next renewal invoice.`}
+          {month
+            ? 'Storage is not charged without a paid period.'
+            : charged
+              ? `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to your next renewal invoice.`
+              : 'Storage is covered by free access. It will not be charged later.'}
         </FieldHint>
       </SettingsField>
       <SettingsGroup

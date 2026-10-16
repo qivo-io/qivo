@@ -171,8 +171,8 @@ function LiveBillingSettings({ orgId }: { orgId: string }) {
           Usage could not be refreshed: {usageError}
         </p>
       )}
-      {usage && summary?.plan && (
-        <BillingUsage usage={usage} currency={summary.plan.currency} measuredAt={measuredAt} />
+      {usage && summary && (
+        <BillingUsage usage={usage} currency={summary.plan?.currency} measuredAt={measuredAt} />
       )}
     </>
   )

@@ -187,11 +187,13 @@ minute** applies before authentication across both interfaces. These use fixed
 minute windows. CORS preflights do not consume either allowance.
 
 An exceeded limit returns HTTP `429` with `Retry-After: 60`; wait 60 seconds
-before retrying. During a recorded billing period, authenticated requests
-that pass rate limiting count toward the organization's pooled API allowance,
-including requests that later fail validation, routing or permission checks.
-Requests rejected for missing/invalid credentials or rate limiting do not add
-billable calls. The separate curation API keeps its own limits below.
+before retrying. Every authenticated request that passes rate limiting counts
+as one API call, including requests that later fail validation, routing or
+permission checks. During a paid billing period, these calls count toward the
+organization's pooled API allowance. Without a paid billing period, calls are
+counted per calendar month (UTC) and are never charged. Requests rejected for
+missing/invalid credentials or rate limiting are not counted. The separate
+curation API keeps its own limits below.
 
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
