@@ -28,7 +28,9 @@ export function BillingUsage({
   return (
     <SettingsSection
       title="Usage"
-      description={`Measured ${new Date(measuredAt).toLocaleString()}. Allowances are shared across your organization.`}
+      description={`Measured ${new Date(measuredAt).toLocaleString()}.${
+        usage.included_calls === null ? '' : ' Allowances are shared across your organization.'
+      }`}
       data-billing-usage=""
     >
       {usage.delivery_unconfirmed && (
