@@ -155,8 +155,13 @@ export const expire = internalMutation({
   },
 })
 
-/** The rows one purgeOrg call deletes at most. */
-export const PURGE_ORG = { batch: 256 }
+/** What one purgeOrg call deletes at most: `batch` rows and about `bytes`
+ * of them. A stored row can hold a document of almost 1 MiB, so a batch
+ * counted in rows alone could read past Convex's 16 MiB, and every retry
+ * would fail on the same rows. 4 MiB leaves the margin an organization's
+ * deletion in steps leaves (model/cascade.ts REMOVAL_BUDGET) for the rows a
+ * call reads past its last check. */
+export const PURGE_ORG = { batch: 256, bytes: 4 * 1024 * 1024 }
 
 /* Deletes everything an organization keeps in Deleted items for good,
  * whatever state its items are in, one bounded batch per call
@@ -169,7 +174,8 @@ export const purgeOrg = internalMutation({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }): Promise<{ done: boolean }> => {
     refuseProduction('deletedItems:purgeOrg')
-    return { done: await clearOrgTrash(ctx, org_id, { left: PURGE_ORG.batch }) }
+    const budget = { left: PURGE_ORG.batch, bytes: PURGE_ORG.bytes }
+    return { done: await clearOrgTrash(ctx, org_id, budget) }
   },
 })
 
