@@ -1,9 +1,10 @@
 /* What the Deleted items page says about its rows, kept out of the page so it
    stays pure: the deleter line, the suffix after a title, the sentence of a
    row that cannot be restored, the Deleted by options, the search filter, the
-   project item a search hit stands for when no list holds it, the order of
-   rows and search hits, and how a long run of one person's deletes folds. Types come from the deletedItems functions, so the page follows the
-   server's projection (convex/model/deletedItemsList.ts). */
+   item a search hit stands for when no list holds it, the order of rows and
+   search hits, and how a long run of one person's deletes folds. Types come
+   from the deletedItems functions, so the page follows the server's
+   projection (convex/model/deletedItemsList.ts). */
 
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
@@ -23,26 +24,29 @@ export type PurgeRefusal = FunctionReturnType<
   typeof api.deletedItems.purge
 >['refused'][number]['reason']
 
-/** An item the page acts on. It is a row of a list, or the project item of a
-    search hit that no list holds (hitItem), which carries that `hit`. */
+/** An item the page acts on. It is a row of a list, or the item of a search
+    hit that no list holds (hitItem), which carries that `hit`. */
 export type ItemRow = DeletedRow & { hit?: DeletedMatch }
 
 /** One line of the list: an item, or a task inside a deleted project that the
-    search found. A match acts on its project item, `item`. */
+    search found. A match acts on its project item, `item`. A task item that
+    the search found is an item line, its own row. */
 export type Line =
-  | { kind: 'item'; row: DeletedRow }
+  | { kind: 'item'; row: ItemRow }
   | { kind: 'match'; match: DeletedMatch; item: ItemRow }
 
 /** The item a line acts on. */
 export const lineItem = (line: Line): ItemRow => (line.kind === 'item' ? line.row : line.item)
 
-/** The project item of a search hit, as far as the hit tells it, for a hit
-    whose item no list holds. A capped list can stop before older items that
-    the search still finds. The item has the hit's organization, deleter, time
-    and restore state. It has no name, counts or Delete now, which the hit
-    does not carry, so the page names it through `hit`. */
+/** The item of a search hit, as far as the hit tells it, for a hit whose item
+    no list holds. A capped list can stop before older items that the search
+    still finds. The item has the hit's organization, deleter, time and
+    restore state, and no counts or Delete now, which the hit does not carry.
+    A task item is the task the search found, with its key, title and place,
+    and shows as an ordinary task row, redacted when the hit is. A project
+    item has no name, so the page names it through `hit`. */
 export function hitItem(match: DeletedMatch): ItemRow {
-  return {
+  const item: ItemRow = {
     id: match.item_id,
     org_id: match.org_id,
     org_name: match.org_name,
@@ -60,6 +64,16 @@ export function hitItem(match: DeletedMatch): ItemRow {
     blocked: match.blocked,
     can_purge: false,
     hit: match,
+  }
+  if (match.item_kind !== 'task') return item
+  return {
+    ...item,
+    kind: 'task',
+    key: match.key,
+    title: match.title,
+    path: match.path,
+    archived: match.archived,
+    ...(match.redacted ? { redacted: true } : {}),
   }
 }
 

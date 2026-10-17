@@ -11,6 +11,7 @@ import {
   deletedByOptions,
   fold,
   foldText,
+  hitItem,
   itemSuffix,
   type Line,
   matchHasText,
@@ -201,6 +202,7 @@ describe('who deleted it', () => {
 describe('search hits', () => {
   const hit: DeletedMatch = {
     item_id: 'p',
+    item_kind: 'project',
     org_id: 'org',
     org_name: 'Northstar Labs',
     key: 'QN-12',
@@ -218,6 +220,46 @@ describe('search hits', () => {
     expect(matchHasText(hit, 'zebra')).toBe(false)
     // the path is not what the server searched
     expect(matchHasText(hit, 'field trial')).toBe(false)
+  })
+
+  it('stands for a task item as its own task row, and a project item as an unnamed project', () => {
+    const blocked = { reason: 'view_only' as const, project: 'Luma Sensor' }
+    const task = hitItem({
+      ...hit,
+      item_id: 't',
+      item_kind: 'task',
+      path: ['Luma Sensor', 'Firmware'],
+      archived: true,
+      can_restore: false,
+      blocked,
+    })
+    expect(task).toMatchObject({
+      id: 't',
+      kind: 'task',
+      key: 'QN-12',
+      title: 'Book test sites in Umeå',
+      path: ['Luma Sensor', 'Firmware'],
+      archived: true,
+      deleter: CURSOR,
+      state: 'ready',
+      can_restore: false,
+      blocked,
+      can_purge: false,
+    })
+    expect(task.redacted).toBeUndefined()
+    expect(placeText(task)).toBe('Luma Sensor › Firmware')
+    expect(itemSuffix(task)).toBe('')
+    const redacted = hitItem({
+      ...hit,
+      item_kind: 'task',
+      path: [],
+      redacted: true,
+      can_restore: false,
+      blocked: { reason: 'no_access' },
+    })
+    expect(redacted).toMatchObject({ kind: 'task', redacted: true, path: [], can_restore: false })
+    // a project item's hit names only the task, never the project
+    expect(hitItem(hit)).toMatchObject({ id: 'p', kind: 'project', key: '', title: '', path: [] })
   })
 })
 

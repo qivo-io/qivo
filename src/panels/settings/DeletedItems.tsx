@@ -1,7 +1,8 @@
 /* Settings › Projects › Deleted items (design 10). The page lists the tasks
    and projects in the trash that this login may see in each of its
-   organizations, live from deletedItems.list, and search finds tasks inside
-   deleted projects, live from deletedItems.matches. One item restores
+   organizations, live from deletedItems.list, and search finds deleted tasks
+   by key or title, live from deletedItems.matches, also inside deleted
+   projects and among task items a capped list leaves out. One item restores
    without asking, and several open a window that says where they go back.
    An organization admin can delete an item for good from its row menu. The
    page never names the 30 days an item stays, which only the user guide
@@ -213,13 +214,13 @@ export function DeletedItemsPage() {
     run?.()
   })
 
-  /* Search hits inside deleted projects, live for the text 250ms after
-     typing stops. The server answers again whenever a hit's project item
-     changes state or leaves, and when a project deleted after the search
-     holds tasks the text finds, so hits outside a capped list stay current
-     too. A new text stops following the old one at once, and the old
-     answer shows until the new one replaces it. An error keeps the hits of
-     the text, or shows none when the text has no answer yet. */
+  /* Search hits, live for the text 250ms after typing stops. The server
+     answers again whenever a hit's item changes state or leaves, and when an
+     item deleted after the search holds tasks the text finds, so hits outside
+     a capped list stay current too. A new text stops following the old one
+     at once, and the old answer shows until the new one replaces it. An
+     error keeps the hits of the text, or shows none when the text has no
+     answer yet. */
   const text = search.trim()
   useEffect(() => {
     if (!text) {
@@ -258,21 +259,27 @@ export function DeletedItemsPage() {
   )
 
   /* ---------------------------------------------------------- the lines */
-  // A search hit acts on its project item as a list has it, with its name
-  // and counts. A hit whose project item left a complete list goes. A capped
-  // list can stop before an older project item, so there the hit stands for
-  // its item itself (hitItem), in the state of the newest search answer,
-  // until this page restores it.
+  // A search hit acts on its item as a list has it, with its name and
+  // counts. A hit whose item left a complete list goes. A capped list can
+  // stop before an older item, so there the hit stands for its item itself
+  // (hitItem), in the state of the newest search answer, until this page
+  // restores it. A hit inside a project item is a match line, which acts on
+  // the project. A task item's hit is that item's own row, which shows once
+  // however many of its tasks the search finds, and also when the text is
+  // in a subtask the row does not name.
   const capped = source.list?.capped === true
   const lines = useMemo(() => {
     const out: Line[] = []
+    const shown = new Set<string>()
     for (const row of rows)
       if (
         (kind === 'all' || row.kind === kind) &&
         deletedBy(row, by) &&
         (!lower || rowHasText(row, lower))
-      )
+      ) {
         out.push({ kind: 'item', row })
+        shown.add(row.id)
+      }
     if (lower && kind !== 'project')
       for (const match of hits) {
         const id = match.item_id
@@ -280,22 +287,28 @@ export function DeletedItemsPage() {
           byId.get(id) ??
           allById.get(id) ??
           (capped && !restored.has(id) ? hitItem(match) : undefined)
-        if (item && deletedBy(item, by)) out.push({ kind: 'match', match, item })
+        if (!item || !deletedBy(item, by)) continue
+        if (item.kind === 'project') out.push({ kind: 'match', match, item })
+        else if (!shown.has(id)) {
+          out.push({ kind: 'item', row: item })
+          shown.add(id)
+        }
       }
     return out.sort(byTime)
   }, [rows, byId, allById, capped, restored, kind, by, lower, hits])
   // the items the lines show, each once however many hits it has
   const lineIds = useMemo(() => new Set(lines.map((line) => lineItem(line).id)), [lines])
-  // the project items that only a search hit names, by id
+  // the items that only a search hit names, by id
   const hitItems = useMemo(() => {
     const out = new Map<string, ItemRow>()
-    for (const line of lines)
-      if (line.kind === 'match' && line.item.hit && !out.has(line.item.id))
-        out.set(line.item.id, line.item)
+    for (const line of lines) {
+      const item = lineItem(line)
+      if (item.hit && !out.has(item.id)) out.set(item.id, item)
+    }
     return out
   }, [lines])
-  /** Item `id` as a line acts on it. That is a list's row, else a project
-      item that only a search hit names. */
+  /** Item `id` as a line acts on it. That is a list's row, else an item that
+      only a search hit names. */
   const itemOf = (id: string): ItemRow | undefined => findItem(id) ?? hitItems.get(id)
 
   /* The selection holds only what the person can still act on. A delivery or
@@ -331,16 +344,18 @@ export function DeletedItemsPage() {
      answer speaks for it from then on (deferred again, it waits again). A
      waiting item that no list holds stays, since a list narrowed to one
      person or a capped one need not hold it, unless the main list is
-     complete and no longer holds it. It runs on each delivery of either list
-     and when an answer defers items, because the list that shows a small
-     project back can arrive before the answer that defers its items. */
+     complete and no longer holds it. A task item older than a capped list
+     holds is sent once its search hit shows it restorable. It runs on each
+     delivery of either list or the search, and when an answer defers items,
+     because the list that shows a small project back can arrive before the
+     answer that defers its items. */
   useEffect(() => {
     if (waiting.size === 0) return
     const complete = main.list?.capped === false
-    const ready: DeletedRow[] = []
+    const ready: ItemRow[] = []
     const gone: string[] = []
     for (const id of waiting) {
-      const held = [byId.get(id), allById.get(id)]
+      const held = [byId.get(id), allById.get(id), hitItems.get(id)]
       const row = held.find((r) => r?.can_restore)
       if (row) ready.push(row)
       else if (complete && held.every((r) => r === undefined)) gone.push(id)
@@ -350,7 +365,7 @@ export function DeletedItemsPage() {
     setWaiting((current) => new Set([...current].filter((id) => !settled.has(id))))
     if (ready.length) void restore(ready)
     // restore reads the newest state through refs and setters
-  }, [byId, allById, main.list, waiting])
+  }, [byId, allById, hitItems, main.list, waiting])
 
   /* The Deleted by choices. An admin's seat reads a chosen person's own range
      on the server, which reaches past a capped list, so an admin may choose
@@ -557,8 +572,9 @@ export function DeletedItemsPage() {
     )
   }
 
-  /** A row's Restore. One item restores at once, and a search hit or an item
-      whose project is deleted too goes through the project window. */
+  /** A row's Restore. One item restores at once, and a search hit inside a
+      deleted project or an item whose project is deleted too goes through
+      the project window. */
   const restoreLine = (line: Line, key: string) => {
     const row = lineItem(line)
     const reason = row.blocked?.reason
@@ -591,8 +607,8 @@ export function DeletedItemsPage() {
 
   /* --------------------------------------------------------------- render */
   // The count names items, so a project with three search hits counts once.
-  // The total holds the project items that only a hit names. A list narrowed
-  // to one person on the server has no total to count against.
+  // The total holds the items that only a hit names. A list narrowed to one
+  // person on the server has no total to count against.
   const countText =
     filtered && person === undefined
       ? `${lineIds.size.toLocaleString('en-US')} of ${plural(rows.length + hitItems.size, 'item')}`

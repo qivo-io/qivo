@@ -113,6 +113,39 @@ const trial = (patch: Partial<DeletedRow> = {}): DeletedRow =>
     deleted_at: at(16, 40, 0, 15),
     ...patch,
   })
+/** A search hit inside the deleted project Field trial Q3 (trial). */
+const hit = (patch: Partial<DeletedMatch> = {}): DeletedMatch => ({
+  item_id: 'item-trial',
+  item_kind: 'project',
+  org_id: ORG,
+  org_name: 'Testbed Labs',
+  key: 'QN-12',
+  title: 'Book test sites in Umeå',
+  archived: false,
+  path: ['Field trial Q3', 'Site preparation'],
+  deleted_at: at(16, 40, 0, 15),
+  deleter: MIRA,
+  state: 'ready',
+  can_restore: true,
+  ...patch,
+})
+/** A search hit of a task deleted on its own on 2 Oct, older than the lists
+    the tests deliver hold. */
+const taskHit = (patch: Partial<DeletedMatch> = {}): DeletedMatch => ({
+  item_id: 'item-old',
+  item_kind: 'task',
+  org_id: ORG,
+  org_name: 'Testbed Labs',
+  key: 'QN-77',
+  title: 'Calibrate the humidity sensor',
+  archived: false,
+  path: ['Luma Sensor', 'Firmware'],
+  deleted_at: at(9, 0, 0, 2),
+  deleter: DANIEL,
+  state: 'ready',
+  can_restore: true,
+  ...patch,
+})
 /** `n` tasks Daniel deleted with Cursor, 20 seconds apart from 14:05 down. */
 const burst = (n: number, from = 100) =>
   Array.from({ length: n }, (_, i) =>
@@ -267,6 +300,14 @@ async function search(value: string) {
 }
 /** Waits past the search's 250ms pause. */
 const pause = () => act(async () => await new Promise((r) => setTimeout(r, 300)))
+/** Types `value`, waits past the pause and answers the search with `matches`. */
+async function found(value: string, matches: DeletedMatch[]) {
+  await search(value)
+  await pause()
+  const last = searches[searches.length - 1]
+  await act(async () => last.next(matches))
+  await settle()
+}
 /** Picks the Deleted by choice labelled `label`. */
 async function deletedByChoice(label: string) {
   const select = find<HTMLSelectElement>('[data-deleted-by]')
@@ -1037,21 +1078,6 @@ describe('Delete now', () => {
 })
 
 describe('searching inside deleted projects', () => {
-  const hit = (patch: Partial<DeletedMatch> = {}): DeletedMatch => ({
-    item_id: 'item-trial',
-    org_id: ORG,
-    org_name: 'Testbed Labs',
-    key: 'QN-12',
-    title: 'Book test sites in Umeå',
-    archived: false,
-    path: ['Field trial Q3', 'Site preparation'],
-    deleted_at: at(16, 40, 0, 15),
-    deleter: MIRA,
-    state: 'ready',
-    can_restore: true,
-    ...patch,
-  })
-
   it('shows a task found in a deleted project, which restores with its project', async () => {
     await open()
     answers['deletedItems:restore'] = async (args) => ({
@@ -1371,29 +1397,6 @@ describe('windows that wait for the server', () => {
 })
 
 describe('search hits follow the list', () => {
-  const hit = (patch: Partial<DeletedMatch> = {}): DeletedMatch => ({
-    item_id: 'item-trial',
-    org_id: ORG,
-    org_name: 'Testbed Labs',
-    key: 'QN-12',
-    title: 'Book test sites in Umeå',
-    archived: false,
-    path: ['Field trial Q3', 'Site preparation'],
-    deleted_at: at(16, 40, 0, 15),
-    deleter: MIRA,
-    state: 'ready',
-    can_restore: true,
-    ...patch,
-  })
-  /** Types `value`, waits past the pause and answers the search with `matches`. */
-  async function found(value: string, matches: DeletedMatch[]) {
-    await search(value)
-    await pause()
-    const last = searches[searches.length - 1]
-    await act(async () => last.next(matches))
-    await settle()
-  }
-
   it('shows the live state of the project item a hit belongs to', async () => {
     await open()
     await deliver([trial({ state: 'moving', can_restore: false })])
@@ -1594,10 +1597,190 @@ describe('search hits follow the list', () => {
   it('shows a hit under an organization that the capped list stopped before', async () => {
     await open()
     await deliver([task(1), task(2, { org_id: 'org-two', org_name: 'Aurora Studio' })], true)
-    await found('Book', [hit({ org_id: 'org-three', org_name: 'Polar Works' })])
+    await found('Book', [
+      hit({ org_id: 'org-three', org_name: 'Polar Works' }),
+      taskHit({ title: 'Book the calibration lab', org_id: 'org-four', org_name: 'Nordic Works' }),
+    ])
     const groups = [...document.querySelectorAll<HTMLElement>('[data-org-group]')]
-    expect(groups.map((el) => el.dataset.orgGroup)).toEqual(['org-three'])
-    expect(groups[0].firstElementChild?.textContent).toBe('Polar Works')
-    expect(groups[0].querySelector('[data-deleted-match="QN-12"]')).not.toBeNull()
+    expect(groups.map((el) => el.dataset.orgGroup)).toEqual(['org-four', 'org-three'])
+    expect(groups.map((g) => g.firstElementChild?.textContent)).toEqual([
+      'Nordic Works',
+      'Polar Works',
+    ])
+    expect(groups[0].querySelector('[data-deleted-row="item-old"]')).not.toBeNull()
+    expect(groups[1].querySelector('[data-deleted-match="QN-12"]')).not.toBeNull()
+  })
+})
+
+describe('task items the search finds', () => {
+  const restoresAll = () => {
+    answers['deletedItems:restore'] = async (args) => ({
+      restored: args.ids as string[],
+      refused: [],
+      deferred: [],
+    })
+  }
+
+  it('restores a task item that a capped list leaves out from its own row', async () => {
+    await open()
+    restoresAll()
+    // the capped list ends before the older task item
+    await deliver([task(1), trial()], true)
+    expect(has('[data-deleted-row="item-old"]')).toBe(false)
+    await found('QN-77', [taskHit()])
+    // an ordinary task row, not a task inside a deleted project
+    expect(rowIds()).toEqual(['item-old'])
+    expect(has('[data-deleted-match]')).toBe(false)
+    expect(rowOf('item-old').textContent).toContain('QN-77Calibrate the humidity sensor')
+    expect(text('[data-deleted-row="item-old"] [data-row-place]')).toBe('Luma Sensor › Firmware')
+    expect(text('[data-deleted-row="item-old"] [data-row-who]')).toBe('Daniel Berg')
+    expect(text('[data-deleted-count]')).toBe('1 of 3 items')
+    await click(find('[data-select-all]'))
+    expect(checkbox('item-old').getAttribute('data-state')).toBe('checked')
+    expect(text('[data-deleted-count]')).toBe('1 selected')
+    await click(find('[data-clear-selection]'))
+    const restore = find<HTMLButtonElement>('[data-deleted-row="item-old"] [data-restore]')
+    restore.focus()
+    await click(restore)
+    // it comes back at once, without the project window
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-old'] }])
+    expect(window.showToast).toHaveBeenCalledWith('Restored QN-77', undefined)
+    // no list will drop it, so its row goes now, and focus with it to the search box
+    expect(has('[data-deleted-row="item-old"]')).toBe(false)
+    expect(document.activeElement).toBe(find('[data-deleted-search]'))
+  })
+
+  it('shows a task item the list holds once, also when the text is in its subtask', async () => {
+    await open()
+    const parent = task(30, {
+      title: 'Ship the firmware',
+      counts: { tasks: 3, archived_tasks: 0, subtasks: 2, sub_projects: 0 },
+    })
+    const ofParent = (key: string, title: string) =>
+      taskHit({ item_id: 'item-30', key, title, deleted_at: parent.deleted_at })
+    await deliver([parent, task(1)])
+    // the root by key, and a subtask of the same item by title
+    await found('QN-3', [ofParent('QN-30', 'Ship the firmware'), ofParent('QN-31', 'QN-3 notes')])
+    expect(rowIds()).toEqual(['item-30'])
+    expect(text('[data-deleted-count]')).toBe('1 of 2 items')
+    // the list row's title does not hold the text, its subtask does
+    await found('Sign', [ofParent('QN-31', 'Sign the image')])
+    expect(rowIds()).toEqual(['item-30'])
+    expect(rowOf('item-30').textContent).toContain('QN-30Ship the firmwareand 2 subtasks')
+    expect(has('[data-deleted-match]')).toBe(false)
+  })
+
+  it('shows a redacted task item the search finds as the redacted row', async () => {
+    await open('lead')
+    await deliver([task(1, { deleter: ME })], true)
+    await found('Sign', [
+      taskHit({
+        key: 'QN-31',
+        title: 'Sign the image',
+        path: [],
+        redacted: true,
+        can_restore: false,
+        blocked: { reason: 'no_access' },
+      }),
+    ])
+    expect(rowIds()).toEqual(['item-old'])
+    // the task the person can see, and nothing of the root or its project
+    expect(rowOf('item-old').textContent).toContain('QN-31Sign the image')
+    expect(text('[data-deleted-row="item-old"] [data-row-place]')).toBe(
+      "Deleted with a task in a project you can't open",
+    )
+    expect(has('[data-deleted-row="item-old"] [data-row-notes]')).toBe(false)
+    expect(has('[data-deleted-row="item-old"] [data-restore]')).toBe(false)
+    expect(checkbox('item-old').disabled).toBe(true)
+    await click(checkbox('item-old'))
+    expect(find<HTMLButtonElement>('[data-select-all]').disabled).toBe(true)
+    expect(text('[data-deleted-count]')).toBe('1 of 2 items')
+  })
+
+  it('restores found task items with the selection, and still asks before a project hit', async () => {
+    await open()
+    restoresAll()
+    await deliver([task(1, { title: 'Calibrate the light sensor' }), trial()], true)
+    await found('Calibrate', [taskHit(), hit({ title: 'Calibrate the field kit' })])
+    expect(rowIds()).toEqual(['item-1', 'item-trial:QN-12', 'item-old'])
+    await click(find('[data-select-all]'))
+    expect(text('[data-deleted-count]')).toBe('3 selected')
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    expect(text('[data-modal-shell] h2')).toBe('Restore 3 items?')
+    // the found task goes back with the listed one in the same project
+    expect(
+      [...document.querySelectorAll('[data-destination]')].map((el) => el.textContent),
+    ).toEqual([
+      'Field trial Q3project with 2 sub-projects and 48 tasks',
+      'Luma Sensor › Firmware2 tasks',
+    ])
+    await click(button('Cancel'))
+    await click(button('Clear'))
+    // the task inside the deleted project still comes back only with it
+    await click(find('[data-deleted-match="QN-12"] [data-restore]'))
+    expect(text('[data-modal-shell] h2')).toBe('QN-12 is in a deleted project')
+    await click(button('Restore Field trial Q3 and QN-12'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-trial'] }])
+  })
+
+  it('sends a found task item that waits for its project once the search shows it restorable', async () => {
+    await open()
+    // the server defers the task while its project comes back in the same call
+    answers['deletedItems:restore'] = async (args) => {
+      const ids = args.ids as string[]
+      const waits = (id: string) => id === 'item-old' && ids.includes('item-trial')
+      return {
+        restored: ids.filter((id) => !waits(id)),
+        refused: [],
+        deferred: ids.filter(waits),
+      }
+    }
+    // the capped list holds the project, but not the older task deleted before it
+    await deliver([trial()], true)
+    const waits = { reason: 'project_deleted' as const, item_id: 'item-trial' }
+    await found('QN-77', [taskHit({ can_restore: false, blocked: waits })])
+    expect(text('[data-deleted-row="item-old"] [data-row-note="blocked"]')).toBe(
+      'Its project, Field trial Q3, is in Deleted items too.',
+    )
+    await click(find('[data-deleted-row="item-old"] [data-restore]'))
+    expect(text('[data-modal-shell] h2')).toBe('QN-77 is in a deleted project')
+    await click(button('Restore Field trial Q3 and QN-77'))
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial', 'item-old'] },
+    ])
+    // the project is back, and the search answers again
+    await deliver([], true)
+    await act(async () => searches[0].next([taskHit()]))
+    await settle()
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial', 'item-old'] },
+      { org_id: ORG, ids: ['item-old'] },
+    ])
+  })
+
+  it('folds found task items into a run of the same who', async () => {
+    await open()
+    const listed = burst(8)
+    // four older tasks of the same run that the capped list stops before
+    const older = [108, 109, 110, 111].map((num, i) =>
+      taskHit({
+        item_id: `item-${num}`,
+        key: `QN-${num}`,
+        title: `Task ${num}`,
+        deleter: CURSOR,
+        deleted_at: new Date(Date.parse(at(14, 5)) - (8 + i) * 20_000).toISOString(),
+      }),
+    )
+    await deliver(listed, true)
+    await found('Task', older)
+    expect(rowIds()).toEqual(listed.slice(0, 7).map((r) => r.id))
+    expect(text('[data-fold]')).toContain(
+      'and 5 more tasks Daniel Berg deleted via Cursor, today 14:01 to 14:02',
+    )
+    expect(text('[data-deleted-count]')).toBe('12 of 12 items')
+    await click(find('[data-select-run]'))
+    expect(text('[data-deleted-count]')).toBe('12 selected')
+    await click(find('[data-show-all]'))
+    expect(rowIds()).toEqual([...listed.map((r) => r.id), ...older.map((m) => m.item_id)])
   })
 })
