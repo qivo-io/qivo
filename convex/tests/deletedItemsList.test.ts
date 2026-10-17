@@ -12,13 +12,15 @@ import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import { TRASH_BUDGET } from '../model/deletedItems'
-import { LIST, listFor } from '../model/deletedItemsList'
+import { LIST, listFor, MATCHES, matchesFor } from '../model/deletedItemsList'
 import { REMOVAL_COUNT } from '../model/projects'
 import {
   as,
+  chargeFilteredReads,
   expectRefusal,
   messagesFor,
   NOW,
@@ -183,6 +185,92 @@ const plantedItem = (
   purge_after: START + 30 * 86_400_000,
   ...fields,
 })
+
+let plantedProjects = 1000
+
+/** A small top-level project `lead` led and deleted, as a ready project
+ * item with its one stored row, the project, deleted at `at`. With `task`,
+ * the project held one task of that title, which the search finds. */
+async function plantLedProject(
+  ctx: MutationCtx,
+  lead: Doc<'profiles'>,
+  at: number,
+  task?: string,
+): Promise<string> {
+  const num = plantedProjects++
+  const project = {
+    id: uuid(),
+    org_id: lead.org_id,
+    type: 'meta' as const,
+    key: `SV${num}`,
+    name: `Survey ${num}`,
+    description: '',
+    sort_order: num,
+    num,
+    track_delay: false,
+    created_at: NOW,
+    lead_id: lead.id,
+  }
+  const id = uuid()
+  await ctx.db.insert('deleted_items', {
+    id,
+    org_id: lead.org_id,
+    kind: 'project',
+    target_id: project.id,
+    num,
+    name: project.name,
+    key: project.key,
+    archived: false,
+    project_id: project.id,
+    path: [],
+    projects: [
+      {
+        id: project.id,
+        name: project.name,
+        key: project.key,
+        type: 'meta',
+        tasks: 0,
+        archived_tasks: 0,
+      },
+    ],
+    counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+    deleted_at: new Date(at).toISOString(),
+    deleted_by: lead.id,
+    state: 'ready',
+    purge_after: at + 30 * 86_400_000,
+  })
+  await ctx.db.insert('deleted_rows', {
+    item_id: id,
+    org_id: lead.org_id,
+    table: 'projects',
+    owner_id: project.id,
+    row_id: project.id,
+    created_ts: START,
+    project_key: project.key,
+    lead_id: lead.id,
+    row: { table: 'projects', doc: project },
+  })
+  if (task !== undefined)
+    await ctx.db.insert('deleted_tasks', {
+      org_id: lead.org_id,
+      item_id: id,
+      task_id: uuid(),
+      num,
+      title: task,
+      project_id: project.id,
+      archived: false,
+    })
+  return id
+}
+
+/** `count` projects `lead` led and deleted one after another
+ * (plantLedProject), their item ids newest first. */
+const plantLedProjects = (t: T, lead: Doc<'profiles'>, count: number, task?: string) =>
+  t.run(async (ctx) => {
+    const ids: string[] = []
+    for (let i = 0; i < count; i++) ids.unshift(await plantLedProject(ctx, lead, START + i, task))
+    return ids
+  })
 
 /** What one list call for `who` reads, as Convex counts it. */
 const listMetrics = (t: T, who: Doc<'profiles'>) =>
@@ -680,16 +768,16 @@ describe('the list (design 6.2)', () => {
       items: newer.map((id) => expect.objectContaining({ id })),
       capped: true,
     })
-    // The range also stops once the list spent its read budget, and says
-    // so. Two documents are the newest stored row and its item.
-    LIST.rows = 2
+    // The range also stops once the reads that find items spent their
+    // share of the call, and says so. Two documents are the newest stored
+    // row and its item.
+    LIST.find = { ...DEFAULT_LIST.find, rows: 2 }
     expect(await list(t, lena)).toEqual({
       items: [expect.objectContaining({ id: newer[0] })],
       capped: true,
     })
     // and a budget the first stored row spends reads no item
-    LIST.rows = DEFAULT_LIST.rows
-    LIST.bytes = 1
+    LIST.find = { ...DEFAULT_LIST.find, bytes: 1 }
     expect(await list(t, lena)).toEqual({ items: [], capped: true })
   })
 
@@ -742,7 +830,7 @@ describe('the list (design 6.2)', () => {
     expect(await list(t, f.admin, f.admin.id)).toMatchObject({ capped: true })
   })
 
-  it('spends one read budget across every range and seat of a call, and says when it ran out', async () => {
+  it('spends one budget to find items across every range and seat of a call, and says when it ran out', async () => {
     const t = newT()
     const f = await withOrg(t)
     const omar = await person(t, f.org.id, 'Omar')
@@ -779,15 +867,13 @@ describe('the list (design 6.2)', () => {
       capped: false,
     })
     // three documents: Infra's two items and Lab's newest
-    LIST.rows = 3
+    LIST.find = { ...DEFAULT_LIST.find, rows: 3 }
     expect(await list(t, omar)).toEqual({ items: ids([lab[1], infra[1], infra[0]]), capped: true })
     // three ranges: Omar's deletes, the projects he led and Infra's items
-    LIST.rows = DEFAULT_LIST.rows
-    LIST.ranges = 3
+    LIST.find = { ...DEFAULT_LIST.find, ranges: 3 }
     expect(await list(t, omar)).toEqual({ items: ids([infra[1], infra[0]]), capped: true })
     // the first seat spends four documents, so the second reads nothing
-    LIST.ranges = DEFAULT_LIST.ranges
-    LIST.rows = 4
+    LIST.find = { ...DEFAULT_LIST.find, rows: 4 }
     expect(await list(t, omar)).toEqual({
       items: ids([lab[1], lab[0], infra[1], infra[0]]),
       capped: true,
@@ -862,13 +948,61 @@ describe('the list (design 6.2)', () => {
 
     const listed = await list(t, omar)
     expect(listed).toMatchObject({ capped: true })
-    // the budget's 8 MiB hold the items of the first sites it reads, more
-    // than one organization lists, and none of the last site's
+    // the 6 MiB that finding items may read hold the items of the first
+    // sites it reads, more than one organization lists, and none of the
+    // last site's
     expect(listed.items).toHaveLength(LIST.cap)
     expect(listed.items.map((row) => row.path[1])).not.toContain(subs[6].name)
     // the whole call, its sight and rows included, stays well inside them
     expectWellInside(await listMetrics(t, omar))
   }, 120_000)
+
+  it('lists the newest rows instead of failing when a lead deleted many small projects', async () => {
+    const t = newT({ transactionLimits: true })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    // 1,400 projects Lena led and deleted herself. Finding them reads two
+    // ranges, but her row for each reads its stored projects, grants and
+    // team shares, 3 ranges, so rows for all of them would read 4,200
+    // ranges, past Convex's 4,096.
+    const ids = await plantLedProjects(t, lena, 1400)
+
+    const listed = await list(t, lena)
+    expect(listed.capped).toBe(true)
+    expect(listed.items.length).toBeGreaterThan(500)
+    expect(listed.items.map((row) => row.id)).toEqual(ids.slice(0, listed.items.length))
+    // the whole call, its sight and rows included, stays well inside them
+    expectWellInside(await listMetrics(t, lena))
+  }, 120_000)
+
+  it('builds rows newest first while the call lasts, and says when it ran out', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    const ids = await plantLedProjects(t, lena, 6)
+    expect(await list(t, lena)).toEqual({
+      items: ids.map((id) => expect.objectContaining({ id, can_restore: true })),
+      capped: false,
+    })
+
+    // 17 ranges read Lena's sight and the two ranges that find her items,
+    // and leave too few for all six rows, which take 3 ranges each
+    LIST.call = { ...DEFAULT_LIST.call, ranges: 17 }
+    const few = await list(t, lena)
+    expect(few.capped).toBe(true)
+    expect(few.items.length).toBeGreaterThan(0)
+    expect(few.items.length).toBeLessThan(ids.length - 1)
+    expect(few.items.map((row) => row.id)).toEqual(ids.slice(0, few.items.length))
+    // three ranges more build one more row
+    LIST.call = { ...DEFAULT_LIST.call, ranges: 20 }
+    expect((await list(t, lena)).items.map((row) => row.id)).toEqual(
+      ids.slice(0, few.items.length + 1),
+    )
+    // the sight spends the call too: one whose bytes it spends lists nothing
+    LIST.call = { ...DEFAULT_LIST.call, bytes: 1 }
+    expect(await list(t, lena)).toEqual({ items: [], capped: true })
+  })
 
   it('reads a fixed number of ranges, however many items a lead or an admin sees', async () => {
     const t = newT({ transactionLimits: { databaseQueries: 40 } })
@@ -963,6 +1097,66 @@ describe('searching inside deleted projects', () => {
     // a member who can see Board rev, and neither deleted nor leads it
     expect(await matches(t, f.guest, 'power')).toEqual([])
     expect(await matches(t, f.otherAdmin, 'power')).toEqual([])
+  })
+
+  it('answers instead of failing when many project items it cannot show match in many seats', async () => {
+    const t = newT({ transactionLimits: true })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    // Lena has a seat in five organizations. In each, 256 small project
+    // items deleted by someone else, which she cannot see, hold a task the
+    // search finds. Telling that she cannot see an item reads it and its
+    // stored projects, grants and shares, 4 ranges, so the search would
+    // read over 5,120 ranges, past Convex's 4,096.
+    const seats = [lena]
+    for (let n = 1; n < 5; n++) {
+      const org = await t.run(async (ctx) => {
+        const _id = await ctx.db.insert('organizations', {
+          id: uuid(),
+          name: `Branch ${n}`,
+          slug: `branch-${n}`,
+          created_at: NOW,
+          next_issue_num: 1,
+          next_project_num: 1,
+          date_format: 'iso',
+          week_start: 1,
+          week_one_rule: 'first4day',
+          default_plannable_hours: 40,
+          gravatar_avatars: false,
+        })
+        return (await ctx.db.get(_id)) as Doc<'organizations'>
+      })
+      seats.push(
+        await plantSeat(t, { org_id: org.id, name: 'Lena', auth_user_id: lena.auth_user_id }),
+      )
+    }
+    for (const seat of seats)
+      await plantLedProjects(t, { ...seat, id: uuid() }, MATCHES.scan, 'Survey the north gate')
+
+    expect(await matches(t, lena, 'survey')).toEqual([])
+    // the whole call, its sights and items included, stays well inside them
+    expectWellInside(
+      await as(t, lena).query(async (ctx) => {
+        await matchesFor(ctx, seats, 'survey')
+        return await ctx.meta.getTransactionMetrics()
+      }),
+    )
+  }, 120_000)
+
+  it('answers the matches it judged before the call spent its budget', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lena = await person(t, f.org.id, 'Lena')
+    await plantLedProjects(t, lena, 4, 'Survey the north gate')
+    const all = await matches(t, lena, 'survey')
+    expect(all).toHaveLength(4)
+    // 20 ranges read the search, Lena's sight and some of the items
+    LIST.call = { ...DEFAULT_LIST.call, ranges: 20 }
+    const few = await matches(t, lena, 'survey')
+    expect(few.length).toBeGreaterThan(0)
+    expect(few.length).toBeLessThan(4)
+    expect(few).toEqual(all.slice(0, few.length))
   })
 })
 

@@ -64,7 +64,8 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
 
 /* ------------------------------------------------------------------- list
  * The Deleted items page: the rows every seat of the login sees, newest
- * first, at most 2,000 per organization (`capped` when more may exist).
+ * first, at most 2,000 per organization, fewer once the call spent its read
+ * budget (model/deletedItemsList.ts LIST); `capped` when more may exist.
  * `deleted_by` lists one person's deletes only, a profile id. */
 export const list = authedQuery({
   args: { deleted_by: v.optional(v.string()) },
@@ -73,7 +74,8 @@ export const list = authedQuery({
 
 /* ---------------------------------------------------------------- matches
  * Tasks inside the deleted projects the caller sees whose task key or title
- * matches `text`, at most 50; each comes back with its project item. */
+ * matches `text`, at most 50, fewer once the call spent the same read
+ * budget; each comes back with its project item. */
 export const matches = authedQuery({
   args: { text: v.string() },
   handler: async (ctx, { text }) => await matchesFor(ctx, ctx.myProfiles.values(), text),

@@ -326,7 +326,7 @@ const READS = new Set<string | symbol>([
 /** How a metered database counts its reads. `range` runs once for each
  * index range a read takes, and `doc`, when given, for each document a read
  * returns. */
-type Meter = { range: () => void; doc?: (doc: unknown) => void }
+export type Meter = { range: () => void; doc?: (doc: unknown) => void }
 
 /** What reads cost, in index ranges and the bytes of the documents they
  * return. */
@@ -384,8 +384,9 @@ function weighed(key: string | symbol, result: unknown, doc: Meter['doc']): unkn
 /** `ctx` whose database reads `meter` counts, wherever they happen. It
  * wraps the database the way lib/demo.ts demoWriter does for its own
  * accounting, and passes properties that are not functions on as they are,
- * demoWriter's uncounted writer included. */
-function meterDb(ctx: MutationCtx, meter: Meter): MutationCtx {
+ * demoWriter's uncounted writer included. A step meters a mutation; the
+ * Deleted items list and search meter a query (model/deletedItemsList.ts). */
+export function meterDb<C extends QueryCtx>(ctx: C, meter: Meter): C {
   const db = new Proxy(ctx.db, {
     get(target, key) {
       const value: unknown = Reflect.get(target, key)
