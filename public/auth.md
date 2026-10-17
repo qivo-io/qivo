@@ -61,7 +61,7 @@ The MCP endpoint's initial HTTP 401 challenge advertises
 Use these steps for a personal-token fallback or a named agent's key:
 
 1. Have the user sign in at [Qivo](https://qivo.io/app).
-2. For a personal token, open **Settings → User account → MCP access →
+2. For a personal token, open **Settings → Your preferences → MCP access →
    Personal access tokens** and choose **New token**. Enter a name, leave
    **Allow changes** on unless the client only needs to read, and keep
    **Never** or pick the last day the token works. Neither choice can be
@@ -208,7 +208,7 @@ agent's key cannot grant access, even to itself.
 
 ## Revocation and connection failures
 
-Delete OAuth connections under **Settings → User account → MCP access → Connected
+Delete OAuth connections under **Settings → Your preferences → MCP access → Connected
 apps**. Deleting removes the connection from the list and prevents subsequent
 access and refresh requests. Previously revoked connections can also be
 deleted. Connecting again requires fresh approval in the assistant. OAuth

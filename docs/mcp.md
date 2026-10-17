@@ -84,11 +84,11 @@ requested manual setup; agent keys give automation its own identity.
   and `offline_access`; the person can turn off **Allow changes** to approve
   reading only. Opaque access tokens (`qvo_…`) and rotating refresh tokens (`qvr_…`, when
   `offline_access` is approved) go directly to the client. Delete the
-  connection under **Settings → User account → MCP access → Connected apps**
+  connection under **Settings → Your preferences → MCP access → Connected apps**
   to stop its access and remove it from the list. Previously revoked
   connections can also be deleted.
-- **A person's token.** Each person mints their own under **Settings → User
-  account → MCP access → Personal access tokens**; the secret (`qvt_…`, shown once,
+- **A person's token.** Each person mints their own under **Settings → Your
+  preferences → MCP access → Personal access tokens**; the secret (`qvt_…`, shown once,
   stored as SHA-256 + display prefix, migration 0030) maps to that account,
   and the client then acts as them. Personal tokens remain a secondary option
   below the OAuth setup and its copyable MCP server address. Each token

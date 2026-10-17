@@ -10,7 +10,7 @@ organization, in one of two ways. An **agent key** (`qva_`) acts as an
 **agent user**, a user of the organization that is not a person, with no
 email and no password. Agents are created by org admins in **Settings →
 Organization → Users**. A **personal access token** (`qvt_`) acts as the
-person who created it under **Settings → User account → MCP access**. Either
+person who created it under **Settings → Your preferences → MCP access**. Either
 way, what the caller may reach is the projects that user can access directly
 or through a team: a `lead` or `user` **project role** reads and writes, a
 `viewer` project role reads, and a role on a meta-project covers its
