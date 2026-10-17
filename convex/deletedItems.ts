@@ -17,14 +17,20 @@
  * crons.ts) restarts a job whose step stopped, at half the budget each
  * time, and makes an item stuck after its last retry. expire (daily at
  * 03:45 UTC) starts purging the ready items whose 30 days are over, one
- * bounded batch per run, and schedules the next run while more are due. */
+ * bounded batch per run, and schedules the next run while more are due.
+ *
+ * purgeOrg and purgeTasks are deploy-key seams for fixtures and live
+ * drives, refused on production and public demo deployments like
+ * machine/testing.ts. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type QueryCtx } from './_generated/server'
+import { refuseProduction } from './lib/deployment'
 import { adminMutation, authedQuery, orgMutation, rule } from './lib/functions'
 import {
+  clearOrgTrash,
   expireItems,
   myItem,
   PURGE_MAX,
@@ -130,5 +136,46 @@ export const expire = internalMutation({
   handler: async (ctx): Promise<null> => {
     if (await expireItems(ctx)) await ctx.scheduler.runAfter(0, expireRef, {})
     return null
+  },
+})
+
+/** The rows one purgeOrg call deletes at most. */
+export const PURGE_ORG = { batch: 256 }
+
+/* Deletes everything an organization keeps in Deleted items for good,
+ * whatever state its items are in, one bounded batch per call
+ * (model/deletedItems.ts clearOrgTrash). The Northstar fixture CLI
+ * (scripts/marketing-demo.mjs) calls it until it answers done before a wipe
+ * or a reset, because the wipe refuses while the organization has Deleted
+ * items: their tasks keep numbers the wipe hands out again, and an item
+ * still moving keeps tasks under projects the wipe cannot reach. */
+export const purgeOrg = internalMutation({
+  args: { org_id: v.string() },
+  handler: async (ctx, { org_id }): Promise<{ done: boolean }> => {
+    refuseProduction('deletedItems:purgeOrg')
+    return { done: await clearOrgTrash(ctx, org_id, { left: PURGE_ORG.batch }) }
+  },
+})
+
+/* Deletes for good the Deleted items whose root is one of `task_ids`, as
+ * an admin's Delete now does (model/deletedItems.ts purgeItems), for the
+ * live browser drives (scripts/browser-demo.mjs) that delete their own
+ * temporary tasks in the shared development organization and must not leave
+ * them in its Deleted items for 30 days. At most 25 ids. `waiting` counts
+ * the items still moving or restoring, which a drive's small deletes never
+ * leave. */
+export const purgeTasks = internalMutation({
+  args: { task_ids: v.array(v.string()) },
+  handler: async (ctx, { task_ids }): Promise<{ purged: number; waiting: number }> => {
+    refuseProduction('deletedItems:purgeTasks')
+    const items: Doc<'deleted_items'>[] = []
+    for (const id of new Set(task_ids))
+      for (const item of await ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', id))
+        .collect())
+        if (item.kind === 'task' && item.state !== 'purging') items.push(item)
+    const { purged, refused } = await purgeItems(ctx, items)
+    return { purged: purged.length, waiting: refused.length }
   },
 })

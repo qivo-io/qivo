@@ -1,6 +1,7 @@
 /* Fixtures and readers shared by the Deleted items suites
  * (deletedItems.test.ts, deletedItemsRestore.test.ts,
- * deletedItemsList.test.ts).
+ * deletedItemsList.test.ts, deletedItemsMachine.test.ts) and by the REST
+ * and MCP delete tests.
  *
  * Two dots in the basename keep the Convex CLI from deploying this module,
  * the same rule as helpers.setup.ts. installTrashTimers puts a suite on fake
@@ -11,7 +12,9 @@
 import { afterEach, beforeEach, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
+import { PURGE_ORG } from '../deletedItems'
 import { byId } from '../lib/db'
+import type { EventOwner } from '../lib/taskEvents'
 import { EXPIRY, RETRY, TRASH_BUDGET } from '../model/deletedItems'
 import { as, NOW, type OrgFixture, type T, uuid } from './helpers.setup'
 
@@ -25,9 +28,10 @@ export const HOUR = 3_600_000
 export const DEFAULT_BUDGET = { ...TRASH_BUDGET }
 const DEFAULT_RETRY = { ...RETRY }
 const DEFAULT_EXPIRY = { ...EXPIRY }
+const DEFAULT_PURGE_ORG = { ...PURGE_ORG }
 
 /** Fake timers from START for each test of the suite, and the default
- * budget, retries and expiry batch back after it. */
+ * budget, retries, expiry batch and purgeOrg batch back after it. */
 export function installTrashTimers(): void {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -37,6 +41,7 @@ export function installTrashTimers(): void {
     Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
     Object.assign(RETRY, DEFAULT_RETRY)
     Object.assign(EXPIRY, DEFAULT_EXPIRY)
+    Object.assign(PURGE_ORG, DEFAULT_PURGE_ORG)
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
@@ -99,6 +104,62 @@ export const deleteTask = (t: T, f: OrgFixture, id: string, extra: object = {}) 
   as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id, ...extra })
 export const deleteProject = (t: T, f: OrgFixture, id: string) =>
   as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id })
+
+/** A credential of `table` for `profile`, named `name` (an OAuth
+ * connection's app), named as the HTTP action hands the one a request came
+ * with to a REST route or MCP tool. */
+export async function plantCredential(
+  t: T,
+  profile: Doc<'profiles'>,
+  table: EventOwner['credential_table'],
+  name: string,
+): Promise<EventOwner> {
+  return await t.run(async (ctx) => {
+    const id = uuid()
+    const hash = `${id.replaceAll('-', '')}${'0'.repeat(32)}`
+    const _id =
+      table === 'agent_keys'
+        ? await ctx.db.insert('agent_keys', {
+            id,
+            profile_id: profile.id,
+            name,
+            key_prefix: 'qva_012...abcde',
+            key_hash: hash,
+            created_at: NOW,
+          })
+        : table === 'mcp_tokens'
+          ? await ctx.db.insert('mcp_tokens', {
+              id,
+              profile_id: profile.id,
+              name,
+              token_prefix: 'qvt_0123456',
+              token_hash: hash,
+              access: 'write',
+              created_at: NOW,
+            })
+          : await ctx.db.insert('oauth_connections', {
+              id,
+              authorization_hash: hash,
+              auth_user_id: profile.auth_user_id ?? `auth_${profile.id}`,
+              profile_id: profile.id,
+              org_id: profile.org_id,
+              client_id: 'trash-test-client',
+              client_name: name,
+              resource: 'https://convex.test/mcp',
+              requested_scopes: ['qivo:read', 'qivo:write'],
+              scopes: ['qivo:read', 'qivo:write'],
+              created_at: NOW,
+              authorization_expires_at: NOW,
+              approved_at: NOW,
+            })
+    return {
+      profile_id: profile.id,
+      credential_table: table,
+      credential_id: id,
+      credential_row_id: _id,
+    }
+  })
+}
 
 /** An attachment of `size` bytes on `task`, with its bytes stored. */
 export async function attach(

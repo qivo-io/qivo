@@ -7,6 +7,7 @@ import {
   type OrgExportRow,
   type OrgExportSection,
 } from '../lib/orgExport'
+import { moveTasksToTrash } from '../model/deletedItems'
 import schema from '../schema'
 import {
   as,
@@ -14,6 +15,7 @@ import {
   NOW,
   newT,
   plantIssue,
+  plantProject,
   plantSeat,
   type T,
   uuid,
@@ -343,6 +345,46 @@ describe('organization export', () => {
     expect(exported.comments[0].body).toBe('<p>Remember this.</p>')
     expect(JSON.stringify(exported)).not.toContain(f.otherOrg.id)
     expect(JSON.stringify(exported)).not.toContain(f.admin.auth_user_id)
+  })
+
+  it('leaves out Deleted items and the tasks a moving project still has in the live tables', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const comment = (issue_id: string) =>
+      t.run((ctx) =>
+        ctx.db.insert('comments', { id: uuid(), issue_id, body: 'Notes', created_at: NOW }),
+      )
+    const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await comment(kept.id)
+    const trashed = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run((ctx) =>
+      moveTasksToTrash(ctx, { actor: f.admin, root: trashed, subtasks: [], now: NOW }),
+    )
+    // a project item hides its project first and moves its tasks in steps,
+    // so a task can sit in issues under a project row that is gone
+    const moving = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
+    await comment(stranded.id)
+    await t.run((ctx) => ctx.db.delete(moving._id))
+
+    const caller = as(t, f.admin)
+    const tasks = await readAll(caller, f.org.id, 'issues')
+    expect(tasks.map((row) => row.id)).toEqual([kept.id])
+    expect(await readAll(caller, f.org.id, 'comments', kept.id)).toHaveLength(1)
+    await expectRefusal(
+      caller.query(page, {
+        org_id: f.org.id,
+        section: 'comments',
+        parent_id: stranded.id,
+        cursor: null,
+      }),
+      'not_found',
+      /export parent not found/,
+    )
   })
 
   it('requires owned parents and refuses malformed section scopes', async () => {

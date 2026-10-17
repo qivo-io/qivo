@@ -12,12 +12,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { PURGE_ORG } from '../deletedItems'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageIdInUse } from '../model/attachments'
 import { storageUsage } from '../model/billing'
+import { deleteOrgDeep } from '../model/cascade'
 import {
   EXPIRY,
+  moveTasksToTrash,
   STALLED_MS,
   STORED_ROW_MAX_BYTES,
   sameReference,
@@ -946,5 +949,177 @@ describe('references and liveness', () => {
     const item = await itemFor(t, deleted.id)
     await t.run((ctx) => ctx.db.patch(item._id, { state: 'purging' }))
     expect(await where(deleted.id)).toBe('gone')
+  })
+})
+
+/* --------------------------------------------------------------- teardown */
+
+/* Deleted items in each state a teardown can meet in `f`'s organization: a
+ * ready task item with an attachment's bytes, a task item whose rows are
+ * still draining, and a project item still moving, with tasks left in the
+ * live tables under its absent project. The other organization holds one
+ * ready item, the control. */
+async function trashInFlight(t: T, f: OrgFixture) {
+  const org_id = f.org.id
+  const ready = await plantIssue(t, { org_id, project_id: f.sub.id })
+  const readyFile = await attach(t, ready)
+  await deleteTask(t, f, ready.id)
+  const draining = await plantIssue(t, { org_id, project_id: f.sub.id })
+  const drainingFile = await attach(t, draining)
+  for (let i = 0; i < 3; i++) await comment(t, draining)
+  const stranded: Doc<'issues'>[] = []
+  for (let i = 0; i < 3; i++) stranded.push(await plantIssue(t, { org_id, project_id: f.sub2.id }))
+  await comment(t, stranded[2])
+  const strandedFile = await attach(t, stranded[2])
+  Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+  await deleteTask(t, f, draining.id)
+  await deleteProject(t, f, f.sub2.id)
+  Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+  const elsewhere = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+  const elsewhereFile = await attach(t, elsewhere)
+  await t.run((ctx) =>
+    moveTasksToTrash(ctx, { actor: f.otherAdmin, root: elsewhere, subtasks: [], now: NOW }),
+  )
+
+  expect((await itemFor(t, ready.id)).state).toBe('ready')
+  expect((await itemFor(t, draining.id)).state).toBe('moving')
+  expect((await itemFor(t, f.sub2.id)).state).toBe('moving')
+  expect(await liveRowsOf(t, draining.id)).toBeGreaterThan(0)
+  const left = await t.run((ctx) =>
+    ctx.db
+      .query('issues')
+      .withIndex('by_project', (q) => q.eq('project_id', f.sub2.id))
+      .collect(),
+  )
+  expect(left.length).toBeGreaterThan(0)
+  return {
+    files: [readyFile, drainingFile, strandedFile].map((file) => file.storage_id),
+    elsewhere: { item: await itemFor(t, elsewhere.id), file: elsewhereFile.storage_id },
+  }
+}
+
+/** The comments and attachments task `id` still has in the live tables. */
+const liveRowsOf = (t: T, id: string) =>
+  t.run(async (ctx) => {
+    const comments = await ctx.db
+      .query('comments')
+      .withIndex('by_issue', (q) => q.eq('issue_id', id))
+      .collect()
+    const files = await ctx.db
+      .query('issue_attachments')
+      .withIndex('by_issue', (q) => q.eq('issue_id', id))
+      .collect()
+    return comments.length + files.length
+  })
+
+/** What organization `orgId` keeps in Deleted items, by table. */
+const trashOf = (t: T, orgId: string) =>
+  t.run(async (ctx) => ({
+    items: (await ctx.db.query('deleted_items').collect()).filter((r) => r.org_id === orgId),
+    rows: (await ctx.db.query('deleted_rows').collect()).filter((r) => r.org_id === orgId),
+    tasks: (await ctx.db.query('deleted_tasks').collect()).filter((r) => r.org_id === orgId),
+  }))
+
+describe('organization teardown', () => {
+  it('deleteOrgDeep deletes every item, stored row, leftover live row and byte of the organization', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { files, elsewhere } = await trashInFlight(t, f)
+
+    await t.run(async (ctx) => deleteOrgDeep(ctx, (await ctx.db.get(f.org._id))!))
+
+    expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
+    expect(await t.run((ctx) => ctx.db.query('deleted_item_jobs').collect())).toEqual([])
+    for (const table of ['issues', 'comments', 'issue_attachments'] as const)
+      expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
+    for (const file of files) expect(await blobExists(t, file)).toBe(false)
+    // the other organization keeps its item and its bytes
+    expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
+    expect(await blobExists(t, elsewhere.file)).toBe(true)
+    // a step scheduled before the teardown finds nothing to do
+    await runSteps(t)
+    expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
+    await assertNoDanglingRefs(t, 'after deleteOrgDeep with Deleted items')
+  })
+
+  it('purgeOrg empties Deleted items in bounded batches whatever their state, and refuses production', async () => {
+    vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+    vi.stubEnv('SITE_URL', 'https://preview.qivo.io')
+    const t = newT()
+    const f = await withOrg(t)
+    const { files, elsewhere } = await trashInFlight(t, f)
+    const live = await t.run((ctx) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_project', (q) => q.eq('project_id', f.sub.id))
+        .collect(),
+    )
+    PURGE_ORG.batch = 3
+
+    vi.stubEnv('QIVO_ENVIRONMENT', 'production')
+    await expect(t.mutation(internal.deletedItems.purgeOrg, { org_id: f.org.id })).rejects.toThrow(
+      /cannot run on a production/,
+    )
+    expect((await trashOf(t, f.org.id)).items).toHaveLength(3)
+    vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+
+    let calls = 0
+    for (;;) {
+      calls++
+      expect(calls).toBeLessThan(100)
+      const { done } = await t.mutation(internal.deletedItems.purgeOrg, { org_id: f.org.id })
+      if (done) break
+    }
+    expect(calls).toBeGreaterThan(3)
+    await runSteps(t)
+    expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
+    // the tasks the moving project left behind went with it, and every byte
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('issues')
+          .withIndex('by_project', (q) => q.eq('project_id', f.sub2.id))
+          .collect(),
+      ),
+    ).toEqual([])
+    for (const file of files) expect(await blobExists(t, file)).toBe(false)
+    // live work and the other organization stay
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('issues')
+          .withIndex('by_project', (q) => q.eq('project_id', f.sub.id))
+          .collect(),
+      ),
+    ).toEqual(live)
+    expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
+    expect(await blobExists(t, elsewhere.file)).toBe(true)
+  })
+
+  it("purgeTasks deletes a drive's own tasks for good, and nothing else", async () => {
+    vi.stubEnv('QIVO_ENVIRONMENT', 'development')
+    vi.stubEnv('SITE_URL', 'https://dev.qivo.test')
+    const t = newT()
+    const f = await withOrg(t)
+    const temporary = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const file = await attach(t, temporary)
+    const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, f, temporary.id)
+    await deleteTask(t, f, kept.id)
+    const keptItem = await itemFor(t, kept.id)
+
+    vi.stubEnv('APP_MODE', 'demo')
+    await expect(
+      t.mutation(internal.deletedItems.purgeTasks, { task_ids: [temporary.id] }),
+    ).rejects.toThrow(/public demo/)
+    vi.stubEnv('APP_MODE', '')
+
+    expect(
+      await t.mutation(internal.deletedItems.purgeTasks, { task_ids: [temporary.id, uuid()] }),
+    ).toEqual({ purged: 1, waiting: 0 })
+    await runSteps(t)
+    expect(await storedIssue(t, temporary.id)).toBeUndefined()
+    expect(await blobExists(t, file.storage_id)).toBe(false)
+    expect(await itemById(t, keptItem.id)).toEqual(keptItem)
   })
 })

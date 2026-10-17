@@ -29,13 +29,12 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
-import { byId } from './lib/db'
+import { byId, LARGE_ROWS_PER_READ } from './lib/db'
 import { REMOVAL_PHASES, type RemovalPhase } from './lib/enums'
 import {
   budgetSpent,
   clearHolder,
   heldTasks,
-  LARGE_ROWS_PER_READ,
   pendingRemoval,
   REMOVAL_BUDGET,
   type RemovalBudget,

@@ -126,6 +126,9 @@ export function assertDemoPayload(value: unknown): void {
     throw demoRefusal('This change is too large for the demo.', 'demo_limit')
 }
 
+/* The key under which demoWriter hands out the writer it wraps. */
+const UNCOUNTED = Symbol('demoWriter.uncounted')
+
 /** Count actual inserted records, including narration and bulk helpers, in
  * the writer's transaction. Updating the receipt uses the underlying writer
  * so accounting cannot recursively count itself. */
@@ -146,10 +149,22 @@ export function demoWriter(ctx: MutationCtx, authUserId: string): MutationCtx['d
   return new Proxy(ctx.db, {
     get(target, key) {
       if (key === 'insert') return insert
+      if (key === UNCOUNTED) return ctx.db
       const value = Reflect.get(target, key)
       return typeof value === 'function' ? value.bind(target) : value
     },
   })
+}
+
+/** The writer under `db`'s demo accounting, or `db` itself when nothing
+ * counts its inserts. For rows that only move between the live tables and
+ * Deleted items (model/deletedItems.ts): moving a row leaves the number of
+ * records as it was, so it spends none of the record limit and skips the
+ * payload check, which a stored copy of a legal row can pass. A wrapper
+ * around `db` passes the key on (a Proxy that returns non-function
+ * properties as they are, as model/deletedItems.ts metered does). */
+export function uncountedWriter(db: MutationCtx['db']): MutationCtx['db'] {
+  return (db as { [UNCOUNTED]?: MutationCtx['db'] })[UNCOUNTED] ?? db
 }
 
 export async function registerDemoUser(

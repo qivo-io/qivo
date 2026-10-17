@@ -56,6 +56,7 @@ import {
   type Catalogue,
   COMMENT_PAGE_MAX,
   commentOut,
+  credentialVia,
   destinationOf,
   findIssue,
   findProjectRef,
@@ -95,6 +96,7 @@ import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { postComment } from '../model/comments'
+import { moveTasksToTrash } from '../model/deletedItems'
 import {
   assertAssignable,
   assertAssignableChange,
@@ -105,7 +107,6 @@ import {
   assertWeekPair,
   cleanTitle,
   createIssueCore,
-  deleteIssueCore,
   type IssuePatch,
   linkAccess,
   metaNeedsSub,
@@ -762,19 +763,35 @@ export const updateIssue = internalMutation({
   },
 })
 
-/* DELETE /v1/tasks/{ref} (rest:479-484) runs model/issues deleteIssueCore.
- * Detached children are touched AND notified, attachment bytes die in the
- * same transaction, and the 'deleted' narration's detail is exactly the
- * provenance. */
+/* DELETE /v1/tasks/{ref} moves the task to Deleted items as the app's
+ * delete does (model/deletedItems.ts moveTasksToTrash), where a person can
+ * restore it in the app. Its comments, follows, labels, links and
+ * attachments go with it, its messages are deleted, and its subtasks stay,
+ * detached, touched AND notified. The item records the credential (`via`),
+ * and the 'deleted' narration's detail is exactly the provenance. */
 export const deleteIssue = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, ref: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    keyName: vKeyName,
+    credential: vEventOwner,
+    ref: v.string(),
+  },
   handler: async (ctx, a): Promise<{ deleted: boolean; id: string; key: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const via = await credentialVia(ctx, me, a.credential)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const now = new Date().toISOString()
-    await deleteIssueCore(ctx, { me, issue, now, provenance: provenanceOf(a.keyName) })
+    await moveTasksToTrash(ctx, {
+      actor: me,
+      root: issue,
+      subtasks: [],
+      now,
+      provenance: provenanceOf(a.keyName),
+      via,
+    })
     return { deleted: true, id: issue.id, key: issueKey(issue.num) }
   },
 })
@@ -1018,7 +1035,8 @@ type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${in
 
 /** What a route's `run` receives once auth and routing are done. */
 type RouteInput<Name extends string> = Principal & {
-  /** the credential row that authenticated the request, for GET /v1/me */
+  /** the credential row that authenticated the request, for GET /v1/me and
+   * the delete, which records it in Deleted items */
   credential: EventOwner
   /** the agent key's name, or null for a personal token */
   keyName: string | null
@@ -1167,11 +1185,12 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, keyName, param }) =>
+    run: (r, { callerId, access, keyName, credential, param }) =>
       r.runMutation(internal.machine.rest.deleteIssue, {
         callerId,
         access,
         keyName,
+        credential,
         ref: param('ref'),
       }),
   }),

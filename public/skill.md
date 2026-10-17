@@ -72,7 +72,8 @@ own comments need only read access to the task.
   `archived=true` needs `project` and returns `{next_cursor, tasks}`; pass
   `next_cursor` back as `cursor` until it is null, even after an empty page.
 - **Browser:** Use it for images inside descriptions, guest invitations,
-  deleting a project, and other actions absent from the machine interfaces.
+  deleting a project, restoring work from Deleted items, and other actions
+  absent from the machine interfaces.
   Attach files through MCP or REST instead. Enter at `https://qivo.io/app` and
   use the user's signed-in session. Follow an explicitly requested interface
   when it supports the work.
@@ -103,8 +104,12 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 
 Use the current task names; former endpoint and tool names are not aliases.
 Refresh cached MCP discovery or reconnect if the client still has an older
-tool catalogue. Use deletion only for requested permanent removal; archiving
-retains the task and its history.
+tool catalogue. Use deletion only when the user asks to delete a task;
+archiving retains the task and its history. A delete moves the task, with its
+comments, files, links and labels, to Deleted items, and its subtasks stay as
+top-level tasks. Agents cannot restore it. A person can restore it in the
+app within 30 days, after which it is deleted for good. Deleted items names
+the credential that deleted the task.
 
 ## Resolve the work and people
 
@@ -364,7 +369,9 @@ settings page is unnecessary; connecting an ordinary MCP tool client does not
 provide a receiver or automatically start agent work. Configure the intended
 receiver before subscribing. Qivo sends no application-specific bridge messages.
 
-Choose one of `task.created`, `task.updated`, `task.deleted` or `comment.created`.
+Choose one of `task.created`, `task.updated`, `task.deleted`, `task.restored` or
+`comment.created`. `task.deleted` means the task moved to Deleted items, and
+`task.restored` that a person restored it there.
 Subscribe separately for each event type. Optional `arguments.task_id` and
 `arguments.project_id` take UUIDs from task/project discovery, not QN refs or
 project keys. A project filter names exactly one task-containing sub-project.
@@ -428,7 +435,8 @@ Payloads identify the task and changed fields; read current content with
 `get_task` or REST GET. Verify signatures before acting and deduplicate by
 `eventId`. Deliveries may arrive more than once or out of order. Acknowledge with
 `2xx` only after accepting the event for processing. This acknowledgment does
-not tell Qivo whether the agent completed its work. Deleted tasks cannot be read.
+not tell Qivo whether the agent completed its work. Deleted tasks cannot be
+read until a person restores them.
 `changed_fields` uses stored task-column names, including server-maintained fields.
 Do not treat it as an API write payload. For example, `archived_at` reports an
 archive change, while the API write uses `archived`.

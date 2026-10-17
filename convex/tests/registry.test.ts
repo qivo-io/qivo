@@ -232,10 +232,17 @@ describe('the machine action registry', () => {
       'runMutation',
       'runQuery',
     ])
+    const credential = {
+      profile_id: 'c',
+      credential_table: 'agent_keys',
+      credential_id: 'k',
+      credential_row_id: 'row',
+    } as const
     const cast = (r: unknown) =>
       (r as WriteRunner).runMutation(internal.machine.mcp.deleteIssue, {
         callerId: 'c',
         access: 'write',
+        credential,
         ref: 'r',
       })
     await expect(runEntry(runner, { access: 'read', run: cast }, null)).rejects.toThrow(TypeError)
@@ -245,7 +252,7 @@ describe('the machine action registry', () => {
       {
         via: 'mutation',
         name: 'machine/mcp:deleteIssue',
-        args: { callerId: 'c', access: 'write', ref: 'r' },
+        args: { callerId: 'c', access: 'write', credential, ref: 'r' },
       },
     ])
   })
