@@ -442,7 +442,7 @@ export default defineSchema({
   org_removals: defineTable({
     org_id: v.string(),
     reason: vOrgRemovalReason,
-    ended_at: v.string(), // when the read-only period began
+    ended_at: v.string(), // when the service ended; exports a week before count
     delete_after: v.string(), // when deletion may begin
     requested_by: v.optional(v.string()), // the admin profile, for 'requested'
     phase: v.optional(vOrgRemovalPhase),
@@ -451,7 +451,6 @@ export default defineSchema({
     created_at: v.string(),
   })
     .index('by_org', ['org_id'])
-    .index('by_delete_after', ['delete_after'])
     .index('by_progress', ['progress_at']),
 
   teams: defineTable({

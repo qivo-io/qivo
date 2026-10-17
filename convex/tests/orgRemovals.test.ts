@@ -6,7 +6,7 @@ import type { BillingPlan } from '../lib/billingTypes'
 import { enrollOrganization } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { noCheckoutDue, serviceEndedAt } from '../model/orgRetention'
-import { STALLED_MS } from '../orgRemovals'
+import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
 import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -49,6 +49,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   REMOVAL_BUDGET.rows = 256
+  SWEEP_PAGES.removals = 128
+  SWEEP_PAGES.subscriptions = 64
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
@@ -113,6 +115,28 @@ function remote(orgId: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
 }
+const checkoutId = '66666666-6666-4666-8666-666666666666'
+const checkoutBody = (orgId: string, status: string) => ({
+  id: checkoutId,
+  status,
+  url: 'https://sandbox.polar.sh/checkout/example',
+  expires_at: at(40),
+  external_customer_id: orgId,
+  product_id: productId,
+  seats: 5,
+  min_seats: 5,
+  max_seats: 5,
+})
+/* Saves a checkout on the organization's subscription row, as
+ * billingActions.finishCheckout does. */
+const saveCheckout = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    const sub = await ctx.db
+      .query('billing_subscriptions')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .unique()
+    await ctx.db.patch(sub!._id, { checkout_id: checkoutId })
+  })
 const applied = (t: T, body: Record<string, unknown>) =>
   t.mutation(internal.billingSync.apply, { payload: JSON.stringify(body) })
 
@@ -358,8 +382,31 @@ describe('an admin deleting the organization', () => {
       confirm: f.org.slug,
     })
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true)
+    expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'requested' })
+
+    // Keep waits for a subscription, so it cannot restart the period for free
+    const state = () => as(t, f.admin).query(api.orgRemovals.state, { org_id: f.org.id })
+    expect((await state()).deletion?.keep_available).toBe(false)
+    await expectRefusal(
+      as(t, f.admin).mutation(api.orgRemovals.keep, { org_id: f.org.id }),
+      'rule',
+      /Subscribe again/,
+    )
+    await applied(
+      t,
+      remote(f.org.id, {
+        id: replacementId,
+        current_period_start: at(1),
+        current_period_end: at(31),
+        modified_at: at(1),
+      }),
+    )
     // a later subscription does not stop a deletion an admin asked for
     expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'requested' })
+    expect((await state()).deletion?.keep_available).toBe(true)
+    await as(t, f.admin).mutation(api.orgRemovals.keep, { org_id: f.org.id })
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    await createTask(t, f.admin, f.org.id, f.sub.id)
   })
 })
 
@@ -492,9 +539,123 @@ describe('deleting the organization', () => {
     expect(await removalOf(t, f.org.id)).toBeNull()
     expect((await orgRows(t, f.org.id)).profiles).toBeGreaterThan(0)
   })
+
+  it('holds a deletion an admin asked for while a subscription is live', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id))
+    polar({
+      list: () => [remote(f.org.id)],
+      revoke: () => remote(f.org.id, { status: 'canceled', ended_at: NOW }),
+    })
+    await as(t, f.admin).action(api.orgRemovals.request, { org_id: f.org.id, confirm: f.org.slug })
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    polar({ list: () => [remote(f.org.id, { id: replacementId, current_period_end: at(59) })] })
+    await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+    const held = await removalOf(t, f.org.id)
+    expect(held).toMatchObject({ reason: 'requested' })
+    expect(held?.phase).toBeUndefined()
+  })
+
+  it.each([
+    ['open', false],
+    ['expired', true],
+  ] as const)(
+    'reads a %s checkout from Polar on the date: deleting %s',
+    async (status, deleting) => {
+      const { t, f } = await billed()
+      await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))
+      await saveCheckout(t, f.org.id)
+      vi.setSystemTime(Date.parse(at(30)) + 60_000)
+      polar({ list: () => [], checkout: () => checkoutBody(f.org.id, status) })
+      await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+      expect((await removalOf(t, f.org.id))?.phase).toBe(deleting ? 'profiles' : undefined)
+    },
+  )
+
+  it('waits while billing runs without Polar credentials', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))
+    vi.stubEnv('POLAR_ACCESS_TOKEN', '')
+    await expectRefusal(
+      as(t, f.admin).action(api.orgRemovals.request, { org_id: f.org.id, confirm: f.org.slug }),
+      'rule',
+    )
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+    const waiting = await removalOf(t, f.org.id)
+    expect(waiting).toMatchObject({ reason: 'service_ended' })
+    expect(waiting?.phase).toBeUndefined()
+  })
+
+  it("leaves an organization being deleted out of its members' other reads", async () => {
+    const { t, f } = await filled()
+    // the admin also belongs to the other organization
+    await t.run((ctx) => {
+      const { _id, _creationTime, ...admin } = f.admin
+      return ctx.db.insert('profiles', { ...admin, id: uuid(), org_id: f.otherOrg.id })
+    })
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+    const snapshot = await as(t, f.admin).query(api.snapshot.forMe, {})
+    expect(snapshot?.orgs.map((org) => org.id)).toEqual([f.otherOrg.id])
+    await expectRefusal(
+      as(t, f.admin).query(api.billing.status, { org_id: f.org.id }),
+      'forbidden',
+      /being deleted/,
+    )
+  })
+})
+
+describe('the hourly sweep', () => {
+  it('reaches every organization one page at a time', async () => {
+    const { t, f } = await billed()
+    await t.run(async (ctx) => {
+      await enrollOrganization(ctx, f.otherOrg.id)
+      // complimentary access that ran out without any webhook, and recent
+      // exports, so no deletion email is queued
+      for (const sub of await ctx.db.query('billing_subscriptions').collect())
+        await ctx.db.patch(sub._id, { complimentary_until: at(-1) })
+      for (const org of await ctx.db.query('organizations').collect())
+        await ctx.db.patch(org._id, { last_export_at: NOW })
+    })
+    SWEEP_PAGES.removals = 1
+    SWEEP_PAGES.subscriptions = 1
+    await t.mutation(internal.orgRemovals.sweep, {})
+    await runSteps(t)
+    for (const org of [f.org, f.otherOrg])
+      expect(await removalOf(t, org.id)).toMatchObject({
+        reason: 'service_ended',
+        delete_after: at(30),
+      })
+
+    polar({ list: () => [] })
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    await t.mutation(internal.orgRemovals.sweep, {})
+    await runSteps(t)
+    for (const org of [f.org, f.otherOrg]) {
+      expect(await removalOf(t, org.id)).toBeNull()
+      expect((await orgRows(t, org.id)).profiles).toBe(0)
+    }
+  })
 })
 
 describe('an organization that never completes checkout', () => {
+  it('keeps a checkout saved after Polar was asked', async () => {
+    const { t, f } = await billed()
+    vi.setSystemTime(Date.parse(at(3)) + 60_000)
+    await saveCheckout(t, f.org.id)
+    await t.mutation(internal.orgRemovals.startNoCheckout, { org_id: f.org.id })
+    expect(await removalOf(t, f.org.id)).toBeNull()
+  })
+
+  it('shows no checkout deadline once complimentary access was granted', async () => {
+    const { t, f, operator } = await billed()
+    const status = () => as(t, f.user).query(api.billing.status, { org_id: f.org.id })
+    expect((await status()).checkout_due_at).toBe(at(3))
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    expect((await status()).checkout_due_at).toBeNull()
+  })
+
   it('is deleted 3 days after enrollment once Polar confirms nothing is pending', async () => {
     const { t, f } = await billed()
     const sub = await t.run((ctx) =>

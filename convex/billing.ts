@@ -46,7 +46,11 @@ export const status = orgQuery({
       status: sub?.status ?? 'pending',
       complimentary_until: sub?.complimentary_until ?? null,
       current_period_end: sub?.current_period_end ?? null,
-      checkout_due_at: sub?.checkout_due_at ?? null,
+      // only while the checkout deadline applies (model/orgRetention.ts)
+      checkout_due_at:
+        sub && !sub.complimentary_until && !sub.polar_subscription_id
+          ? (sub.checkout_due_at ?? null)
+          : null,
       deletion: removal ? { reason: removal.reason, delete_after: removal.delete_after } : null,
     }
   },

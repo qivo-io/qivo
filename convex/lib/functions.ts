@@ -14,7 +14,7 @@ import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { action, mutation, query } from '../_generated/server'
-import { assertOrgAvailable, assertOrgWritable } from './billingAccess'
+import { assertOrgWritable, orgRemovalFor } from './billingAccess'
 import {
   assertDemoPayload,
   consumeDemoWrite,
@@ -53,8 +53,12 @@ export function require(cond: unknown, err: ConvexError<Refusal>): asserts cond 
   if (!cond) throw err
 }
 
-/* MutationCtx satisfies this too (writer db/storage extend the readers). */
-async function loadAuthed(ctx: QueryCtx) {
+/* The signed-in login's active profiles, keyed by org_id. An organization
+ * whose deletion has begun is left out and listed in `deleting`, so reads
+ * across organizations, such as the snapshot, stop showing it while its
+ * profiles are deleted. MutationCtx satisfies this too (writer db/storage
+ * extend the readers). */
+async function loadMemberships(ctx: QueryCtx) {
   const identity = await ctx.auth.getUserIdentity()
   if (identity === null) throw forbidden('not signed in')
   const authUserId = identity.subject
@@ -64,21 +68,29 @@ async function loadAuthed(ctx: QueryCtx) {
     .withIndex('by_auth', (q) => q.eq('auth_user_id', authUserId))
     .collect()
   const myProfiles = new Map<string, Doc<'profiles'>>()
+  const deleting = new Set<string>()
   for (const profile of mine) {
-    if (profile.active && (!demo || profile.org_id === demo.org_id))
-      myProfiles.set(profile.org_id, profile)
+    if (!profile.active || (demo && profile.org_id !== demo.org_id)) continue
+    if ((await orgRemovalFor(ctx, profile.org_id))?.phase !== undefined)
+      deleting.add(profile.org_id)
+    else myProfiles.set(profile.org_id, profile)
   }
+  return { authUserId, myProfiles, deleting }
+}
+
+async function loadAuthed(ctx: QueryCtx) {
+  const { authUserId, myProfiles } = await loadMemberships(ctx)
   return { authUserId, myProfiles }
 }
 
-/* private.profile_in's successor for people. An organization whose deletion
- * has begun refuses everyone, before its profiles are gone. */
+/* private.profile_in's successor for people. A member of an organization
+ * whose deletion has begun learns why they are refused. */
 async function loadMember(ctx: QueryCtx, orgId: string) {
-  const authed = await loadAuthed(ctx)
-  const me = authed.myProfiles.get(orgId)
+  const { authUserId, myProfiles, deleting } = await loadMemberships(ctx)
+  if (deleting.has(orgId)) throw forbidden('this organization is being deleted')
+  const me = myProfiles.get(orgId)
   if (!me) throw forbidden('no profile in this organization')
-  await assertOrgAvailable(ctx, orgId)
-  return { ...authed, me }
+  return { authUserId, myProfiles, me }
 }
 
 async function loadOperator(ctx: QueryCtx) {

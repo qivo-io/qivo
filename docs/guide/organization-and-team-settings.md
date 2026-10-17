@@ -102,8 +102,11 @@ deletes everything the organization owns, including uploaded files. Each
 person's sign-in and their other organizations remain.
 
 Until that date, subscribing again keeps an organization whose subscription
-ended, and an admin can stop a deletion an admin asked for with **Keep
-organization**.
+ended. An admin can stop a deletion an admin asked for with **Keep
+organization** while the organization has a subscription or complimentary
+access. If the deletion ended the subscription, subscribe again first. Qivo
+does not start a deletion while the organization has a live subscription or
+a checkout that is still open.
 
 A new organization that has not completed checkout within 3 days, and has no
 complimentary access, is deleted.

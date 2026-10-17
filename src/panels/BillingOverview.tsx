@@ -58,7 +58,7 @@ export function BillingOverview({
   busy: boolean
   onCheckout: () => void
   onManage: () => void
-  onCancel: () => Promise<void>
+  onCancel: () => Promise<string | null>
   onExport: () => void
 }) {
   const plan = billing.plan
@@ -250,12 +250,20 @@ function CancelSubscription({
 }: {
   lastExportAt: string | null
   busy: boolean
-  onCancel: () => Promise<void>
+  onCancel: () => Promise<string | null>
   onExport: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
   return (
-    <AlertDialog open={open} onOpenChange={(next) => !busy && setOpen(next)}>
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (busy) return
+        setOpen(next)
+        if (!next) setError('')
+      }}
+    >
       <Button
         type="button"
         variant="outline"
@@ -276,6 +284,11 @@ function CancelSubscription({
               : 'No export has been made yet.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Keep subscription</AlertDialogCancel>
           <Button type="button" variant="outline" disabled={busy} onClick={onExport}>
@@ -287,7 +300,10 @@ function CancelSubscription({
             disabled={busy}
             onClick={(event) => {
               event.preventDefault()
-              void onCancel().then(() => setOpen(false))
+              setError('')
+              void onCancel().then((refusal) =>
+                refusal === null ? setOpen(false) : setError(refusal),
+              )
             }}
           >
             {busy ? 'Cancelling…' : 'Cancel subscription'}

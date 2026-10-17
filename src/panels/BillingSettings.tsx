@@ -132,9 +132,10 @@ function LiveBillingSettings({
   }
 
   // Cancelling ends the subscription at once. The summary then reports the
-  // deletion date that the read-only period counts towards.
-  async function cancelSubscription() {
-    if (actionInFlight.current) return
+  // deletion date that the read-only period counts towards. Answers the
+  // refusal for the dialog to show, or null once the subscription ended.
+  async function cancelSubscription(): Promise<string | null> {
+    if (actionInFlight.current) return 'Another billing action is still running.'
     actionInFlight.current = true
     const release = beginUpdateBlock()
     setBusy(true)
@@ -142,8 +143,9 @@ function LiveBillingSettings({
     try {
       await convex.action(api.billingActions.cancelSubscription, { org_id: orgId })
       window.showToast?.('Subscription cancelled')
+      return null
     } catch (cause) {
-      setActionError(billingError(cause))
+      return billingError(cause)
     } finally {
       actionInFlight.current = false
       setBusy(false)

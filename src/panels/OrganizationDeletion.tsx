@@ -73,11 +73,13 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
       {deletion ? (
         <>
           <p data-org-deletion-date className="text-sm text-text-1">
-            {deletion.reason === 'requested'
-              ? `Deletion is scheduled for ${billingDate(deletion.delete_after)}.`
-              : `The subscription has ended. The organization will be deleted on ${billingDate(deletion.delete_after)} unless someone subscribes in Billing.`}
+            {deletion.reason !== 'requested'
+              ? `The subscription has ended. The organization will be deleted on ${billingDate(deletion.delete_after)} unless someone subscribes in Billing.`
+              : deletion.keep_available
+                ? `Deletion is scheduled for ${billingDate(deletion.delete_after)}.`
+                : `Deletion is scheduled for ${billingDate(deletion.delete_after)}. To keep the organization, subscribe again in Billing first.`}
           </p>
-          {deletion.reason === 'requested' && (
+          {deletion.keep_available && (
             <Button
               type="button"
               variant="outline"

@@ -13,10 +13,23 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [unrecorded, setUnrecorded] = useState(false)
   const active = useRef<AbortController | null>(null)
   useUpdateBlocker(busy)
 
   useEffect(() => () => active.current?.abort(), [])
+
+  // The browser started the download. Qivo cannot see the file reach disk,
+  // so the date only decides whether admins get a deletion email. A failure
+  // is shown, because a missing date can send that email needlessly.
+  async function recordExport() {
+    try {
+      await convex.mutation(api.orgRemovals.recordExport, { org_id: orgId })
+      setUnrecorded(false)
+    } catch {
+      setUnrecorded(true)
+    }
+  }
 
   async function download() {
     if (active.current) return
@@ -45,9 +58,7 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
       setStatus('Export downloaded.')
-      // The browser started the download. Qivo cannot see the file reach
-      // disk, so this only decides whether admins get a deletion reminder.
-      void convex.mutation(api.orgRemovals.recordExport, { org_id: orgId }).catch(() => {})
+      void recordExport()
     } catch (cause) {
       if (controller.signal.aborted) {
         setStatus('Export cancelled.')
@@ -92,6 +103,18 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
         <p role="alert" className="mt-2 text-sm text-danger">
           {error}
         </p>
+      )}
+      {unrecorded && (
+        <div
+          role="alert"
+          data-org-export-unrecorded
+          className="mt-2 flex flex-wrap items-center gap-2 text-sm text-danger"
+        >
+          The export downloaded, but Qivo could not record its date.
+          <Button type="button" variant="outline" size="xs" onClick={() => void recordExport()}>
+            Try again
+          </Button>
+        </div>
       )}
       <p className="mt-2 text-sm leading-relaxed text-text-2">
         Keep this page open until the download finishes. Changes made during export may appear at

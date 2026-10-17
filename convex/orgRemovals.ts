@@ -1,13 +1,15 @@
 /* Organization retention and deletion jobs (rules in model/orgRetention.ts,
  * deletion steps in model/orgDeletion.ts).
  *
- * `sweep` runs every hour (crons.ts). It starts the read-only period for
- * organizations whose billing ended, stops it when access returns or billing
- * is switched off, hands organizations that never completed checkout to
- * `verifyNoCheckout`, and hands removals whose date has passed to `begin`.
- * Both ask Polar first, so a lost webhook cannot delete an organization that
- * pays. `begin` then sets the first phase, which ends all access
- * (lib/billingAccess.ts), and `step` deletes in bounded transactions until
+ * `sweep` runs every hour (crons.ts), one page per transaction. It starts
+ * the read-only period for organizations whose billing ended, stops it when
+ * access returns or billing is switched off, hands organizations that never
+ * completed checkout to `verifyNoCheckout`, and hands removals whose date has
+ * passed to `begin`. Both ask Polar first, so neither a lost webhook nor a
+ * checkout still open can let Qivo delete an organization that pays. The
+ * mutation that starts a deletion refuses any checkout saved meanwhile. It
+ * sets the first phase, which ends all access (lib/functions.ts and
+ * lib/billingAccess.ts), and `step` deletes in bounded transactions until
  * nothing is left. Convex drops the calls a failed mutation scheduled, so
  * `recover` (every ten minutes) restarts a deletion whose step stalled, as
  * labelRemovals.ts does.
@@ -18,7 +20,7 @@
  * the archive. */
 
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { type ObjectType, v } from 'convex/values'
 import {
   type ActionCtx,
   internalAction,
@@ -36,8 +38,10 @@ import {
 } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
+import type { OrgRemovalReason } from './lib/enums'
 import {
   authedMutation,
+  badRequest,
   forbidden,
   notFound,
   orgAction,
@@ -55,6 +59,7 @@ import {
 } from './lib/polar'
 import { sendDeletionNotice } from './mail'
 import { audit } from './model/admin'
+import { hasPendingCheckout } from './model/billing'
 import { deleteOrgStep } from './model/orgDeletion'
 import {
   accessReturned,
@@ -70,12 +75,12 @@ import {
 export const STALLED_MS = 5 * 60_000
 const RECOVER_BATCH = 32
 const RECOVER_SCAN = 512
-const DUE_BATCH = 32
-/* Removals one sweep starts or stops; each start may queue an email per
- * admin. */
-const SWEEP_CHANGES = 32
-/* Checkout deadlines one sweep hands to Polar. */
-const CHECK_BATCH = 64
+
+/** The most rows one sweep leg reads in each phase. A removal costs at most
+ * one subscription lookup. A subscription costs one removal lookup and, when
+ * its service ended, the reads and emails scheduleRemoval queues. Tests lower
+ * these. */
+export const SWEEP_PAGES = { removals: 128, subscriptions: 64 }
 
 const isoNow = () => new Date().toISOString()
 
@@ -83,7 +88,11 @@ const orgArg = { org_id: v.string() }
 type OrgArg = { org_id: string }
 const stepRef = makeFunctionReference<'mutation', OrgArg, null>('orgRemovals:step')
 const beginRef = makeFunctionReference<'action', OrgArg, null>('orgRemovals:begin')
-const beginDueRef = makeFunctionReference<'query', OrgArg, boolean>('orgRemovals:beginDue')
+type Due = { reason: OrgRemovalReason; checkout_id: string | null }
+const beginDueRef = makeFunctionReference<'query', OrgArg, Due | null>('orgRemovals:beginDue')
+const clearEndedRef = makeFunctionReference<'mutation', OrgArg & { checkout_id: string }, null>(
+  'billingActions:clearEndedCheckout',
+)
 const abortRef = makeFunctionReference<'mutation', OrgArg, null>('orgRemovals:abort')
 const markDeletingRef = makeFunctionReference<'mutation', OrgArg, null>('orgRemovals:markDeleting')
 const verifyNoCheckoutRef = makeFunctionReference<'action', OrgArg, null>(
@@ -119,12 +128,14 @@ const sendNoticeRef = makeFunctionReference<
 
 /** Ends every live Polar subscription of the organization at once and
  * records the result locally, so a deletion never leaves one billing. A
- * Polar failure becomes a readable refusal, and nothing is scheduled. */
+ * Polar failure, or billing without Polar credentials, becomes a readable
+ * refusal, and nothing is scheduled. */
 export async function revokeLiveSubscriptions(
   ctx: Pick<ActionCtx, 'runMutation'>,
   orgId: string,
 ): Promise<number> {
-  if (!billingEnabled() || !polarConfigured()) return 0
+  if (!billingEnabled()) return 0
+  require(polarConfigured(), rule('Billing is not available. Try again later.'))
   let revoked = 0
   try {
     for (const subscription of await listPolarSubscriptions(orgId)) {
@@ -141,6 +152,23 @@ export async function revokeLiveSubscriptions(
   return revoked
 }
 
+/* Whether the organization's last checkout could still become a
+ * subscription. Polar answers for it; an ended one is cleared, so the
+ * mutation that starts a deletion can refuse any checkout saved since. A
+ * checkout naming another customer throws, and the caller waits. */
+async function checkoutOpen(
+  ctx: Pick<ActionCtx, 'runMutation'>,
+  orgId: string,
+  checkoutId: string | null,
+): Promise<boolean> {
+  if (!checkoutId) return false
+  const session = await getPolarCheckout(checkoutId)
+  require(session.externalCustomerId === orgId, badRequest('Checkout ownership mismatch.'))
+  if (session.status !== 'expired' && session.status !== 'failed') return true
+  await ctx.runMutation(clearEndedRef, { org_id: orgId, checkout_id: checkoutId })
+  return false
+}
+
 /* Sets the first phase, which refuses all access from here on, and starts
  * the steps. */
 async function beginDeletion(ctx: MutationCtx, orgId: string): Promise<void> {
@@ -151,42 +179,58 @@ async function beginDeletion(ctx: MutationCtx, orgId: string): Promise<void> {
   console.info('Organization deletion started', { org_id: orgId, reason: removal.reason })
 }
 
-/* Both tables are read whole, so one run costs a few lookups per change
- * rather than per organization. What a run leaves waits for the next hour;
- * billing webhooks make the same changes at once (billingSync.ts). */
+const sweepArgs = {
+  phase: v.optional(v.union(v.literal('removals'), v.literal('subscriptions'))),
+  cursor: v.optional(v.string()), // the phase's page cursor
+  now: v.optional(v.number()), // the run's start, epoch milliseconds
+}
+type SweepLeg = ObjectType<typeof sweepArgs>
+const sweepRef = makeFunctionReference<'mutation', SweepLeg, null>('orgRemovals:sweep')
+
+/* One leg of the hourly sweep. Empty arguments start a run, and each leg
+ * reads one page and schedules the next, as files.reapOrphans does. The
+ * removals phase stops billing-driven periods whose access returned and
+ * hands removals whose date has passed to `begin`. The subscriptions phase
+ * runs while billing is on. It starts the period for organizations whose
+ * service ended and hands those past their checkout deadline to
+ * `verifyNoCheckout`. Billing webhooks make the same changes at once
+ * (billingSync.ts); the sweep catches what they miss. */
 export const sweep = internalMutation({
-  args: {},
-  handler: async (ctx): Promise<null> => {
-    const now = Date.now()
-    const subs = billingEnabled() ? await ctx.db.query('billing_subscriptions').collect() : []
-    const subFor = new Map(subs.map((sub) => [sub.org_id, sub]))
-    const removals = await ctx.db.query('org_removals').collect()
-    const removed = new Set(removals.map((removal) => removal.org_id))
-    let changes = 0
-    let checks = 0
-    for (const removal of removals) {
-      if (changes === SWEEP_CHANGES) break
-      if (!accessReturned(removal, subFor.get(removal.org_id) ?? null, now)) continue
-      await ctx.db.delete(removal._id)
-      changes += 1
-    }
-    for (const sub of subs) {
-      if (removed.has(sub.org_id)) continue
-      const endedAt = serviceEndedAt(sub, now)
-      if (endedAt && changes < SWEEP_CHANGES) {
-        await scheduleRemoval(ctx, { orgId: sub.org_id, reason: 'service_ended', endedAt })
-        changes += 1
-      } else if (!endedAt && checks < CHECK_BATCH && polarConfigured() && noCheckoutDue(sub, now)) {
-        await ctx.scheduler.runAfter(0, verifyNoCheckoutRef, { org_id: sub.org_id })
-        checks += 1
+  args: sweepArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? Date.now()
+    let next: Pick<SweepLeg, 'phase' | 'cursor'> | null = null
+    if ((a.phase ?? 'removals') === 'removals') {
+      const page = await ctx.db
+        .query('org_removals')
+        .paginate({ cursor: a.cursor ?? null, numItems: SWEEP_PAGES.removals })
+      for (const removal of page.page) {
+        if (removal.phase !== undefined) continue
+        if (
+          removal.reason === 'service_ended' &&
+          accessReturned(removal, await subscriptionFor(ctx, removal.org_id), now)
+        )
+          await ctx.db.delete(removal._id)
+        else if (Date.parse(removal.delete_after) <= now)
+          await ctx.scheduler.runAfter(0, beginRef, { org_id: removal.org_id })
       }
+      if (!page.isDone) next = { phase: 'removals', cursor: page.continueCursor }
+      else if (billingEnabled()) next = { phase: 'subscriptions' }
+    } else {
+      const page = await ctx.db
+        .query('billing_subscriptions')
+        .paginate({ cursor: a.cursor ?? null, numItems: SWEEP_PAGES.subscriptions })
+      for (const sub of page.page) {
+        if (await orgRemovalFor(ctx, sub.org_id)) continue
+        const endedAt = serviceEndedAt(sub, now)
+        if (endedAt)
+          await scheduleRemoval(ctx, { orgId: sub.org_id, reason: 'service_ended', endedAt })
+        else if (polarConfigured() && noCheckoutDue(sub, now))
+          await ctx.scheduler.runAfter(0, verifyNoCheckoutRef, { org_id: sub.org_id })
+      }
+      if (!page.isDone) next = { phase: 'subscriptions', cursor: page.continueCursor }
     }
-    const due = await ctx.db
-      .query('org_removals')
-      .withIndex('by_delete_after', (q) => q.lte('delete_after', new Date(now).toISOString()))
-      .filter((q) => q.eq(q.field('phase'), undefined))
-      .take(DUE_BATCH)
-    for (const removal of due) await ctx.scheduler.runAfter(0, beginRef, { org_id: removal.org_id })
+    if (next) await ctx.scheduler.runAfter(0, sweepRef, { ...next, now })
     return null
   },
 })
@@ -214,10 +258,7 @@ export const verifyNoCheckout = internalAction({
         await ctx.scheduler.runAfter(0, reconcileRef, { org_id })
         return null
       }
-      if (candidate.checkout_id) {
-        const session = await getPolarCheckout(candidate.checkout_id)
-        if (session.status !== 'expired' && session.status !== 'failed') return null
-      }
+      if (await checkoutOpen(ctx, org_id, candidate.checkout_id)) return null
     } catch (error) {
       console.warn('Checkout deadline check deferred', { org_id, error: String(error) })
       return null
@@ -231,7 +272,9 @@ export const startNoCheckout = internalMutation({
   args: orgArg,
   handler: async (ctx, { org_id }): Promise<null> => {
     const sub = await subscriptionFor(ctx, org_id)
-    if (!noCheckoutDue(sub) || (await orgRemovalFor(ctx, org_id))) return null
+    // a checkout saved after Polar was asked waits for the next sweep
+    if (!noCheckoutDue(sub) || hasPendingCheckout(sub) || (await orgRemovalFor(ctx, org_id)))
+      return null
     await scheduleRemoval(ctx, { orgId: org_id, reason: 'no_checkout', endedAt: isoNow() })
     await beginDeletion(ctx, org_id)
     return null
@@ -240,34 +283,44 @@ export const startNoCheckout = internalMutation({
 
 export const beginDue = internalQuery({
   args: orgArg,
-  handler: async (ctx, { org_id }): Promise<boolean> => {
+  handler: async (ctx, { org_id }): Promise<Due | null> => {
     const removal = await orgRemovalFor(ctx, org_id)
-    return (
-      !!removal && removal.phase === undefined && Date.parse(removal.delete_after) <= Date.now()
-    )
+    if (!removal || removal.phase !== undefined) return null
+    if (Date.parse(removal.delete_after) > Date.now()) return null
+    const sub = await subscriptionFor(ctx, org_id)
+    return { reason: removal.reason, checkout_id: sub?.checkout_id ?? null }
   },
 })
 
-/** Begins a deletion whose date has passed, unless Polar still has a live
- * subscription for the organization. Then the deletion stops and billing is
- * reconciled, because someone subscribed again or a webhook was lost. */
+/** Begins a deletion whose date has passed, once Polar confirms that the
+ * organization has no live subscription and no checkout that could still
+ * become one. A live subscription stops a deletion that billing started and
+ * reconciles billing, because someone subscribed again or a webhook was
+ * lost. A deletion an admin asked for waits instead, until an admin keeps
+ * the organization or the subscription ends. Missing Polar credentials or a
+ * Polar error also wait. */
 export const begin = internalAction({
   args: orgArg,
   handler: async (ctx, { org_id }): Promise<null> => {
-    if (!(await ctx.runQuery(beginDueRef, { org_id }))) return null
-    if (billingEnabled() && polarConfigured()) {
-      let live: boolean
-      try {
-        live = (await listPolarSubscriptions(org_id)).some((subscription) =>
-          LIVE_POLAR_STATUSES.includes(subscription.status),
-        )
-      } catch (error) {
-        console.warn('Organization deletion deferred', { org_id, error: String(error) })
+    const due = await ctx.runQuery(beginDueRef, { org_id })
+    if (!due) return null
+    if (billingEnabled()) {
+      if (!polarConfigured()) {
+        console.warn('Organization deletion deferred until Polar is configured', { org_id })
         return null
       }
-      if (live) {
-        await ctx.runMutation(abortRef, { org_id })
-        await ctx.scheduler.runAfter(0, reconcileRef, { org_id })
+      try {
+        const live = (await listPolarSubscriptions(org_id)).some((subscription) =>
+          LIVE_POLAR_STATUSES.includes(subscription.status),
+        )
+        if (live) {
+          if (due.reason !== 'requested') await ctx.runMutation(abortRef, { org_id })
+          await ctx.scheduler.runAfter(0, reconcileRef, { org_id })
+          return null
+        }
+        if (await checkoutOpen(ctx, org_id, due.checkout_id)) return null
+      } catch (error) {
+        console.warn('Organization deletion deferred', { org_id, error: String(error) })
         return null
       }
     }
@@ -298,6 +351,8 @@ export const markDeleting = internalMutation({
     const removal = await orgRemovalFor(ctx, org_id)
     if (!removal || removal.phase !== undefined) return null
     if (Date.parse(removal.delete_after) > Date.now()) return null
+    // a checkout saved after Polar was asked waits for the next sweep
+    if (billingEnabled() && hasPendingCheckout(await subscriptionFor(ctx, org_id))) return null
     await beginDeletion(ctx, org_id)
     return null
   },
@@ -401,9 +456,9 @@ export const recordRequest = internalMutation({
   },
 })
 
-/** An admin stops a deletion they or another admin asked for. A deletion
- * that billing started stops only when paid or complimentary access
- * returns. */
+/** An admin stops a deletion they or another admin asked for, once the
+ * organization has paid or complimentary access again. A deletion that
+ * billing started stops only when that access returns. */
 export const keep = authedMutation({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }): Promise<null> => {
@@ -414,6 +469,11 @@ export const keep = authedMutation({
     require(removal && removal.phase === undefined && removal.reason === 'requested', rule(
       'This organization has no requested deletion to stop.',
     ))
+    // Without paid or complimentary access, keeping would only start a new
+    // billing period, and repeating it would postpone deletion for free.
+    require(subscriptionWritable(await subscriptionFor(ctx, org_id)), rule(
+      'Subscribe again in Billing before keeping this organization.',
+    ))
     await ctx.db.delete(removal._id)
     await audit(ctx, {
       actor_email: me.email ?? '',
@@ -422,8 +482,6 @@ export const keep = authedMutation({
       target_org_id: org_id,
       detail: { delete_after: removal.delete_after },
     })
-    // An organization left without paid access starts its billing period.
-    await syncOrgRemoval(ctx, org_id)
     return null
   },
 })
@@ -444,6 +502,9 @@ export const state = orgQuery({
             reason: removal.reason,
             ended_at: removal.ended_at,
             delete_after: removal.delete_after,
+            keep_available:
+              removal.reason === 'requested' &&
+              subscriptionWritable(await subscriptionFor(ctx, org.id)),
           }
         : null,
     }
