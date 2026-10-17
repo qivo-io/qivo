@@ -12,6 +12,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { CALLER_GONE } from '../lib/core'
 import type { EventOwner } from '../lib/taskEvents'
+import { NAME_MAX } from '../lib/textLimits'
 import {
   activityFor,
   as,
@@ -193,5 +194,29 @@ describe('REST and MCP deletes in Deleted items', () => {
           .collect(),
       ),
     ).toEqual([])
+  })
+
+  it('cuts a name stored before the 80 character cap, as the activity row does, and keeps one at the cap', async () => {
+    const t = newT()
+    const f = await org(t)
+    const atCap = '🔑'.repeat(NAME_MAX)
+    const long = `${'Legacy sync key '.repeat(6)}end`
+    // its first 80 code points end on a space, which the cut drops
+    const cut = `${'Legacy sync key '.repeat(5).trimEnd()}…`
+    const longKey = await plantCredential(t, f.agent, 'agent_keys', long)
+    const capKey = await plantCredential(t, f.agent, 'agent_keys', atCap)
+    const longApp = await plantCredential(t, f.guest, 'oauth_connections', long)
+    const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const [overLongKey, overCapKey, overLongApp] = [await task(), await task(), await task()]
+
+    await restDelete(t, f.agent, longKey, overLongKey, long)
+    await restDelete(t, f.agent, capKey, overCapKey, atCap)
+    await mcpDelete(t, f.guest, longApp, overLongApp)
+
+    expect((await itemFor(t, overLongKey.id)).via?.name).toBe(cut)
+    expect((await itemFor(t, overCapKey.id)).via?.name).toBe(atCap)
+    expect((await itemFor(t, overLongApp.id)).via?.name).toBe(cut)
+    const detail = new Map((await activityFor(t, f.org.id)).map((e) => [e.target_id, e.detail]))
+    expect(detail.get(overLongKey.id)).toBe(`via the REST API (${cut})`)
   })
 })

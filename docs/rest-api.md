@@ -1757,9 +1757,9 @@ reaches members who cannot see that person's tokens, so the row leaves the
 name out. Only the person and organization admins can see a person's tokens.
 An admin's revocation of a token or connected app is a feed row that only
 organization admins receive. A `DELETE` also records its credential in
-Deleted items. Everyone who sees the item there sees an agent key's name,
-while a personal token's name shows only to organization admins and to the
-person who deleted. An update's feed
+Deleted items, with its name cut the same way. Everyone who sees the item
+there sees an agent key's name, while a personal token's name shows only to
+organization admins and to the person who deleted. An update's feed
 row names both sides of every changed field before the provenance suffix —
 e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
 (<key name>)`; description edits quote both sides as ~80-char excerpts

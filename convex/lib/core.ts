@@ -86,6 +86,7 @@ import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
+import { cutName } from './textLimits'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
@@ -1804,8 +1805,11 @@ const credentialName = (row: Doc<EventOwner['credential_table']>): string =>
 
 /**
  * The credential a REST or MCP delete came through, as Deleted items records
- * it (`via`): its table, uuid and current name. `credential` names the exact
- * row that authenticated the request. One revoked or expired since then
+ * it (`via`): its table, uuid and current name. A name longer than NAME_MAX,
+ * which only a key, token or connection named before that cap has, is cut
+ * as restProvenance cuts a key's name (lib/textLimits.ts cutName), so every
+ * item the credential deletes does not repeat it. `credential` names the
+ * exact row that authenticated the request. One revoked or expired since then
  * still names itself, because a request already accepted may finish; one
  * deleted since then, or of another profile, answers like a caller gone
  * between lookup and dispatch.
@@ -1821,7 +1825,7 @@ export async function credentialVia(
   return {
     table: credential.credential_table,
     id: credential.credential_id,
-    name: credentialName(row),
+    name: cutName(credentialName(row)),
   }
 }
 
