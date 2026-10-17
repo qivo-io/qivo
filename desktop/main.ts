@@ -14,6 +14,7 @@ import {
   Tray,
 } from 'electron'
 import electronUpdater from 'electron-updater'
+import { disableStagingUserId, keepSpellcheckOffline } from './privacy.js'
 import { createDesktopSettingsStore, defaultDesktopSettings } from './settings.js'
 import { createLoginStartup, startupArgument } from './startup.js'
 import { createUpdatePrompt } from './updatePrompt.js'
@@ -185,6 +186,7 @@ function setupAutoUpdates(): void {
       return
     }
   }
+  disableStagingUserId(autoUpdater)
   autoUpdater.autoDownload = true
   // Download in the background and finish on a normal app quit. A click on
   // the ready notification still offers an immediate, confirmed restart.
@@ -530,6 +532,9 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  // Register before ready so the window's session and electron-updater's
+  // session are both covered from the moment they exist.
+  app.on('session-created', (session) => keepSpellcheckOffline(session, process.platform))
   app.on('second-instance', (_event, commandLine) => {
     const deepLink = commandLine.find((arg) => arg.startsWith('qivo://'))
     if (deepLink) consumeDeepLink(deepLink)
