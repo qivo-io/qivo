@@ -114,7 +114,10 @@ read notifications** removes them at once. Restoring brings back the rows
 that remain, with their messages read. A task restored right after its
 archive keeps its messages as they were. Restoring a task also sends its
 other subscribers a **Restored** update. Deleting a task or a project
-removes its messages.
+removes its messages, and restoring it from
+[Deleted items](./how-work-is-organized.md#deleted-items) does not bring them
+back. A task restored from there on its own sends its other subscribers a
+**Restored** update; restoring several at once, or a project, sends none.
 
 **Subscriptions.** Click the eye button in a task window to open
 **Subscribers**, then use the eye beside **Me** to subscribe or unsubscribe.

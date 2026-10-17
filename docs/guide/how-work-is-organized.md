@@ -117,19 +117,20 @@ parents. Use **Move** to relocate an existing task while keeping its ID.
 Qivo assigns `QN-1`, `QN-2`, … from one counter per organization. Numbers do
 not change or get reused. Moving a task between projects or sub-projects in
 the organization keeps its number and labels. Task links still require
-access to the task, and archived tasks must be restored before they open.
+access to the task, and archived or deleted tasks must be restored before
+they open.
 
 ## Archiving a project. Putting a finished one away
 
-Use **Project settings → Danger zone → Archive project** to remove a
-finished project and its sub-projects from active views and capacity
-planning. Tasks, comments, attachments, estimates and history remain stored.
-The planner stops loading the archived work. Restore the project before
-adding tasks.
+In the project's settings, choose **Archive or delete…** in the **Archive or
+delete** section at the end, then **Archive**, to remove a finished project
+and its sub-projects from active views and capacity planning. Tasks,
+comments, attachments, estimates and history remain stored. The planner stops
+loading the archived work. Restore the project before adding tasks.
 
 **Settings → Projects → Archived projects** lists archived projects, newest
-first. **Restore** returns them to active views; **Delete** permanently
-removes them after confirmation. Archiving and restoring require Lead
+first. **Restore** returns them to active views; **Delete** moves them to
+[Deleted items](#deleted-items). Archiving, restoring and deleting require Lead
 access, which organization admins and project leads have.
 
 Sub-projects archived with a project return with it. A sub-project archived
@@ -140,3 +141,92 @@ If you can access only a sub-project, the archived list shows its archived
 project too, with that sub-project under it. Restoring a sub-project also
 restores its archived project, so it needs Lead access to that project.
 Otherwise, ask the project's lead to restore the project.
+
+## Deleting a project
+
+In the same **Archive or delete…** window, **Delete** moves the project, its
+sub-projects and all their tasks, archived tasks included, to
+[Deleted items](#deleted-items). A sub-project always goes with its project.
+The window first counts the work, for example **Field trial Q3 has 2
+sub-projects and 48 tasks, including 9 archived tasks.** Its button names the
+count, such as **Delete project and 48 tasks**. An optional reason is shown
+in Deleted items. **Delete** on the Archived projects page opens the same
+window without the Archive choice. Deleting a project removes the inbox
+messages about its tasks.
+
+## Deleted items
+
+Deleting a task or a project moves it to **Settings → Projects → Deleted
+items**, newest first. A nightly job deletes each item for good 30 days after
+it was deleted, also while the organization is read-only.
+
+Who sees an item:
+
+- **Organization admins** see everything deleted in the organization.
+- **Project leads** see what they deleted, and everything deleted in projects
+  they lead, including the sub-projects of a project they lead.
+- **Everyone else** sees what they deleted.
+
+Except for organization admins, you see an item only while you can still open
+the project it was in. If you can now only view that project, your own delete
+shows without **Restore**, with a line such as **You can only view Luma
+Sensor now. Ask its lead, Mira Holm, to restore it.** A subtask deleted with
+a task in a project you cannot open shows only its key and title, without
+**Restore**. Items from every organization you belong to appear together,
+grouped by organization when there is more than one.
+
+Each row shows who deleted the item and when, where it was, and the reason
+when one was given. A delete through the REST API or MCP also names the
+credential, such as **Daniel Berg via Cursor, personal token**. Everyone who
+sees the item sees an agent key's name. The name of a personal token or a
+connected app shows only to organization admins and to the person who
+deleted, so a project lead reads **Daniel Berg via a personal token**. When
+eleven or more tasks in a row were deleted by the same person in the same
+way, each within 10 minutes of the next, the list shows seven and folds the
+rest into one line with **Show all**.
+
+Filter the list by kind, by text and, for admins and leads, by **Deleted
+by**. The text filter also finds tasks inside deleted projects by key or
+title. Such a task can only come back with its project. The page shows the
+newest 2,000 items. An admin can choose a person in **Deleted by** to reach
+their older deletes.
+
+**Restore** on a row brings the item back at once, where it was, with its
+comments, attachments, links and labels. To restore several, select their
+rows and choose a button such as **Restore 3 selected**. A window lists where
+they go before anything changes. Restored work keeps its keys, such as
+`QN-142`, because Qivo never reuses a number
+([Permanent task IDs](#permanent-task-ids)). Labels deleted since then are
+gone, and so are links to work deleted for good. A subtask deleted on its own
+returns under its parent when the parent still exists and you can edit it,
+and as a top-level task otherwise. Work that was archived when it was
+deleted returns archived. A restored Done task restarts its auto-archive
+clock. A task restored on its own sends its followers a **Restored** update.
+Restoring several items at once, or a project, sends none, and inbox
+messages removed by the delete do not come back
+([Your inbox](./working-together.md#your-inbox)).
+
+You can restore what you see when you can still edit where it goes back:
+
+- A task needs edit access to its project and to the projects of the
+  subtasks deleted with it. If its project is archived, restore that project
+  from Archived projects first.
+- A project needs its lead or an organization admin. A sub-project also
+  needs its project to be active.
+- A task or sub-project deleted before its project can only come back with
+  that project. Only organization admins see it, and its **Restore** brings
+  the project back first.
+- While the organization is read-only, restoring is paused.
+
+**Delete now…** in a row's menu deletes an item for good at once, with its
+comments and attachments. Only organization admins have it, and only while
+the organization can make changes. It cannot be undone. Deleting a project
+for good also deletes the tasks that were deleted from it before it. An item
+that could not finish moving shows **Couldn't finish moving this item.** to
+admins. It does not expire, so delete it with **Delete now…** or contact
+support.
+
+Deleted items do not count toward the organization's storage
+([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)),
+and the organization export leaves them out
+([Export data](./organization-and-team-settings.md#export-data)).

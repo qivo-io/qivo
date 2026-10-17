@@ -116,6 +116,11 @@ and review time. Names allow up to 80 characters. Descriptions allow up to
 500 characters and save when you click outside; clearing the field removes
 the description. Lead access is required to change **Review time**. An empty
 sub-project value follows its parent project ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
+Its last section, **Archive or delete**, archives the project or moves it to
+Deleted items ([Deleting a project](./how-work-is-organized.md#deleting-a-project)).
+**Settings → Projects → Deleted items** lists deleted tasks and projects for
+every role, and organization admins see all of them
+([Deleted items](./how-work-is-organized.md#deleted-items)).
 
 Choose **Create an account** on the pricing or sign-in page to sign up. Email
 confirmation links expire after one hour; **Confirm your email address** can
@@ -130,14 +135,18 @@ If Microsoft blocks sign-in until an administrator approves Qivo, follow
 Approval requires a Microsoft Entra administrator with consent permissions;
 a Qivo organization admin role alone is not enough.
 
-Destructive controls ask for a second click. Compact trash buttons first
+Destructive controls ask for a second click. Compact delete buttons first
 expand to **Delete?**; larger controls state what will be removed. The second
 click must come after a short pause, so a double click does not confirm. Every
-confirmation expires after a few seconds if unused. Deleting a parent project
-also deletes its sub-projects and tasks. Deleting a team removes memberships
-and sharing grants but preserves project work. If members would lose sight of
-open tasks they work on, Qivo first asks whether to keep them as Viewers or
-reassign the tasks.
+confirmation expires after a few seconds if unused. Tasks and projects work
+differently. **Archive or delete…** opens a window that lists what goes with
+them, and deleting moves them to Deleted items, where they can be restored.
+Deleting a parent project also deletes its sub-projects and tasks. Only an
+organization admin can delete an item for good before it expires, with
+**Delete now…**, which asks first and cannot be undone. Deleting a team
+removes memberships and sharing grants but preserves project work. If members
+would lose sight of open tasks they work on, Qivo first asks whether to keep
+them as Viewers or reassign the tasks.
 
 Users without management access see read-only team and project settings.
 Organization General, Billing, Users, API access and Labels require an
@@ -170,7 +179,12 @@ proration or credit.
 
 Billing lists active and inactive accounts and guests with their own billing.
 It also shows shared storage and API allowances, API usage by account and
-credential, and storage by project. **Refresh** reads current usage.
+credential, and storage by project. **Refresh** reads current usage. Files in
+Deleted items are not billed as storage
+([Deleted items](./how-work-is-organized.md#deleted-items)). In the private
+demo, they still count toward its 50 MiB upload allowance until they are
+deleted for good with **Delete now…**
+([Private demo](./qivo-in-one-minute.md#private-demo)).
 
 API calls accumulate during each paid subscription period. Qivo samples storage
 at the start of the period and collects its extra charge, plus API overages, on

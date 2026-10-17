@@ -52,8 +52,8 @@
     "reason": "key action state, user role state, and protected/deleting roster row emphasis"
   },
   "src/panels/settings/controls.tsx": {
-    "count": 3,
-    "reason": "shared two-click confirmation colors and toggle state geometry"
+    "count": 2,
+    "reason": "toggle state geometry"
   },
   "src/views/Kanban.tsx": {
     "count": 15,
