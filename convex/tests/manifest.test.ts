@@ -188,7 +188,11 @@ comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"ty
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:expire mutation internal {"type":"object","value":{}}
+deletedItems:list query public {"type":"object","value":{"deleted_by":{"fieldType":{"type":"string"},"optional":true}}}
+deletedItems:matches query public {"type":"object","value":{"text":{"fieldType":{"type":"string"},"optional":false}}}
+deletedItems:purge mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:recover mutation internal {"type":"object","value":{}}
+deletedItems:restore mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:step mutation internal {"type":"object","value":{"item_id":{"fieldType":{"type":"string"},"optional":false}}}
 demo:configuration query public {"type":"object","value":{}}
 demo:current query public {"type":"object","value":{}}
@@ -247,7 +251,7 @@ invites:sendFromApp action internal {"type":"object","value":{"invites":{"fieldT
 invites:settle mutation internal {"type":"object","value":{"row":{"fieldType":{"type":"id","tableName":"platform_audit_log"},"optional":false},"sent":{"fieldType":{"type":"boolean"},"optional":false},"uncertain":{"fieldType":{"type":"boolean"},"optional":false}}}
 invites:targets query internal {"type":"object","value":{"invites":{"fieldType":{"type":"array","value":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":true},"unless_sent":{"fieldType":{"type":"boolean"},"optional":true}}}},"optional":false},"operator":{"fieldType":{"type":"boolean"},"optional":false},"strict":{"fieldType":{"type":"boolean"},"optional":false}}}
 issues:addLink mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false},"target_id":{"fieldType":{"type":"string"},"optional":false},"type":{"fieldType":{"type":"union","value":[{"type":"literal","value":"blocks"},{"type":"literal","value":"relates"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-issues:archive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"reason":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+issues:archive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"reason":{"fieldType":{"type":"string"},"optional":true},"keep_subtasks":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:archivedFor query public {"type":"object","value":{"project_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 issues:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"status":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"backlog"},{"type":"literal","value":"todo"},{"type":"literal","value":"progress"},{"type":"literal","value":"review"},{"type":"literal","value":"done"}]},{"type":"null"}]},"optional":true},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":true},"assignee_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"reviewer_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"parent_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"due_date":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"paused":{"fieldType":{"type":"union","value":[{"type":"boolean"},{"type":"null"}]},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:deleteDeep mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"subtask_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"reason":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -443,6 +447,7 @@ projects:archive mutation public {"type":"object","value":{"id":{"fieldType":{"t
 projects:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"type":{"fieldType":{"type":"union","value":[{"type":"literal","value":"meta"},{"type":"literal","value":"project"}]},"optional":false},"team_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"parent_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"key":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"icon":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"icon_color":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"lead_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"sort_order":{"fieldType":{"type":"number"},"optional":false},"track_delay":{"fieldType":{"type":"boolean"},"optional":true},"access":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},{"type":"literal","value":"lead"},{"type":"null"}]},"optional":false}},"optional":true},"team_access":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:deleteDeep mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"reason":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:inviteGuest mutation public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"level":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projects:removalSummary query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:removeAccess mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":true},"team_id":{"fieldType":{"type":"string"},"optional":true},"on_held_tasks":{"fieldType":{"type":"union","value":[{"type":"literal","value":"leave"},{"type":"literal","value":"keep_as_viewer"},{"type":"object","value":{"reassign_to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:removeMilestone mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:unarchive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -614,6 +619,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // A post on a thread too long to count at once schedules commentCounts:step (internal).
   comments: { create: 'orgMutation', update: 'orgMutation', remove: 'orgMutation' },
+  // Deleted items spans organizations like Archived projects: list and
+  // matches read every active seat and judge each item with the seat in its
+  // organization. restore acts in one organization; Delete now (purge) is
+  // for its admins. Each loads items through the same not_found fence.
+  deletedItems: {
+    list: 'authedQuery',
+    matches: 'authedQuery',
+    restore: 'orgMutation',
+    purge: 'adminMutation',
+  },
   files: {
     uploadUrl: 'orgMutation',
     avatarUploadUrl: 'authedMutation',
@@ -728,6 +743,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     archive: 'orgMutation',
     unarchive: 'orgMutation',
     deleteDeep: 'orgMutation',
+    // The Archive or delete window's counts, behind deleteDeep's Lead gate.
+    removalSummary: 'orgQuery',
     inviteGuest: 'orgMutation',
     addMilestone: 'orgMutation',
     updateMilestone: 'orgMutation',

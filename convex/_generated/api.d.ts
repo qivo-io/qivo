@@ -121,6 +121,7 @@ import type * as model_cascade from "../model/cascade.js";
 import type * as model_commentCounts from "../model/commentCounts.js";
 import type * as model_comments from "../model/comments.js";
 import type * as model_deletedItems from "../model/deletedItems.js";
+import type * as model_deletedItemsList from "../model/deletedItemsList.js";
 import type * as model_demoMetrics from "../model/demoMetrics.js";
 import type * as model_demoSeed from "../model/demoSeed.js";
 import type * as model_demoUploads from "../model/demoUploads.js";
@@ -282,6 +283,7 @@ declare const fullApi: ApiFromModules<{
   "model/commentCounts": typeof model_commentCounts;
   "model/comments": typeof model_comments;
   "model/deletedItems": typeof model_deletedItems;
+  "model/deletedItemsList": typeof model_deletedItemsList;
   "model/demoMetrics": typeof model_demoMetrics;
   "model/demoSeed": typeof model_demoSeed;
   "model/demoUploads": typeof model_demoUploads;
