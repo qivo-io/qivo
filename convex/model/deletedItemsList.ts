@@ -15,7 +15,10 @@
  * to LIST.cap items, and a seat lists at most LIST.cap; `capped` says when
  * more may exist. The two ranges of stored rows hold a row per project the
  * person led and per subtask, so several of their rows can name one item.
- * They count distinct items and stop after LIST.bytes of rows. A
+ * They count distinct items and read each new one by id. Every range and
+ * read of one list call, across all its seats, spends one read budget
+ * (LIST.bytes, rows and ranges); the call stops reading once it is spent
+ * and reports `capped`, so it lists fewer items rather than fail. A
  * `deleted_by` filter keeps one person's deletes, judged by the reference
  * predicate, so a seat that reuses the id of someone removed does not take
  * over their deletes. An admin's seat reads that person's range instead of
@@ -45,10 +48,25 @@ import { estimateDocumentBytes } from './demoMetrics'
 
 type Item = Doc<'deleted_items'>
 
-/** The most items one organization lists, and the most bytes (estimated)
- * one range of stored rows reads to find its items. A mutable object, so
- * tests can lower it. */
-export const LIST = { cap: 2000, bytes: 2 * 1024 * 1024 }
+/** The most items one organization lists (`cap`), and the read budget one
+ * list call spends to find its items (candidatesOf): estimated `bytes`,
+ * documents (`rows`) and index `ranges`, each query read or read by id
+ * being one. Convex stops a query at 16 MiB, 32,000 documents or 4,096
+ * ranges. The budget takes half the bytes and documents and a quarter of
+ * the ranges, and leaves the rest to the call's other reads: the login's
+ * seats, each seat's sight (sightOf: the organization's projects, profiles
+ * and teams and the person's grants) and rowOf. rowOf answers most items
+ * from the sight's memo. It adds a few small reads once per deleted project
+ * an item names, and per item a redacted task item's first visible task (1
+ * range) and, for a seat that is not an admin, a project item's stored
+ * projects, grants and team shares (3 ranges). A mutable object, so tests
+ * can lower it. */
+export const LIST = { cap: 2000, bytes: 8 * 1024 * 1024, rows: 16_000, ranges: 1024 }
+
+/** What one list call has left of its LIST budget, shared by every seat. */
+type Reads = { bytes: number; rows: number; ranges: number }
+
+const spent = (reads: Reads): boolean => reads.bytes <= 0 || reads.rows <= 0 || reads.ranges <= 0
 
 /** The most hits one search returns, and the search results it looks at per
  * organization to find them. */
@@ -131,8 +149,14 @@ export async function listFor(
 ): Promise<{ items: DeletedRow[]; capped: boolean }> {
   const items: DeletedRow[] = []
   let capped = false
+  const reads: Reads = { bytes: LIST.bytes, rows: LIST.rows, ranges: LIST.ranges }
   for (const me of seats) {
-    const seat = await seatList(ctx, me, deletedBy)
+    // a seat the budget cannot read lists nothing, and capped says so
+    if (spent(reads)) {
+      capped = true
+      break
+    }
+    const seat = await seatList(ctx, me, deletedBy, reads)
     items.push(...seat.items)
     capped ||= seat.capped
   }
@@ -143,10 +167,11 @@ async function seatList(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   deletedBy: string | undefined,
+  reads: Reads,
 ): Promise<{ items: DeletedRow[]; capped: boolean }> {
   const sight = await sightOf(ctx, me)
   const orgName = (await byId(ctx, 'organizations', me.org_id))?.name ?? ''
-  const { items, truncated } = await candidatesOf(ctx, sight, deletedBy)
+  const { items, truncated } = await candidatesOf(ctx, sight, deletedBy, reads)
   const deleter = deletedBy === undefined ? undefined : sight.profiles.get(deletedBy)
   const rows: DeletedRow[] = []
   for (const item of items) {
@@ -160,111 +185,120 @@ async function seatList(
 }
 
 /** The items `sight`'s person may see, from the ranges that can hold them
- * (see the file comment). `truncated` when a range held more than it read.
- * Only an admin's seat reads `deletedBy`'s range; seatList filters. */
+ * (see the file comment), read while `reads` lasts. Each document read
+ * spends a row and its estimated bytes, and each range or read by id a
+ * range. `truncated` when a range held more than it read, or when the
+ * budget ran out first. Only an admin's seat reads `deletedBy`'s range;
+ * seatList filters. */
 async function candidatesOf(
   ctx: QueryCtx,
   sight: Sight,
   deletedBy: string | undefined,
+  reads: Reads,
 ): Promise<{ items: Item[]; truncated: boolean }> {
   const { me, levels } = sight
   const org = me.org_id
   const found = new Map<string, Item>()
   let truncated = false
-  const take = async <R>(rows: { take: (n: number) => Promise<R[]> }): Promise<R[]> => {
-    const read = await rows.take(LIST.cap + 1)
-    if (read.length > LIST.cap) truncated = true
-    return read
+  // Spends one range, or reports the budget spent.
+  const open = (): boolean => {
+    if (spent(reads)) {
+      truncated = true
+      return false
+    }
+    reads.ranges -= 1
+    return true
+  }
+  // Spends one document read; true when no further document may be read.
+  // A range already open reads on after the last range is spent.
+  const charge = (doc: object): boolean => {
+    reads.rows -= 1
+    reads.bytes -= estimateDocumentBytes(doc)
+    if (reads.rows > 0 && reads.bytes > 0) return false
+    truncated = true
+    return true
+  }
+  // A range of items, up to LIST.cap of them and one more to tell whether
+  // it held more.
+  const take = async (rows: AsyncIterable<Item>): Promise<void> => {
+    if (!open()) return
+    let count = 0
+    for await (const item of rows) {
+      found.set(item.id, item)
+      if (charge(item)) return
+      if (++count > LIST.cap) {
+        truncated = true
+        return
+      }
+    }
   }
   // A range of stored rows can name one item several times, so it counts
-  // the items it names, and its bytes, since stored rows vary in size.
-  const takeItemIds = async (rows: AsyncIterable<{ item_id: string }>): Promise<Set<string>> => {
-    const ids = new Set<string>()
-    let bytes = 0
+  // the items it names, and reads each one it has not found yet.
+  const takeNamed = async (rows: AsyncIterable<{ item_id: string }>): Promise<void> => {
+    if (!open()) return
+    const named = new Set<string>()
     for await (const row of rows) {
-      if (bytes > LIST.bytes) {
+      if (charge(row)) return
+      if (named.has(row.item_id)) continue
+      named.add(row.item_id)
+      if (named.size > LIST.cap) {
         truncated = true
-        break
+        return
       }
-      ids.add(row.item_id)
-      bytes += estimateDocumentBytes(row)
-      if (ids.size > LIST.cap) {
-        truncated = true
-        break
-      }
+      if (found.has(row.item_id)) continue
+      if (!open()) return
+      const item = await byId(ctx, 'deleted_items', row.item_id)
+      if (item === null) continue
+      found.set(item.id, item)
+      if (charge(item)) return
     }
-    return ids
   }
   const items = ctx.db.query('deleted_items')
-  const add = (rows: Item[]) => {
-    for (const item of rows) found.set(item.id, item)
-  }
-  const addIds = async (ids: Iterable<string>) => {
-    for (const id of ids) {
-      if (found.has(id)) continue
-      const item = await byId(ctx, 'deleted_items', id)
-      if (item !== null) found.set(id, item)
-    }
-  }
   if (me.org_role === 'admin') {
-    add(
-      await take(
-        deletedBy === undefined
-          ? items.withIndex('by_org_deleted', (q) => q.eq('org_id', org)).order('desc')
-          : items
-              .withIndex('by_org_deleter', (q) => q.eq('org_id', org).eq('deleted_by', deletedBy))
-              .order('desc'),
-      ),
+    await take(
+      deletedBy === undefined
+        ? items.withIndex('by_org_deleted', (q) => q.eq('org_id', org)).order('desc')
+        : items
+            .withIndex('by_org_deleter', (q) => q.eq('org_id', org).eq('deleted_by', deletedBy))
+            .order('desc'),
     )
     return { items: [...found.values()], truncated }
   }
-  add(
-    await take(
-      items
-        .withIndex('by_org_deleter', (q) => q.eq('org_id', org).eq('deleted_by', me.id))
-        .order('desc'),
-    ),
+  await take(
+    items
+      .withIndex('by_org_deleter', (q) => q.eq('org_id', org).eq('deleted_by', me.id))
+      .order('desc'),
   )
-  await addIds(
-    await takeItemIds(
-      ctx.db
-        .query('deleted_rows')
-        .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', me.id))
-        .order('desc'),
-    ),
+  await takeNamed(
+    ctx.db
+      .query('deleted_rows')
+      .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', me.id))
+      .order('desc'),
   )
   const leads = (p: Doc<'projects'> | undefined) => p !== undefined && levels.levelOf(p) === 'lead'
   for (const p of sight.projects.values()) {
     if (p.type === 'meta') {
       if (leads(p))
-        add(
-          await take(
-            items
-              .withIndex('by_org_parent', (q) => q.eq('org_id', org).eq('parent_project_id', p.id))
-              .order('desc'),
-          ),
+        await take(
+          items
+            .withIndex('by_org_parent', (q) => q.eq('org_id', org).eq('parent_project_id', p.id))
+            .order('desc'),
         )
       continue
     }
     const topLed = p.parent_id !== undefined && leads(sight.projects.get(p.parent_id))
     if (!leads(p) && !topLed) continue
     if (!topLed)
-      add(
-        await take(
-          items
-            .withIndex('by_org_project', (q) => q.eq('org_id', org).eq('project_id', p.id))
-            .order('desc'),
-        ),
-      )
-    await addIds(
-      await takeItemIds(
-        ctx.db
-          .query('deleted_tasks')
-          .withIndex('by_org_cross_project', (q) =>
-            q.eq('org_id', org).eq('cross_project_id', p.id),
-          )
+      await take(
+        items
+          .withIndex('by_org_project', (q) => q.eq('org_id', org).eq('project_id', p.id))
           .order('desc'),
-      ),
+      )
+    await takeNamed(
+      ctx.db
+        .query('deleted_tasks')
+        .withIndex('by_org_cross_project', (q) => q.eq('org_id', org).eq('cross_project_id', p.id))
+        .order('desc'),
     )
   }
   return { items: [...found.values()], truncated }

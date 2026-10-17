@@ -886,6 +886,8 @@ export default defineSchema({
     .index('by_org_project', ['org_id', 'project_id', 'deleted_at'])
     .index('by_org_parent', ['org_id', 'parent_project_id', 'deleted_at'])
     .index('by_state_purge', ['state', 'purge_after'])
+    // whether an organization has an item in flight, which decides whether
+    // its export reads each task's parent (orgExport.ts)
     .index('by_org_state', ['org_id', 'state']),
 
   /* The background steps of one moving, restoring or purging item. Kept off
