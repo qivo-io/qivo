@@ -16,6 +16,16 @@
  * item's projects, then the task row. While an item drains, its leftover
  * rows name a task or project that is absent, so readers skip them.
  *
+ * Fill first, reveal last (restoreItems). A restore mirrors the move: steps
+ * write the rows back while what they name is still absent, and one
+ * transaction at the end, the reveal, writes the item's root rows (a task
+ * item's tasks; a project item's projects, milestones and grants), so the
+ * work appears complete in one delivery. A task item first hands each
+ * subtask whose project is no longer live to the item that holds that
+ * project. References that no longer name what the item stored are dropped
+ * (sameReference). A reveal whose checks fail sends the item back to
+ * moving, and the move takes the rows back.
+ *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
  * job's budget_scale: rows moved, their bytes, task rows moved and index
  * ranges read. `metered` counts the ranges of every read a step makes,
@@ -31,8 +41,10 @@
  * the full budget and no retries.
  *
  * Steps need neither the deleter's nor the restorer's profile: notices and
- * events then go out without an actor. A step returns without work when its
- * item or job is gone, or while its demo organization is being deleted. */
+ * events then go out without an actor. Only a reveal needs the restorer,
+ * whose permission it checks again; without them it sends the item back. A
+ * step returns without work when its item or job is gone, or while its demo
+ * organization is being deleted. */
 
 import {
   type FilterBuilder,
@@ -42,15 +54,36 @@ import {
 } from 'convex/server'
 import type { DataModel, Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import {
+  canHoldWork,
+  canLeadProjects,
+  canSeeProject,
+  hasProjectLevel,
+  levelRank,
+  levelsFrom,
+  type OrgProjectLevels,
+} from '../lib/access'
+import { billingReadOnly } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { demoForOrg, isDemoDeployment } from '../lib/demo'
-import { type ProjectType, STORED_TABLES, type StoredTable, type TrashPhase } from '../lib/enums'
+import {
+  LEVEL_RANK,
+  type ProjectType,
+  STORED_TABLES,
+  type StoredTable,
+  type TrashPhase,
+} from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
 import { logActivity } from './activity'
 import { LARGE_ROWS_PER_READ } from './cascade'
 import { estimateDocumentBytes } from './demoMetrics'
-import { assertCanEdit } from './issues'
-import { type NotifyPreload, notifyIssueUpdate } from './messages'
+import { assertCanEdit, clearParentRemaining, parentChain } from './issues'
+import {
+  type NotifyPreload,
+  notifyIssueUpdate,
+  postMessage,
+  scheduleArchivedReads,
+} from './messages'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
@@ -96,11 +129,15 @@ type Item = Doc<'deleted_items'>
 type Job = Doc<'deleted_item_jobs'>
 type Tally = NonNullable<Job['tally']>
 /** Where a job is: what a step reads first and saves last. */
-type JobState = Pick<Job, 'phase' | 'cursor' | 'tally'>
+type JobState = Pick<Job, 'phase' | 'cursor' | 'tally' | 'alone'>
 export type Via = NonNullable<Item['via']>
 
 /** A live document of one of the stored tables, tagged with its table. */
 export type LiveRow = { [T in StoredTable]: { table: T; doc: Doc<T> } }[StoredTable]
+
+/** A stored document of `T`, as deleted_rows keeps it: the live document
+ * without its system fields. */
+type Stored<T extends StoredTable> = Extract<Doc<'deleted_rows'>['row'], { table: T }>['doc']
 
 /* ------------------------------------------------------------ references */
 
@@ -130,11 +167,12 @@ export const namesProfile = (item: Stamp, id: string | undefined, me: Doc<'profi
 
 /** Where a task is. Live: its row is in issues and its project row in
  * projects. In trash: an item that is not purging holds it, either as a
- * stored task (deleted_tasks) or, while a project item is still moving, as a
- * task left under one of that item's absent projects. Otherwise gone. */
+ * stored task or as a task in issues under one of that item's absent
+ * projects (while a project item moves or restores). `task` is its row
+ * there, for the reference predicate. Otherwise gone. */
 export type TaskWhere =
   | { where: 'live'; issue: Doc<'issues'>; project: Doc<'projects'> }
-  | { where: 'trash'; item: Item }
+  | { where: 'trash'; item: Item; task: Stored<'issues'> }
   | { where: 'gone' }
 
 export async function whereIsTask(ctx: QueryCtx, taskId: string): Promise<TaskWhere> {
@@ -146,17 +184,18 @@ export async function whereIsTask(ctx: QueryCtx, taskId: string): Promise<TaskWh
       .query('deleted_rows')
       .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', issue.project_id))
       .first()
-    return inTrash(held === null ? null : await byId(ctx, 'deleted_items', held.item_id))
+    return inTrash(held === null ? null : await byId(ctx, 'deleted_items', held.item_id), issue)
   }
   const stored = await ctx.db
-    .query('deleted_tasks')
-    .withIndex('by_task', (q) => q.eq('task_id', taskId))
+    .query('deleted_rows')
+    .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', taskId))
     .first()
-  return inTrash(stored === null ? null : await byId(ctx, 'deleted_items', stored.item_id))
+  if (stored?.row.table !== 'issues') return { where: 'gone' }
+  return inTrash(await byId(ctx, 'deleted_items', stored.item_id), stored.row.doc)
 }
 
-const inTrash = (item: Item | null): TaskWhere =>
-  item === null || item.state === 'purging' ? { where: 'gone' } : { where: 'trash', item }
+const inTrash = (item: Item | null, task: Stored<'issues'>): TaskWhere =>
+  item === null || item.state === 'purging' ? { where: 'gone' } : { where: 'trash', item, task }
 
 /* ----------------------------------------------------------------- budget */
 
@@ -461,17 +500,60 @@ async function clearAll(
 
 /* ------------------------------------------------------------------- runs */
 
+/** Reads a restore repeats for many rows, kept for one item in one
+ * transaction. Nothing the restore writes changes them before its reveal. */
+type Memo = {
+  profiles: Map<string, Promise<Doc<'profiles'> | null>>
+  teams: Map<string, Promise<Doc<'teams'> | null>>
+  labels: Map<string, Promise<Doc<'labels'> | null>>
+  projects: Map<string, Promise<Doc<'projects'> | null>>
+  hierarchy: Promise<Hierarchy> | undefined
+  levels: Map<string, Promise<OrgProjectLevels>>
+  holders: Map<string, Promise<boolean>>
+}
+
+const newMemo = (): Memo => ({
+  profiles: new Map(),
+  teams: new Map(),
+  labels: new Map(),
+  projects: new Map(),
+  hierarchy: undefined,
+  levels: new Map(),
+  holders: new Map(),
+})
+
+/** One item as the restore rules read it (design 5.2, 5.3), in a query or
+ * in a step. */
+type Scope<C extends QueryCtx = QueryCtx> = { ctx: C; item: Item; memo: Memo }
+
+/** What one transaction's items share. A restore call works on several
+ * items; a step on one. */
+type Txn = {
+  /** The archived tasks written back, for one scheduleArchivedReads call. */
+  archived: string[]
+  /** Collects the items revealed, when the caller narrates them together
+   * (a restore call); otherwise each reveal writes its own activity row. */
+  revealed: Revealed[] | undefined
+  /** Restores whose reveal failed, with the reason. */
+  failed: Map<string, RestoreBlock>
+  /** The person restoring, as the restore call knows them. */
+  restorer?: Doc<'profiles'>
+  now?: string
+}
+
+const newTxn = (): Txn => ({ archived: [], revealed: undefined, failed: new Map() })
+
 /** What a running step holds. `ctx` is metered against `budget`. */
-type Run = {
-  ctx: MutationCtx
-  item: Item
+type Run = Scope<MutationCtx> & {
   state: JobState
   budget: Budget
-  /** The deleter, for notices and events; absent once their profile is gone. */
+  /** The deleter for a move, the restorer for a restore, for notices and
+   * events; absent once their profile is gone, and for purges. */
   actor: Doc<'profiles'> | undefined
   /** Read once per step, when the first detach needs it. */
   preload: NotifyPreload | undefined
   now: string
+  txn: Txn
 }
 
 type Mode = 'keep' | 'purge'
@@ -646,27 +728,23 @@ async function clearProjectRows(run: Run, projectId: string, mode: Mode): Promis
 
 /** Runs `clear` for each task the item stores, in deleted_tasks order from
  * the job's cursor. False when the budget ran out first; the cursor then
- * names the last task fully done. A task the cursor skips on a tie of
- * _creationTime is found by the finish check, which starts over. */
+ * names the last task fully done. When all are done the cursor stays at
+ * the end, so the phase does not walk them again. A task the cursor skips
+ * on a tie of _creationTime is found by the finish check, which starts
+ * over. */
 async function eachStoredTask(
   run: Run,
-  clear: (taskId: string) => Promise<boolean>,
+  clear: (task: Doc<'deleted_tasks'>) => Promise<boolean>,
 ): Promise<boolean> {
   const cursor = run.state.cursor ?? { index: 0, after: 0 }
+  run.state.cursor = cursor
   for (;;) {
-    if (spent(run.budget)) {
-      run.state.cursor = cursor
-      return false
-    }
     const tasks = await run.ctx.db
       .query('deleted_tasks')
       .withIndex('by_item', (q) => q.eq('item_id', run.item.id).gt('_creationTime', cursor.after))
       .take(TASK_PAGE)
     for (const task of tasks) {
-      if (!(await clear(task.task_id))) {
-        run.state.cursor = cursor
-        return false
-      }
+      if (spent(run.budget) || !(await clear(task))) return false
       cursor.after = task._creationTime
       run.budget.moved = true
     }
@@ -751,12 +829,12 @@ async function moveProjectTasks(run: Run): Promise<boolean> {
 
 /* A task item's stored tasks: the rows that travel with each. */
 const moveDrain = (run: Run): Promise<boolean> =>
-  eachStoredTask(run, async (taskId) => {
+  eachStoredTask(run, async ({ task_id }) => {
     for (const relation of TASK_ROWS) {
       const done = await drain(
         run.budget,
-        (n) => relation.read(run.ctx, taskId, n),
-        (row) => clearRow(run, row, taskId, 'keep'),
+        (n) => relation.read(run.ctx, task_id, n),
+        (row) => clearRow(run, row, task_id, 'keep'),
         relation.perRead,
       )
       if (!done) return false
@@ -766,7 +844,10 @@ const moveDrain = (run: Run): Promise<boolean> =>
 
 /** The phase to go back to when a range the move drains holds a row again,
  * else null. Once a task row has left issues nothing can add a row naming
- * it, so a project item's ranges are its projects' tasks and rows. */
+ * it, so a project item's ranges are its projects' tasks and rows. A failed
+ * restore also wrote rows of tasks it left stored back; its move drains
+ * those first (move_drain), and the finish does not read them again,
+ * because that would read each of the item's tasks in one transaction. */
 async function moveLeft(run: Run): Promise<TrashPhase | null> {
   if (run.item.kind === 'task') {
     const tasks = await run.ctx.db
@@ -793,6 +874,7 @@ async function finishMove(run: Run): Promise<void> {
   const tally = tallyOf(run)
   await run.ctx.db.patch(run.item._id, {
     state: 'ready',
+    restore_by: undefined,
     counts: { ...run.item.counts, tasks: tally.tasks, archived_tasks: tally.archived_tasks },
     projects: run.item.projects.map((p) => {
       const counted = tally.projects.find((c) => c.id === p.id)
@@ -843,21 +925,25 @@ async function purgeDependents(run: Run): Promise<boolean> {
 /* Rows the item still holds in the live tables. A project item that got
  * stuck can leave tasks, with their rows, messages and children, and
  * project rows under its absent projects; they are deleted as the hard
- * delete would have. A task item can leave rows of its stored tasks. */
+ * delete would have. A task item can leave rows of its stored tasks, and so
+ * can a project item that got stuck during or after a restore (restore_by
+ * set). */
 async function purgeLive(run: Run): Promise<boolean> {
-  if (run.item.kind === 'task')
-    return await eachStoredTask(run, async (taskId) => {
+  if (run.item.kind === 'task' || run.item.restore_by !== undefined) {
+    const done = await eachStoredTask(run, async ({ task_id }) => {
       for (const relation of TASK_ROWS) {
-        const done = await drain(
+        const drained = await drain(
           run.budget,
-          (n) => relation.read(run.ctx, taskId, n),
+          (n) => relation.read(run.ctx, task_id, n),
           (row) => discard(run.ctx, row),
           relation.perRead,
         )
-        if (!done) return false
+        if (!drained) return false
       }
       return true
     })
+    if (!done || run.item.kind === 'task') return done
+  }
   for (const id of await absentProjects(run)) {
     if (!(await clearProjectRows(run, id, 'purge'))) return false
     if (!(await clearProjectTasks(run, id, 'purge'))) return false
@@ -949,45 +1035,1023 @@ async function purgeLeft(run: Run): Promise<boolean> {
   return false
 }
 
+/* --------------------------------------------------------------- restores */
+
+/** The most items one restore call takes. */
+export const RESTORE_MAX = 25
+
+/* The index ranges a reveal may read per task it writes back. A task item
+ * of 41 tasks with holders, a parent outside, task.restored subscriptions
+ * and the Restored notice measured about 6, so this leaves room. */
+const REVEAL_RANGES_PER_TASK = 16
+
+/** Why an item cannot be restored now (design 5.3). The item's state while
+ * it is not ready; read_only while billing pauses editing; then the blocked
+ * reasons of the design's table. no_access: the person has no level on the
+ * project the item goes back to (the list's redacted row). conflict: a live
+ * row holds a uuid or key the item needs, which the reservations
+ * (lib/db.ts insertUnique, model/projects.ts keyHolder) should prevent. */
+export type RestoreBlock =
+  | Exclude<Item['state'], 'ready'>
+  | 'read_only'
+  | 'project_deleted'
+  | 'parent_deleted'
+  | 'no_access'
+  | 'view_only'
+  | 'not_lead'
+  | 'subtask_project'
+  | 'project_archived'
+  | 'parent_archived'
+  | 'conflict'
+
+/** What one restore call answers per item (deletedItems.restore). Items
+ * that do not finish in the call are restored, and go on in steps as
+ * restoring. A deferred item waits for a project item in the same call. */
+export type RestoreResult = {
+  restored: string[]
+  refused: { id: string; reason: RestoreBlock }[]
+  deferred: string[]
+}
+
+/** An item a reveal brought back, for the activity row. */
+type Revealed = { item: Item; tasks: number }
+
+/** The relation rows a restore writes back before its links and reveal. */
+const RESTORED_ROWS = [
+  'comments',
+  'issue_labels',
+  'issue_subscriptions',
+  'issue_attachments',
+] as const
+
+/* `read`, run once per key for one item in one transaction (Memo). */
+function memoRead<V>(cache: Map<string, Promise<V>>, key: string, read: () => Promise<V>) {
+  let value = cache.get(key)
+  if (value === undefined) {
+    value = read()
+    cache.set(key, value)
+  }
+  return value
+}
+
+const profileOf = (s: Scope, id: string) =>
+  memoRead(s.memo.profiles, id, () => byId(s.ctx, 'profiles', id))
+const teamOf = (s: Scope, id: string) => memoRead(s.memo.teams, id, () => byId(s.ctx, 'teams', id))
+const labelOf = (s: Scope, id: string) =>
+  memoRead(s.memo.labels, id, () => byId(s.ctx, 'labels', id))
+
+/** `id` when the profile it names passes the reference predicate, else
+ * undefined: how a restore keeps authors, uploaders, creators and
+ * reporters. */
+async function keptProfile(s: Scope, id: string | undefined): Promise<string | undefined> {
+  if (id === undefined) return undefined
+  return sameReference(await profileOf(s, id), s.item) ? id : undefined
+}
+
+/** The live project `id` when it is the one the item stored (the reference
+ * predicate, with the type rule when `type` is given). */
+async function namedProject(s: Scope, id: string, type?: ProjectType) {
+  const project = await memoRead(s.memo.projects, id, () => byId(s.ctx, 'projects', id))
+  return sameReference(project, s.item, type) ? project : null
+}
+
+/** The item's stored rows of `table`, whole. For a project item's own rows,
+ * which organization size bounds, and for what a reveal writes back. */
+const storedOf = (s: Scope, table: StoredTable) =>
+  s.ctx.db
+    .query('deleted_rows')
+    .withIndex('by_item_table_owner', (q) => q.eq('item_id', s.item.id).eq('table', table))
+    .collect()
+
+/** The stored document of `row`, read as a row of `table`. */
+function docOf<T extends StoredTable>(row: Doc<'deleted_rows'>, table: T): Stored<T> {
+  if (row.row.table !== table) throw new Error(`A ${row.row.table} row is not a ${table} row`)
+  // checked against the tag just above
+  return row.row.doc as Stored<T>
+}
+
+/** A stored project as its reveal writes it back: its lead only while that
+ * profile passes the reference predicate and may lead (design 6.1), its
+ * legacy team only while the team passes the predicate. */
+async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'projects'>> {
+  const lead = p.lead_id === undefined ? null : await profileOf(s, p.lead_id)
+  const team = p.team_id === undefined ? null : await teamOf(s, p.team_id)
+  return {
+    ...p,
+    lead_id: sameReference(lead, s.item) && canLeadProjects(lead) ? p.lead_id : undefined,
+    team_id: sameReference(team, s.item) ? p.team_id : undefined,
+  }
+}
+
+/** A stored grant as its reveal writes it back: none when its profile fails
+ * the reference predicate, a viewer grant for someone who is a viewer now
+ * (model/projects.ts assertGrantee). */
+async function cleanGrant(
+  s: Scope,
+  g: Stored<'project_access'>,
+): Promise<Stored<'project_access'> | null> {
+  const profile = await profileOf(s, g.profile_id)
+  if (!sameReference(profile, s.item)) return null
+  return profile.org_role === 'viewer' ? { ...g, level: 'viewer' } : g
+}
+
+/** A stored team share as its reveal writes it back, or none when its team
+ * fails the reference predicate. */
+async function cleanShare(
+  s: Scope,
+  g: Stored<'project_team_access'>,
+): Promise<Stored<'project_team_access'> | null> {
+  return sameReference(await teamOf(s, g.team_id), s.item) ? g : null
+}
+
+/** A project item's projects as its reveal writes them back, with their
+ * grants and shares, and a sub-project item's live parent: what levels
+ * inside the item are computed over while it is in Deleted items. */
+type Hierarchy = {
+  root: Stored<'projects'> | undefined
+  projects: Stored<'projects'>[]
+  grants: Stored<'project_access'>[]
+  shares: Stored<'project_team_access'>[]
+  parent: Doc<'projects'> | null
+}
+
+function hierarchyOf(s: Scope): Promise<Hierarchy> {
+  s.memo.hierarchy ??= (async () => {
+    const projects: Stored<'projects'>[] = []
+    for (const row of await storedOf(s, 'projects'))
+      projects.push(await cleanProject(s, docOf(row, 'projects')))
+    const grants: Stored<'project_access'>[] = []
+    for (const row of await storedOf(s, 'project_access')) {
+      const grant = await cleanGrant(s, docOf(row, 'project_access'))
+      if (grant !== null) grants.push(grant)
+    }
+    const shares: Stored<'project_team_access'>[] = []
+    for (const row of await storedOf(s, 'project_team_access')) {
+      const share = await cleanShare(s, docOf(row, 'project_team_access'))
+      if (share !== null) shares.push(share)
+    }
+    const { parent_project_id } = s.item
+    return {
+      root: projects.find((p) => p.id === s.item.target_id),
+      projects,
+      grants,
+      shares,
+      parent:
+        parent_project_id === undefined ? null : await namedProject(s, parent_project_id, 'meta'),
+    }
+  })()
+  return s.memo.hierarchy
+}
+
+/** `profile`'s levels on a project item's projects while they are in
+ * Deleted items (design 6.1): lib/access.ts levelsFrom over the projects as
+ * the reveal writes them back, the profile's stored grants, the stored
+ * shares of the teams it belongs to now, and the live grants and shares on
+ * a sub-project item's parent. */
+function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLevels> {
+  return memoRead(s.memo.levels, profile.id, async () => {
+    const h = await hierarchyOf(s)
+    const teams = new Set<string>()
+    const memberships = s.ctx.db
+      .query('team_members')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+    for await (const m of memberships)
+      if ((await teamOf(s, m.team_id))?.org_id === profile.org_id) teams.add(m.team_id)
+    const grants: Pick<Doc<'project_access'>, 'project_id' | 'level'>[] = h.grants.filter(
+      (g) => g.profile_id === profile.id,
+    )
+    const shares: Pick<Doc<'project_team_access'>, 'project_id' | 'level'>[] = h.shares.filter(
+      (g) => teams.has(g.team_id),
+    )
+    if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
+    const parentId = h.parent.id
+    const own = await s.ctx.db
+      .query('project_access')
+      .withIndex('by_project_profile', (q) =>
+        q.eq('project_id', parentId).eq('profile_id', profile.id),
+      )
+      .unique()
+    if (own !== null) grants.push(own)
+    const parentShares = s.ctx.db
+      .query('project_team_access')
+      .withIndex('by_project', (q) => q.eq('project_id', parentId))
+    for await (const share of parentShares) if (teams.has(share.team_id)) shares.push(share)
+    return levelsFrom(profile, [...h.projects, h.parent], grants, shares)
+  })
+}
+
+/** Whether `id` can stay a task's assignee or reviewer in `projectId`: the
+ * profile passes the reference predicate and today's assignment rule there
+ * (lib/access.ts profileCanBeAssigned). While the project is still in
+ * Deleted items, its level comes from the stored rows. */
+function keepsHolder(s: Scope, id: string, projectId: string): Promise<boolean> {
+  return memoRead(s.memo.holders, `${id}:${projectId}`, async () => {
+    const profile = await profileOf(s, id)
+    if (!sameReference(profile, s.item) || !canHoldWork(profile)) return false
+    if ((await byId(s.ctx, 'projects', projectId)) !== null)
+      return await hasProjectLevel(s.ctx, profile, projectId, 'user')
+    const level = (await storedLevels(s, profile)).levelOf({ id: projectId, org_id: s.item.org_id })
+    return levelRank(level) >= LEVEL_RANK.user
+  })
+}
+
+const keptHolder = async (s: Scope, id: string | undefined, projectId: string) =>
+  id !== undefined && (await keepsHolder(s, id, projectId)) ? id : undefined
+
+/** Why `me` cannot restore `item` now, else null (design 5.3). Callers
+ * check the item's state; the reveal asks again for the restorer. */
+async function blockOf(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
+  if (me.org_id !== s.item.org_id) return 'no_access'
+  if (await billingReadOnly(s.ctx, s.item.org_id)) return 'read_only'
+  return s.item.kind === 'task' ? await taskItemBlock(s, me) : await projectItemBlock(s, me)
+}
+
+/* A task item goes back into its root's project, which must be live and
+ * not archived, and the person needs Edit on every live project its tasks
+ * go back to. A subtask project that is no longer live does not block: the
+ * restore moves that subtask to the item that holds its project. */
+async function taskItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
+  const project = await namedProject(s, s.item.project_id, 'project')
+  if (project === null) return 'project_deleted'
+  if (!(await canSeeProject(s.ctx, me, project))) return 'no_access'
+  if (!(await hasProjectLevel(s.ctx, me, project.id, 'user'))) return 'view_only'
+  for (const { id } of s.item.projects) {
+    if (id === project.id || (await namedProject(s, id, 'project')) === null) continue
+    if (!(await hasProjectLevel(s.ctx, me, id, 'user'))) return 'subtask_project'
+  }
+  if (project.archived_at !== undefined) return 'project_archived'
+  if ((await byId(s.ctx, 'issues', s.item.target_id)) !== null) return 'conflict'
+  return null
+}
+
+/* A project item needs an organization admin or the effective lead of its
+ * root, computed over the stored rows; restore works like unarchive, so
+ * there is no project_creators check and a sub-project's own lead
+ * suffices. A sub-project item needs its parent live and not archived. */
+async function projectItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
+  const h = await hierarchyOf(s)
+  if (h.root === undefined) return 'conflict'
+  if (s.item.parent_project_id !== undefined && h.parent === null) return 'parent_deleted'
+  const level = (await storedLevels(s, me)).levelOf(h.root)
+  if (level !== 'lead')
+    return level === null ? 'no_access' : level === 'viewer' ? 'view_only' : 'not_lead'
+  if (h.parent !== null && h.parent.archived_at !== undefined) return 'parent_archived'
+  for (const p of h.projects) {
+    const holder = await s.ctx.db
+      .query('projects')
+      .withIndex('by_org_key', (q) => q.eq('org_id', s.item.org_id).eq('key', p.key))
+      .first()
+    if (holder !== null || (await byId(s.ctx, 'projects', p.id)) !== null) return 'conflict'
+  }
+  return null
+}
+
+/** Why `me` cannot restore `item` now, or null when they can (design 5.3,
+ * also the list's can_restore and blocked). Visibility (design 6.1) is the
+ * caller's to check first. */
+export async function restoreBlock(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  item: Item,
+): Promise<RestoreBlock | null> {
+  if (item.state !== 'ready') return item.state
+  return await blockOf({ ctx, item, memo: newMemo() }, me)
+}
+
+/** The tally of what `item` stores now, which a restore subtracts from. */
+const tallyFromItem = (item: Item): Tally => ({
+  tasks: item.counts.tasks,
+  archived_tasks: item.counts.archived_tasks,
+  dropped_rows: item.dropped_rows ?? 0,
+  projects: item.projects.map((p) => ({
+    id: p.id,
+    tasks: p.tasks,
+    archived_tasks: p.archived_tasks,
+  })),
+})
+
+/** Adds `delta` tasks like `task` to `tally`. */
+function tallyTask(
+  tally: Tally,
+  task: Pick<Doc<'deleted_tasks'>, 'project_id' | 'archived'>,
+  delta: number,
+): void {
+  const archived = task.archived ? delta : 0
+  tally.tasks += delta
+  tally.archived_tasks += archived
+  const project = tally.projects.find((p) => p.id === task.project_id)
+  if (project === undefined) return
+  project.tasks += delta
+  project.archived_tasks += archived
+}
+
+/* ------------------------------------------------------------- the fill */
+
+/* A task item's subtasks whose project is no longer live leave the item
+ * before anything is written back (design 5.2): to the item that holds
+ * their project, which brings them back with it, or for good when their
+ * project is gone. */
+const restoreSplit = (run: Run): Promise<boolean> =>
+  run.item.kind === 'project'
+    ? Promise.resolve(true)
+    : eachStoredTask(run, async (task) => {
+        if (task.task_id === run.item.target_id) return true
+        if ((await namedProject(run, task.project_id, 'project')) !== null) return true
+        return await splitOff(run, task)
+      })
+
+/** Moves subtask `task` with every row it owns to the item that holds its
+ * project, keeping its parent; when no item that is not purging holds the
+ * project, deletes them for good with their bytes. Both items' counts
+ * follow. */
+async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> {
+  const held = await run.ctx.db
+    .query('deleted_rows')
+    .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', task.project_id))
+    .first()
+  const holder = held === null ? null : await byId(run.ctx, 'deleted_items', held.item_id)
+  const into =
+    holder !== null && holder.state !== 'purging' && holder.org_id === run.item.org_id
+      ? holder
+      : null
+  const done = await drain(
+    run.budget,
+    (n) =>
+      run.ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_owner', (q) =>
+          q.eq('item_id', run.item.id).eq('owner_id', task.task_id),
+        )
+        .take(n),
+    (row) =>
+      into === null ? dropStored(run.ctx, row) : run.ctx.db.patch(row._id, { item_id: into.id }),
+    LARGE_ROWS_PER_READ,
+  )
+  if (!done) return false
+  await run.ctx.db.delete(task._id)
+  await countOut(run, task)
+  if (into === null) {
+    console.warn('A restore deleted a subtask whose project is gone', {
+      item_id: run.item.id,
+      task_id: task.task_id,
+    })
+    return true
+  }
+  const { _id, _creationTime, ...light } = task
+  // a new row, so that a restore of `into` past its cursor still meets it
+  await run.ctx.db.insert('deleted_tasks', { ...light, item_id: into.id })
+  await countInto(run.ctx, into, task)
+  return true
+}
+
+/** Takes subtask `task` out of the counts of the item restoring it: from
+ * its tally, and on the item row from the subtask count and, once no task
+ * of the item is left in the subtask's project, the projects. */
+async function countOut(run: Run, task: Doc<'deleted_tasks'>): Promise<void> {
+  const tally = tallyOf(run)
+  tallyTask(tally, task, -1)
+  const left = tally.projects.find((p) => p.id === task.project_id)?.tasks ?? 0
+  const fields = {
+    counts: { ...run.item.counts, subtasks: Math.max(0, run.item.counts.subtasks - 1) },
+    projects:
+      left > 0 ? run.item.projects : run.item.projects.filter((p) => p.id !== task.project_id),
+  }
+  await run.ctx.db.patch(run.item._id, fields)
+  run.item = { ...run.item, ...fields }
+}
+
+/** Counts `task` into item `into`: into the tally of its job while it moves
+ * or restores, else on the item row. */
+async function countInto(
+  ctx: MutationCtx,
+  into: Item,
+  task: Pick<Doc<'deleted_tasks'>, 'project_id' | 'archived'>,
+): Promise<void> {
+  const job = await jobOf(ctx, into.id)
+  if (job !== null && (into.state === 'moving' || into.state === 'restoring')) {
+    const tally = job.tally ?? emptyTally(into)
+    tallyTask(tally, task, 1)
+    await ctx.db.patch(job._id, { tally })
+    return
+  }
+  const archived = task.archived ? 1 : 0
+  await ctx.db.patch(into._id, {
+    counts: {
+      ...into.counts,
+      tasks: into.counts.tasks + 1,
+      archived_tasks: into.counts.archived_tasks + archived,
+    },
+    projects: into.projects.map((p) =>
+      p.id === task.project_id
+        ? { ...p, tasks: p.tasks + 1, archived_tasks: p.archived_tasks + archived }
+        : p,
+    ),
+  })
+}
+
+/** Deletes a stored row for good, attachment bytes with it. */
+async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<void> {
+  if (row.storage_id !== undefined) await ctx.storage.delete(row.storage_id)
+  await ctx.db.delete(row._id)
+}
+
+/* The rows that travel with the item's tasks, while those tasks are still
+ * absent from issues, so readers skip them (design 5.1). They go back in
+ * their original order per task: a move stores a task's rows in the order
+ * of the index it reads them by, which for comments and attachments is
+ * their creation order, and this reads them back in the order stored. */
+async function restoreRows(run: Run): Promise<boolean> {
+  for (const table of RESTORED_ROWS) {
+    const done = await drain(
+      run.budget,
+      (n) =>
+        run.ctx.db
+          .query('deleted_rows')
+          .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table))
+          .take(n),
+      (row) => writeRowBack(run, row),
+      table === 'comments' || table === 'issue_attachments' ? LARGE_ROWS_PER_READ : ALL,
+    )
+    if (!done) return false
+  }
+  return true
+}
+
+/** Writes a stored relation row back without its archive mark, with org_id
+ * where the table has it (design 5.2): a comment keeps its author and
+ * editor, an attachment its uploader, only while they pass the reference
+ * predicate; a follow and a label assignment stay only while their profile
+ * or label passes it. Deletes the stored row. */
+async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
+  const { org_id } = run.item
+  const r = row.row
+  if (r.table === 'comments')
+    await run.ctx.db.insert('comments', {
+      ...r.doc,
+      author: await keptProfile(run, r.doc.author),
+      edited_by: await keptProfile(run, r.doc.edited_by),
+    })
+  else if (r.table === 'issue_labels') {
+    if (sameReference(await labelOf(run, r.doc.label_id), run.item))
+      await run.ctx.db.insert('issue_labels', { ...r.doc, org_id, task_archived: undefined })
+  } else if (r.table === 'issue_subscriptions') {
+    if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
+      await run.ctx.db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
+  } else if (r.table === 'issue_attachments')
+    await run.ctx.db.insert('issue_attachments', {
+      ...r.doc,
+      org_id,
+      uploaded_by: await keptProfile(run, r.doc.uploaded_by),
+      task_archived: undefined,
+    })
+  else throw new Error(`A restore cannot write a ${r.table} row back here`)
+  await run.ctx.db.delete(row._id)
+}
+
+/* The item's links, after the rows above and before a project item's
+ * tasks, so the archive steps scheduled for an archived task written back
+ * (finishTxn) find every row of it in place. Writing a link before the
+ * reveal shows nobody anything, because a read sends a link only when its
+ * reader is shown both ends (lib/workingSet.ts linkShown), and a task of
+ * the item is absent until then. Links that reach the item later are placed
+ * by the reveal (design 5.2). */
+const restoreLinks = (run: Run): Promise<boolean> =>
+  drain(
+    run.budget,
+    (n) =>
+      run.ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_table_owner', (q) =>
+          q.eq('item_id', run.item.id).eq('table', 'issue_links'),
+        )
+        .take(n),
+    (row) => placeLink(run, row),
+    ALL,
+  )
+
+/** Where stored link `row` goes (design 5.2). Both ends live in the
+ * organization, by the reference predicate, or tasks of this item: written
+ * back unless a link already holds its pair. A task of this item is absent
+ * until the reveal, so nobody sees the link before then, and a failed
+ * reveal's move takes it back with the task. An end in another item that is
+ * ready, moving or restoring: the link moves to that item, owned by that
+ * end. Otherwise it is dropped. */
+async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
+  const link = docOf(row, 'issue_links')
+  let away: { item: Item; end: string } | null = null
+  for (const end of [link.source_id, link.target_id]) {
+    const where = await whereIsTask(run.ctx, end)
+    const kept =
+      where.where === 'live'
+        ? sameReference(where.issue, run.item)
+        : where.where === 'trash' &&
+          sameReference(where.task, run.item) &&
+          (where.item.id === run.item.id ||
+            where.item.state === 'ready' ||
+            where.item.state === 'moving' ||
+            where.item.state === 'restoring')
+    if (!kept) return await run.ctx.db.delete(row._id)
+    if (where.where === 'trash' && where.item.id !== run.item.id) away ??= { item: where.item, end }
+  }
+  if (away !== null)
+    return await run.ctx.db.patch(row._id, { item_id: away.item.id, owner_id: away.end })
+  const taken = await run.ctx.db
+    .query('issue_links')
+    .withIndex('by_pair', (q) => q.eq('pair_key', link.pair_key))
+    .first()
+  if (taken === null)
+    await run.ctx.db.insert('issue_links', {
+      ...link,
+      org_id: run.item.org_id,
+      task_archived: undefined,
+    })
+  await run.ctx.db.delete(row._id)
+}
+
+type StoredTask = { row: Doc<'deleted_rows'>; doc: Stored<'issues'> }
+
+/* A project item's tasks, written back under its projects, which stay
+ * absent until the reveal (design 5.1), so these tasks stay hidden. A task
+ * whose parent is in the item keeps it. A task whose parent is outside the
+ * item stays stored: its parent is decided at the reveal, by the state
+ * then (design 5.2), and writing it now would make that parent a group
+ * before the reveal. */
+const restoreTasks = (run: Run): Promise<boolean> =>
+  run.item.kind === 'task'
+    ? Promise.resolve(true)
+    : eachStoredTask(run, async (task) => {
+        const row = await run.ctx.db
+          .query('deleted_rows')
+          .withIndex('by_item_table_owner', (q) =>
+            q.eq('item_id', run.item.id).eq('table', 'issues').eq('owner_id', task.task_id),
+          )
+          .first()
+        if (row === null) return true
+        const doc = docOf(row, 'issues')
+        if (doc.parent_id !== undefined && !(await inThisItem(run, doc.parent_id))) return true
+        await writeTask(run, { row, doc }, doc.parent_id)
+        return true
+      })
+
+/** Whether task `taskId` belongs to this project item while it fills: a
+ * task already written back sits under one of its absent projects, the
+ * others are still stored in it. */
+async function inThisItem(run: Run, taskId: string): Promise<boolean> {
+  const issue = await byId(run.ctx, 'issues', taskId)
+  if (issue !== null) return itemProjectIds(run.item).includes(issue.project_id)
+  const stored = await run.ctx.db
+    .query('deleted_rows')
+    .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', taskId))
+    .first()
+  return stored?.item_id === run.item.id
+}
+
+/** Writes stored task `t` back into issues with parent `parentId` (design
+ * 5.2): its holders kept only by the reference predicate and today's
+ * assignment rule, creator and reporter only by the predicate, a fresh
+ * done_at for an active Done task so the nightly sweep does not archive it
+ * the next night (as a restore from the archive restarts it,
+ * model/issues.ts doneStampUpdate), no archive mark, updated_at now.
+ * Deletes the stored row and the task's deleted_tasks row, and counts the
+ * task out of the tally. Returns the task as written. */
+async function writeTask(
+  run: Run,
+  t: StoredTask,
+  parentId: string | undefined,
+): Promise<Doc<'issues'>> {
+  const { doc } = t
+  const active = doc.archived_at === undefined
+  const _id = await run.ctx.db.insert('issues', {
+    ...doc,
+    parent_id: parentId,
+    assignee_id: await keptHolder(run, doc.assignee_id, doc.project_id),
+    reviewer_id: await keptHolder(run, doc.reviewer_id, doc.project_id),
+    created_by: await keptProfile(run, doc.created_by),
+    reporter_id: await keptProfile(run, doc.reporter_id),
+    done_at: active && doc.status === 'done' ? run.now : doc.done_at,
+    relations_marked: undefined,
+    updated_at: run.now,
+  })
+  await run.ctx.db.delete(t.row._id)
+  const light = await run.ctx.db
+    .query('deleted_tasks')
+    .withIndex('by_task', (q) => q.eq('task_id', doc.id))
+    .collect()
+  for (const row of light) if (row.item_id === run.item.id) await run.ctx.db.delete(row._id)
+  tallyTask(tallyOf(run), { project_id: doc.project_id, archived: !active }, -1)
+  if (!active) run.txn.archived.push(doc.id)
+  run.budget.tasks -= 1
+  charge(run.budget, t.row)
+  const written = await run.ctx.db.get(_id)
+  if (written === null) throw new Error('A restored task vanished on insert')
+  return written
+}
+
+/* ----------------------------------------------------------- the reveal */
+
+/** The reveal (design 5.1), one transaction. Relation rows that reached
+ * the item after their phase send it back to restore_rows, and a subtask
+ * whose project left since restore_split back there. A failed check (design
+ * 5.3, asked again for the restorer) sends it back to moving. Otherwise it
+ * writes back a project item's own rows, then the tasks still stored (every
+ * task of a task item; a project item's tasks whose parent is outside it,
+ * and late arrivals) and the links left, deletes the item and its
+ * deleted_tasks rows, and narrates. Returns where to go on, or null once the
+ * item is gone. */
+async function reveal(run: Run): Promise<JobState | null> {
+  for (const table of RESTORED_ROWS) {
+    const late = await run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table))
+      .first()
+    if (late !== null) return { ...run.state, phase: 'restore_rows', cursor: undefined }
+  }
+  const restorer = run.actor
+  if (restorer === undefined) return await sendBack(run, 'no_access')
+  const block = await blockOf(run, restorer)
+  if (block !== null) return await sendBack(run, block)
+  const tasks = (await storedOf(run, 'issues')).map((row) => ({ row, doc: docOf(row, 'issues') }))
+  for (const { doc } of tasks) {
+    if ((await byId(run.ctx, 'issues', doc.id)) !== null) return await sendBack(run, 'conflict')
+    if (run.item.kind === 'task' && (await namedProject(run, doc.project_id, 'project')) === null)
+      return { ...run.state, phase: 'restore_split', cursor: undefined }
+  }
+  if (run.item.kind === 'project') await revealProjects(run)
+  const written = await revealTasks(run, tasks, restorer)
+  for (;;) {
+    const links = await run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_owner', (q) =>
+        q.eq('item_id', run.item.id).eq('table', 'issue_links'),
+      )
+      .take(TASK_PAGE)
+    for (const row of links) await placeLink(run, row)
+    if (links.length < TASK_PAGE) break
+  }
+  const left = await run.ctx.db
+    .query('deleted_tasks')
+    .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
+    .collect()
+  for (const row of left) await run.ctx.db.delete(row._id)
+  await run.ctx.db.delete(run.item._id)
+  await announce(run, written, restorer)
+  return null
+}
+
+/** A failed reveal: the item goes back to moving, and its steps take what
+ * the restore wrote back into storage again (design 5.1), the rows of its
+ * stored tasks first (move_drain). restore_by stays until the item is ready,
+ * so a purge of an item that got stuck before then looks for those rows too
+ * (purgeLive). The list shows the reason from the live state. */
+async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
+  const log = reason === 'conflict' ? console.error : console.warn
+  log('A deleted item restore was sent back at its reveal', { item_id: run.item.id, reason })
+  run.txn.failed.set(run.item.id, reason)
+  await run.ctx.db.patch(run.item._id, { state: 'moving' })
+  run.item = { ...run.item, state: 'moving' }
+  return { phase: 'move_drain', tally: run.state.tally }
+}
+
+/* A project item's own rows as the hierarchy cleans them: its projects,
+ * then their milestones, grants and team shares. */
+async function revealProjects(run: Run): Promise<void> {
+  for (const table of [
+    'projects',
+    'milestones',
+    'project_access',
+    'project_team_access',
+  ] as const) {
+    for (const row of await storedOf(run, table)) {
+      const r = row.row
+      if (r.table === 'projects')
+        await run.ctx.db.insert('projects', await cleanProject(run, r.doc))
+      else if (r.table === 'milestones') await run.ctx.db.insert('milestones', r.doc)
+      else if (r.table === 'project_access') {
+        const grant = await cleanGrant(run, r.doc)
+        if (grant !== null) await run.ctx.db.insert('project_access', grant)
+      } else if (r.table === 'project_team_access') {
+        const share = await cleanShare(run, r.doc)
+        if (share !== null) await run.ctx.db.insert('project_team_access', share)
+      }
+      await run.ctx.db.delete(row._id)
+    }
+  }
+}
+
+/** Writes the stored tasks `tasks` back, parents before children, each
+ * keeping a parent inside the item. Then, with every task in place, a
+ * parent outside the item is kept or cleared by the parent table (design
+ * 5.2). Returns the tasks as written. */
+async function revealTasks(
+  run: Run,
+  tasks: StoredTask[],
+  restorer: Doc<'profiles'>,
+): Promise<Doc<'issues'>[]> {
+  const byTask = new Map(tasks.map((t) => [t.doc.id, t]))
+  const depthOf = (t: StoredTask): number => {
+    let depth = 0
+    for (let up = t.doc.parent_id; up !== undefined && depth <= 20; depth++)
+      up = byTask.get(up)?.doc.parent_id
+    return depth
+  }
+  const own = new Set(itemProjectIds(run.item))
+  const written = new Map<string, Doc<'issues'>>()
+  const outside: (Doc<'issues'> & { parent_id: string })[] = []
+  for (const t of [...tasks].sort((a, b) => depthOf(a) - depthOf(b))) {
+    const parentId = t.doc.parent_id
+    let inside = parentId !== undefined && byTask.has(parentId)
+    if (parentId !== undefined && !inside && run.item.kind === 'project') {
+      // a project item's tasks already back sit in its projects, live now
+      const parent = await byId(run.ctx, 'issues', parentId)
+      inside = parent !== null && own.has(parent.project_id)
+    }
+    const issue = await writeTask(run, t, inside ? parentId : undefined)
+    written.set(issue.id, issue)
+    if (parentId !== undefined && !inside) outside.push({ ...issue, parent_id: parentId })
+  }
+  for (const issue of outside) {
+    const kept = await keptParent(run, issue, restorer)
+    if (kept === null) continue
+    await run.ctx.db.patch(issue._id, { parent_id: kept.parent.id })
+    if (kept.grouped)
+      await clearParentRemaining(run.ctx, {
+        parentId: kept.parent.id,
+        actor: restorer,
+        now: run.now,
+      })
+    const after = await run.ctx.db.get(issue._id)
+    if (after !== null) written.set(after.id, after)
+  }
+  return [...written.values()]
+}
+
+/** The parent `issue` (written back with none) keeps from outside the item,
+ * by the parent table (design 5.2), or null to clear it. Only a live parent
+ * in the organization that existed at deletion can stay. An active one
+ * stays when the restorer passes the boolean form of assertParentChain
+ * (sight and Edit on its project, at most 20 levels); an archived one only
+ * for an archived task, within the same depth. `grouped`: the attach makes
+ * the parent a group (an active task under an active parent, any task under
+ * an archived one), so the parent loses its own remaining hours as on a
+ * reparent (model/issues.ts clearParentRemaining). An archived parent that
+ * holds hours of its own therefore needs the restorer's Edit too, so a
+ * restore never changes a task in a project the restorer cannot edit. */
+async function keptParent(
+  run: Run,
+  issue: Doc<'issues'> & { parent_id: string },
+  restorer: Doc<'profiles'>,
+): Promise<{ parent: Doc<'issues'>; grouped: boolean } | null> {
+  const where = await whereIsTask(run.ctx, issue.parent_id)
+  if (where.where !== 'live' || !sameReference(where.issue, run.item)) return null
+  const { issue: parent } = where
+  const active = parent.archived_at === undefined
+  if (!active && issue.archived_at === undefined) return null
+  const grouped = !active || issue.archived_at === undefined
+  const clears = parent.remaining_hours !== undefined || parent.review_at !== undefined
+  const checked = active || clears ? restorer : undefined
+  const chain = await parentChain(run.ctx, issue, issue.parent_id, checked)
+  return 'parent' in chain ? { parent: chain.parent, grouped } : null
+}
+
+/* What a reveal tells (design 5.4). A task item sends task.restored for
+ * each task it wrote back, and its root's followers get the Restored notice
+ * when the restore call held this item alone. A project item sends
+ * neither, as its delete sent no task.deleted. The activity row is the
+ * call's when it collects reveals, else the item's own. */
+async function announce(
+  run: Run,
+  written: Doc<'issues'>[],
+  restorer: Doc<'profiles'>,
+): Promise<void> {
+  if (run.item.kind === 'task') {
+    for (const issue of written)
+      await emitTaskEvent(run.ctx, { name: 'task.restored', issue, actor: restorer, now: run.now })
+    const root = written.find((issue) => issue.id === run.item.target_id)
+    if (run.state.alone === true && root !== undefined) await noticeRestored(run, root, restorer)
+  }
+  const revealed = { item: run.item, tasks: written.length }
+  if (run.txn.revealed !== undefined) run.txn.revealed.push(revealed)
+  else await narrate(run.ctx, [revealed], restorer, run.now)
+}
+
+/* The Restored notice to the followers of `root`, the one a restore from
+ * the archive sends (model/issues.ts unarchiveIssueCore). */
+async function noticeRestored(
+  run: Run,
+  root: Doc<'issues'>,
+  restorer: Doc<'profiles'>,
+): Promise<void> {
+  const follows = run.ctx.db
+    .query('issue_subscriptions')
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', root.id))
+  for await (const follow of follows)
+    await postMessage(run.ctx, {
+      org_id: root.org_id,
+      recipient_id: follow.profile_id,
+      issue_id: root.id,
+      kind: 'change',
+      body: 'Restored',
+      actor_id: restorer.id,
+      now: run.now,
+      issue: root,
+    })
+}
+
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
+
+/** One activity row for the items one transaction revealed (design 5.4):
+ * a single task item's row on its root task, a single project item's row on
+ * its project, or for several one row that counts them ("restored 3 tasks
+ * from Deleted items"). That row is filed under the project the items
+ * share; otherwise it is a project row without project_id, which only
+ * organization admins receive (lib/activityVisibility.ts), so its count
+ * names no project to anyone else. */
+async function narrate(
+  ctx: MutationCtx,
+  revealed: Revealed[],
+  actor: Doc<'profiles'>,
+  now: string,
+): Promise<void> {
+  const [first] = revealed
+  if (first === undefined) return
+  const row = { org_id: first.item.org_id, actor_id: actor.id, verb: 'restored', ts: now }
+  const detail = 'from Deleted items'
+  if (revealed.length === 1) {
+    const { item } = first
+    await logActivity(ctx, {
+      ...row,
+      target_type: item.kind === 'task' ? 'issue' : 'project',
+      target_id: item.target_id,
+      label: item.name,
+      detail,
+      project_id: item.project_id,
+    })
+    return
+  }
+  const projects = revealed.filter((r) => r.item.kind === 'project').length
+  const tasks = revealed.reduce((n, r) => n + (r.item.kind === 'task' ? r.tasks : 0), 0)
+  const shared = revealed.every((r) => r.item.project_id === first.item.project_id)
+    ? first.item.project_id
+    : undefined
+  await logActivity(ctx, {
+    ...row,
+    target_type: 'project',
+    target_id: shared ?? first.item.org_id,
+    label: [projects > 0 && plural(projects, 'project'), tasks > 0 && plural(tasks, 'task')]
+      .filter((part) => part !== false)
+      .join(' and '),
+    detail,
+    project_id: shared,
+  })
+}
+
+/* ------------------------------------------------------------ restoring */
+
+/**
+ * Restores `items` for `me`, as deletedItems.restore will (design 5). The
+ * caller loads each item through the visibility fence (design 6.1); this
+ * checks the rest per item and never throws for one item's problem.
+ * Project items go first. A task item whose project, or a sub-project item
+ * whose parent, is in a project item this call restores is deferred, for
+ * the client to send again once that item has left the list. Every other
+ * item is refused with its RestoreBlock or restored: it becomes restoring,
+ * with restore_by, and the call's one shared budget fills and reveals as
+ * much as it can; the rest goes on in steps. The reveals of this call share
+ * one activity row, and an item revealed by a later step writes its own.
+ * The Restored notice goes out only when the call held a single task item,
+ * whichever transaction reveals it.
+ */
+export async function restoreItems(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; items: Item[]; now: string },
+): Promise<RestoreResult> {
+  if (a.items.length > RESTORE_MAX)
+    throw rule(`at most ${RESTORE_MAX} items can be restored at a time`)
+  const budget = budgetFor(1)
+  const counted = metered(ctx, budget)
+  const result: RestoreResult = { restored: [], refused: [], deferred: [] }
+  const ids = new Set<string>()
+  const ordered = [
+    ...a.items.filter((item) => item.kind === 'project'),
+    ...a.items.filter((item) => item.kind === 'task'),
+  ].filter((item) => !ids.has(item.id) && ids.add(item.id))
+  const txn: Txn = { ...newTxn(), revealed: [], restorer: a.me, now: a.now }
+  const started: Item[] = []
+  for (const given of ordered) {
+    // an earlier item of the call may have counted a subtask into this one
+    const item = (await byId(counted, 'deleted_items', given.id)) ?? given
+    const above = item.kind === 'task' ? item.project_id : item.parent_project_id
+    if (started.some((p) => p.kind === 'project' && p.projects.some((x) => x.id === above))) {
+      result.deferred.push(item.id)
+      continue
+    }
+    const block = await restoreBlock(counted, a.me, item)
+    if (block !== null) {
+      result.refused.push({ id: item.id, reason: block })
+      continue
+    }
+    started.push(item)
+    const fields = { state: 'restoring' as const, restore_by: a.me.id }
+    await counted.db.patch(item._id, fields)
+    const restoring: Item = { ...item, ...fields }
+    const state: JobState = {
+      phase: 'restore_split',
+      tally: tallyFromItem(item),
+      alone: ordered.length === 1 || undefined,
+    }
+    const next = await work(counted, budget, restoring, state, txn)
+    if (next !== null) await saveJob(ctx, restoring, next, null)
+    const failed = txn.failed.get(item.id)
+    if (failed === undefined) result.restored.push(item.id)
+    else result.refused.push({ id: item.id, reason: failed })
+  }
+  await narrate(ctx, txn.revealed ?? [], a.me, a.now)
+  await finishTxn(ctx, txn)
+  return result
+}
+
 /* --------------------------------------------------------------- the jobs */
 
 /* The work each phase does, true when it is complete, and the phase that
- * follows it. The finish phases are handled in `work`. */
+ * follows it. The finish phases and the reveal are handled in `work`. A
+ * project item drains its stored tasks' rows only after a failed restore
+ * (sendBack), and then moves its projects' tasks again. */
 const PHASES: Record<
-  Exclude<TrashPhase, 'move_finish' | 'purge_finish'>,
-  { run: (run: Run) => Promise<boolean>; next: TrashPhase }
+  Exclude<TrashPhase, 'move_finish' | 'purge_finish' | 'restore_reveal'>,
+  { run: (run: Run) => Promise<boolean>; next: (item: Item) => TrashPhase }
 > = {
-  move_edges: { run: moveEdges, next: 'move_tasks' },
-  move_tasks: { run: moveProjectTasks, next: 'move_finish' },
-  move_drain: { run: moveDrain, next: 'move_finish' },
-  purge_dependents: { run: purgeDependents, next: 'purge_live' },
-  purge_live: { run: purgeLive, next: 'purge_rows' },
-  purge_rows: { run: purgeRows, next: 'purge_activity' },
-  purge_activity: { run: purgeActivity, next: 'purge_projects' },
-  purge_projects: { run: (run) => purgeStored(run, 'projects'), next: 'purge_finish' },
+  move_edges: { run: moveEdges, next: () => 'move_tasks' },
+  move_tasks: { run: moveProjectTasks, next: () => 'move_finish' },
+  move_drain: {
+    run: moveDrain,
+    next: (item) => (item.kind === 'project' ? 'move_edges' : 'move_finish'),
+  },
+  restore_split: { run: restoreSplit, next: () => 'restore_rows' },
+  restore_rows: { run: restoreRows, next: () => 'restore_links' },
+  restore_links: { run: restoreLinks, next: () => 'restore_tasks' },
+  restore_tasks: { run: restoreTasks, next: () => 'restore_reveal' },
+  purge_dependents: { run: purgeDependents, next: () => 'purge_live' },
+  purge_live: { run: purgeLive, next: () => 'purge_rows' },
+  purge_rows: { run: purgeRows, next: () => 'purge_activity' },
+  purge_activity: { run: purgeActivity, next: () => 'purge_projects' },
+  purge_projects: { run: (run) => purgeStored(run, 'projects'), next: () => 'purge_finish' },
+}
+
+/** Who acts in `item`'s phase: nobody for a purge; the deleter for a move,
+ * unless their id was reused; the restorer for a restore, while their seat
+ * in the item's organization is active. */
+async function actorOf(
+  ctx: QueryCtx,
+  item: Item,
+  phase: TrashPhase,
+  txn: Txn,
+): Promise<Doc<'profiles'> | undefined> {
+  if (phase.startsWith('purge')) return undefined
+  if (phase.startsWith('restore')) {
+    if (txn.restorer !== undefined) return txn.restorer
+    const restorer =
+      item.restore_by === undefined ? null : await byId(ctx, 'profiles', item.restore_by)
+    return restorer?.org_id === item.org_id && restorer.active ? restorer : undefined
+  }
+  const deleter =
+    item.deleted_by === undefined ? null : await byId(ctx, 'profiles', item.deleted_by)
+  return sameReference(deleter, item) ? deleter : undefined
+}
+
+/** Whether what is left of `run`'s budget holds its reveal, which writes the
+ * item's stored tasks back in one transaction whatever their number. */
+function revealFits(run: Run): boolean {
+  const tasks = run.state.tally?.tasks ?? 0
+  const b = run.budget
+  return (
+    !spent(b) && tasks <= b.tasks && tasks <= b.rows && tasks * REVEAL_RANGES_PER_TASK <= b.ranges
+  )
 }
 
 /** Runs `item`'s phases from `state` with `budget`, which `ctx` is metered
  * against. Returns null when the item's work is done: a move made it ready,
- * a purge deleted it. Otherwise returns where the next step starts. */
+ * a restore revealed it, a purge deleted it. Otherwise returns where the
+ * next step starts. The reveal runs in one transaction whatever its size, so
+ * it runs where the budget left holds it (revealFits), else at the start of
+ * a step of its own. */
 async function work(
   ctx: MutationCtx,
   budget: Budget,
   item: Item,
   state: JobState,
+  txn: Txn,
 ): Promise<JobState | null> {
-  const deleter =
-    item.deleted_by === undefined ? null : await byId(ctx, 'profiles', item.deleted_by)
   const run: Run = {
     ctx,
     item,
-    state: { phase: state.phase, cursor: state.cursor, tally: state.tally },
+    memo: newMemo(),
+    state: { phase: state.phase, cursor: state.cursor, tally: state.tally, alone: state.alone },
     budget,
-    // purges are nobody's act; a deleter whose id was reused is not the deleter
-    actor: !state.phase.startsWith('purge') && sameReference(deleter, item) ? deleter : undefined,
+    actor: await actorOf(ctx, item, state.phase, txn),
     preload: undefined,
     // stamps each step with its own time, as profileRemovals.ts does
-    now: new Date().toISOString(),
+    now: txn.now ?? new Date().toISOString(),
+    txn,
   }
   for (;;) {
     const { phase } = run.state
@@ -1008,9 +2072,22 @@ async function work(
       await ctx.db.delete(item._id)
       return null
     }
+    if (phase === 'restore_reveal') {
+      if (run.budget.moved && !revealFits(run)) return run.state
+      const next = await reveal(run)
+      if (next === null) return null
+      run.state = next
+      continue
+    }
     if (!(await PHASES[phase].run(run))) return run.state
-    run.state = { ...run.state, phase: PHASES[phase].next, cursor: undefined }
+    run.state = { ...run.state, phase: PHASES[phase].next(run.item), cursor: undefined }
   }
+}
+
+/** Schedules what a transaction's items left for after it: the archive
+ * steps of the archived tasks it wrote back, in one call. */
+async function finishTxn(ctx: MutationCtx, txn: Txn): Promise<void> {
+  if (txn.archived.length > 0) await scheduleArchivedReads(ctx, { issues: txn.archived })
 }
 
 const jobOf = (ctx: QueryCtx, itemId: string) =>
@@ -1032,6 +2109,7 @@ async function saveJob(
     phase: state.phase,
     cursor: state.cursor,
     tally: state.tally,
+    alone: state.alone,
     progress_at: new Date().toISOString(),
     scheduled_id,
     attempts: 0,
@@ -1055,7 +2133,9 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
   if (job === null) return
   if (isDemoDeployment() && (await demoForOrg(ctx, item.org_id))?.status === 'deleting') return
   const budget = budgetFor(job.budget_scale)
-  const next = await work(metered(ctx, budget), budget, item, job)
+  const txn = newTxn()
+  const next = await work(metered(ctx, budget), budget, item, job, txn)
+  await finishTxn(ctx, txn)
   if (next === null) await ctx.db.delete(job._id)
   else await saveJob(ctx, item, next, job)
 }
@@ -1151,7 +2231,9 @@ async function startJob(
   state: JobState,
   budget = budgetFor(1),
 ): Promise<void> {
-  const next = await work(metered(ctx, budget), budget, item, state)
+  const txn = newTxn()
+  const next = await work(metered(ctx, budget), budget, item, state, txn)
+  await finishTxn(ctx, txn)
   if (next !== null) await saveJob(ctx, item, next, null)
 }
 

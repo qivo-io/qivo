@@ -19,8 +19,11 @@
  *   (jobs.ts). A project archive stamps no task, so it marks nothing. The
  *   Northstar demo writer runs markArchivedTask on the archived tasks it
  *   inserts (model/demoSeed.ts).
- * - A restore writes no relation row. Every restore path schedules clear
- *   steps (clearMarkedTasks) for each task it restores that has the flag. A
+ * - A restore from the archive writes no relation row. Every such restore
+ *   path schedules clear steps (clearMarkedTasks) for each task it restores
+ *   that has the flag. A restore from Deleted items (model/deletedItems.ts)
+ *   writes the task and its rows back without the flag or any mark, and
+ *   schedules the mark steps for the archived tasks it writes back. A
  *   step clears marks in bounded batches while the task is active and unsets
  *   the flag in the transaction that finds no mark left in the task's five
  *   ranges. A step that finds the task archived again stops and leaves its
