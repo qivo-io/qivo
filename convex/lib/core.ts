@@ -265,14 +265,15 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
  * through a credential that may write (machineAccess). projectLevelsForOrg,
  * the snapshot's batched form of those rules, answers both for every project
  * from the caller's grants and team shares, a few index ranges in all. Asking
- * the predicates project by project read about three ranges per project, so
- * a writer's every call passed Convex's 4,096 at about 1,300 projects. A
- * project outside a top-level meta, such as one whose parent is missing,
- * gets neither flag. The level carries the viewer ceiling (cappedLevel), so an
- * org-role-viewer agent and a grant-viewer agent both get `write: false`, and
- * so does every project seen through a read-only credential. (asMachineCaller
- * refuses those writes before they get this far.) Here code sees everything
- * and CHOOSES what to disclose; these flags are that choice's only input. */
+ * the predicates project by project read about three ranges per project for
+ * a writer who is not an admin, so such a writer's every call passed Convex's
+ * 4,096 at about 1,300 projects. A project outside a top-level meta, such as
+ * one whose parent is missing, gets neither flag. The level carries the
+ * viewer ceiling (cappedLevel), so an org-role-viewer agent and a grant-viewer
+ * agent both get `write: false`, and so does every project seen through a
+ * read-only credential. (asMachineCaller refuses those writes before they get
+ * this far.) Here code sees everything and CHOOSES what to disclose; these
+ * flags are that choice's only input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 

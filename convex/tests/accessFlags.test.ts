@@ -2,13 +2,19 @@
  * MCP list tools build over the organization's catalogue. They come from the
  * batched project levels (lib/access.ts projectLevelsForOrg) and must equal
  * what canSeeProject and hasProjectLevel answer project by project, which is
- * how they were computed before, for every tree the project writers can
- * build. The per-project walk is kept here as the reference. */
+ * how they were computed before and how the single-project reads and writes
+ * still decide. The per-project walk is kept here as the reference. */
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { canSeeProject, hasProjectLevel, machineAccess } from '../lib/access'
+import {
+  canAccessProject,
+  canManageProjectUsers,
+  canSeeProject,
+  hasProjectLevel,
+  machineAccess,
+} from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
 import {
   type CredentialAccess,
@@ -22,6 +28,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantIssue,
   plantProject,
   plantSeat,
   uuid,
@@ -230,7 +237,7 @@ describe('accessFlags', () => {
     ])
   }, 60_000)
 
-  it('gives no flag on a project outside a top-level meta, even to an admin', async () => {
+  it('hides a project outside a top-level meta from everyone, in lists and single reads and writes', async () => {
     const t = newT()
     const f = await withOrg(t)
     const dangling = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
@@ -271,6 +278,56 @@ describe('accessFlags', () => {
       access: 'write',
     })
     expect(rows.map((p) => p.key).sort()).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
+    // The per-project predicates hide the projects they can walk to a root
+    // too, so the single-project reads and writes agree with the lists.
+    await t.run(async (ctx) => {
+      for (const me of [f.admin, f.user, f.viewer, f.guest, f.agent]) {
+        const walked = [loose, underLoose, nested]
+        const flags = await perProjectFlags(ctx, me, walked, 'write')
+        for (const p of walked) {
+          expect(flags.get(p.id), `${me.name} on ${p.key}`).toEqual({ read: false, write: false })
+          expect(await canAccessProject(ctx, me, p)).toBe(false)
+          expect(await canManageProjectUsers(ctx, me, p)).toBe(false)
+        }
+      }
+    })
+    const as_ = { callerId: f.admin.id, access: 'write' as const }
+    for (const p of [loose, underLoose, nested]) {
+      await expectRefusal(
+        t.query(internal.machine.projects.mcpGetProject, { ...as_, project: p.key }),
+        'not_found',
+      )
+      await expectRefusal(
+        t.query(internal.machine.rest.getProject, { ...as_, ref: p.key }),
+        'not_found',
+      )
+      await expectRefusal(
+        t.mutation(internal.machine.projects.restUpdateProject, {
+          ...as_,
+          keyName: 'drive',
+          ref: p.key,
+          body: JSON.stringify({ name: 'Renamed' }),
+        }),
+        'not_found',
+      )
+      await expectRefusal(
+        t.mutation(internal.machine.projects.mcpUpdateProject, {
+          ...as_,
+          project: p.key,
+          name: 'Renamed',
+        }),
+        'not_found',
+      )
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: p.id })
+      await expectRefusal(
+        t.query(internal.machine.rest.getIssue, { ...as_, ref: task.id }),
+        'not_found',
+      )
+      await expectRefusal(
+        t.query(internal.machine.mcp.getIssue, { ...as_, ref: task.id }),
+        'not_found',
+      )
+    }
   })
 
   it("stays within Convex's 4,096 index ranges for a writer among 1,654 projects, where the per-project walk did not", async () => {
