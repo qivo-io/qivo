@@ -188,7 +188,7 @@ commentCounts:step mutation internal {"type":"object","value":{"issue_id":{"fiel
 comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-deletedItems:expire mutation internal {"type":"object","value":{}}
+deletedItems:expire mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true}}}
 deletedItems:list query public {"type":"object","value":{"deleted_by":{"fieldType":{"type":"string"},"optional":true}}}
 deletedItems:matches query public {"type":"object","value":{"text":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:purge mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -795,7 +795,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 154
+const PUBLIC_COUNT = 159
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

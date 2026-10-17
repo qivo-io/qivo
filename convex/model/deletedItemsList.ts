@@ -34,10 +34,10 @@ import type { CredentialTable } from '../lib/enums'
 import { issueKey } from '../lib/taskRefs'
 import {
   type BlockDetail,
-  billingPaused,
   blockDetail,
   type ItemView,
   namesProfile,
+  orgReadOnly,
   restoreBlock,
   type Sight,
   sameReference,
@@ -337,11 +337,11 @@ async function rowOf(
     state: item.state,
     can_restore: ready && block === null,
     blocked,
-    // Delete now is an adminMutation, which billing's read-only state refuses
+    // Delete now is an adminMutation, which a read-only organization refuses
     can_purge:
       me.org_role === 'admin' &&
       (ready || item.state === 'stuck') &&
-      !(await billingPaused(ctx, memo, item.org_id)),
+      !(await orgReadOnly(ctx, memo, item.org_id)),
   }
   if (shown !== null)
     return {

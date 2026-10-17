@@ -19,15 +19,18 @@
  * back to moving so the item is ready again, or, once a restored project is
  * live, leaves the tasks still waiting for their parent without it. expire
  * (daily at 03:45 UTC) starts purging the ready items whose 30 days are
- * over, one bounded batch per run, and schedules the next run while more
- * are due.
+ * over, one bounded page per run, and schedules the next page while more
+ * are due. Items keep expiring while their organization is read-only
+ * before its deletion. Once that deletion has begun (orgRemovals.ts), step,
+ * recover and expire leave the organization's items and jobs alone, and the
+ * deletion's trash phase deletes them (model/orgDeletion.ts).
  *
  * purgeOrg and purgeTasks are deploy-key seams for fixtures and live
  * drives, refused on production and public demo deployments like
  * machine/testing.ts. */
 
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type QueryCtx } from './_generated/server'
 import { refuseProduction } from './lib/deployment'
@@ -111,7 +114,11 @@ export const purge = adminMutation({
   },
 })
 
-const expireRef = makeFunctionReference<'mutation', Record<string, never>, null>(
+const expireArgs = {
+  cursor: v.optional(v.string()), // where the next page starts
+  now: v.optional(v.number()), // the run's start, epoch milliseconds
+}
+const expireRef = makeFunctionReference<'mutation', ObjectType<typeof expireArgs>, null>(
   'deletedItems:expire',
 )
 
@@ -133,11 +140,15 @@ export const recover = internalMutation({
   },
 })
 
-/** Starts purging one batch of expired items and chains the next. */
+/** Starts purging one page of expired items and chains the next. Empty
+ * arguments start a run, as the nightly cron does; each page reads up to
+ * the run's start. */
 export const expire = internalMutation({
-  args: {},
-  handler: async (ctx): Promise<null> => {
-    if (await expireItems(ctx)) await ctx.scheduler.runAfter(0, expireRef, {})
+  args: expireArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? Date.now()
+    const cursor = await expireItems(ctx, { cursor: a.cursor, now })
+    if (cursor !== null) await ctx.scheduler.runAfter(0, expireRef, { cursor, now })
     return null
   },
 })

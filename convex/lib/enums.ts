@@ -92,9 +92,11 @@ export const vOrgRemovalReason = literals(...ORG_REMOVAL_REASONS)
 export type OrgRemovalReason = (typeof ORG_REMOVAL_REASONS)[number]
 
 /* The background steps of an organization deletion, in the order they run
- * (orgRemovals.ts). Stored on org_removals only, never on the wire. */
+ * (orgRemovals.ts). Stored on org_removals only, never on the wire. 'trash'
+ * empties Deleted items (model/orgDeletion.ts says why it runs there). */
 export const ORG_REMOVAL_PHASES = [
   'profiles',
+  'trash',
   'tasks',
   'projects',
   'teams',

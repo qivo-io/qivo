@@ -12,6 +12,19 @@
  * organization, and deleting the profiles also ends their sessions,
  * credentials and OAuth connections.
  *
+ * Deleted items go next, whatever state their items are in
+ * (model/deletedItems.ts clearOrgTrash). The Deleted items steps, their
+ * recovery and the nightly expiry already stand still for an organization
+ * whose deletion has begun, so nothing moves rows between the live tables
+ * and Deleted items while this runs. The items and their jobs go first, so
+ * a step still scheduled finds nothing to do; then the rows a move or
+ * restore left in the live tables under stored tasks, which the tasks phase
+ * cannot reach because those tasks are not in issues; then the stored rows,
+ * with the tasks a moving project left under its stored project. Running
+ * before the tasks phase, as the public demo's cleanup runs it, leaves the
+ * later phases only live rows that nothing in Deleted items still names.
+ * Bytes go with their row unless another row still names them.
+ *
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
  * profile_removals and label_removals rows (their own steps finish), the
@@ -19,16 +32,11 @@
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { byId } from '../lib/db'
+import { byId, LARGE_ROWS_PER_READ } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import { require, rule } from '../lib/functions'
-import {
-  budgetSpent,
-  LARGE_ROWS_PER_READ,
-  REMOVAL_BUDGET,
-  type RemovalBudget,
-  sweep,
-} from './cascade'
+import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
+import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { deleteOrgBookkeeping } from './orgs'
 
@@ -186,6 +194,16 @@ const profileRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ]),
     (profile) => removeFile(ctx, profile.avatar_storage_id),
   )
+
+/** Everything in Deleted items, from one budget: clearOrgTrash counts its
+ * rows and their bytes as this file's steps do. */
+async function trashRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget) {
+  const teardown = { left: budget.rows, bytes: budget.bytes }
+  const done = await clearOrgTrash(ctx, orgId, teardown)
+  budget.rows = teardown.left
+  budget.bytes = teardown.bytes
+  return done
+}
 
 /** Tasks with their links, labels, subscriptions, comments, messages and files. */
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
@@ -408,8 +426,9 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     ),
   ])
 
-/** The last step checks that every parent range is empty, then deletes the
- * organization with its counters and retention rows, and its removal row. */
+/** The last step checks that every parent range is empty, Deleted items
+ * included, then deletes the organization with its counters and retention
+ * rows, and its removal row. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
   for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels'] as const)
@@ -417,6 +436,21 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
       .query(table)
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()) === null, rule('Organization deletion left organization data'))
+  const trash = [
+    await ctx.db
+      .query('deleted_items')
+      .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
+      .first(),
+    await ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
+      .first(),
+    await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .first(),
+  ]
+  require(trash.every((row) => row === null), rule('Organization deletion left Deleted items'))
   // the Northstar importer's ownership receipt names the org (one-row table)
   for (const receipt of await ctx.db.query('marketing_demo').collect())
     if (receipt.org_id === orgId) await ctx.db.delete(receipt._id)
@@ -431,6 +465,7 @@ const PHASE_ROWS: Record<
   (ctx: MutationCtx, orgId: string, budget: RemovalBudget) => Promise<boolean>
 > = {
   profiles: profileRows,
+  trash: trashRows,
   tasks: taskRows,
   projects: projectRows,
   teams: teamRows,

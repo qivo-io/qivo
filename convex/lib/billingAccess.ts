@@ -71,11 +71,16 @@ export async function assertOrgWritable(ctx: QueryCtx, orgId: string): Promise<v
   if (block) throw new ConvexError({ code: 'forbidden', ...block })
 }
 
+/** Whether the organization's deletion has begun: orgRemovals.ts has set
+ * its first phase. Its read-only period before that does not count. */
+export async function deletionBegun(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  return (await orgRemovalFor(ctx, orgId))?.phase !== undefined
+}
+
 /** Refuses every call into an organization whose deletion has begun. Before
  * that, the organization stays readable so admins can export it. */
 export async function assertOrgAvailable(ctx: QueryCtx, orgId: string): Promise<void> {
-  const removal = await orgRemovalFor(ctx, orgId)
-  if (removal?.phase !== undefined)
+  if (await deletionBegun(ctx, orgId))
     throw new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
 }
 

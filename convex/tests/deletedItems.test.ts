@@ -15,10 +15,11 @@ import type { Doc } from '../_generated/dataModel'
 import { PURGE_ORG } from '../deletedItems'
 import { REAP_PAGES } from '../files'
 import { byId } from '../lib/db'
+import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageIdInUse } from '../model/attachments'
 import { storageUsage } from '../model/billing'
-import { deleteOrgDeep } from '../model/cascade'
+import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import {
   DELETE_REASON_TOO_LONG,
   EXPIRY,
@@ -868,8 +869,8 @@ describe('purging', () => {
         job.name.includes('deletedItems:expire'),
       ),
     )
-    // two due items, one per batch: each full batch chains the next run
-    expect(runs.length).toBeGreaterThanOrEqual(2)
+    // two due items, one per page: the first page chains the next
+    expect(runs.length).toBeGreaterThanOrEqual(1)
   })
 
   it('purges a stuck project item with the tasks it left in the live tables', async () => {
@@ -1113,6 +1114,8 @@ async function trashInFlight(t: T, f: OrgFixture) {
   return {
     files: [readyFile, drainingFile, strandedFile].map((file) => file.storage_id),
     elsewhere: { item: await itemFor(t, elsewhere.id), file: elsewhereFile.storage_id },
+    items: await Promise.all([ready.id, draining.id, f.sub2.id].map((id) => itemFor(t, id))),
+    draining: draining.id,
   }
 }
 
@@ -1239,5 +1242,208 @@ describe('organization teardown', () => {
     expect(await storedIssue(t, temporary.id)).toBeUndefined()
     expect(await blobExists(t, file.storage_id)).toBe(false)
     expect(await itemById(t, keptItem.id)).toEqual(keptItem)
+  })
+})
+
+/* ------------------------------------------- an organization's deletion */
+
+/** Starts `f`'s organization's read-only period as an admin's request does
+ * (orgRemovals.ts), after an export, so no deletion email is queued.
+ * Returns the deletion date. */
+async function requestDeletion(t: T, f: OrgFixture): Promise<number> {
+  await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
+  const { delete_after } = await as(t, f.admin).action(api.orgRemovals.request, {
+    org_id: f.org.id,
+    confirm: f.org.slug,
+  })
+  return Date.parse(delete_after)
+}
+
+const removalOf = (t: T, orgId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('org_removals')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .unique(),
+  )
+
+describe("an organization's deletion", () => {
+  it('empties Deleted items in bounded steps, with no Deleted items step running, and keeps bytes another row names', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { files, elsewhere, items, draining } = await trashInFlight(t, f)
+    const [readyFile, ...trashOnly] = files
+    // a live attachment in the other organization names the ready item's
+    // stored bytes, which the fence must keep
+    const keeper = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    await t.run((ctx) =>
+      ctx.db.insert('issue_attachments', {
+        org_id: f.otherOrg.id,
+        project_id: f.otherProject.id,
+        id: uuid(),
+        issue_id: keeper.id,
+        name: 'shared.txt',
+        size_bytes: 5,
+        storage_id: readyFile,
+        inline: false,
+        created_at: NOW,
+      }),
+    )
+    vi.setSystemTime((await requestDeletion(t, f)) + 60_000)
+    await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+    expect((await removalOf(t, f.org.id))?.phase).toBe('profiles')
+
+    // the steps of the items still moving stand still once deletion begins
+    const inFlight = () =>
+      t.run(async (ctx) => ({
+        jobs: await ctx.db.query('deleted_item_jobs').collect(),
+        rows: (await ctx.db.query('deleted_rows').collect()).filter((r) => r.org_id === f.org.id),
+        stranded: await ctx.db
+          .query('issues')
+          .withIndex('by_project', (q) => q.eq('project_id', f.sub2.id))
+          .collect(),
+      }))
+    const before = await inFlight()
+    expect(before.jobs.length).toBeGreaterThan(0)
+    for (const item of items) await step(t, item.id)
+    expect(await inFlight()).toEqual(before)
+    expect(await liveRowsOf(t, draining)).toBeGreaterThan(0)
+
+    // one row per step, so the trash phase takes many
+    Object.assign(REMOVAL_BUDGET, { rows: 256, bytes: 1 })
+    const phases: OrgRemovalPhase[] = []
+    for (;;) {
+      const removal = await removalOf(t, f.org.id)
+      if (removal === null) break
+      if (removal.phase === undefined) throw new Error('the deletion lost its phase')
+      phases.push(removal.phase)
+      expect(phases.length).toBeLessThan(2000)
+      await t.mutation(internal.orgRemovals.step, { org_id: f.org.id })
+    }
+    expect(phases.filter((phase) => phase === 'trash').length).toBeGreaterThan(5)
+    const order = phases.map((phase) => ORG_REMOVAL_PHASES.indexOf(phase))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(phases[0]).toBe('profiles')
+    // the Deleted items steps scheduled before the deletion find nothing
+    await runSteps(t)
+
+    expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
+    for (const table of ['deleted_item_jobs', 'deleted_item_parents'] as const)
+      expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
+    expect(await liveRowsOf(t, draining)).toBe(0)
+    for (const file of trashOnly) expect(await blobExists(t, file)).toBe(false)
+    expect(await blobExists(t, readyFile)).toBe(true)
+    expect(await t.run((ctx) => byId(ctx, 'organizations', f.org.id))).toBeNull()
+    expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
+    expect(await blobExists(t, elsewhere.file)).toBe(true)
+    await assertNoDanglingRefs(t, "after an organization's deletion with Deleted items")
+  })
+
+  it('leaves the items and jobs of an organization being deleted to the deletion, and expires the others', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const due = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, f, due.id)
+    const dueItem = await itemFor(t, due.id)
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    const moving = await itemFor(t, f.sub2.id)
+    // its step failed, so the job waits for recovery
+    const stalled = (await jobFor(t, moving.id))!
+    await t.run((ctx) => ctx.scheduler.cancel(stalled.scheduled_id!))
+    // another organization's item, due an hour later
+    vi.setSystemTime(START + HOUR)
+    const other = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    await as(t, f.otherAdmin).mutation(api.issues.deleteDeep, {
+      org_id: f.otherOrg.id,
+      id: other.id,
+    })
+    const otherItem = await itemFor(t, other.id)
+    // the deletion has begun; its own steps are not part of this test
+    await t.run((ctx) =>
+      ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: new Date(START).toISOString(),
+        delete_after: new Date(START + HOUR).toISOString(),
+        phase: 'profiles',
+        progress_at: new Date(START + HOUR).toISOString(),
+        created_at: new Date(START).toISOString(),
+      }),
+    )
+
+    vi.setSystemTime(START + TRASH_DAYS * DAY + 2 * HOUR)
+    await t.mutation(internal.deletedItems.recover, {})
+    expect(await jobFor(t, moving.id)).toEqual(stalled)
+    // one item per page: the first page holds only the deleting
+    // organization's item, and the run goes on past it
+    EXPIRY.batch = 1
+    await t.mutation(internal.deletedItems.expire, {})
+    await runSteps(t)
+    expect(await itemById(t, dueItem.id)).toEqual(dueItem)
+    expect(await jobFor(t, dueItem.id)).toBeNull()
+    expect(await itemById(t, moving.id)).toEqual(moving)
+    expect(await jobFor(t, moving.id)).toEqual(stalled)
+    expect(await itemById(t, otherItem.id)).toBeNull()
+    expect(await storedRows(t, otherItem.id)).toEqual([])
+  })
+
+  it('keeps moving and expiring items while the organization is read-only before its deletion, and refuses restores then', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const file = await attach(t, task)
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    const moving = await itemFor(t, f.sub2.id)
+    // its step failed, so the job waits for recovery
+    const stalled = (await jobFor(t, moving.id))!
+    await t.run((ctx) => ctx.scheduler.cancel(stalled.scheduled_id!))
+    vi.setSystemTime(START + DAY)
+    await requestDeletion(t, f)
+    const rowOf = async (who: Doc<'profiles'>) =>
+      (await as(t, who).query(api.deletedItems.list, {})).items.find((row) => row.id === item.id)
+
+    expect(await rowOf(f.user)).toMatchObject({
+      can_restore: false,
+      blocked: { reason: 'read_only' },
+    })
+    expect((await rowOf(f.admin))?.can_purge).toBe(false)
+    await expectRefusal(
+      as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] }),
+      'forbidden',
+      /will be deleted/,
+    )
+    await expectRefusal(
+      as(t, f.admin).mutation(api.deletedItems.purge, { org_id: f.org.id, ids: [item.id] }),
+      'forbidden',
+      /will be deleted/,
+    )
+
+    // recovery restarts the stalled move, which finishes
+    vi.setSystemTime(START + DAY + STALLED_MS + 1)
+    await t.mutation(internal.deletedItems.recover, {})
+    expect((await jobFor(t, moving.id))?.attempts).toBe(1)
+    await runSteps(t)
+    expect((await itemById(t, moving.id))?.state).toBe('ready')
+
+    vi.setSystemTime(START + TRASH_DAYS * DAY)
+    await t.mutation(internal.deletedItems.expire, {})
+    await runSteps(t)
+    for (const id of [item.id, moving.id]) {
+      expect(await itemById(t, id)).toBeNull()
+      expect(await storedRows(t, id)).toEqual([])
+    }
+    expect(await blobExists(t, file.storage_id)).toBe(false)
+    // the organization is still read-only, waiting for its deletion date
+    expect((await removalOf(t, f.org.id))?.phase).toBeUndefined()
+    expect(await t.run((ctx) => byId(ctx, 'organizations', f.org.id))).not.toBeNull()
   })
 })
