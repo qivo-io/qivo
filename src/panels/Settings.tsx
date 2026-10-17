@@ -72,6 +72,15 @@ function SettingsScreen({
     restoreFocus(contentRef.current?.querySelector<HTMLElement>('h1'))
   }, [page])
 
+  /* A project page whose own delete waits for the server. The delivery that
+     drops the project usually lands first, and the page then moves on by
+     itself to where the delete leads; until it does, the check below must not
+     send it to another page first. Cleared with every page change. */
+  const leavingProject = useRefS<string | null>(null)
+  useEffectS(() => {
+    leavingProject.current = null
+  }, [page])
+
   // keep the page valid for the current user
   useEffectS(() => {
     if (page === 'desktop' && !desktopSettings) {
@@ -80,7 +89,7 @@ function SettingsScreen({
       const pid = page.slice(8)
       const pr = P.project(pid)
       const meta = pr ? (pr.type === 'meta' ? pr : P.project(pr.parent)) : null
-      if (!(meta && P.canSee(meta.id))) setPage('account')
+      if (!(meta && P.canSee(meta.id)) && leavingProject.current !== pid) setPage('account')
     } else if (page.indexOf('team:') === 0) {
       if (!P.isTeamLeader(page.slice(5))) setPage('account')
     } else if (page.startsWith('user:')) {
@@ -171,6 +180,9 @@ function SettingsScreen({
         setPage={setPage}
         onBackPage={onBackPage}
         onProjectGone={onProjectGone}
+        onLeaving={(id) => {
+          leavingProject.current = id
+        }}
       />
     )
 

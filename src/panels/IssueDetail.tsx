@@ -62,13 +62,7 @@ import {
   type IssueVM,
   P,
 } from '../store/planner'
-import {
-  ArchiveIssueModal,
-  DeleteTaskModal,
-  fmtSize,
-  MoveIssueModal,
-  useWindowDropGuard,
-} from './Modals'
+import { ArchiveOrDeleteTaskModal, fmtSize, MoveIssueModal, useWindowDropGuard } from './Modals'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
 // when the modal opens; viewers render the plain Markdown component
@@ -281,23 +275,6 @@ const relMapID = {
   blocks: { label: 'Blocks', glyph: 'arrowRightFromLine', completedLabel: 'Previously blocked' },
   blocked_by: { label: 'Blocked by', glyph: 'arrowRightToLine', completedLabel: 'Was blocked by' },
   relates: { label: 'Relates to', glyph: 'arrowLeftRight' },
-}
-
-/* Whether a visible task in this one's subtree sits in a project the person
- * cannot edit. Archiving would change it, so the server refuses. */
-function hasReadOnlySubtask(root: IssueVM): boolean {
-  const seen = new Set<string>()
-  const stack = [...(root.children || [])]
-  while (stack.length) {
-    const id = stack.pop() as string
-    if (seen.has(id)) continue
-    seen.add(id)
-    const child = P.issueById[id]
-    if (!child) continue
-    if (!P.canWrite(child.project)) return true
-    stack.push(...(child.children || []))
-  }
-  return false
 }
 
 function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }) {
@@ -1026,12 +1003,9 @@ function IssueDetail({
   const [parentAnchor, setParentAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [linkAnchor, setLinkAnchor] = useStateID<{ x: number; y: number } | null>(null)
   const [linkType, setLinkType] = useStateID('blocked_by')
-  // Delete task in the task menu, for a task without subtasks
-  const deletion = useConfirmArm<'delete'>()
-  const confirmDel = deletion.armed !== null
   const [moveOpen, setMoveOpen] = useStateID(false)
-  const [archiveOpen, setArchiveOpen] = useStateID(false)
-  const [deleteOpen, setDeleteOpen] = useStateID(false)
+  // the Archive or delete window, from the task menu
+  const [fateOpen, setFateOpen] = useStateID(false)
   // the task this window shows now, for work that finishes after a switch;
   // updated once a render commits, never during one
   const shownIssue = useRefID(issueId)
@@ -1093,10 +1067,8 @@ function IssueDetail({
     setParentAnchor(null)
     setLinkAnchor(null)
     setLinkType('blocked_by')
-    deletion.disarm()
     setMoveOpen(false)
-    setArchiveOpen(false)
-    setDeleteOpen(false)
+    setFateOpen(false)
     setActFilter('comments')
     setEditingComment(null)
     setDescOpen(!embedded)
@@ -2135,10 +2107,7 @@ function IssueDetail({
                           variant="ghost"
                           size="icon"
                           className="w-control-sm h-control-sm"
-                          onClick={() => {
-                            deletion.disarm()
-                            t()
-                          }}
+                          onClick={() => t()}
                           aria-label="Task actions"
                           title="Task actions"
                         >
@@ -2192,77 +2161,20 @@ function IssueDetail({
                               Move to sub-project…
                             </MenuItem>
                           )}
-                          {/* archiving takes the whole subtree with it, so only an
-                            issue whose leaf work is entirely Done archives on the
-                            spot — any unfinished leaf work
-                            asks for a why first (ArchiveIssueModal → comment,
-                            0070). Mirrors the sweep's leaf-up caution:
-                            unfinished work never leaves the board silently. */}
-                          {canLabel &&
-                            (() => {
-                              // a visible subtask the person cannot edit makes
-                              // the server refuse, so the dialog explains it
-                              const needsWhy = !P.isDone(it) || hasReadOnlySubtask(it)
-                              return (
-                                <MenuItem
-                                  onClick={() => {
-                                    close()
-                                    if (needsWhy) {
-                                      setArchiveOpen(true)
-                                      return
-                                    }
-                                    // a paused archive leaves the window open
-                                    if (P.refusePausedEdit()) return
-                                    const id = it.id
-                                    const shown = it.key
-                                    onClose()
-                                    P.archiveIssue(id)
-                                    window.showToast?.(`Archived ${shown}`)
-                                  }}
-                                >
-                                  <Icon name="inbox" size={14} />
-                                  {needsWhy ? 'Archive task…' : 'Archive task'}
-                                </MenuItem>
-                              )
-                            })()}
-                          {/* the rule that fenced Delete off is gone with the rest
-                            of the window's lines (deviation #65) — `danger`
-                            already paints the entry red, which is the warning
-                            the divider was repeating */}
-                          {(() => {
-                            // a task with subtasks explains what happens to
-                            // them in a window first (DeleteTaskModal)
-                            const asks = it.children.length > 0 || it.hasHiddenSubtasks
-                            return (
-                              <MenuItem
-                                danger
-                                onClick={() => {
-                                  if (asks) {
-                                    close()
-                                    setDeleteOpen(true)
-                                    return
-                                  }
-                                  deletion.press('delete', () => {
-                                    const id = it.id
-                                    const shown = it.key
-                                    close()
-                                    // a paused delete leaves the window open
-                                    if (P.refusePausedEdit()) return
-                                    onClose()
-                                    P.deleteIssue(id)
-                                    window.showToast?.(`Deleted ${shown}`)
-                                  })
-                                }}
-                              >
-                                <Icon name="trash" size={14} />
-                                {asks
-                                  ? 'Delete task…'
-                                  : confirmDel
-                                    ? 'Confirm delete'
-                                    : 'Delete task'}
-                              </MenuItem>
-                            )
-                          })()}
+                          {/* one window for both ways a task leaves the board, for
+                            every task, Done ones too; viewers see neither */}
+                          {canLabel && (
+                            <MenuItem
+                              data-task-fate
+                              onClick={() => {
+                                close()
+                                setFateOpen(true)
+                              }}
+                            >
+                              <Icon name="inbox" size={14} />
+                              Archive or delete…
+                            </MenuItem>
+                          )}
                         </>
                       )}
                     </Popover>
@@ -3090,45 +3002,40 @@ function IssueDetail({
           }}
         />
       )}
-      {it && deleteOpen && (
-        <DeleteTaskModal
+      {/* stacked like the Move dialog */}
+      {it && fateOpen && (
+        <ArchiveOrDeleteTaskModal
           issueId={it.id}
-          onClose={() => setDeleteOpen(false)}
+          onClose={() => setFateOpen(false)}
           focusAfterClose={taskActionsButton}
-          onDelete={async (subtasks) => {
+          onArchive={async (reason, keepSubtasks) => {
             const shown = it.key
             const opened = issueId
             // the window waits for the server, so a refusal leaves it open
-            const deleted = await P.deleteIssue(it.id, subtasks, true)
-            if (!deleted) return false
+            const archived = await P.archiveIssue(it.id, reason, keepSubtasks)
+            if (!archived) return false
             // the person may have gone to another task meanwhile: leave that one open
             if (shownIssue.current === opened) {
-              setDeleteOpen(false)
-              onClose() // the task is gone — the window has nothing to show
+              setFateOpen(false)
+              onClose() // the task left the board: the window has nothing to show
+            }
+            window.showToast?.(`Archived ${shown}`)
+            return true
+          }}
+          onDelete={async (subtasks, reason) => {
+            const shown = it.key
+            const opened = issueId
+            const deleted = await P.deleteIssue(it.id, subtasks, true, reason)
+            if (!deleted) return false
+            if (shownIssue.current === opened) {
+              setFateOpen(false)
+              onClose()
             }
             const n = subtasks.length
             window.showToast?.(
               n ? `Deleted ${shown} and ${n} subtask${n === 1 ? '' : 's'}` : `Deleted ${shown}`,
             )
             return true
-          }}
-        />
-      )}
-      {/* stacked like the Move dialog; only reachable for non-Done issues */}
-      {it && archiveOpen && (
-        <ArchiveIssueModal
-          issueId={it.id}
-          onClose={() => setArchiveOpen(false)}
-          focusAfterClose={taskActionsButton}
-          onArchive={(reason) => {
-            // a paused archive keeps the dialog open with the typed reason
-            if (P.refusePausedEdit()) return
-            const id = it.id
-            const shown = it.key
-            setArchiveOpen(false)
-            onClose() // the issue leaves the snapshot — the window has nothing to show
-            P.archiveIssue(id, reason)
-            window.showToast?.(`Archived ${shown}`)
           }}
         />
       )}

@@ -8,6 +8,7 @@ import {
   useState as useStateM,
 } from 'react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -43,6 +44,8 @@ import {
   type NewIssueInput,
   type NewProjectInput,
   P,
+  type ProjectRemovalSummary,
+  type ProjectVM,
   type TeamAccessLevel,
   teamNoun,
 } from '../store/planner'
@@ -1080,341 +1083,658 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
   )
 }
 
-/* ---------- Deleting a task that has subtasks ----------
-   Shown instead of the two-click confirm when the task has subtasks. The
-   task always goes, with its comments, attachments and links. When I can
-   delete some of its subtasks, the window offers to delete them too
-   (selected first); a subtask I can't delete, or can't see, is not deleted
-   and becomes a top-level task with its own subtasks. Without deletable
-   subtasks it says why the subtasks stay. The list is taken when the window
-   opens; if it changed by the click, the window shows the new list and asks
-   again, so the subtasks deleted are the ones the person read. It stays open,
-   showing Deleting…, until the server answers; a refusal leaves it open on
-   the list as it is now. */
+/* ---------- Archive or delete ----------
+   One window for the two ways work leaves the board: Archive puts it away
+   where its editors can restore it, Delete moves it to Deleted items. The
+   two choices are radio cards; the arrow keys move between them, and the
+   reason typed under them survives a switch. What either choice takes along
+   (subtasks, sub-projects) is listed above the cards. */
+
 // one step per level of subtasks, as literal classes for Tailwind
 const INDENT = ['', 'ml-4', 'ml-8', 'ml-12', 'ml-16']
-function DeleteTaskModal({
+
+type Fate = 'archive' | 'delete'
+
+/** One of the window's two radio cards. `extra` sits below the card's label,
+    outside it, so a control there never switches cards. */
+function FateCard({
+  name,
+  checked,
+  onSelect,
+  title,
+  danger = false,
+  autoFocus = false,
+  extra,
+  children,
+}: {
+  name: string
+  checked: boolean
+  onSelect: () => void
+  title: string
+  danger?: boolean
+  /** the selected card when the window opens takes the first focus */
+  autoFocus?: boolean
+  extra?: ReactNodeM
+  children: ReactNodeM
+}) {
+  return (
+    <div
+      data-fate-card={title.toLowerCase()}
+      className={cn(
+        'flex flex-col rounded-lg border p-3',
+        !checked
+          ? 'border-border'
+          : danger
+            ? '[border-color:var(--danger)] [background:var(--danger-soft)]'
+            : '[border-color:var(--primary)] [background:var(--accent-soft)]',
+      )}
+    >
+      <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
+        <Input
+          type="radio"
+          name={name}
+          value={title.toLowerCase()}
+          checked={checked}
+          onChange={onSelect}
+          data-autofocus={autoFocus ? '' : undefined}
+          className={cn('mt-0.5', danger && 'accent-danger')}
+        />
+        <span className="flex flex-col gap-0.5">
+          <span
+            className={cn(
+              'text-base font-semibold',
+              danger && checked ? 'text-danger' : 'text-text-1',
+            )}
+          >
+            {title}
+          </span>
+          <span className="text-sm text-text-2">{children}</span>
+        </span>
+      </Label>
+      {extra && <div className="pl-[26px]">{extra}</div>}
+    </div>
+  )
+}
+
+/** The checkbox in a selected card that takes the subtasks along, with what
+    happens to them when it is cleared. */
+function SubtaskChoice({
+  label,
+  checked,
+  onChange,
+  danger = false,
+}: {
+  label: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+  danger?: boolean
+}) {
+  return (
+    <div className="mt-3">
+      <Label className="flex w-fit cursor-pointer items-center gap-2 font-normal text-text-1">
+        <Checkbox
+          data-subtask-choice
+          checked={checked}
+          onCheckedChange={(value) => onChange(value === true)}
+          className={cn(
+            danger &&
+              'data-[state=checked]:border-danger data-[state=checked]:bg-danger dark:data-[state=checked]:bg-danger',
+          )}
+        />
+        {label}
+      </Label>
+      {!checked && (
+        <p className="mt-1 pl-6 text-sm leading-normal text-text-2">
+          They stay in their projects. Those directly under it become{' '}
+          <span className="whitespace-nowrap">top-level tasks.</span>
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** The window's lead sentence, in the style every line above the cards uses. */
+function FateLead({ children, ...rest }: ComponentPropsM<'p'>) {
+  return (
+    <p {...rest} className="mb-3 text-base leading-normal text-text-2">
+      {children}
+    </p>
+  )
+}
+
+/** A list above the cards: its heading and its rows in a scrolling box. */
+function FateList({
+  heading,
+  going,
+  children,
+  ...rest
+}: { heading: string; going: boolean } & ComponentPropsM<'div'>) {
+  return (
+    <div {...rest} className="mb-3">
+      <div
+        className={cn(
+          'mb-2 text-sm leading-[1.45] font-semibold',
+          going ? 'text-danger' : 'text-text-1',
+        )}
+      >
+        {heading}
+      </div>
+      <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-surface-1">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+const fateRow = 'flex items-baseline gap-2 px-2.5 py-[5px] text-sm leading-[1.4]'
+
+/** The reason field under the cards. Archive's is a comment on the task;
+    Delete's is shown in Deleted items. */
+function FateReason({
+  archiving,
+  value,
+  onChange,
+}: {
+  archiving: boolean
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <MField data-fate-reason-field label={archiving ? 'Reason (required)' : 'Reason (optional)'}>
+      <Textarea
+        data-fate-reason
+        aria-label={archiving ? 'Reason for archiving' : 'Reason for deleting'}
+        rows={archiving ? 3 : 2}
+        maxLength={TEXT_MAX}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          ctlClass,
+          'h-auto resize-y px-2.5 py-2 leading-normal',
+          archiving ? 'min-h-[72px]' : 'min-h-[56px]',
+        )}
+      />
+      <p className="mt-2 text-sm text-text-2">
+        {archiving ? "Saved to the task's comments." : 'Shown in Deleted items.'}
+      </p>
+    </MField>
+  )
+}
+
+const plural = (n: number, noun: string) =>
+  `${n.toLocaleString('en-US')} ${noun}${n === 1 ? '' : 's'}`
+
+/** A subtask the window lists for an archive: `editable` is whether I can
+    change it, which the archive needs for every subtask it takes along. */
+type ArchiveRow = { task: IssueVM; depth: number; editable: boolean }
+
+/* What archiving a task takes along: its whole visible subtree in tree
+   order, and whether a task in it has subtasks in projects I cannot see. */
+function archivePlan(id: string): { rows: ArchiveRow[]; hidden: boolean } {
+  const root = P.issueById[id]
+  const rows: ArchiveRow[] = []
+  if (!root) return { rows, hidden: false }
+  let hidden = root.hasHiddenSubtasks
+  const seen = new Set([root.id])
+  const walk = (it: IssueVM, depth: number) => {
+    for (const key of it.children) {
+      const child = P.issueById[key]
+      if (!child || seen.has(key)) continue
+      seen.add(key)
+      rows.push({ task: child, depth, editable: P.canWrite(child.project) })
+      hidden ||= child.hasHiddenSubtasks
+      walk(child, depth + 1)
+    }
+  }
+  walk(root, 0)
+  return { rows, hidden }
+}
+
+type TaskPlans = {
+  archive: ReturnType<typeof archivePlan>
+  delete: ReturnType<typeof P.deletePlan>
+}
+const readPlans = (id: string): TaskPlans => ({
+  archive: archivePlan(id),
+  delete: P.deletePlan(id),
+})
+/* What a choice depends on, to tell whether it changed since the person read it. */
+const planKey = (plans: TaskPlans, fate: Fate) =>
+  fate === 'archive'
+    ? `${plans.archive.rows.map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.editable}`).join()}|${plans.archive.hidden}`
+    : `${plans.delete.rows.map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.deletable}`).join()}|${plans.delete.hidden}`
+
+/* ---------- Archive or delete a task ----------
+   Opened from the task menu by people who can edit the task, for every task.
+   Archive takes it off the board with its whole subtree, or alone when the
+   subtasks are kept: they become top-level tasks. A subtree with a subtask
+   in a project I can't edit can't be archived, so Archive waits for the
+   subtasks to be kept. Unfinished work needs a reason, saved as a comment.
+   Delete moves it to Deleted items, with the subtasks I can delete unless
+   they are kept; a subtask I can't delete, or can't see, stays and becomes a
+   top-level task. The lists are taken when the window opens; if the chosen
+   one changed by the click, the window shows the new lists and asks again,
+   ignoring clicks for a second, so what leaves is what the person read. Both
+   actions wait for the server, the window refuses to close meanwhile, and a
+   refusal leaves it open on the lists as they are now. */
+function ArchiveOrDeleteTaskModal({
   issueId,
   onClose,
+  onArchive,
   onDelete,
   focusAfterClose,
 }: {
   issueId: string
   onClose: () => void
-  /** delete the task and these subtasks (handles); resolves whether the
-      server deleted them, and the caller closes the window when it did */
-  onDelete: (subtasks: string[]) => Promise<boolean>
+  /** archive the task, alone when `keepSubtasks`; resolves whether the server
+      archived it, and the caller closes the window when it did */
+  onArchive: (reason: string, keepSubtasks: boolean) => Promise<boolean>
+  /** delete the task and these subtasks (handles); resolves like onArchive */
+  onDelete: (subtasks: string[], reason: string) => Promise<boolean>
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const [plan, setPlan] = useStateM(() => P.deletePlan(issueId))
+  const [plans, setPlans] = useStateM(() => readPlans(issueId))
+  const [fate, setFate] = useStateM<Fate>('archive')
+  const [reason, setReason] = useStateM('')
+  const [archiveAll, setArchiveAll] = useStateM(true)
+  const [deleteAll, setDeleteAll] = useStateM(plans.delete.deletable.length > 0)
   const [changed, setChanged] = useStateM(false)
-  const [withSubtasks, setWithSubtasks] = useStateM(plan.deletable.length > 0)
   const [saving, setSaving] = useStateM(false)
   // when the window last asked again: the click right after (a double click,
-  // a repeated Enter) must not delete a list nobody has read yet
+  // a repeated Enter) must not act on lists nobody has read yet
   const askedAt = useRefM(0)
   const it = P.issueById[issueId]
   if (!it) return null
+  const archiving = fate === 'archive'
+  const { rows, hidden } = plans.archive
+  const plan = plans.delete
+  const hasSubtasks = rows.length > 0 || hidden
   const n = plan.deletable.length
+  // the statuses as they are now; the rows are what the window opened with
+  const live = (task: IssueVM) => P.issueById[task.id] ?? task
+  const unfinishedRows = rows.filter((r) => !P.isDone(live(r.task))).length
+  const readOnly = rows.some((r) => !r.editable)
+  const withSubtasks = archiving ? archiveAll && hasSubtasks : deleteAll && n > 0
+  // archiving takes unfinished work off the board: the task itself when its
+  // subtasks are kept (it is a task of its own then), else its whole subtree
+  const unfinished = archiving && (withSubtasks ? !P.isDone(it) : it.status !== 'done')
+  const showReason = !archiving || unfinished
+  const archiveBlocked = archiving && withSubtasks && readOnly
+  const canSubmit =
+    !saving && (!archiving || (!archiveBlocked && (!unfinished || reason.trim().length > 0)))
   const viewOnly = plan.rows.some((r) => !r.deletable)
-  // why some subtasks are not deleted, in the words of the list. The hidden
-  // flag also covers subtasks in archived projects, which can't be opened.
-  const kept =
-    viewOnly && plan.hidden
-      ? "Subtasks marked View only, and any you can't open, aren't deleted."
-      : viewOnly
-        ? "Subtasks marked View only aren't deleted."
-        : plan.hidden
-          ? "Subtasks you can't open aren't deleted."
+  const suffix = !withSubtasks
+    ? ''
+    : archiving
+      ? readOnly
+        ? "At least one is in a project you can't edit. Keep the subtasks, or ask an organization admin."
+        : hidden
+          ? "If any of them is in a project you can't edit, the archive is refused."
           : ''
-  const deleteText = kept
-    ? `Deletes the ${n === 1 ? 'subtask' : `${n} subtasks`} you can edit. ${kept} They stay and become top-level tasks.`
-    : n === 1
-      ? 'Deletes the subtask as well.'
-      : `Deletes all ${n} subtasks as well.`
-  // ask again with the list as it is now
-  const reask = (now: typeof plan) => {
+      : viewOnly && plan.hidden
+        ? "Subtasks marked View only, and any you can't open, aren't deleted. They stay and become top-level tasks."
+        : viewOnly
+          ? "Subtasks marked View only aren't deleted. They stay and become top-level tasks."
+          : plan.hidden
+            ? "Subtasks you can't open aren't deleted. They stay and become top-level tasks."
+            : ''
+  const status = P.statusOf(it.status)
+  const count = (k: number) => (k ? plural(k, 'subtask') : 'its subtasks')
+  // ask again with the lists as they are now
+  const reask = (now: TaskPlans) => {
     askedAt.current = Date.now()
-    setPlan(now)
+    setPlans(now)
     setChanged(true)
-    if (!now.deletable.length) setWithSubtasks(false)
+    if (!now.delete.deletable.length) setDeleteAll(false)
   }
-  const finish = (subtasks: string[]) => {
+  const finish = (sent: Promise<boolean>) => {
     setSaving(true)
-    void onDelete(subtasks).then((deleted) => {
-      if (deleted) return // the caller closes the window
+    void sent.then((done) => {
+      if (done) return // the caller closes the window
       setSaving(false)
-      const now = P.deletePlan(issueId)
-      if (key(now) !== key(plan)) reask(now)
+      const now = readPlans(issueId)
+      if (planKey(now, fate) !== planKey(plans, fate)) reask(now)
     })
   }
-  const key = (p: typeof plan) =>
-    `${p.rows.map((r) => `${r.task.id}:${r.task.project}:${r.depth}:${r.deletable}`).join()}|${p.hidden}`
   const submit = () => {
-    if (saving || Date.now() - askedAt.current < 1000) return
-    const now = P.deletePlan(issueId)
+    if (!canSubmit || Date.now() - askedAt.current < 1000) return
+    const now = readPlans(issueId)
+    const gone = archiving
+      ? !now.archive.rows.length && !now.archive.hidden
+      : !now.delete.rows.length && !now.delete.hidden
     // nothing under it any more: the task alone goes, as the person confirmed
-    if (!now.rows.length && !now.hidden) return finish([])
-    if (key(now) !== key(plan)) return reask(now)
-    finish(withSubtasks ? plan.deletable.map((t) => t.id) : [])
+    if (!gone && planKey(now, fate) !== planKey(plans, fate)) return reask(now)
+    if (archiving) finish(onArchive(unfinished ? reason.trim() : '', !gone && !withSubtasks))
+    else
+      finish(onDelete(withSubtasks && !gone ? plan.deletable.map((t) => t.id) : [], reason.trim()))
   }
-  const option = (selected: boolean) =>
-    cn(
-      'flex flex-col rounded-lg border p-3',
-      selected ? '[border-color:var(--primary)] [background:var(--accent-soft)]' : 'border-border',
-    )
+  // the list shows what the selected card does to the subtasks
+  const listed = archiving ? rows.length > 0 || hidden : plan.rows.length > 0 || plan.hidden
+  const heading = archiving
+    ? withSubtasks
+      ? `Also archives ${count(rows.length)}:`
+      : `Keeps ${count(rows.length)}:`
+    : withSubtasks
+      ? `Also deletes ${plural(n, 'subtask')}:`
+      : `Keeps ${count(plan.rows.length)}:`
+  const listRows: { task: IssueVM; depth: number; editable: boolean }[] = archiving
+    ? rows
+    : plan.rows.map((r) => ({ task: r.task, depth: r.depth, editable: r.deletable }))
   return (
     <ModalShell
-      icon="warning"
-      title={`Delete ${it.key}?`}
-      onClose={saving ? () => {} : onClose}
+      icon="inbox"
+      title="Archive or delete task"
+      badge={it.key}
+      onClose={saving ? () => false : onClose}
       onSubmit={submit}
-      canSubmit={!saving}
-      danger
+      canSubmit={canSubmit}
+      danger={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={
-        saving
-          ? 'Deleting…'
-          : !n
-            ? 'Delete task'
+        archiving
+          ? saving
+            ? 'Archiving…'
+            : 'Archive'
+          : saving
+            ? 'Deleting…'
             : withSubtasks
               ? `Delete ${n + 1} tasks`
               : `Delete ${it.key}`
       }
       width={540}
     >
-      <div data-delete-task className="flex flex-col gap-3">
-        <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
-          <b className="text-text-1">{it.title}</b> and its comments, attachments and links are
-          deleted. This can't be undone.
-        </p>
-        {!n && (
-          <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
-            You can't delete its subtasks, so they stay in their projects and become top-level
-            tasks.
-          </p>
-        )}
+      <div data-task-fate>
+        <FateLead data-fate-lead>
+          <b className="text-text-1">{it.key}</b>
+          {rows.length ? (
+            <>
+              {' '}
+              has {plural(rows.length, 'subtask')}
+              {rows.length === 1
+                ? unfinishedRows
+                  ? ', which is unfinished.'
+                  : ', which is done.'
+                : unfinishedRows
+                  ? `, ${unfinishedRows} of them unfinished.`
+                  : ', all of them done.'}
+            </>
+          ) : hidden ? (
+            " has subtasks in projects you can't open."
+          ) : (
+            <>
+              {' '}
+              is <b className="text-text-1">{status ? status.name : it.status}</b>.
+            </>
+          )}
+          {suffix && ` ${suffix}`}
+        </FateLead>
         {changed && (
-          <p className="text-sm [color:var(--danger)]">
+          <p className="mb-3 text-sm text-danger">
             The subtasks changed while this window was open. Check them and choose again.
           </p>
         )}
-        <div className="max-h-56 overflow-auto rounded-lg border border-border">
-          {plan.rows.map((r) => (
-            <div
-              key={r.task.id}
-              className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm first:border-t-0"
-            >
-              <span
-                className={cn(
-                  'w-12 shrink-0 font-mono text-xs text-text-2',
-                  INDENT[Math.min(r.depth, INDENT.length - 1)],
-                )}
-              >
-                {r.task.key}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-text-1">{r.task.title}</span>
-              <span className="max-w-32 shrink-0 truncate text-xs text-text-2">
-                {P.projectLabelOf(r.task.project)}
-              </span>
-              <span className="w-16 shrink-0 text-right text-xs font-medium text-text-1">
-                {r.deletable ? '' : 'View only'}
-              </span>
-            </div>
-          ))}
-          {plan.hidden && (
-            <div className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm text-text-2 first:border-t-0">
-              <span className="w-12 shrink-0" />
-              <span className="min-w-0 flex-1">
-                {plan.rows.length ? 'More subtasks' : 'Subtasks'} in projects you can't open
-              </span>
-            </div>
-          )}
-        </div>
-        {n > 0 && (
-          <>
-            <div className={option(withSubtasks)}>
-              <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
-                <Input
-                  type="radio"
-                  name="delete-subtasks"
-                  checked={withSubtasks}
-                  onChange={() => setWithSubtasks(true)}
-                  className="mt-0.5"
-                />
-                <span className="flex flex-col gap-0.5">
-                  <span className="text-base font-semibold text-text-1">Also delete subtasks</span>
-                  <span className="text-sm text-text-2">{deleteText}</span>
-                </span>
-              </Label>
-            </div>
-            <div className={option(!withSubtasks)}>
-              <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
-                <Input
-                  type="radio"
-                  name="delete-subtasks"
-                  checked={!withSubtasks}
-                  onChange={() => setWithSubtasks(false)}
-                  className="mt-0.5"
-                />
-                <span className="flex flex-col gap-0.5">
-                  <span className="text-base font-semibold text-text-1">Keep the subtasks</span>
-                  <span className="text-sm text-text-2">
-                    They stay in their projects. Those directly under it become top-level tasks.
+        {listed && (
+          <FateList data-fate-subtasks heading={heading} going={withSubtasks}>
+            {listRows.map((r) => {
+              const task = live(r.task)
+              const st = P.statusOf(task.status)
+              const going = withSubtasks && r.editable
+              return (
+                <div key={r.task.id} data-fate-subtask={r.task.key} className={fateRow}>
+                  <span
+                    className={cn(
+                      'shrink-0 font-semibold text-text-3',
+                      INDENT[Math.min(r.depth, INDENT.length - 1)],
+                    )}
+                  >
+                    {r.task.key}
                   </span>
-                </span>
-              </Label>
-            </div>
-          </>
+                  <span className="min-w-0 flex-1 truncate text-text-1">{task.title}</span>
+                  {!r.editable ? (
+                    <span className="shrink-0 font-medium text-text-1">View only</span>
+                  ) : (
+                    !P.isGroup(task) && (
+                      <span
+                        className={cn(
+                          'shrink-0',
+                          going && task.status !== 'done' ? 'text-danger' : 'text-text-3',
+                        )}
+                      >
+                        {st ? st.name : task.status}
+                      </span>
+                    )
+                  )}
+                </div>
+              )
+            })}
+            {(archiving ? hidden : plan.hidden) && (
+              <div className={cn(fateRow, 'text-text-2')}>
+                {listRows.length ? 'More subtasks' : 'Subtasks'} in projects you can't open
+              </div>
+            )}
+          </FateList>
         )}
+        <div
+          role="radiogroup"
+          aria-label="Archive or delete"
+          className={cn('mt-5 flex flex-col gap-3', showReason && 'mb-6')}
+        >
+          <FateCard
+            name="task-fate"
+            title="Archive"
+            checked={archiving}
+            autoFocus
+            onSelect={() => setFate('archive')}
+            extra={
+              archiving &&
+              hasSubtasks && (
+                <SubtaskChoice
+                  label={`Also archive ${rows.length === 1 ? 'the subtask' : rows.length ? `the ${rows.length} subtasks` : 'its subtasks'}`}
+                  checked={archiveAll}
+                  onChange={setArchiveAll}
+                />
+              )
+            }
+          >
+            Takes it off the board. Anyone who can edit the project can restore it from{' '}
+            <span className="whitespace-nowrap">Archived tasks.</span>
+          </FateCard>
+          <FateCard
+            name="task-fate"
+            title="Delete"
+            danger
+            checked={!archiving}
+            onSelect={() => setFate('delete')}
+            extra={
+              !archiving &&
+              (n > 0 ? (
+                <SubtaskChoice
+                  danger
+                  label={n === 1 ? 'Also delete the subtask' : `Also delete the ${n} subtasks`}
+                  checked={deleteAll}
+                  onChange={setDeleteAll}
+                />
+              ) : (
+                (plan.rows.length > 0 || plan.hidden) && (
+                  <p className="mt-2 text-sm leading-normal text-text-2">
+                    You can't delete its subtasks, so they stay in their projects and become
+                    top-level tasks.
+                  </p>
+                )
+              ))
+            }
+          >
+            Moves it to Deleted items with its comments, attachments and links. You can restore it
+            from there.
+          </FateCard>
+        </div>
+        {showReason && <FateReason archiving={archiving} value={reason} onChange={setReason} />}
       </div>
     </ModalShell>
   )
 }
 
-/* ---------- Archive issue (0070) ---------- */
-/* Shown whenever archiving would take UNFINISHED leaf work off the board
-   (archiving is subtree-atomic). Parent statuses do not affect this decision.
-   The required note lands in the issue's comments,
-   readable after a restore or from the Archive page. An issue whose whole
-   subtree is Done archives without a dialog. */
-function ArchiveIssueModal({
-  issueId,
+/* ---------- Archive or delete a project ----------
+   Opened by the project's lead from its settings page, or from Archived
+   projects with only the delete part (`deleteOnly`, titled Delete “name”?).
+   The counts come from the server when the window opens, archived work
+   included, because the store holds no archived tasks; until they arrive
+   both actions wait, and a failed count offers to try again. Archive acts at
+   once (the caller closes the window). Delete waits for the server, the
+   window refuses to close meanwhile, and a refusal leaves it open. */
+function ArchiveOrDeleteProjectModal({
+  project,
+  deleteOnly = false,
   onClose,
   onArchive,
+  onDelete,
   focusAfterClose,
 }: {
-  issueId: string
+  project: Pick<ProjectVM, 'id' | 'name' | 'type'>
+  deleteOnly?: boolean
   onClose: () => void
-  onArchive: (reason: string) => void
+  onArchive?: () => void
+  /** resolves whether the server deleted it; the caller closes the window */
+  onDelete: (reason: string) => Promise<boolean>
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const it = P.issueById[issueId]
+  // undefined while counting, null when the count failed
+  const [summary, setSummary] = useStateM<ProjectRemovalSummary | null | undefined>(undefined)
+  const [attempt, setAttempt] = useStateM(0)
+  const [fate, setFate] = useStateM<Fate>(deleteOnly ? 'delete' : 'archive')
   const [reason, setReason] = useStateM('')
-  if (!it) return null
-  const status = P.statusOf(it.status)
-  const sub = P.progressOf(it) // whole subtree — the cascade takes all of it
-  const unfinished = sub.total - sub.done
-  const rootGroup = P.isGroup(it)
-  // archiving changes every active subtask, so the server refuses when one is
-  // in a project this person cannot edit
-  // the subtree's issues, listed so it's plain what the cascade takes along
-  // (the store only mirrors active issues, so everything here is unarchived;
-  // cycle-safe like progressOf)
-  const subIssues: IssueVM[] = []
-  {
-    const seen = new Set<string>()
-    const stack = [...(it.children || [])]
-    while (stack.length) {
-      const c = stack.pop()
-      if (seen.has(c)) continue
-      seen.add(c)
-      const ci = P.issueById[c]
-      if (!ci) continue
-      subIssues.push(ci)
-      ;(ci.children || []).forEach((k: string) => {
-        stack.push(k)
-      })
+  const [saving, setSaving] = useStateM(false)
+  useEffectM(() => {
+    let current = true
+    setSummary(undefined)
+    void P.projectRemovalSummary(project.id).then((answer) => {
+      if (current) setSummary(answer)
+    })
+    return () => {
+      current = false
     }
-    // by task number — read from the display key, since the handle is a uuid
-    // for another organization's tasks (0081)
-    subIssues.sort(
-      (a, b) => Number(String(a.key).split('-')[1]) - Number(String(b.key).split('-')[1]),
-    )
+    // attempt: Try again asks once more
+  }, [project.id, attempt])
+  const archiving = fate === 'archive'
+  const noun = project.type === 'meta' ? 'project' : 'sub-project'
+  const subs = summary?.sub_projects ?? []
+  const tasks = summary
+    ? summary.more
+      ? `more than ${plural(summary.tasks, 'task')}`
+      : plural(summary.tasks, 'task')
+    : ''
+  const anyTasks = !!summary && (summary.tasks > 0 || summary.more)
+  const deleteText = !summary
+    ? `Moves the ${noun} and everything in it to Deleted items. You can restore it from there.`
+    : subs.length
+      ? anyTasks
+        ? `Moves the ${noun}, its sub-projects and ${summary.more ? 'their tasks' : `all ${tasks}`} to Deleted items. You can restore them from there.`
+        : `Moves the ${noun} and its sub-projects to Deleted items. You can restore them from there.`
+      : anyTasks
+        ? `Moves the ${noun} and ${summary.tasks === 1 && !summary.more ? 'its task' : summary.more ? 'its tasks' : `all ${tasks}`} to Deleted items. You can restore them from there.`
+        : `Moves the ${noun} to Deleted items. You can restore it from there.`
+  const listed = archiving ? subs.filter((s) => !s.archived) : subs
+  const submit = () => {
+    if (!summary || saving) return
+    if (archiving) {
+      onArchive?.()
+      return
+    }
+    setSaving(true)
+    void onDelete(reason.trim()).then((done) => {
+      if (!done) setSaving(false) // the caller closes the window when it did
+    })
   }
-  const readOnlySub = subIssues.some((si) => !P.canWrite(si.project))
-  const canSubmit = reason.trim().length > 0 && !readOnlySub
-  const refusal = readOnlySub
-    ? ' At least one is in a project you cannot edit, so an organization admin can archive it.'
-    : sub.unknown
-      ? ' If any of them is in a project you cannot edit, the archive is refused.'
-      : ''
   return (
     <ModalShell
-      icon="inbox"
-      title="Archive task"
-      badge={it.key}
-      onClose={onClose}
+      icon={deleteOnly ? 'warning' : 'archive'}
+      title={deleteOnly ? `Delete “${P.projectLabel(project)}”?` : `Archive or delete ${noun}`}
+      onClose={saving ? () => false : onClose}
+      onSubmit={submit}
+      canSubmit={!!summary && !saving}
+      danger={!archiving}
       focusAfterClose={focusAfterClose}
-      onSubmit={() => {
-        if (canSubmit) onArchive(reason.trim())
-      }}
-      canSubmit={canSubmit}
-      submitLabel="Archive"
-      width={440}
+      submitLabel={
+        archiving
+          ? 'Archive'
+          : saving
+            ? 'Deleting…'
+            : anyTasks
+              ? `Delete ${noun} and ${tasks}`
+              : `Delete ${noun}`
+      }
+      width={540}
     >
-      <div className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5] [margin-bottom:12px]">
-        {rootGroup && sub.unknown ? (
-          <>
-            <b>{it.key}</b> may include work outside this view; completion is unknown. All subtasks
-            will also be archived.{refusal}
-          </>
-        ) : rootGroup ? (
-          <>
-            <b>{it.key}</b> has{' '}
-            {unfinished === 1
-              ? 'one unfinished subtask'
-              : unfinished > 1
-                ? `${unfinished} unfinished subtasks`
-                : 'unfinished subtasks'}
-            . All subtasks will also be archived.{refusal}
-          </>
+      <div data-project-fate>
+        {summary === undefined ? (
+          <FateLead role="status">Counting tasks…</FateLead>
+        ) : summary === null ? (
+          <div role="alert" className="mb-3 flex items-center gap-3">
+            <p className="text-base leading-normal text-text-2">Couldn't count the tasks.</p>
+            <Button type="button" size="sm" onClick={() => setAttempt((a) => a + 1)}>
+              Try again
+            </Button>
+          </div>
         ) : (
-          <>
-            <b>{it.key}</b> is <b>{status ? status.name : it.status}</b>.
-          </>
+          <FateLead data-fate-lead>
+            <b className="text-text-1">{P.projectLabel(project)}</b> has{' '}
+            {subs.length ? `${plural(subs.length, 'sub-project')} and ` : ''}
+            {anyTasks ? tasks : 'no tasks'}
+            {summary.archived_tasks
+              ? `, including ${plural(summary.archived_tasks, 'archived task')}`
+              : ''}
+            .
+          </FateLead>
         )}
+        {listed.length > 0 && (
+          <FateList
+            data-fate-subprojects
+            heading={`Also ${archiving ? 'archives' : 'deletes'} ${plural(listed.length, 'sub-project')}:`}
+            going={false}
+          >
+            {listed.map((s) => (
+              <div key={s.id} data-fate-subproject={s.id} className={fateRow}>
+                <Icon name="layers" size={14} className="self-center text-text-3" />
+                <span className="min-w-0 flex-1 truncate text-text-1">{s.name}</span>
+                {s.archived && <span className="shrink-0 text-text-3">Archived</span>}
+                <span className="shrink-0 text-text-2">
+                  {s.more ? `more than ${plural(s.tasks, 'task')}` : plural(s.tasks, 'task')}
+                </span>
+              </div>
+            ))}
+          </FateList>
+        )}
+        {deleteOnly ? (
+          <p className="mt-2 mb-6 text-base leading-normal text-text-2">{deleteText}</p>
+        ) : (
+          <div
+            role="radiogroup"
+            aria-label="Archive or delete"
+            className={cn('mt-5 flex flex-col gap-3', !archiving && 'mb-6')}
+          >
+            <FateCard
+              name="project-fate"
+              title="Archive"
+              checked={archiving}
+              autoFocus
+              onSelect={() => setFate('archive')}
+            >
+              Hides it and its tasks from every view. You can restore it from{' '}
+              <span className="whitespace-nowrap">Archived projects.</span>
+            </FateCard>
+            <FateCard
+              name="project-fate"
+              title="Delete"
+              danger
+              checked={!archiving}
+              onSelect={() => setFate('delete')}
+            >
+              {deleteText}
+            </FateCard>
+          </div>
+        )}
+        {!archiving && <FateReason archiving={false} value={reason} onChange={setReason} />}
       </div>
-      {subIssues.length > 0 && (
-        <div data-archive-subtree className="[margin-bottom:12px]">
-          <div className="[font-size:var(--fs-sm)] [font-weight:600] [color:var(--danger)] [line-height:1.45] [margin-bottom:8px]">
-            {subIssues.length === 1
-              ? 'Also archives 1 subtask:'
-              : `Also archives ${subIssues.length} subtasks:`}
-          </div>
-          <div className="[max-height:160px] [overflow-y:auto] [border:1px_solid_var(--border)] [border-radius:var(--r-md)] [background:var(--surface-1)]">
-            {subIssues.map((si) => {
-              const st = P.statusOf(si.status)
-              const done = si.status === 'done'
-              return (
-                <div
-                  key={si.id}
-                  data-archive-subtree-row
-                  className="[display:flex] [gap:8px] [align-items:baseline] [padding:5px_10px] [font-size:var(--fs-sm)] [line-height:1.4]"
-                >
-                  <span className="[font-weight:600] [color:var(--text-3)] [flex-shrink:0]">
-                    {si.key}
-                  </span>
-                  <span className="[flex:1] [color:var(--text-1)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                    {si.title}
-                  </span>
-                  {!P.isGroup(si) && (
-                    <span
-                      style={{ color: done ? 'var(--text-3)' : 'var(--danger)' }}
-                      className="[flex-shrink:0]"
-                    >
-                      {st ? st.name : si.status}
-                    </span>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-      <MField label="Reason (required)">
-        <Textarea
-          data-archive-reason
-          aria-label="Reason for archiving"
-          autoFocus
-          rows={3}
-          maxLength={TEXT_MAX}
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          className={`${ctlClass} h-auto min-h-[72px] resize-y px-2.5 py-2 leading-normal`}
-        />
-        <p className="mt-2 text-sm text-text-2">Saved to the task's comments.</p>
-      </MField>
     </ModalShell>
   )
 }
@@ -1796,9 +2116,9 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
 
 export {
   AccessRemovalModal,
-  ArchiveIssueModal,
+  ArchiveOrDeleteProjectModal,
+  ArchiveOrDeleteTaskModal,
   CreateOrgModal,
-  DeleteTaskModal,
   fmtSize,
   MField,
   MilestoneModal,

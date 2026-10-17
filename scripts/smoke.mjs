@@ -1859,14 +1859,16 @@ try {
     })
     if (!boxed) await fail('Project settings Sub-projects and Project access are not named boxes')
   }
-  // TODO(Deleted items UI): the UI change replaces the Danger zone with the
-  // project settings section that opens "Archive or delete…". Move this
-  // assertion to that section in the same change.
-  const dangerZone = projectSettings.locator('fieldset.settings-danger-zone')
-  if ((await dangerZone.count()) !== 1 || !(await dangerZone.locator('legend').textContent()))
-    await fail('Project settings has no Danger zone box')
+  // the section that opens the Archive or delete window replaced the Danger zone
+  const removal = projectSettings.locator('fieldset.settings-section[data-project-removal]')
+  if (
+    (await removal.count()) !== 1 ||
+    (await removal.locator('legend').textContent()) !== 'Archive or delete' ||
+    (await removal.getByRole('button', { name: 'Archive or delete…' }).count()) !== 1
+  )
+    await fail('Project settings has no Archive or delete box')
   log(
-    'A: project forms use Name without an icon chooser; Sub-projects, Project access and Danger zone are named boxes',
+    'A: project forms use Name without an icon chooser; Sub-projects, Project access and Archive or delete are named boxes',
   )
 
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-billing`, {
