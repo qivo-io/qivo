@@ -144,9 +144,11 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
   )
 }
 
-/* includeNavigation: whether a parent visible only for navigation to one of
- * its sub-projects counts (it then answers 'viewer'). */
-async function projectLevel(
+/* The effective level of `me` on a live project, the one rule behind
+ * canSeeProject and hasProjectLevel. includeNavigation: whether a parent
+ * visible only for navigation to one of its sub-projects counts (it then
+ * answers 'viewer'). */
+export async function projectLevel(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   project: Doc<'projects'>,

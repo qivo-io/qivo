@@ -26,6 +26,13 @@
  * (sameReference). A reveal whose checks fail sends the item back to
  * moving, and the move takes the rows back.
  *
+ * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
+ * seat sees of an item, restoreBlock why that seat cannot restore it, and
+ * myItem fences every public load with viewOf. A task item is judged over
+ * the live projects it goes back to, a project item over its stored rows
+ * (storedLevels), each with the seat in the item's organization. A Memo
+ * keeps the reads they repeat; a list read seeds one per seat (sightOf).
+ *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
  * job's budget_scale: rows moved, their bytes, task rows moved and index
  * ranges read. `metered` counts the ranges of every read a step makes,
@@ -57,16 +64,18 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canHoldWork,
   canLeadProjects,
-  canSeeProject,
   hasProjectLevel,
   levelRank,
   levelsFrom,
   type OrgProjectLevels,
+  projectLevel,
+  projectLevelsForOrg,
 } from '../lib/access'
 import { billingReadOnly } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { demoForOrg, isDemoDeployment } from '../lib/demo'
 import {
+  type AccessLevel,
   LEVEL_RANK,
   type ProjectType,
   STORED_TABLES,
@@ -77,13 +86,8 @@ import { notFound, rule } from '../lib/functions'
 import { logActivity } from './activity'
 import { LARGE_ROWS_PER_READ } from './cascade'
 import { estimateDocumentBytes } from './demoMetrics'
-import { assertCanEdit, clearParentRemaining, parentChain } from './issues'
-import {
-  type NotifyPreload,
-  notifyIssueUpdate,
-  postMessage,
-  scheduleArchivedReads,
-} from './messages'
+import { assertCanEdit, clearParentRemaining, detachChild, parentChain } from './issues'
+import { type NotifyPreload, postMessage, scheduleArchivedReads } from './messages'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
@@ -324,6 +328,7 @@ function wrapRow(
     created_ts: _creationTime,
     storage_id: live.table === 'issue_attachments' ? live.doc.storage_id : undefined,
     project_key: live.table === 'projects' ? live.doc.key : undefined,
+    lead_id: live.table === 'projects' ? live.doc.lead_id : undefined,
     // the tag and its document, so row.table names doc's table
     row: { table: live.table, doc } as Doc<'deleted_rows'>['row'],
   }
@@ -500,24 +505,50 @@ async function clearAll(
 
 /* ------------------------------------------------------------------- runs */
 
-/** Reads a restore repeats for many rows, kept for one item in one
- * transaction. Nothing the restore writes changes them before its reveal. */
-type Memo = {
+/** Reads the restore and visibility rules repeat, kept for one transaction:
+ * for one item in a restore or a step, where nothing the restore writes
+ * changes them before its reveal, or for every item one person's list read
+ * looks at (sightOf). Entries that depend on the item are keyed by its id. */
+export type Memo = {
+  /** Whether a restore check also looks for a live row holding the item's
+   * uuids or keys (the 'conflict' block). A list read leaves that to the
+   * restore, which the reservations should make pass anyway. */
+  conflicts: boolean
   profiles: Map<string, Promise<Doc<'profiles'> | null>>
   teams: Map<string, Promise<Doc<'teams'> | null>>
   labels: Map<string, Promise<Doc<'labels'> | null>>
+  /** live projects by id */
   projects: Map<string, Promise<Doc<'projects'> | null>>
-  hierarchy: Promise<Hierarchy> | undefined
+  /** a person's level on a live project, keyed `profile:project` */
+  live: Map<string, Promise<AccessLevel | null>>
+  /** a person's live teams in the organization, by profile */
+  teamsOf: Map<string, Promise<Set<string>>>
+  /** a person's live grant and team shares on a live parent, keyed `parent:profile` */
+  parentAccess: Map<string, Promise<LevelGrants>>
+  /** whether billing pauses editing, by organization */
+  readOnly: Map<string, Promise<boolean>>
+  /** the item holding a stored project, by project */
+  heldBy: Map<string, Promise<string | undefined>>
+  /** a project item's hierarchy, by item */
+  hierarchy: Map<string, Promise<Hierarchy>>
+  /** a person's levels inside a project item, keyed `item:profile` */
   levels: Map<string, Promise<OrgProjectLevels>>
+  /** whether a holder stays, keyed `item:profile:project` */
   holders: Map<string, Promise<boolean>>
 }
 
-const newMemo = (): Memo => ({
+export const newMemo = (): Memo => ({
+  conflicts: true,
   profiles: new Map(),
   teams: new Map(),
   labels: new Map(),
   projects: new Map(),
-  hierarchy: undefined,
+  live: new Map(),
+  teamsOf: new Map(),
+  parentAccess: new Map(),
+  readOnly: new Map(),
+  heldBy: new Map(),
+  hierarchy: new Map(),
   levels: new Map(),
   holders: new Map(),
 })
@@ -597,6 +628,8 @@ async function storeTask(
     title: task.title,
     project_id: task.project_id,
     archived,
+    cross_project_id:
+      item.kind === 'task' && task.project_id !== item.project_id ? task.project_id : undefined,
   })
   tally.tasks += 1
   if (archived) tally.archived_tasks += 1
@@ -605,22 +638,6 @@ async function storeTask(
     project.tasks += 1
     if (archived) project.archived_tasks += 1
   }
-}
-
-/** Detaches `child` from its deleted parent with the SET NULL's touch, the
- * 'Detached from its parent' notice and task.updated, as model/cascade.ts
- * deleteIssueDeep does. */
-async function detach(
-  ctx: MutationCtx,
-  child: Doc<'issues'>,
-  actor: Doc<'profiles'> | undefined,
-  now: string,
-  preload?: NotifyPreload,
-): Promise<void> {
-  await ctx.db.patch(child._id, { parent_id: undefined, updated_at: now })
-  const after = await ctx.db.get(child._id)
-  if (after === null) return
-  await notifyIssueUpdate(ctx, { before: child, after, actor, now, preload })
 }
 
 /** The step's NotifyPreload. A step changes no profile, grant, team or
@@ -679,7 +696,7 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
         .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
         .filter((q) => q.and(...ids.map((id) => q.neq(q.field('project_id'), id))))
         .take(n),
-    (child) => detach(run.ctx, child, run.actor, run.now, preload),
+    (child) => detachChild(run.ctx, child, run.actor, run.now, preload),
     LARGE_ROWS_PER_READ,
   )
   if (!detached) return false
@@ -1084,7 +1101,7 @@ const RESTORED_ROWS = [
   'issue_attachments',
 ] as const
 
-/* `read`, run once per key for one item in one transaction (Memo). */
+/* `read`, run once per key in one transaction (Memo). */
 function memoRead<V>(cache: Map<string, Promise<V>>, key: string, read: () => Promise<V>) {
   let value = cache.get(key)
   if (value === undefined) {
@@ -1108,12 +1125,20 @@ async function keptProfile(s: Scope, id: string | undefined): Promise<string | u
   return sameReference(await profileOf(s, id), s.item) ? id : undefined
 }
 
+/** The live project `id`, or null. */
+const projectOf = (s: Scope, id: string) =>
+  memoRead(s.memo.projects, id, () => byId(s.ctx, 'projects', id))
+
 /** The live project `id` when it is the one the item stored (the reference
  * predicate, with the type rule when `type` is given). */
 async function namedProject(s: Scope, id: string, type?: ProjectType) {
-  const project = await memoRead(s.memo.projects, id, () => byId(s.ctx, 'projects', id))
+  const project = await projectOf(s, id)
   return sameReference(project, s.item, type) ? project : null
 }
+
+/** `me`'s level on live project `project` (lib/access.ts projectLevel). */
+const liveLevel = (s: Scope, me: Doc<'profiles'>, project: Doc<'projects'>) =>
+  memoRead(s.memo.live, `${me.id}:${project.id}`, () => projectLevel(s.ctx, me, project))
 
 /** The item's stored rows of `table`, whole. For a project item's own rows,
  * which organization size bounds, and for what a reveal writes back. */
@@ -1176,7 +1201,7 @@ type Hierarchy = {
 }
 
 function hierarchyOf(s: Scope): Promise<Hierarchy> {
-  s.memo.hierarchy ??= (async () => {
+  return memoRead(s.memo.hierarchy, s.item.id, async () => {
     const projects: Stored<'projects'>[] = []
     for (const row of await storedOf(s, 'projects'))
       projects.push(await cleanProject(s, docOf(row, 'projects')))
@@ -1199,8 +1224,7 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
       parent:
         parent_project_id === undefined ? null : await namedProject(s, parent_project_id, 'meta'),
     }
-  })()
-  return s.memo.hierarchy
+  })
 }
 
 /** `profile`'s levels on a project item's projects while they are in
@@ -1209,43 +1233,64 @@ function hierarchyOf(s: Scope): Promise<Hierarchy> {
  * shares of the teams it belongs to now, and the live grants and shares on
  * a sub-project item's parent. */
 function storedLevels(s: Scope, profile: Doc<'profiles'>): Promise<OrgProjectLevels> {
-  return memoRead(s.memo.levels, profile.id, async () => {
+  return memoRead(s.memo.levels, `${s.item.id}:${profile.id}`, async () => {
     const h = await hierarchyOf(s)
+    const teams = await teamsOf(s, profile)
+    const grants: LevelGrants['grants'] = h.grants.filter((g) => g.profile_id === profile.id)
+    const shares: LevelGrants['shares'] = h.shares.filter((g) => teams.has(g.team_id))
+    if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
+    const parent = await parentAccess(s, h.parent, profile)
+    return levelsFrom(
+      profile,
+      [...h.projects, h.parent],
+      [...grants, ...parent.grants],
+      [...shares, ...parent.shares],
+    )
+  })
+}
+
+/** Grants and team shares as lib/access.ts levelsFrom takes them. */
+type LevelGrants = {
+  grants: Pick<Doc<'project_access'>, 'project_id' | 'level'>[]
+  shares: Pick<Doc<'project_team_access'>, 'project_id' | 'level'>[]
+}
+
+/** The live teams `profile` belongs to in its organization. */
+const teamsOf = (s: Scope, profile: Doc<'profiles'>) =>
+  memoRead(s.memo.teamsOf, profile.id, async () => {
     const teams = new Set<string>()
     const memberships = s.ctx.db
       .query('team_members')
       .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
     for await (const m of memberships)
       if ((await teamOf(s, m.team_id))?.org_id === profile.org_id) teams.add(m.team_id)
-    const grants: Pick<Doc<'project_access'>, 'project_id' | 'level'>[] = h.grants.filter(
-      (g) => g.profile_id === profile.id,
-    )
-    const shares: Pick<Doc<'project_team_access'>, 'project_id' | 'level'>[] = h.shares.filter(
-      (g) => teams.has(g.team_id),
-    )
-    if (h.parent === null) return levelsFrom(profile, h.projects, grants, shares)
-    const parentId = h.parent.id
+    return teams
+  })
+
+/** `profile`'s own grant and its teams' shares on live project `parent`. */
+const parentAccess = (s: Scope, parent: Doc<'projects'>, profile: Doc<'profiles'>) =>
+  memoRead(s.memo.parentAccess, `${parent.id}:${profile.id}`, async (): Promise<LevelGrants> => {
+    const teams = await teamsOf(s, profile)
     const own = await s.ctx.db
       .query('project_access')
       .withIndex('by_project_profile', (q) =>
-        q.eq('project_id', parentId).eq('profile_id', profile.id),
+        q.eq('project_id', parent.id).eq('profile_id', profile.id),
       )
       .unique()
-    if (own !== null) grants.push(own)
+    const shares: LevelGrants['shares'] = []
     const parentShares = s.ctx.db
       .query('project_team_access')
-      .withIndex('by_project', (q) => q.eq('project_id', parentId))
+      .withIndex('by_project', (q) => q.eq('project_id', parent.id))
     for await (const share of parentShares) if (teams.has(share.team_id)) shares.push(share)
-    return levelsFrom(profile, [...h.projects, h.parent], grants, shares)
+    return { grants: own === null ? [] : [own], shares }
   })
-}
 
 /** Whether `id` can stay a task's assignee or reviewer in `projectId`: the
  * profile passes the reference predicate and today's assignment rule there
  * (lib/access.ts profileCanBeAssigned). While the project is still in
  * Deleted items, its level comes from the stored rows. */
 function keepsHolder(s: Scope, id: string, projectId: string): Promise<boolean> {
-  return memoRead(s.memo.holders, `${id}:${projectId}`, async () => {
+  return memoRead(s.memo.holders, `${s.item.id}:${id}:${projectId}`, async () => {
     const profile = await profileOf(s, id)
     if (!sameReference(profile, s.item) || !canHoldWork(profile)) return false
     if ((await byId(s.ctx, 'projects', projectId)) !== null)
@@ -1261,8 +1306,10 @@ const keptHolder = async (s: Scope, id: string | undefined, projectId: string) =
 /** Why `me` cannot restore `item` now, else null (design 5.3). Callers
  * check the item's state; the reveal asks again for the restorer. */
 async function blockOf(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
-  if (me.org_id !== s.item.org_id) return 'no_access'
-  if (await billingReadOnly(s.ctx, s.item.org_id)) return 'read_only'
+  const { org_id } = s.item
+  if (me.org_id !== org_id) return 'no_access'
+  if (await memoRead(s.memo.readOnly, org_id, () => billingReadOnly(s.ctx, org_id)))
+    return 'read_only'
   return s.item.kind === 'task' ? await taskItemBlock(s, me) : await projectItemBlock(s, me)
 }
 
@@ -1273,29 +1320,45 @@ async function blockOf(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | nu
 async function taskItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
   const project = await namedProject(s, s.item.project_id, 'project')
   if (project === null) return 'project_deleted'
-  if (!(await canSeeProject(s.ctx, me, project))) return 'no_access'
-  if (!(await hasProjectLevel(s.ctx, me, project.id, 'user'))) return 'view_only'
+  const level = await liveLevel(s, me, project)
+  if (level === null) return 'no_access'
+  if (levelRank(level) < LEVEL_RANK.user) return 'view_only'
   for (const { id } of s.item.projects) {
-    if (id === project.id || (await namedProject(s, id, 'project')) === null) continue
-    if (!(await hasProjectLevel(s.ctx, me, id, 'user'))) return 'subtask_project'
+    const other = id === project.id ? null : await namedProject(s, id, 'project')
+    if (other !== null && levelRank(await liveLevel(s, me, other)) < LEVEL_RANK.user)
+      return 'subtask_project'
   }
   if (project.archived_at !== undefined) return 'project_archived'
-  if ((await byId(s.ctx, 'issues', s.item.target_id)) !== null) return 'conflict'
+  if (s.memo.conflicts && (await byId(s.ctx, 'issues', s.item.target_id)) !== null)
+    return 'conflict'
   return null
 }
 
 /* A project item needs an organization admin or the effective lead of its
  * root, computed over the stored rows; restore works like unarchive, so
  * there is no project_creators check and a sub-project's own lead
- * suffices. A sub-project item needs its parent live and not archived. */
+ * suffices. A person whose level on the root is only for navigation to a
+ * sub-project they lead or can access reads not_lead, as the root has a
+ * lead of its own. A sub-project item needs its parent live and not
+ * archived. An admin needs no stored row read, so a list of many project
+ * items stays cheap for them. */
 async function projectItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
+  const parentId = s.item.parent_project_id
+  const parent = parentId === undefined ? null : await namedProject(s, parentId, 'meta')
+  if (parentId !== undefined && parent === null) return 'parent_deleted'
+  if (me.org_role !== 'admin') {
+    const h = await hierarchyOf(s)
+    if (h.root === undefined) return 'conflict'
+    const levels = await storedLevels(s, me)
+    const level = levels.levelOf(h.root)
+    if (level === null) return 'no_access'
+    if (level === 'viewer' && !levels.navigationOnly(h.root.id)) return 'view_only'
+    if (level !== 'lead') return 'not_lead'
+  }
+  if (parent !== null && parent.archived_at !== undefined) return 'parent_archived'
+  if (!s.memo.conflicts) return null
   const h = await hierarchyOf(s)
   if (h.root === undefined) return 'conflict'
-  if (s.item.parent_project_id !== undefined && h.parent === null) return 'parent_deleted'
-  const level = (await storedLevels(s, me)).levelOf(h.root)
-  if (level !== 'lead')
-    return level === null ? 'no_access' : level === 'viewer' ? 'view_only' : 'not_lead'
-  if (h.parent !== null && h.parent.archived_at !== undefined) return 'parent_archived'
   for (const p of h.projects) {
     const holder = await s.ctx.db
       .query('projects')
@@ -1308,15 +1371,207 @@ async function projectItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreB
 
 /** Why `me` cannot restore `item` now, or null when they can (design 5.3,
  * also the list's can_restore and blocked). Visibility (design 6.1) is the
- * caller's to check first. */
+ * caller's to check first. `memo` lets a list read share its reads across
+ * items (sightOf). */
 export async function restoreBlock(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   item: Item,
+  memo = newMemo(),
 ): Promise<RestoreBlock | null> {
   if (item.state !== 'ready') return item.state
-  return await blockOf({ ctx, item, memo: newMemo() }, me)
+  return await blockOf({ ctx, item, memo }, me)
 }
+
+/* ------------------------------------------------------------ visibility */
+
+/** What one person sees of an item (design 6.1). */
+export type ItemView = {
+  /** The entries of the item's projects whose tasks the person may see. */
+  projects: Item['projects']
+  /** A task item whose root's project the person cannot see. It is listed
+   * only through a task they can see, without the root, its path or the
+   * reason, and cannot be restored by them. */
+  redacted: boolean
+}
+
+/**
+ * What `me` sees of `item`, or null when it is hidden from them (design
+ * 6.1). `me` is their seat in the item's organization, never another one.
+ * Organization admins see every item that is not purging. Nobody else sees
+ * a stuck item, or one whose project (a task item) or parent (a sub-project
+ * item) is no longer live: those wait for an admin.
+ *
+ * A task item shows to the person who deleted it and to the lead of one of
+ * its projects or of that project's top-level project, while they can see
+ * one of its projects. It shows only the tasks in projects they can see, and
+ * is redacted when that leaves out the root's project.
+ *
+ * A project item is read over its stored rows (storedLevels). It shows to
+ * the effective lead of its root, the lead of a sub-project item's live
+ * parent, the lead of one of its sub-projects, and the person who deleted it
+ * while they have a level on its root. It shows only the projects their
+ * level reaches, so a sub-project's lead sees nothing of its siblings.
+ */
+export async function viewOf(
+  ctx: QueryCtx,
+  memo: Memo,
+  me: Doc<'profiles'>,
+  item: Item,
+): Promise<ItemView | null> {
+  if (item.org_id !== me.org_id || item.state === 'purging') return null
+  if (me.org_role === 'admin') return { projects: item.projects, redacted: false }
+  if (item.state === 'stuck') return null
+  const s = { ctx, item, memo }
+  return item.kind === 'task' ? await taskItemView(s, me) : await projectItemView(s, me)
+}
+
+async function taskItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView | null> {
+  const root = await namedProject(s, s.item.project_id, 'project')
+  if (root === null) return null
+  const projects: Item['projects'] = []
+  let leads = false
+  for (const entry of s.item.projects) {
+    const project = await namedProject(s, entry.id, 'project')
+    const level = project === null ? null : await liveLevel(s, me, project)
+    if (project === null || level === null) continue
+    projects.push(entry)
+    if (level === 'lead' || (await leadsTop(s, me, project))) leads = true
+  }
+  if (projects.length === 0) return null
+  if (!leads && !namesProfile(s.item, s.item.deleted_by, me)) return null
+  return { projects, redacted: !projects.some((p) => p.id === root.id) }
+}
+
+/** Whether `me` leads the top-level project above live project `project`. */
+async function leadsTop(s: Scope, me: Doc<'profiles'>, project: Doc<'projects'>) {
+  const top = project.parent_id === undefined ? null : await projectOf(s, project.parent_id)
+  return top !== null && (await liveLevel(s, me, top)) === 'lead'
+}
+
+async function projectItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView | null> {
+  const h = await hierarchyOf(s)
+  if (h.root === undefined) return null
+  if (s.item.parent_project_id !== undefined && h.parent === null) return null
+  const levels = await storedLevels(s, me)
+  const levelOf = (p: Pick<Doc<'projects'>, 'id'>) =>
+    levels.levelOf({ id: p.id, org_id: s.item.org_id })
+  const leads =
+    (h.parent !== null && levelOf(h.parent) === 'lead') ||
+    h.projects.some((p) => levelOf(p) === 'lead')
+  const deleted = namesProfile(s.item, s.item.deleted_by, me) && levelOf(h.root) !== null
+  if (!leads && !deleted) return null
+  return { projects: s.item.projects.filter((p) => levelOf(p) !== null), redacted: false }
+}
+
+/** The item `id` when `me` can see it (viewOf), else null. An unknown id,
+ * another organization's item and one hidden from `me` answer alike, so no
+ * answer tells them apart (design 6.2); public callers turn null into
+ * not_found('item not found'). */
+export async function myItem(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  id: string,
+  memo = newMemo(),
+): Promise<Item | null> {
+  const item = await byId(ctx, 'deleted_items', id)
+  return item !== null && (await viewOf(ctx, memo, me, item)) !== null ? item : null
+}
+
+/** One person's sight of their organization for a list read, read once for
+ * every item it looks at: the live projects, `levels` on them, the
+ * profiles, and a memo seeded with those and with the organization's teams.
+ * The memo leaves the conflict checks to the restore. */
+export type Sight = {
+  me: Doc<'profiles'>
+  memo: Memo
+  projects: Map<string, Doc<'projects'>>
+  levels: OrgProjectLevels
+  profiles: Map<string, Doc<'profiles'>>
+}
+
+export async function sightOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Sight> {
+  const { org_id } = me
+  const projects = await ctx.db
+    .query('projects')
+    .withIndex('by_org', (q) => q.eq('org_id', org_id))
+    .collect()
+  const levels = await projectLevelsForOrg(ctx, me, projects)
+  const memo: Memo = { ...newMemo(), conflicts: false }
+  for (const p of projects) {
+    memo.projects.set(p.id, Promise.resolve(p))
+    memo.live.set(`${me.id}:${p.id}`, Promise.resolve(levels.levelOf(p)))
+  }
+  const profiles = new Map<string, Doc<'profiles'>>()
+  const seats = ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', org_id))
+  for await (const p of seats) {
+    profiles.set(p.id, p)
+    memo.profiles.set(p.id, Promise.resolve(p))
+  }
+  const teams = ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', org_id))
+  for await (const team of teams) memo.teams.set(team.id, Promise.resolve(team))
+  return { me, memo, projects: new Map(projects.map((p) => [p.id, p])), levels, profiles }
+}
+
+/** The names a blocked row's sentence needs (design 5.3): the project it
+ * speaks of and, for view_only and not_lead, that project's effective lead
+ * when it has one. For project_deleted and parent_deleted (admins only),
+ * the item holding the deleted project, which must be restored first. */
+export type BlockDetail = {
+  reason: RestoreBlock
+  project?: string
+  lead?: string
+  item_id?: string
+}
+
+export async function blockDetail(
+  ctx: QueryCtx,
+  memo: Memo,
+  item: Item,
+  reason: RestoreBlock,
+): Promise<BlockDetail> {
+  const s: Scope = { ctx, item, memo }
+  // a stored lead has passed the reference predicate already (cleanProject)
+  const named = async (id: string | undefined) => {
+    const profile = id === undefined ? null : await profileOf(s, id)
+    return profile !== null && canLeadProjects(profile) ? profile.name : undefined
+  }
+  if (reason === 'project_deleted' || reason === 'parent_deleted') {
+    const id = reason === 'project_deleted' ? item.project_id : item.parent_project_id
+    return { reason, item_id: id === undefined ? undefined : await holderOf(s, id) }
+  }
+  if (item.kind === 'task') {
+    const project = await namedProject(s, item.project_id, 'project')
+    if (project === null || (reason !== 'view_only' && reason !== 'project_archived'))
+      return { reason }
+    const top = project.parent_id === undefined ? null : await projectOf(s, project.parent_id)
+    const lead = reason === 'view_only' ? await named(project.lead_id ?? top?.lead_id) : undefined
+    return { reason, project: project.name, lead }
+  }
+  if (reason === 'parent_archived') {
+    const id = item.parent_project_id
+    const parent = id === undefined ? null : await namedProject(s, id, 'meta')
+    return { reason, project: parent?.name }
+  }
+  if (reason !== 'view_only' && reason !== 'not_lead') return { reason }
+  const h = await hierarchyOf(s)
+  return { reason, project: item.name, lead: await named(h.root?.lead_id ?? h.parent?.lead_id) }
+}
+
+/** The id of the item that holds stored project `projectId`, unless it is
+ * purging. Many task items can wait for one deleted project, so it is read
+ * once per list. */
+const holderOf = (s: Scope, projectId: string) =>
+  memoRead(s.memo.heldBy, projectId, async () => {
+    const row = await s.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', projectId))
+      .first()
+    const holder = row === null ? null : await byId(s.ctx, 'deleted_items', row.item_id)
+    return holder !== null && holder.org_id === s.item.org_id && holder.state !== 'purging'
+      ? holder.id
+      : undefined
+  })
 
 /** The tally of what `item` stores now, which a restore subtracts from. */
 const tallyFromItem = (item: Item): Tally => ({
@@ -1398,8 +1653,13 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
     return true
   }
   const { _id, _creationTime, ...light } = task
-  // a new row, so that a restore of `into` past its cursor still meets it
-  await run.ctx.db.insert('deleted_tasks', { ...light, item_id: into.id })
+  // a new row, so that a restore of `into` past its cursor still meets it;
+  // in the project item that holds its project it is no cross-project task
+  await run.ctx.db.insert('deleted_tasks', {
+    ...light,
+    item_id: into.id,
+    cross_project_id: undefined,
+  })
   await countInto(run.ctx, into, task)
   return true
 }
@@ -1893,13 +2153,14 @@ async function narrate(
   const shared = revealed.every((r) => r.item.project_id === first.item.project_id)
     ? first.item.project_id
     : undefined
+  const parts: string[] = []
+  if (projects > 0) parts.push(plural(projects, 'project'))
+  if (tasks > 0) parts.push(plural(tasks, 'task'))
   await logActivity(ctx, {
     ...row,
     target_type: 'project',
     target_id: shared ?? first.item.org_id,
-    label: [projects > 0 && plural(projects, 'project'), tasks > 0 && plural(tasks, 'task')]
-      .filter((part) => part !== false)
-      .join(' and '),
+    label: parts.join(' and '),
     detail,
     project_id: shared,
   })
@@ -1908,8 +2169,8 @@ async function narrate(
 /* ------------------------------------------------------------ restoring */
 
 /**
- * Restores `items` for `me`, as deletedItems.restore will (design 5). The
- * caller loads each item through the visibility fence (design 6.1); this
+ * Restores `items` for `me`, for deletedItems.restore (design 5). The
+ * caller loads each item through the visibility fence (myItem); this
  * checks the rest per item and never throws for one item's problem.
  * Project items go first. A task item whose project, or a sub-project item
  * whose parent, is in a project item this call restores is deferred, for
@@ -2210,6 +2471,11 @@ export async function startPurge(
   item: Item,
   opts: { inline?: boolean } = {},
 ): Promise<void> {
+  await beginPurge(ctx, item, opts.inline ? budgetFor(1) : undefined)
+}
+
+/** startPurge, spending `budget` in this transaction when one is given. */
+async function beginPurge(ctx: MutationCtx, item: Item, budget?: Budget): Promise<void> {
   if (item.state !== 'ready' && item.state !== 'stuck')
     throw new Error(`A ${item.state} deleted item cannot be purged`)
   // ready and stuck items have no job; one left over would make two chains
@@ -2218,8 +2484,47 @@ export async function startPurge(
   await ctx.db.patch(item._id, { state: 'purging' })
   const purging: Item = { ...item, state: 'purging' }
   const state: JobState = { phase: item.kind === 'project' ? 'purge_dependents' : 'purge_live' }
-  if (opts.inline) await startJob(ctx, purging, state)
+  if (budget !== undefined) await startJob(ctx, purging, state, budget)
   else await saveJob(ctx, purging, state, null)
+}
+
+/** The most items one Delete now takes. */
+export const PURGE_MAX = RESTORE_MAX
+
+/** What one Delete now answers per item (deletedItems.purge). A purged item
+ * left the list; its steps finish deleting it. */
+export type PurgeResult = {
+  purged: string[]
+  refused: { id: string; reason: 'moving' | 'restoring' }[]
+}
+
+/**
+ * Deletes `items` for good, for an organization admin's Delete now (design
+ * 7). The caller loads each item through myItem, which never passes a
+ * purging one. Ready and stuck items start purging and share one budget in
+ * this transaction, which most small items finish in; the rest goes on in
+ * steps. An item moving or restoring is refused with its state: one answer
+ * per item, never a throw for one item's problem.
+ */
+export async function purgeItems(ctx: MutationCtx, items: Item[]): Promise<PurgeResult> {
+  if (items.length > PURGE_MAX)
+    throw rule(`at most ${PURGE_MAX} items can be deleted for good at a time`)
+  const budget = budgetFor(1)
+  const result: PurgeResult = { purged: [], refused: [] }
+  const ids = new Set<string>()
+  for (const { id } of items) {
+    if (ids.has(id)) continue
+    ids.add(id)
+    const item = await byId(ctx, 'deleted_items', id)
+    if (item === null || item.state === 'purging') {
+      // purged earlier in this call, with a project item it needed
+      result.purged.push(id)
+    } else if (item.state === 'ready' || item.state === 'stuck') {
+      await beginPurge(ctx, item, budget)
+      result.purged.push(id)
+    } else result.refused.push({ id, reason: item.state })
+  }
+  return result
 }
 
 /** Spends the first budget of `item`'s work in the caller's transaction and
@@ -2361,7 +2666,7 @@ export async function moveTasksToTrash(
       .query('issues')
       .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
       .collect()
-    for (const kid of kids) if (!doomed.has(kid.id)) await detach(counted, kid, actor, now)
+    for (const kid of kids) if (!doomed.has(kid.id)) await detachChild(counted, kid, actor, now)
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })
     if (tooLarge(item, { table: 'issues', doc: task }, task.id)) {
       // deleted as before, with every row that would have travelled with it

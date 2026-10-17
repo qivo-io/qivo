@@ -939,6 +939,9 @@ export default defineSchema({
     created_ts: v.number(), // the original _creationTime
     storage_id: v.optional(v.id('_storage')), // issue_attachments: the bytes
     project_key: v.optional(v.string()), // projects: the key
+    // projects: the stored lead, so a lead finds the projects they led in
+    // Deleted items (model/deletedItemsList.ts)
+    lead_id: v.optional(v.string()),
     row: v.union(
       v.object({ table: v.literal('issues'), doc: issuesTable.validator }),
       v.object({ table: v.literal('comments'), doc: commentsTable.validator }),
@@ -963,6 +966,7 @@ export default defineSchema({
     .index('by_row', ['table', 'row_id'])
     .index('by_storage', ['storage_id'])
     .index('by_org_key', ['org_id', 'project_key'])
+    .index('by_org_lead', ['org_id', 'lead_id'])
     .index('by_org', ['org_id']),
 
   /* One light row per stored task, written and deleted with its issues row
@@ -975,10 +979,14 @@ export default defineSchema({
     title: v.string(),
     project_id: v.string(),
     archived: v.boolean(),
+    // a task item's subtask in another project than the item's root: that
+    // project, so its lead finds the item (model/deletedItemsList.ts)
+    cross_project_id: v.optional(v.string()),
   })
     .index('by_task', ['task_id'])
     .index('by_item', ['item_id'])
     .index('by_org_num', ['org_id', 'num'])
+    .index('by_org_cross_project', ['org_id', 'cross_project_id'])
     .searchIndex('search_title', { searchField: 'title', filterFields: ['org_id'] }),
 
   webhook_subscriptions: defineTable({

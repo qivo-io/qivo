@@ -2,9 +2,10 @@
  *
  * A restore writes the stored rows back while what they name is still
  * absent, then reveals the item in one transaction. These tests restore
- * through the model entry the public restore will call, read both the live
- * tables and the trash, and drive the steps one at a time on fake timers,
- * with lowered budgets so that many-step paths run on small data. */
+ * through the model entry the public restore calls (deletedItemsList.test.ts
+ * covers its visibility fence), read both the live tables and the trash,
+ * and drive the steps one at a time on fake timers, with lowered budgets so
+ * that many-step paths run on small data. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it, vi } from 'vitest'
@@ -56,7 +57,7 @@ installTrashTimers()
 const iso = (ms: number) => new Date(ms).toISOString()
 const LATER = iso(START + DAY)
 
-/** Restores the items `ids` for `who`, as deletedItems.restore will after
+/** Restores the items `ids` for `who`, as deletedItems.restore does after
  * its visibility fence. */
 const restore = (t: T, who: Doc<'profiles'>, ids: string[]): Promise<RestoreResult> =>
   t.run(async (ctx) => {

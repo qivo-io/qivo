@@ -1,5 +1,6 @@
 /* Fixtures and readers shared by the Deleted items suites
- * (deletedItems.test.ts, deletedItemsRestore.test.ts).
+ * (deletedItems.test.ts, deletedItemsRestore.test.ts,
+ * deletedItemsList.test.ts).
  *
  * Two dots in the basename keep the Convex CLI from deploying this module,
  * the same rule as helpers.setup.ts. installTrashTimers puts a suite on fake
