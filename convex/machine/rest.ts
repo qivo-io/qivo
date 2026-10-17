@@ -33,7 +33,9 @@
  * Refusal mapping: ConvexError e.data.code → {not_found:404, forbidden:403,
  * bad_request:400, rule:400}, body {"error": message}; the CALLER_GONE /
  * CALLER_DEACTIVATED race reasons map back to the caller's own 401 sentences
- * BEFORE the code map; anything else → 500 {"error": String(e)}. */
+ * BEFORE the code map; anything else → 500 {"error": "internal error"},
+ * with the error itself only in the deployment's log (shared.ts
+ * internalError). */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
@@ -51,6 +53,7 @@ import {
   CALLER_GONE,
   type Caller,
   type Catalogue,
+  COMMENT_PAGE_MAX,
   commentOut,
   destinationOf,
   findIssue,
@@ -135,7 +138,14 @@ import { DISCUSSION_ROUTES } from './discussion'
 import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
-import { REST_CALLER as CALLER, needJson, restProvenance as provenanceOf, vKeyName } from './shared'
+import {
+  REST_CALLER as CALLER,
+  internalError,
+  needJson,
+  restProvenance as provenanceOf,
+  vKeyName,
+  wholeParam,
+} from './shared'
 import { TEAM_ROUTES } from './teams'
 
 type RestProjectJson = ReturnType<typeof projectJson>
@@ -772,14 +782,25 @@ export const deleteIssue = internalMutation({
 
 /* ------------------------------------------------------------- comments -- */
 
-/* GET /v1/tasks/{ref}/comments — the discussion thread, oldest first. */
+/* GET /v1/tasks/{ref}/comments?limit=&before= answers the newest comments
+ * of the discussion thread, or those before the comment `before` names,
+ * oldest first (lib/core.ts listCommentsCore). */
 export const listComments = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    limit: v.optional(v.string()),
+    before: v.optional(v.string()),
+  },
   handler: async (ctx, a): Promise<RestCommentJson[]> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    const rows = await listCommentsCore(ctx, issue.id)
+    const rows = await listCommentsCore(ctx, issue.id, {
+      limit: wholeParam(a.limit, 'limit', COMMENT_PAGE_MAX, 1, COMMENT_PAGE_MAX),
+      before: a.before,
+    })
     const names = await orgNames(ctx, me.org_id)
     return (await Promise.all(
       rows.map((c) => commentOut(ctx, c, { surface: 'rest', names })),
@@ -1156,8 +1177,14 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref/comments',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access, param }) =>
-      r.runQuery(internal.machine.rest.listComments, { callerId, access, ref: param('ref') }),
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.rest.listComments, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        before: query('before'),
+      }),
   }),
   route({
     method: 'POST',
@@ -1268,7 +1295,7 @@ const STATUS_OF: Partial<Record<string, number>> = {
 /* The REST response for an error a route threw. A caller gone or
  * deactivated since auth gets its own 401 sentence, a refusal whose code
  * STATUS_OF maps gets that status and its message, and anything else is a
- * 500 with its text. */
+ * 500 with INTERNAL_ERROR, because its own text can hold a stack trace. */
 function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>
@@ -1279,7 +1306,7 @@ function refusalResponse(e: unknown, kind: ProfileKind): Response {
     const status = data.code !== undefined ? STATUS_OF[data.code] : undefined
     if (status !== undefined && data.message !== undefined) return err(data.message, status)
   }
-  return err(String(e), 500)
+  return err(internalError(e), 500)
 }
 
 /** Webhook lifecycle and inspection, the only REST routes that also accept

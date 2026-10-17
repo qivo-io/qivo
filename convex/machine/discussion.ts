@@ -72,7 +72,7 @@ import {
 } from '../model/messages'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
-import { needJson, pretty } from './shared'
+import { needJson, pretty, wholeParam } from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -435,23 +435,6 @@ function flagParam(raw: string | undefined, name: string): boolean {
   if (raw === undefined) return false
   if (raw !== 'true' && raw !== 'false') throw badRequest(`${name} must be true or false`)
   return raw === 'true'
-}
-
-/* A whole-number REST query parameter from `min` to `max`; absent is
- * `fallback`. */
-function wholeParam(
-  raw: string | undefined,
-  name: string,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  if (raw === undefined) return fallback
-  const n = Number(raw)
-  if (raw.trim() === '' || !Number.isInteger(n) || n < min || n > max) {
-    throw badRequest(`${name} must be a whole number from ${min} to ${max}`)
-  }
-  return n
 }
 
 /* ---------------------------------------------------------------- follows */

@@ -16,11 +16,12 @@
  * (cleanTitle, pairRule, metaNeedsSub, assertLive, assertAssignable,
  * assertAssignableChange, assertNoSubtasks, assertNoGroupDates,
  * assertWeekPair, SUB_MUST_NAME, deleteIssueCore), model/comments.ts
- * (postComment) and model/orgs.ts (setPlannableHoursCore); the task search
- * text is lib/search.ts taskSearchText, as in the app. This file adds only
- * what the model does not own: the caller shape, the ref grammar, the
- * catalogue, the access flags, the shared list reads, the wire projections
- * and applyTaskUpdate, the write order of a task update on both surfaces.
+ * (postComment, newestComments) and model/orgs.ts (setPlannableHoursCore);
+ * the task search text is lib/search.ts taskSearchText, as in the app. This
+ * file adds only what the model does not own: the caller shape, the ref
+ * grammar, the catalogue, the access flags, the shared list reads, the wire
+ * projections and applyTaskUpdate, the write order of a task update on both
+ * surfaces.
  *
  * Refusal grammar: helpers here throw the shipped ConvexError {code, message,
  * reason?} values (lib/functions.ts). REST maps code → status (not_found 404,
@@ -32,7 +33,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { type AttachmentJson, taskAttachments } from '../model/attachments'
-import { postArchiveReason } from '../model/comments'
+import { newestComments, postArchiveReason } from '../model/comments'
 import {
   assertLive,
   type IssuePatch,
@@ -524,17 +525,41 @@ export async function listProjectUsersCore(
   return out
 }
 
-/* A task's discussion thread, oldest first (ties keep insertion order —
- * Array.prototype.sort is stable). Visibility rides the issue: callers reach
- * this only through findIssue. */
-export async function listCommentsCore(ctx: QueryCtx, issueId: string): Promise<Doc<'comments'>[]> {
-  const rows = await ctx.db
-    .query('comments')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-    .collect()
-  return rows.sort((a, b) =>
-    a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
-  )
+/* The most comments one REST or MCP read answers, and how many it answers
+ * unless the caller asks for fewer (model/comments.ts). */
+export { COMMENT_PAGE_MAX } from '../model/comments'
+
+/** The refusal for a `before` that names no comment on the task read. */
+export const BEFORE_NOT_A_COMMENT = 'before must be the id of a comment on this task'
+
+/* A page of a task's discussion thread for REST and MCP. It holds the
+ * newest `limit` comments (model/comments.ts newestComments), or with
+ * `before`, a comment's id, the newest ones the thread holds before that
+ * comment. Answers them oldest first by created_at, and ties keep the
+ * thread's order, because Array.prototype.sort is stable. A caller reads
+ * further back by passing the first comment's id as `before`, and an empty
+ * page means it reached the start. Should created_at and the thread's order
+ * ever disagree, a later page can repeat a comment but never skips one.
+ * Refuses a `before` that is not a comment on this task, unknown ids
+ * included. Visibility rides the issue, because callers reach this only
+ * through findIssue. */
+export async function listCommentsCore(
+  ctx: QueryCtx,
+  issueId: string,
+  page: { limit: number; before?: string },
+): Promise<Doc<'comments'>[]> {
+  let before: Doc<'comments'> | undefined
+  if (page.before !== undefined) {
+    const anchor = UUID.test(page.before)
+      ? await byId(ctx, 'comments', page.before.toLowerCase())
+      : null
+    if (anchor === null || anchor.issue_id !== issueId) throw badRequest(BEFORE_NOT_A_COMMENT)
+    before = anchor
+  }
+  const rows = await newestComments(ctx, issueId, { limit: page.limit, before })
+  return rows
+    .reverse()
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
 }
 
 /* ------------------------------------------------------------- projections

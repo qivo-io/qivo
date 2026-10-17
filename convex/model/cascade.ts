@@ -21,6 +21,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
+import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
 import { notifyIssueUpdate } from './messages'
 import { emitTaskEvent } from './taskEvents'
@@ -79,6 +80,7 @@ export async function deleteIssueDeep(
   for await (const s of subs) await ctx.db.delete(s._id)
   const comments = ctx.db.query('comments').withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
   for await (const c of comments) await ctx.db.delete(c._id)
+  await dropCommentCount(ctx, issue.id)
   const messages = ctx.db
     .query('messages')
     .withIndex('by_issue_read', (q) => q.eq('issue_id', issue.id))
@@ -520,6 +522,7 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))
       .collect())
       await ctx.db.delete(c._id)
+    await dropCommentCount(ctx, i.id)
     for (const il of await ctx.db
       .query('issue_labels')
       .withIndex('by_issue', (q) => q.eq('issue_id', i.id))

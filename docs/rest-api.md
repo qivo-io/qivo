@@ -102,7 +102,9 @@ A request without a recognizable credential cannot be told apart, so it keeps
 the agent key's sentence. A `qvo_` OAuth token on these routes gets that
 sentence too. `403` means the credential is valid but the user lacks the
 required role, the credential can only read, or organization editing is
-paused for billing. Unreadable objects come back as `404`.
+paused for billing. Unreadable objects come back as `404`. A failure that is
+not a refusal, such as a server limit, is a `500` with `{"error": "internal
+error"}`, and Qivo keeps its details in its own logs.
 
 An agent may hold several keys at once, and a person several tokens, which is
 how one is rotated without going dark: mint the new one, move the client over,
@@ -1036,7 +1038,9 @@ was already archived, and a blank reason posts nothing. `archive_reason`
 without `archived: true` is a `400` (`archive_reason needs archived set to
 true`). It is at most 20,000 characters after trimming, counted like a
 description; a longer one is a `400` (`archive_reason must be at most 20,000
-characters`) and the PATCH changes nothing.
+characters`) and the PATCH changes nothing. The reason is posted even when the
+task already holds 400 comments, the most a task can otherwise have
+([Comments](#comments)).
 
 Task shape of a list row from `GET /v1/tasks`:
 
@@ -1156,7 +1160,9 @@ The task's discussion thread (migration 0054) — the same comments the app
 shows on the task window's discussion spine:
 
 ```
-GET    /v1/tasks/{ref}/comments   the full thread, oldest first (read)
+GET    /v1/tasks/{ref}/comments   the newest comments, oldest first (read)
+       ?limit=50                  1 to 50, 50 by default
+       &before=<comment id>       the comments posted before that one
 POST   /v1/tasks/{ref}/comments   { "body": "Markdown text" }      (write)
 PATCH  /v1/comments/{id}          { "body": "Markdown text" }      (write)
 DELETE /v1/comments/{id}                                           (write)
@@ -1171,6 +1177,15 @@ DELETE /v1/comments/{id}                                           (write)
 }
 ```
 
+`GET` answers a JSON array of the task's newest comments, oldest first. It
+holds at most `limit` comments, and fewer when they are long, because one
+call reads at most about 8 MiB of comments. To read further back, pass the
+`id` of the first comment in the array as `before`, and repeat until the
+array is empty. Only an empty array means there are no earlier comments. A
+`limit` that is not a whole number from 1 to 50 is a `400` (`limit must be
+a whole number from 1 to 50`), and so is a `before` that is not the id of a
+comment on this task (`before must be the id of a comment on this task`).
+
 A comment created here is authored by **the caller**, which is the agent
 itself for an agent key and the person for a personal token. An agent is a
 user, so it speaks under its own name instead of landing as the anonymous
@@ -1184,6 +1199,13 @@ the created comment; a blank `body` is a `400`. A comment body is at most
 20,000 characters after trimming, counted like a description, on `POST` and
 `PATCH`; a longer one is a `400` (`a comment must be at most 20,000
 characters`). Comments are deleted with their task.
+
+A task holds at most 400 comments. `POST` on a task that has 400 is a `400`
+(`this task has 400 comments, the most a task can have; start a new task to
+continue`), and so is the same post in the app and over MCP. Deleting a
+comment makes room again. A task that had more than 400 comments before the
+limit keeps them, and only new comments are refused. An `archive_reason` is
+posted even on a task at the limit, so archiving never fails on it.
 
 `PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
@@ -1618,6 +1640,11 @@ curl -X PUT -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/following"
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/inbox?unread_only=true"
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"tasks":["QN-26"]}' "$BASE/inbox/read"
+
+# the newest 50 comments on QN-26, then the 20 before the first of them
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/comments"
+curl -H "Authorization: Bearer $QIVO_KEY" \
+  "$BASE/tasks/QN-26/comments?limit=20&before=<first comment's id>"
 
 # fix a typo in a comment you wrote (the id comes from the thread)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \

@@ -909,6 +909,18 @@ export default defineSchema({
     .index('by_author', ['author'])
     .index('by_edited_by', ['edited_by']),
 
+  // How many comments a task holds, for the per-task cap
+  // (model/commentCounts.ts). It is its own table and not a task field,
+  // because the app snapshot reads every active task and no other write
+  // changes the task when a comment is posted. A task without a row is not
+  // counted yet. While `cursor` is set, `count` covers the comments before
+  // that position in the by_issue index, and later steps count the rest.
+  comment_counts: defineTable({
+    issue_id: v.string(),
+    count: v.number(),
+    cursor: v.optional(v.string()),
+  }).index('by_issue', ['issue_id']),
+
   messages: defineTable({
     id: v.string(),
     org_id: v.string(),

@@ -226,6 +226,15 @@ const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
               .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
               .take(n),
           ),
+        // The count goes before the comments it counts, so a count step
+        // scheduled earlier finds no row and ends (model/commentCounts.ts).
+        () =>
+          drain(ctx, budget, (n) =>
+            ctx.db
+              .query('comment_counts')
+              .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+              .take(n),
+          ),
         () =>
           drain(
             ctx,

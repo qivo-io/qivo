@@ -40,6 +40,7 @@ import { INBOX_LIMIT, loadInbox } from './lib/inbox'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
+import { COMMENT_PAGE_MAX, newestComments } from './model/comments'
 import { shownLabelColor } from './model/labels'
 import { shownAvatarColor } from './model/people'
 import { type OrgLoadRow, orgLoadRows } from './planning'
@@ -455,6 +456,9 @@ export const forMe = authedQuery({
   },
 })
 
+// The task window's thread loads the newest COMMENT_PAGE_MAX comments, and
+// fewer when they are long (model/comments.ts newestComments), so a long
+// thread loads its newest part instead of passing Convex's read limits.
 // Comments remain available on visible archived tasks. Unknown, foreign and
 // invisible task IDs all return the same not-found refusal.
 export const commentsForIssue = orgQuery({
@@ -466,10 +470,7 @@ export const commentsForIssue = orgQuery({
     if (project === null || !(await canSeeProject(ctx, ctx.me, project))) {
       throw notFound('task not found')
     }
-    const thread = await ctx.db
-      .query('comments')
-      .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-      .collect()
+    const thread = await newestComments(ctx, issue.id, { limit: COMMENT_PAGE_MAX })
     // created_at asc, id tiebreak — the order spine.ts depends on
     thread.sort((a, b) =>
       a.created_at === b.created_at ? (a.id < b.id ? -1 : 1) : a.created_at < b.created_at ? -1 : 1,

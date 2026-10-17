@@ -56,6 +56,7 @@ import {
   CALLER_DEACTIVATED,
   CALLER_GONE,
   type Caller,
+  COMMENT_PAGE_MAX,
   childProjectsCore,
   commentOut,
   destinationOf,
@@ -90,6 +91,7 @@ import {
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
 import { TEXT_MAX } from '../lib/textLimits'
+import { COMMENT_MAX } from '../model/commentCounts'
 import { postComment } from '../model/comments'
 import {
   assertAssignable,
@@ -132,7 +134,13 @@ import { DISCUSSION_TOOLS } from './discussion'
 import { PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
-import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty, withIgnored } from './shared'
+import {
+  internalError,
+  MCP_NO_WRITE,
+  MCP_PROVENANCE as PROVENANCE,
+  pretty,
+  withIgnored,
+} from './shared'
 import { TEAM_TOOLS } from './teams'
 
 /* --------------------------------------------------------------- the tools
@@ -431,13 +439,20 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_comments',
       title: 'List comments',
-      description:
-        'The discussion thread on a task, oldest first. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
+      description: `The newest comments on a task, oldest first. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. \`limit\` caps how many (${COMMENT_PAGE_MAX} by default and at most), and long comments can make a page shorter. To read further back, pass the first comment's \`id\` as \`before\`. An empty list means there are no earlier comments.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
         properties: {
           ref: {
+            type: 'string',
+          },
+          limit: {
+            type: 'integer',
+            minimum: 1,
+            maximum: COMMENT_PAGE_MAX,
+          },
+          before: {
             type: 'string',
           },
         },
@@ -448,7 +463,7 @@ export const TOOLS: McpTool[] = [
       r.runQuery(internal.machine.mcp.listComments, {
         callerId,
         access,
-        ...(args as { ref: string }),
+        ...(args as { ref: string; limit?: number; before?: string }),
       }),
   },
   {
@@ -456,8 +471,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'add_comment',
       title: 'Add comment',
-      description:
-        "Comment on a task's discussion thread, as yourself. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid; `body` is markdown. Commenting does not change the task itself.",
+      description: `Comment on a task's discussion thread, as yourself. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid; \`body\` is markdown. Commenting does not change the task itself. A task holds at most ${COMMENT_MAX} comments; past that, start a new task.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1143,8 +1157,12 @@ async function callTool(
         result: { content: [{ type: 'text', text: data.message }], isError: true },
       }
     }
-    const text = e instanceof Error ? e.message : String(e)
-    return { kind: 'result', result: { content: [{ type: 'text', text }], isError: true } }
+    // a failure that is no refusal, such as a Convex limit, whose own text
+    // can hold a stack trace
+    return {
+      kind: 'result',
+      result: { content: [{ type: 'text', text: internalError(e) }], isError: true },
+    }
   }
 }
 
@@ -1626,12 +1644,24 @@ export const getIssue = internalQuery({
   },
 })
 
+/* list_comments answers a page of the thread, the newest comments or those
+ * before the comment `before` names, oldest first (lib/core.ts
+ * listCommentsCore). The schema holds `limit` to 1 to COMMENT_PAGE_MAX. */
 export const listComments = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, { callerId, access, ref }) => {
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    limit: v.optional(v.number()),
+    before: v.optional(v.string()),
+  },
+  handler: async (ctx, { callerId, access, ref, limit, before }) => {
     const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
-    const rows = await listCommentsCore(ctx, issue.id)
+    const rows = await listCommentsCore(ctx, issue.id, {
+      limit: limit ?? COMMENT_PAGE_MAX,
+      before,
+    })
     const names = await orgNames(ctx, me)
     const out = []
     for (const c of rows) out.push(await commentOut(ctx, c, { surface: 'mcp', names }))
@@ -2199,7 +2229,7 @@ const mcpPost = httpAction(async (ctx, request) => {
         [CALLER_GONE, CALLER_DEACTIVATED].includes((error.data as Refusal).reason || '')
       )
         return unauthorized('OAuth connection is invalid, expired or disconnected')
-      return jsonRes(500, { error: String(error) })
+      return jsonRes(500, { error: internalError(error) })
     }
   }
   const res = await authenticateSecret(ctx, secret)
@@ -2249,7 +2279,7 @@ const mcpPost = httpAction(async (ctx, request) => {
         return unauthorized(cred.isAgent ? MCP_AUTH_401.agent : MCP_AUTH_401.person)
       }
     }
-    return jsonRes(500, { error: String(e) })
+    return jsonRes(500, { error: internalError(e) })
   }
 })
 

@@ -35,7 +35,11 @@ shorten it. Older text over this limit can be read but not edited.
 
 **Comments** use the same editor but accept text only. Add images as
 attachments. The composer sits below the newest message, or below the scrolling
-Activity feed on phones. Comments and activity run oldest to newest.
+Activity feed on phones. Comments and activity run oldest to newest. A long
+discussion shows its newest 50 comments, and fewer when they are very long.
+The API can read the earlier ones. A task holds at most 400 comments. Once it
+has 400, Qivo refuses new ones, so start a new task to continue. An archive
+reason is still posted.
 **Comments** is the default filter; **All** adds changes such as assignments,
 status moves, dates, labels and attachments. Field-change entries show before
 and after values, including short description excerpts. A **New** line marks

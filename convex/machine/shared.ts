@@ -6,7 +6,7 @@
  * ROUTES, so a domain module that imported a value from them would close an
  * import cycle. These rules therefore live here, once, and every module that
  * names the caller, signs a write's activity row, reads an agent key's name
- * or parses a REST body imports them from this file. */
+ * or parses a REST body or query parameter imports them from this file. */
 
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
@@ -43,6 +43,18 @@ export const REST_CALLER = {
   { gone: string; deactivated: string; noWrite: string; commentAuthor: string }
 >
 
+/** The error REST and MCP answer for a failure that is no refusal, such as
+ * a Convex read limit. Such a failure's own text can name source files and
+ * hold a stack trace, so only the deployment's log keeps it. */
+export const INTERNAL_ERROR = 'internal error'
+
+/** Logs `e`, a failure that is no refusal, and returns INTERNAL_ERROR for
+ * the answer. */
+export function internalError(e: unknown): string {
+  console.error(e)
+  return INTERNAL_ERROR
+}
+
 /** The provenance an MCP write's activity row carries. */
 export const MCP_PROVENANCE = 'via MCP'
 
@@ -71,6 +83,23 @@ export function needJson(raw: string): Record<string, unknown> {
   }
   if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
   return body as Record<string, unknown>
+}
+
+/** A whole-number REST query parameter from `min` to `max`; absent is
+ * `fallback`. */
+export function wholeParam(
+  raw: string | undefined,
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (raw === undefined) return fallback
+  const n = Number(raw)
+  if (raw.trim() === '' || !Number.isInteger(n) || n < min || n > max) {
+    throw badRequest(`${name} must be a whole number from ${min} to ${max}`)
+  }
+  return n
 }
 
 /** A REST request body that may be left out, such as a DELETE's. An empty

@@ -52,6 +52,9 @@ const EXCLUDED_TABLES = [
   'attachment_uploads',
   'marketing_demo',
   'issue_subscriptions',
+  // Each task's comment count is derived from its comments and counted again
+  // when it is missing (model/commentCounts.ts).
+  'comment_counts',
   'messages',
   'user_prefs',
   'mcp_tokens',

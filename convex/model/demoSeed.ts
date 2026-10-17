@@ -15,6 +15,7 @@ import {
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
 import { markArchivedTask } from './archiveMarks'
+import { storeCommentCount } from './commentCounts'
 import { cleanDescription } from './issues'
 import { type NotifyPreload, notifyCommentInsert, notifyIssueInsert } from './messages'
 import { assertSlugAvailable, newOrgDefaults, newTeamDefaults } from './orgs'
@@ -296,6 +297,11 @@ export async function writeNorthstarWork(
       skipTaskEvent: true,
     })
   }
+  // Every comment of these new tasks is written above, so their counts are
+  // whole from the start (model/commentCounts.ts).
+  const threads = new Map<string, number>()
+  for (const c of data.comments) threads.set(c.issue, (threads.get(c.issue) ?? 0) + 1)
+  for (const [issue, count] of threads) await storeCommentCount(ctx, issueIds[issue], count)
   // The archived tasks' labels, links and follows carry the mark the archive
   // steps leave (model/archiveMarks.ts), as in an organization in use.
   for (const issue of issueDocs.values()) {

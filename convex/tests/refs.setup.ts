@@ -68,6 +68,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'comments', field: 'issue_id', target: 'issues' },
   { table: 'comments', field: 'author', target: 'profiles' },
   { table: 'comments', field: 'edited_by', target: 'profiles' },
+  { table: 'comment_counts', field: 'issue_id', target: 'issues' },
   { table: 'messages', field: 'org_id', target: 'organizations' },
   { table: 'messages', field: 'recipient_id', target: 'profiles' },
   { table: 'messages', field: 'actor_id', target: 'profiles' },

@@ -60,6 +60,7 @@ const collect = <
     | 'issue_labels'
     | 'issue_subscriptions'
     | 'comments'
+    | 'comment_counts'
     | 'milestones'
     | 'project_access'
     | 'team_members'
@@ -330,6 +331,7 @@ describe('deleteIssueDeep', () => {
     await plantSubscription(t, { issue_id: childCross.id, profile_id: f.user.id }) // hears the detach
     await plantComment(t, { issue_id: parent.id, author: f.user.id })
     await plantComment(t, { issue_id: parent.id, author: f.admin.id, edited_by: f.user.id })
+    await t.run((ctx) => ctx.db.insert('comment_counts', { issue_id: parent.id, count: 2 }))
     // inbox rows about the doomed issue, in several people's inboxes
     await plantMessageRow(t, {
       org_id: f.org.id,
@@ -350,6 +352,7 @@ describe('deleteIssueDeep', () => {
     expect(await collect(t, 'issue_links')).toEqual([])
     expect(await collect(t, 'issue_labels')).toEqual([])
     expect(await collect(t, 'comments')).toEqual([])
+    expect(await collect(t, 'comment_counts')).toEqual([])
     expect(await collect(t, 'issue_attachments')).toEqual([])
     expect(await storageMeta(t, att.storage_id)).toBeNull() // bytes die with the row
     expect(await rowByUuid(t, 'labels', label.id)).not.toBeNull() // org-level, survives
@@ -542,6 +545,7 @@ describe('deleteOrgDeep', () => {
     const label = await plantLabel(t, f.org.id, 'Doomed')
     await plantMilestone(t, f.meta.id, 'Project milestone')
     await plantComment(t, { issue_id: issue.id, author: f.user.id })
+    await t.run((ctx) => ctx.db.insert('comment_counts', { issue_id: issue.id, count: 1 }))
     await plantSubscription(t, { issue_id: issue.id, profile_id: f.viewer.id })
     await plantMessageRow(t, { org_id: f.org.id, recipient_id: f.viewer.id, issue_id: issue.id })
     await plantEvent(t, { org_id: f.org.id, actor_id: f.admin.id, project_id: f.sub.id })
@@ -617,6 +621,7 @@ describe('deleteOrgDeep', () => {
       'issue_labels',
       'issue_subscriptions',
       'comments',
+      'comment_counts',
       'milestones',
       'project_access',
       'team_members',
