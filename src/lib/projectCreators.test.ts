@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Row } from '../store/rows'
 import { shapeUser } from '../store/viewModels'
-import { creatorName, namePhrase, projectCreatorsIn, projectRightBox } from './projectCreators'
+import { creatorName, creatorPhrase, projectCreatorsIn, projectRightBox } from './projectCreators'
 
 /* A home-org member as the roster holds it; a standard user who is an active
    person unless `extra` says otherwise. An agent has no login or email. */
@@ -36,10 +36,14 @@ const agent = (extra: Partial<Row<'profiles'>> = {}): Partial<Row<'profiles'>> =
 
 const names = (users: { name: string }[]) => users.map((user) => user.name)
 const roster3 = [member('Leo'), member('Nora', { org_role: 'admin' }), member('Atlas', agent())]
-const phrase = (list: string[]) =>
-  namePhrase(list)
+const phrase = (users: Parameters<typeof creatorPhrase>[0]) =>
+  creatorPhrase(users)
     .map((part) => part.text)
     .join('')
+/* Creators by name, each a person unless it names a known agent. */
+const AGENTS = new Set(['Atlas', 'Relay', 'Ledger'])
+const creators = (...list: string[]) =>
+  list.map((name) => member(name, AGENTS.has(name) ? agent() : {}))
 
 describe('projectCreatorsIn', () => {
   const roster = [
@@ -94,32 +98,52 @@ describe('creatorName', () => {
   it('marks agents and leaves people as they are', () => {
     expect(creatorName(member('Atlas', agent()))).toBe('Atlas (agent)')
     expect(creatorName(member('Leo'))).toBe('Leo')
-    expect(phrase(projectCreatorsIn(roster3, 'users').map(creatorName))).toBe(
-      'Nora, Leo and Atlas (agent)',
-    )
   })
 })
 
-describe('namePhrase', () => {
-  it('writes up to three names in full', () => {
-    expect(phrase(['Nora'])).toBe('Nora')
-    expect(phrase(['Nora', 'Leo'])).toBe('Nora and Leo')
-    expect(phrase(['Nora', 'Leo', 'Aisha'])).toBe('Nora, Leo and Aisha')
+describe('creatorPhrase', () => {
+  it('writes up to three creators in full, agents marked', () => {
+    expect(phrase(creators('Nora'))).toBe('Nora')
+    expect(phrase(creators('Nora', 'Leo'))).toBe('Nora and Leo')
+    expect(phrase(creators('Nora', 'Leo', 'Aisha'))).toBe('Nora, Leo and Aisha')
+    expect(phrase(projectCreatorsIn(roster3, 'users'))).toBe('Nora, Leo and Atlas (agent)')
   })
 
-  it('cuts four or more to the first two and a count', () => {
-    expect(phrase(['Nora', 'Leo', 'Aisha', 'Mira'])).toBe('Nora, Leo and 2 more')
-    expect(phrase(['Nora', 'Leo', 'Aisha', 'Mira', 'Daniel', 'Ben'])).toBe('Nora, Leo and 4 more')
+  it('cuts four or more to the first two and a count of people', () => {
+    expect(phrase(creators('Nora', 'Leo', 'Aisha', 'Mira'))).toBe('Nora, Leo and 2 more')
+    expect(phrase(creators('Nora', 'Leo', 'Aisha', 'Mira', 'Daniel', 'Ben'))).toBe(
+      'Nora, Leo and 4 more',
+    )
+  })
+
+  it('says how many of the counted creators are agents', () => {
+    expect(phrase(creators('Nora', 'Leo', 'Aisha', 'Atlas'))).toBe(
+      'Nora, Leo and 2 more, including 1 agent,',
+    )
+    expect(phrase(creators('Nora', 'Leo', 'Atlas', 'Aisha', 'Relay'))).toBe(
+      'Nora, Leo and 3 more, including 2 agents,',
+    )
+    expect(phrase(creators('Nora', 'Leo', 'Atlas', 'Relay'))).toBe('Nora, Leo and 2 agents')
+  })
+
+  it('counts only the creators it does not name', () => {
+    expect(phrase(creators('Atlas', 'Leo', 'Aisha', 'Mira'))).toBe('Atlas (agent), Leo and 2 more')
+    expect(phrase(creators('Nora', 'Atlas', 'Relay', 'Aisha'))).toBe(
+      'Nora, Atlas (agent) and 2 more, including 1 agent,',
+    )
   })
 
   it('keeps the names apart from the joining words', () => {
-    expect(namePhrase(['Nora', 'Leo', 'Aisha', 'Mira'])).toEqual([
+    expect(creatorPhrase(creators('Nora', 'Leo', 'Aisha', 'Atlas'))).toEqual([
       { text: 'Nora', name: true },
       { text: ', ', name: false },
       { text: 'Leo', name: true },
-      { text: ' and 2 more', name: false },
+      { text: ' and 2 more, including 1 agent,', name: false },
     ])
-    expect(namePhrase(['Nora', 'Leo']).filter((part) => part.name)).toHaveLength(2)
+    expect(creatorPhrase(creators('Nora', 'Atlas')).filter((part) => part.name)).toEqual([
+      { text: 'Nora', name: true },
+      { text: 'Atlas (agent)', name: true },
+    ])
   })
 })
 

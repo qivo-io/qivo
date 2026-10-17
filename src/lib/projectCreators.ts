@@ -37,15 +37,26 @@ export function creatorName(user: Pick<UserVM, 'name' | 'isAgent'>): string {
 /** One part of a name list: a name, or the words that join the names. */
 export type NamePart = { text: string; name: boolean }
 
-/** A list of names that fits one line: up to three in full ("A", "A and B",
- * "A, B and C"), past three the first two and a count ("A, B and 2 more").
+/** The summary's creators on one line: up to three in full ("A", "A and B",
+ * "A, B and C"), past three the first two and a count that says how many of
+ * the others are agents ("A, B and 3 more", "A, B and 3 more, including 1
+ * agent," or "A, B and 2 agents"), so an agent is never hidden in the count.
  * Names and joining words are separate parts so the caller can ink them
- * apart. */
-export function namePhrase(names: string[]): NamePart[] {
+ * apart; the caller adds " can create projects." */
+export function creatorPhrase(creators: Pick<UserVM, 'name' | 'isAgent'>[]): NamePart[] {
   const name = (text: string): NamePart => ({ text, name: true })
   const words = (text: string): NamePart => ({ text, name: false })
+  const names = creators.map(creatorName)
   if (names.length > 3) {
-    return [name(names[0]), words(', '), name(names[1]), words(` and ${names.length - 2} more`)]
+    const rest = creators.slice(2)
+    const agents = rest.filter((user) => user.isAgent).length
+    const count =
+      agents === 0
+        ? ` and ${rest.length} more`
+        : agents === rest.length
+          ? ` and ${agents} agents`
+          : ` and ${rest.length} more, including ${agents} agent${agents === 1 ? '' : 's'},`
+    return [name(names[0]), words(', '), name(names[1]), words(count)]
   }
   return names.flatMap((text, i) => {
     if (i === 0) return [name(text)]

@@ -143,9 +143,11 @@ describe('Who can create new projects?', () => {
     )
 
     await act(async () => segment('Standard users')?.click())
-    // admins first, then standard users in roster order, the agent Atlas
-    // included; Mira is invited
-    expect(summary()).toBe('Nora Berg, Leo Martins and 3 more can create projects.')
+    // admins first, then standard users in roster order; Mira is invited, and
+    // the count says the agent Atlas is one of the three it does not name
+    expect(summary()).toBe(
+      'Nora Berg, Leo Martins and 3 more, including 1 agent, can create projects.',
+    )
 
     await act(async () => segment('Selected users')?.click())
     expect(summary()).toBe(
