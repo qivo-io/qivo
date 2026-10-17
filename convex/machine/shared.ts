@@ -48,7 +48,8 @@ export const MCP_PROVENANCE = 'via MCP'
 
 /** The provenance a REST write's activity row carries. An agent key's writes
  * name the key. A personal token's writes name no token, because the person
- * is the actor and their tokens are private. */
+ * is the actor and only they and organization admins (on API access) see
+ * their tokens, while the activity row reaches other members too. */
 export const restProvenance = (keyName: string | null): string =>
   keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
 

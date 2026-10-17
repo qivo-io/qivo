@@ -143,8 +143,9 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
 
 /* One token. A revoked or expired token is dimmed and offers Delete, an
    active one Revoke; both take a second click to confirm, which turns the
-   icon red. The button stays icon-sized when armed, so the cells stay under
-   their headings. */
+   icon red. A token an organization admin revoked on API access says so.
+   The button stays icon-sized when armed, so the cells stay under their
+   headings. */
 function TokenRow({
   token: t,
   now,
@@ -190,7 +191,7 @@ function TokenRow({
           {t.name}
           {ended && (
             <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:700] [color:var(--danger)]">
-              {revoked ? 'revoked' : 'expired'}
+              {revoked ? (t.revokedByAdmin ? 'revoked by an admin' : 'revoked') : 'expired'}
             </span>
           )}
         </div>

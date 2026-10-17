@@ -11,7 +11,7 @@ import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTy
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
 import { polarConfigured } from '../lib/polar'
-import { usagePeriod } from './billingUsage'
+import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
 import { newUuid } from './orgs'
 
 export const GB = 1_000_000_000
@@ -198,15 +198,35 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
   }
 }
 
+/** The plan usage allowances follow (the subscription's, else the default
+ * plan before enrollment, else none), the seats they are sized by and the API
+ * calls they include. The Billing and API access pages both use it, so their
+ * allowances agree. */
+export async function usageAllowance(
+  ctx: QueryCtx,
+  orgId: string,
+  sub: Doc<'billing_subscriptions'> | null,
+) {
+  const plan = sub ? await byId(ctx, 'billing_plans', sub.plan_id) : await defaultPlan(ctx)
+  const count = await getBillableUsers(ctx, orgId)
+  const seats = sub?.billed_seats || Math.max(plan?.minimum_seats ?? 5, count.total)
+  // Included calls are the allowance recordApiCall charges against. Before
+  // enrollment there is no subscription, so the preview counts members.
+  const includedCalls = plan
+    ? includedApiCalls(plan, sub ? allowanceSeats(sub) : count.total)
+    : null
+  return { plan, seats, includedCalls }
+}
+
 /** The admin Billing page's usage report. It reads the same bucket the
  * API-call writer is filling now (`usagePeriod`): the live paid period, the
  * pending interval after it, or the current UTC calendar month. Allowances
  * come from the subscription's plan, or the default plan before enrollment,
- * and are null when there is no plan. A calendar month is always waived. */
+ * and are null when there is no plan. A calendar month and a pending
+ * interval are always waived. */
 export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
   const sub = await subscriptionFor(ctx, orgId)
-  const plan = sub ? await byId(ctx, 'billing_plans', sub.plan_id) : await defaultPlan(ctx)
-  const count = await getBillableUsers(ctx, orgId)
+  const { plan, seats, includedCalls } = await usageAllowance(ctx, orgId, sub)
   const now = Date.now()
   const period = usagePeriod(sub, now)
   const rows = await ctx.db
@@ -230,8 +250,6 @@ export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<Billin
     user.keys.push({ id: row.credential_id, name: row.credential_name, calls: row.calls })
   }
   const calls = rows.reduce((total, row) => total + row.calls, 0)
-  const seats = sub?.billed_seats || Math.max(plan?.minimum_seats ?? 5, count.total)
-  const includedCalls = plan ? seats * plan.api_calls_per_seat : null
   const includedBytes = plan
     ? Math.max(plan.minimum_storage_gb, seats * plan.storage_gb_per_seat) * GB
     : null
@@ -247,8 +265,9 @@ export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<Billin
   const storageBlocks = events
     .filter((event) => event.kind === 'storage' && (!event.abandoned_at || event.attempts > 0))
     .reduce((total, event) => total + event.units, 0)
+  // recordApiCall never charges a calendar month or a pending interval.
   const waived =
-    period.kind === 'month' ||
+    period.kind !== 'paid' ||
     !billingEnabled() ||
     !sub?.polar_subscription_id ||
     (!!sub.complimentary_until && Date.parse(sub.complimentary_until) > now)

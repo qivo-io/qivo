@@ -937,6 +937,9 @@ export default defineSchema({
     created_at: v.string(),
     last_used_at: v.optional(v.string()),
     revoked_at: v.optional(v.string()),
+    // Set when an organization admin revoked the token on API access
+    // (apiAccess.ts), so its owner sees who ended it.
+    revoked_by_admin: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
     .index('by_profile', ['profile_id'])
@@ -961,6 +964,9 @@ export default defineSchema({
     code_used_at: v.optional(v.string()),
     last_used_at: v.optional(v.string()),
     revoked_at: v.optional(v.string()),
+    // 'deleted' by the owner or a profile removal (hidden from the owner's
+    // list), 'admin' from API access (apiAccess.ts), 'credential_replay' or
+    // 'fixture_retirement'.
     revocation_reason: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])

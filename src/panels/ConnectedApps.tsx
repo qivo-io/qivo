@@ -102,7 +102,11 @@ export function ConnectedApps() {
               </Button>
             </div>
             <div className="mt-2 space-y-1 text-xs text-text-2">
-              {connection.revokedAt && <div className="text-danger">Access revoked</div>}
+              {connection.revokedAt && (
+                <div data-oauth-connection-revoked="" className="text-danger">
+                  {connection.revokedByAdmin ? 'Revoked by an admin' : 'Access revoked'}
+                </div>
+              )}
               {connection.scopes.map((scope) => (
                 <div key={scope}>{connectionScopeLabel(scope)}</div>
               ))}

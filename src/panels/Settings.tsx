@@ -10,6 +10,7 @@ import { BillingSettings } from './BillingSettings'
 import '../styles/settings-layout.css'
 import '../styles/mobile-settings.css'
 import { AccountPage } from './settings/AccountSettings'
+import { OrgApiAccessPage } from './settings/ApiAccessSettings'
 import { DesktopSettingsPage } from './settings/DesktopSettings'
 import { OrgLabelsPage } from './settings/LabelsSettings'
 import { OrgGeneralPage } from './settings/OrganizationSettings'
@@ -111,6 +112,7 @@ function SettingsScreen({
       { id: 'org-general', label: 'General', icon: 'cog' },
       { id: 'org-billing', label: 'Billing', icon: 'chart' },
       { id: 'org-users', label: 'Users', icon: 'people' },
+      { id: 'org-api', label: 'API access', icon: 'key' },
     )
   // a team leader manages their own team without being an org admin
   if (admin || myTeams.length) orgItems.push({ id: 'org-teams', label: 'Teams', icon: 'layers' })
@@ -148,6 +150,7 @@ function SettingsScreen({
   else if (page === 'projects-archived') content = <ArchivedProjectsPage />
   else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
   else if (page === 'org-billing') content = <BillingSettings />
+  else if (page === 'org-api') content = <OrgApiAccessPage />
   else if (page === 'org-users' || page.startsWith('user:'))
     content = (
       <OrgUsersPage
@@ -249,7 +252,9 @@ function SettingsScreen({
   })()
   return (
     <WorkspaceShell
-      className="settings-shell"
+      // API access's table needs a wider frame than the other pages
+      // (settings-layout.css)
+      className={page === 'org-api' ? 'settings-shell settings-shell-wide' : 'settings-shell'}
       header={
         narrow ? (
           <header className="settings-mobile-header">

@@ -61,7 +61,7 @@ The MCP endpoint's initial HTTP 401 challenge advertises
 Use these steps for a personal-token fallback or a named agent's key:
 
 1. Have the user sign in at [Qivo](https://qivo.io/app).
-2. For a personal token, open **Settings → User account → MCP access →
+2. For a personal token, open **Settings → Your preferences → MCP access →
    Personal access tokens** and choose **New token**. Enter a name, leave
    **Allow changes** on unless the client only needs to read, and keep
    **Never** or pick the last day the token works. Neither choice can be
@@ -208,7 +208,7 @@ agent's key cannot grant access, even to itself.
 
 ## Revocation and connection failures
 
-Delete OAuth connections under **Settings → User account → MCP access → Connected
+Delete OAuth connections under **Settings → Your preferences → MCP access → Connected
 apps**. Deleting removes the connection from the list and prevents subsequent
 access and refresh requests. Previously revoked connections can also be
 deleted. Connecting again requires fresh approval in the assistant. OAuth
@@ -217,7 +217,10 @@ when offline access was approved. Reusing a consumed authorization code or
 refresh token revokes that connection, so clients must serialize refreshes.
 
 Personal tokens are revoked on **MCP access**; admins revoke agent keys from
-the agent's **Users** row. Revocation takes effect on subsequent requests.
+the agent's **Users** row. Organization admins can also revoke any member's
+personal token, connected app or agent key under **Settings → Organization →
+API access**, which lists every credential with its calls; the owner sees it
+as revoked by an admin. Revocation takes effect on subsequent requests.
 Switching a user to **Inactive** disables all their credentials. Agent keys
 and personal tokens have no refresh-token flow. An agent key never expires on
 its own. A personal token created with a last day is refused once that day

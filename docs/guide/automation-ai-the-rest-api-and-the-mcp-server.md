@@ -196,3 +196,10 @@ use your name. Manual tokens and agent keys show creation and last-used dates
 and can be revoked individually. OAuth access tokens expire and can renew
 when you approve offline access. Deactivating the account stops all its
 credentials.
+
+Organization admins can see every member's personal tokens and connected apps,
+with their calls, and revoke any of them on
+[API access](./administration-guard-rails-and-the-demo.md#api-access). A token
+an admin revoked reads **revoked by an admin** in your list, and such a
+connection reads **Revoked by an admin**. Create a new token or connect the
+app again if you still need it.

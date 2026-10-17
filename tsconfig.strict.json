@@ -5,6 +5,7 @@
     "noImplicitAny": true
   },
   "include": [
+    "src/lib/apiAccess.ts",
     "src/lib/appUpdates.ts",
     "src/lib/appearance.ts",
     "src/lib/backgroundPreview.ts",

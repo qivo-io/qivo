@@ -349,7 +349,7 @@ describe('demo lifetime and capabilities', () => {
     expect(JSON.stringify(mine)).not.toContain(b.demo.orgId)
   }, 30_000)
 
-  it('refuses invitations, additional organizations, credential minting and editable synthetic email', async () => {
+  it('refuses invitations, additional organizations, credential minting, API access and editable synthetic email', async () => {
     const a = await readyDemo()
     await expectRefusal(
       a.as.mutation(api.identity.createOrganization, { name: 'Escape' }),
@@ -383,6 +383,21 @@ describe('demo lifetime and capabilities', () => {
         resource: 'anything',
       }),
     ).toBeNull()
+    // API access lists and revokes nothing in a demo, even for its admin
+    await expectRefusal(
+      a.as.query(api.apiAccess.list, { org_id: a.demo.orgId! }),
+      'forbidden',
+      /regular workspace/,
+    )
+    await expectRefusal(
+      a.as.mutation(api.apiAccess.revoke, {
+        org_id: a.demo.orgId!,
+        table: 'mcp_tokens',
+        id: uuid(),
+      }),
+      'forbidden',
+      /regular workspace/,
+    )
   })
 
   it('enforces write/record quotas transactionally and refuses large websocket payloads', async () => {

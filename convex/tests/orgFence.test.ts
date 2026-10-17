@@ -127,6 +127,8 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
   let otherMilestoneId: string
   let otherAttachmentId: string
   let otherKeyId: string
+  let otherTokenId: string
+  let otherConnectionId: string
 
   beforeAll(async () => {
     t = newT()
@@ -136,11 +138,14 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
     otherIssue = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
     otherTeam = await plantTeam(t, { org_id: f.otherOrg.id })
     otherLabel = await plantLabel(t, f.otherOrg.id, 'Elsewhere')
-    // a milestone, an attachment (real _storage bytes) and an agent key in
-    // the other org — refs the sweep can probe from outside
+    // a milestone, an attachment (real _storage bytes), an agent key, a
+    // personal token and a connected app in the other org — refs the sweep
+    // can probe from outside
     otherMilestoneId = uuid()
     otherAttachmentId = uuid()
     otherKeyId = uuid()
+    otherTokenId = uuid()
+    otherConnectionId = uuid()
     const otherAgent = await plantSeat(t, {
       org_id: f.otherOrg.id,
       kind: 'agent',
@@ -172,6 +177,30 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         key_prefix: 'qva_zzzz',
         key_hash: 'f'.repeat(64),
         created_at: NOW,
+      })
+      await ctx.db.insert('mcp_tokens', {
+        id: otherTokenId,
+        profile_id: f.otherAdmin.id,
+        name: 'foreign token',
+        token_prefix: 'qvt_zzzzzzz',
+        token_hash: 'e'.repeat(64),
+        access: 'write',
+        created_at: NOW,
+      })
+      await ctx.db.insert('oauth_connections', {
+        id: otherConnectionId,
+        authorization_hash: 'foreign-authorization',
+        auth_user_id: f.otherAdmin.auth_user_id ?? '',
+        profile_id: f.otherAdmin.id,
+        org_id: f.otherOrg.id,
+        client_id: 'foreign-client',
+        client_name: 'Foreign app',
+        resource: 'https://qivo.test/mcp',
+        requested_scopes: ['qivo:read'],
+        scopes: ['qivo:read'],
+        created_at: NOW,
+        authorization_expires_at: NOW,
+        approved_at: NOW,
       })
     })
   })
@@ -578,6 +607,21 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         as(t, f.admin).mutation(api.tokens.revokeAgentKey, { org_id: f.org.id, id: ref }),
       answer: { code: 'not_found', message: 'key not found' },
     },
+    // API access reaches every credential kind, each fenced to the caller's org
+    ...(['agent_keys', 'mcp_tokens', 'oauth_connections'] as const).map(
+      (table): Door => ({
+        name: `apiAccess.revoke (${table})`,
+        ref: () =>
+          table === 'agent_keys'
+            ? otherKeyId
+            : table === 'mcp_tokens'
+              ? otherTokenId
+              : otherConnectionId,
+        call: (ref) =>
+          as(t, f.admin).mutation(api.apiAccess.revoke, { org_id: f.org.id, table, id: ref }),
+        answer: { code: 'not_found', message: 'credential not found' },
+      }),
+    ),
   ]
 
   for (const door of DOORS) {

@@ -130,6 +130,8 @@ adminOrgs:resendInvite action public {"type":"object","value":{"profile_id":{"fi
 adminOrgs:setMemberRole mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}
 adminOrgs:suggestAddress query public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 adminOrgs:updateInvite mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+apiAccess:list query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+apiAccess:revoke mutation public {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:beginDemoUploadWork mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:cancelUpload mutation public {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:clearForDeletedLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -500,6 +502,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // caller's org entitlement. Checkout and portal re-check admin identity in
   // orgAction and remain available during billing recovery/read-only access.
   billing: { summary: 'orgQuery', usage: 'orgQuery', status: 'orgQuery' },
+  // API access lists every member's credentials for an org admin (checked in
+  // the handler) and revokes any of them; revoking only takes access away, so
+  // it stays open to admins during a billing pause.
+  apiAccess: { list: 'orgQuery', revoke: 'accessRemovalMutation' },
   billingActions: {
     checkout: 'orgAction',
     portal: 'orgAction',
@@ -715,7 +721,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 146
+const PUBLIC_COUNT = 148
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

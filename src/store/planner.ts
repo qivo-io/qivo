@@ -2021,6 +2021,8 @@ export type McpTokenChoice = {
   access: FunctionArgs<typeof api.tokens.createMcpToken>['access']
   expiresAt?: string
 }
+/** The credential tables an admin can revoke from on API access. */
+export type ApiCredentialTable = FunctionArgs<typeof api.apiAccess.revoke>['table']
 
 /* The toolbar filter row's state — one shape for every view that renders it
    and for P.passesFilters, the one predicate they share. `mine` and
@@ -4224,6 +4226,36 @@ export const PLANNER = {
     }
   },
 
+  /* ---- API access (Settings → Organization → API access) ----
+     An admin's list of every credential in the home organization with its
+     calls in one usage period. Fetched on demand: each API call changes the
+     rows, so a subscription would re-render on every call. Null when the
+     list could not be loaded. */
+  listApiAccess: async (period?: string) => {
+    try {
+      return await convex.query(api.apiAccess.list, {
+        org_id: HOME_ORG,
+        ...(period === undefined ? {} : { period }),
+      })
+    } catch (e) {
+      console.error('[qivo] API access list failed:', e)
+      return null
+    }
+  },
+
+  /** Revokes any credential in the home organization as its admin. Resolves
+      whether the server accepted it; revoking one that is already revoked
+      counts as accepted. */
+  revokeApiCredential: async (table: ApiCredentialTable, id: string) => {
+    try {
+      await write(api.apiAccess.revoke, { org_id: HOME_ORG, table, id })
+      return true
+    } catch (e) {
+      console.error('[qivo] API credential revoke failed:', e)
+      return false
+    }
+  },
+
   /* ---- OAuth connections (self-service, separately listed from tokens) ---- */
   getOAuthConnectionContext: async (oauthQuery: string) => {
     const operation = write(api.oauthConnections.getContext, { oauth_query: oauthQuery })
@@ -4249,8 +4281,9 @@ export const PLANNER = {
   },
 
   /* ---- personal MCP tokens (Settings → Your preferences) ----
-     Same on-demand pattern, strictly self-service (authedMutations — no
-     org_id); token churn is private credential management, nothing narrates. */
+     Same on-demand pattern. The owner manages their own tokens here
+     (authedMutations, no org_id) and nothing narrates; an organization admin
+     can also list and revoke them on API access (listApiAccess above). */
   listMcpTokens: async () => {
     try {
       return await convex.query(api.tokens.listMcpTokens, {})

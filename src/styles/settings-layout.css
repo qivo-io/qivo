@@ -72,6 +72,18 @@
 .settings-content-frame {
   max-width: 820px;
 }
+/* API access is one table of credentials whose columns need more room than
+   the reading frame. Only that page widens (Settings.tsx), and its title row
+   spans the frame so Refresh lines up with the table's right edge. */
+.settings-shell-wide {
+  --workspace-content-max: 1100px;
+}
+.settings-shell-wide .settings-content-frame {
+  max-width: 1060px;
+}
+.settings-shell-wide .settings-page-title {
+  max-width: none;
+}
 .archive-content-frame {
   max-width: 880px;
 }

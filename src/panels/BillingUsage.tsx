@@ -1,5 +1,5 @@
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
-import { billingBytes, billingDate, billingMoney } from '@/lib/billingDisplay'
+import { billingBytes, billingDate, usageHints } from '@/lib/billingDisplay'
 import type { BillingUsage as BillingUsageData } from '../../convex/lib/billingTypes'
 
 /** The period line: a paid period's dates, a UTC calendar month, or the start
@@ -24,7 +24,7 @@ export function BillingUsage({
   measuredAt: number
 }) {
   const month = usage.period_kind === 'month'
-  const charged = !usage.waived && currency !== undefined
+  const hints = usageHints(usage, currency)
   return (
     <SettingsSection
       title="Usage"
@@ -55,13 +55,7 @@ export function BillingUsage({
             ? ' calls'
             : ` of ${usage.included_calls.toLocaleString()} included calls`}
         </p>
-        <FieldHint>
-          {month
-            ? 'API calls are not charged without a paid period.'
-            : charged
-              ? `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to your next renewal invoice.`
-              : 'API usage is covered by free access. It will not be charged later.'}
-        </FieldHint>
+        <FieldHint>{hints.api}</FieldHint>
       </SettingsField>
       <SettingsField label="Attachment storage" width={550}>
         <p className="text-base">
@@ -70,13 +64,7 @@ export function BillingUsage({
             ? ' stored'
             : ` of ${billingBytes(usage.included_storage_bytes)} included`}
         </p>
-        <FieldHint>
-          {month
-            ? 'Storage is not charged without a paid period.'
-            : charged
-              ? `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to your next renewal invoice.`
-              : 'Storage is covered by free access. It will not be charged later.'}
-        </FieldHint>
+        <FieldHint>{hints.storage}</FieldHint>
       </SettingsField>
       <SettingsGroup
         legend="API calls by account"
