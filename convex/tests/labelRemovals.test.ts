@@ -241,6 +241,29 @@ describe('a label on more tasks than one delete removes', () => {
     expect(await assignments(t, bug.id)).toBe(0)
   })
 
+  it('starts a removal only for more assignments than the inline bound', async () => {
+    LABEL_REMOVAL.inline = 3
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const exact = await plantLabel(t, f.org.id, 'Exact')
+    const over = await plantLabel(t, f.org.id, 'Over')
+    await plantLabelledTasks(t, f, 3, [exact])
+    await plantLabelledTasks(t, f, 4, [over])
+
+    await remove(t, f, exact)
+    expect(await assignments(t, exact.id)).toBe(0)
+    expect(await jobOf(t, exact.id)).toBeNull()
+
+    await remove(t, f, over)
+    expect(await assignments(t, over.id)).toBe(1)
+    expect(await jobOf(t, over.id)).not.toBeNull()
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await assignments(t, over.id)).toBe(0)
+    expect(await jobOf(t, over.id)).toBeNull()
+    expect(await stepsRun(t)).toBe(1)
+  })
+
   it('fits a transaction that may write 50 documents with 200 assignments', async () => {
     LABEL_REMOVAL.inline = 20
     LABEL_REMOVAL.step = 40
