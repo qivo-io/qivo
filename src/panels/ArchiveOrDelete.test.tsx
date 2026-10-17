@@ -309,6 +309,9 @@ describe('Archive or delete a task', () => {
     await openTask('root')
     await choose('delete')
     expect(labels()).toContain('Delete 4 tasks')
+    // the delete can be restored, so only its button turns red, not the window
+    expect(button('Delete 4 tasks').dataset.variant).toBe('destructive')
+    expect(find('[data-modal-shell]').className).not.toContain('var(--danger)')
     await click(subtasks())
     expect(labels()).toContain('Delete QN-1')
     expect(labels()).not.toContain('Delete 4 tasks')
