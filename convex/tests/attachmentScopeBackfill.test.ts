@@ -57,6 +57,12 @@ const stepWrites = (t: T, args: Record<string, unknown>) =>
     return written
   })
 
+/* The arguments of every backfill step scheduled so far. */
+const steps = async (t: T): Promise<Record<string, unknown>[]> =>
+  (await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect()))
+    .filter((job) => job.name === 'internal/attachmentScopeBackfill:start')
+    .map((job) => job.args[0] as Record<string, unknown>)
+
 /* An attachment row of the task `issue_id`, with only the scope fields
  * `scope` gives, as older rows were stored. */
 async function plantRow(
@@ -152,10 +158,10 @@ describe('internal/attachmentScopeBackfill', () => {
     })
     expect(warn).toHaveBeenCalledTimes(1)
     const done = info.mock.calls.filter(([message]) => message === 'Attachment scope backfill done')
-    expect(done).toEqual([['Attachment scope backfill done', { tasks: 4, filled: 5, orphans: 0 }]])
+    expect(done).toEqual([['Attachment scope backfill done', { rows: 6, filled: 5, orphans: 0 }]])
   })
 
-  it('pages through tasks and rows without an organization, fills those with a task and leaves orphans alone', async () => {
+  it('pages through the rows, fills those with a task and leaves orphans alone', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { t, f, sid } = await fixture()
@@ -164,12 +170,15 @@ describe('internal/attachmentScopeBackfill', () => {
       more.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }))
     }
     for (const task of more) await plantRow(t, sid, task.id)
-    // rows whose task was deleted without them
-    const orphans = [await plantRow(t, sid, uuid()), await plantRow(t, sid, uuid())]
-    // a task outside every organization the first phase walks
+    // rows whose task was deleted without them, with and without a scope
+    const orphans = [
+      await plantRow(t, sid, uuid()),
+      await plantRow(t, sid, uuid(), { org_id: f.org.id, project_id: f.sub.id }),
+    ]
+    // a task whose organization is gone
     const unowned = await plantIssue(t, { org_id: uuid(), project_id: f.sub.id })
     const adrift = await plantRow(t, sid, unowned.id)
-    Object.assign(SCOPE_PAGE, { tasks: 2, legacy: 1 })
+    SCOPE_PAGE.rows = 2
 
     await run(t)
 
@@ -193,15 +202,51 @@ describe('internal/attachmentScopeBackfill', () => {
         id: orphan.id,
       })
     }
-    // Testbed's 6 tasks take 3 steps, Other's 1 another, and each legacy row one
-    const steps = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    const phases = steps
-      .filter((job) => job.name === 'internal/attachmentScopeBackfill:start')
-      .map((job) => job.args[0].phase)
-    expect(phases.filter((phase) => phase === 'tasks').length).toBeGreaterThanOrEqual(3)
-    expect(phases.filter((phase) => phase === 'legacy').length).toBeGreaterThanOrEqual(3)
+    // 6 rows at 2 a step, the run's first one and two it scheduled
+    expect(await steps(t)).toHaveLength(2)
     const done = info.mock.calls.filter(([message]) => message === 'Attachment scope backfill done')
-    expect(done).toEqual([['Attachment scope backfill done', { tasks: 7, filled: 4, orphans: 2 }]])
+    expect(done).toEqual([['Attachment scope backfill done', { rows: 6, filled: 4, orphans: 2 }]])
+  })
+
+  it('reads and writes at most one page of rows a step, and finishes a task with more rows across steps', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { t, f, sid, active, board } = await fixture()
+    for (let i = 0; i < 5; i++) await plantRow(t, sid, active.id)
+    await plantRow(t, sid, board.id)
+    SCOPE_PAGE.rows = 2
+
+    expect(await stepWrites(t, {})).toBe(2)
+
+    await run(t)
+    for (const row of await allRows(t)) {
+      expect(scopeOf(row)).toEqual({
+        org_id: f.org.id,
+        project_id: row.issue_id === board.id ? f.sub2.id : f.sub.id,
+        task_archived: undefined,
+      })
+    }
+    const done = info.mock.calls.filter(([message]) => message === 'Attachment scope backfill done')
+    // the step above filled two of them
+    expect(done).toEqual([['Attachment scope backfill done', { rows: 6, filled: 4, orphans: 0 }]])
+  })
+
+  it('stops before a task past the task byte budget and starts the next step at it', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { t, sid, active, archived, board, elsewhere } = await fixture()
+    for (const task of [active, active, archived, board, elsewhere]) await plantRow(t, sid, task.id)
+    // one task passes a 1-byte budget, so each step reads one task and its rows
+    SCOPE_PAGE.taskBytes = 1
+
+    await run(t)
+
+    for (const row of await allRows(t)) expect(row.project_id).toBeDefined()
+    // after the run's first step, one step starts at each of the other tasks
+    const started = (await steps(t)).map((args) => args.from)
+    expect(started).toHaveLength(3)
+    expect(new Set(started).size).toBe(3)
+    expect(started).not.toContain(undefined)
+    const done = info.mock.calls.filter(([message]) => message === 'Attachment scope backfill done')
+    expect(done).toEqual([['Attachment scope backfill done', { rows: 5, filled: 5, orphans: 0 }]])
   })
 
   it('writes nothing for a row that matches its task, so a second run changes nothing', async () => {
@@ -211,19 +256,21 @@ describe('internal/attachmentScopeBackfill', () => {
     await plantRow(t, sid, board.id, { org_id: f.org.id, project_id: f.sub2.id })
     await plantRow(t, sid, elsewhere.id, { org_id: f.otherOrg.id })
 
-    // Testbed's first step fills the one row that differs, and a step over
-    // the same tasks again writes no document
-    expect(await stepWrites(t, { org: f.org.id })).toBe(1)
-    expect(await stepWrites(t, { org: f.org.id })).toBe(0)
+    // the first step fills the two rows that differ, and a step over the
+    // same rows again writes no document
+    expect(await stepWrites(t, {})).toBe(2)
+    expect(await stepWrites(t, {})).toBe(0)
+    info.mockClear()
 
+    await plantRow(t, sid, board.id)
     await run(t)
     const before = await allRows(t)
     await run(t)
     expect(await allRows(t)).toEqual(before)
     const done = info.mock.calls.filter(([message]) => message === 'Attachment scope backfill done')
     expect(done).toEqual([
-      ['Attachment scope backfill done', { tasks: 4, filled: 1, orphans: 0 }],
-      ['Attachment scope backfill done', { tasks: 4, filled: 0, orphans: 0 }],
+      ['Attachment scope backfill done', { rows: 4, filled: 1, orphans: 0 }],
+      ['Attachment scope backfill done', { rows: 4, filled: 0, orphans: 0 }],
     ])
   })
 })

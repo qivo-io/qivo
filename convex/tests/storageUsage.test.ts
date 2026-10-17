@@ -6,16 +6,18 @@
  *      groups them by the project each row carries, counting only projects
  *      that still exist.
  *   2. Older rows without a project take their task's, and older rows
- *      without an organization count in their task's organization.
+ *      without an organization count in their task's organization. Past
+ *      UNSCOPED_READ, those are found through the organization's own tasks,
+ *      so other organizations' rows cannot take its read past the limits.
  *   3. Every move of a task (the app, REST and MCP) moves its rows' project.
  *
  * The fixtures insert rows directly, in the shape attachFileCore stores, or
  * without the fields older rows lack. */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { storageUsage } from '../model/billing'
+import { storageUsage, UNSCOPED_READ } from '../model/billing'
 import {
   as,
   NOW,
@@ -41,7 +43,7 @@ g.process ??= { env: {} }
 g.process.env.BETTER_AUTH_SECRET ??= 'test-files-secret'
 
 /* One stored file that every planted row names. Its real size does not
- * matter: storageUsage adds the rows' size_bytes. */
+ * matter, because storageUsage adds the rows' size_bytes. */
 const storedFile = (t: T): Promise<Id<'_storage'>> =>
   t.run((ctx) => ctx.storage.store(new Blob(['x']) as never))
 
@@ -183,6 +185,77 @@ describe('storageUsage', () => {
       bytes: 7,
       projects: [{ project_id: f.otherProject.id, name: 'Elsewhere', storage_bytes: 7 }],
       ranges: 3 + 3,
+    })
+  })
+})
+
+describe('rows stored without an organization past UNSCOPED_READ', () => {
+  const defaults = { ...UNSCOPED_READ }
+  afterEach(() => Object.assign(UNSCOPED_READ, defaults))
+
+  it("are found through the organization's own tasks, whatever other organizations store", async () => {
+    const { t, f, sid, active, shelved, elsewhere } = await fixture()
+    await plantFile(t, sid, active, 100)
+    await plantFile(t, sid, active, 50, { legacy: 'scope' })
+    await plantFile(t, sid, shelved, 5, { legacy: 'scope' })
+    await plantFile(t, sid, elsewhere, 7, { legacy: 'scope' })
+    UNSCOPED_READ.lookups = 2
+
+    // projects, the organization's rows, the rows without org_id up to the
+    // bound, then the organization's tasks and each one's attachments
+    const before = await usage(t, f.org.id)
+    expect(before).toEqual({ bytes: 155, projects: [FW(f, 150), PCB(f, 5)], ranges: 3 + 1 + 4 })
+    // more rows without org_id elsewhere, here of tasks that are gone
+    for (let i = 0; i < 10; i++) {
+      await plantFile(t, sid, { ...elsewhere, id: uuid() }, 40, { legacy: 'scope' })
+    }
+    expect(await usage(t, f.org.id)).toEqual(before)
+    expect(await usage(t, f.otherOrg.id)).toMatchObject({
+      bytes: 7,
+      projects: [{ project_id: f.otherProject.id, name: 'Elsewhere', storage_bytes: 7 }],
+    })
+  })
+
+  it("get the task lookups the organization's own rows without a project leave", async () => {
+    const { t, f, sid, active, quiet, shelved } = await fixture()
+    await plantFile(t, sid, active, 50, { legacy: 'scope' })
+    await plantFile(t, sid, shelved, 5, { legacy: 'scope' })
+    UNSCOPED_READ.lookups = 3
+
+    // two lookups for the rows without org_id
+    expect(await usage(t, f.org.id)).toEqual({
+      bytes: 55,
+      projects: [FW(f, 50), PCB(f, 5)],
+      ranges: 3 + 2,
+    })
+    // two of the organization's rows lack their project, which leaves one
+    await plantFile(t, sid, active, 100, { legacy: 'project' })
+    await plantFile(t, sid, quiet, 10, { legacy: 'project' })
+    expect(await usage(t, f.org.id)).toEqual({
+      bytes: 165,
+      projects: [FW(f, 160), PCB(f, 5)],
+      ranges: 3 + 2 + 1 + 4,
+    })
+  })
+
+  it("are found through the organization's own tasks once other organizations' tasks pass the byte budget", async () => {
+    const { t, f, sid, active } = await fixture()
+    // another organization's task, first in the range of rows without org_id
+    const first = await plantIssue(t, {
+      id: '00000000-0000-4000-8000-000000000000',
+      org_id: f.otherOrg.id,
+      project_id: f.otherProject.id,
+    })
+    await plantFile(t, sid, first, 7, { legacy: 'scope' })
+    await plantFile(t, sid, active, 50, { legacy: 'scope' })
+    UNSCOPED_READ.taskBytes = 1
+
+    // the read of rows without org_id and its one task lookup, then the
+    // organization's tasks and each one's attachments
+    expect(await usage(t, f.org.id)).toEqual({
+      bytes: 50,
+      projects: [FW(f, 50)],
+      ranges: 3 + 1 + 1 + 4,
     })
   })
 })

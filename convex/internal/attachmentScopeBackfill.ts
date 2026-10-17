@@ -8,34 +8,36 @@
  * lib/snapshotRelations.ts reads the app snapshot's attachments task by
  * task. The backfill only makes those reads cheaper.
  *
- * One sequential chain of `start` steps, so the last one can log one
- * summary. Empty arguments start a run. Each step schedules the next.
- * - Phase `tasks` takes the first organization whose id is not before
- *   `org` and reads one page of its tasks (issues by_org, bounded by count
- *   and bytes, as task descriptions have no size cap on older rows). Each
- *   task's attachment rows that name another organization or project get
- *   the task's. A row that changes organization enters the new range
- *   unmarked, and the step schedules the archive mark steps for the
- *   archived tasks among those (model/archiveMarks.ts), as every archive
- *   does. A row that named another organization is logged by id. The next
- *   step continues the organization's tasks, then the next organization,
- *   then phase `legacy`.
- * - Phase `legacy` pages through the rows still without org_id. After phase
- *   `tasks` only rows whose task is gone remain. Each is logged by id and
- *   counted in `orphans`, and left alone, because deleting it would delete
- *   bytes and is a separate decision. While one remains, storageUsage reads
- *   it on every call and the snapshot keeps reading attachments task by
- *   task. A row whose task does exist, outside every organization the
- *   first phase walked, is filled like the others.
- * The last step logs 'Attachment scope backfill done' with the tasks it
+ * One sequential chain of `start` steps over every attachment row in task
+ * order (issue_attachments by_issue), so the last one can log one summary.
+ * Empty arguments start a run. Each step reads one page of rows, bounded by
+ * count and bytes, and the task of each row, each task once. A row that
+ * names another organization or project, or none, gets its task's. A row
+ * that changes organization enters the new range unmarked, and the step
+ * schedules the archive mark steps for the archived tasks among those
+ * (model/archiveMarks.ts), as every archive does. A row that named another
+ * organization is logged by id. A row whose task is gone is logged by id,
+ * counted in `orphans` and left alone, because deleting it would delete
+ * bytes and is a separate decision. While one without org_id remains,
+ * storageUsage reads it on every call and the snapshot keeps reading
+ * attachments task by task.
+ *
+ * Tasks are the larger documents, as their descriptions hold up to about
+ * 60 KB and older ones up to the 1 MiB document limit. A step stops before
+ * the first task that would take it past SCOPE_PAGE.taskBytes, and the next
+ * step starts its walk at that task. The rows before it belong to earlier
+ * tasks, so the walk skips and repeats nothing.
+ *
+ * The last step logs 'Attachment scope backfill done' with the rows it
  * visited, the rows it wrote (`filled`) and `orphans`.
  *
- * Running it twice, or while it runs, is safe. A step reads a task and its
- * rows in one transaction, so a concurrent move (model/issues.ts
+ * Running it twice, or while it runs, is safe. A step reads a row and its
+ * task in one transaction, so a concurrent move (model/issues.ts
  * moveIssueCore, which moves the rows' project too) cannot interleave, and a
- * row that already matches its task is not written. A second run reports
- * `filled: 0`. Organizations created or deleted during a run, as on the demo
- * deployment, are harmless.
+ * row that already matches its task is not written. Rows stored during a run
+ * already carry both fields (model/attachments.ts attachFileCore). A second
+ * run reports `filled: 0`. Organizations created or deleted during a run, as
+ * on the demo deployment, are harmless.
  *
  * Run it once per deployment. Running it on any hosted deployment
  * (development, staging, production or demo) needs the user's approval
@@ -57,20 +59,22 @@ import type { Doc } from '../_generated/dataModel'
 import { internalMutation, type MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { scheduleArchiveMarks } from '../model/archiveMarks'
+import { estimateDocumentBytes } from '../model/demoMetrics'
 
-/** The most tasks and task bytes one `tasks` step reads, and the most rows
- * without org_id one `legacy` step reads. A task costs one attachment range
- * and a legacy row one task lookup, so a step stays far below Convex's 4,096
- * ranges per transaction. Tests lower these. */
-export const SCOPE_PAGE = { tasks: 200, bytes: 8 * 1024 * 1024, legacy: 100 }
+/** The most rows (`rows`) and row bytes (`bytes`) one step reads, and about
+ * the most bytes of tasks it reads for them (`taskBytes`). A row costs at
+ * most one task lookup and one write, so a step stays far below Convex's
+ * 4,096 index ranges, 16 MiB read and 16,000 documents written per
+ * transaction. Tests lower these. */
+export const SCOPE_PAGE = { rows: 200, bytes: 4 * 1024 * 1024, taskBytes: 8 * 1024 * 1024 }
 
-/** One step's arguments: the phase, the organization and page cursor it
- * continues from, and the running counts for the final log. */
+/** One step's arguments: the task id the walk started at (`from`, absent
+ * for the first task), the page cursor of that walk, and the running counts
+ * for the final log. */
 type ScopeStep = {
-  phase?: 'tasks' | 'legacy'
-  org?: string
+  from?: string
   cursor?: string
-  tasks?: number
+  rows?: number
   filled?: number
   orphans?: number
 }
@@ -79,120 +83,86 @@ const startRef = makeFunctionReference<'mutation', ScopeStep, null>(
   'internal/attachmentScopeBackfill:start',
 )
 
-/* Gives each of `rows` the organization and project of `task` where they
- * differ. A row that changes organization also drops any archive mark,
- * which belonged to its old range. Answers how many rows it wrote and
- * whether one changed organization. */
+/* Gives `row` the organization and project of `task` where they differ. A
+ * row that changes organization also drops any archive mark, which belonged
+ * to its old range. Answers what it wrote. */
 async function fill(
   ctx: MutationCtx,
   task: Doc<'issues'>,
-  rows: readonly Doc<'issue_attachments'>[],
-): Promise<{ filled: number; rescoped: boolean }> {
-  let filled = 0
-  let rescoped = false
-  for (const row of rows) {
-    if (row.org_id === task.org_id && row.project_id === task.project_id) continue
-    if (row.org_id === task.org_id) {
-      await ctx.db.patch(row._id, { project_id: task.project_id })
-    } else {
-      if (row.org_id !== undefined) {
-        console.warn('Attachment scope backfill corrected an organization', { id: row.id })
-      }
-      await ctx.db.patch(row._id, {
-        org_id: task.org_id,
-        project_id: task.project_id,
-        task_archived: undefined,
-      })
-      rescoped = true
-    }
-    filled += 1
+  row: Doc<'issue_attachments'>,
+): Promise<'none' | 'project' | 'organization'> {
+  if (row.org_id === task.org_id) {
+    if (row.project_id === task.project_id) return 'none'
+    await ctx.db.patch(row._id, { project_id: task.project_id })
+    return 'project'
   }
-  return { filled, rescoped }
+  if (row.org_id !== undefined) {
+    console.warn('Attachment scope backfill corrected an organization', { id: row.id })
+  }
+  await ctx.db.patch(row._id, {
+    org_id: task.org_id,
+    project_id: task.project_id,
+    task_archived: undefined,
+  })
+  return 'organization'
 }
 
 /** One step of the backfill, then the next one scheduled. Empty arguments
- * start a run at the first organization. */
+ * start a run at the first row. */
 export const start = internalMutation({
   args: {
-    phase: v.optional(v.union(v.literal('tasks'), v.literal('legacy'))),
-    org: v.optional(v.string()),
+    from: v.optional(v.string()),
     cursor: v.optional(v.string()),
-    tasks: v.optional(v.number()),
+    rows: v.optional(v.number()),
     filled: v.optional(v.number()),
     orphans: v.optional(v.number()),
   },
   handler: async (ctx, a): Promise<null> => {
-    let tasks = a.tasks ?? 0
+    let rows = a.rows ?? 0
     let filled = a.filled ?? 0
     let orphans = a.orphans ?? 0
-    let next: ScopeStep
-
-    if ((a.phase ?? 'tasks') === 'tasks') {
-      const org = await ctx.db
-        .query('organizations')
-        .withIndex('by_uuid', (q) => q.gte('id', a.org ?? ''))
-        .first()
-      if (org === null) {
-        next = { phase: 'legacy' }
-      } else {
-        // a cursor belongs to the organization it was read for, which may
-        // have been deleted since
-        const page = await ctx.db
-          .query('issues')
-          .withIndex('by_org', (q) => q.eq('org_id', org.id))
-          .paginate({
-            cursor: org.id === a.org ? (a.cursor ?? null) : null,
-            numItems: Math.max(1, SCOPE_PAGE.tasks),
-            maximumBytesRead: SCOPE_PAGE.bytes,
-          })
-        const marks = new Set<string>()
-        for (const task of page.page) {
-          const rows = await ctx.db
-            .query('issue_attachments')
-            .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-            .collect()
-          const done = await fill(ctx, task, rows)
-          filled += done.filled
-          if (done.rescoped && task.archived_at !== undefined) marks.add(task.id)
+    const from = a.from
+    const walk =
+      from === undefined
+        ? ctx.db.query('issue_attachments').withIndex('by_issue')
+        : ctx.db.query('issue_attachments').withIndex('by_issue', (q) => q.gte('issue_id', from))
+    const page = await walk.paginate({
+      cursor: a.cursor ?? null,
+      numItems: Math.max(1, SCOPE_PAGE.rows),
+      maximumBytesRead: SCOPE_PAGE.bytes,
+    })
+    let next: ScopeStep | null = page.isDone ? null : { from, cursor: page.continueCursor }
+    const tasks = new Map<string, Doc<'issues'> | null>()
+    let taskBytes = 0
+    const marks = new Set<string>()
+    for (const row of page.page) {
+      let task = tasks.get(row.issue_id)
+      if (task === undefined) {
+        // rows are in task order, so every row before this one is done
+        if (taskBytes >= SCOPE_PAGE.taskBytes) {
+          next = { from: row.issue_id }
+          break
         }
-        await scheduleArchiveMarks(ctx, [...marks])
-        tasks += page.page.length
-        if (!page.isDone) {
-          next = { phase: 'tasks', org: org.id, cursor: page.continueCursor }
-        } else {
-          const after = await ctx.db
-            .query('organizations')
-            .withIndex('by_uuid', (q) => q.gt('id', org.id))
-            .first()
-          next = after === null ? { phase: 'legacy' } : { phase: 'tasks', org: after.id }
-        }
+        task = await byId(ctx, 'issues', row.issue_id)
+        tasks.set(row.issue_id, task)
+        if (task !== null) taskBytes += estimateDocumentBytes(task)
       }
-    } else {
-      const page = await ctx.db
-        .query('issue_attachments')
-        .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', undefined))
-        .paginate({ cursor: a.cursor ?? null, numItems: Math.max(1, SCOPE_PAGE.legacy) })
-      const marks = new Set<string>()
-      for (const row of page.page) {
-        const task = await byId(ctx, 'issues', row.issue_id)
-        if (task === null) {
-          console.warn('Attachment scope backfill found a row without a task', { id: row.id })
-          orphans += 1
-          continue
-        }
-        const done = await fill(ctx, task, [row])
-        filled += done.filled
-        if (done.rescoped && task.archived_at !== undefined) marks.add(task.id)
+      rows += 1
+      if (task === null) {
+        console.warn('Attachment scope backfill found a row without a task', { id: row.id })
+        orphans += 1
+        continue
       }
-      await scheduleArchiveMarks(ctx, [...marks])
-      if (page.isDone) {
-        console.info('Attachment scope backfill done', { tasks, filled, orphans })
-        return null
-      }
-      next = { phase: 'legacy', cursor: page.continueCursor }
+      const wrote = await fill(ctx, task, row)
+      if (wrote !== 'none') filled += 1
+      if (wrote === 'organization' && task.archived_at !== undefined) marks.add(task.id)
     }
-
-    await ctx.scheduler.runAfter(0, startRef, { ...next, tasks, filled, orphans })
+    await scheduleArchiveMarks(ctx, [...marks])
+    if (next === null) {
+      console.info('Attachment scope backfill done', { rows, filled, orphans })
+      return null
+    }
+    await ctx.scheduler.runAfter(0, startRef, { ...next, rows, filled, orphans })
     return null
   },
 })

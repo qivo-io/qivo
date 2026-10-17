@@ -129,4 +129,12 @@ describe('webpName', () => {
     expect(webpName('screenshot')).toBe('screenshot.webp')
     expect(webpName('')).toBe('image.webp')
   })
+
+  it("keeps the name within the server's 255 characters, counted as characters", () => {
+    const stem = `${'é'.repeat(250)}😀`
+    expect(webpName(`${stem}.png`)).toBe(`${'é'.repeat(250)}.webp`)
+    expect([...webpName(`${'a'.repeat(251)}.png`)]).toHaveLength(255)
+    expect(webpName(`${'a'.repeat(300)}`)).toBe(`${'a'.repeat(250)}.webp`)
+    expect(webpName(`${'a'.repeat(250)}.jpeg`)).toBe(`${'a'.repeat(250)}.webp`)
+  })
 })

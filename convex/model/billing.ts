@@ -12,6 +12,7 @@ import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
+import { estimateDocumentBytes } from './demoMetrics'
 import { newUuid } from './orgs'
 
 export const GB = 1_000_000_000
@@ -170,6 +171,68 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
   }
 }
 
+/** Bounds on what storageUsage reads for the rows stored without org_id,
+ * which are in no organization's range. It makes at most `lookups` task
+ * lookups in all. The organization's own rows without a project use some,
+ * and the rows without org_id, read from the whole deployment, get the rest
+ * at one lookup per row. Other organizations' tasks among those may hold
+ * about `taskBytes`. Past either bound it finds this organization's rows
+ * without org_id through its own tasks instead, at the cost the read had
+ * before rows carried their organization. Both bounds stay well below
+ * Convex's 4,096 index ranges and 16 MiB per transaction, so other
+ * organizations' rows cannot take the read past them. Tests lower both. */
+export const UNSCOPED_READ = { lookups: 3000, taskBytes: 4 * 1024 * 1024 }
+
+/* One attachment row's bytes and the project they count in. */
+type Counted = { project_id: string; size_bytes: number }
+
+/* The rows without org_id whose task belongs to `orgId`, each with its
+ * task's project, read from the whole deployment. Answers null when there
+ * are more than `limit` such rows, or once other organizations' tasks pass
+ * UNSCOPED_READ.taskBytes. `taskOf` reads each task once. */
+async function unscopedFiles(
+  ctx: QueryCtx,
+  orgId: string,
+  taskOf: (issueId: string) => Promise<Doc<'issues'> | null>,
+  limit: number,
+): Promise<Counted[] | null> {
+  const rows = await ctx.db
+    .query('issue_attachments')
+    .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', undefined))
+    .take(limit + 1)
+  if (rows.length > limit) return null
+  const files: Counted[] = []
+  const foreign = new Set<string>()
+  let foreignBytes = 0
+  for (const row of rows) {
+    const task = await taskOf(row.issue_id)
+    if (task === null) continue
+    if (task.org_id === orgId) {
+      files.push({ project_id: task.project_id, size_bytes: row.size_bytes })
+    } else if (!foreign.has(task.id)) {
+      foreign.add(task.id)
+      foreignBytes += estimateDocumentBytes(task)
+      if (foreignBytes > UNSCOPED_READ.taskBytes) return null
+    }
+  }
+  return files
+}
+
+/* The rows without org_id of `orgId`'s tasks, read task by task, one index
+ * range per task the organization ever stored. */
+async function* filesByTask(ctx: QueryCtx, orgId: string): AsyncGenerator<Counted> {
+  const issues = ctx.db.query('issues').withIndex('by_org', (q) => q.eq('org_id', orgId))
+  for await (const task of issues) {
+    const files = ctx.db
+      .query('issue_attachments')
+      .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+    for await (const file of files) {
+      if (file.org_id === undefined)
+        yield { project_id: task.project_id, size_bytes: file.size_bytes }
+    }
+  }
+}
+
 /**
  * The attachment bytes an organization stores, in total and per project,
  * largest first. Counts every attachment and description image of its
@@ -177,11 +240,16 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
  * under a removed project is not counted. Reads the organization's
  * attachment rows in one index range and groups them by the project each
  * row carries. A row stored before rows carried their project takes its
- * task's. A row stored before rows carried their organization is in no
- * organization's range, so every such row in the deployment is read too and
- * counts when its task belongs to this organization. Each task is read at
- * most once. internal/attachmentScopeBackfill fills both fields, after which
- * only rows whose task is gone lack them, and those count nowhere.
+ * task's, and each task is read at most once.
+ *
+ * A row stored before rows carried their organization is in no
+ * organization's range. While the deployment holds few such rows, they are
+ * read from their own range and count when their task belongs to this
+ * organization. Past UNSCOPED_READ, this organization's tasks are read one
+ * by one instead, as before rows carried their organization, so other
+ * organizations' rows and tasks cannot take the read past Convex's limits.
+ * internal/attachmentScopeBackfill fills both fields, after which only rows
+ * whose task is gone lack them, and those count nowhere.
  */
 export async function storageUsage(ctx: QueryCtx, orgId: string) {
   const projects = await ctx.db
@@ -213,13 +281,9 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
   for await (const file of own) {
     add(file.project_id ?? (await taskOf(file.issue_id))?.project_id, file.size_bytes)
   }
-  const unscoped = ctx.db
-    .query('issue_attachments')
-    .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', undefined))
-  for await (const file of unscoped) {
-    const task = await taskOf(file.issue_id)
-    if (task?.org_id === orgId) add(task.project_id, file.size_bytes)
-  }
+  const room = Math.max(0, UNSCOPED_READ.lookups - tasks.size)
+  const unscoped = (await unscopedFiles(ctx, orgId, taskOf, room)) ?? filesByTask(ctx, orgId)
+  for await (const file of unscoped) add(file.project_id, file.size_bytes)
   return {
     bytes,
     projects: [...totals.values()]

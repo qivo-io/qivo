@@ -62,12 +62,18 @@ export function fitWithin(
   return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) }
 }
 
+/** The longest attachment name the server stores, in characters
+    (convex/model/attachments.ts cleanAttachmentName). */
+const NAME_MAX = 255
+
 /** Re-extension for the WebP that comes out. Keeps the stem (the description
     editor already gave clipboard images a readable name) and never doubles up
-    a suffix. Pure. */
+    a suffix. Shortens the stem when the new suffix would take the name past
+    the server's 255 characters, so a file the user could attach as chosen
+    still attaches once compressed. Pure. */
 export function webpName(name: string): string {
-  const stem = (name || 'image').replace(/\.[A-Za-z0-9]{1,5}$/, '')
-  return `${stem || 'image'}.webp`
+  const stem = (name || 'image').replace(/\.[A-Za-z0-9]{1,5}$/, '') || 'image'
+  return `${[...stem].slice(0, NAME_MAX - '.webp'.length).join('')}.webp`
 }
 
 /** Encode a bitmap to a WebP blob, preferring OffscreenCanvas and falling
