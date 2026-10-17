@@ -199,8 +199,10 @@ they go before anything changes. Restored work keeps its keys, such as
 `QN-142`, because Qivo never reuses a number
 ([Permanent task IDs](#permanent-task-ids)). Labels deleted since then are
 gone, and so are links to work deleted for good. A subtask deleted on its own
-returns under its parent when the parent still exists and you can edit it,
-and as a top-level task otherwise. Work that was archived when it was
+returns under its parent when the parent still exists, you can edit it, and
+everyone assigned to or reviewing the subtask and its open subtasks can still
+see the parent's project. Otherwise it returns as a top-level task and keeps
+its people. Work that was archived when it was
 deleted returns archived. A restored Done task restarts its auto-archive
 clock. A task restored on its own sends its followers a **Restored** update.
 Restoring several items at once, or a project, sends none, and inbox
