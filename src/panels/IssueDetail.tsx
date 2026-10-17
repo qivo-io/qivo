@@ -3045,7 +3045,7 @@ function IssueDetail({
             // the person may have gone to another task meanwhile: leave that one open
             if (shownIssue.current === opened) {
               setFateOpen(false)
-              onClose() // the task left the board: the window has nothing to show
+              onClose() // the task left the board, so the window has nothing to show
             }
             window.showToast?.(`Archived ${shown}`)
             return true

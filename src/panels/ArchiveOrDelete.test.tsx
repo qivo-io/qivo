@@ -388,8 +388,61 @@ describe('Archive or delete a task', () => {
     expect(button('Delete 4 tasks').disabled).toBe(false)
     expect(window.showToast).toHaveBeenCalled()
     expect(P.issues.find((it) => it.uuid === 'root')).toBeDefined()
+    // the lists did not change, so the window does not ask again
+    expect(text('[data-task-fate]')).not.toContain('The subtasks changed')
     await click(button('Cancel'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('shows the lists as they are after a refusal, and asks again', async () => {
+    let refuse: (error: Error) => void = () => {}
+    answers['issues:deleteDeep'] = () => new Promise((_, reject) => (refuse = reject))
+    await openTask('root')
+    await choose('delete')
+    await click(button('Delete 4 tasks'))
+    // another person adds a subtask while the delete waits, and the server refuses
+    snap.issues.push({ ...snap.issues[2], id: 'late-sub', num: 8, title: 'Task late-sub' })
+    await act(async () => deliver(snap))
+    await act(async () => refuse(new Error('the subtasks changed')))
+    await settle()
+    expect(text('[data-task-fate]')).toContain(
+      'The subtasks changed while this window was open. Check them and choose again.',
+    )
+    expect(text('[data-fate-subtasks] > div')).toBe('Also deletes 4 subtasks:')
+    expect(labels()).toContain('Delete 5 tasks')
+  })
+
+  it('asks a reason when a Done task takes unfinished subtasks along, and none once they stay', async () => {
+    // QN-1 itself is Done, while two of its subtasks are not
+    snap.issues = snap.issues.map((t) => (t.id === 'root' ? { ...t, status: 'done' } : t))
+    await act(async () => deliver(snap))
+    answers['issues:archive'] = () => Promise.resolve(null)
+    await openTask('root')
+    expect(reasonLabel()).toBe('Reason (required)')
+    expect(button('Archive').disabled).toBe(true)
+    await click(subtasks())
+    expect(has('[data-fate-reason]')).toBe(false)
+    expect(button('Archive').disabled).toBe(false)
+    await click(button('Archive'))
+    await settle()
+    expect(writes()).toEqual([
+      {
+        name: 'issues:archive',
+        args: expect.objectContaining({ id: 'root', keep_subtasks: true }),
+      },
+    ])
+    expect(writes()[0].args).not.toHaveProperty('reason')
+  })
+
+  it('tells assistive technology whether the reason is required, and its hint', async () => {
+    await openTask('root')
+    const field = () => find<HTMLTextAreaElement>('[data-fate-reason]')
+    const hint = () => document.getElementById(field().getAttribute('aria-describedby') ?? '')
+    expect(field().getAttribute('aria-required')).toBe('true')
+    expect(hint()?.textContent).toBe("Saved to the task's comments.")
+    await choose('delete')
+    expect(field().getAttribute('aria-required')).toBe('false')
+    expect(hint()?.textContent).toBe('Shown in Deleted items.')
   })
 
   it('asks again when the subtasks changed, and ignores clicks for a second after', async () => {
@@ -544,6 +597,24 @@ describe('Archive or delete a project', () => {
     expect(P.project('plan')).toBeUndefined()
   })
 
+  it('waits for the server while deleting, and refuses to close meanwhile', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    let refuse: (error: Error) => void = () => {}
+    answers['projects:deleteDeep'] = () => new Promise((_, reject) => (refuse = reject))
+    const { onClose } = await openProject()
+    await choose('delete')
+    await click(button('Delete project and 48 tasks'))
+    expect(button('Deleting…').disabled).toBe(true)
+    await click(button('Cancel'))
+    await click(find('[data-modal-shell] button[aria-label="Close"]'))
+    expect(onClose).not.toHaveBeenCalled()
+    await act(async () => refuse(new Error('requires the project lead')))
+    await settle()
+    expect(button('Delete project and 48 tasks').disabled).toBe(false)
+    await click(button('Cancel'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
   it('offers only the delete from Archived projects, without the cards', async () => {
     summaries.push(() =>
       Promise.resolve(summary({ tasks: 1, archived_tasks: 0, sub_projects: [] })),
@@ -558,6 +629,69 @@ describe('Archive or delete a project', () => {
     expect(has('[data-fate-reason]')).toBe(true)
     expect(button('Delete project and 1 task').disabled).toBe(false)
     expect(labels()).not.toContain('Archive')
+  })
+})
+
+describe('Archived projects', () => {
+  it('keeps keyboard focus on the page after a delete', async () => {
+    // Plan and Docs are archived, with their sub-projects, and Mira leads both
+    for (const p of snap.projects) p.archived_at = AT
+    const docs = snap.projects.find((p) => p.id === 'docs')
+    if (docs) docs.lead_id = 'mira'
+    await act(async () => deliver(snap))
+    const settings = await import('./settings/ProjectSettings')
+    const version = await import('../store/usePlannerVersion')
+    function Live() {
+      version.usePlannerVersion()
+      return <settings.ArchivedProjectsPage />
+    }
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Live />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+    // the delivery without the project, as the server sends it before it answers
+    const drop = (id: string) => {
+      snap.projects = snap.projects.filter((p) => p.id !== id && p.parent_id !== id)
+      deliver(snap)
+      return Promise.resolve(null)
+    }
+    const remove = async (id: string, name: string) => {
+      summaries.push(() =>
+        Promise.resolve(summary({ tasks: 4, archived_tasks: 0, sub_projects: [] })),
+      )
+      answers['projects:deleteDeep'] = () => drop(id)
+      const del = find<HTMLButtonElement>(`[data-delete-project="${id}"]`)
+      del.focus()
+      await click(del)
+      await settle()
+      expect(text('[data-modal-shell] h2')).toBe(`Delete “${name}”?`)
+      await click(button('Delete project and 4 tasks'))
+      await settle()
+      expect(has('[data-modal-shell]')).toBe(false)
+      expect(has(`[data-archived-project="${id}"]`)).toBe(false)
+    }
+    // a cancelled window gives focus back to the row's Delete
+    summaries.push(() =>
+      Promise.resolve(summary({ tasks: 4, archived_tasks: 0, sub_projects: [] })),
+    )
+    const plan = find<HTMLButtonElement>('[data-delete-project="plan"]')
+    plan.focus()
+    await click(plan)
+    await settle()
+    await click(button('Cancel'))
+    // the dialog hands focus back on a timer after it unmounts
+    await settle()
+    expect(document.activeElement).toBe(find('[data-delete-project="plan"]'))
+    // the row left, so focus goes to the next row's first button
+    await remove('plan', 'Plan')
+    expect(document.activeElement).toBe(find('[data-restore-project="docs"]'))
+    // no row is left, so focus goes to the page heading
+    await remove('docs', 'Docs')
+    expect(document.activeElement).toBe(find('.settings-page-title h1'))
   })
 })
 

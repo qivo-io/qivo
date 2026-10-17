@@ -156,7 +156,7 @@ export type {
 
 /* Personal theme and Canvas background, exactly as appearance:get returns them. */
 export type AppearancePreferences = FunctionReturnType<typeof api.appearance.get>
-/** What archiving or deleting a project takes along: see P.projectRemovalSummary. */
+/** What archiving or deleting a project takes along, as P.projectRemovalSummary answers. */
 export type ProjectRemovalSummary = FunctionReturnType<typeof api.projects.removalSummary>
 /** What one restore or Delete now did over every call it took (P.restoreDeletedItems,
     P.purgeDeletedItems): the ids the server restored or deleted for good, the
@@ -1984,7 +1984,7 @@ export function andList(
 
 /** Someone working on a task, as a parent change or a move checks them. */
 export type Holder = { uid: string; task: IssueVM; role: 'assignee' | 'reviewer' }
-/** A subtask the Archive or delete window lists for a delete: see P.deletePlan. */
+/** A subtask the Archive or delete window lists for a delete (P.deletePlan). */
 export type DeleteRow = { task: IssueVM; depth: number; deletable: boolean }
 /** What a removal would do to work: see P.accessRemoval. */
 export type RemovalEffect = { people: string[]; items: Holder[]; projects: string[] }
@@ -3571,8 +3571,8 @@ export const PLANNER = {
      holds. The Archive or delete window waits for the server, so nothing
      changes here until it accepts and a refusal leaves the task and the
      window in place (toasted). Resolves whether the server archived it.
-     `reason` travels as an argument: the server posts it as a comment in the
-     same transaction. With `keepSubtasks` the server detaches the task's
+     `reason` travels as an argument, and the server posts it as a comment in
+     the same transaction. With `keepSubtasks` the server detaches the task's
      active direct children first and archives the task alone, so only the
      task leaves the board and its subtasks become top-level tasks;
      otherwise the whole subtree goes with it. */
@@ -4736,8 +4736,8 @@ export const PLANNER = {
       "Couldn't restore",
     ),
 
-  /** Delete now: an organization admin deletes Deleted items for good. Awaited
-      like restoreDeletedItems, and never toasts either. */
+  /** Delete now, where an organization admin deletes Deleted items for good.
+      Awaited like restoreDeletedItems, and never toasts either. */
   purgeDeletedItems: (
     items: { id: string; org_id: string }[],
   ): Promise<DeletedItemsOutcome<PurgeRefusal>> =>
@@ -4748,7 +4748,7 @@ export const PLANNER = {
     ),
 
   /* Move a project, its sub-projects and every task in them to Deleted
-     items. Awaited, as the Archive or delete window asks: nothing changes
+     items. Awaited, as the Archive or delete window asks. Nothing changes
      here until the server accepts, so a refusal (toasted) leaves the project
      and the window in place. `reason` is shown in Deleted items. Resolves
      whether the server deleted it. */

@@ -125,7 +125,7 @@ describe('moving a task that has subtasks to Deleted items', () => {
   const accept = (name: string, value: unknown = null) => {
     answers[name] = () => Promise.resolve(value)
   }
-  /* The server's tasks after it moved `gone` to Deleted items: every task
+  /* The server's tasks after it moved `gone` to Deleted items. Every task
      left under a moved one becomes top-level. */
   const moveToTrash = (gone: string[]) => {
     const kept = server.issues.filter((t) => !gone.includes(t.id))

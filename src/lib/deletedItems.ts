@@ -55,7 +55,7 @@ export function deleterName(deleter: Deleter): string {
   return deleter.name ?? 'Someone'
 }
 
-/** The name inside a sentence: "you" and "someone" lose their capital. */
+/** The name inside a sentence, where "you" and "someone" lose their capital. */
 export function deleterInSentence(deleter: Deleter): string {
   const name = deleterName(deleter)
   return deleter.you || deleter.name === undefined ? name.toLowerCase() : name
@@ -77,7 +77,7 @@ export function viaText(deleter: Deleter, form: 'row' | 'sentence' | 'short'): s
   return form === 'row' ? ` via ${name}, ${noun}` : ` via ${name} (${noun})`
 }
 
-/** A project item for a sub-project: its path names the parent. */
+/** Whether a project item is a sub-project. Its path names the parent. */
 export const isSubProject = (row: DeletedRow): boolean =>
   row.kind === 'project' && row.path.length > 0
 
@@ -128,9 +128,10 @@ export function blockedText(blocked: BlockDetail, holder?: string): string | nul
         ? `You can only view ${project} now. Ask its lead, ${blocked.lead}, to restore it.`
         : `You can only view ${project} now. Ask an organization admin to restore it.`
     case 'not_lead':
+      // the server names no lead when none passes today's lead rule
       return blocked.lead
         ? `${project} has its own lead, ${blocked.lead}. Ask them or an organization admin to restore it.`
-        : `${project} has its own lead. Ask them or an organization admin to restore it.`
+        : `${project} has no lead now. Ask an organization admin to restore it.`
     case 'subtask_project':
       return "A subtask is in a project you can't edit. Ask an organization admin to restore it."
     case 'project_archived':
@@ -203,23 +204,37 @@ export type KindFilter = 'all' | 'task' | 'project'
 /** One choice of the Deleted by select. */
 export type ByOption = { value: string; label: string }
 
-/** "Deleted by anyone": no filter. */
+/** The value of "Deleted by anyone", which filters nothing. */
 export const ANYONE = 'any'
 
-/* A person option names the deleter's profile ("Someone" has none and is
-   one option), a "via" option the opaque `who` key of one credential. */
-const personValue = (deleter: Deleter) => `person:${deleter.profile_id ?? ''}`
-const whoValue = (deleter: Deleter) => `who:${deleter.who}`
+/** What a Deleted by choice is about: a row's organization and deleter. */
+type DeletedBy = Pick<DeletedRow, 'org_id' | 'deleter'>
+
+/* A person choice names the organization and the deleter's profile. Every
+   removed deleter of one organization has no profile and is one "Someone"
+   choice. A "via" choice names the organization and the opaque `who` key of
+   one credential. The organization keeps the "Someone" of two organizations
+   apart, and their shared `who` keys too. */
+const personValue = (row: DeletedBy) => `person:${row.org_id}:${row.deleter.profile_id ?? ''}`
+const whoValue = (row: DeletedBy) => `who:${row.org_id}:${row.deleter.who}`
+
+/** A choice's organization and the rest of its value, or null for anyone. */
+function parseChoice(value: string): { kind: 'person' | 'who'; org: string; rest: string } | null {
+  const kind = value.startsWith('person:') ? 'person' : value.startsWith('who:') ? 'who' : null
+  if (kind === null) return null
+  const tail = value.slice(kind.length + 1)
+  const cut = tail.indexOf(':')
+  return cut < 0 ? null : { kind, org: tail.slice(0, cut), rest: tail.slice(cut + 1) }
+}
 
 /** The profile a Deleted by choice names, which the server can filter by, or
     undefined for anyone and for "Someone". */
 export function chosenProfile(value: string, rows: DeletedRow[]): string | undefined {
-  if (value.startsWith('person:')) return value.slice(7) || undefined
-  if (value.startsWith('who:')) {
-    const who = value.slice(4)
-    return rows.find((row) => row.deleter.who === who)?.deleter.profile_id
-  }
-  return undefined
+  const choice = parseChoice(value)
+  if (choice === null) return undefined
+  if (choice.kind === 'person') return choice.rest || undefined
+  return rows.find((row) => row.org_id === choice.org && row.deleter.who === choice.rest)?.deleter
+    .profile_id
 }
 
 /**
@@ -228,43 +243,50 @@ export function chosenProfile(value: string, rows: DeletedRow[]): string | undef
  * one "<person> via <credential>" choice per credential they deleted with,
  * when they deleted in more than one way. A credential whose name the viewer
  * may not see is one choice per kind ("Daniel Berg via a personal token"),
- * as its `who` key is. With `orgNames`, a person's label names their
- * organization, since one login can hold a seat in several.
+ * as its `who` key is. With `orgNames`, a label ends with the person's
+ * organization ("You via Claude, Northstar Labs"), since one login can hold
+ * a seat in several.
  */
 export function deletedByOptions(rows: DeletedRow[], orgNames: boolean): ByOption[] {
-  type Person = { deleter: Deleter; org: string; ways: Map<string, Deleter> }
+  type Person = { row: DeletedRow; ways: Map<string, DeletedRow> }
   const people = new Map<string, Person>()
   for (const row of rows) {
-    const key = `${row.org_id}|${personValue(row.deleter)}`
-    const person = people.get(key) ?? { deleter: row.deleter, org: row.org_name, ways: new Map() }
-    person.ways.set(row.deleter.who, row.deleter)
+    const key = personValue(row)
+    const person = people.get(key) ?? { row, ways: new Map() }
+    person.ways.set(row.deleter.who, row)
     people.set(key, person)
   }
-  const label = (person: Person) =>
-    orgNames ? `${deleterName(person.deleter)}, ${person.org}` : deleterName(person.deleter)
+  const label = ({ row }: Person, via = '') =>
+    `${deleterName(row.deleter)}${via}${orgNames ? `, ${row.org_name}` : ''}`
   const sorted = [...people.values()].sort(
     (a, b) =>
-      Number(b.deleter.you) - Number(a.deleter.you) ||
-      Number(a.deleter.name === undefined) - Number(b.deleter.name === undefined) ||
+      Number(b.row.deleter.you) - Number(a.row.deleter.you) ||
+      Number(a.row.deleter.name === undefined) - Number(b.row.deleter.name === undefined) ||
       label(a).localeCompare(label(b)),
   )
   const options: ByOption[] = [{ value: ANYONE, label: 'Deleted by anyone' }]
   for (const person of sorted) {
-    options.push({ value: personValue(person.deleter), label: label(person) })
+    options.push({ value: personValue(person.row), label: label(person) })
     if (person.ways.size < 2) continue
     const ways = [...person.ways.values()]
-      .filter((way) => way.kind !== 'app')
-      .map((way) => ({ value: whoValue(way), label: `${label(person)}${viaText(way, 'short')}` }))
+      .filter((way) => way.deleter.kind !== 'app')
+      .map((way) => ({
+        value: whoValue(way),
+        label: label(person, viaText(way.deleter, 'short')),
+      }))
     options.push(...ways.sort((a, b) => a.label.localeCompare(b.label)))
   }
   return options
 }
 
-/** Whether a delete by `deleter` passes the Deleted by choice `value`. */
-export function deletedBy(deleter: Deleter, value: string): boolean {
+/** Whether a row's delete passes the Deleted by choice `value`. */
+export function deletedBy(row: DeletedBy, value: string): boolean {
   if (value === ANYONE) return true
-  if (value.startsWith('who:')) return deleter.who === value.slice(4)
-  return personValue(deleter) === value
+  const choice = parseChoice(value)
+  if (choice === null || choice.org !== row.org_id) return false
+  return choice.kind === 'who'
+    ? row.deleter.who === choice.rest
+    : (row.deleter.profile_id ?? '') === choice.rest
 }
 
 /** Whether a row's text holds the search text, lowercased: its key, title,
@@ -283,6 +305,13 @@ export function rowHasText(row: DeletedRow, text: string): boolean {
     .join('\n')
     .toLowerCase()
     .includes(text)
+}
+
+/** Whether a search hit shows the search text, lowercased, in its key or
+    title. It keeps a hit of the previous text on screen until the new
+    answer arrives. */
+export function matchHasText(match: DeletedMatch, text: string): boolean {
+  return `${match.key}\n${match.title}`.toLowerCase().includes(text)
 }
 
 /** Lines newest first. A search hit sits right after its project item, which
@@ -403,7 +432,7 @@ export function deleterSentence(rows: DeletedRow[], now: Date): string | null {
   return `${deleterName(first.deleter)} deleted ${rows.length === 1 ? 'it' : 'them'}${viaText(first.deleter, 'sentence')} ${day}, ${timeSpan(earliest, latest)}.`
 }
 
-/** One line of the bulk restore window's list: where items go back. */
+/** One line of the bulk restore window's list, a place items go back to. */
 export type Destination = { key: string; kind: 'task' | 'project'; name: string; count: string }
 
 /**
