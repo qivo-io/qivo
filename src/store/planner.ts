@@ -72,6 +72,7 @@ import {
   DELAY_NEUTRAL,
   type DelayInfo,
 } from '../lib/delay'
+import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { prime as primeGravatar } from '../lib/gravatar'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
@@ -157,6 +158,18 @@ export type {
 export type AppearancePreferences = FunctionReturnType<typeof api.appearance.get>
 /** What archiving or deleting a project takes along: see P.projectRemovalSummary. */
 export type ProjectRemovalSummary = FunctionReturnType<typeof api.projects.removalSummary>
+/** What one restore or Delete now did over every call it took (P.restoreDeletedItems,
+    P.purgeDeletedItems): the ids the server restored or deleted for good, the
+    ids it refused with their reason, the ids it deferred until a project item
+    of the same call is back, and the ids of calls it refused whole, with the
+    sentence to show for them. */
+export type DeletedItemsOutcome<Reason> = {
+  done: string[]
+  refused: { id: string; reason: Reason }[]
+  deferred: string[]
+  failed: string[]
+  error: string | null
+}
 
 /* The wire shape of the one snapshot — derived from the server function so
    the cache can never drift from what forMe actually emits. Optional columns
@@ -734,6 +747,72 @@ function restoreErrorText(e: unknown): string {
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore — ${String(d.message)}`
   return "Couldn't restore"
+}
+
+/* A Deleted items call the server refused whole, in the restore refusal voice
+   above: billing's sentence as it is, the fixed permission line, a rule's own
+   sentence after what failed. Anything else (offline, a server fault) asks
+   for another try. */
+function deletedItemsErrorText(e: unknown, failed: string): string {
+  const d = errData(e)
+  if (d.reason === 'billing_required' && d.message) return d.message
+  if (d.code === 'forbidden') return "You don't have permission for that."
+  if (d.code === 'rule' && d.message) {
+    const m = String(d.message)
+    return `${failed}. ${m.charAt(0).toUpperCase()}${m.slice(1)}${/[.!?]$/.test(m) ? '' : '.'}`
+  }
+  return `${failed}. Try again.`
+}
+
+/** The most ids one deletedItems.restore or purge call takes
+    (convex/model/deletedItems.ts RESTORE_MAX, PURGE_MAX). */
+const DELETED_ITEMS_BATCH = 25
+
+/* Sends `items` in calls of one organization and at most 25 ids each, one
+   call after another, and adds up the answers. A call refused whole fails
+   only its own ids. */
+async function deletedItemsCalls<Reason>(
+  items: { id: string; org_id: string }[],
+  send: (
+    orgId: string,
+    ids: string[],
+  ) => Promise<
+    { refused: { id: string; reason: Reason }[]; deferred?: string[] } & (
+      | { restored: string[] }
+      | { purged: string[] }
+    )
+  >,
+  failed: string,
+): Promise<DeletedItemsOutcome<Reason>> {
+  const outcome: DeletedItemsOutcome<Reason> = {
+    done: [],
+    refused: [],
+    deferred: [],
+    failed: [],
+    error: null,
+  }
+  const byOrg = new Map<string, string[]>()
+  for (const { id, org_id } of items) {
+    const ids = byOrg.get(org_id) ?? []
+    if (!ids.includes(id)) ids.push(id)
+    byOrg.set(org_id, ids)
+  }
+  for (const [orgId, ids] of byOrg) {
+    for (let at = 0; at < ids.length; at += DELETED_ITEMS_BATCH) {
+      const batch = ids.slice(at, at + DELETED_ITEMS_BATCH)
+      try {
+        const answer = await send(orgId, batch)
+        outcome.done.push(...('restored' in answer ? answer.restored : answer.purged))
+        outcome.refused.push(...answer.refused)
+        outcome.deferred.push(...(answer.deferred ?? []))
+      } catch (e) {
+        console.error('[qivo] deleted items call failed:', e)
+        outcome.failed.push(...batch)
+        outcome.error ??= deletedItemsErrorText(e, failed)
+      }
+    }
+  }
+  return outcome
 }
 
 /* A refused project create names what disappeared, followed by the reason
@@ -4643,6 +4722,30 @@ export const PLANNER = {
       return null
     }
   },
+
+  /** Restore Deleted items (Settings, Deleted items). Awaited, never
+      optimistic: the work comes back through the snapshot, and the page's
+      list drops the items as the server does. Sent per organization, 25 ids
+      at a time. Never toasts; the page says what happened. */
+  restoreDeletedItems: (
+    items: { id: string; org_id: string }[],
+  ): Promise<DeletedItemsOutcome<RestoreRefusal>> =>
+    deletedItemsCalls(
+      items,
+      (orgId, ids) => write(api.deletedItems.restore, { org_id: orgId, ids }),
+      "Couldn't restore",
+    ),
+
+  /** Delete now: an organization admin deletes Deleted items for good. Awaited
+      like restoreDeletedItems, and never toasts either. */
+  purgeDeletedItems: (
+    items: { id: string; org_id: string }[],
+  ): Promise<DeletedItemsOutcome<PurgeRefusal>> =>
+    deletedItemsCalls(
+      items,
+      (orgId, ids) => write(api.deletedItems.purge, { org_id: orgId, ids }),
+      "Couldn't delete it for good",
+    ),
 
   /* Move a project, its sub-projects and every task in them to Deleted
      items. Awaited, as the Archive or delete window asks: nothing changes
