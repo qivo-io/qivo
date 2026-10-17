@@ -104,7 +104,7 @@ import { notFound, rule } from '../lib/functions'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { logActivity } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
-import { assertCanEdit, clearParentRemaining, detachChild, levelsAbove } from './issues'
+import { assertCanEdit, clearParentRemaining, detachChild } from './issues'
 import { type NotifyPreload, postMessage, scheduleArchivedReads } from './messages'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
@@ -252,9 +252,11 @@ function charge(b: Budget, doc: unknown): void {
 
 /** Charges the bytes of a document a step reads and leaves where it is, so
  * that a scan which passes over large documents stops on the byte budget
- * too. */
-function chargeRead(b: Budget, doc: unknown): void {
-  b.bytes -= estimateDocumentBytes(doc)
+ * too. Returns the bytes charged. */
+function chargeRead(b: Budget, doc: unknown): number {
+  const bytes = estimateDocumentBytes(doc)
+  b.bytes -= bytes
+  return bytes
 }
 
 /** Clears the rows `read` returns until the range is empty (true) or the
@@ -689,9 +691,9 @@ const itemProjectIds = (item: Item): string[] => item.projects.map((p) => p.id)
  * the item's projects, then the task row. True once the task row is gone.
  * A task left half done stays hidden, because its project is absent, and
  * the next step picks it up. A task too large to store is purged instead.
- * A task that a restore of the item wrote back without its parent is
- * stored with that parent again (takeParent). Tasks of a deleted project
- * emit no task.deleted. */
+ * A task that a restore wrote back without its parent, and that still waits
+ * for it, is stored with that parent again (takeParent). Tasks of a deleted
+ * project emit no task.deleted. */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   const live = { table: 'issues', doc: task } as const
   const how = mode === 'keep' && tooLarge(run.item, live, task.id) ? 'purge' : mode
@@ -729,7 +731,7 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     LARGE_ROWS_PER_READ,
   )
   if (!detached) return false
-  const parent_id = await takeParent(run, task)
+  const parent_id = await takeParent(run.ctx, task, run.item)
   if (how === 'keep') await storeTask(run.ctx, run.item, tallyOf(run), { ...task, parent_id })
   else {
     if (mode === 'keep') {
@@ -746,21 +748,37 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   return true
 }
 
-/** The parent a move stores `task` with. A restore of the item may have
- * written the task back without its parent outside the item, to give it
- * back after the reveal (deleted_item_parents). Then it is that parent, and
- * this deletes its row; otherwise it is the task's own. Only an item that
- * was restoring has such rows, and it keeps restore_by until it is ready
- * again. */
-async function takeParent(run: Run, task: Doc<'issues'>): Promise<string | undefined> {
-  if (run.item.restore_by === undefined) return task.parent_id
-  const waiting = await run.ctx.db
+/** Whether `task`, which a restore of project item `item` wrote back
+ * without its parent outside the item, still waits for that parent: it has
+ * no parent of its own and is in one of the item's projects. Otherwise
+ * someone changed it since, and it stays as they left it. */
+const waitsFor = (item: Item, task: Doc<'issues'>): boolean =>
+  task.parent_id === undefined && itemProjectIds(item).includes(task.project_id)
+
+/** The parent `task` is stored with as it moves to `mover`. A project
+ * item's restore may have written the task back without its parent outside
+ * that item, to give it back after the reveal (deleted_item_parents). While
+ * the task still waits for it (waitsFor) it is that parent; otherwise it is
+ * the task's own. Every move asks, and so does a purge of a live task, and
+ * the row goes either way. A task that goes to Deleted items again before
+ * its turn therefore keeps the parent it had there, and the restore that
+ * wrote it back does not attach it when it shows again. A task has at most
+ * one such row, because a move takes it before another restore can write
+ * one. */
+async function takeParent(
+  ctx: MutationCtx,
+  task: Doc<'issues'>,
+  mover: Item,
+): Promise<string | undefined> {
+  const waiting = await ctx.db
     .query('deleted_item_parents')
-    .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id).eq('task_id', task.id))
+    .withIndex('by_task', (q) => q.eq('task_id', task.id))
     .first()
   if (waiting === null) return task.parent_id
-  await run.ctx.db.delete(waiting._id)
-  return waiting.parent_id
+  await ctx.db.delete(waiting._id)
+  const restoring =
+    waiting.item_id === mover.id ? mover : await byId(ctx, 'deleted_items', waiting.item_id)
+  return restoring !== null && waitsFor(restoring, task) ? waiting.parent_id : task.parent_id
 }
 
 /** Clears (keep or purge) the tasks left in project `projectId`. */
@@ -2172,6 +2190,7 @@ async function revealTasks(
       up = byTask.get(up)?.doc.parent_id
     return depth
   }
+  const live: LiveTasks = new Map()
   const parents = new Map<string, Promise<OutsideParent | null>>()
   const grouped = new Set<string>()
   const written: Id<'issues'>[] = []
@@ -2180,9 +2199,9 @@ async function revealTasks(
     let kept = parentId
     if (parentId !== undefined && !byTask.has(parentId)) {
       const outside = await memoRead(parents, parentId, () =>
-        outsideParent(run, parentId, restorer),
+        outsideParent(run, parentId, restorer, live),
       )
-      const attach = await keptParent(run, t.doc, outside, children)
+      const attach = await keptParent(run, t.doc, outside, children, live)
       if (attach?.grouped) grouped.add(parentId)
       kept = attach?.id
     }
@@ -2193,34 +2212,48 @@ async function revealTasks(
   return written
 }
 
+/** The live tasks one reveal or attach step read for the parent table, by
+ * id, null for one that is gone. An attach step puts back each task it
+ * gives a parent, so the map stays as the transaction left the tasks. */
+type LiveTasks = Map<string, Doc<'issues'> | null>
+
+/** Live task `id` from `live`, read and charged to the step's budget the
+ * first time. */
+async function liveTaskOf(run: Run, live: LiveTasks, id: string): Promise<Doc<'issues'> | null> {
+  let task = live.get(id)
+  if (task === undefined) {
+    task = await byId(run.ctx, 'issues', id)
+    if (task !== null) chargeRead(run.budget, task)
+    live.set(id, task)
+  }
+  return task
+}
+
 /** A live task outside the item that tasks of the item name as their
  * parent, as a reveal or an attach step reads it once for all of them: the
- * task, how many levels its chain holds above the attach point
- * (model/issues.ts levelsAbove), whether the restorer may change it (sight
- * and Edit on its project, as assertParentChain asks) and whether it holds
- * hours of its own that a new child takes away. */
-type OutsideParent = { parent: Doc<'issues'>; above: number; edits: boolean; clears: boolean }
+ * task, whether the restorer may change it (sight and Edit on its project,
+ * as assertParentChain asks) and whether it holds hours of its own that a
+ * new child takes away. No task the step gives a parent is such a parent,
+ * because the item stored only parents outside it, so this holds for the
+ * whole step. */
+type OutsideParent = { parent: Doc<'issues'>; edits: boolean; clears: boolean }
 
 /** The OutsideParent for `parentId`, or null when no task of the item can
- * keep it: it is not live, it is not the task the item stored (the
- * reference predicate), or its chain is past 20 levels already. Without a
- * restorer, whose profile is gone since the reveal, it edits nothing. In a
- * reveal its chain cannot run through a task of the item, which is absent
- * from issues or under the item's absent projects, and nothing attaches to
- * those; after it heightBelow finds such a chain. */
+ * keep it: it is not live, or it is not the task the item stored (the
+ * reference predicate). Without a restorer, whose profile is gone since the
+ * reveal, it edits nothing. */
 async function outsideParent(
   run: Run,
   parentId: string,
   restorer: Doc<'profiles'> | undefined,
+  live: LiveTasks,
 ): Promise<OutsideParent | null> {
-  const where = await whereIsTask(run.ctx, parentId)
-  if (where.where !== 'live' || !sameReference(where.issue, run.item)) return null
-  const above = await levelsAbove(run.ctx, parentId)
-  if (typeof above !== 'number') return null
-  const { issue: parent, project } = where
+  const parent = await liveTaskOf(run, live, parentId)
+  if (parent === null || !sameReference(parent, run.item)) return null
+  const project = await byId(run.ctx, 'projects', parent.project_id)
+  if (project === null) return null
   return {
     parent,
-    above,
     edits:
       restorer !== undefined &&
       levelRank(await liveLevel(run, restorer, project)) >= LEVEL_RANK.user,
@@ -2237,60 +2270,103 @@ async function outsideParent(
  * one), so the parent loses its own remaining hours as on a reparent
  * (model/issues.ts clearParentRemaining). An archived parent that holds
  * hours of its own therefore needs the restorer's Edit too, so a restore
- * never changes a task in a project the restorer cannot edit. The depth
- * counts the levels under `task` (heightBelow), read only for a parent that
- * passes the rest. */
+ * never changes a task in a project the restorer cannot edit. The depth is
+ * the levels above the parent (levelsOver) and under `task` (fitsBelow),
+ * read only for a parent that passes the rest, and for each task, because
+ * an attach earlier in the step can deepen a chain. */
 async function keptParent(
   run: Run,
   task: Pick<Stored<'issues'>, 'id' | 'archived_at'>,
   outside: OutsideParent | null,
   children: Map<string, string[]>,
+  live: LiveTasks,
 ): Promise<{ id: string; grouped: boolean } | undefined> {
   if (outside === null) return undefined
   const active = outside.parent.archived_at === undefined
   const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
   if ((active || outside.clears) && !outside.edits) return undefined
-  const below = await heightBelow(run, task.id, outside.parent.id, children)
-  if (outside.above + 1 + below > 20) return undefined
+  const above = await levelsOver(run, outside.parent, task.id, live)
+  if (above === null || !(await fitsBelow(run, task.id, 20 - above - 1, children))) return undefined
   return { id: outside.parent.id, grouped: !active || taskActive }
 }
 
-/** The height of the subtree under task `id` of the item once it is back:
- * its children among the tasks the reveal writes (`children`) and, for a
- * project item, the tasks under it in issues, which restore_tasks wrote
- * back or, after the reveal, anyone attached. Capped at 24, as parentChain
- * caps its walk; a subtree that holds `parentId` counts as the cap, because
- * attaching `id` there would close a cycle, which only a task that shows
- * without its parent after a reveal can meet. A task item's tasks have no
- * other children, because its delete detached every live child outside it
- * and nothing can attach to a task in Deleted items. The bytes of what it
+/** How many levels the chain from live task `parent` to the top holds,
+ * `parent` included, or null past 20 levels or when the chain runs through
+ * task `taskId`, so attaching it there would close a cycle, as the upward
+ * walk of model/issues.ts assertParentChain counts. Only a task that shows without its
+ * parent after a project item's reveal can meet a cycle. It reads through
+ * `live`, so the tasks of a step read the chains they share once, and an
+ * attach sees the levels an earlier attach of its step added. */
+async function levelsOver(
+  run: Run,
+  parent: Doc<'issues'>,
+  taskId: string,
+  live: LiveTasks,
+): Promise<number | null> {
+  let up = 1
+  let at = parent
+  while (at.parent_id !== undefined) {
+    if (at.parent_id === taskId) return null
+    up += 1
+    if (up > 20) return null
+    const above = await liveTaskOf(run, live, at.parent_id)
+    if (above === null) break
+    at = above
+  }
+  return up
+}
+
+/** The most one depth check under a task (fitsBelow) reads: tasks and
+ * their bytes. A subtree past it counts as too deep, so its task keeps no
+ * parent from outside, and the check stays within what one step can read
+ * next to its own budget. Someone with Edit can still give the task that
+ * parent by hand, which reads the whole subtree (model/issues.ts
+ * assertParentChain). A mutable object, so tests can lower it. */
+export const HEIGHT_READ = { tasks: 500, bytes: 4 * 1024 * 1024 }
+
+/** Whether the subtree under task `id` of the item, once it is back, is at
+ * most `room` levels high: its children among the tasks the reveal writes
+ * (`children`) and, for a project item, the tasks under it in issues, which
+ * restore_tasks wrote back or, after the reveal, anyone attached. A task
+ * item's tasks have no other children, because its delete detached every
+ * live child outside it and nothing can attach to a task in Deleted items.
+ * The walk stops a level past `room`. A subtree it cannot read within
+ * HEIGHT_READ does not fit either, with a warning. The bytes of what it
  * reads count against the step's budget. */
-async function heightBelow(
+async function fitsBelow(
   run: Run,
   id: string,
-  parentId: string,
+  room: number,
   children: Map<string, string[]>,
-): Promise<number> {
+): Promise<boolean> {
+  const read = { tasks: 0, bytes: 0 }
   let height = 0
   let frontier = [id]
-  while (frontier.length > 0 && height < 24) {
+  while (height <= room) {
     const next: string[] = []
     for (const at of frontier) {
       next.push(...(children.get(at) ?? []))
       if (run.item.kind !== 'project') continue
       const kids = run.ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', at))
       for await (const kid of kids) {
-        chargeRead(run.budget, kid)
+        read.tasks += 1
+        read.bytes += chargeRead(run.budget, kid)
+        if (read.tasks > HEIGHT_READ.tasks || read.bytes > HEIGHT_READ.bytes) {
+          console.warn('A deleted item restore cannot check the depth under a task', {
+            item_id: run.item.id,
+            task_id: id,
+          })
+          return false
+        }
         next.push(kid.id)
       }
     }
-    if (next.length === 0) break
-    if (next.includes(parentId)) return 24
+    if (next.length === 0) return true
     height += 1
     frontier = next
   }
-  return height
+  return false
 }
 
 /* What a reveal tells (design 5.4). A task item sends task.restored for
@@ -2401,9 +2477,11 @@ const waitingParents = (run: Run, n: number) =>
     .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id))
     .take(n)
 
-/** What one attach step reads once: each parent's OutsideParent, whether a
- * project is live, and the parents it made a group. */
+/** What one attach step reads once: the live tasks of the parent chains it
+ * walks, as its own attaches leave them, each parent's OutsideParent,
+ * whether a project is live, and the parents it made a group. */
 type Attach = {
+  tasks: LiveTasks
   parents: Map<string, Promise<OutsideParent | null>>
   live: Map<string, Promise<boolean>>
   grouped: Set<string>
@@ -2424,13 +2502,19 @@ type Attach = {
  * the tasks left keep no parent. True once no task waits.
  */
 async function attachParents(run: Run, attach: boolean): Promise<boolean> {
-  const step: Attach = { parents: new Map(), live: new Map(), grouped: new Set() }
+  const step: Attach = {
+    tasks: new Map(),
+    parents: new Map(),
+    live: new Map(),
+    grouped: new Set(),
+  }
   const done = await drain(
     run.budget,
     (n) => waitingParents(run, n),
     async (row) => {
-      if (attach) await attachParent(run, row, step)
-      await run.ctx.db.delete(row._id)
+      const holder = attach ? await attachParent(run, row, step) : undefined
+      if (holder === undefined) await run.ctx.db.delete(row._id)
+      else await run.ctx.db.patch(row._id, { item_id: holder })
     },
     TASK_PAGE,
   )
@@ -2443,33 +2527,37 @@ async function attachParents(run: Run, attach: boolean): Promise<boolean> {
 }
 
 /** Gives the task of `row` its parent when the parent table keeps it. A
- * task that is no longer where the reveal put it (deleted, moved to another
- * project, its project deleted again) or that has a parent of its own by
- * now stays as it is. Restoring a project item sends no notice for its
- * tasks, so the task changes without one. */
+ * task that is gone or that someone changed since the reveal (waitsFor)
+ * stays as it is. A task whose project went to Deleted items again is
+ * hidden with it, and the item that holds that project takes the row, so
+ * its move stores the task with this parent (takeParent). This returns
+ * that item's id. Restoring a project item sends no notice for its tasks,
+ * so the task changes without one. */
 async function attachParent(
   run: Run,
   row: Doc<'deleted_item_parents'>,
   step: Attach,
-): Promise<void> {
-  const task = await byId(run.ctx, 'issues', row.task_id)
-  if (task === null) return
-  chargeRead(run.budget, task)
+): Promise<string | undefined> {
+  const task = await liveTaskOf(run, step.tasks, row.task_id)
+  if (task === null) return undefined
   run.budget.tasks -= 1
-  if (task.parent_id !== undefined || !itemProjectIds(run.item).includes(task.project_id)) return
+  if (!waitsFor(run.item, task)) return undefined
   const live = await memoRead(
     step.live,
     task.project_id,
     async () => (await byId(run.ctx, 'projects', task.project_id)) !== null,
   )
-  if (!live) return
+  if (!live) return await holderOf(run, task.project_id)
   const outside = await memoRead(step.parents, row.parent_id, () =>
-    outsideParent(run, row.parent_id, run.actor),
+    outsideParent(run, row.parent_id, run.actor, step.tasks),
   )
-  const kept = await keptParent(run, task, outside, new Map())
-  if (kept === undefined) return
-  await run.ctx.db.patch(task._id, { parent_id: kept.id, updated_at: run.now })
+  const kept = await keptParent(run, task, outside, new Map(), step.tasks)
+  if (kept === undefined) return undefined
+  const fields = { parent_id: kept.id, updated_at: run.now }
+  await run.ctx.db.patch(task._id, fields)
+  step.tasks.set(task.id, { ...task, ...fields })
   if (kept.grouped) step.grouped.add(kept.id)
+  return undefined
 }
 
 /* ------------------------------------------------------------ restoring */
@@ -2602,8 +2690,10 @@ async function actorOf(
  * task item's stored tasks back in one transaction whatever their number,
  * and, for a project item, the attach of every task that waits for its
  * parent (attachParents), so that a small item comes back whole in one
- * transaction. It reads at most one more waiting task than the budget
- * holds. */
+ * transaction. It counts tasks, not the bytes their parents' chains and
+ * subtrees hold. An attach that spends the bytes left stops there, as any
+ * step does, and steps finish it. It reads at most one more waiting task
+ * than the budget holds. */
 async function revealFits(run: Run): Promise<boolean> {
   const b = run.budget
   if (spent(b)) return false
@@ -3152,11 +3242,12 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
  * touch, 'Detached from its parent' and task.updated), task.deleted is
  * emitted, the task row is stored and the 'deleted' activity row written as
  * before, its detail the machine `provenance`. A child inside the item keeps
- * its parent. The tasks are then hidden; their other rows follow within the
- * same budget, and steps take the rest. A task too large to store is
- * deleted with its rows instead, as today; the item neither counts it nor
- * lists its project, so nobody needs access there to restore the rest.
- * Returns the item.
+ * its parent, and a task that still waits for its parent after a project
+ * item's restore is stored with it (takeParent). The tasks are then hidden;
+ * their other rows follow within the same budget, and steps take the rest.
+ * A task too large to store is deleted with its rows instead, as today; the
+ * item neither counts it nor lists its project, so nobody needs access
+ * there to restore the rest. Returns the item.
  */
 export async function moveTasksToTrash(
   ctx: MutationCtx,
@@ -3229,7 +3320,11 @@ export async function moveTasksToTrash(
       await clearAll(counted, TASK_ROWS, task.id, (row) => discard(counted, row))
       await counted.db.delete(task._id)
       tally.dropped_rows += 1
-    } else await storeTask(counted, item, tally, task)
+    } else
+      await storeTask(counted, item, tally, {
+        ...task,
+        parent_id: await takeParent(counted, task, item),
+      })
     await logActivity(counted, {
       org_id: task.org_id,
       actor_id: actor.id,
