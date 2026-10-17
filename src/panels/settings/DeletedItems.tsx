@@ -1,12 +1,12 @@
 /* Settings › Projects › Deleted items (design 10). The page lists the tasks
    and projects in the trash that this login may see in each of its
    organizations, live from deletedItems.list, and search finds tasks inside
-   deleted projects (deletedItems.matches). One item restores without asking,
-   and several open a window that says where they go back. An organization
-   admin can delete an item for good from its row menu. The page never names
-   the 30 days an item stays, which only the user guide does. Row text,
-   folding and the filters live in lib/deletedItems.ts, and times in
-   lib/deletedTime.ts. */
+   deleted projects, live from deletedItems.matches. One item restores
+   without asking, and several open a window that says where they go back.
+   An organization admin can delete an item for good from its row menu. The
+   page never names the 30 days an item stays, which only the user guide
+   does. Row text, folding and the filters live in lib/deletedItems.ts, and
+   times in lib/deletedTime.ts. */
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
@@ -190,43 +190,41 @@ export function DeletedItemsPage() {
     run?.()
   })
 
-  /* Search hits inside deleted projects, 250ms after typing stops, and again
-     250ms after the list's project items change: a project deleted after the
-     search, or one whose tasks finished moving, holds tasks the last answer
-     could not name. Only project items hold hits, so other deliveries ask
-     nothing. The last answer shows until the next one replaces it, and the
-     sequence drops an answer that a newer search overtook. */
+  /* Search hits inside deleted projects, live for the text 250ms after
+     typing stops. The server answers again whenever a hit's project item
+     changes state or leaves, and when a project deleted after the search
+     holds tasks the text finds, so hits outside a capped list stay current
+     too. A new text stops following the old one at once, and the old
+     answer shows until the new one replaces it. An error keeps the hits of
+     the text, or shows none when the text has no answer yet. */
   const text = search.trim()
-  const projectItems = useMemo(
-    () =>
-      rows
-        .filter((row) => row.kind === 'project')
-        .map((row) => `${row.id}:${row.state}`)
-        .join(' '),
-    [rows],
-  )
-  const sequence = useRef(0)
   useEffect(() => {
-    const mine = ++sequence.current
     if (!text) {
       setFound(NOTHING_FOUND)
       return
     }
+    let active = true
+    let unsubscribe: (() => void) | undefined
     const timer = window.setTimeout(() => {
-      convex.query(api.deletedItems.matches, { text }).then(
+      unsubscribe = convex.onUpdate(
+        api.deletedItems.matches,
+        { text },
         (answer) => {
-          if (sequence.current === mine) setFound({ text, matches: answer })
+          if (active) setFound({ text, matches: answer })
         },
         (cause) => {
           console.error('[qivo] deleted items search failed:', cause)
-          // a failed refresh keeps the hits it would have replaced
-          if (sequence.current === mine)
+          if (active)
             setFound((current) => (current.text === text ? current : { text, matches: [] }))
         },
       )
     }, 250)
-    return () => window.clearTimeout(timer)
-  }, [text, projectItems])
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+      unsubscribe?.()
+    }
+  }, [text])
   const lower = text.toLowerCase()
   // Until the new text has its answer, the hits of the previous one show only
   // when they still hold the new text.
@@ -237,10 +235,11 @@ export function DeletedItemsPage() {
   )
 
   /* ---------------------------------------------------------- the lines */
-  // A search hit acts on its project item and shows that item's live state,
-  // since matches is not reactive. A hit whose project item left a complete
-  // list goes. A capped list can stop before an older project item, so there
-  // the hit stands for its item itself (hitItem) until this page restores it.
+  // A search hit acts on its project item as a list has it, with its name
+  // and counts. A hit whose project item left a complete list goes. A capped
+  // list can stop before an older project item, so there the hit stands for
+  // its item itself (hitItem), in the state of the newest search answer,
+  // until this page restores it.
   const capped = source.list?.capped === true
   const lines = useMemo(() => {
     const out: Line[] = []
