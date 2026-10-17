@@ -87,7 +87,8 @@ function ModalShell({
   onSubmit?: () => void
   canSubmit?: boolean
   submitLabel?: ReactNodeM
-  /** paints the submit button red, for a submit that deletes */
+  /** paints the icon, the border and the submit button red, for a submit
+   * that deletes or revokes */
   danger?: boolean
   width?: number
   /** a status line left of Cancel and the submit button. Its container is a
@@ -123,7 +124,10 @@ function ModalShell({
         showCloseButton={false}
         aria-describedby={undefined}
         overlayClassName="z-[100]"
-        className="top-[4vh] z-[101] flex max-h-[92vh] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 shadow-pop"
+        className={cn(
+          'top-[4vh] z-[101] flex max-h-[92vh] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl bg-background p-0 shadow-pop',
+          danger && 'border-[color-mix(in_oklab,var(--danger)_45%,var(--border))]',
+        )}
         style={{ width: mobile ? '100%' : width }}
         onOpenAutoFocus={(event) => {
           // Preserve the shell's chosen field instead of Radix's close-button
@@ -168,7 +172,7 @@ function ModalShell({
             the three zones is space: 24px from the header to the first field and 24px of scrollable
             air before the footer actions, all on the same 20px inset. */}
         <div className="flex shrink-0 items-center gap-2 px-5 pt-4 pb-0">
-          <Icon name={icon} size={16} color="var(--primary)" />
+          <Icon name={icon} size={16} color={danger ? 'var(--danger)' : 'var(--primary)'} />
           <DialogTitle className="text-xl font-semibold text-text-1">{title}</DialogTitle>
           {/* the resting-control treatment every other box in the dialog wears
               — --surface-3 was the pill of a card that no longer exists */}
