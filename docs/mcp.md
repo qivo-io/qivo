@@ -110,7 +110,10 @@ an older catalogue does not see them until it refreshes its tool list. At
 the same time every tool began to refuse a string argument holding an
 unpaired surrogate, such as a lone `\ud83c` escape, with the schema message
 `Invalid string: has an unpaired surrogate, which UTF-8 cannot encode`.
-Such a call answered `internal error` before.
+Such a call answered `internal error` before. A request body that is not
+UTF-8 is now refused with a parse error (see
+[Request limits and billing](#request-limits-and-billing)). Before, Qivo
+replaced each invalid byte sequence with U+FFFD and ran the call.
 
 ## Access model: the credential is a user
 
@@ -290,6 +293,12 @@ checks the size after authentication and answers a longer body with HTTP
 `413` and `{"jsonrpc": "2.0", "error": {"code": -32600, "message": "Bad
 Request: the request body is too large"}, "id": null}`. Such a request still
 counts as a call.
+
+MCP messages must be UTF-8. A body holding bytes that are not UTF-8, such as
+text a client encoded as Latin-1 or Windows-1252, is answered with HTTP
+`400` and `{"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse
+error: the request body is not UTF-8"}, "id": null}` before any tool runs,
+so it cannot store garbled text. Such a request still counts as a call.
 
 When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
@@ -1253,6 +1262,8 @@ and an optional `content_type` (`text/plain; charset=utf-8` by default) and
 stores the text as a UTF-8 file in one call. The text may hold at most 256
 KiB once encoded, and the organization's per-file limit applies too. Longer
 text is refused with `text must be at most 256 KiB (262144 bytes) as UTF-8`.
+A request that is not valid UTF-8 is refused before anything is stored, as
+[Request limits and billing](#request-limits-and-billing) describes.
 It needs Edit access to the task's project like the upload, answers the
 attachment and writes the same activity row. A refused call keeps no
 file.

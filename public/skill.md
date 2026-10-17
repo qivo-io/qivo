@@ -250,7 +250,8 @@ Useful field rules:
 - **Attach text you write:** `attach_text_file` with `name`, `text` and an
   optional `content_type` stores notes, a CSV table or a log as a UTF-8
   file of at most 256 KiB in one call. Chat assistants that cannot make
-  HTTP requests can still attach text they write this way.
+  HTTP requests can still attach text they write this way. Send MCP
+  requests as UTF-8, because Qivo refuses a body with other bytes.
 - **Delete a file:** `delete_attachment` or
   `DELETE /v1/tasks/{ref}/attachments/{id}`, with User or Lead access to the
   project. Description images are left to the app. When you rewrite a

@@ -159,7 +159,7 @@ const storageExists = (t: T, id: Id<'_storage'>) =>
 
 const tickets = (t: T) => t.run((ctx) => ctx.db.query('attachment_uploads').collect())
 
-type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
+type FetchInit = { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }
 type Res = { status: number; text: string }
 
 async function fetchPath(t: T, path: string, init: FetchInit = {}): Promise<Res> {
@@ -200,15 +200,25 @@ async function personalToken(
   return secret
 }
 
-/* One MCP tools/call with `secret` on the modern leg: the tool's text and
- * whether it is an error result. */
-async function mcpTool(
-  t: T,
-  secret: string,
-  name: string,
-  args: Record<string, unknown>,
-): Promise<{ text: string; isError: boolean }> {
-  const res = await fetchPath(t, '/mcp', {
+/* The JSON-RPC body of one tools/call on the modern leg. */
+const toolCall = (name: string, args: Record<string, unknown>): string =>
+  JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: {
+      name,
+      arguments: args,
+      _meta: {
+        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        'io.modelcontextprotocol/clientCapabilities': {},
+      },
+    },
+  })
+
+/* POSTs `body`, a tools/call of the tool `name`, to /mcp with `secret`. */
+const postTool = (t: T, secret: string, name: string, body: string | Uint8Array) =>
+  fetchPath(t, '/mcp', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${secret}`,
@@ -216,20 +226,18 @@ async function mcpTool(
       'Mcp-Method': 'tools/call',
       'Mcp-Name': name,
     },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: {
-        name,
-        arguments: args,
-        _meta: {
-          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-          'io.modelcontextprotocol/clientCapabilities': {},
-        },
-      },
-    }),
+    body,
   })
+
+/* One MCP tools/call with `secret` on the modern leg. Answers the tool's
+ * text and whether it is an error result. */
+async function mcpTool(
+  t: T,
+  secret: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean }> {
+  const res = await postTool(t, secret, name, toolCall(name, args))
   expect(res.status, res.text).toBe(200)
   const { result } = JSON.parse(res.text) as {
     result: { content: { text: string }[]; isError?: boolean }
@@ -1105,6 +1113,37 @@ describe('attach_text_file', () => {
     expect(stores).not.toHaveBeenCalled()
     expect(await storedFiles(fx.t)).toBe(before)
     expect(await attachmentRows(fx.t)).toEqual([])
+  })
+
+  it('refuses a request body that is not UTF-8, and stores nothing', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const token = await personalToken(fx.t, fx.user, 'write')
+    // the call with the degree sign sent as the bytes `degree`
+    const [head, tail] = toolCall('attach_text_file', {
+      ref: issue.id,
+      name: 'readings.txt',
+      text: '3,5 °C',
+    }).split('°')
+    const body = (degree: number[]) => {
+      const encoder = new TextEncoder()
+      return Uint8Array.from([...encoder.encode(head), ...degree, ...encoder.encode(tail)])
+    }
+    const before = await storedFiles(fx.t)
+    // Latin-1 and cp1252 send the degree sign as the one byte B0
+    const latin1 = await postTool(fx.t, token, 'attach_text_file', body([0xb0]))
+    expect(latin1).toEqual({
+      status: 400,
+      text: '{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: the request body is not UTF-8"},"id":null}',
+    })
+    expect(await storedFiles(fx.t)).toBe(before)
+    expect(await attachmentRows(fx.t)).toEqual([])
+    // the same call in UTF-8 attaches the text byte for byte
+    const utf8 = await postTool(fx.t, token, 'attach_text_file', body([0xc2, 0xb0]))
+    expect(utf8.status).toBe(200)
+    const { result } = JSON.parse(utf8.text) as { result: { content: { text: string }[] } }
+    const attachment = JSON.parse(result.content[0].text) as { url: string }
+    expect(await download(fx.t, attachment.url)).toEqual(new TextEncoder().encode('3,5 °C'))
   })
 
   it('deletes the stored text when the organization limit refuses it', async () => {

@@ -112,13 +112,17 @@ export const optionalJson = (raw: string): Record<string, unknown> =>
   raw.trim() === '' ? {} : needJson(raw)
 
 /** The largest REST or MCP request body, in bytes (1 MiB). A field at the
- * 20,000-character text cap is at most about 120 KB of JSON, and files go to
- * signed upload URLs, never through these bodies. */
+ * 20,000-character text cap is at most about 120 KB of JSON. Uploaded files
+ * go to signed upload URLs, never through these bodies. The at most 256 KiB
+ * of UTF-8 that MCP's attach_text_file takes fits as JSON even with every
+ * non-ASCII character escaped, unless it is mostly control characters,
+ * which JSON escapes to six bytes each. */
 export const BODY_MAX_BYTES = 1024 * 1024
 
 /* convex/tsconfig's lib is ESNext only, which declares neither the decoder
  * nor the request body stream the Convex runtime has. */
 declare class TextDecoder {
+  constructor(label?: string, options?: { fatal?: boolean })
   decode(value: Uint8Array): string
 }
 type BodyStream = {
@@ -128,20 +132,25 @@ type BodyStream = {
   }
 }
 
+/** A request body that readBody read. `text` decodes as request.text()
+ * would, with each byte sequence that is not UTF-8 replaced by U+FFFD, and
+ * `utf8` says whether the bytes held none. MCP refuses a body that is not
+ * UTF-8, and REST reads the replaced text. */
+export type RequestBody = { text: string; utf8: boolean }
+
 /**
- * A REST or MCP request body as text, or null when it is longer than
+ * A REST or MCP request body, or null when it is longer than
  * BODY_MAX_BYTES. A Content-Length over the cap answers before the body is
  * read. Otherwise the bytes are counted as they arrive, before decoding, so
  * a body sent without Content-Length (chunked) stops being read once it
- * passes the cap, and a byte-order mark counts too. The text decodes as
- * request.text() would. Callers read it after authentication, so an
- * unauthenticated caller learns nothing new and an oversized request still
- * counts as a call.
+ * passes the cap, and a byte-order mark counts too. Callers read it after
+ * authentication, so an unauthenticated caller learns nothing new and an
+ * oversized request still counts as a call.
  */
-export async function readBody(request: Request): Promise<string | null> {
+export async function readBody(request: Request): Promise<RequestBody | null> {
   if (Number(request.headers.get('Content-Length')) > BODY_MAX_BYTES) return null
   const body = (request as Request & { body: BodyStream | null }).body
-  if (body === null) return ''
+  if (body === null) return { text: '', utf8: true }
   const reader = body.getReader()
   try {
     const chunks: Uint8Array[] = []
@@ -160,7 +169,11 @@ export async function readBody(request: Request): Promise<string | null> {
       bytes.set(chunk, offset)
       offset += chunk.byteLength
     }
-    return new TextDecoder().decode(bytes)
+    try {
+      return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), utf8: true }
+    } catch {
+      return { text: new TextDecoder().decode(bytes), utf8: false }
+    }
   } finally {
     // stops an oversized body; a no-op once the body has been read
     await reader.cancel().catch(() => {})

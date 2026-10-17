@@ -48,9 +48,13 @@ import {
   withOrg,
 } from './helpers.setup'
 
-/* edge-runtime provides Blob's constructor; convex/env.d.ts declares the
- * type without it. */
+/* edge-runtime provides Blob's constructor and TextEncoder; convex/env.d.ts
+ * declares Blob without its constructor, and convex/tsconfig's ESNext-only
+ * lib lacks TextEncoder. */
 declare const Blob: { new (parts: Uint8Array[]): Blob }
+declare class TextEncoder {
+  encode(input: string): Uint8Array
+}
 
 /* The two read-only refusal sentences, pinned byte for byte here rather than
  * imported, so an edit to the source constants fails the HTTP sweep. */
@@ -455,10 +459,10 @@ type ModuleCode = {
  * imported from another, and so on by name. A query cannot write, and a
  * mutation it reaches is checked itself, so only actions are followed. For
  * the same reason the walk never follows a registered query or mutation by
- * name: an action can only run one through its `internal.…` reference, which
- * the walk reaches. A reference or an import the walk cannot resolve throws,
- * so a call it cannot follow fails every test that uses the walk instead of
- * dropping out of it.
+ * name, because an action can only run one through its `internal.…`
+ * reference, which the walk reaches. A reference or an import the walk
+ * cannot resolve throws, so a call it cannot follow fails every test that
+ * uses the walk instead of dropping out of it.
  */
 function walker(modules: Modules, sources: Sources) {
   const registered = (name: string): Registered | undefined => {
@@ -800,7 +804,7 @@ describe('every machine write takes the credential access', () => {
 
 /* ---------------------------------------------------------- 4. over HTTP */
 
-type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
+type FetchInit = { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }
 type Res = { status: number; text: string; header: (name: string) => string | null }
 
 async function fetchAs(t: T, path: string, init: FetchInit): Promise<Res> {
@@ -1231,6 +1235,26 @@ describe('read-only credentials over HTTP', () => {
       expect(out.isError, out.text).toBe(false)
       expect(JSON.parse(out.text)).toMatchObject({ uploaded_by_id: c.f.user.id })
     }
+    // a body that is not UTF-8 is no JSON-RPC message, so no tool runs
+    const encoder = new TextEncoder()
+    const latin1 = Uint8Array.from([
+      ...encoder.encode(
+        `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"attach_text_file","arguments":{"ref":"${key}","name":"t.txt","text":"3,5 `,
+      ),
+      0xb0,
+      ...encoder.encode('C"}}}'),
+    ])
+    const notUtf8 = await fetchAs(c.t, '/mcp', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: latin1,
+    })
+    expect(notUtf8.status).toBe(400)
+    expect(JSON.parse(notUtf8.text)).toMatchObject({ error: { code: -32700 } })
     const rows = await c.t.run((ctx) => ctx.db.query('issue_attachments').collect())
     expect(rows.map((row) => [row.name, row.size_bytes])).toEqual([
       ['wiring.pdf', 5],

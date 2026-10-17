@@ -953,6 +953,15 @@ const TOO_LARGE = {
   id: null,
 }
 
+/* The 400 body for a request whose bytes are not UTF-8, which MCP requires
+ * of every JSON-RPC message. Without it, readBody's replacement characters
+ * would reach the tools, and attach_text_file would store them. */
+const NOT_UTF8 = {
+  jsonrpc: '2.0',
+  error: { code: -32700, message: 'Parse error: the request body is not UTF-8' },
+  id: null,
+}
+
 /* The captured -32603 body for a params-less legacy initialize: a
  * pretty-printed zod issue array AS the message string. */
 const LEGACY_INIT_NO_PARAMS = JSON.stringify(
@@ -2209,14 +2218,15 @@ const mcpPost = httpAction(async (ctx, request) => {
       }))
     )
       return rateLimited()
-    const bodyText = await readBody(request)
-    if (bodyText === null) return jsonRes(413, TOO_LARGE)
-    const challenge = scopeChallenge(bodyText, credential.scopes)
+    const body = await readBody(request)
+    if (body === null) return jsonRes(413, TOO_LARGE)
+    if (!body.utf8) return jsonRes(400, NOT_UTF8)
+    const challenge = scopeChallenge(body.text, credential.scopes)
     if (challenge) return challenge
     try {
       return await dispatchMcp({
         headers: request.headers,
-        bodyText,
+        bodyText: body.text,
         runEvent: async (method, params) => {
           const live = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
             tokenHash,
@@ -2283,8 +2293,9 @@ const mcpPost = httpAction(async (ctx, request) => {
   })
   if (allowed === null) return unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
-  const bodyText = await readBody(request)
-  if (bodyText === null) return jsonRes(413, TOO_LARGE)
+  const body = await readBody(request)
+  if (body === null) return jsonRes(413, TOO_LARGE)
+  if (!body.utf8) return jsonRes(400, NOT_UTF8)
   // the exact credential row this request runs as, for get_me and events/*
   const owner: EventOwner = {
     profile_id: cred.profileId,
@@ -2295,7 +2306,7 @@ const mcpPost = httpAction(async (ctx, request) => {
   try {
     return await dispatchMcp({
       headers: request.headers,
-      bodyText,
+      bodyText: body.text,
       runTool: (name, args, ignored) =>
         runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args, ignored),
       runEvent: (method, params) =>
