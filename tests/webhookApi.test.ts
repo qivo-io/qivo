@@ -224,6 +224,7 @@ describe('MCP Events and generic REST webhooks', () => {
       'task.created',
       'task.updated',
       'task.deleted',
+      'task.restored',
       'comment.created',
     ])
     const subscribed = await f.mcp('events/subscribe', f.params)

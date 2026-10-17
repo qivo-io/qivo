@@ -895,7 +895,10 @@ export default defineSchema({
     reason: v.optional(v.string()), // app deletes only, trimmed, ≤500 characters
     state: vDeletedItemState,
     purge_after: v.number(), // epoch ms, deleted_at + 30 days
-    restore_by: v.optional(v.string()), // the profile restoring it, for the steps
+    // the profile restoring it, for the steps and the final activity row.
+    // Kept until the item is ready again after a failed restore, because
+    // rows may be back in the live tables under its stored tasks until then.
+    restore_by: v.optional(v.string()),
     dropped_rows: v.optional(v.number()), // rows too large to store, deleted instead
   })
     .index('by_uuid', ['id'])
@@ -917,8 +920,10 @@ export default defineSchema({
     // Where a phase that reads a range it does not empty goes on: an index
     // into the item's projects (or 0) and the _creationTime last done there.
     cursor: v.optional(v.object({ index: v.number(), after: v.number() })),
-    // What the move's steps counted so far. The item takes these numbers
-    // when it becomes ready, so the steps never rewrite the listed row.
+    // The tasks the item stores, as its steps count them: a move adds each
+    // task it stores, and a restore subtracts each one it writes back. The
+    // item takes these numbers when it becomes ready, so the steps never
+    // rewrite the listed row.
     tally: v.optional(
       v.object({
         tasks: v.number(),
@@ -933,6 +938,9 @@ export default defineSchema({
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
     attempts: v.number(), // restarts since the last committed step
     budget_scale: v.number(), // 1, halved by each restart down to 1/16
+    // a restore whose call held this task item alone: its reveal sends the
+    // Restored notice (model/deletedItems.ts)
+    alone: v.optional(v.boolean()),
   })
     .index('by_item', ['item_id'])
     .index('by_progress', ['progress_at']),
