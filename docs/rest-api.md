@@ -522,6 +522,10 @@ what happens to them:
   unassigned. The new holder must be able to work on each task once the
   access is gone, by the usual assignee rules.
 
+`PUT` takes only `level` and `DELETE` only `on_held_tasks`. Any other field
+is refused with `400`, such as `unknown field "on_held_task"; this request
+takes on_held_tasks`, so a misspelled choice never falls back to `leave`.
+
 The removal and its choice land together or not at all. If any task cannot
 be reassigned, the access stays and nothing changes. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
@@ -623,6 +627,10 @@ access](#project-access):
   and can still leave the tasks.
 - `{"reassign_to": "<user uuid>"}` or `{"reassign_to": null}` hands the tasks
   over, by the usual assignee rules.
+
+`PUT` takes only `leader` and `DELETE` only `on_held_tasks`, as for project
+access. Any other field is refused with `400`, such as `unknown field
+"leadr"; this request takes leader`, and the request changes nothing.
 
 The removal and its choice land together or not at all. The answer is
 `{"team_id", "user", "removed", "stranded", "kept_as_viewer",

@@ -57,7 +57,15 @@ import {
 import type { TOOLS } from './mcp'
 import { orgProfile, orgTeam, removalJson } from './projects'
 import type { ROUTES, route as restRoute } from './rest'
-import { MCP_PROVENANCE, needJson, optionalJson, pretty, restProvenance, vKeyName } from './shared'
+import {
+  MCP_PROVENANCE,
+  needJson,
+  optionalJson,
+  pretty,
+  refuseUnknownFields,
+  restProvenance,
+  vKeyName,
+} from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -263,7 +271,8 @@ export const restUpdateTeam = internalMutation({
   },
 })
 
-/* PUT /v1/teams/{ref}/members/{user}, with an optional body {leader}. */
+/* PUT /v1/teams/{ref}/members/{user}, with an optional body {leader}. Any
+ * other body field is refused (refuseUnknownFields). */
 export const restPutMember = internalMutation({
   args: {
     callerId: v.string(),
@@ -278,6 +287,7 @@ export const restPutMember = internalMutation({
     const team = await restTeam(ctx, me, a.ref)
     const member = await restUser(ctx, me, a.user)
     const b = optionalJson(a.body)
+    refuseUnknownFields(b, ['leader'])
     if ('leader' in b && typeof b.leader !== 'boolean') {
       throw badRequest('leader must be a boolean')
     }
@@ -293,7 +303,8 @@ export const restPutMember = internalMutation({
 })
 
 /* DELETE /v1/teams/{ref}/members/{user}, with an optional body
- * {on_held_tasks}. */
+ * {on_held_tasks}. Any other body field is refused (refuseUnknownFields),
+ * so a misspelled choice never falls back to `leave`. */
 export const restDeleteMember = internalMutation({
   args: {
     callerId: v.string(),
@@ -305,7 +316,9 @@ export const restDeleteMember = internalMutation({
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const held = parseHeldTasks(optionalJson(a.body).on_held_tasks)
+    const b = optionalJson(a.body)
+    refuseUnknownFields(b, ['on_held_tasks'])
+    const held = parseHeldTasks(b.on_held_tasks)
     const team = await restTeam(ctx, me, a.ref)
     const member = await restUser(ctx, me, a.user)
     const removal = await removeMember(ctx, {

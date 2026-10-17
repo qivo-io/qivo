@@ -10,7 +10,8 @@
  *   4. Removing a member settles the open tasks they can no longer see
  *      (leave, keep_as_viewer, reassign_to) in one transaction, for REST,
  *      MCP and the app alike.
- *   5. The routes over HTTP with a personal token. */
+ *   5. The routes over HTTP with a personal token, which refuse a body field
+ *      or an argument the change does not take. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -714,37 +715,75 @@ describe('removing a member settles their open tasks', () => {
 
 /* ------------------------------------------------------- 5. over HTTP */
 
+/* A request through the deployment's HTTP routes as `person`, with a new
+ * personal token that writes. `call` answers a REST status and parsed body,
+ * `tool` one MCP tools/call result. */
+async function httpAs(fx: Fx, person: Doc<'profiles'>) {
+  const token = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
+  const token_hash = await sha256hex(token)
+  await fx.t.run((ctx) =>
+    ctx.db.insert('mcp_tokens', {
+      id: uuid(),
+      profile_id: person.id,
+      name: 'Leader token',
+      token_prefix: token.slice(0, 11),
+      token_hash,
+      access: 'write',
+      created_at: NOW,
+    }),
+  )
+  const send = (method: string, path: string, headers: Record<string, string>, body?: unknown) =>
+    (
+      fx.t as unknown as {
+        fetch(
+          path: string,
+          init: { method: string; headers: Record<string, string>; body?: string },
+        ): Promise<{ status: number; text(): Promise<string> }>
+      }
+    ).fetch(path, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  const call = async (method: string, path: string, body?: unknown) => {
+    const res = await send(method, path, {}, body)
+    return { status: res.status, body: JSON.parse(await res.text()) as unknown }
+  }
+  const tool = async (name: string, args: Json) => {
+    const res = await send(
+      'POST',
+      '/mcp',
+      { 'Mcp-Method': 'tools/call', 'Mcp-Name': name },
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name,
+          arguments: args,
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {},
+          },
+        },
+      },
+    )
+    const body = JSON.parse(await res.text()) as {
+      result: { content: { text: string }[]; isError?: boolean }
+    }
+    return { text: body.result.content[0].text, isError: body.result.isError === true }
+  }
+  return { call, tool }
+}
+
 describe('team routes over HTTP', () => {
   it('serves the list, PUT and DELETE with their bodies to a personal token', async () => {
     const fx = await setup()
-    const token = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
-    const token_hash = await sha256hex(token)
-    await fx.t.run((ctx) =>
-      ctx.db.insert('mcp_tokens', {
-        id: uuid(),
-        profile_id: fx.user.id,
-        name: 'Leader token',
-        token_prefix: token.slice(0, 11),
-        token_hash,
-        access: 'write',
-        created_at: NOW,
-      }),
-    )
-    const call = async (method: string, path: string, body?: unknown) => {
-      const res = await (
-        fx.t as unknown as {
-          fetch(
-            path: string,
-            init: { method: string; headers: Record<string, string>; body?: string },
-          ): Promise<{ status: number; text(): Promise<string> }>
-        }
-      ).fetch(path, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      })
-      return { status: res.status, body: JSON.parse(await res.text()) as unknown }
-    }
+    const { call } = await httpAs(fx, fx.user)
     const listed = await call('GET', '/v1/teams')
     expect(listed.status).toBe(200)
     expect((listed.body as Json[]).map((t) => t.name)).toEqual(['Hardware'])
@@ -772,6 +811,63 @@ describe('team routes over HTTP', () => {
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       verb: 'removed',
       detail: 'from Hardware — via the REST API',
+    })
+  })
+
+  it('refuses a body field or an argument the change does not take, so nothing falls back to leave', async () => {
+    const fx = await setup()
+    const { call, tool } = await httpAs(fx, fx.user)
+    const members = `/v1/teams/${fx.team.id}/members`
+    // a misspelled on_held_tasks would otherwise remove Emil and leave his tasks
+    expect(
+      await tool('set_team_member', {
+        team_id: fx.team.id,
+        user_id: fx.emil.id,
+        member: false,
+        on_held_task: 'keep_as_viewer',
+      }),
+    ).toEqual({
+      text: 'Input validation error: Invalid arguments for tool set_team_member: Unrecognized key: "on_held_task"',
+      isError: true,
+    })
+    expect(
+      await call('DELETE', `${members}/${fx.emil.id}`, { on_held_task: 'keep_as_viewer' }),
+    ).toEqual({
+      status: 400,
+      body: { error: 'unknown field "on_held_task"; this request takes on_held_tasks' },
+    })
+    expect(await membership(fx.t, fx.team.id, fx.emil.id)).not.toBeNull()
+    expect(
+      await call('PUT', `${members}/${fx.pia.id}`, { leader: true, leadr: false, x: 1 }),
+    ).toEqual({
+      status: 400,
+      body: { error: 'unknown fields "leadr", "x"; this request takes leader' },
+    })
+    expect(await membership(fx.t, fx.team.id, fx.pia.id)).toBeNull()
+    expect(await activityFor(fx.t, fx.org.id)).toEqual([])
+    // the fields each route takes still pass, and an empty object is no field
+    expect(await call('PUT', `${members}/${fx.pia.id}`, {})).toMatchObject({
+      status: 200,
+      body: { leader: false, changed: true },
+    })
+    expect(await call('DELETE', `${members}/${fx.pia.id}`, {})).toMatchObject({
+      status: 200,
+      body: { removed: true },
+    })
+    // leave lists the tasks Emil loses sight of, as an empty body does
+    expect(await call('DELETE', `${members}/${fx.emil.id}`, { on_held_tasks: 'leave' })).toEqual({
+      status: 200,
+      body: {
+        team_id: fx.team.id,
+        user: { id: fx.emil.id, name: 'emil' },
+        removed: true,
+        stranded: [
+          holding(fx.open, fx.emil.id, 'assignee'),
+          holding(fx.reviewing, fx.emil.id, 'reviewer'),
+        ],
+        kept_as_viewer: [],
+        reassigned: [],
+      },
     })
   })
 })

@@ -9,8 +9,9 @@
  *   3. REST writes: a move with Edit on both ends, parent, labels, the
  *      archive reason, and the fields a body may not write.
  *   4. REST links and labels.
- *   5. MCP: the new create and update arguments, ignored arguments, the link
- *      and label tools and the argument validation for lists.
+ *   5. MCP: the new create and update arguments, the refusal of arguments a
+ *      schema does not know, the link and label tools and the argument
+ *      validation for lists.
  *   6. applyTaskUpdate, the write order both surfaces share, the shared
  *      cores the app now runs too, and the activity reader for signed rows
  *      that name tasks. */
@@ -37,6 +38,7 @@ import {
   HOLDER_SIGHT_RULE,
   type IssuePatch,
   MOVE_HOLDER_RULE,
+  REPORTER_IMMUTABLE_SENTENCE,
 } from '../model/issues'
 import {
   activityFor,
@@ -940,7 +942,7 @@ describe('REST labels', () => {
 /* -------------------------------------------------------------------- 5. MCP */
 
 describe('MCP task parity', () => {
-  it('create_task takes parent, plan weeks and paused, and reports ignored arguments', async () => {
+  it('create_task takes parent, plan weeks and paused', async () => {
     const fx = await setup()
     const parent = await task(fx, { title: 'Parent' })
     const out = await mcpWrite(fx, internal.machine.mcp.createIssue, {
@@ -1125,7 +1127,7 @@ describe('MCP task parity', () => {
     })
   })
 
-  it('reports arguments the schema does not know instead of dropping them silently', async () => {
+  it('refuses arguments the schema does not know before the tool runs, unless it takes none', async () => {
     const fx = await setup()
     const t1 = await task(fx, { title: 'Echo' })
     const secret = `qva_${'1a2b3c4d'.repeat(6)}`
@@ -1146,7 +1148,7 @@ describe('MCP task parity', () => {
         init: { method: string; headers: Record<string, string>; body: string },
       ): Promise<{ text(): Promise<string> }>
     }
-    const call = async (name: string, args: Record<string, unknown>) => {
+    const result = async (name: string, args: unknown) => {
       const res = await http.fetch('/mcp', {
         method: 'POST',
         headers: {
@@ -1169,36 +1171,69 @@ describe('MCP task parity', () => {
           },
         }),
       })
-      const body = JSON.parse(await res.text()) as { result: { content: { text: string }[] } }
-      return body.result.content[0].text
+      const body = JSON.parse(await res.text()) as {
+        result: { content: { text: string }[]; isError?: boolean }
+      }
+      return body.result
     }
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await result(name, args)).content[0].text
     const callJson = async (name: string, args: Record<string, unknown>) =>
       JSON.parse(await call(name, args)) as Record<string, unknown>
-    expect(
-      await callJson('update_task', {
-        ref: t1.id,
-        title: 'Echoed',
-        estimate_hours: 3,
-        parent_id: 'x',
-      }),
-    ).toEqual({
+    const invalid = 'Input validation error: Invalid arguments for tool'
+    const taskCount = () => fx.t.run(async (ctx) => (await ctx.db.query('issues').collect()).length)
+    const before = await taskCount()
+    for (const [name, args, problem] of [
+      // the old name of remaining_hours and a misspelled parent
+      [
+        'update_task',
+        { ref: t1.id, title: 'Echoed', estimate_hours: 3, parent_id: 'x' },
+        'Unrecognized keys: "estimate_hours", "parent_id"',
+      ],
+      [
+        'create_task',
+        { project: 'FW', title: 'New', labels: ['Bug'] },
+        'Unrecognized key: "labels"',
+      ],
+      // the reporter keeps its own sentence, and the unknown key follows
+      [
+        'update_task',
+        { ref: t1.id, reporter_id: fx.user.id, foo: 1 },
+        `reporter_id: ${REPORTER_IMMUTABLE_SENTENCE}, Unrecognized key: "foo"`,
+      ],
+      // a misspelled filter would otherwise answer an unfiltered list
+      ['list_tasks', { project: 'FW', statuses: ['todo'] }, 'Unrecognized key: "statuses"'],
+      // and so would arguments that are not an object
+      ['list_tasks', 'status=done', 'Invalid input: expected object, received string'],
+      ['list_tasks', ['status'], 'Invalid input: expected object, received array'],
+    ] as const) {
+      expect(await result(name, args)).toMatchObject({
+        content: [{ type: 'text', text: `${invalid} ${name}: ${problem}` }],
+        isError: true,
+      })
+    }
+    expect((await row(fx.t, t1.id)).title).toBe('Echo')
+    expect(await taskCount()).toBe(before)
+    // a tool that takes no arguments ignores the placeholder some clients send
+    for (const args of [{ random_string: 'x' }, 'x']) {
+      const me = await result('get_me', args)
+      expect(me.isError).toBeUndefined()
+      expect(JSON.parse(me.content[0].text)).toMatchObject({ user: { id: fx.agent.id } })
+    }
+    // null arguments mean none
+    const all = await result('list_tasks', null)
+    expect(all.isError).toBeUndefined()
+    expect(JSON.parse(all.content[0].text)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: t1.id })]),
+    )
+    // known arguments alone run, and the answer carries nothing extra
+    expect(await callJson('update_task', { ref: t1.id, title: 'Again' })).toEqual({
       id: t1.id,
       key: `QN-${t1.num}`,
       updated: ['title'],
-      ignored_arguments: ['estimate_hours', 'parent_id'],
     })
-    expect((await row(fx.t, t1.id)).title).toBe('Echoed')
-    const created = await callJson('create_task', { project: 'FW', title: 'New', labels: ['Bug'] })
-    expect(created).toEqual({
-      id: created.id,
-      key: created.key,
-      ignored_arguments: ['labels'],
-    })
-    expect(await callJson('update_task', { ref: t1.id, title: 'Again' })).not.toHaveProperty(
-      'ignored_arguments',
-    )
+    expect((await row(fx.t, t1.id)).title).toBe('Again')
     // lists are checked item by item, and a list where one value goes fails
-    const invalid = 'Input validation error: Invalid arguments for tool'
     for (const [name, args, problem] of [
       ['list_tasks', { status: [] }, 'status: Too small: expected array to have >=1 items'],
       [
