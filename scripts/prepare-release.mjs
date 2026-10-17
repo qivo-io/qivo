@@ -166,7 +166,8 @@ export async function prepareRelease({
       `Dry run. Would prepare ${version}${staleDrafts.length ? ` and delete ${staleDrafts.length} older draft(s)` : ''}.`,
     )
     log(body)
-    log(`The run summary would add: ${DRAFT_STEPS}`)
+    log('The run summary would link the draft, give these steps and repeat the section above.')
+    log(DRAFT_STEPS)
     return plan
   }
 

@@ -159,7 +159,10 @@ describe('preparing a draft', () => {
     expect(existsSync(summaryFile)).toBe(false)
     const body = logged.find((line) => line.startsWith('## What publishing ships'))
     expect(body).toMatch(/\/actions\/runs\/100\)\)\.$/)
-    expect(logged.at(-1)).toBe(`The run summary would add: ${DRAFT_STEPS}`)
+    expect(logged.slice(-2)).toEqual([
+      'The run summary would link the draft, give these steps and repeat the section above.',
+      DRAFT_STEPS,
+    ])
   })
   it('refuses while preview does not serve main yet', async () => {
     const { api, writes } = github({ staging: [] })
