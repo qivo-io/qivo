@@ -53,6 +53,8 @@ export const status = orgQuery({
   },
 })
 
+/** The signed-in admin and organization an orgAction acts for. Refuses
+ * anyone else, the demo and an organization whose deletion has begun. */
 export const adminContext = internalQuery({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }) => {

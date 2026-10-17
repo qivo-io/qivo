@@ -117,6 +117,10 @@ export const release = internalMutation({
   },
 })
 
+/** Applies a Polar subscription, from a webhook or reconciliation, to the
+ * organization's billing row. Stale or out-of-order events are ignored. It
+ * opens the paid period's record when a new period starts, then starts or
+ * stops the read-only period before deletion (model/orgRetention.ts). */
 export const apply = internalMutation({
   args: { payload: v.string(), event_id: v.optional(v.string()) },
   handler: async (ctx, { payload, event_id }) => {

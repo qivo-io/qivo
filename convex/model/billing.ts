@@ -43,6 +43,9 @@ export const planRow = (plan: Doc<'billing_plans'>): BillingPlan => {
   return row
 }
 
+/** The organization's subscription row, created as `pending` on the given
+ * or default plan when it has none. Null when no plan exists. Enrollment
+ * while billing runs starts the CHECKOUT_DAYS checkout deadline. */
 export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId?: string) {
   const old = await subscriptionFor(ctx, orgId)
   if (old) return old
@@ -68,12 +71,13 @@ export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId
   return await ctx.db.get(id)
 }
 
-/* Complimentary access for `months` calendar months, without a card. Enrolls
+/** Complimentary access for `months` calendar months, without a card. Enrolls
  * the organization on the default plan when it has no subscription yet.
- * Repeating a grant extends it from the current end date. Refused once a
- * checkout or provider subscription exists, because Polar then owns the
- * terms. Shared by the operator's grant on an existing organization and the
- * grant chosen while creating one. The caller writes the audit row. */
+ * Repeating a grant extends it from the current end date, and the restored
+ * access stops a deletion that billing started. Refused once a checkout or
+ * provider subscription exists, because Polar then owns the terms. Shared by
+ * the operator's grant on an existing organization and the grant chosen
+ * while creating one. The caller writes the audit row. */
 export async function grantComplimentaryMonths(
   ctx: MutationCtx,
   orgId: string,
@@ -106,6 +110,8 @@ export async function grantComplimentaryMonths(
   return { until, plan_id: sub.plan_id }
 }
 
+/** What an admin's Billing page shows: plan, status, users and charges, the
+ * payment actions available, the last export and any pending deletion. */
 export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<BillingSummary> {
   const org = await byId(ctx, 'organizations', orgId)
   require(org, notFound('organization not found'))
