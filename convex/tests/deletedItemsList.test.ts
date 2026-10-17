@@ -541,15 +541,30 @@ describe('who deleted it (design 1.6)', () => {
     await deleteTask(t, f.guest, task.id)
     const item = await itemFor(t, task.id)
     // the seat is removed, and a later seat reuses its uuid
-    await patch(t, 'profiles', f.guest.id, { created_at: '2026-06-01T00:00:00.000Z' })
+    const reused = '2026-06-01T00:00:00.000Z'
+    await patch(t, 'profiles', f.guest.id, { created_at: reused, name: 'Newcomer' })
 
+    // a "Someone" row, whose key names nobody
     expect((await rowOf(t, f.user, item.id))?.deleter).toEqual({
       you: false,
       kind: 'app',
-      who: `${f.guest.id}|app`,
+      who: '|app',
     })
     // and the new seat does not see the delete as its own
     expect(await idsOf(t, f.guest)).toEqual([])
+
+    // the new seat's own delete groups apart, and a filter by it finds only that
+    vi.setSystemTime(Date.parse(reused) + 60_000)
+    const seat = (await t.run((ctx) => byId(ctx, 'profiles', f.guest.id))) as Doc<'profiles'>
+    const theirs = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, seat, theirs.id)
+    const fresh = await itemFor(t, theirs.id)
+    expect((await rowOf(t, f.user, fresh.id))?.deleter).toMatchObject({
+      name: 'Newcomer',
+      who: `${f.guest.id}|app`,
+    })
+    for (const who of [f.admin, f.user])
+      expect((await list(t, who, f.guest.id)).items.map((r) => r.id)).toEqual([fresh.id])
   })
 })
 
@@ -582,6 +597,24 @@ describe('the list (design 6.2)', () => {
     })
     // filtering by someone else shows nothing the caller could not see anyway
     expect((await list(t, f.viewer, f.guest.id)).items).toEqual([])
+  })
+
+  it('tells a member nothing through capped about deletes a filter cannot show them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    LIST.cap = 1
+    const secret = await hiddenSub(t, f)
+    for (let i = 0; i < 2; i++) {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: secret.id })
+      later()
+      await deleteTask(t, f.admin, task.id)
+    }
+    // the guest cannot see Skunkworks: a filter by the admin answers as one
+    // by nobody, although the admin deleted more than the cap there
+    expect(await list(t, f.guest, f.admin.id)).toEqual({ items: [], capped: false })
+    expect(await list(t, f.guest, uuid())).toEqual({ items: [], capped: false })
+    // an admin's filter still reads that person's range past the cap
+    expect(await list(t, f.admin, f.admin.id)).toMatchObject({ capped: true })
   })
 
   it('reads a fixed number of ranges, however many items a lead or an admin sees', async () => {
@@ -774,6 +807,26 @@ describe('restore and purge calls', () => {
       'rule',
       /^at most 25 items can be deleted for good at a time$/,
     )
+  })
+
+  it('offers Delete now only while billing lets an admin write', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ready = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const stuck = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    for (const task of [ready, stuck]) await deleteTask(t, f.user, task.id)
+    const ids = [(await itemFor(t, ready.id)).id, (await itemFor(t, stuck.id)).id]
+    await patch(t, 'deleted_items', ids[1], { state: 'stuck' })
+    const purgeable = async () =>
+      Promise.all(ids.map(async (id) => (await rowOf(t, f.admin, id))?.can_purge))
+    expect(await purgeable()).toEqual([true, true])
+
+    // billing on and no subscription: the organization is read-only, and
+    // Delete now, an adminMutation, is refused
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    expect(await purgeable()).toEqual([false, false])
+    expect((await rowOf(t, f.admin, ids[0]))?.blocked).toEqual({ reason: 'read_only' })
+    await expectRefusal(purge(t, f.admin, ids), 'forbidden', /read-only/)
   })
 })
 

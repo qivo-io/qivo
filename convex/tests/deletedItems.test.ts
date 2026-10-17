@@ -21,6 +21,7 @@ import { deleteOrgDeep } from '../model/cascade'
 import {
   EXPIRY,
   moveTasksToTrash,
+  restoreBlock,
   STALLED_MS,
   STORED_ROW_MAX_BYTES,
   sameReference,
@@ -258,6 +259,79 @@ describe('moving a task to Deleted items', () => {
     expect(await blobExists(t, file.storage_id)).toBe(false)
     await assertNoDanglingRefs(t, 'after rows too large to store')
   })
+
+  it('counts and lists only the subtasks it stores, so a dropped one gates no restore', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const huge = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: root.id,
+      description: 'x'.repeat(STORED_ROW_MAX_BYTES),
+    })
+    await deleteTask(t, f, root.id, { subtask_ids: [huge.id] })
+    const item = await itemFor(t, root.id)
+    expect(item).toMatchObject({
+      state: 'ready',
+      dropped_rows: 1,
+      counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+    })
+    expect(item.projects.map((p) => p.id)).toEqual([f.sub.id])
+    expect((await storedTasks(t, item.id)).map((x) => x.task_id)).toEqual([root.id])
+    expect(await liveTask(t, huge.id)).toBeNull()
+    // someone who edits Firmware alone can restore it: nothing goes back to Board rev
+    const rita = await t.run(async (ctx) => {
+      const _id = await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id,
+        name: 'Rita',
+        initials: 'RI',
+        color: '#7a7ad0',
+        org_role: 'user',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+      const profile = (await ctx.db.get(_id)) as Doc<'profiles'>
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: profile.id,
+        level: 'user',
+      })
+      return profile
+    })
+    expect(await t.run((ctx) => restoreBlock(ctx, rita, item))).toBeNull()
+  })
+
+  it("checks a task item's stored tasks before it is ready within the step budget", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT({ transactionLimits: { databaseQueries: 400 } })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const subtasks: string[] = []
+    for (let i = 0; i < 40; i++)
+      subtasks.push((await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })).id)
+    // the user's delete leaves the rows of most tasks for the steps
+    TRASH_BUDGET.ranges = 40
+    await deleteTask(t, f, root.id, { subtask_ids: subtasks })
+    const item = await itemFor(t, root.id)
+    expect(item.state).toBe('moving')
+    // a step drains every task, a few ranges each, and the check that
+    // follows reads as many again, so it must stop on what the step has left
+    TRASH_BUDGET.ranges = 300
+    let steps = 0
+    while ((await jobFor(t, item.id)) !== null) {
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(20)
+    }
+    expect(steps).toBeGreaterThan(1)
+    expect(await itemFor(t, root.id)).toMatchObject({ state: 'ready', counts: { tasks: 41 } })
+  })
 })
 
 describe('webhook events', () => {
@@ -478,6 +552,28 @@ describe('moving a project to Deleted items', () => {
     }
     expect(steps).toBeGreaterThan(2)
     expect(await storedTasks(t, item.id)).toHaveLength(40)
+  })
+
+  it('stops a step on its byte budget, which the tasks it reads and passes over spend too', async () => {
+    // none of these tasks has a parent or a child outside, so the first phase
+    // reads each of them and moves none
+    const t = newT({ transactionLimits: { bytesRead: 600_000 } })
+    const f = await withOrg(t)
+    const description = 'Spec line. '.repeat(1_500) // about 16 KB
+    for (let i = 0; i < 60; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, description })
+    TRASH_BUDGET.bytes = 100_000
+    // the user's own delete runs the first step
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    expect(item.state).toBe('moving')
+    let steps = 0
+    while ((await jobFor(t, item.id)) !== null) {
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(60)
+    }
+    expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 60 } })
   })
 
   it('detaches without an actor once the deleter is gone', async () => {
