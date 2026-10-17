@@ -312,7 +312,9 @@ describe('who the page speaks to', () => {
     await deliver([])
     expect(text('[data-deleted-items]')).toContain('No deleted items.')
     await deliver([task(1)], true)
-    expect(text('[data-deleted-items]')).toContain('Showing the newest 2,000 items.')
+    expect(text('[data-deleted-items]')).toContain(
+      'Not every item is shown. Search to find older ones.',
+    )
     await search('nothing like it')
     expect(text('[data-deleted-items]')).toContain('No deleted items match the filter.')
     expect(text('[data-deleted-count]')).toBe('0 of 1 item')
