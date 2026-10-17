@@ -36,7 +36,12 @@
  * unconfigured send keeps the seat, and the console offers the sign-up link
  * instead. A seat claimed between saving and sending is skipped rather than
  * failing a request whose writes already committed. Every write is audited as
- * the operator. */
+ * the operator.
+ *
+ * Nothing here runs on the public demo. The doors refuse demo mode, and so do
+ * the internal mutations behind them (insertOrganization, insertPeople and
+ * updateInvite), because the dashboard and deploy keys can run those directly,
+ * and the demo cleanup removes only the organizations it provisioned. */
 
 import { ConvexError, type Infer, v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -47,6 +52,7 @@ import { type InviteResult, sendInvites } from './invites'
 import { AVATAR_COLORS } from './lib/avatarColors'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
+import { refuseDemoFeature } from './lib/demo'
 import {
   notFound,
   platformAction,
@@ -201,6 +207,7 @@ export const insertOrganization = internalMutation({
     actor: vActor,
   },
   handler: async (ctx, a): Promise<{ org_id: string; profile_ids: string[] }> => {
+    refuseDemoFeature()
     const name = a.name.trim()
     require(name !== '', rule('The organization needs a name.'))
     let slug: string
@@ -257,6 +264,7 @@ export const insertOrganization = internalMutation({
 export const insertPeople = internalMutation({
   args: { org_id: v.string(), people: v.array(vPerson), actor: vActor },
   handler: async (ctx, a): Promise<string[]> => {
+    refuseDemoFeature()
     require(a.people.length > 0, rule('Add at least one person.'))
     const org = await byId(ctx, 'organizations', a.org_id)
     require(org !== null, notFound('organization not found'))
@@ -323,6 +331,7 @@ export const resendInvite = platformAction({
 export const updateInvite = internalMutation({
   args: { profile_id: v.string(), name: v.string(), email: v.string(), actor: vActor },
   handler: async (ctx, a): Promise<{ email_changed: boolean }> => {
+    refuseDemoFeature()
     const seat = await byId(ctx, 'profiles', a.profile_id)
     require(seat !== null &&
       seat.kind === 'person' &&
