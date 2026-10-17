@@ -171,6 +171,7 @@ describe('the operator gate', () => {
 describe('the internal writers behind the doors', () => {
   const actor = { auth_user_id: 'operator-login', email: 'operator@platform.test' }
   type Fixture = { t: T; orgId: string; pending: Doc<'profiles'> }
+  /* Every internal export, so a new one cannot skip the demo refusal unnoticed. */
   const WRITERS: Record<string, { audit: string; run: (f: Fixture) => Promise<unknown> }> = {
     insertOrganization: {
       audit: 'create_org',
@@ -219,6 +220,14 @@ describe('the internal writers behind the doors', () => {
       organizations: await ctx.db.query('organizations').collect(),
       profiles: await ctx.db.query('profiles').collect(),
     }))
+
+  it('lists every internal export', () => {
+    const internalExports = Object.entries(adminOrgsModule)
+      .filter(([, value]) => (value as { isInternal?: boolean }).isInternal === true)
+      .map(([name]) => name)
+      .sort()
+    expect(internalExports).toEqual(Object.keys(WRITERS).sort())
+  })
 
   it.each(Object.keys(WRITERS))('%s refuses a demo deployment and writes nothing', async (name) => {
     const f = await fixture()
