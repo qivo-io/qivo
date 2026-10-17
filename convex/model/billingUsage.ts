@@ -73,6 +73,41 @@ export function usagePeriod(sub: Doc<'billing_subscriptions'> | null, now: numbe
   return monthPeriod(date.getUTCFullYear(), date.getUTCMonth())
 }
 
+/** The API calls a period includes for `seats` billed seats on `plan`,
+ * never fewer than the plan's minimum seats allow. recordApiCall sizes
+ * overage blocks from it, and the Billing and API access pages show it. */
+export const includedApiCalls = (
+  plan: Pick<Doc<'billing_plans'>, 'minimum_seats' | 'api_calls_per_seat'>,
+  seats: number,
+): number => Math.max(plan.minimum_seats, seats) * plan.api_calls_per_seat
+
+/** The seats a subscription's API allowance counts now: its billed seats,
+ * or the seats it will bill before its first invoice. */
+export const allowanceSeats = (sub: Doc<'billing_subscriptions'>): number =>
+  sub.billed_seats || sub.next_seats
+
+/** The plan and seats a paid period of organization `orgId` was billed
+ * with, for showing a past period's allowance: the recorded billing_periods
+ * row usageKeyRange maps `key` to, or `sub`'s current period while it has no
+ * row yet. Null for a month key and any other key without a paid period. */
+export async function billedPeriod(
+  ctx: QueryCtx,
+  orgId: string,
+  sub: Doc<'billing_subscriptions'> | null,
+  key: string,
+): Promise<{ plan_id: string; seats: number } | null> {
+  if (MONTH_KEY.test(key)) return null
+  const rows = await ctx.db
+    .query('billing_periods')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  const row = rows.find((candidate) => candidate.period_start === key)
+  if (row) return { plan_id: row.plan_id, seats: row.seats }
+  if (sub?.org_id === orgId && sub.current_period_start === key && sub.current_period_end)
+    return { plan_id: sub.plan_id, seats: allowanceSeats(sub) }
+  return null
+}
+
 /** The display dates of a stored usage key (see usageKeyRange). */
 export type UsageKeyRange = { kind: 'month' | 'paid' | 'open'; start: string; end: string | null }
 
@@ -207,8 +242,7 @@ export async function recordApiCall(
   // cannot size its blocks; it only counts.
   const plan = kind === 'month' || !sub ? null : await byId(ctx, 'billing_plans', sub.plan_id)
   if (sub && plan) {
-    const included =
-      Math.max(plan.minimum_seats, sub.billed_seats || sub.next_seats) * plan.api_calls_per_seat
+    const included = includedApiCalls(plan, allowanceSeats(sub))
     const blocks = Math.ceil(Math.max(0, calls - included) / plan.api_block_size)
     const complimentary = !!sub.complimentary_until && Date.parse(sub.complimentary_until) > now
     // A pending interval is never charged (see usagePeriod).

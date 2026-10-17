@@ -258,6 +258,21 @@ describe('pooled API usage', () => {
     )
   })
 
+  it('shows the included calls metering charges against, from the seats it will bill before the first invoice', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    // billed seats 2 at 2 calls per seat
+    expect((await report(t, f)).included_calls).toBe(4)
+    // Before its first invoice the subscription has no billed seats, and
+    // metering counts the 7 it will bill, whatever the member count.
+    await patchSub(t, f.sub, { billed_seats: 0 })
+    expect((await report(t, f)).included_calls).toBe(14)
+    for (let n = 0; n < 14; n++) await call(t, f.agent.id)
+    expect(await events(t)).toHaveLength(0)
+    await call(t, f.agent.id)
+    expect(await events(t)).toMatchObject([{ kind: 'api', units: 1 }])
+  })
+
   it('late renewal confirmation never meters calls into the closed invoice', async () => {
     const t = newT()
     const f = await fixture(t)
@@ -269,13 +284,14 @@ describe('pooled API usage', () => {
       [END, 5],
     ])
     expect(await events(t)).toHaveLength(0)
-    // The page shows the pending interval the writer is filling, not the closed period.
+    // The page shows the pending interval the writer is filling, not the
+    // closed period, and as waived: an unconfirmed interval is never charged.
     expect(await report(t, f)).toMatchObject({
       period_kind: 'pending',
       period_start: END,
       period_end: null,
       calls: 5,
-      waived: false,
+      waived: true,
     })
     await patchSub(t, f.sub, {
       current_period_start: END,

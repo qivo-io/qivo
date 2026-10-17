@@ -185,7 +185,8 @@ not charge free-period usage retroactively.
 
 Polar retries failed payments. Qivo allows seven days from the recorded
 past-due state before pausing editing, and a 24-hour grace period for delayed
-renewal confirmation on an otherwise active subscription. Cancellation at
+renewal confirmation on an otherwise active subscription. API calls made
+while a renewal awaits confirmation are counted but not charged. Cancellation at
 period end preserves access through the paid period. Restoring payment
 restores editing.
 
