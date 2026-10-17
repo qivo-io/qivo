@@ -464,7 +464,8 @@ const TASK_ROWS: Relation[] = [
           .withIndex('by_issue', (q) => q.eq('issue_id', id))
           .take(n)
       ).map((doc) => ({ table: 'issue_attachments', doc })),
-    perRead: LARGE_ROWS_PER_READ, // file names have no size cap
+    // file names stored before attachFileCore capped them have no size cap
+    perRead: LARGE_ROWS_PER_READ,
   },
 ]
 
@@ -563,6 +564,9 @@ export type Memo = {
   /** whether a task belongs to the project item a step restores, by task
    * (inThisItem); its answer holds for the whole step */
   inItem: Map<string, Promise<boolean>>
+  /** the project a stored task of the item a step restores goes back to, by
+   * task (restoredProject) */
+  restoredProjects: Map<string, Promise<string | undefined>>
 }
 
 export const newMemo = (): Memo => ({
@@ -580,6 +584,7 @@ export const newMemo = (): Memo => ({
   levels: new Map(),
   holders: new Map(),
   inItem: new Map(),
+  restoredProjects: new Map(),
 })
 
 /** One item as the restore rules read it (design 5.2, 5.3), in a query or
@@ -1863,7 +1868,10 @@ async function restoreRows(run: Run): Promise<boolean> {
  * where the table has it (design 5.2): a comment keeps its author and
  * editor, an attachment its uploader, only while they pass the reference
  * predicate; a follow and a label assignment stay only while their profile
- * or label passes it. Deletes the stored row. */
+ * or label passes it. An attachment takes the project its task goes back
+ * to (restoredProject), whatever project the stored row named, so the
+ * storage totals count it there once that project is live
+ * (model/billing.ts storageUsage). Deletes the stored row. */
 async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const { org_id } = run.item
   const r = row.row
@@ -1884,11 +1892,30 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
     await db.insert('issue_attachments', {
       ...r.doc,
       org_id,
+      project_id: await restoredProject(run, row.owner_id),
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
       task_archived: undefined,
     })
   else throw new Error(`A restore cannot write a ${r.table} row back here`)
   await run.ctx.db.delete(row._id)
+}
+
+/** The project stored task `taskId` of the restoring item goes back to,
+ * from its deleted_tasks row, read once per step. Rows stored before
+ * attachments carried their project have none, so this is where a restored
+ * attachment gets it. Every task of the item has that row until the restore
+ * writes the task, which comes after its relation rows. A task the item does
+ * not hold answers undefined, and a row without a project counts in its
+ * task's, as storageUsage reads it, so it never counts in a project its
+ * task is not in. */
+function restoredProject(run: Run, taskId: string): Promise<string | undefined> {
+  return memoRead(run.memo.restoredProjects, taskId, async () => {
+    const light = await run.ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_task', (q) => q.eq('task_id', taskId))
+      .collect()
+    return light.find((row) => row.item_id === run.item.id)?.project_id
+  })
 }
 
 /* The item's links, after the rows above and before a project item's

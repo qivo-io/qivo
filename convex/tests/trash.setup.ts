@@ -164,16 +164,20 @@ export async function plantCredential(
   })
 }
 
-/** An attachment of `size` bytes on `task`, with its bytes stored. */
+/** An attachment of `size` bytes on `task`, with its bytes stored. It names
+ * the task's project, as attachFileCore writes it, or `project`: null plants
+ * a row stored before attachments carried their project. */
 export async function attach(
   t: T,
   task: Doc<'issues'>,
   size = 5,
+  project: string | null = task.project_id,
 ): Promise<Doc<'issue_attachments'>> {
   return await t.run(async (ctx) => {
     const storage_id = await ctx.storage.store(new Blob(['x'.repeat(size)]) as never)
     const _id = await ctx.db.insert('issue_attachments', {
       org_id: task.org_id,
+      project_id: project ?? undefined,
       id: uuid(),
       issue_id: task.id,
       name: 'notes.txt',
