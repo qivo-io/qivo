@@ -117,6 +117,12 @@
     white-space: normal;
     text-align: center;
   }
+  /* API access's kind filter has four segments, so on a phone their labels
+     wrap, but only between words: "All" never breaks inside itself. */
+  .settings-content-scroll [data-api-access-filters] [data-slot="toggle-group-item"] {
+    min-width: min-content;
+    overflow-wrap: normal;
+  }
   /* A link that is a word in a sentence keeps the sentence's line height.
      Inline links are exempt from the 44px target rule above. */
   .settings-content-scroll [data-project-creators-users] {
