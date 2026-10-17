@@ -286,7 +286,8 @@ So is `update_user`: capacity is a setting on a person, not an event in a
 project's history, and the app writes no feed row for it either.
 
 The feed never names the credential. `delete_task` also records it in
-Deleted items, where everyone who sees the deleted task sees an agent key's
+Deleted items, with a name longer than 80 characters cut to its first 80
+followed by `…`. Everyone who sees the deleted task there sees an agent key's
 name, while a personal token's or connected app's name shows only to
 organization admins and to the person who deleted.
 
