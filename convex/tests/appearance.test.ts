@@ -14,6 +14,7 @@ import {
   newT,
   plantIssue,
   plantSeat,
+  reap,
   type T,
   uuid,
   withOrg,
@@ -721,7 +722,7 @@ describe('private custom background uploads', () => {
       ctx.storage.store(new Blob([jpeg(1920, 1080, 3)], { type: 'image/jpeg' }) as never),
     )
     vi.setSystemTime(new Date(Date.now() + 61 * 60 * 1000))
-    await t.mutation(internal.files.reapOrphans, {})
+    await reap(t)
     expect(await exists(t, image.storage_id)).toBe(true)
     expect(await exists(t, loose)).toBe(false)
   })
@@ -849,7 +850,7 @@ describe('private custom background gateway', () => {
           input: { model: 'user', where: [{ field: '_id', value: owner.id }] },
         })
       expect((await getRequest(t, urls!.preview_url!)).status).toBe(404)
-      if (operation === 'delete') await t.mutation(internal.files.reapOrphans, {})
+      if (operation === 'delete') await reap(t)
       expect(await exists(t, files.preview)).toBe(operation === 'ban')
       expect(await exists(t, files.original)).toBe(operation === 'ban')
     },
@@ -939,7 +940,7 @@ describe('private custom background gateway', () => {
     await expectRefusal(owner.caller.query(api.appearance.mintCustomUrl, {}), 'forbidden')
     expect((await getRequest(t, preview!.url)).status).toBe(404)
     expect((await uploadRequest(t, ticket.upload_url)).status).toBe(404)
-    await t.mutation(internal.files.reapOrphans, {})
+    await reap(t)
     expect(await t.run((ctx) => ctx.db.query('account_appearance').collect())).toHaveLength(1)
     expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
     expect(await customRows(t)).toHaveLength(1)
@@ -962,7 +963,7 @@ describe('private custom background gateway', () => {
     await expectRefusal(settings(owner.caller), 'forbidden')
     await expectRefusal(owner.caller.query(api.appearance.mintCustomUrl, {}), 'forbidden')
     expect((await getRequest(t, preview!.url)).status).toBe(404)
-    await t.mutation(internal.files.reapOrphans, {})
+    await reap(t)
     expect(await customRows(t)).toHaveLength(1)
     expect(await storedRows(t)).toHaveLength(1)
     await t.mutation(components.betterAuth.adapter.updateOne, {

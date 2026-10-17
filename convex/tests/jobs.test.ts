@@ -5,8 +5,9 @@
  * (per-profile period; absent is Never for a person and the default for an
  * agent) and its bounded legs, plus the counts-only platform_audit_log row
  * each run writes in-transaction.
- * The weekly reap-orphan-files cron targets files.reapOrphans directly
- * (crons.ts — it audits itself); its sweep is tested here with the others.
+ * The weekly reap-orphan-files cron targets files.reapOrphans (crons.ts),
+ * which runs in bounded legs and audits itself; its sweep is tested here
+ * with the others.
  *
  * The single-snapshot test is the pin against 0106's one-UPDATE reading: a
  * done parent whose done child was archived THIS run waits until tomorrow —
@@ -16,8 +17,9 @@
 
 import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { internal } from '../_generated/api'
+import { components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import { REAP_PAGES } from '../files'
 import { ARCHIVE_BATCH, SWEEP_BATCH, SWEEP_PROFILES } from '../jobs'
 import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
@@ -30,6 +32,7 @@ import {
   plantMessage,
   plantProject,
   plantSeat,
+  reap,
   type T,
   uuid,
   withOrg,
@@ -716,15 +719,20 @@ describe('sweepReadMessages — retention follows the person', () => {
   })
 })
 
-/* files.reapOrphans — the 0033 sweep: bytes referenced by neither
- * issue_attachments.storage_id nor profiles.avatar_storage_id die once older
- * than the 60-minute floor (0033:34-38 — never race an upload whose attach is
- * seconds away). _creationTime cannot be backdated, so the clock is advanced
- * past the floor instead — Date only, leaving convex-test's real timers
- * alone (it stamps _creationTime from Date.now()). */
+/* files.reapOrphans, the 0033 sweep. Bytes nothing references die once older
+ * than the 60-minute floor (0033:34-38, never race an upload whose attach is
+ * seconds away), measured from the run's start. A run deletes expired upload
+ * tickets, clears the appearance of logins that no longer exist, then checks
+ * every stored file, in legs that each schedule the next, and its last leg
+ * writes one audit row. _creationTime cannot be backdated, so the clock is
+ * advanced past the floor instead. Most cases fake Date only, leaving
+ * convex-test's real timers to run the legs (it stamps _creationTime from
+ * Date.now()). The cases that stop between legs fake every timer. */
 describe('reapOrphans — orphaned bytes die after the floor', () => {
+  const DEFAULT_PAGES = { ...REAP_PAGES }
   afterEach(() => {
     vi.useRealTimers()
+    Object.assign(REAP_PAGES, DEFAULT_PAGES)
   })
 
   const HOUR = 3_600_000
@@ -736,57 +744,245 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
   const blobExists = (t: T, id: Id<'_storage'>): Promise<boolean> =>
     t.run(async (ctx) => (await ctx.storage.get(id)) !== null)
 
-  it('deletes only the old unreferenced file; attachment, avatar, and fresh bytes survive', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    vi.useFakeTimers({ toFake: ['Date'] })
+  const storedCount = (t: T): Promise<number> =>
+    t.run(async (ctx) => (await ctx.db.system.query('_storage').collect()).length)
 
-    const orphan = await storeBlob(t)
-    const attached = await storeBlob(t)
-    const avatar = await storeBlob(t)
-    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await t.run(async (ctx) => {
+  /* An attachment row on `issue` that references `storage_id`. */
+  const attach = (t: T, issue: Doc<'issues'>, storage_id: Id<'_storage'>) =>
+    t.run(async (ctx) => {
       await ctx.db.insert('issue_attachments', {
         org_id: issue.org_id,
         id: uuid(),
         issue_id: issue.id,
         name: 'kept.txt',
         size_bytes: 5,
-        storage_id: attached,
+        storage_id,
         inline: false,
         created_at: NOW,
       })
-      await ctx.db.patch(f.admin._id, { avatar_storage_id: avatar })
     })
+
+  /* A Better Auth login; returns its id. */
+  async function login(t: T, name: string): Promise<string> {
+    const user = await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'user',
+        data: {
+          name,
+          email: `${name}@reap.test`,
+          emailVerified: true,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    })
+    return user._id as string
+  }
+
+  /* A library image whose original and preview are both stored. */
+  async function libraryImage(t: T): Promise<Id<'_storage'>[]> {
+    const files = [await storeBlob(t), await storeBlob(t)]
+    await t.run(async (ctx) => {
+      await ctx.db.insert('panorama_images', {
+        id: uuid(),
+        storage_id: files[0],
+        preview_storage_id: files[1],
+        source_id: uuid(),
+        source_url: '',
+        download_url: '',
+        title: 'Lake',
+        creator: 'Photographer',
+        license: 'CC0',
+        license_url: '',
+        attribution: '',
+        source_metadata: '{}',
+        sha256: uuid(),
+        width: 1920,
+        height: 1080,
+        byte_size: 5,
+        status: 'approved',
+        imported_at: NOW,
+      })
+    })
+    return files
+  }
+
+  /* A login's chosen custom background, original and preview stored. */
+  async function customBackground(t: T, authId: string): Promise<Id<'_storage'>[]> {
+    const files = [await storeBlob(t), await storeBlob(t)]
+    await t.run(async (ctx) => {
+      const id = uuid()
+      await ctx.db.insert('custom_backgrounds', {
+        id,
+        auth_user_id: authId,
+        storage_id: files[0],
+        preview_storage_id: files[1],
+        name: 'Private.jpg',
+        mime: 'image/jpeg',
+        width: 1920,
+        height: 1080,
+        byte_size: 5,
+        sha256: uuid(),
+        uploaded_at: NOW,
+      })
+      await ctx.db.insert('account_appearance', {
+        auth_user_id: authId,
+        mode: 'dark',
+        image_source: 'custom',
+        custom_image_id: id,
+        revision: uuid(),
+        updated_at: NOW,
+      })
+    })
+    return files
+  }
+
+  /* One expired-or-not ticket of each kind, expiring at `expires_at`. */
+  const plantTickets = (t: T, issue: Doc<'issues'>, profileId: string, expires_at: number) =>
+    t.run(async (ctx) => {
+      await ctx.db.insert('background_uploads', {
+        id: uuid(),
+        auth_user_id: 'tickets-login',
+        name: 'Lake.jpg',
+        expires_at,
+        expected_revision: uuid(),
+      })
+      await ctx.db.insert('attachment_uploads', {
+        id: uuid(),
+        org_id: issue.org_id,
+        profile_id: profileId,
+        issue_id: issue.id,
+        name: 'log.txt',
+        size_bytes: 5,
+        expires_at,
+      })
+    })
+
+  const ticketCount = (t: T) =>
+    t.run(async (ctx) => ({
+      background: (await ctx.db.query('background_uploads').collect()).length,
+      attachment: (await ctx.db.query('attachment_uploads').collect()).length,
+    }))
+
+  /* The arguments of the reapOrphans leg waiting to run, or null when the
+   * run has ended. */
+  const pendingLeg = (t: T) =>
+    t.run(async (ctx) => {
+      const jobs = await ctx.db.system.query('_scheduled_functions').collect()
+      const job = jobs.find((j) => j.name.includes('reapOrphans') && j.state.kind === 'pending')
+      return job === undefined ? null : (job.args[0] as { phase: string; cursor?: string })
+    })
+
+  /* Runs the waiting leg alone, under fake timers, and returns the next. */
+  async function step(t: T) {
+    vi.runOnlyPendingTimers()
+    await t.finishInProgressScheduledFunctions()
+    return await pendingLeg(t)
+  }
+
+  it('runs in bounded legs that keep every referenced and fresh file and audit once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(REAP_PAGES, { tickets: 2, accounts: 1, files: 2 })
+    vi.useFakeTimers({ toFake: ['Date'] })
+
+    const kept = await login(t, 'kept')
+    const gone = await login(t, 'gone')
+    const orphans = [] as Id<'_storage'>[]
+    for (let n = 0; n < 5; n++) orphans.push(await storeBlob(t))
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const attached = await storeBlob(t)
+    await attach(t, issue, attached)
+    const avatar = await storeBlob(t)
+    await t.run((ctx) => ctx.db.patch(f.admin._id, { avatar_storage_id: avatar }))
+    const library = await libraryImage(t)
+    const custom = await customBackground(t, kept)
+    const removed = await customBackground(t, gone)
+    // a raw component delete bypasses the auth API hook and leaves the
+    // login's appearance behind
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: gone }] },
+    })
+    for (let n = 0; n < 3; n++) await plantTickets(t, issue, f.user.id, Date.now() - 1)
+    await plantTickets(t, issue, f.user.id, Date.now() + 3 * HOUR)
 
     // past the floor: everything stored above is now old; the next one is not
     vi.setSystemTime(Date.now() + HOUR + 60_000)
     const fresh = await storeBlob(t)
 
-    const counts = await t.mutation(internal.files.reapOrphans, {})
+    expect(await reap(t)).toEqual({ deleted: 5, kept: 7, tickets: 6, accounts: 1 })
 
-    expect(counts).toEqual({ deleted: 1, kept: 3 })
-    expect(await blobExists(t, orphan)).toBe(false)
-    expect(await blobExists(t, attached)).toBe(true)
-    expect(await blobExists(t, avatar)).toBe(true)
-    expect(await blobExists(t, fresh)).toBe(true)
+    for (const id of [...orphans, ...removed]) expect(await blobExists(t, id)).toBe(false)
+    for (const id of [attached, avatar, ...library, ...custom, fresh])
+      expect(await blobExists(t, id)).toBe(true)
+    expect(await ticketCount(t)).toEqual({ background: 1, attachment: 1 })
+    const appearance = await t.run((ctx) => ctx.db.query('account_appearance').collect())
+    expect(appearance.map((row) => row.auth_user_id)).toEqual([kept])
 
     const rows = await auditRows(t, 'reap_orphans')
     expect(rows).toHaveLength(1)
-    expect(rows[0].detail).toEqual({ deleted: 1, kept: 3 })
     expect(rows[0].actor_email).toBe('system')
     expect(rows[0].actor_auth_id).toBeUndefined()
-    expect(rows[0].ts).toBeDefined()
+    // tickets: 3 expired of each kind in pages of 2. accounts: 2 rows in
+    // pages of 1. files: 12 left in pages of 2. The first leg is the call.
+    const legs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 6 - 1)
+  })
+
+  it('keeps a file attached between legs', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    Object.assign(REAP_PAGES, { files: 1 })
+    vi.useFakeTimers()
+    const [first, second, late] = [await storeBlob(t), await storeBlob(t), await storeBlob(t)]
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+
+    await t.mutation(internal.files.reapOrphans, {})
+    let leg = await pendingLeg(t)
+    while (leg !== null && !(leg.phase === 'files' && leg.cursor !== undefined)) leg = await step(t)
+    // the first files leg is done, and the last file sits on a later page
+    expect(await blobExists(t, first)).toBe(false)
+    await attach(t, issue, late)
+    while (leg !== null) leg = await step(t)
+
+    expect(await blobExists(t, second)).toBe(false)
+    expect(await blobExists(t, late)).toBe(true)
+    expect((await auditRows(t, 'reap_orphans'))[0].detail).toEqual({
+      deleted: 2,
+      kept: 1,
+      tickets: 0,
+      accounts: 0,
+    })
+  })
+
+  it("measures the floor from the run's start, not from a later leg's clock", async () => {
+    const t = newT()
+    vi.useFakeTimers()
+    const young = await storeBlob(t)
+    vi.setSystemTime(Date.now() + HOUR - 60_000)
+    const start = Date.now()
+
+    await t.mutation(internal.files.reapOrphans, {})
+    let leg = await pendingLeg(t)
+    while (leg !== null && leg.phase !== 'files') leg = await step(t)
+    // the file is past the floor by the time its leg runs
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    while (leg !== null) leg = await step(t)
+
+    expect(await blobExists(t, young)).toBe(true)
+    const [row] = await auditRows(t, 'reap_orphans')
+    expect(row.detail).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
+    expect(row.ts).toBe(new Date(start).toISOString())
   })
 
   it('a zero-file run still writes its counts-only audit row', async () => {
     const t = newT()
 
-    await t.mutation(internal.files.reapOrphans, {})
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 0, tickets: 0, accounts: 0 })
 
     const rows = await auditRows(t, 'reap_orphans')
     expect(rows).toHaveLength(1)
-    expect(rows[0].detail).toEqual({ deleted: 0, kept: 0 })
     expect(rows[0].actor_email).toBe('system')
   })
 
@@ -795,10 +991,31 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const a = await storeBlob(t)
     const b = await storeBlob(t)
 
-    const counts = await t.mutation(internal.files.reapOrphans, {})
-
-    expect(counts).toEqual({ deleted: 0, kept: 2 })
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 2, tickets: 0, accounts: 0 })
     expect(await blobExists(t, a)).toBe(true)
     expect(await blobExists(t, b)).toBe(true)
+  })
+
+  it("stays inside Convex's transaction limits with many orphans", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 800 orphans cost 6 index ranges each, over the 4,096 one leg may read
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 800; n++) await ctx.storage.store(new Blob(['bytes']) as never)
+    })
+    const kept: Id<'_storage'>[] = []
+    for (let n = 0; n < 100; n++) {
+      const id = await storeBlob(t)
+      await attach(t, issue, id)
+      kept.push(id)
+    }
+    for (let n = 0; n < 20; n++) kept.push(...(await libraryImage(t)))
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+
+    expect(await reap(t)).toEqual({ deleted: 800, kept: 140, tickets: 0, accounts: 0 })
+    expect(await storedCount(t)).toBe(140)
+    for (const id of kept) expect(await blobExists(t, id)).toBe(true)
   })
 })

@@ -32,6 +32,7 @@ import {
   plantIssue,
   plantProject,
   plantSeat,
+  reap,
   type T,
   uuid,
   withOrg,
@@ -656,7 +657,7 @@ describe('the REST upload', () => {
       const row = (await ctx.db.query('attachment_uploads').collect()).find((r) => r.id === ticket)
       if (row) await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
     })
-    await fx.t.mutation(internal.files.reapOrphans, {})
+    expect(await reap(fx.t)).toMatchObject({ tickets: 1 })
     expect((await tickets(fx.t)).map((r) => r.name)).toEqual(['live.txt'])
   })
 

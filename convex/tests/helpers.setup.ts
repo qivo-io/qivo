@@ -18,9 +18,11 @@ import {
 } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
-import { onTestFinished, TestRunner } from 'vitest'
+import { onTestFinished, TestRunner, vi } from 'vitest'
+import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import type { ReapCounts } from '../files'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import schema from '../schema'
@@ -82,6 +84,29 @@ export async function settleScheduled(t: T): Promise<void> {
     if (!running) return
   }
   throw new Error('Scheduled functions were still running after 100 rounds')
+}
+
+/** Runs one orphan sweep (files.reapOrphans) through all of its legs and
+ * returns the counts from the one reap_orphans audit row it wrote. Works with
+ * real timers, a faked Date alone, or fully faked timers. With faked timers
+ * it fires only the timers already due, which the legs are, so the clock
+ * stays put and later scheduled work waits. */
+export async function reap(t: T): Promise<ReapCounts> {
+  const audits = () =>
+    t.run(async (ctx) =>
+      (await ctx.db.query('platform_audit_log').collect()).filter(
+        (row) => row.action === 'reap_orphans',
+      ),
+    )
+  const before = (await audits()).length
+  await t.mutation(internal.files.reapOrphans, {})
+  await t.finishAllScheduledFunctions(() => {
+    if (vi.isFakeTimers()) vi.advanceTimersByTime(0)
+  })
+  const after = await audits()
+  if (after.length !== before + 1)
+    throw new Error('the orphan sweep did not write exactly one audit row')
+  return after[after.length - 1].detail as ReapCounts
 }
 
 /** Complete bounded outbox expansion without executing network delivery actions. */

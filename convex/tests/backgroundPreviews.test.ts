@@ -3,7 +3,17 @@ import { api, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import { BACKGROUND_PREVIEW_VERSION } from '../lib/backgroundPreviews'
 import { imageRow } from '../panoramaImages'
-import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectRefusal,
+  NOW,
+  newT,
+  plantIssue,
+  reap,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -209,7 +219,7 @@ describe('preview identity, storage ownership and cleanup', () => {
       await t.mutation(internal.panoramaImages.discardImport, { storage_id })
     }
     vi.setSystemTime(Date.now() + 61 * 60_000)
-    expect(await t.mutation(internal.files.reapOrphans, {})).toEqual({ deleted: 0, kept: 4 })
+    expect(await reap(t)).toEqual({ deleted: 0, kept: 4, tickets: 0, accounts: 0 })
     expect(await exists(t, libraryPreview)).toBe(true)
     expect(await exists(t, customPreview)).toBe(true)
   })
