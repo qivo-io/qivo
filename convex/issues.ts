@@ -331,7 +331,8 @@ export const unarchive = orgMutation({
  * restore them. Their messages are deleted, children left behind are
  * detached, touched and notified, and each task writes the 'deleted'
  * activity row the old client wrote, with no detail. `reason` is shown in
- * Deleted items: trimmed, at most 500 characters.
+ * Deleted items, trimmed and refused past DELETE_REASON_MAX
+ * (lib/textLimits.ts, 500 characters).
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
  * the delete window listed them. Each must still be an active task under one
