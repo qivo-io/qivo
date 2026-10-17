@@ -115,6 +115,58 @@ async function plantChildren(
   return ids
 }
 
+/** `n` task items of Firmware that are moving, restoring and purging in
+ * turn, as tasks deleted one by one leave them while their steps run,
+ * planted 2,500 to a transaction. */
+async function plantBusyItems(t: T, f: OrgFixture, n: number): Promise<void> {
+  const states = ['moving', 'restoring', 'purging'] as const
+  for (let from = 0; from < n; from += 2500)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 2500); i++)
+        await ctx.db.insert('deleted_items', {
+          id: uuid(),
+          org_id: f.org.id,
+          kind: 'task',
+          target_id: uuid(),
+          num: 20_000 + i,
+          name: `Calibrate sensor ${i + 1}`,
+          status: 'todo',
+          archived: false,
+          project_id: f.sub.id,
+          parent_project_id: f.meta.id,
+          path: [f.meta.name, f.sub.name],
+          projects: [
+            {
+              id: f.sub.id,
+              name: f.sub.name,
+              key: f.sub.key,
+              type: 'project',
+              tasks: 1,
+              archived_tasks: 0,
+            },
+          ],
+          counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+          deleted_at: NOW,
+          deleted_by: f.user.id,
+          state: states[i % 3],
+          restore_by: states[i % 3] === 'restoring' ? f.user.id : undefined,
+          purge_after: START + TRASH_DAYS * DAY,
+        })
+    })
+}
+
+/** How many items of the organization of `f` are in `state`. */
+const busyCount = (t: T, f: OrgFixture, state: Doc<'deleted_items'>['state']) =>
+  t.run(
+    async (ctx) =>
+      (
+        await ctx.db
+          .query('deleted_items')
+          .withIndex('by_org_state', (q) => q.eq('org_id', f.org.id).eq('state', state))
+          .collect()
+      ).length,
+  )
+
 /** Whether deleted_rows holds the comment `id`. */
 const commentStored = async (t: T, id: string) =>
   (await t.run((ctx) =>
@@ -934,6 +986,45 @@ describe('purging', () => {
     expect(await t.run((ctx) => ctx.db.query('deleted_rows').collect())).toHaveLength(1)
     await assertNoDanglingRefs(t, 'after a project purge')
   })
+
+  it('purges a project item that 20,000 items in other states name, in bounded steps within the real limits', async () => {
+    // each names Firmware by project_id and Testbed platform by
+    // parent_project_id, so a purge that passed over them read 40,000
+    // items in one step, past the 32,000 documents and 16 MiB one
+    // transaction may read, and every retry failed
+    const t = newT({ transactionLimits: true })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const early = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await deleteTask(t, f, early.id)
+    const earlyItem = await itemFor(t, early.id)
+    await deleteProject(t, f, f.sub2.id)
+    const subItem = await itemFor(t, f.sub2.id)
+    await plantBusyItems(t, f, 20_000)
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.state).toBe('ready')
+
+    const result = await as(t, f.admin).mutation(api.deletedItems.purge, {
+      org_id,
+      ids: [item.id],
+    })
+    expect(result.purged).toEqual([item.id])
+    let steps = 0
+    while ((await jobFor(t, item.id)) !== null) {
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(5)
+    }
+    await runSteps(t)
+    // the items that need it are purged with it, and the others stay
+    for (const gone of [item, earlyItem, subItem]) expect(await itemById(t, gone.id)).toBeNull()
+    expect(await busyCount(t, f, 'moving')).toBe(6667)
+    expect(await busyCount(t, f, 'restoring')).toBe(6667)
+    expect(await busyCount(t, f, 'purging')).toBe(6666)
+  }, 300_000)
 
   it('expires ready items after 30 days in bounded batches that chain', async () => {
     const t = newT()

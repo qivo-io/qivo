@@ -915,6 +915,13 @@ export default defineSchema({
     .index('by_org_deleter', ['org_id', 'deleted_by', 'deleted_at'])
     .index('by_org_project', ['org_id', 'project_id', 'deleted_at'])
     .index('by_org_parent', ['org_id', 'parent_project_id', 'deleted_at'])
+    // A project item's purge also purges the ready and stuck items that
+    // need its projects (model/deletedItems.ts purgeDependents), task items
+    // by project_id and sub-project items by parent_project_id. Kind and
+    // state in the index let it read only those, however many items in
+    // other states name the same project. A filter would still read each.
+    .index('by_org_project_kind_state', ['org_id', 'project_id', 'kind', 'state'])
+    .index('by_org_parent_kind_state', ['org_id', 'parent_project_id', 'kind', 'state'])
     .index('by_state_purge', ['state', 'purge_after'])
     // whether an organization has an item in flight, which decides whether
     // its export reads each task's parent (orgExport.ts)

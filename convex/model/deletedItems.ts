@@ -93,14 +93,9 @@
  * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
  * state the items are in. */
 
-import {
-  type FilterBuilder,
-  makeFunctionReference,
-  type NamedTableInfo,
-  type WithoutSystemFields,
-} from 'convex/server'
+import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { compareValues } from 'convex/values'
-import type { DataModel, Doc, Id } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canHoldWork,
@@ -1114,39 +1109,44 @@ async function finishMove(run: Run): Promise<void> {
 
 /* ----------------------------------------------------------------- purges */
 
+/** The states an item can be purged from (beginPurge). */
+const PURGEABLE = ['ready', 'stuck'] as const
+
 /* Purging a project item also purges what could never come back without
  * it: the task items whose project was in it, and the sub-project items
  * whose parent was. Items still moving or restoring are left to their own
- * expiry. */
+ * expiry. Each read asks an index for one kind in one purgeable state
+ * (by_org_project_kind_state, by_org_parent_kind_state), so it reads only
+ * items it purges, however many items in other states name the project,
+ * and the step's budget counts every item it reads. */
 async function purgeDependents(run: Run): Promise<boolean> {
-  const purgeable = (
-    q: FilterBuilder<NamedTableInfo<DataModel, 'deleted_items'>>,
-    kind: Item['kind'],
-  ) =>
-    q.and(
-      q.eq(q.field('kind'), kind),
-      q.or(q.eq(q.field('state'), 'ready'), q.eq(q.field('state'), 'stuck')),
-    )
   const { org_id } = run.item
-  for (const id of itemProjectIds(run.item)) {
-    const reads = [
-      (n: number) =>
-        run.ctx.db
-          .query('deleted_items')
-          .withIndex('by_org_project', (q) => q.eq('org_id', org_id).eq('project_id', id))
-          .filter((q) => purgeable(q, 'task'))
-          .take(n),
-      (n: number) =>
-        run.ctx.db
-          .query('deleted_items')
-          .withIndex('by_org_parent', (q) => q.eq('org_id', org_id).eq('parent_project_id', id))
-          .filter((q) => purgeable(q, 'project'))
-          .take(n),
-    ]
-    for (const read of reads)
-      if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent), ALL)))
-        return false
-  }
+  for (const id of itemProjectIds(run.item))
+    for (const state of PURGEABLE) {
+      const reads = [
+        (n: number) =>
+          run.ctx.db
+            .query('deleted_items')
+            .withIndex('by_org_project_kind_state', (q) =>
+              q.eq('org_id', org_id).eq('project_id', id).eq('kind', 'task').eq('state', state),
+            )
+            .take(n),
+        (n: number) =>
+          run.ctx.db
+            .query('deleted_items')
+            .withIndex('by_org_parent_kind_state', (q) =>
+              q
+                .eq('org_id', org_id)
+                .eq('parent_project_id', id)
+                .eq('kind', 'project')
+                .eq('state', state),
+            )
+            .take(n),
+      ]
+      for (const read of reads)
+        if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent), ALL)))
+          return false
+    }
   return true
 }
 
