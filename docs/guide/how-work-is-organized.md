@@ -76,7 +76,8 @@ Tasks have these fields:
   subtasks shows no pause of its own; pause its subtasks instead. REST and
   MCP use the same `paused` flag.
 - **Labels**, a rich-text **description**, **attachments**, **comments**, a
-  **parent**, **subtasks** and task **links**. Links can mean “blocks”, “is
+  **parent**, **subtasks** and task **links**. A subtask stays in its
+  parent's project, in any of its sub-projects. Links can mean “blocks”, “is
   blocked by” or “relates to” and may span projects and teams. You see a link
   only if you can access both tasks. Description
   edits appear in the activity feed with before/after excerpts.
@@ -85,6 +86,8 @@ Moving a task requires its assignee and reviewer to be eligible in the
 destination. Clear or change either person first if they cannot edit that
 project or are switched off. For a grouping parent, an ineligible reviewer
 saved before it gained subtasks is cleared instead of preventing the move.
+A move to another project takes the task's subtasks along, and a subtask
+moved there stops being a subtask of its parent ([Moving a task](./the-task-window.md#moving-a-task)).
 Removing a person from the organization clears their assignments and reviewer
 roles. Qivo clears open tasks at once, or shortly after for someone with
 hundreds of them, and archived tasks within a few minutes.

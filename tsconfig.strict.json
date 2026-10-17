@@ -21,6 +21,7 @@
     "src/lib/md.ts",
     "src/lib/mdSerialize.ts",
     "src/lib/paletteSearch.ts",
+    "src/lib/relationCandidates.ts",
     "src/lib/remaining.ts",
     "src/lib/roadmapEdges.ts",
     "src/lib/roadmapVisibility.ts",

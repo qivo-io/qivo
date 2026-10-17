@@ -85,11 +85,13 @@ groups omit status, and unowned tasks omit the portrait.
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
 
-Setting a parent changes both tasks, so it needs edit access to the subtask
-and to the parent. The parent and subtask pickers offer only tasks you can
-edit, plus the current parent so you can remove it. Everyone assigned to or
-reviewing the task or its subtasks must be able to see the new parent and
-every task above it; otherwise Qivo refuses the parent and names the person
+A subtask stays in its parent's project, in any of that project's
+sub-projects. Setting a parent changes both tasks, so it needs edit access to
+the subtask and to the parent. The parent and subtask pickers offer only
+tasks of the same project that you can edit. The current parent stays listed
+so you can remove it, and so does each current subtask you can edit.
+Everyone assigned to or reviewing the task or its subtasks must be able to
+see the new parent and every task above it; otherwise Qivo refuses the parent and names the person
 and the subtask to reassign. The assignee and
 reviewer pickers on a subtask offer only people who can see every task above
 it. Removing a parent needs edit access to the subtask only. Adding or
@@ -103,18 +105,28 @@ a parent directly.
 
 Choose **Move to sub-project…** to move within the task's organization to a
 sub-project you can edit. The task keeps its ID, comments, attachments, labels,
-activity and relationships.
+activity, links and subtasks.
+
+A move between sub-projects of the same project moves only the task. A move
+to a sub-project of another project also moves the task's subtasks, at any
+depth and archived ones included, unless they are already in that project.
+A subtask moved to another project stops being a subtask of its parent,
+because a subtask stays in its parent's project. The dialog says both before
+you move. Qivo refuses the move if a subtask that would move is in a
+sub-project you cannot edit (an organization admin can move it), or if the
+task has more than 200 subtasks at any depth, archived ones included.
 
 The assignee and, for a task without subtasks, reviewer must be active and
 have User or Lead access at the destination. Otherwise, clear or change them
-before moving. Moving a group clears an ineligible reviewer instead of
-refusing the move for that reviewer. Everyone assigned to or reviewing one of
-its subtasks, at any depth, needs at least View access at the destination, so
-they can still see the task. The dialog names each person who would lose
-access and keeps **Move** disabled until you give them access or reassign
-their subtask. A subtask in a project you cannot see is checked when you
+before moving. The same holds for each active subtask that moves with the
+task. Moving a group clears an ineligible reviewer instead of refusing the
+move for that reviewer. Everyone assigned to or reviewing a subtask that
+stays where it is, at any depth, needs at least View access at the
+destination, so they can still see the task. The dialog names each person
+who would lose access and keeps **Move** disabled until you give them access
+or reassign their subtask. A subtask in a project you cannot see is checked when you
 move, and Qivo refuses the move without naming the person. Switched-off
-people are not checked.
+people are not checked on the subtasks that stay.
 
 ## Archiving
 
@@ -131,7 +143,7 @@ archive on a later sweep when its original Done age meets the threshold;
 a saved To Do task returns to To Do.
 
 **Manual archiving** is available in the task's **…** menu with edit access.
-It includes the whole subtask tree, including subtasks in other projects. If
+It includes the whole subtask tree, including subtasks in other sub-projects. If
 an active subtask is in a project you cannot edit, Qivo refuses the archive,
 and an organization admin can archive it instead. If all descendant work is
 Done, it archives

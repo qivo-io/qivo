@@ -17,8 +17,9 @@ vi.mock('../lib/auth', () => ({
 const NOW = '2026-09-14T08:00:00.000Z'
 
 /* Whoever holds a subtask must see every task above it. "both" can edit the
- * Plans and Work projects; "workOnly" can edit Work alone, so the epic in
- * Plans is out of their sight. */
+ * Plans and Work sub-projects of one top-level project, where a subtask and
+ * its parent may live; "workOnly" can edit Work alone, so the epic in Plans
+ * is out of their sight. */
 describe('assignees must see the tasks above a subtask', () => {
   let P: Planner
   let requests: { name: string; args: Record<string, unknown> }[]
@@ -26,9 +27,10 @@ describe('assignees must see the tasks above a subtask', () => {
   async function load(change?: (snap: Snapshot) => void) {
     const snap: Snapshot = plannerFixture()
     const org = snap.orgs[0].id
-    const work = snap.projects[0]
+    const top = { ...snap.projects[0], type: 'meta' as const, key: 'TOP', num: 3, name: 'Top' }
+    const work = { ...snap.projects[0], id: crypto.randomUUID(), parent_id: top.id }
     const plans = { ...work, id: crypto.randomUUID(), key: 'PLAN', num: 2, name: 'Plans' }
-    snap.projects.push(plans)
+    snap.projects = [top, work, plans]
     const person = (id: string, name: string) =>
       snap.profiles.push({
         id,
