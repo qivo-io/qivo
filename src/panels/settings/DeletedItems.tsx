@@ -910,8 +910,12 @@ export function DeletedItemsPage() {
           </div>
         </div>
         <div className="deleted-list">{body}</div>
+        {/* the server stops at 2,000 items, or sooner when a very large
+            trash would take a list call past its read budget */}
         {source.list?.capped && (
-          <p className="mt-3 px-1 text-sm text-text-2">Showing the newest 2,000 items.</p>
+          <p className="mt-3 px-1 text-sm text-text-2">
+            Not every item is shown. Search to find older ones.
+          </p>
         )}
         {selected.size > 0 && (
           <div data-selection-bar className="deleted-selection-bar">
