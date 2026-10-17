@@ -9,7 +9,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { type ArchiveCursor, archiveCursorText, parseArchiveCursor } from '../lib/archivedTasks'
+import type { QueryCtx } from '../_generated/server'
+import {
+  type ArchiveCursor,
+  archiveCursorText,
+  archivedTasksAfter,
+  cursorAfter,
+  parseArchiveCursor,
+} from '../lib/archivedTasks'
 import { ARCHIVE_PAGE, ARCHIVE_RESERVE, SUBTREE_WALK } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import {
@@ -266,14 +273,126 @@ describe('archived task lists page one project with a cursor', () => {
   it('writes cursors as text that reads back, and refuses anything else', () => {
     const cursor: ArchiveCursor = {
       created: 1760583600000.123,
+      id: 'k57c3d4e5f6g7h8',
       archived_at: '2026-10-16T03:00:00.000Z',
     }
-    expect(archiveCursorText(cursor)).toBe('1~1760583600000.123~2026-10-16T03:00:00.000Z')
+    expect(archiveCursorText(cursor)).toBe(
+      '1~1760583600000.123~k57c3d4e5f6g7h8~2026-10-16T03:00:00.000Z',
+    )
     expect(parseArchiveCursor(archiveCursorText(cursor))).toEqual(cursor)
     // the timestamp is taken verbatim, whatever it holds
-    expect(parseArchiveCursor('1~5~a~b')).toEqual({ created: 5, archived_at: 'a~b' })
-    for (const text of ['abc', '2~1~x', '1~-1~x', '1~1~', '1~1.~x', `1~1~${'x'.repeat(65)}`]) {
+    expect(parseArchiveCursor('1~5~k1~a~b')).toEqual({ created: 5, id: 'k1', archived_at: 'a~b' })
+    for (const text of [
+      'abc',
+      '1~1~x',
+      '2~1~k1~x',
+      '1~-1~k1~x',
+      '1~1~k1~',
+      '1~1.~k1~x',
+      '1~1~K1~x',
+      `1~1~${'k'.repeat(65)}~x`,
+      `1~1~k1~${'x'.repeat(65)}`,
+    ]) {
       expect(parseArchiveCursor(text), text).toBeNull()
+    }
+  })
+
+  it('pages tasks that share both archive times one at a time, by id', async () => {
+    // Convex does not promise distinct creation times, and its indexes order
+    // tasks that share them by id
+    type Row = {
+      _id: string
+      _creationTime: number
+      archived_at?: string
+      project_id: string
+      org_id: string
+    }
+    type Field = keyof Row
+    type Range = {
+      eq(field: Field, value: unknown): Range
+      gt(field: Field, value: unknown): Range
+      lt(field: Field, value: unknown): Range
+    }
+    const compare = (a: unknown, b: unknown): number =>
+      a === b
+        ? 0
+        : a === undefined
+          ? -1
+          : b === undefined
+            ? 1
+            : (a as string | number) < (b as string | number)
+              ? -1
+              : 1
+    // an index read over `rows`, newest first, as Convex orders it
+    const ctxOver = (rows: Row[]) => {
+      const withIndex = (index: string, range: (q: Range) => unknown) => {
+        const tests: ((row: Row) => boolean)[] = []
+        const bound =
+          (keeps: (order: number) => boolean) =>
+          (field: Field, value: unknown): Range => {
+            tests.push((row) => keeps(compare(row[field], value)))
+            return q
+          }
+        const q: Range = {
+          eq: bound((order) => order === 0),
+          gt: bound((order) => order > 0),
+          lt: bound((order) => order < 0),
+        }
+        range(q)
+        const keys: Field[] = [
+          index === 'by_project_archived' ? 'project_id' : 'org_id',
+          'archived_at',
+          '_creationTime',
+          '_id',
+        ]
+        const found = rows
+          .filter((row) => tests.every((test) => test(row)))
+          .sort((a, b) => keys.reduce((c, key) => c || compare(b[key], a[key]), 0))
+        return {
+          order: () => ({
+            async *[Symbol.asyncIterator]() {
+              yield* found
+            },
+          }),
+        }
+      }
+      return { db: { query: () => ({ withIndex }) } } as unknown as QueryCtx
+    }
+    const row = (id: string, project_id: string, archived_at: string, created: number): Row => ({
+      _id: id,
+      _creationTime: created,
+      archived_at,
+      project_id,
+      org_id: 'org',
+    })
+    const ctx = ctxOver([
+      row('k1', 'P', 'T', 100),
+      row('k5', 'Q', 'T', 100),
+      row('k3', 'P', 'T', 100),
+      row('k4', 'Q', 'T', 100),
+      row('k2', 'P', 'T', 100),
+      row('a0', 'Q', 'T', 50),
+      row('z9', 'P', 'U', 10),
+      row('b0', 'Q', 'S', 900),
+    ])
+    // read through each project, and through the organization's archive
+    for (const projects of [true, false]) {
+      const seen: string[] = []
+      let cursor: ArchiveCursor | null = null
+      for (let page = 0; page < 20; page++) {
+        const stream = await archivedTasksAfter(
+          ctx,
+          { orgId: 'org', projectIds: ['P', 'Q'] },
+          cursor,
+          async () => projects,
+        )
+        const task = await stream.next()
+        await stream.close()
+        if (task === null) break
+        seen.push(task._id)
+        cursor = cursorAfter(task)
+      }
+      expect(seen, String(projects)).toEqual(['z9', 'k5', 'k4', 'k3', 'k2', 'k1', 'a0', 'b0'])
     }
   })
 

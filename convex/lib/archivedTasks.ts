@@ -3,8 +3,10 @@
  * (lib/core.ts listArchivedIssuesCore). The order is the one of the
  * archive indexes read backwards, most recently archived first and tasks
  * archived at the same moment newest created first, merged across the
- * projects a list covers. A cursor names a position in that order, so a page
- * reads only what follows it, whatever the size of the archive. */
+ * projects a list covers. Convex does not promise distinct creation times,
+ * so tasks that share both keys follow the indexes' last key, the document
+ * id, which sorts like its text. A cursor names a position in that order, so
+ * a page reads only what follows it, whatever the size of the archive. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -15,21 +17,23 @@ export type ArchivedTask = Doc<'issues'> & { archived_at: string }
 const isArchived = (task: Doc<'issues'>): task is ArchivedTask => task.archived_at !== undefined
 
 /** A position in archive order, just after the task with these keys. */
-export type ArchiveCursor = { created: number; archived_at: string }
+export type ArchiveCursor = { created: number; id: string; archived_at: string }
 
 /** The cursor just after `task`. */
 export const cursorAfter = (task: ArchivedTask): ArchiveCursor => ({
   created: task._creationTime,
+  id: task._id,
   archived_at: task.archived_at,
 })
 
-/** A cursor as callers see it, `1~<_creationTime>~<archived_at>`. Plain text,
- * with the timestamp last and verbatim, so any stored format pages
- * correctly. It holds only a position, so a forged one shows nothing. Every
- * task still comes from the caller's readable projects. */
-export const archiveCursorText = (c: ArchiveCursor): string => `1~${c.created}~${c.archived_at}`
+/** A cursor as callers see it, `1~<_creationTime>~<_id>~<archived_at>`.
+ * Plain text, with the timestamp last and verbatim, so any stored format
+ * pages correctly. It holds only a position, so a forged one shows nothing.
+ * Every task still comes from the caller's readable projects. */
+export const archiveCursorText = (c: ArchiveCursor): string =>
+  `1~${c.created}~${c.id}~${c.archived_at}`
 
-const CURSOR_TEXT = /^1~(\d+(?:\.\d+)?)~(.{1,64})$/s
+const CURSOR_TEXT = /^1~(\d+(?:\.\d+)?)~([0-9a-z]{1,64})~(.{1,64})$/s
 
 /** The cursor `text` names, or null when it is not one archiveCursorText
  * wrote. */
@@ -37,14 +41,24 @@ export function parseArchiveCursor(text: string): ArchiveCursor | null {
   const m = CURSOR_TEXT.exec(text)
   if (m === null) return null
   const created = Number(m[1])
-  return Number.isFinite(created) ? { created, archived_at: m[2] } : null
+  return Number.isFinite(created) ? { created, id: m[2], archived_at: m[3] } : null
 }
 
 /* Whether `a` comes before `b` in archive order. */
 const before = (a: ArchivedTask, b: ArchivedTask): boolean =>
   a.archived_at !== b.archived_at
     ? a.archived_at > b.archived_at
-    : a._creationTime > b._creationTime
+    : a._creationTime !== b._creationTime
+      ? a._creationTime > b._creationTime
+      : a._id > b._id
+
+/* The tasks of `tasks`, read in index order, whose id sorts below `id`. */
+async function* idsBelow(
+  tasks: AsyncIterable<Doc<'issues'>>,
+  id: string,
+): AsyncGenerator<Doc<'issues'>> {
+  for await (const task of tasks) if (task._id < id) yield task
+}
 
 /* The archived tasks of the index ranges `ranges` opens, in turn, read
  * lazily. Each range opens only once the one before it is read to its end. */
@@ -55,7 +69,8 @@ async function* archivedIn(
 }
 
 /* One project's archived tasks after `after`, in archive order, from at most
- * two ranges of by_project_archived, the rest of the cursor's own moment and
+ * three ranges of by_project_archived. They are the tasks that share both of
+ * the cursor's times and sort below its id, the rest of the cursor's moment,
  * then everything archived earlier. */
 function projectArchive(
   ctx: QueryCtx,
@@ -71,6 +86,18 @@ function projectArchive(
       })
       .order('desc')
   if (after === null) return archivedIn([earlier])
+  const sameInstant = () =>
+    idsBelow(
+      issues()
+        .withIndex('by_project_archived', (q) =>
+          q
+            .eq('project_id', projectId)
+            .eq('archived_at', after.archived_at)
+            .eq('_creationTime', after.created),
+        )
+        .order('desc'),
+      after.id,
+    )
   const sameMoment = () =>
     issues()
       .withIndex('by_project_archived', (q) =>
@@ -80,7 +107,7 @@ function projectArchive(
           .lt('_creationTime', after.created),
       )
       .order('desc')
-  return archivedIn([sameMoment, earlier])
+  return archivedIn([sameInstant, sameMoment, earlier])
 }
 
 /* The whole organization's archived tasks after `after`, in archive order,
@@ -99,6 +126,18 @@ function organizationArchive(
       })
       .order('desc')
   if (after === null) return archivedIn([earlier])
+  const sameInstant = () =>
+    idsBelow(
+      issues()
+        .withIndex('by_org_archived', (q) =>
+          q
+            .eq('org_id', orgId)
+            .eq('archived_at', after.archived_at)
+            .eq('_creationTime', after.created),
+        )
+        .order('desc'),
+      after.id,
+    )
   const sameMoment = () =>
     issues()
       .withIndex('by_org_archived', (q) =>
@@ -108,7 +147,7 @@ function organizationArchive(
           .lt('_creationTime', after.created),
       )
       .order('desc')
-  return archivedIn([sameMoment, earlier])
+  return archivedIn([sameInstant, sameMoment, earlier])
 }
 
 /** A merged read of archived tasks in archive order. */

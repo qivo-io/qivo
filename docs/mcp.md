@@ -1066,7 +1066,7 @@ cursor first, with the same rows as an active list:
 
 ```json
 {
-  "next_cursor": "1~1760583600000.123~2026-10-16T03:00:00.000Z",
+  "next_cursor": "1~1760583600000.123~k57…~2026-10-16T03:00:00.000Z",
   "tasks": [{ "id": "…uuid…", "key": "QN-3", "archived_at": "…", "…": "…" }]
 }
 ```
