@@ -31,6 +31,7 @@ import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGr
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
+import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { scheduleArchivedReads } from './messages'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
@@ -45,12 +46,16 @@ export function projectDescription(value: string | null | undefined): string {
   return description
 }
 
-/** A project name as stored: trimmed, and refused when nothing is left. The
- * app trims and skips a blank name before it writes, and sets no length
- * limit, so neither does this. */
-export function cleanProjectName(raw: string): string {
+export const PROJECT_NAME_TOO_LONG = `a project name must be at most ${NAME_MAX} characters`
+
+/** A project name as stored: trimmed, and refused when nothing is left or
+ * when it has more than NAME_MAX code points. A name equal to `current`, the
+ * project's stored one, passes, so a project named before the cap keeps its
+ * name through writes that resend it. */
+export function cleanProjectName(raw: string, current?: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a project name cannot be blank')
+  if (nameOverCap(name, current)) throw rule(PROJECT_NAME_TOO_LONG)
   return name
 }
 
@@ -473,7 +478,7 @@ export async function updateProjectCore(
     throw badRequest('sub-projects carry no icon')
   }
   const db: Partial<Doc<'projects'>> = {}
-  if (patch.name !== undefined) db.name = cleanProjectName(patch.name)
+  if (patch.name !== undefined) db.name = cleanProjectName(patch.name, project.name)
   if (patch.icon !== undefined) db.icon = patch.icon ?? undefined
   if (patch.icon_color !== undefined) {
     const color =

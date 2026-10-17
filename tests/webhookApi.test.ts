@@ -6,6 +6,7 @@ import { CallbackError, decryptSecret } from '../convex/lib/webhookTransport'
 import { sha256hex } from '../convex/machine/auth'
 import { notifyIssueUpdate } from '../convex/model/messages'
 import {
+  beforeBodyRead,
   expectRefusal,
   flushWebhookEvents,
   newT,
@@ -667,13 +668,11 @@ describe('MCP Events and generic REST webhooks', () => {
   it('returns a JSON-RPC refusal when OAuth is revoked after the initial request authentication', async () => {
     const f = await fixture()
     const oauth = await f.oauth()
-    const readText = Request.prototype.text
-    vi.spyOn(Request.prototype, 'text').mockImplementationOnce(async function (this: Request) {
-      await f.t.run((ctx) =>
+    beforeBodyRead(() =>
+      f.t.run((ctx) =>
         ctx.db.patch(oauth.connectionRowId, { revoked_at: new Date().toISOString() }),
-      )
-      return readText.call(this)
-    })
+      ),
+    )
     const response = await f.mcp('events/list', {}, oauth.token)
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({ jsonrpc: '2.0', id: 1, error: { code: -32012 } })

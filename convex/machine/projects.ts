@@ -57,6 +57,7 @@ import {
 import { badRequest, notFound, type Refusal } from '../lib/functions'
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX } from '../lib/review'
+import { NAME_MAX } from '../lib/textLimits'
 import {
   addMilestoneCore,
   changeableMilestone,
@@ -929,6 +930,7 @@ export const PROJECT_TOOLS: McpTool[] = [
         properties: {
           name: {
             type: 'string',
+            maxLength: NAME_MAX,
           },
           parent: {
             type: 'string',
@@ -967,6 +969,7 @@ export const PROJECT_TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
+            maxLength: NAME_MAX,
           },
           description: {
             type: 'string',
@@ -1069,6 +1072,7 @@ export const PROJECT_TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
+            maxLength: NAME_MAX,
           },
           date: {
             type: 'string',

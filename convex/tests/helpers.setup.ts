@@ -564,6 +564,33 @@ export async function drainActivity(t: T): Promise<void> {
 declare function setTimeout(cb: () => void, ms: number): unknown
 export const tick = (): Promise<void> => new Promise((r) => setTimeout(() => r(), 5))
 
+/** Runs `change` once, when the next request body is read. The REST and MCP
+ * shells read the body after authentication and before dispatch
+ * (machine/shared.ts readBody), so a test can change state between the two.
+ * Restore the returned spy when the request is done. */
+export function beforeBodyRead(change: () => Promise<unknown>) {
+  // convex/tsconfig's Request declares no body, which the test runtime has
+  type WithBody = { body: ReadableStream<Uint8Array> | null }
+  const proto = Request.prototype as unknown as WithBody
+  const body = Object.getOwnPropertyDescriptor(proto, 'body')?.get
+  if (body === undefined) throw new Error('Request.prototype.body has no getter')
+  return vi.spyOn(proto, 'body', 'get').mockImplementationOnce(function (this: WithBody) {
+    const reader = (body.call(this) as WithBody['body'])?.getReader()
+    let changed = false
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!changed) {
+          changed = true
+          await change()
+        }
+        const next = await reader?.read()
+        if (next === undefined || next.done) controller.close()
+        else controller.enqueue(next.value)
+      },
+    })
+  })
+}
+
 /* Person callers only: agents/unclaimed seats have no login to impersonate —
  * their surface is the machine transport, tested via internal functions. */
 export function as(t: T, profile: Doc<'profiles'>) {

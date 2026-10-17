@@ -1,6 +1,7 @@
 Open **Settings → Organization → General** to change the organization's name,
 address, attachment limit, calendar, who can create projects and default
-planning hours.
+planning hours. Organization, team, project and milestone names allow up to
+80 characters.
 
 - **Date format** offers six formats with a preview.
 - **Workdays start on** sets the first day of each roadmap week.

@@ -175,6 +175,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
         <TextField
           label="Organization name"
           value={P.org.name}
+          maxLength={P.NAME_MAX}
           probe="data-org-name"
           onCommit={(v) => {
             P.setOrg({ name: v })

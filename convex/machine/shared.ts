@@ -5,12 +5,14 @@
  * The surface modules spread a domain module's entries into TOOLS and
  * ROUTES, so a domain module that imported a value from them would close an
  * import cycle. These rules therefore live here, once, and every module that
- * names the caller, signs a write's activity row, reads an agent key's name
- * or parses a REST body or query parameter imports them from this file. */
+ * names the caller, signs a write's activity row, reads an agent key's name,
+ * reads a request body or parses a REST body or query parameter imports
+ * them from this file. */
 
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
+import { cutName } from '../lib/textLimits'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
 
 /** MCP's refusal for a readable project the caller cannot write, which
@@ -59,11 +61,13 @@ export function internalError(e: unknown): string {
 export const MCP_PROVENANCE = 'via MCP'
 
 /** The provenance a REST write's activity row carries. An agent key's writes
- * name the key. A personal token's writes name no token, because the person
- * is the actor and only they and organization admins (on API access) see
- * their tokens, while the activity row reaches other members too. */
+ * name the key, cut to NAME_MAX code points, because a key named before that
+ * cap would otherwise repeat a long name in every write's row. A personal
+ * token's writes name no token, because the person is the actor and only
+ * they and organization admins (on API access) see their tokens, while the
+ * activity row reaches other members too. */
 export const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
+  keyName === null ? 'via the REST API' : `via the REST API (${cutName(keyName)})`
 
 /** The agent key's name for its writes' provenance, or null for a personal
  * token. */
@@ -106,6 +110,62 @@ export function wholeParam(
  * body reads as {}, and any other body as needJson reads it. */
 export const optionalJson = (raw: string): Record<string, unknown> =>
   raw.trim() === '' ? {} : needJson(raw)
+
+/** The largest REST or MCP request body, in bytes (1 MiB). A field at the
+ * 20,000-character text cap is at most about 120 KB of JSON, and files go to
+ * signed upload URLs, never through these bodies. */
+export const BODY_MAX_BYTES = 1024 * 1024
+
+/* convex/tsconfig's lib is ESNext only, which declares neither the decoder
+ * nor the request body stream the Convex runtime has. */
+declare class TextDecoder {
+  decode(value: Uint8Array): string
+}
+type BodyStream = {
+  getReader(): {
+    read(): Promise<{ done: boolean; value?: Uint8Array }>
+    cancel(): Promise<void>
+  }
+}
+
+/**
+ * A REST or MCP request body as text, or null when it is longer than
+ * BODY_MAX_BYTES. A Content-Length over the cap answers before the body is
+ * read. Otherwise the bytes are counted as they arrive, before decoding, so
+ * a body sent without Content-Length (chunked) stops being read once it
+ * passes the cap, and a byte-order mark counts too. The text decodes as
+ * request.text() would. Callers read it after authentication, so an
+ * unauthenticated caller learns nothing new and an oversized request still
+ * counts as a call.
+ */
+export async function readBody(request: Request): Promise<string | null> {
+  if (Number(request.headers.get('Content-Length')) > BODY_MAX_BYTES) return null
+  const body = (request as Request & { body: BodyStream | null }).body
+  if (body === null) return ''
+  const reader = body.getReader()
+  try {
+    const chunks: Uint8Array[] = []
+    let size = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) continue
+      size += value.byteLength
+      if (size > BODY_MAX_BYTES) return null
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return new TextDecoder().decode(bytes)
+  } finally {
+    // stops an oversized body; a no-op once the body has been read
+    await reader.cancel().catch(() => {})
+  }
+}
 
 /** An MCP tool's result text, the deployed `text()` body. It is 2-space
  * pretty JSON, stringified inside the internal function so the projection's

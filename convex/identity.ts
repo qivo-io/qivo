@@ -25,6 +25,7 @@ import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { authedMutation, authedQuery, require, rule } from './lib/functions'
 import { enrollOrganization } from './model/billing'
 import {
+  cleanOrgName,
   createStarterLabels,
   createStarterTeam,
   generateSlug,
@@ -184,7 +185,7 @@ export const createOrganization = authedMutation({
     require(!mine.some((p) => p.org_role !== 'guest' && p.accepted_at !== undefined), rule(
       'you already belong to an organization',
     ))
-    const nm = name.trim()
+    const nm = cleanOrgName(name)
     require(nm !== '', rule('the organization needs a name'))
     const em = user.email.toLowerCase()
     /* (e) who the provider says this is, before a name is invented from an

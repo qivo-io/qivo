@@ -15,6 +15,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { weekLabel } from './orgs'
 import { calendarDay } from './taskValues'
@@ -85,11 +86,17 @@ export function cleanMilestoneDate(raw: unknown): string {
   })
 }
 
-/** A milestone name as stored: trimmed, and refused when nothing is left,
- * as the app's Milestones window does before it saves. */
-export function cleanMilestoneName(raw: string): string {
+export const MILESTONE_NAME_TOO_LONG = `a milestone name must be at most ${NAME_MAX} characters`
+
+/** A milestone name as stored: trimmed, and refused when nothing is left, as
+ * the app's Milestones window does before it saves, or when it has more than
+ * NAME_MAX code points. A name equal to `current`, the milestone's stored
+ * one, passes, so a milestone named before the cap keeps its name through a
+ * move that resends it. */
+export function cleanMilestoneName(raw: string, current?: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a milestone name cannot be blank')
+  if (nameOverCap(name, current)) throw rule(MILESTONE_NAME_TOO_LONG)
   return name
 }
 
@@ -165,7 +172,7 @@ export async function updateMilestoneCore(
 ): Promise<Doc<'milestones'>> {
   const { me, milestone, now } = a
   const db: Partial<Doc<'milestones'>> = {}
-  if (a.patch.name !== undefined) db.name = cleanMilestoneName(a.patch.name)
+  if (a.patch.name !== undefined) db.name = cleanMilestoneName(a.patch.name, milestone.name)
   if (a.patch.week !== undefined) db.week = cleanMilestoneWeek(a.patch.week)
   const weekChanged = db.week !== undefined && db.week !== milestone.week
   const renamed = db.name !== undefined && db.name !== milestone.name

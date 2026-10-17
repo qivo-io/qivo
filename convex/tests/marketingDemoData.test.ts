@@ -13,7 +13,7 @@ import {
   marketingWeek,
 } from '../internal/marketingDemoData'
 import { taskOwnerId } from '../lib/review'
-import { TEXT_MAX } from '../lib/textLimits'
+import { nameTooLong, TEXT_MAX } from '../lib/textLimits'
 import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
@@ -496,6 +496,19 @@ describe('marketing text uses the application Markdown dialect', () => {
       expect(issue.description.length, issue.key).toBeLessThanOrEqual(TEXT_MAX)
     for (const comment of comments)
       expect(comment.body.length, comment.key).toBeLessThanOrEqual(TEXT_MAX)
+  })
+
+  it('keeps the organization, team, project and milestone names trimmed and within the name limit', () => {
+    const names = [
+      MARKETING_DEMO.organization.name,
+      ...teams.map((t) => t.name),
+      ...projects.map((p) => p.name),
+      ...milestones.map((m) => m.name),
+    ]
+    for (const name of names) {
+      expect(name, name).toBe(name.trim())
+      expect(nameTooLong(name), name).toBe(false)
+    }
   })
 })
 

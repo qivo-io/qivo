@@ -17,7 +17,7 @@ import { hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
-import { TEXT_MAX } from '../../convex/lib/textLimits'
+import { NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -433,6 +433,7 @@ function NameRow({ nameRef, name, setName, submit }) {
         aria-label="Name"
         ref={nameRef}
         value={name}
+        maxLength={NAME_MAX}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') submit()
@@ -1456,6 +1457,7 @@ function MilestoneModal({
                 data-milestone-new
                 data-autofocus={init.id ? undefined : ''}
                 value={name}
+                maxLength={NAME_MAX}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') add()
@@ -1651,6 +1653,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
           data-autofocus
           autoFocus
           value={name}
+          maxLength={NAME_MAX}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') save()
@@ -1737,6 +1740,7 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
           ref={ref}
           data-create-org
           value={name}
+          maxLength={NAME_MAX}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit()

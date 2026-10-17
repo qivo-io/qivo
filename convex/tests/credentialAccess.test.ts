@@ -21,7 +21,7 @@
  * in tests/webhookApi.test.ts, where the callback receiver is mocked. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
@@ -37,7 +37,16 @@ import { mcpResource } from '../lib/oauth'
 import { MCP_AUTH_401, sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { ROUTES } from '../machine/rest'
-import { as, expectRefusal, NOW, newT, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  beforeBodyRead,
+  expectRefusal,
+  NOW,
+  newT,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 /* The two read-only refusal sentences, pinned byte for byte here rather than
  * imported, so an edit to the source constants fails the HTTP sweep. */
@@ -1164,13 +1173,7 @@ describe('read-only credentials over HTTP', () => {
     // the grant narrows to qivo:write alone before the tool runs. That still
     // passes the per-call qivo:write check, so only the live access handed to
     // the tool, read without qivo:read, keeps it from writing.
-    const readText = Request.prototype.text
-    const spy = vi.spyOn(Request.prototype, 'text').mockImplementationOnce(async function (
-      this: Request,
-    ) {
-      await narrowGrant(c.t, grant.clientId, ['qivo:write'])
-      return readText.call(this)
-    })
+    const spy = beforeBodyRead(() => narrowGrant(c.t, grant.clientId, ['qivo:write']))
     try {
       const res = await callTool(c.t, grant.token, 'create_task', {
         project: c.f.sub.key,

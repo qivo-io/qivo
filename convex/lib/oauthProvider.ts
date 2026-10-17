@@ -6,7 +6,7 @@ import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { makeFunctionReference } from 'convex/server'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
-import { mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
+import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
 
 export const authorizationHash = (authUserId: string, query: URLSearchParams) =>
   sha256hex(
@@ -128,7 +128,7 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
           authorizationHash: await authorizationHash(user.id, query),
           authUserId: user.id,
           clientId,
-          clientName: client?.name || 'Unnamed app',
+          clientName: clientDisplayName(client?.name),
           resource,
           requestedScopes: (query.get('scope') || '').split(' ').filter(Boolean),
           scopes,

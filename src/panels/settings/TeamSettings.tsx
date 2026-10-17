@@ -55,6 +55,7 @@ export function TeamPage({
           <TextField
             label="Team name"
             value={teamName}
+            maxLength={P.NAME_MAX}
             onCommit={(v) => {
               P.updateTeam(ws, { name: v })
               window.showToast?.('Team renamed')
@@ -312,6 +313,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             <div className="[display:flex] [gap:8px]">
               <Input
                 value={teamName}
+                maxLength={P.NAME_MAX}
                 onChange={(e) => setTeamName(e.target.value)}
                 placeholder="New team name"
                 onKeyDown={(e) => {

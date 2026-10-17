@@ -280,7 +280,7 @@ export const change = authedMutation({
             await logMilestone(ctx, before, undefined, now)
           } else {
             const patch = { ...op.patch }
-            if (patch.name !== undefined) patch.name = cleanMilestoneName(patch.name)
+            if (patch.name !== undefined) patch.name = cleanMilestoneName(patch.name, existing.name)
             if (patch.week !== undefined) patch.week = cleanMilestoneWeek(patch.week)
             const after = { ...before, ...patch }
             if (same(before, after)) continue

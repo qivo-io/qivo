@@ -836,6 +836,7 @@ export function AuthGate() {
             id="organization-name"
             className={fieldClass}
             value={orgName}
+            maxLength={P.NAME_MAX}
             autoFocus
             data-create-org
             onChange={(e) => setOrgName(e.target.value)}

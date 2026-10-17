@@ -1,5 +1,6 @@
 import type { Doc } from '../_generated/dataModel'
 import { badRequest, forbidden } from './functions'
+import { cutName } from './textLimits'
 
 export const OAUTH_SCOPES = ['qivo:read', 'qivo:write', 'offline_access']
 export const oauthIssuer = () => {
@@ -17,6 +18,16 @@ export const mcpResource = () => {
 }
 export const mcpResourceMetadata = () =>
   `${new URL(mcpResource()).origin}/.well-known/oauth-protected-resource/mcp`
+
+/** An OAuth client's name as Qivo shows and stores it: whitespace runs
+ * folded to one space, trimmed, cut to NAME_MAX code points with "…", and
+ * 'Unnamed app' when nothing is left. Dynamic client registration takes any
+ * name from an unauthenticated caller, so the name is cut rather than
+ * refused; the person approving the connection did not choose it. */
+export function clientDisplayName(raw: string | null | undefined): string {
+  const name = cutName((raw ?? '').replace(/\s+/g, ' ').trim())
+  return name === '' ? 'Unnamed app' : name
+}
 
 export function homeProfile(profiles: Doc<'profiles'>[]): Doc<'profiles'> {
   const active = profiles.filter((p) => p.active && p.kind === 'person' && p.auth_user_id)

@@ -68,6 +68,7 @@ import { removeProfile } from './model/cascade'
 import {
   assertNotLastAdmin,
   assertSlugAvailable,
+  cleanOrgName,
   createStarterLabels,
   createStarterTeam,
   generateSlug,
@@ -208,7 +209,7 @@ export const insertOrganization = internalMutation({
   },
   handler: async (ctx, a): Promise<{ org_id: string; profile_ids: string[] }> => {
     refuseDemoFeature()
-    const name = a.name.trim()
+    const name = cleanOrgName(a.name)
     require(name !== '', rule('The organization needs a name.'))
     let slug: string
     if (a.slug === undefined || a.slug.trim() === '') slug = await generateSlug(ctx, name)

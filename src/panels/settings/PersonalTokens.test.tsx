@@ -313,6 +313,7 @@ describe('New token', () => {
     expect(find('[data-new-mcp-token-changes]').getAttribute('aria-checked')).toBe('true')
     expect(radio('never').checked).toBe(true)
     expect(find('input[aria-label="Name"]')).toBe(document.activeElement)
+    expect(find<HTMLInputElement>('input[aria-label="Name"]').maxLength).toBe(80)
     expect(createButton().disabled).toBe(true)
     await type('input[aria-label="Name"]', '   ')
     expect(createButton().disabled).toBe(true)
@@ -333,6 +334,8 @@ describe('New token', () => {
     expect(document.activeElement).toBe(find('[data-fresh-token]'))
     const secret = find('[data-fresh-token]').textContent?.replace('Copy token ', '') ?? ''
     expect(secret).toMatch(/^qvt_[0-9a-f]{48}$/)
+    // the shape convex/tokens.ts requires
+    expect(args.token_prefix).toMatch(/^qvt_[0-9a-f]{7}$/)
     expect(args.token_prefix).toBe(secret.slice(0, 11))
     // the server only ever sees the SHA-256 of the secret
     expect(args.token_hash).toBe(createHash('sha256').update(secret).digest('hex'))

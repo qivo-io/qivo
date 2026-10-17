@@ -36,6 +36,7 @@ import { isTeamLeader } from '../lib/access'
 import { asMachineCaller, type Caller } from '../lib/core'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
+import { NAME_MAX } from '../lib/textLimits'
 import { newUuid } from '../model/orgs'
 import {
   type AccessRemoval,
@@ -345,6 +346,7 @@ export const TEAM_TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
+            maxLength: NAME_MAX,
           },
         },
         required: ['name'],

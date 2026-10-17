@@ -139,6 +139,7 @@ import {
   MCP_NO_WRITE,
   MCP_PROVENANCE as PROVENANCE,
   pretty,
+  readBody,
   withIgnored,
 } from './shared'
 import { TEAM_TOOLS } from './teams'
@@ -937,6 +938,14 @@ const INVALID_MESSAGE = {
   id: null,
 }
 
+/* The 413 body for a request over BODY_MAX_BYTES (shared.ts readBody), in
+ * INVALID_MESSAGE's form. */
+const TOO_LARGE = {
+  jsonrpc: '2.0',
+  error: { code: -32600, message: 'Bad Request: the request body is too large' },
+  id: null,
+}
+
 /* The captured -32603 body for a params-less legacy initialize: a
  * pretty-printed zod issue array AS the message string. */
 const LEGACY_INIT_NO_PARAMS = JSON.stringify(
@@ -986,11 +995,18 @@ function hasType(p: SchemaProp, x: unknown): boolean {
   }
 }
 
-function checkValue(p: SchemaProp, x: unknown): string | null {
+/* Arguments whose minLength and maxLength count code points, as the server's
+ * rules for them do (cleanTitle, NAME_MAX), so most single emoji count once.
+ * Every other argument counts UTF-16 code units, the unit of the long text
+ * caps (TEXT_MAX) and of zod's string checks. */
+const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
+
+/* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
+function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
   if (p.anyOf !== undefined) {
     // the alternative of the value's own type decides, else the first one
     const alternative = p.anyOf.find((option) => hasType(option, x)) ?? p.anyOf[0]
-    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x)
+    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x, codePoints)
   }
   switch (p.type) {
     case 'string': {
@@ -998,10 +1014,11 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       if (p.enum !== undefined && !p.enum.includes(x)) {
         return `Invalid option: expected one of ${p.enum.map((e) => `"${e}"`).join('|')}`
       }
-      if (p.minLength !== undefined && x.length < p.minLength) {
+      const length = codePoints ? [...x].length : x.length
+      if (p.minLength !== undefined && length < p.minLength) {
         return `Too small: expected string to have >=${p.minLength} characters`
       }
-      if (p.maxLength !== undefined && x.length > p.maxLength) {
+      if (p.maxLength !== undefined && length > p.maxLength) {
         return `Too big: expected string to have <=${p.maxLength} characters`
       }
       if (p.format === 'uuid') {
@@ -1043,7 +1060,7 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       }
       if (p.items === undefined) return null
       for (const item of x) {
-        const problem = checkValue(p.items, item)
+        const problem = checkValue(p.items, item, codePoints)
         if (problem !== null) return problem
       }
       return null
@@ -1070,7 +1087,7 @@ function validateArgs(tool: ToolDef, args: Record<string, unknown>): string | nu
       }
       continue
     }
-    const msg = checkValue(prop, value)
+    const msg = checkValue(prop, value, CODE_POINT_ARGS.has(key))
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
   return problems.length > 0 ? problems.join(', ') : null
@@ -2176,7 +2193,8 @@ const mcpPost = httpAction(async (ctx, request) => {
       }))
     )
       return rateLimited()
-    const bodyText = await request.text()
+    const bodyText = await readBody(request)
+    if (bodyText === null) return jsonRes(413, TOO_LARGE)
     const challenge = scopeChallenge(bodyText, credential.scopes)
     if (challenge) return challenge
     try {
@@ -2249,7 +2267,8 @@ const mcpPost = httpAction(async (ctx, request) => {
   })
   if (allowed === null) return unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
-  const bodyText = await (request as unknown as { text(): Promise<string> }).text()
+  const bodyText = await readBody(request)
+  if (bodyText === null) return jsonRes(413, TOO_LARGE)
   // the exact credential row this request runs as, for get_me and events/*
   const owner: EventOwner = {
     profile_id: cred.profileId,

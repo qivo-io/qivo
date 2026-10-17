@@ -14,12 +14,13 @@
  *      MCP's update_user. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import { ROUTES } from '../machine/rest'
 import {
   activityFor,
+  beforeBodyRead,
   NOW,
   newT,
   plantIssue,
@@ -503,15 +504,7 @@ describe('personal token authentication on REST', () => {
     const { t, f } = fx
     // the shell reads the body after authenticating and before dispatch, so
     // the profile flips in between
-    const flipBefore = (change: () => Promise<unknown>) => {
-      const readText = Request.prototype.text
-      return vi.spyOn(Request.prototype, 'text').mockImplementationOnce(async function (
-        this: Request,
-      ) {
-        await change()
-        return readText.call(this)
-      })
-    }
+    const flipBefore = beforeBodyRead
     const user = await plantToken(t, f.user, { access: 'write' })
     const patchTitle = () => call(t, user, 'PATCH', '/v1/tasks/QN-1', { title: 'x' })
     let spy = flipBefore(() => t.run((ctx) => ctx.db.patch(f.user._id, { active: false })))

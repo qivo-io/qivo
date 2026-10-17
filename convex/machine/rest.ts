@@ -143,6 +143,7 @@ import {
   internalError,
   needJson,
   restProvenance as provenanceOf,
+  readBody,
   vKeyName,
   wholeParam,
 } from './shared'
@@ -979,6 +980,9 @@ const json = (body: unknown, status: number): Response =>
 
 const err = (message: string, status: number): Response => json({ error: message }, status)
 
+/* The 413 for a body over BODY_MAX_BYTES (shared.ts readBody). */
+const tooLarge = (): Response => err('request body is too large', 413)
+
 const rateLimited = (): Response =>
   new Response(JSON.stringify({ error: 'Too many requests. Try again in 60 seconds.' }), {
     status: 429,
@@ -1378,10 +1382,12 @@ async function webhookResponse(
   if (seg.length === 2 && req.method === 'GET')
     return json(await ctx.runQuery(internal.webhooks.list, { owner }), 200)
   if (seg.length === 2 && req.method === 'POST') {
+    const params = await readBody(req)
+    if (params === null) return tooLarge()
     const reply = await ctx.runAction(internal.webhookActions.manage, {
       owner,
       method: 'events/subscribe',
-      params_json: await req.text(),
+      params_json: params,
     })
     if ('error' in reply) {
       const status =
@@ -1445,8 +1451,10 @@ const restHandler = httpAction(async (ctx, req) => {
     const keyName = res.cred.isAgent ? res.cred.keyName : null
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
-    // every method but GET may carry a body; DELETE's is optional
-    const body = req.method === 'GET' ? '' : await req.text()
+    // every method but GET may carry a body; DELETE's is optional. One over
+    // BODY_MAX_BYTES answers 413 here, after the call was counted
+    const body = req.method === 'GET' ? '' : await readBody(req)
+    if (body === null) return tooLarge()
     // other methods on a known path (PATCH …/comments, PUT on a task) fall
     // to the unknown-route 404, as deployed
     const found = findRoute(req.method, seg.slice(1))

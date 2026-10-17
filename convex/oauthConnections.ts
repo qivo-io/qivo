@@ -6,7 +6,13 @@ import { credentialAccess, findAuthUser, loginBanned } from './lib/access'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { authedMutation, authedQuery, badRequest, notFound } from './lib/functions'
-import { canonicalOAuthQuery, homeProfile, mcpResource, validateOAuthQuery } from './lib/oauth'
+import {
+  canonicalOAuthQuery,
+  clientDisplayName,
+  homeProfile,
+  mcpResource,
+  validateOAuthQuery,
+} from './lib/oauth'
 import { authorizationHash } from './lib/oauthProvider'
 import { newUuid } from './model/orgs'
 
@@ -49,7 +55,7 @@ export const getContext = authedMutation({
         profile_id: profile.id,
         org_id: org.id,
         client_id: query.get('client_id') || '',
-        client_name: client.client_name || 'Unnamed app',
+        client_name: clientDisplayName(client.client_name),
         resource: mcpResource(),
         requested_scopes: (query.get('scope') || '').split(' ').filter(Boolean),
         scopes: [],
@@ -59,7 +65,7 @@ export const getContext = authedMutation({
     return {
       oauthQuery,
       clientId: query.get('client_id') || '',
-      clientName: client.client_name || 'Unnamed app',
+      clientName: clientDisplayName(client.client_name),
       redirectOrigin: new URL(query.get('redirect_uri') || '').origin,
       profileId: profile.id,
       profileName: profile.name,
@@ -149,7 +155,7 @@ export const ensure = internalMutation({
         profile_id: home.id,
         org_id: home.org_id,
         client_id: args.clientId,
-        client_name: args.clientName,
+        client_name: clientDisplayName(args.clientName),
         resource: args.resource,
         requested_scopes: args.requestedScopes,
         scopes: [],

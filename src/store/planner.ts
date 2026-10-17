@@ -21,7 +21,7 @@ import {
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
-import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
+import { NAME_MAX, TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -1635,8 +1635,9 @@ function eachDescendant(it: IssueVM, visit: (child: IssueVM) => void) {
 export const TITLE_MAX = 80
 const clampTitle = (t: unknown) => [...String(t ?? '').trim()].slice(0, TITLE_MAX).join('')
 
-// Same cap, same reason, for a person's name — mirrored by the server (0116).
-export const NAME_MAX = 80
+// Same cap, same reason, for a person's name (0116) and every other name the
+// server caps (convex/lib/textLimits.ts NAME_MAX).
+export { NAME_MAX }
 
 /* The app-side patch: camelCase fields, week INDEXES for dates, null (or ''
    for remaining) meaning clear — what every issue-editing surface hands

@@ -205,6 +205,13 @@ counted per calendar month (UTC) and are never charged. Requests rejected for
 missing/invalid credentials or rate limiting are not counted. The separate
 curation API keeps its own limits below.
 
+A request body may hold at most **1 MiB** (1,048,576 bytes of UTF-8). Qivo
+checks the size after authentication, before routing, and answers a longer
+body with `413` `{"error": "request body is too large"}`. Such a request
+still counts as a call. A declared `Content-Length` over the limit is refused
+without reading the body. Files never travel in these bodies; see
+[Attachments](#attachments).
+
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
 existing access rules. An organization admin can subscribe or update payment
@@ -414,7 +421,10 @@ read, `access` flags included.
 - A creator who is not an organization admin and names someone else as the
   lead of a top-level project gets User access to it, as in the app, so the
   project stays in their sight.
-- `name` is trimmed and may not be blank. `description` is at most 500
+- `name` is trimmed, may not be blank and holds at most 80 characters (`a
+  project name must be at most 80 characters`). Names count Unicode code
+  points, so most single emoji count as one character, while flags, skin
+  tones and joined emoji count as several. `description` is at most 500
   characters, and `null` means none.
 - The body takes no grants. `access` and `team_access` are refused with
   `give access one user or team at a time, under /v1/projects/{ref}/access`,
@@ -438,6 +448,9 @@ follows the rule for managing its users instead, so someone who is neither an
 organization admin nor its lead gets `no permission to manage users on this
 project`.
 
+- `name` follows the rule for creating. A project named before the
+  80-character limit keeps its longer name until it is renamed, and sending
+  that same name back is accepted.
 - `review_hours` is a number of hours from 0 to 999, kept to 0.1 h, or `null`
   to use the parent's or the default again.
 - `archived: true` archives the project, and a top-level project's active
@@ -545,9 +558,12 @@ write access to this project`. An archived project takes no new milestones
 
 `date` is a real calendar day as `YYYY-MM-DD` (`date must be YYYY-MM-DD`,
 `date must be a valid calendar date`), usually the first day of a planning
-week. `name` is trimmed and may not be blank. `POST` answers `201` and
-`PATCH` `200` with `{"id", "name", "date", "project_id"}`, where `project_id`
-is the top-level project; `DELETE` answers `{"deleted": true, "id"}`.
+week. `name` is trimmed, may not be blank and holds at most 80 characters (`a
+milestone name must be at most 80 characters`); a milestone named before
+that limit keeps its longer name through a `PATCH` that sends it back
+unchanged. `POST` answers `201` and `PATCH` `200` with `{"id", "name",
+"date", "project_id"}`, where `project_id` is the top-level project;
+`DELETE` answers `{"deleted": true, "id"}`.
 `GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
 `renamed milestone`, `moved milestone` or `deleted milestone`.
 
@@ -576,10 +592,12 @@ Only organization admins create teams; anyone else gets `only organization
 admins can create teams`. An organization admin or a leader of the team
 renames it with `PATCH`, and anyone else gets `requires an organization admin
 or a leader of this team`. `name` is trimmed and may not be blank (`a team
-name cannot be blank`). `PATCH` changes only `name`, and a body without it is
-a `400` (`no recognized fields to update`). The team's other settings and
-deleting a team stay in the app. `POST` answers `201` and `PATCH` `200` with
-the team. Neither writes an activity row, as in the app.
+name cannot be blank`) or longer than 80 characters (`a team name must be at
+most 80 characters`), unless it is a longer name the team had before that
+limit, sent back unchanged. `PATCH` changes only `name`, and a body without
+it is a `400` (`no recognized fields to update`). The team's other settings
+and deleting a team stay in the app. `POST` answers `201` and `PATCH` `200`
+with the team. Neither writes an activity row, as in the app.
 
 Members decide who sees the projects shared with the team, so changing them
 needs a person who is an organization admin or a leader of the team. An agent
@@ -1655,7 +1673,8 @@ curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application
 
 Organization API writes leave the same trail the app leaves, and they are **signed**: an
 `activity_events` feed row whose actor is **the caller's user**. For an agent
-key the detail is `via the REST API (<key name>)`. The org-level `qv_` keys
+key the detail is `via the REST API (<key name>)`, with a key name longer than
+80 characters cut to its first 80 followed by `…`. The org-level `qv_` keys
 this replaced left a null actor and that footnote, which read as "someone,
 somehow" in a feed whose whole job is saying who did what; an agent is a user,
 so it signs its own work. The key is still named beside it, because an agent
