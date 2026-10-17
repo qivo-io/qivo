@@ -23,9 +23,11 @@ import {
   startPurge,
   TRASH_BUDGET,
 } from '../model/deletedItems'
+import { HOLDER_SIGHT_RULE } from '../model/issues'
 import {
   activityFor,
   as,
+  expectRefusal,
   messagesFor,
   NOW,
   newT,
@@ -340,6 +342,86 @@ describe('restoring a task item', () => {
     await patch(t, 'issues', chain[0].id, { parent_id: top.id })
     await restore(t, f.user, [(await itemFor(t, deepest.id)).id])
     expect((await liveTask(t, deepest.id))?.parent_id).toBeUndefined()
+  })
+
+  it('keeps a parent only while its assignee can still see it, as a reparent requires', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // the guest edits Board rev through the top-level grant, and sees the
+    // parent's project in Skunkworks through a grant of its own
+    const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    const grant = await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: hiddenSub.id,
+        profile_id: f.guest.id,
+        level: 'user',
+      }),
+    )
+    const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
+    const child = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+      assignee_id: f.guest.id,
+    })
+    const deleteAndRestore = async () => {
+      await deleteTask(t, f, child.id)
+      const item = await itemFor(t, child.id)
+      expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+      return await liveTask(t, child.id)
+    }
+    // the guest sees the whole chain, so the parent stays
+    expect(await deleteAndRestore()).toMatchObject({
+      parent_id: parent.id,
+      assignee_id: f.guest.id,
+    })
+
+    // the guest loses Skunkworks and keeps Board rev, so the task comes back
+    // without the parent and keeps its assignee
+    await t.run((ctx) => ctx.db.delete(grant))
+    const back = await deleteAndRestore()
+    expect(back?.parent_id).toBeUndefined()
+    expect(back?.assignee_id).toBe(f.guest.id)
+    // an edit refuses that parent for the same reason
+    const refused = await expectRefusal(
+      as(t, f.user).mutation(api.issues.update, {
+        org_id,
+        id: child.id,
+        patch: { parent_id: parent.id },
+      }),
+      'rule',
+    )
+    expect(refused.data.message).toBe(HOLDER_SIGHT_RULE)
+  })
+
+  it('keeps no parent that someone working on a subtask that comes back with it cannot see', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const hiddenSub = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    const parent = await plantIssue(t, { org_id, project_id: hiddenSub.id })
+    // the admin, who sees every project, works on the task; the guest, who
+    // cannot see Skunkworks, works on its subtask
+    const task = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+      assignee_id: f.admin.id,
+    })
+    const subtask = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: task.id,
+      assignee_id: f.guest.id,
+    })
+    await deleteTask(t, f, task.id, { subtask_ids: [subtask.id] })
+    await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
+    expect(await liveTask(t, subtask.id)).toMatchObject({
+      parent_id: task.id,
+      assignee_id: f.guest.id,
+    })
   })
 
   it('drops references whose uuid now names something created after the delete', async () => {
@@ -1558,6 +1640,44 @@ describe('parents outside a restored project', () => {
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
     expect((await parentsOf(t, tasks)).filter((p) => p === epic.id)).toHaveLength(1)
+    expect(await waitingParents(t)).toEqual([])
+  })
+
+  it('attaches a task only when everyone working under it can see the parent, as a reparent requires', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // the guest edits Board rev through the top-level grant and cannot see
+    // Skunkworks, where the epic is
+    const epic = await plantIssue(t, { org_id, project_id: f.hidden.id })
+    const plant = (extra: Partial<Doc<'issues'>>) =>
+      plantIssue(t, { org_id, project_id: f.sub2.id, ...extra })
+    // the guest works on this one only where a reparent does not look, as
+    // the dormant reviewer of a group and on an archived subtask
+    const kept = await plant({
+      parent_id: epic.id,
+      assignee_id: f.admin.id,
+      reviewer_id: f.guest.id,
+    })
+    await plant({ parent_id: kept.id, reviewer_id: f.admin.id })
+    await plant({ parent_id: kept.id, assignee_id: f.guest.id, archived_at: NOW })
+    // the guest reviews an open subtask two levels under this one
+    const lost = await plant({ parent_id: epic.id })
+    const middle = await plant({ parent_id: lost.id })
+    const leaf = await plant({ parent_id: middle.id, reviewer_id: f.guest.id })
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.sub2.id)
+
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    await runSteps(t)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect((await liveTask(t, kept.id))?.parent_id).toBe(epic.id)
+    expect((await liveTask(t, lost.id))?.parent_id).toBeUndefined()
+    expect(await liveTask(t, leaf.id)).toMatchObject({
+      parent_id: middle.id,
+      reviewer_id: f.guest.id,
+    })
     expect(await waitingParents(t)).toEqual([])
   })
 
