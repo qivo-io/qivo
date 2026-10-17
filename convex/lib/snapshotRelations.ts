@@ -84,8 +84,10 @@ const byCreation = <Row extends { _creationTime: number }>(rows: Row[]): Row[] =
  * task so far fit RELATION_READ.ranges, else in full. A table kept in bulk is
  * then probed for rows stored without org_id, which the organization's range
  * cannot hold. While an unmarked one exists anywhere, that table is read task
- * by task as before. No writer stores such rows any more, none rewrites
- * them, and the archive steps never mark one.
+ * by task as before. No writer stores such rows any more, and
+ * internal/attachmentScopeBackfill gives older attachment rows their
+ * organization. Nothing rewrites older label and link rows, and the archive
+ * steps never mark a row without org_id.
  *
  * A task restored from the archive keeps marked rows until background steps
  * clear them, and carries relations_marked meanwhile. Each such visible task

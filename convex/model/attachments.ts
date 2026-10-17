@@ -14,6 +14,13 @@
  * because a throw would roll the delete back (files.ts header, the probe
  * verdict).
  *
+ * Each row carries its task's organization and project. The app snapshot
+ * reads the organization's rows by index, and the storage totals group
+ * them by project without reading tasks (model/billing.ts storageUsage).
+ * moveIssueCore moves the project with the task. A file name has 1 to 255
+ * characters and a media type at most 255. That keeps every row small, and
+ * storageUsage reads all of an organization's rows in one transaction.
+ *
  * REST uploads in two steps. startAttachmentUpload checks the write gate and
  * the declared size, mints a Convex upload URL and records a ticket naming
  * the caller, the task and an expiry. The client sends the bytes to the URL,
@@ -92,8 +99,33 @@ async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
 /** The refusal for a file larger than the organization allows. */
 const overCap = (cap: number): string => `attachment exceeds the organization limit of ${cap} MiB`
 
-/* System fields stay internal; optional columns come back ABSENT. */
-const pub = ({ _id, _creationTime, org_id: _orgId, ...row }: Doc<'issue_attachments'>) => row
+/* The longest file name an attachment may have, in characters. */
+const NAME_MAX = 255
+
+/** The longest media type an attachment may have. REST also checks it when
+ * an upload starts (machine/records.ts uploadFields). */
+export const ATTACHMENT_TYPE_MAX = 255
+
+/** Answers `raw` trimmed, the name an attachment stores. Refuses a name that
+ * is empty after trimming or longer than 255 characters. REST checks it when
+ * an upload starts, and attachFileCore for every attach. */
+export function cleanAttachmentName(raw: string): string {
+  const name = raw.trim()
+  if (name === '' || [...name].length > NAME_MAX) {
+    throw badRequest(`name must be a file name of 1 to ${NAME_MAX} characters`)
+  }
+  return name
+}
+
+/* System fields and the index fields (organization and project) stay
+ * internal; optional columns come back ABSENT. */
+const pub = ({
+  _id,
+  _creationTime,
+  org_id: _orgId,
+  project_id: _projectId,
+  ...row
+}: Doc<'issue_attachments'>) => row
 
 export type AttachmentRow = ReturnType<typeof pub>
 
@@ -108,12 +140,14 @@ export type AttachResult =
  * Attaches the stored file `storage_id` to `issue` as `me`, with the
  * activity row the app writes ('attached a file to', or 'added an image to'
  * for an inline image), signed with `provenance` for a machine caller. The
- * size comes from storage metadata. When `declaredSize` is given, the stored
- * file must have exactly that many bytes, checked before the cap so that a
- * file of another size is refused and kept, never deleted. Throws before any
- * write; only an oversize file is a returned refusal, after its bytes are
- * deleted. Does not notify and does not stamp the task's updated_at, as in
- * the app.
+ * row takes the task's organization and project. `name` is stored trimmed
+ * and must have 1 to 255 characters, and the media type (`mime`, else the
+ * stored file's) at most 255. The size comes from storage metadata. When
+ * `declaredSize` is given, the stored file must have exactly that many
+ * bytes, checked before the cap so that a file of another size is refused
+ * and kept, never deleted. Throws before any write; only an oversize file is
+ * a returned refusal, after its bytes are deleted. Does not notify and does
+ * not stamp the task's updated_at, as in the app.
  */
 export async function attachFileCore(
   ctx: MutationCtx,
@@ -132,12 +166,17 @@ export async function attachFileCore(
 ): Promise<AttachResult> {
   const { me, issue } = a
   await assertCanEdit(ctx, me, issue.project_id)
+  const name = cleanAttachmentName(a.name)
   if (await storageIdInUse(ctx, a.storage_id)) {
     // never delete here, the bytes belong to the EXISTING referent
     throw badRequest('this file is already attached')
   }
   const meta = await ctx.db.system.get(a.storage_id)
   if (meta === null) throw badRequest('attachment bytes not found in storage')
+  const mime = a.mime ?? meta.contentType ?? undefined
+  if (mime !== undefined && mime.length > ATTACHMENT_TYPE_MAX) {
+    throw badRequest(`the file's media type must be at most ${ATTACHMENT_TYPE_MAX} characters`)
+  }
   if (a.declaredSize !== undefined && meta.size !== a.declaredSize) {
     throw badRequest(`the uploaded file has ${meta.size} bytes, not the ${a.declaredSize} declared`)
   }
@@ -154,10 +193,11 @@ export async function attachFileCore(
     {
       id: a.id,
       org_id: issue.org_id,
+      project_id: issue.project_id,
       issue_id: issue.id,
-      name: a.name,
+      name,
       size_bytes: meta.size, // server truth, NEVER a client number (0089)
-      mime: a.mime ?? meta.contentType ?? undefined,
+      mime,
       storage_id: a.storage_id,
       inline: a.inline,
       uploaded_by: me.id,
@@ -172,7 +212,7 @@ export async function attachFileCore(
     target_type: 'issue',
     target_id: issue.id,
     label: issue.title,
-    detail: signedDetail(a.name, a.provenance),
+    detail: signedDetail(name, a.provenance),
     project_id: issue.project_id,
     ts: a.now,
   })

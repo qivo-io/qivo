@@ -64,6 +64,13 @@ function relationRow<
   return row
 }
 
+/* An attachment as the app receives it. Its project only serves storage
+ * totals (model/billing.ts storageUsage). */
+function attachmentRow(doc: Doc<'issue_attachments'>) {
+  const { project_id: _project, ...row } = relationRow(doc)
+  return row
+}
+
 // Billing is admin-only; application counters and settings are shared.
 type OrgRow = Omit<AppRow<'organizations'>, 'billing' | 'activity_count'> & {
   billing?: Doc<'organizations'>['billing']
@@ -114,7 +121,7 @@ export const forMe = authedQuery({
     const labels: AppRow<'labels'>[] = []
     const issueLabels: RelationRow<'issue_labels'>[] = []
     const issueSubs: RelationRow<'issue_subscriptions'>[] = []
-    const attachments: RelationRow<'issue_attachments'>[] = []
+    const attachments: ReturnType<typeof attachmentRow>[] = []
     const milestones: AppRow<'milestones'>[] = []
     const orgLoad: OrgLoadRow[] = []
     const activityDocs: Doc<'activity_events'>[] = []
@@ -282,7 +289,7 @@ export const forMe = authedQuery({
         for (const il of ils) issueLabels.push(relationRow(il))
         // attachments — active tasks only. This is the expensive storage row
         // that previously made every archive part of the initial boot.
-        for (const a of atts) attachments.push(relationRow(a))
+        for (const a of atts) attachments.push(attachmentRow(a))
       }
 
       // Guests also see the host org's label vocabulary. Clients paint the

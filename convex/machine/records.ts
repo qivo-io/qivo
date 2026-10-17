@@ -35,9 +35,11 @@ import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import {
+  ATTACHMENT_TYPE_MAX,
   type AttachmentJson,
   type AttachResult,
   attachmentJson,
+  cleanAttachmentName,
   confirmAttachmentUpload,
   removeAttachmentCore,
   startAttachmentUpload,
@@ -90,9 +92,9 @@ async function attachmentOf(
 const canEdit = (ctx: QueryCtx, me: Caller, issue: Doc<'issues'>): Promise<boolean> =>
   hasProjectLevel(ctx, me, issue.project_id, 'user')
 
-/* The longest file name and media type an upload may declare. */
-const NAME_MAX = 255
-const TYPE_MAX = 255
+/* The shape of a media type an upload may declare. The file name rule and
+ * the type's length limit are model/attachments.ts's, which every attach
+ * checks again. */
 const MEDIA_TYPE = /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?:\s*;.*)?$/
 
 /* An upload body's file name, media type and byte size. */
@@ -101,14 +103,11 @@ function uploadFields(b: Record<string, unknown>): {
   content_type?: string
   size: number
 } {
-  const name = typeof b.name === 'string' ? b.name.trim() : ''
-  if (name === '' || [...name].length > NAME_MAX) {
-    throw badRequest(`name must be a file name of 1 to ${NAME_MAX} characters`)
-  }
+  const name = cleanAttachmentName(typeof b.name === 'string' ? b.name : '')
   let content_type: string | undefined
   if (b.content_type !== undefined && b.content_type !== null) {
     const value = typeof b.content_type === 'string' ? b.content_type.trim() : ''
-    if (value.length > TYPE_MAX || !MEDIA_TYPE.test(value)) {
+    if (value.length > ATTACHMENT_TYPE_MAX || !MEDIA_TYPE.test(value)) {
       throw badRequest('content_type must be a media type such as application/pdf')
     }
     content_type = value

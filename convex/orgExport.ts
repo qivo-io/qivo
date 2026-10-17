@@ -184,6 +184,9 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
     delete row.org_id
     delete row.task_archived
   }
+  // An attachment's project copies its task's for the storage totals. Other
+  // sections' project_id is their own data.
+  if (section === 'issue_attachments') delete row.project_id
   delete row.key_hash
   return row
 }

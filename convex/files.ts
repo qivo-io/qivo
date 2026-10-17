@@ -145,9 +145,9 @@ export const avatarUploadUrl = authedMutation({
 /* ----------------------------------------------------------------- attach
  * Order is load-bearing: every throw happens BEFORE any write, and the
  * oversize refusal-return happens before the row insert — the committed
- * transaction then carries exactly one effect, the byte delete. The cap,
- * the byte fence, the row and the activity row are model/attachments.ts
- * attachFileCore, which REST uploads run too. */
+ * transaction then carries exactly one effect, the byte delete. The name and
+ * type limits, the cap, the byte fence, the row and the activity row are
+ * model/attachments.ts attachFileCore, which REST uploads run too. */
 export const attach = orgMutation({
   args: {
     id: v.string(), // client-generated attachment uuid

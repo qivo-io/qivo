@@ -83,8 +83,8 @@ function terms(name = 'Founding', cents = 100): PlanInput {
     storage_meter_id: uuid(),
   }
 }
-async function fixture() {
-  const t = newT()
+async function fixture(options: Parameters<typeof newT>[0] = {}) {
+  const t = newT(options)
   const f = await withOrg(t)
   const operatorId = 'billing-operator'
   await t.run((ctx) =>
@@ -473,6 +473,94 @@ describe('provider state, retries and billing snapshots', () => {
         .unique(),
     )
     expect(sent).toMatchObject({ attempts: 1, sent_at: NOW })
+  })
+
+  it('reads and records the storage of an organization with 5,000 tasks within the transaction limits', async () => {
+    const { t, f } = await fixture({ transactionLimits: true })
+    await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
+    // 5,000 tasks, 4,500 of them with a 2 MB file, a third of those in PCB.
+    // The rows share one stored file; only their size_bytes count.
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    for (let from = 0; from < 5000; from += 1000) {
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 1000; i++) {
+          const project_id = i % 3 === 0 ? f.sub2.id : f.sub.id
+          const id = uuid()
+          await ctx.db.insert('issues', {
+            id,
+            org_id: f.org.id,
+            project_id,
+            num: i + 1,
+            title: `Task ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+          if (i < 4500)
+            await ctx.db.insert('issue_attachments', {
+              org_id: f.org.id,
+              project_id,
+              id: uuid(),
+              issue_id: id,
+              storage_id,
+              name: `file-${i}.bin`,
+              size_bytes: 2_000_000,
+              inline: false,
+              created_at: NOW,
+            })
+        }
+      })
+    }
+
+    // a row stored before rows carried their organization, whose task is
+    // gone, as the backfill leaves it, costs one lookup and counts nowhere
+    await t.run((ctx) =>
+      ctx.db.insert('issue_attachments', {
+        id: uuid(),
+        issue_id: uuid(),
+        storage_id,
+        name: 'old.bin',
+        size_bytes: 5,
+        inline: false,
+        created_at: NOW,
+      }),
+    )
+
+    // the admin Billing page
+    const report = await as(t, f.admin).query(usage, { org_id: f.org.id })
+    expect(report.storage_bytes).toBe(9_000_000_000)
+    expect(report.projects).toEqual([
+      { project_id: f.sub.id, name: 'Firmware', storage_bytes: 6_000_000_000 },
+      { project_id: f.sub2.id, name: 'Board rev', storage_bytes: 3_000_000_000 },
+    ])
+
+    // the renewal into the next period samples the same figure
+    const next = { start: END, end: '2026-11-01T12:00:00.000Z' }
+    await t.mutation(apply, {
+      payload: remote(f.org.id, {
+        current_period_start: next.start,
+        current_period_end: next.end,
+        modified_at: next.start,
+      }),
+      event_id: 'renewal',
+    })
+    expect(await stored(t, f.org.id)).toMatchObject({
+      current_period_start: next.start,
+      current_period_end: next.end,
+    })
+    const period = await t.run((ctx) =>
+      ctx.db
+        .query('billing_periods')
+        .withIndex('by_subscription_period', (q) =>
+          q.eq('subscription_id', providerId).eq('period_start', next.start),
+        )
+        .unique(),
+    )
+    // 9 GB against the 5 GB the plan includes for five seats
+    expect(period).toMatchObject({ storage_bytes: 9_000_000_000, storage_blocks: 4 })
   })
 
   it.each([0, 1])(

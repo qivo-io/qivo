@@ -431,7 +431,13 @@ describe('the REST upload', () => {
     expect(new URL(out.attachment.url).searchParams.get('m')).toBe(fx.agent.id)
     expect(await tickets(fx.t)).toEqual([])
     const row = await attachmentRow(fx.t, out.attachment.id)
-    expect(row).toMatchObject({ storage_id: stored, issue_id: issue.id, uploaded_by: fx.agent.id })
+    expect(row).toMatchObject({
+      storage_id: stored,
+      issue_id: issue.id,
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      uploaded_by: fx.agent.id,
+    })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       verb: 'attached a file to',
       detail: 'wiring.pdf — via the REST API (CI key)',
@@ -509,6 +515,16 @@ describe('the REST upload', () => {
     )
     expect(await storageExists(fx.t, huge)).toBe(true)
     expect(await tickets(fx.t)).toHaveLength(1)
+    // without a declared type the upload's own becomes the attachment's,
+    // and it has the same length limit
+    const typed = await storeFile(fx.t, 100, `application/${'x'.repeat(244)}`)
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: typed }),
+      'bad_request',
+      "the file's media type must be at most 255 characters",
+    )
+    expect(await storageExists(fx.t, typed)).toBe(true)
+    expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
   })
 
   it('deletes a file of the declared size over a cap lowered since the start, and spends the ticket', async () => {

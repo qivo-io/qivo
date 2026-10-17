@@ -183,7 +183,7 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
           .query('issue_attachments')
           .withIndex('by_uploaded_by', (q) => q.eq('uploaded_by', profileId)),
       clear: (ctx, attachment) => ctx.db.patch(attachment._id, { uploaded_by: undefined }),
-      large: true, // file names have no size cap
+      large: true, // file names stored before attachFileCore capped them have no size cap
     }),
   ],
   agent_keys: [

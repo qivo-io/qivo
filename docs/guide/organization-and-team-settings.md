@@ -11,6 +11,7 @@ planning hours.
 to **1–20 MiB**, with a default of **20 MiB**. The task's organization sets the
 limit, including for guest uploads. Lowering it leaves existing files intact.
 It does not set a combined storage quota. Only organization admins can change it.
+A file name can have up to 255 characters.
 
 ## Who can create projects
 

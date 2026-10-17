@@ -691,6 +691,14 @@ export default defineSchema({
 
   issue_attachments: defineTable({
     org_id: v.optional(v.string()),
+    // The task's project. attachFileCore and moveIssueCore keep it equal to
+    // issues.project_id, so storage totals group by project without reading
+    // tasks (model/billing.ts storageUsage). Any new code that changes a
+    // task's project, or writes attachment rows back such as a restore, must
+    // set it too. Rows stored before it existed lack it until
+    // internal/attachmentScopeBackfill fills them, and readers use the task's
+    // project meanwhile.
+    project_id: v.optional(v.string()),
     id: v.string(),
     issue_id: v.string(),
     name: v.string(),
