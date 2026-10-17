@@ -21,13 +21,31 @@
  * the function boundary, and REST answers objects.
  *
  * A task the caller cannot read answers like an unknown one, before any
- * write check. Uploads are REST only. Inline description images stay
- * app-only, so neither surface deletes one. */
+ * write check. Inline description images stay app-only, so neither surface
+ * uploads or deletes one.
+ *
+ * Both surfaces upload a file in the same three steps, through the same
+ * ticket (model/attachments.ts startAttachmentUpload and
+ * confirmAttachmentUpload). The start answers a one-time upload URL that
+ * takes no credential, the client sends the bytes there, and the confirm
+ * attaches them. So the file never passes through an MCP or REST request,
+ * and an OAuth token never leaves /mcp. A ticket belongs to the user, not the
+ * credential, so either surface may confirm it. MCP's attach_text_file
+ * stores text the assistant writes itself, for a client that cannot send
+ * the bytes anywhere. Its action stores the text and a mutation attaches
+ * it, both behind the same checks as every other MCP write. */
 
-import { type ConvexError, v } from 'convex/values'
+import { ConvexError, type ObjectType, v } from 'convex/values'
 import { internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
-import { internalMutation, internalQuery, type QueryCtx } from '../_generated/server'
+import type { Doc, Id } from '../_generated/dataModel'
+import {
+  type ActionCtx,
+  internalAction,
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+  type QueryCtx,
+} from '../_generated/server'
 import { canSeeProject, hasProjectLevel } from '../lib/access'
 import { taskActivity } from '../lib/activityVisibility'
 import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } from '../lib/core'
@@ -35,9 +53,11 @@ import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import {
+  ATTACHMENT_NAME_MAX,
   ATTACHMENT_TYPE_MAX,
   type AttachmentJson,
   type AttachResult,
+  attachFileCore,
   attachmentJson,
   cleanAttachmentName,
   confirmAttachmentUpload,
@@ -46,6 +66,7 @@ import {
   taskAttachments,
   UPLOAD_STORAGE_ID,
 } from '../model/attachments'
+import { newUuid } from '../model/orgs'
 import { calendarDay } from '../model/taskValues'
 import { type WorkloadJson, workloadCore } from '../planning'
 import type { TOOLS } from './mcp'
@@ -97,7 +118,8 @@ const canEdit = (ctx: QueryCtx, me: Caller, issue: Doc<'issues'>): Promise<boole
  * checks again. */
 const MEDIA_TYPE = /^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?:\s*;.*)?$/
 
-/* An upload body's file name, media type and byte size. */
+/* An upload's file name, media type and byte size, from a REST body or MCP
+ * arguments. */
 function uploadFields(b: Record<string, unknown>): {
   name: string
   content_type?: string
@@ -187,6 +209,189 @@ export const restConfirmUpload = internalMutation({
     })
     if ('refused' in result) return { refused: result.refused.message }
     return { attachment: await attachmentJson(ctx, me, result.attachment) }
+  },
+})
+
+/* start_attachment_upload starts an upload by REST's rule (restStartUpload). */
+export const mcpStartUpload = internalMutation({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    name: v.string(),
+    size: v.number(),
+    content_type: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const issue = await findIssue(ctx, me, a.ref)
+    if (issue === null) throw notFound(`task "${a.ref}" not found (or not visible to you)`)
+    if (!(await canEdit(ctx, me, issue))) throw forbidden(MCP_NO_WRITE)
+    const fields = uploadFields({ name: a.name, content_type: a.content_type, size: a.size })
+    const { ticket, uploadUrl } = await startAttachmentUpload(ctx, {
+      me,
+      issue,
+      ...fields,
+      nowMs: Date.now(),
+    })
+    return pretty({
+      ticket: ticket.id,
+      upload_url: uploadUrl,
+      expires_at: new Date(ticket.expires_at).toISOString(),
+    })
+  },
+})
+
+/* confirm_attachment_upload attaches the uploaded file by REST's rule
+ * (restConfirmUpload). An oversize file comes back as a refusal whose byte
+ * delete has committed, and the tool answers it as an error result. */
+export const mcpConfirmUpload = internalMutation({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    ticket: v.string(),
+    storage_id: v.string(),
+  },
+  handler: async (ctx, a): Promise<{ refused: string } | { text: string }> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const issue = await findIssue(ctx, me, a.ref)
+    if (issue === null) throw notFound(`task "${a.ref}" not found (or not visible to you)`)
+    if (!(await canEdit(ctx, me, issue))) throw forbidden(MCP_NO_WRITE)
+    const result = await confirmAttachmentUpload(ctx, {
+      me,
+      issue,
+      ticketId: a.ticket,
+      storage_id: a.storage_id,
+      nowMs: Date.now(),
+      provenance: MCP_PROVENANCE,
+    })
+    if ('refused' in result) return { refused: result.refused.message }
+    return { text: pretty(await attachmentJson(ctx, me, result.attachment)) }
+  },
+})
+
+/* The largest text attach_text_file stores, in UTF-8 bytes (256 KiB). The
+ * organization's per-file limit applies too. */
+export const TEXT_FILE_MAX_BYTES = 256 * 1024
+
+/* The media type of a text file attached without one. */
+const TEXT_FILE_TYPE = 'text/plain; charset=utf-8'
+
+/* The Convex isolate's Blob, which encodes a string part as UTF-8.
+ * convex/env.d.ts declares the type without its constructor. */
+declare const Blob: { new (parts: string[], options: { type: string }): Blob }
+
+/* What attach_text_file checks before it stores the text and again when it
+ * attaches it, with the text's `size` in UTF-8 bytes. */
+const vTextFile = {
+  callerId: v.string(),
+  access: vCredentialAccess,
+  ref: v.string(),
+  name: v.string(),
+  content_type: v.string(),
+  size: v.number(),
+}
+
+/**
+ * The caller, the task and the file's trimmed name, media type and size for
+ * attach_text_file. It refuses in the order of every MCP write, so a
+ * read-only credential comes first, then a task the caller cannot read, then
+ * one it cannot edit, then the fields.
+ */
+async function textFileTarget(
+  ctx: MutationCtx,
+  a: ObjectType<typeof vTextFile>,
+): Promise<{ me: Caller; issue: Doc<'issues'> } & ReturnType<typeof uploadFields>> {
+  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const issue = await findIssue(ctx, me, a.ref)
+  if (issue === null) throw notFound(`task "${a.ref}" not found (or not visible to you)`)
+  if (!(await canEdit(ctx, me, issue))) throw forbidden(MCP_NO_WRITE)
+  const fields = uploadFields(a)
+  if (fields.size > TEXT_FILE_MAX_BYTES) {
+    throw badRequest(`text must be at most 256 KiB (${TEXT_FILE_MAX_BYTES} bytes) as UTF-8`)
+  }
+  return { me, issue, ...fields }
+}
+
+/* attach_text_file's check before the text is stored, so a call it refuses
+ * stores nothing. */
+export const mcpCheckTextFile = internalMutation({
+  args: vTextFile,
+  handler: async (ctx, a): Promise<null> => {
+    await textFileTarget(ctx, a)
+    return null
+  },
+})
+
+/* attach_text_file attaches the stored text by the app's rule
+ * (attachFileCore), after the same checks again. A file over the
+ * organization's limit comes back as a refusal whose byte delete has
+ * committed. */
+export const mcpAttachStoredText = internalMutation({
+  args: { ...vTextFile, storage_id: v.id('_storage') },
+  handler: async (ctx, a): Promise<{ refused: string } | { text: string }> => {
+    const { me, issue, name, content_type, size } = await textFileTarget(ctx, a)
+    const result = await attachFileCore(ctx, {
+      me,
+      issue,
+      id: newUuid(),
+      storage_id: a.storage_id,
+      name,
+      mime: content_type,
+      inline: false,
+      now: new Date().toISOString(),
+      declaredSize: size,
+      provenance: MCP_PROVENANCE,
+    })
+    if ('refused' in result) return { refused: result.refused.message }
+    return { text: pretty(await attachmentJson(ctx, me, result.attachment)) }
+  },
+})
+
+/**
+ * Stores `file` and runs `attach` with its storage id, as http.ts
+ * receiveBackground does. When `attach` refuses (a ConvexError), its
+ * transaction rolled back and nothing holds the file, so the file is deleted
+ * before the refusal is rethrown. Any other failure leaves the file to the
+ * weekly sweep, which keeps it if the attach committed after all.
+ */
+export async function storeThenAttach<Out>(
+  storage: Pick<ActionCtx['storage'], 'store' | 'delete'>,
+  file: Blob,
+  attach: (storageId: Id<'_storage'>) => Promise<Out>,
+): Promise<Out> {
+  const storageId = await storage.store(file)
+  try {
+    return await attach(storageId)
+  } catch (e) {
+    if (e instanceof ConvexError) await storage.delete(storageId)
+    throw e
+  }
+}
+
+/* attach_text_file stores `text` as a UTF-8 file and attaches it to the
+ * task. The check runs first, so a refused call stores nothing. Answers the
+ * attachment as get_task lists it. */
+export const mcpAttachTextFile = internalAction({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    name: v.string(),
+    text: v.string(),
+    content_type: v.optional(v.string()),
+  },
+  handler: async (ctx, { text, content_type = TEXT_FILE_TYPE, ...a }): Promise<string> => {
+    const file = new Blob([text], { type: content_type })
+    const target = { ...a, content_type, size: file.size }
+    await ctx.runMutation(internal.machine.records.mcpCheckTextFile, target)
+    const out = await storeThenAttach(ctx.storage, file, (storage_id) =>
+      ctx.runMutation(internal.machine.records.mcpAttachStoredText, { ...target, storage_id }),
+    )
+    // the refusal's byte delete has committed, and an action rolls nothing back
+    if ('refused' in out) throw badRequest(out.refused)
+    return out.text
   },
 })
 
@@ -433,6 +638,116 @@ export const RECORD_TOOLS: McpTool[] = [
         callerId,
         access,
         ...(args as { ref: string; attachment: string }),
+      }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'start_attachment_upload',
+      title: 'Start attachment upload',
+      description:
+        "Start attaching a file to the task `ref`. Give the file `name`, its exact `size` in bytes and optionally its `content_type`. Answers a one-time `upload_url` and a `ticket`, valid for an hour. Send the file's bytes to `upload_url` in an HTTP POST with the file's type as Content-Type and no Authorization header, for example `curl -X POST -H 'Content-Type: application/pdf' --data-binary @wiring.pdf '<upload_url>'`. Then call confirm_attachment_upload with the `storageId` it answers. Needs Edit access to the task's project.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+          name: {
+            type: 'string',
+            minLength: 1,
+            maxLength: ATTACHMENT_NAME_MAX,
+          },
+          size: {
+            type: 'integer',
+            minimum: 0,
+          },
+          content_type: {
+            type: 'string',
+            maxLength: ATTACHMENT_TYPE_MAX,
+          },
+        },
+        required: ['ref', 'name', 'size'],
+      },
+    },
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.records.mcpStartUpload, {
+        callerId,
+        access,
+        ...(args as { ref: string; name: string; size: number; content_type?: string }),
+      }),
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'confirm_attachment_upload',
+      title: 'Confirm attachment upload',
+      description:
+        'Attach the file sent to the upload_url from start_attachment_upload. Give the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Only the same user can confirm it, for the same task and once. Answers the attachment as get_task lists it.',
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+          ticket: {
+            type: 'string',
+          },
+          storage_id: {
+            type: 'string',
+          },
+        },
+        required: ['ref', 'ticket', 'storage_id'],
+      },
+    },
+    run: async (r, { callerId, access, args }) => {
+      const out = await r.runMutation(internal.machine.records.mcpConfirmUpload, {
+        callerId,
+        access,
+        ...(args as { ref: string; ticket: string; storage_id: string }),
+      })
+      // the refusal's byte delete has committed; answer it as an error result
+      if ('refused' in out) throw badRequest(out.refused)
+      return out.text
+    },
+  },
+  {
+    access: 'write',
+    def: {
+      name: 'attach_text_file',
+      title: 'Attach text file',
+      description:
+        "Attach a text file you write yourself, such as notes, a CSV table or a log, to the task `ref`. Give the file `name`, its `text` and optionally its `content_type` (default `text/plain; charset=utf-8`). Qivo stores the text as UTF-8, at most 256 KiB and within the organization's per-file limit. To attach a file that already exists, use start_attachment_upload. Needs Edit access to the task's project. Answers the attachment as get_task lists it.",
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          ref: {
+            type: 'string',
+          },
+          name: {
+            type: 'string',
+            minLength: 1,
+            maxLength: ATTACHMENT_NAME_MAX,
+          },
+          text: {
+            type: 'string',
+          },
+          content_type: {
+            type: 'string',
+            maxLength: ATTACHMENT_TYPE_MAX,
+          },
+        },
+        required: ['ref', 'name', 'text'],
+      },
+    },
+    run: (r, { callerId, access, args }) =>
+      r.runAction(internal.machine.records.mcpAttachTextFile, {
+        callerId,
+        access,
+        ...(args as { ref: string; name: string; text: string; content_type?: string }),
       }),
   },
   {

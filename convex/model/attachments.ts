@@ -22,11 +22,11 @@
  * characters and a media type at most 255. That keeps every row small, and
  * storageUsage reads all of an organization's rows in one transaction.
  *
- * REST uploads in two steps. startAttachmentUpload checks the write gate and
- * the declared size, mints a Convex upload URL and records a ticket naming
- * the caller, the task and an expiry. The client sends the bytes to the URL,
- * and confirmAttachmentUpload attaches them only for that caller and task
- * before the ticket expires. Convex does not tell which URL stored a file,
+ * REST and MCP upload in two steps. startAttachmentUpload checks the write
+ * gate and the declared size, mints a Convex upload URL and records a ticket
+ * naming the caller, the task and an expiry. The client sends the bytes to
+ * the URL, and confirmAttachmentUpload attaches them only for that caller
+ * and task before the ticket expires, on either surface. Convex does not tell which URL stored a file,
  * so confirm binds the ticket to its bytes as far as it can. The file must
  * have been stored after the ticket was issued and have exactly the
  * declared size before anything else, the cap's byte delete included, looks
@@ -100,20 +100,21 @@ async function attachmentCapMb(ctx: QueryCtx, orgId: string): Promise<number> {
 /** The refusal for a file larger than the organization allows. */
 const overCap = (cap: number): string => `attachment exceeds the organization limit of ${cap} MiB`
 
-/* The longest file name an attachment may have, in characters. */
-const NAME_MAX = 255
+/** The longest file name an attachment may have, in characters (code
+ * points). The MCP upload tools' schemas state it too. */
+export const ATTACHMENT_NAME_MAX = 255
 
-/** The longest media type an attachment may have. REST also checks it when
- * an upload starts (machine/records.ts uploadFields). */
+/** The longest media type an attachment may have. REST and MCP also check
+ * it when an upload starts (machine/records.ts uploadFields). */
 export const ATTACHMENT_TYPE_MAX = 255
 
 /** Answers `raw` trimmed, the name an attachment stores. Refuses a name that
- * is empty after trimming or longer than 255 characters. REST checks it when
- * an upload starts, and attachFileCore for every attach. */
+ * is empty after trimming or longer than 255 characters. REST and MCP check
+ * it when an upload starts, and attachFileCore for every attach. */
 export function cleanAttachmentName(raw: string): string {
   const name = raw.trim()
-  if (name === '' || [...name].length > NAME_MAX) {
-    throw badRequest(`name must be a file name of 1 to ${NAME_MAX} characters`)
+  if (name === '' || [...name].length > ATTACHMENT_NAME_MAX) {
+    throw badRequest(`name must be a file name of 1 to ${ATTACHMENT_NAME_MAX} characters`)
   }
   return name
 }
@@ -131,8 +132,8 @@ const pub = ({
 export type AttachmentRow = ReturnType<typeof pub>
 
 /* The structured refusal an attach returns when the byte delete must commit
- * (the probe verdict above). The app's client toasts the message; REST
- * answers it as a 400. */
+ * (the probe verdict above). The app's client toasts the message, REST
+ * answers it as a 400 and MCP as an error result. */
 export type AttachResult =
   | { refused: { code: 'bad_request'; message: string } }
   | { attachment: AttachmentRow }
@@ -257,7 +258,7 @@ export async function removeAttachmentCore(
 
 /* --------------------------------------------------------------- uploads */
 
-/** How long a REST upload ticket and its upload URL stay usable, matching
+/** How long an upload ticket and its upload URL stay usable, matching
  * the lifetime Convex gives the URL. It stays within the 60 minutes
  * reapOrphans waits before reaping unreferenced bytes. */
 export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
@@ -267,7 +268,7 @@ export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
 const EXPIRED_TICKETS_PER_UPLOAD = 100
 
 /**
- * Starts a REST upload of a file of `size` bytes to `issue` for `me`. Checks
+ * Starts an upload of a file of `size` bytes to `issue` for `me`. Checks
  * the write gate and the organization's cap against the declared size, mints
  * a Convex upload URL and records the ticket that confirmAttachmentUpload
  * requires. `nowMs` is the request's clock. Deletes some of the caller's
@@ -316,7 +317,7 @@ export const UPLOAD_TICKET_MISSING = 'upload not found or expired; start a new u
 export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload answered'
 
 /**
- * Confirms the REST upload `ticketId` of `me` to `issue` with the uploaded
+ * Confirms the upload `ticketId` of `me` to `issue` with the uploaded
  * file `storage_id`, then attaches it like the app does (attachFileCore,
  * with the declared size enforced and `provenance` signing the activity
  * row). The ticket must be this caller's, for this task and unexpired at
