@@ -108,6 +108,12 @@ requested manual setup; agent keys give automation its own identity.
   [organization REST API](rest-api.md) takes it too, so one key serves both
   surfaces.
 
+Organization admins see all three kinds for every member under **Settings →
+Organization → API access**, with each credential's owner, access, last use
+and calls per usage period, and can revoke any of them there. A connection or
+token revoked that way stops working at once, and its owner sees it as revoked
+by an admin under **MCP access**.
+
 Global background curation uses the separate
 [curation REST API](rest-api.md#background-curation-api) and an operator-issued
 `qvc_` key. MCP accepts `qvo_`, `qvt_` and `qva_` credentials and exposes no
@@ -241,11 +247,13 @@ When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
 An organization admin restores editing through **Settings → Organization →
 Billing**, where they can subscribe, open the customer portal and inspect
-usage by account and key or OAuth connection. MCP does not expose billing subscription
-management tools. While writes are paused, an organization admin can still
-revoke or delete agent keys and make users Inactive in the app, and people can
-still revoke their own personal tokens and OAuth connections. Each of these
-also stops reads with the affected credentials.
+usage by account and key or OAuth connection. **API access** shows each
+credential's calls in the current or an earlier period. MCP does not expose
+billing subscription management tools. While writes are paused, an
+organization admin can still revoke any credential on **API access**, revoke
+or delete agent keys and make users Inactive in the app, and people can still
+revoke their own personal tokens and OAuth connections. Each of these also
+stops reads with the affected credentials.
 
 ## Connecting Claude
 

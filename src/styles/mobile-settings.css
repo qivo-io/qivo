@@ -22,6 +22,24 @@
   }
 }
 
+/* The API access columns need about 840px. A narrower list (a laptop window,
+   a tablet or a phone) hides them, and each row says its owner, kind,
+   access, last use and calls in a line under its name instead. */
+[data-api-credential-summary] {
+  display: none;
+}
+[data-api-access-list] {
+  container: api-access / inline-size;
+}
+@container api-access (max-width: 840px) {
+  :is([data-api-access-columns], [data-api-credential-cell]) {
+    display: none;
+  }
+  [data-api-credential-summary] {
+    display: block;
+  }
+}
+
 @media (max-width: 760px) {
   .settings-shell {
     grid-template-rows: auto minmax(0, 1fr);

@@ -77,6 +77,28 @@ Its Luma Sensor, Luma Cloud and Pilot & Launch projects contain planned work,
 reviews, comments and archived tasks. Nora is the organization admin. The
 private demo signs you in as Nora and does not support external agent keys ([Private demo](./qivo-in-one-minute.md#private-demo)).
 
+## API access
+
+**Settings → Organization → API access** lists every credential in the
+organization in one table: each member's personal tokens and connected apps
+and every agent key. Each row shows the person, kind, whether it can make
+changes or only read, the expiry of a token that has one, its last use and
+its calls in the selected period. The summary above it shows the period's
+calls against the plan's included calls. Choose an earlier period to see its
+calls; credentials and calls of people who left the organization stay listed
+as **Removed user**, and deleted credentials as **deleted**.
+
+Filter by kind, by **Active** or **All**, by person, or by name, prefix or
+person. Revoked and expired credentials stay listed because their calls in
+the period still count. **Refresh** reads current figures.
+
+**Revoke** asks for confirmation and stops the credential at once, including
+its task event subscriptions. The person sees a token or connected app
+revoked this way as revoked by an admin and can create a new token or connect
+the app again. Create a new agent key in **Users**. A revocation appears in
+the change history for organization admins only. The demo does not offer API
+access.
+
 ## Managing projects and accounts
 
 **Settings → Projects → All projects** lists accessible projects by
@@ -115,7 +137,8 @@ open tasks they work on, Qivo first asks whether to keep them as Viewers or
 reassign the tasks.
 
 Users without management access see read-only team and project settings.
-Organization General, Users, Labels and Billing require an organization admin.
+Organization General, Billing, Users, API access and Labels require an
+organization admin.
 Team leaders can open **Teams** and manage their own teams; only admins create
 or delete teams.
 
@@ -130,8 +153,8 @@ When billing is disabled, the page says so and the organization remains
 usable. When enabled, editing requires a paid subscription or complimentary
 access. Paused editing leaves existing readable work and personal settings
 available. Admins can still take access away while editing is paused. They
-can revoke or delete agent keys, make users **Inactive**, remove users and
-remove users from teams. A team removal that asks about open tasks waits,
+can revoke any credential on [API access](#api-access), revoke or delete agent
+keys, make users **Inactive**, remove users and remove users from teams. A team removal that asks about open tasks waits,
 because both of its choices also save Viewer grants or reassigned tasks.
 Reactivating users and every other change wait until billing is active again.
 

@@ -13,6 +13,7 @@ import type * as adminAuth from "../adminAuth.js";
 import type * as adminBilling from "../adminBilling.js";
 import type * as adminDemo from "../adminDemo.js";
 import type * as adminOrgs from "../adminOrgs.js";
+import type * as apiAccess from "../apiAccess.js";
 import type * as appearance from "../appearance.js";
 import type * as archiveMarks from "../archiveMarks.js";
 import type * as auth from "../auth.js";
@@ -164,6 +165,7 @@ declare const fullApi: ApiFromModules<{
   adminBilling: typeof adminBilling;
   adminDemo: typeof adminDemo;
   adminOrgs: typeof adminOrgs;
+  apiAccess: typeof apiAccess;
   appearance: typeof appearance;
   archiveMarks: typeof archiveMarks;
   auth: typeof auth;

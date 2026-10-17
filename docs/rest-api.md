@@ -108,6 +108,13 @@ An agent may hold several keys at once, and a person several tokens, which is
 how one is rotated without going dark: mint the new one, move the client over,
 revoke the old.
 
+Organization admins see every credential in the organization under
+**Settings → Organization → API access**: each member's personal tokens and
+connected apps as well as agent keys, with their owner, access, last use and
+calls per usage period. An admin can revoke any of them there. The token or
+connection then answers like any revoked credential, and its owner sees it as
+revoked by an admin in their own list.
+
 Access follows the user's effective project roles, including team grants:
 
 - **read**: any role, to list and fetch the project, its tasks and their
@@ -200,10 +207,11 @@ When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
 existing access rules. An organization admin can subscribe or update payment
 details under **Settings → Organization → Billing**; machine credentials
-cannot manage subscriptions. Billing also shows usage by account and key.
-While writes are paused, an organization admin can still revoke or delete an
-agent's keys or make the agent Inactive in the app, which also stops its
-reads.
+cannot manage subscriptions. Billing also shows usage by account and key, and
+**API access** shows each credential's calls in the current or an earlier
+period. While writes are paused, an organization admin can still revoke any
+credential on **API access**, revoke or delete an agent's keys or make the
+agent Inactive in the app, which also stops its reads.
 
 ## Endpoints
 
@@ -1621,8 +1629,9 @@ somehow" in a feed whose whole job is saying who did what; an agent is a user,
 so it signs its own work. The key is still named beside it, because an agent
 may hold several and "which key did this" is the question you ask when one has
 to be rotated. A personal token's writes read `via the REST API` with no
-token name. The person is the actor, and their token names are their own
-business, as with MCP's `via MCP`. An update's feed
+token name, as MCP's read `via MCP`. The person is the actor, and the feed
+reaches members who cannot see that person's tokens. Only the person and
+organization admins can. An update's feed
 row names both sides of every changed field before the provenance suffix —
 e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
 (<key name>)`; description edits quote both sides as ~80-char excerpts
@@ -1654,7 +1663,8 @@ authenticated request.
 - `mcp_tokens` holds one row per personal access token, hanging off the
   person's profile: name, `token_prefix` (display only), `token_hash` (SHA-256),
   `access` (`read` or `write`; absent reads as `read`), an optional
-  `expires_at` and created/last-used/revoked timestamps. The same row serves
+  `expires_at`, created/last-used/revoked timestamps and `revoked_by_admin`
+  when an organization admin revoked it on API access. The same row serves
   MCP and REST.
 - `attachment_uploads` holds one row per upload in progress: the ticket,
   the user that started it, the task, the declared name, type and size, and

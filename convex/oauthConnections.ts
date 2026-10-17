@@ -95,6 +95,8 @@ export const list = authedQuery({
           createdAt: row.created_at,
           lastUsedAt: row.last_used_at ?? null,
           revokedAt: row.revoked_at ?? null,
+          // an organization admin revoked it on API access (apiAccess.ts)
+          revokedByAdmin: row.revocation_reason === 'admin',
         })),
     )
   },

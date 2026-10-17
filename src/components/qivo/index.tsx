@@ -41,6 +41,7 @@ import {
   History,
   Inbox,
   Info,
+  Key,
   Keyboard,
   Layers,
   Link as LinkIcon,
@@ -55,6 +56,7 @@ import {
   Pause,
   PenLine,
   Play,
+  Plug,
   Plus,
   RotateCcw,
   Rows2,
@@ -154,6 +156,8 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   rotateCcw: RotateCcw,
   diamond: Diamond,
   keyboard: Keyboard,
+  key: Key,
+  plug: Plug,
   command: CommandIcon,
   inbox: Inbox,
   archive: Archive,
@@ -1159,7 +1163,9 @@ function AnchoredPop({
    icon's corner (the caller styles and positions it, relative to the 16px
    icon), `divider` stands a vertical rule after the option, splitting the
    switch into groups, and `ariaLabel` names an icon-only option without the
-   hover tooltip `title` would open. */
+   hover tooltip `title` would open. `label` names the whole control for
+   assistive tech, where two segmented controls on one page share an option
+   label such as "All". */
 function Seg<T extends string>({
   value,
   options,
@@ -1167,6 +1173,7 @@ function Seg<T extends string>({
   height = 24,
   ground = 'page',
   fit = true,
+  label,
 }: {
   value: T
   options: {
@@ -1182,11 +1189,13 @@ function Seg<T extends string>({
   height?: string | number
   ground?: 'page' | 'raised'
   fit?: boolean
+  label?: string
 }) {
   const page = ground === 'page'
   return (
     <ToggleGroup
       type="single"
+      aria-label={label}
       value={value}
       onValueChange={(next) => {
         if (next) onChange(next as T)

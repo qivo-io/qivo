@@ -9,9 +9,12 @@
  *
  * Rights split (the two tables' whole difference): agent keys are managed
  * by ADMINS of the agent's org — nobody else sees the rows at all — while
- * MCP tokens are strictly self-service. Narration is equally split (T8):
- * agent key create/revoke narrate against the AGENT profile ("what happened
- * to this user"); MCP tokens never narrate (private credential management).
+ * MCP tokens are created, listed and deleted by their owner here. An
+ * organization admin can also list every member's tokens and revoke them on
+ * API access (apiAccess.ts), which marks the row revoked_by_admin and
+ * narrates to admins only. Narration is equally split (T8): agent key
+ * create/revoke narrate against the AGENT profile ("what happened to this
+ * user"); the owner's own token churn here never narrates.
  *
  * A personal token also carries its access ('read' or 'write', chosen at
  * creation; a row without one can only read) and an optional expiry, after
@@ -69,6 +72,8 @@ const pubToken = (t: Doc<'mcp_tokens'>) => ({
   expiresAt: t.expires_at ?? null,
   lastUsedAt: t.last_used_at ?? null,
   revokedAt: t.revoked_at ?? null,
+  // an organization admin revoked it on API access
+  revokedByAdmin: t.revoked_by_admin === true,
 })
 
 const byCreatedDesc = <R extends { createdAt: string }>(rows: R[]): R[] =>
@@ -207,8 +212,9 @@ export const deleteAgentKey = accessRemovalMutation({
 })
 
 /* ------------------------------------------------------------- mcp tokens
- * Strictly self-service (0030): rows whose profile_id is one of the
- * caller's own seats; nothing narrates, ever. */
+ * The owner's own management (0030): rows whose profile_id is one of the
+ * caller's own seats; nothing here narrates. Admins list and revoke other
+ * members' tokens through apiAccess.ts instead. */
 export const listMcpTokens = authedQuery({
   args: {},
   handler: async (ctx) => {

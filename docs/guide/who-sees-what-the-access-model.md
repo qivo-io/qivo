@@ -78,7 +78,8 @@ two exceptions. People with access to a parent project see that one of its
 sub-projects was deleted, and a task that moved out of a project before it was
 deleted keeps that earlier history for everyone who can open the task. Changes
 that name a deleted task reach organization admins only, and so do agent key
-creation and revocation.
+creation and revocation and every revocation an admin makes on
+[API access](./administration-guard-rails-and-the-demo.md#api-access).
 
 Organization admins add people through **Organization → Users**. There is no
 purchased-seat limit on adding or reactivating users. Billing counts active

@@ -44,12 +44,14 @@ export function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'acti
 }
 
 /* tokens.ts narrates agent key creation and revocation against the agent,
- * naming the key. Only admins manage keys (and list them), so only admins
- * receive these rows. */
-const isAgentKeyRow = (ev: Doc<'activity_events'>): boolean =>
+ * naming the key, and apiAccess.ts narrates an admin's revocation of any
+ * credential against its owner, naming the token or app. Only admins manage
+ * and list other people's credentials, so only admins receive these rows. */
+const REVOKED_CREDENTIAL = ['the key “', 'a personal token “', 'the connection to “']
+const isCredentialRow = (ev: Doc<'activity_events'>): boolean =>
   ev.target_type === 'user' &&
   ((ev.verb === 'created' && !!ev.detail?.startsWith('a new key “')) ||
-    (ev.verb === 'revoked' && !!ev.detail?.startsWith('the key “')))
+    (ev.verb === 'revoked' && REVOKED_CREDENTIAL.some((start) => !!ev.detail?.startsWith(start))))
 
 /* Members other than organization admins receive an activity row only if
  * they can access every project it names: the project it was filed under
@@ -65,7 +67,7 @@ const isAgentKeyRow = (ev: Doc<'activity_events'>): boolean =>
  * rows reach that team's leaders, who are people (lib/access canLeadTeams).
  * A deleted team's rows keep its id and reach admins only, as do person rows
  * that may be older team rows whose id was cleared (isUnscopedTeamRow) and
- * agent key rows. The remaining rows reach every member. */
+ * credential rows. The remaining rows reach every member. */
 export async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
@@ -95,7 +97,7 @@ export async function memberSeesActivity(
   }
   if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
   if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
-  if (isAgentKeyRow(ev)) return false
+  if (isCredentialRow(ev)) return false
   if (ev.team_id !== undefined) return canLeadTeams(a.me) && a.leaderOf.get(ev.team_id) === true
   return !isUnscopedTeamRow(ev)
 }

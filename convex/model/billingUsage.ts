@@ -73,6 +73,9 @@ export function usagePeriod(sub: Doc<'billing_subscriptions'> | null, now: numbe
   return monthPeriod(date.getUTCFullYear(), date.getUTCMonth())
 }
 
+/** The display dates of a stored usage key (see usageKeyRange). */
+export type UsageKeyRange = { kind: 'month' | 'paid' | 'open'; start: string; end: string | null }
+
 /** Display dates for any stored usage key of organization `orgId`, for
  * listing past periods.
  * - A month key maps to its UTC month (`kind: 'month'`).
@@ -87,22 +90,42 @@ export async function usageKeyRange(
   orgId: string,
   sub: Doc<'billing_subscriptions'> | null,
   key: string,
-): Promise<{ kind: 'month' | 'paid' | 'open'; start: string; end: string | null }> {
-  const month = MONTH_KEY.exec(key)
-  if (month) {
-    const { start, end } = monthPeriod(Number(month[1]), Number(month[2]) - 1)
-    return { kind: 'month', start, end }
+): Promise<UsageKeyRange> {
+  const [range] = await usageKeyRanges(ctx, orgId, sub, [key])
+  return range
+}
+
+/** usageKeyRange for several keys of one organization, in the order given.
+ * It reads the organization's recorded periods once, and not at all when
+ * every key is a month key. */
+export async function usageKeyRanges(
+  ctx: QueryCtx,
+  orgId: string,
+  sub: Doc<'billing_subscriptions'> | null,
+  keys: readonly string[],
+): Promise<UsageKeyRange[]> {
+  const ends = new Map<string, string>()
+  if (keys.some((key) => !MONTH_KEY.test(key))) {
+    // One row per provider period, so an organization has few of them.
+    const periods = await ctx.db
+      .query('billing_periods')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect()
+    for (const row of periods)
+      if (!ends.has(row.period_start)) ends.set(row.period_start, row.period_end)
   }
-  // One row per provider period, so an organization has few of them.
-  const periods = await ctx.db
-    .query('billing_periods')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  const period = periods.find((row) => row.period_start === key)
-  if (period) return { kind: 'paid', start: period.period_start, end: period.period_end }
-  if (sub?.org_id === orgId && sub.current_period_start === key && sub.current_period_end)
-    return { kind: 'paid', start: key, end: sub.current_period_end }
-  return { kind: 'open', start: key, end: null }
+  return keys.map((key): UsageKeyRange => {
+    const month = MONTH_KEY.exec(key)
+    if (month) {
+      const { start, end } = monthPeriod(Number(month[1]), Number(month[2]) - 1)
+      return { kind: 'month', start, end }
+    }
+    const end = ends.get(key)
+    if (end !== undefined) return { kind: 'paid', start: key, end }
+    if (sub?.org_id === orgId && sub.current_period_start === key && sub.current_period_end)
+      return { kind: 'paid', start: key, end: sub.current_period_end }
+    return { kind: 'open', start: key, end: null }
+  })
 }
 
 /** Fixed minute windows use one stable row per subject. A denied call returns
