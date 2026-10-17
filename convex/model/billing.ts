@@ -172,15 +172,18 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
 }
 
 /** Bounds on what storageUsage reads for the rows stored without org_id,
- * which are in no organization's range. It makes at most `lookups` task
- * lookups in all. The organization's own rows without a project use some,
- * and the rows without org_id, read from the whole deployment, get the rest
- * at one lookup per row. Other organizations' tasks among those may hold
- * about `taskBytes`. Past either bound it finds this organization's rows
- * without org_id through its own tasks instead, at the cost the read had
- * before rows carried their organization. Both bounds stay well below
- * Convex's 4,096 index ranges and 16 MiB per transaction, so other
- * organizations' rows cannot take the read past them. Tests lower both. */
+ * which are in no organization's range. Those rows, read from the whole
+ * deployment, get `lookups` task lookups less the ones the organization's
+ * own rows without a project already made, at one lookup per row. Other
+ * organizations' tasks among them may hold about `taskBytes`. Past either
+ * bound it finds this organization's rows without org_id through its own
+ * tasks instead, at the cost the read had before rows carried their
+ * organization. Both bounds stay well below Convex's 4,096 index ranges and
+ * 16 MiB per transaction, so other organizations' rows cannot take the read
+ * past them. The organization's own rows without a project are not bounded.
+ * They cost one lookup per distinct task, never more than that older read,
+ * until internal/attachmentScopeBackfill gives them their project. Tests
+ * lower both bounds. */
 export const UNSCOPED_READ = { lookups: 3000, taskBytes: 4 * 1024 * 1024 }
 
 /* One attachment row's bytes and the project they count in. */
