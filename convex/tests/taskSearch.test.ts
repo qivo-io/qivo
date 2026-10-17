@@ -1,16 +1,27 @@
-/* Machine task search (lib/core.ts listIssuesCore, behind REST
- * GET /v1/tasks?search= and MCP list_tasks `search`) reads a label's
- * assignments only when a search piece occurs in the label's name, and still
- * matches exactly as the matcher did when it read every label. */
+/* Machine task search (lib/core.ts listActiveIssuesCore and
+ * listArchivedIssuesCore, behind REST GET /v1/tasks?search= and MCP
+ * list_tasks `search`) reads a label's assignments only when a search piece
+ * occurs in the label's name, reads no assignment of an archived task in an
+ * active list, and still matches exactly as the matcher did when it read
+ * every label. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { issueKey, type ListIssueOpts, listIssuesCore, loadCatalogue } from '../lib/core'
+import { issueKey, listActiveIssuesCore, listArchivedIssuesCore, loadCatalogue } from '../lib/core'
 import { allWordsMatcher, searchPieces, taskSearchText } from '../lib/search'
-import { NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  NOW,
+  newT,
+  type OrgFixture,
+  plantIssue,
+  restTasks,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 type Fx = OrgFixture & { t: T }
 
@@ -42,34 +53,47 @@ const label = (fx: Fx, labelId: string, tasks: Doc<'issues'>[], legacy = false) 
     }
   })
 
-const searchOpts = (search: string, stars: boolean, archived = false): ListIssueOpts => ({
-  scope: null,
-  archived,
-  search,
-  stars,
-  limit: 1000,
-  offset: 0,
-  order: 'created',
-})
+/** One search, over active or archived tasks. */
+type SearchCase = { search: string; stars: boolean; archived: boolean }
 
-/* The task ids an admin's search finds, through the shared core. */
-const found = (fx: Fx, opts: ListIssueOpts) =>
+/* An admin's active list of the whole organization, through the shared core. */
+const activeList = async (ctx: MutationCtx, fx: Fx, search: string) =>
+  await listActiveIssuesCore(
+    ctx,
+    fx.admin,
+    { scope: null, search, stars: true, limit: 1000, offset: 0 },
+    { surface: 'rest', cat: await loadCatalogue(ctx, fx.admin), readable: () => true },
+  )
+
+/* The task ids an admin's search finds, through the shared cores. Archived
+ * tasks are listed one project at a time, so that half reads FW, which holds
+ * every task of the fixture. */
+const found = (fx: Fx, c: SearchCase) =>
   fx.t.run(async (ctx) => {
-    const { page } = await listIssuesCore(
-      ctx,
-      fx.admin,
-      opts,
-      await loadCatalogue(ctx, fx.admin),
-      () => true,
-    )
-    return page.map((i) => i.id).sort()
+    const view = {
+      surface: 'rest',
+      cat: await loadCatalogue(ctx, fx.admin),
+      readable: () => true,
+    } as const
+    const filters = { search: c.search, stars: c.stars, limit: 1000 }
+    const rows = c.archived
+      ? (
+          await listArchivedIssuesCore(
+            ctx,
+            fx.admin,
+            { ...filters, scope: [fx.sub.id], cursor: null },
+            view,
+          )
+        ).rows
+      : await listActiveIssuesCore(ctx, fx.admin, { ...filters, scope: null, offset: 0 }, view)
+    return rows.map((i) => i.id).sort()
   })
 
 /* The matcher as it was before label reads were narrowed. It read every
  * label's assignments through each label in organization order and joined
  * them into each task's search text. The fixture has no subtasks, so no
  * status line is dormant. */
-async function oldMatch(ctx: MutationCtx, fx: Fx, opts: ListIssueOpts): Promise<string[]> {
+async function oldMatch(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<string[]> {
   const labels = new Map<string, string[]>()
   const rows = ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
   for await (const l of rows) {
@@ -82,13 +106,13 @@ async function oldMatch(ctx: MutationCtx, fx: Fx, opts: ListIssueOpts): Promise<
     .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
     .collect()
   const names = new Map(profiles.map((p) => [p.id, p.name]))
-  const matches = allWordsMatcher(opts.search ?? '', opts.stars)
+  const matches = allWordsMatcher(c.search, c.stars)
   const tasks = await ctx.db
     .query('issues')
     .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
     .collect()
   return tasks
-    .filter((i) => (i.archived_at !== undefined) === opts.archived)
+    .filter((i) => (i.archived_at !== undefined) === c.archived)
     .filter((i) =>
       matches(
         taskSearchText({
@@ -145,7 +169,7 @@ describe('task search reads only the labels it can match', () => {
     const { fx, bracket, lid } = await mixed()
     const rest = async (search: string) =>
       (
-        await fx.t.query(internal.machine.rest.listIssues, {
+        await restTasks(fx.t, {
           callerId: fx.admin.id,
           access: 'read',
           search,
@@ -181,9 +205,8 @@ describe('task search reads only the labels it can match', () => {
     }
     const reads = (search: string) =>
       fx.t.run(async (ctx) => {
-        const cat = await loadCatalogue(ctx, fx.admin)
         const before = await ctx.meta.getTransactionMetrics()
-        await listIssuesCore(ctx, fx.admin, searchOpts(search, true), cat, () => true)
+        await activeList(ctx, fx, search)
         const after = await ctx.meta.getTransactionMetrics()
         return {
           documents: after.documentsRead.used - before.documentsRead.used,
@@ -242,9 +265,9 @@ describe('task search reads only the labels it can match', () => {
     for (const search of searches) {
       for (const stars of [true, false]) {
         for (const archived of [false, true]) {
-          const opts = searchOpts(search, stars, archived)
-          const expected = await fx.t.run((ctx) => oldMatch(ctx, fx, opts))
-          expect(await found(fx, opts), `${search} stars=${stars} archived=${archived}`).toEqual(
+          const c = { search, stars, archived }
+          const expected = await fx.t.run((ctx) => oldMatch(ctx, fx, c))
+          expect(await found(fx, c), `${search} stars=${stars} archived=${archived}`).toEqual(
             expected,
           )
         }

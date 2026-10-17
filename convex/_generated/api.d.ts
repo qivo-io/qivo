@@ -54,6 +54,7 @@ import type * as labelRemovals from "../labelRemovals.js";
 import type * as labels from "../labels.js";
 import type * as lib_access from "../lib/access.js";
 import type * as lib_activityVisibility from "../lib/activityVisibility.js";
+import type * as lib_archivedTasks from "../lib/archivedTasks.js";
 import type * as lib_avatarColors from "../lib/avatarColors.js";
 import type * as lib_backgroundPreviews from "../lib/backgroundPreviews.js";
 import type * as lib_billableUsers from "../lib/billableUsers.js";
@@ -213,6 +214,7 @@ declare const fullApi: ApiFromModules<{
   labels: typeof labels;
   "lib/access": typeof lib_access;
   "lib/activityVisibility": typeof lib_activityVisibility;
+  "lib/archivedTasks": typeof lib_archivedTasks;
   "lib/avatarColors": typeof lib_avatarColors;
   "lib/backgroundPreviews": typeof lib_backgroundPreviews;
   "lib/billableUsers": typeof lib_billableUsers;

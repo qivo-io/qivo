@@ -774,11 +774,11 @@ sub-projects and any project rename. The `QN` prefix is a fixed product
 constant, not data.
 
 ```
-GET    /v1/tasks                           tasks across all readable projects
-                                           that are not archived (0106)
+GET    /v1/tasks                           active tasks across all readable
+                                           projects that are not archived (0106)
 GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
                                            or key; a meta expands to its
-                                           sub-projects) — naming an ARCHIVED
+                                           sub-projects). Naming an ARCHIVED
                                            project is how you read its tasks
        &status=todo &priority=high         enum filters; status takes several
                                            values separated by commas
@@ -791,12 +791,17 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
        &search=text                        matches fragments of the fields the
                                            app's task filter searches (below;
                                            substring; * acts as a wildcard)
-       &archived=true                      the ARCHIVED tasks instead (0070);
-                                           the default lists active ones only.
+       &archived=true                      the ARCHIVED tasks instead (0070),
+                                           one project at a time. It needs
+                                           `project=` and answers a page
+                                           (see Archived tasks below). The
+                                           default lists active ones only.
                                            A task's archive and its PROJECT's
-                                           are different axes: this flag is
-                                           the first, `project=` is the second
-       &limit=100 &offset=0                limit ≤ 200
+                                           are different axes. This flag is
+                                           the first, `project=` the second
+       &limit=100 &offset=0                limit ≤ 200; offset pages active
+                                           lists only
+       &cursor=<next_cursor>               the next page of archived tasks
 GET    /v1/tasks/{ref}                     ref: QN-482 | 482 | uuid — resolves
                                            archived tasks too; adds labels,
                                            subtasks, links and attachments
@@ -819,9 +824,57 @@ anywhere inside a word. These are the fields the app's task filter searches.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
 literal.
 
-The list comes in creation order, oldest first, with tasks created at the
-same moment ordered by number, so `offset` pages through it. MCP's
-`list_tasks` orders by project key and task number instead.
+Active lists come in creation order, oldest first, with tasks created at the
+same moment ordered by number, so `offset` pages through them. MCP's
+`list_tasks` uses the same order. Page with `offset` until a page holds fewer
+tasks than `limit`.
+
+#### Archived tasks
+
+`archived=true` lists archived tasks one project at a time and needs
+`project`. Naming a project lists its archived tasks and those of all its
+sub-projects you can read, archived sub-projects included, like the app's
+Archive page. Tasks come most recently archived first, and tasks archived at
+the same moment keep one fixed order across pages. The answer is an object
+instead of an array, with the same rows as an active list:
+
+```json
+{
+  "next_cursor": "1~1760583600000.123~k57…~2026-10-16T03:00:00.000Z",
+  "tasks": [{ "id": "…uuid…", "key": "QN-3", "archived": true, "…": "…" }]
+}
+```
+
+Pass `next_cursor` unchanged, URL-encoded like any query value, as `cursor`
+for the next page, and stop when it is `null`. A page can hold fewer than
+`limit` tasks, or none, while `next_cursor` is set, because each page reads a
+bounded amount however large the archive is. Tasks archived after you start
+paging appear at the start of the list, so start again to see them. If an
+archived group has more tasks under it than one request can read, such as
+thousands of subtasks or hundreds with very long descriptions, its row has
+`start_week` and `end_week` set to `null`, so paging still moves past it.
+
+To find every archived task you can read, take two steps. First list
+projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
+Archived tasks can sit in active projects as well as archived ones, and both
+lists include sub-projects. Then page `archived=true` for each top-level
+project, the rows whose `parent_id` is `null`. Each covers all its
+sub-projects you can read, even when you can read only some of them. To read
+one sub-project's archive alone, name that sub-project.
+
+These requests are a `400`:
+
+- `archived=true` without `project`: `archived=true needs project, because
+  archived tasks are listed one project at a time`
+- `cursor` without `archived=true`: `cursor works only with archived=true`
+- `offset` other than `0` with `archived=true`: `offset does not apply to
+  archived tasks; pass next_cursor as cursor`
+- a `cursor` that is not a `next_cursor`: `cursor must be the next_cursor of
+  an earlier page`
+
+Until October 2026, `archived=true` listed the archived tasks of every
+readable project as an array paged with `offset`, and read the
+organization's whole archive on every request.
 
 
 POST body — `project` (uuid, number or key) and `title` are required. Tasks live in
@@ -1039,8 +1092,9 @@ access on every project the cascade changes. Otherwise the PATCH is a `400`
 with `archiving this task would change a subtask in a project you cannot edit; an
 organization admin can archive it` or `restoring this task would change a
 parent task in a project you cannot edit; an organization admin can restore
-it`, and nothing changes. Archived tasks disappear from the default list (`?archived=true` finds
-them), stop counting as workload, and in the app leave every normal view for
+it`, and nothing changes. Archived tasks disappear from the default list
+(`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
+stop counting as workload, and in the app leave every normal view for
 the Archive page. A nightly sweep archives tasks that have been `done` for
 30 days, or for a legacy team archive setting's number of days where an older
 project kept one. Restoring a still-`done` task **restarts its auto-archive
@@ -1606,6 +1660,12 @@ curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users"
 
 # open high-priority tasks in Enclosure
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks?project=ENC&priority=high"
+
+# archived tasks of Enclosure, a page at a time. Repeat with the answer's
+# next_cursor until it is null.
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks?project=ENC&archived=true&limit=200"
+curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<next_cursor>" \
+  "$BASE/tasks?project=ENC&archived=true&limit=200"
 
 # create a task
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \

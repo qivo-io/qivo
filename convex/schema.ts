@@ -690,7 +690,8 @@ export default defineSchema({
   })
     .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
     .index('by_issue', ['issue_id'])
-    .index('by_label', ['label_id'])
+    // a label's assignments; REST and MCP search read only its unmarked ones
+    .index('by_label', ['label_id', 'task_archived'])
     .index('by_issue_label', ['issue_id', 'label_id']),
 
   // A deleted label whose task assignments background steps still remove

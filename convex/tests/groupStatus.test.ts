@@ -8,6 +8,7 @@ import {
   newT,
   plantIssue,
   plantProject,
+  restTasks,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -82,7 +83,7 @@ describe('parent task status', () => {
     const root = await plantIssue(t, base)
     const middle = await plantIssue(t, { ...base, parent_id: root.id })
     const leaf = await plantIssue(t, { ...base, parent_id: middle.id })
-    const rest = await t.query(internal.machine.rest.listIssues, {
+    const rest = await restTasks(t, {
       callerId: f.admin.id,
       access: 'read',
       status: 'review',

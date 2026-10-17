@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'e666c595272d737222f7b8188ca6ac76833077fa9a39e56c376bdab977f29372'
-const SHA_TOOLS_MODERN = '4fbe0f5ac53b2fdc6110536f4ad989d5224fd3dd3615b5a424f21bc3a384528c'
+const SHA_TOOLS_LEGACY = '8c79634bc97a64eb44a0c8786e0b8814827e11a37930c863ad7d12ab8115e0e0'
+const SHA_TOOLS_MODERN = '606ab7112493780d4b0d572eeb215e14e7fa80b53ec4de816efbee1781431aaa'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1169,6 +1169,7 @@ describe('read tools', () => {
 
   test('list_tasks: scope expansion, filters, uniform refusal, projection', async () => {
     const fx = await machineOrg()
+    // created last, so creation order differs from project key order
     const i1 = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
@@ -1176,6 +1177,7 @@ describe('read tools', () => {
       assignee_id: fx.user.id,
       reporter_id: fx.viewer.id,
       created_by: fx.agent.id,
+      created_at: '2026-01-03T00:00:00.000Z',
     })
     const i2 = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1187,6 +1189,7 @@ describe('read tools', () => {
       org_id: fx.org.id,
       project_id: fx.hidden.id,
       title: 'Sneaky task',
+      created_at: '2026-01-02T00:00:00.000Z',
     })
     const i4 = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1198,23 +1201,31 @@ describe('read tools', () => {
       JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, { callerId, access: 'read', ...args }),
       ) as Record<string, unknown>[]
-    // no scope: everything readable, active only — order by project key then num
+    // without a scope, everything readable and active, oldest first by
+    // creation as on REST, not by project key
     expect((await list(fx.admin.id)).map((i) => i.title)).toEqual([
-      'Alpha widget',
       'Beta gadget',
       'Sneaky task',
+      'Alpha widget',
     ])
-    expect((await list(fx.guest.id)).map((i) => i.title)).toEqual(['Alpha widget', 'Beta gadget'])
+    expect((await list(fx.guest.id)).map((i) => i.title)).toEqual(['Beta gadget', 'Alpha widget'])
     // meta scope expands to its subs — by key, num or uuid ref
     for (const ref of [fx.meta.key, String(fx.meta.num), fx.meta.id, fx.meta.id.toUpperCase()]) {
-      expect((await list(fx.guest.id, { project: ref })).map((i) => i.id)).toEqual([i1.id, i2.id])
+      expect((await list(fx.guest.id, { project: ref })).map((i) => i.id)).toEqual([i2.id, i1.id])
     }
     // sub scope stays put
     expect((await list(fx.guest.id, { project: 'FW' })).map((i) => i.id)).toEqual([i1.id])
-    // archived axis
-    expect((await list(fx.guest.id, { project: 'FW', archived: true })).map((i) => i.id)).toEqual([
-      i4.id,
-    ])
+    // the archived axis answers one project's archived tasks as a page
+    const archived = JSON.parse(
+      await fx.t.query(internal.machine.mcp.listIssues, {
+        callerId: fx.guest.id,
+        access: 'read',
+        project: 'FW',
+        archived: true,
+      }),
+    ) as { next_cursor: string | null; tasks: { id: string }[] }
+    expect(Object.keys(archived)).toEqual(['next_cursor', 'tasks'])
+    expect(archived).toMatchObject({ next_cursor: null, tasks: [{ id: i4.id }] })
     // filters
     expect((await list(fx.guest.id, { status: 'done' })).map((i) => i.id)).toEqual([i2.id])
     expect((await list(fx.guest.id, { assignee_id: fx.user.id })).map((i) => i.id)).toEqual([i1.id])
@@ -1223,7 +1234,7 @@ describe('read tools', () => {
     ).toEqual([i1.id])
     expect((await list(fx.guest.id, { search: 'alpha' })).map((i) => i.id)).toEqual([i1.id])
     expect(await list(fx.guest.id, { search: '*' })).toEqual([]) // no wildcard on MCP
-    expect((await list(fx.guest.id, { limit: 1 })).map((i) => i.id)).toEqual([i1.id])
+    expect((await list(fx.guest.id, { limit: 1 })).map((i) => i.id)).toEqual([i2.id])
     // the uniform refusal: nonexistent, invisible, foreign — one sentence shape
     for (const [caller, ref] of [
       [fx.admin.id, 'NOPE'],
