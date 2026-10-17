@@ -51,7 +51,18 @@
  * events then go out without an actor. Only a reveal needs the restorer,
  * whose permission it checks again; without them it sends the item back. A
  * step returns without work when its item or job is gone, or while its demo
- * organization is being deleted. */
+ * organization is being deleted.
+ *
+ * In a public demo, the rows a move or restore carries between the live
+ * tables and Deleted items, with the bookkeeping rows that go with them,
+ * spend none of the visitor's record limit and skip its payload check
+ * (lib/demo.ts uncountedWriter): the number of records stays as it was. The
+ * item row, activity rows and notices count as any write does, and each user
+ * transaction counts as one demo change.
+ *
+ * Teardowns that delete an organization's work outright (deleteOrgDeep, the
+ * public demo's cleanup, the Northstar wipe) empty its Deleted items with
+ * clearOrgTrash, whatever state the items are in. */
 
 import {
   type FilterBuilder,
@@ -72,8 +83,8 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { billingReadOnly } from '../lib/billingAccess'
-import { byId } from '../lib/db'
-import { demoForOrg, isDemoDeployment } from '../lib/demo'
+import { byId, LARGE_ROWS_PER_READ } from '../lib/db'
+import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
   LEVEL_RANK,
@@ -84,7 +95,6 @@ import {
 } from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
 import { logActivity } from './activity'
-import { LARGE_ROWS_PER_READ } from './cascade'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, parentChain } from './issues'
 import { type NotifyPreload, postMessage, scheduleArchivedReads } from './messages'
@@ -289,7 +299,8 @@ function meterQuery<Q extends object>(query: Q, budget: Budget): Q {
 
 /** `ctx` whose database reads each spend one range of `budget`, wherever in
  * the step they happen. It wraps the database the way lib/demo.ts
- * demoWriter does for its own accounting. */
+ * demoWriter does for its own accounting, and passes properties that are
+ * not functions on as they are, demoWriter's uncounted writer included. */
 function metered(ctx: MutationCtx, budget: Budget): MutationCtx {
   const db = new Proxy(ctx.db, {
     get(target, key) {
@@ -363,7 +374,7 @@ export async function storeRow(
     await discard(ctx, live)
     return false
   }
-  await ctx.db.insert('deleted_rows', stored)
+  await uncountedWriter(ctx.db).insert('deleted_rows', stored)
   await ctx.db.delete(live.doc._id)
   return true
 }
@@ -620,7 +631,7 @@ async function storeTask(
     return
   }
   const archived = task.archived_at !== undefined
-  await ctx.db.insert('deleted_tasks', {
+  await uncountedWriter(ctx.db).insert('deleted_tasks', {
     org_id: item.org_id,
     item_id: item.id,
     task_id: task.id,
@@ -1655,7 +1666,7 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   const { _id, _creationTime, ...light } = task
   // a new row, so that a restore of `into` past its cursor still meets it;
   // in the project item that holds its project it is no cross-project task
-  await run.ctx.db.insert('deleted_tasks', {
+  await uncountedWriter(run.ctx.db).insert('deleted_tasks', {
     ...light,
     item_id: into.id,
     cross_project_id: undefined,
@@ -1745,20 +1756,21 @@ async function restoreRows(run: Run): Promise<boolean> {
 async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const { org_id } = run.item
   const r = row.row
+  const db = uncountedWriter(run.ctx.db)
   if (r.table === 'comments')
-    await run.ctx.db.insert('comments', {
+    await db.insert('comments', {
       ...r.doc,
       author: await keptProfile(run, r.doc.author),
       edited_by: await keptProfile(run, r.doc.edited_by),
     })
   else if (r.table === 'issue_labels') {
     if (sameReference(await labelOf(run, r.doc.label_id), run.item))
-      await run.ctx.db.insert('issue_labels', { ...r.doc, org_id, task_archived: undefined })
+      await db.insert('issue_labels', { ...r.doc, org_id, task_archived: undefined })
   } else if (r.table === 'issue_subscriptions') {
     if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
-      await run.ctx.db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
+      await db.insert('issue_subscriptions', { ...r.doc, task_archived: undefined })
   } else if (r.table === 'issue_attachments')
-    await run.ctx.db.insert('issue_attachments', {
+    await db.insert('issue_attachments', {
       ...r.doc,
       org_id,
       uploaded_by: await keptProfile(run, r.doc.uploaded_by),
@@ -1820,7 +1832,7 @@ async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
     .withIndex('by_pair', (q) => q.eq('pair_key', link.pair_key))
     .first()
   if (taken === null)
-    await run.ctx.db.insert('issue_links', {
+    await uncountedWriter(run.ctx.db).insert('issue_links', {
       ...link,
       org_id: run.item.org_id,
       task_archived: undefined,
@@ -1881,7 +1893,7 @@ async function writeTask(
 ): Promise<Doc<'issues'>> {
   const { doc } = t
   const active = doc.archived_at === undefined
-  const _id = await run.ctx.db.insert('issues', {
+  const _id = await uncountedWriter(run.ctx.db).insert('issues', {
     ...doc,
     parent_id: parentId,
     assignee_id: await keptHolder(run, doc.assignee_id, doc.project_id),
@@ -1975,6 +1987,7 @@ async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
 /* A project item's own rows as the hierarchy cleans them: its projects,
  * then their milestones, grants and team shares. */
 async function revealProjects(run: Run): Promise<void> {
+  const db = uncountedWriter(run.ctx.db)
   for (const table of [
     'projects',
     'milestones',
@@ -1983,15 +1996,14 @@ async function revealProjects(run: Run): Promise<void> {
   ] as const) {
     for (const row of await storedOf(run, table)) {
       const r = row.row
-      if (r.table === 'projects')
-        await run.ctx.db.insert('projects', await cleanProject(run, r.doc))
-      else if (r.table === 'milestones') await run.ctx.db.insert('milestones', r.doc)
+      if (r.table === 'projects') await db.insert('projects', await cleanProject(run, r.doc))
+      else if (r.table === 'milestones') await db.insert('milestones', r.doc)
       else if (r.table === 'project_access') {
         const grant = await cleanGrant(run, r.doc)
-        if (grant !== null) await run.ctx.db.insert('project_access', grant)
+        if (grant !== null) await db.insert('project_access', grant)
       } else if (r.table === 'project_team_access') {
         const share = await cleanShare(run, r.doc)
-        if (share !== null) await run.ctx.db.insert('project_team_access', share)
+        if (share !== null) await db.insert('project_team_access', share)
       }
       await run.ctx.db.delete(row._id)
     }
@@ -2376,7 +2388,8 @@ async function saveJob(
     attempts: 0,
     budget_scale: 1,
   }
-  if (job === null) await ctx.db.insert('deleted_item_jobs', { item_id: item.id, ...fields })
+  if (job === null)
+    await uncountedWriter(ctx.db).insert('deleted_item_jobs', { item_id: item.id, ...fields })
   else await ctx.db.patch(job._id, fields)
 }
 
@@ -2540,6 +2553,144 @@ async function startJob(
   const next = await work(metered(ctx, budget), budget, item, state, txn)
   await finishTxn(ctx, txn)
   if (next !== null) await saveJob(ctx, item, next, null)
+}
+
+/* --------------------------------------------------------------- teardown */
+
+/** What one teardown transaction may still delete, one per row. */
+export type Teardown = { left: number }
+
+/* The most rows a teardown reads at once. */
+const TEARDOWN_PAGE = 256
+
+/** Removes the rows `read` returns (up to `n`, from the start of the range),
+ * page by page, until the range is empty (true) or `budget` is spent
+ * (false). `remove` must take its row out of the range, and answers false
+ * when the budget ran out before it could. */
+async function clearPages<Row>(
+  budget: Teardown,
+  read: (n: number) => Promise<Row[]>,
+  remove: (row: Row) => Promise<boolean>,
+  perRead = TEARDOWN_PAGE,
+): Promise<boolean> {
+  for (;;) {
+    if (budget.left <= 0) return false
+    const n = Math.min(budget.left, perRead, TEARDOWN_PAGE)
+    const rows = await read(n)
+    for (const row of rows) {
+      if (budget.left <= 0 || !(await remove(row))) return false
+      budget.left -= 1
+    }
+    if (rows.length < n) return true
+  }
+}
+
+/** Deletes the rows task `taskId` still has in the live tables, attachment
+ * bytes with their row, then its messages. */
+async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
+  for (const relation of TASK_ROWS) {
+    const cleared = await clearPages(
+      budget,
+      (n) => relation.read(ctx, taskId, n),
+      async (row) => {
+        await discard(ctx, row)
+        return true
+      },
+      relation.perRead,
+    )
+    if (!cleared) return false
+  }
+  return await clearPages(
+    budget,
+    (n) =>
+      ctx.db
+        .query('messages')
+        .withIndex('by_issue_read', (q) => q.eq('issue_id', taskId))
+        .take(n),
+    async (message) => {
+      await ctx.db.delete(message._id)
+      return true
+    },
+  )
+}
+
+/**
+ * Deletes everything organization `orgId` keeps in Deleted items for good,
+ * whatever state its items are in, for the teardowns that delete the
+ * organization's work outright: model/cascade.ts deleteOrgDeep, the public
+ * demo's cleanup (internal/demoCleanup.ts) and the Northstar wipe's
+ * deletedItems:purgeOrg. Items and their jobs go first, so a step still
+ * scheduled finds nothing to do. Then each stored task goes with the rows a
+ * move or restore left of it in the live tables, and each stored row, an
+ * attachment with its bytes, a project after the tasks still live under it.
+ * Nothing is narrated or detached, because the caller deletes the rest of
+ * the organization's work too. Makes at most `budget.left` deletions and
+ * returns true once nothing is left.
+ */
+export async function clearOrgTrash(
+  ctx: MutationCtx,
+  orgId: string,
+  budget: Teardown,
+): Promise<boolean> {
+  const items = await clearPages(
+    budget,
+    (n) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
+        .take(n),
+    async (item) => {
+      const job = await jobOf(ctx, item.id)
+      if (job !== null) await ctx.db.delete(job._id)
+      await ctx.db.delete(item._id)
+      return true
+    },
+  )
+  if (!items) return false
+  const tasks = await clearPages(
+    budget,
+    (n) =>
+      ctx.db
+        .query('deleted_tasks')
+        .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
+        .take(n),
+    async (task) => {
+      if (!(await clearLiveRows(ctx, task.task_id, budget))) return false
+      await ctx.db.delete(task._id)
+      return true
+    },
+  )
+  if (!tasks) return false
+  return await clearPages(
+    budget,
+    (n) =>
+      ctx.db
+        .query('deleted_rows')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .take(n),
+    async (row) => {
+      if (row.table === 'projects') {
+        const stranded = await clearPages(
+          budget,
+          (n) =>
+            ctx.db
+              .query('issues')
+              .withIndex('by_project', (q) => q.eq('project_id', row.owner_id))
+              .take(n),
+          async (task) => {
+            if (!(await clearLiveRows(ctx, task.id, budget))) return false
+            await ctx.db.delete(task._id)
+            return true
+          },
+          LARGE_ROWS_PER_READ,
+        )
+        if (!stranded) return false
+      }
+      await dropStored(ctx, row)
+      return true
+    },
+    LARGE_ROWS_PER_READ,
+  )
 }
 
 /* ------------------------------------------------------------- deleting */

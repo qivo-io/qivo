@@ -1,6 +1,14 @@
 /* Durable public-demo deletion. Child rows are drained before their parent,
  * and every transaction has a fixed deletion budget. Re-running a batch after
- * an interrupted scheduler delivery cannot recreate content or extend access. */
+ * an interrupted scheduler delivery cannot recreate content or extend access.
+ *
+ * Deleted items go first (model/deletedItems.ts clearOrgTrash): their items
+ * and jobs, so a step still scheduled does nothing (steps also stand still
+ * while the receipt is deleting), then the rows a move or restore left in
+ * the live tables, the stored rows and their bytes, before the uploads
+ * phase, whose byte fence would otherwise keep trashed files. The tasks phase
+ * then sweeps every task of the organization, those a moving project left
+ * under its absent projects included. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { components } from '../_generated/api'
@@ -9,6 +17,7 @@ import { internalMutation, type MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { requireDemoDeployment } from '../lib/demo'
 import { require, rule } from '../lib/functions'
+import { clearOrgTrash } from '../model/deletedItems'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
 import { marketingId } from './marketingDemoData'
@@ -424,6 +433,7 @@ async function authRows(ctx: MutationCtx, authId: string, budget: Budget): Promi
 
 const PHASES = [
   'sessions',
+  'trash',
   'tasks',
   'projects',
   'teams',
@@ -468,7 +478,8 @@ export const purge = internalMutation({
         })) as { count: number; isDone: boolean }
         budget.left -= result.count
         done = result.isDone
-      } else if (phase === 'tasks') done = !orgId || (await taskRows(ctx, orgId, budget))
+      } else if (phase === 'trash') done = !orgId || (await clearOrgTrash(ctx, orgId, budget))
+      else if (phase === 'tasks') done = !orgId || (await taskRows(ctx, orgId, budget))
       else if (phase === 'projects') done = !orgId || (await projectRows(ctx, orgId, budget))
       else if (phase === 'teams') done = !orgId || (await teamRows(ctx, orgId, budget))
       else if (phase === 'profiles') done = !orgId || (await profileRows(ctx, orgId, budget))
@@ -528,6 +539,21 @@ export const purge = internalMutation({
               .query(table)
               .withIndex('by_org', (q) => q.eq('org_id', orgId))
               .first()) === null, rule('Demo cleanup left organization data'))
+          const trash = [
+            await ctx.db
+              .query('deleted_items')
+              .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
+              .first(),
+            await ctx.db
+              .query('deleted_rows')
+              .withIndex('by_org', (q) => q.eq('org_id', orgId))
+              .first(),
+            await ctx.db
+              .query('deleted_tasks')
+              .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
+              .first(),
+          ]
+          require(trash.every((row) => row === null), rule('Demo cleanup left Deleted items'))
           const org = await byId(ctx, 'organizations', orgId)
           if (org) await ctx.db.delete(org._id)
         }

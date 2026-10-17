@@ -65,7 +65,10 @@ export const MCP_PROVENANCE = 'via MCP'
  * cap would otherwise repeat a long name in every write's row. A personal
  * token's writes name no token, because the person is the actor and only
  * they and organization admins (on API access) see their tokens, while the
- * activity row reaches other members too. */
+ * activity row reaches other members too. A delete records its credential
+ * in Deleted items as well, where a personal token's name shows only to
+ * organization admins and to the person who deleted
+ * (model/deletedItemsList.ts). */
 export const restProvenance = (keyName: string | null): string =>
   keyName === null ? 'via the REST API' : `via the REST API (${cutName(keyName)})`
 

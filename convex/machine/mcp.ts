@@ -59,6 +59,7 @@ import {
   COMMENT_PAGE_MAX,
   childProjectsCore,
   commentOut,
+  credentialVia,
   destinationOf,
   findIssue,
   findProjectRef,
@@ -93,6 +94,7 @@ import {
 import { TEXT_MAX } from '../lib/textLimits'
 import { COMMENT_MAX } from '../model/commentCounts'
 import { postComment } from '../model/comments'
+import { moveTasksToTrash } from '../model/deletedItems'
 import {
   assertAssignable,
   assertAssignableChange,
@@ -102,7 +104,6 @@ import {
   assertReporter,
   cleanTitle,
   createIssueCore,
-  deleteIssueCore,
   type IssuePatch,
   linkAccess,
   metaNeedsSub,
@@ -193,8 +194,8 @@ type ToolDef = {
 }
 
 /** The principal, the credential row that authenticated the request (for
- *  get_me), the arguments a tool's `run` receives and the names of the
- *  arguments its schema does not know, which were dropped. */
+ *  get_me and delete_task), the arguments a tool's `run` receives and the
+ *  names of the arguments its schema does not know, which were dropped. */
 type ToolInput = Principal & {
   credential: EventOwner
   args: Record<string, unknown>
@@ -778,7 +779,7 @@ export const TOOLS: McpTool[] = [
       name: 'delete_task',
       title: 'Delete task',
       description:
-        'Delete a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
+        'Move a task to Deleted items, where a person can restore it in the app. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -790,11 +791,12 @@ export const TOOLS: McpTool[] = [
         required: ['ref'],
       },
     },
-    run: (r, { callerId, access, args }) =>
+    run: (r, { callerId, access, credential, args }) =>
       r.runMutation(internal.machine.mcp.deleteIssue, {
         callerId,
         access,
         ...(args as { ref: string }),
+        credential,
       }),
   },
   {
@@ -1957,14 +1959,31 @@ export const updateIssue = internalMutation({
   },
 })
 
+/* delete_task moves the task to Deleted items as the app's delete does
+ * (model/deletedItems.ts moveTasksToTrash), where a person can restore it in
+ * the app. The item records the credential (`via`); the 'deleted' row's
+ * detail stays `via MCP`. */
 export const deleteIssue = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, { callerId, access, ref }) => {
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    credential: vEventOwner,
+    ref: v.string(),
+  },
+  handler: async (ctx, { callerId, access, credential, ref }) => {
     const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, callerId, access)
+    const via = await credentialVia(ctx, me, credential)
     const issue = await mustFindIssue(ctx, me, ref)
     await mustWrite(ctx, me, issue.project_id)
-    await deleteIssueCore(ctx, { me, issue, now, provenance: PROVENANCE })
+    await moveTasksToTrash(ctx, {
+      actor: me,
+      root: issue,
+      subtasks: [],
+      now,
+      provenance: PROVENANCE,
+      via,
+    })
     return pretty({ deleted: true, key: issueKey(issue.num) })
   },
 })

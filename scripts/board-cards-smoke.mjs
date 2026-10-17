@@ -8,7 +8,12 @@ import { mkdirSync } from 'node:fs'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import {
+  inspectBrowserDemo,
+  loadBrowserDemo,
+  purgeDeletedTasks,
+  signInDemo,
+} from './browser-demo.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -207,6 +212,11 @@ async function cleanupFixture() {
         if (errors.length) throw new Error(`Could not remove ${errors.length} temporary tasks`)
       },
       { tasks: fixtures, orgSlug: demo.orgSlug },
+    )
+    // deleting moved them to Deleted items; delete them for good there
+    await purgeDeletedTasks(
+      demo,
+      fixtures.map((task) => task.id),
     )
   } finally {
     // Successful sign-out can destroy its own JavaScript context during the

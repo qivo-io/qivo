@@ -13,7 +13,8 @@
 
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
+import { CALLER_GONE } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import {
   classifySecret,
@@ -39,6 +40,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { itemFor, plantCredential, storedRows } from './trash.setup'
 
 const KEY = 'drive'
 const VIA = 'via the REST API (drive)'
@@ -2041,9 +2043,10 @@ describe("a group's dates on REST", () => {
 /* ----------------------------------------------------------- delete issue */
 
 describe('DELETE /v1/tasks/{ref}', () => {
-  it('deletes deep, detaches children with notify, narrates deleted with provenance', async () => {
+  it('moves the task to Deleted items with the key, detaches children with notify, narrates deleted with provenance', async () => {
     const t = newT()
     const f = await machineOrg(t)
+    const credential = await plantCredential(t, f.agent, 'agent_keys', KEY)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Doomed' })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -2065,6 +2068,7 @@ describe('DELETE /v1/tasks/{ref}', () => {
       callerId: f.agent.id,
       access: 'write',
       keyName: KEY,
+      credential,
       ref: `QN-${parent.num}`,
     })
     expect(out).toEqual({ deleted: true, id: parent.id, key: `QN-${parent.num}` })
@@ -2077,6 +2081,18 @@ describe('DELETE /v1/tasks/{ref}', () => {
           .collect(),
     )
     expect(comments).toEqual([])
+    // the task and its comment wait in Deleted items, named by the key
+    const item = await itemFor(t, parent.id)
+    expect(item).toMatchObject({
+      kind: 'task',
+      state: 'ready',
+      deleted_by: f.agent.id,
+      via: { table: 'agent_keys', id: credential.credential_id, name: KEY },
+    })
+    expect((await storedRows(t, item.id)).map((row) => row.table).sort()).toEqual([
+      'comments',
+      'issues',
+    ])
     const childRow = await issueRow(t, child.id)
     expect(childRow?.parent_id).toBeUndefined()
     const childMsgs = await messagesFor(t, f.user.id, child.id)
@@ -2088,47 +2104,40 @@ describe('DELETE /v1/tasks/{ref}', () => {
     expect(acts[0].detail).toBe(VIA)
   })
 
-  it('404 for unknown/invisible refs, 403 for read-only standing', async () => {
+  it('404 for unknown/invisible refs, 403 for read-only standing, 401 for a credential gone since auth', async () => {
     const t = newT()
     const f = await machineOrg(t)
-    await refused(
+    const credential = await plantCredential(t, f.agent, 'agent_keys', KEY)
+    const remove = (callerId: string, ref: string, owner = credential) =>
       t.mutation(internal.machine.rest.deleteIssue, {
-        callerId: f.agent.id,
+        callerId,
         access: 'write',
         keyName: KEY,
-        ref: 'QN-424242',
-      }),
-      'not_found',
-      'task not found',
-    )
+        credential: owner,
+        ref,
+      })
+    await refused(remove(f.agent.id, 'QN-424242'), 'not_found', 'task not found')
     const hiddenIssue = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.hidden.id,
       title: 'No see',
     })
-    await refused(
-      t.mutation(internal.machine.rest.deleteIssue, {
-        callerId: f.agent.id,
-        access: 'write',
-        keyName: KEY,
-        ref: hiddenIssue.id,
-      }),
-      'not_found',
-      'task not found',
-    )
+    await refused(remove(f.agent.id, hiddenIssue.id), 'not_found', 'task not found')
     const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'Kept' })
     const grantViewer = await plantAgent(t, f.org.id, 'Grant viewer bot', 'user')
     await grant(t, f.meta.id, grantViewer.id, 'viewer')
-    await refused(
-      t.mutation(internal.machine.rest.deleteIssue, {
-        callerId: grantViewer.id,
-        access: 'write',
-        keyName: KEY,
-        ref: row.id,
-      }),
-      'forbidden',
-      NO_WRITE,
-    )
+    const viewerKey = await plantCredential(t, grantViewer, 'agent_keys', KEY)
+    await refused(remove(grantViewer.id, row.id, viewerKey), 'forbidden', NO_WRITE)
+    // the key was deleted between auth and dispatch: the race reason, which
+    // the HTTP action answers with the caller's 401 sentence
+    await t.run(async (ctx) => {
+      await ctx.db.delete(credential.credential_row_id as Id<'agent_keys'>)
+    })
+    expect(
+      (await refused(remove(f.agent.id, row.id), 'forbidden', 'unknown agent key')).reason,
+    ).toBe(CALLER_GONE)
+    expect(await issueRow(t, row.id)).not.toBeNull()
+    expect(await t.run((ctx) => ctx.db.query('deleted_items').collect())).toEqual([])
   })
 })
 

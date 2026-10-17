@@ -4,7 +4,7 @@
  * tests exercise its actual adapter without paying for scrypt hashing. */
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { components } from '../_generated/api'
+import { components, internal } from '../_generated/api'
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import {
@@ -17,6 +17,7 @@ import {
 } from '../internal/marketingDemoData'
 import { canSeeProject, hasProjectLevel } from '../lib/access'
 import { logActivity } from '../model/activity'
+import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
@@ -1247,6 +1248,148 @@ describe('marketing demo rebuild ownership', () => {
       expect(await t.run(async (ctx) => ctx.db.query('issues').collect())).toEqual(workBefore)
     },
   )
+})
+
+describe('marketing demo Deleted items', () => {
+  // fake timers keep the steps of a moving item from running in between
+  const DEFAULT_TRASH_BUDGET = { ...TRASH_BUDGET }
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    Object.assign(TRASH_BUDGET, DEFAULT_TRASH_BUDGET)
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+  const TRASH_LEFT = /Deleted items must be empty; run the same command again/
+
+  /* Nora deletes a task and, in bounded steps that have not run, a whole
+   * project, as the app does: the project's item is still moving, with
+   * tasks left under its absent projects. */
+  async function trashSome(t: T, orgId: string) {
+    await t.run(async (ctx) => {
+      const nora = (
+        await ctx.db
+          .query('profiles')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      ).find((p) => p.org_role === 'admin')!
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+      const [first, second] = projects.filter((p) => p.type === 'meta')
+      const task = (
+        await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      ).find((i) => projects.some((p) => p.id === i.project_id && p.parent_id === first.id))!
+      const now = new Date().toISOString()
+      await moveTasksToTrash(ctx, { actor: nora, root: task, subtasks: [], now })
+      Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+      await moveProjectToTrash(ctx, { actor: nora, project: second, now })
+    })
+  }
+
+  const purgeAll = async (t: T, orgId: string) => {
+    for (let calls = 1; ; calls++) {
+      expect(calls).toBeLessThan(200)
+      if ((await t.mutation(internal.deletedItems.purgeOrg, { org_id: orgId })).done) return
+    }
+  }
+
+  it('refuses a wipe while Deleted items hold anything, and wipes and reseeds once purgeOrg emptied them', async () => {
+    const t = newAuthT()
+    const demo = await seeded(t)
+    const issueIds = (await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)
+    await trashSome(t, demo.org_id)
+    const before = await fixtureSnapshot(t)
+    await expectRefusal(apply(t, 'wipe', NEXT_ANCHOR), 'rule', TRASH_LEFT)
+    expect(await fixtureSnapshot(t)).toEqual(before)
+
+    await purgeAll(t, demo.org_id)
+    expect(await reset(t, NEXT_ANCHOR)).toMatchObject({
+      state: 'ready',
+      anchor: NEXT_ANCHOR,
+      counts: { tasks: MARKETING_DEMO.issues.length },
+    })
+    // the same uuids and numbers again, the deleted and the stranded included
+    const issues = await t.run(async (ctx) => ctx.db.query('issues').collect())
+    expect(issues.map((i) => i.id)).toEqual(issueIds)
+    expect(new Set(issues.map((i) => i.num)).size).toBe(issues.length)
+    await t.run(async (ctx) => {
+      for (const table of ['deleted_items', 'deleted_rows', 'deleted_tasks'] as const)
+        expect(await ctx.db.query(table).collect(), table).toEqual([])
+    })
+    await assertNoDanglingRefs(t, 'reset after purging Deleted items')
+  }, 60_000)
+
+  it('refuses a seed after a wipe once something reached Deleted items again', async () => {
+    const t = newAuthT()
+    const demo = await seeded(t)
+    await apply(t, 'wipe')
+    // a stored row a purge stopped short of: no item, but a reserved uuid
+    await t.run((ctx) =>
+      ctx.db.insert('deleted_rows', {
+        item_id: uuid(),
+        org_id: demo.org_id,
+        table: 'milestones',
+        owner_id: uuid(),
+        row_id: uuid(),
+        created_ts: 0,
+        row: {
+          table: 'milestones',
+          doc: { id: uuid(), project_id: uuid(), name: 'Gone', week: ANCHOR, created_at: NOW },
+        },
+      }),
+    )
+    await expectRefusal(apply(t, 'seed', NEXT_ANCHOR), 'rule', /work was added after wipe/)
+    await expectRefusal(apply(t, 'wipe'), 'rule', TRASH_LEFT)
+    await purgeAll(t, demo.org_id)
+    expect(await reset(t, NEXT_ANCHOR)).toMatchObject({ state: 'ready' })
+  }, 60_000)
+
+  it("refuses a seed whose reserved task uuid another organization's Deleted items keep", async () => {
+    const t = newAuthT()
+    const foreign = await withOrg(t)
+    await seeded(t)
+    await apply(t, 'wipe')
+    const reserved = await demoId(`issue:${MARKETING_DEMO.issues[0].key}`)
+    await t.run((ctx) =>
+      ctx.db.insert('deleted_rows', {
+        item_id: uuid(),
+        org_id: foreign.org.id,
+        table: 'issues',
+        owner_id: reserved,
+        row_id: reserved,
+        created_ts: 0,
+        row: {
+          table: 'issues',
+          doc: {
+            id: reserved,
+            org_id: foreign.org.id,
+            num: 7,
+            project_id: foreign.sub.id,
+            title: 'Customer work in Deleted items',
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          },
+        },
+      }),
+    )
+    const refusal = await expectRefusal(
+      apply(t, 'seed', NEXT_ANCHOR),
+      'conflict',
+      /reserved task id belongs to another organization/,
+    )
+    expect(refusal.data.reason).toBe('demo_id_collision')
+    expect(await t.query(inspectRef, TARGET)).toMatchObject({ state: 'empty' })
+  }, 60_000)
 })
 
 describe('marketing demo dataset upgrades', () => {

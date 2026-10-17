@@ -2,9 +2,9 @@
  * spelled out. This file is phase 5's home for deleteProjectDeep /
  * deleteTeamDeep / removeProfile; deleteIssueDeep is pulled forward because
  * phase 4's issues.deleteDeep must not ship without the message/subscription/
- * link edges. The app's deletes now move tasks and projects to Deleted items
- * instead (model/deletedItems.ts); these hard deletes remain for the REST and
- * MCP task deletes and the Northstar wipe.
+ * link edges. Every task and project delete, in the app and over REST and
+ * MCP, now moves the work to Deleted items instead (model/deletedItems.ts);
+ * these hard deletes remain for the Northstar wipe.
  *
  * deleteIssueDeep deletes ONE issue. It does NOT delete the subtree:
  * issues.parent_id is `on delete set null` (0001:95) — deleting a parent
@@ -20,10 +20,12 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
 import { dropCommentCount } from './commentCounts'
+import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { notifyIssueUpdate } from './messages'
 import { emitTaskEvent } from './taskEvents'
@@ -252,11 +254,6 @@ export async function clearHolder(
  * mutable object, so tests can lower it. */
 export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
 
-/* Comments and tasks can approach Convex's 1 MiB document limit, so their
- * ranges are read a few rows at a time. Unused rows of the last read then
- * add at most three such documents to what a transaction reads. */
-export const LARGE_ROWS_PER_READ = 4
-
 /** The most OAuth connections removeProfile revokes itself. The background
  * step deletes the rest, which can no longer be used anyway. */
 export const REVOKE_AT_ONCE = 256
@@ -450,7 +447,10 @@ export async function removeProfile(
  * audit log (history survives its subjects). Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
  * profiles' inboxes and OAuth connections, which this sweep only reaches
- * through live profiles. No narration: nothing is left to read it. */
+ * through live profiles. Deleted items go first, whatever state they are in,
+ * with the rows they still kept in the live tables and their bytes
+ * (model/deletedItems.ts clearOrgTrash); tasks a moving project left behind
+ * are then gone too. No narration: nothing is left to read it. */
 export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>): Promise<void> {
   const subscriptions = await ctx.db
     .query('billing_subscriptions')
@@ -486,6 +486,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .collect()) {
     await ctx.db.delete(a._id)
   }
+
+  await clearOrgTrash(ctx, org.id, { left: Number.POSITIVE_INFINITY })
 
   for (const table of [
     'webhook_events',

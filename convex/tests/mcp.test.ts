@@ -28,6 +28,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { itemFor, plantCredential, storedRows } from './trash.setup'
 
 /* ------------------------------------------------------------ wire helpers */
 
@@ -131,8 +132,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'e666c595272d737222f7b8188ca6ac76833077fa9a39e56c376bdab977f29372'
-const SHA_TOOLS_MODERN = '4fbe0f5ac53b2fdc6110536f4ad989d5224fd3dd3615b5a424f21bc3a384528c'
+const SHA_TOOLS_LEGACY = '33e21b419806342a3e1155aa8debc6c754dae4c5bd833daa704a1e040c099f6a'
+const SHA_TOOLS_MODERN = 'f546241e5a3804d22248e69114991af16dbb4309991d10f6b87044396a627321'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1967,8 +1968,9 @@ describe('write tools', () => {
     )
   })
 
-  test('delete_task: deep delete + provenance row; refusals', async () => {
+  test('delete_task: moves to Deleted items with the credential + provenance row; refusals', async () => {
     const fx = await machineOrg()
+    const credential = await plantCredential(fx.t, fx.agent, 'agent_keys', 'Default key')
     const i1 = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'Doomed' })
     await fx.t.run(async (ctx) => {
       await ctx.db.insert('comments', {
@@ -1984,6 +1986,7 @@ describe('write tools', () => {
       await fx.t.mutation(internal.machine.mcp.deleteIssue, {
         callerId: fx.agent.id,
         access: 'write',
+        credential,
         ref: i1.id,
       }),
     ) as { deleted: boolean; key: string }
@@ -2000,6 +2003,17 @@ describe('write tools', () => {
     }))
     expect(remains.issue).toBeNull()
     expect(remains.comments).toEqual([])
+    // both wait in Deleted items, which names the key the agent used
+    const item = await itemFor(fx.t, i1.id)
+    expect(item).toMatchObject({
+      state: 'ready',
+      deleted_by: fx.agent.id,
+      via: { table: 'agent_keys', id: credential.credential_id, name: 'Default key' },
+    })
+    expect((await storedRows(fx.t, item.id)).map((row) => row.table).sort()).toEqual([
+      'comments',
+      'issues',
+    ])
     const events = await activityFor(fx.t, fx.org.id)
     expect(events).toHaveLength(1)
     expect(events[0].verb).toBe('deleted')
@@ -2008,11 +2022,13 @@ describe('write tools', () => {
     // refusals
     const grantViewer = await plantAgent(fx.t, fx.org.id)
     await grant(fx.t, fx.meta.id, grantViewer.id, 'viewer')
+    const viewerKey = await plantCredential(fx.t, grantViewer, 'agent_keys', 'Default key')
     const i2 = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: 'Safe' })
     await expectRefusal(
       fx.t.mutation(internal.machine.mcp.deleteIssue, {
         callerId: grantViewer.id,
         access: 'write',
+        credential: viewerKey,
         ref: i2.id,
       }),
       'forbidden',
@@ -2022,6 +2038,7 @@ describe('write tools', () => {
       fx.t.mutation(internal.machine.mcp.deleteIssue, {
         callerId: fx.agent.id,
         access: 'write',
+        credential,
         ref: 'QN-999999',
       }),
       'not_found',
