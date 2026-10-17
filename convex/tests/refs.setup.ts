@@ -215,7 +215,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'panorama_refills.actor_auth_id',
   // Deleted items name what they hold by id while those rows are absent from
   // the live tables: the root, its project and parent, a stored row's owner
-  // and own id, a stored task. Restore checks each again (model/deletedItems.ts
+  // and own id, a stored project's lead, a stored task and its project.
+  // Restore and the list check each again (model/deletedItems.ts
   // sameReference). The bytes are a _storage id like issue_attachments'.
   'deleted_items.target_id',
   'deleted_items.project_id',
@@ -223,8 +224,10 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'deleted_rows.owner_id',
   'deleted_rows.row_id',
   'deleted_rows.storage_id',
+  'deleted_rows.lead_id',
   'deleted_tasks.task_id',
   'deleted_tasks.project_id',
+  'deleted_tasks.cross_project_id',
   'deleted_item_jobs.scheduled_id',
   // the platform audit log survives its subjects on purpose
   'platform_audit_log.actor_auth_id',

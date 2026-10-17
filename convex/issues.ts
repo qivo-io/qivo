@@ -283,15 +283,29 @@ export const moveCarriesSubtasks = orgQuery({
  * optional early-archive reason posted as a normal comment — author pinned
  * to the actor, sharing the archive's `now` (0111: the 'New comment' and
  * 'Archived' messages land at the same instant; the prune tie-break falls to
- * id). Archiving an already-archived row is a no-op and posts no reason. */
+ * id). Archiving an already-archived row is a no-op and posts no reason.
+ * `keep_subtasks` is the archive window's choice to keep the subtasks: each
+ * active direct child is detached first, exactly as a delete detaches it,
+ * and becomes a top-level task; the task is archived alone and its archived
+ * children stay attached (model/issues.ts archiveIssueCore). REST and MCP
+ * always archive the subtree. */
 export const archive = orgMutation({
-  args: { id: v.string(), reason: v.optional(v.string()) },
-  handler: async (ctx, { id, reason }) => {
+  args: {
+    id: v.string(),
+    reason: v.optional(v.string()),
+    keep_subtasks: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { id, reason, keep_subtasks }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const wasActive = issue.archived_at === undefined
-    const after = await archiveIssueCore(ctx, { me: ctx.me, issue, now })
+    const after = await archiveIssueCore(ctx, {
+      me: ctx.me,
+      issue,
+      now,
+      keepSubtasks: keep_subtasks === true,
+    })
     if (wasActive) await postArchiveReason(ctx, { issue: after, author: ctx.me, reason, now })
     return { issue: await pubFor(ctx, ctx.me, after) }
   },

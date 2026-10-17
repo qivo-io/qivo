@@ -726,3 +726,67 @@ export async function unarchiveProjectCore(
   })
   return true
 }
+
+/** The most tasks a removal summary counts in one project tree. A mutable
+ * object, so tests can lower it. */
+export const REMOVAL_COUNT = { cap: 5000 }
+
+/** Tasks counted in a project or a tree. `more`: the count stopped at the
+ * cap, so there are at least this many. */
+export type RemovalCount = { tasks: number; archived_tasks: number; more: boolean }
+
+/**
+ * What archiving or deleting `project` takes along, for the app's Archive
+ * or delete window (projects.removalSummary): every sub-project, archived
+ * ones included, and the tasks of the whole tree, archived ones included,
+ * which the client cannot count from what its snapshot holds. Convex has no
+ * count, so the tasks are read; the tree reads at most REMOVAL_COUNT.cap + 1
+ * of them in all, which keeps a very large tree within a query's limits,
+ * and a count cut short says `more` ("more than 5,000 tasks").
+ */
+export async function removalSummaryOf(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+): Promise<RemovalCount & { sub_projects: (RemovalCount & SubProjectName)[] }> {
+  let left = REMOVAL_COUNT.cap + 1
+  const count = async (id: string): Promise<RemovalCount> => {
+    const room = left
+    const tasks =
+      room === 0
+        ? []
+        : await ctx.db
+            .query('issues')
+            .withIndex('by_project', (q) => q.eq('project_id', id))
+            .take(room)
+    left -= tasks.length
+    const archived_tasks = tasks.filter((task) => task.archived_at !== undefined).length
+    return { tasks: tasks.length, archived_tasks, more: tasks.length === room }
+  }
+  const own = await count(project.id)
+  const subs = await ctx.db
+    .query('projects')
+    .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
+    .collect()
+  const sub_projects: (RemovalCount & SubProjectName)[] = []
+  for (const sub of subs.sort((a, b) => a.sort_order - b.sort_order))
+    sub_projects.push({
+      id: sub.id,
+      name: sub.name,
+      key: sub.key,
+      archived: sub.archived_at !== undefined,
+      ...(await count(sub.id)),
+    })
+  const counted = [own, ...sub_projects]
+  const more = left === 0
+  return {
+    tasks: Math.min(
+      REMOVAL_COUNT.cap,
+      counted.reduce((n, c) => n + c.tasks, 0),
+    ),
+    archived_tasks: counted.reduce((n, c) => n + c.archived_tasks, 0),
+    more,
+    sub_projects,
+  }
+}
+
+type SubProjectName = { id: string; name: string; key: string; archived: boolean }

@@ -1,8 +1,9 @@
 /* The project domain's public surface (phase 5): create / update /
- * removeAccess / archive / unarchive / deleteDeep / inviteGuest, plus the
- * milestones CRUD (there is no milestones.ts). Thin wrappers over the shared
- * cores REST and MCP use too (model/projects.ts, model/projectAccess.ts,
- * model/milestones.ts) and over lib/access, model/orgs and model/cascade —
+ * removeAccess / archive / unarchive / deleteDeep / removalSummary /
+ * inviteGuest, plus the milestones CRUD (there is no milestones.ts). Thin
+ * wrappers over the shared cores REST and MCP use too (model/projects.ts,
+ * model/projectAccess.ts, model/milestones.ts) and over lib/access,
+ * model/orgs and model/cascade —
  * orgMutation → resolve by uuid → core (access predicate → guards → writes →
  * narration), all under ONE `now`.
  *
@@ -36,13 +37,21 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
-import type { MutationCtx } from './_generated/server'
+import type { QueryCtx } from './_generated/server'
 import { canManageOwnProjectAccess, canManageProjectUsers, hasProjectLevel } from './lib/access'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { vGrantLevel, vProjectType } from './lib/enums'
-import { badRequest, forbidden, notFound, orgMutation, require, rule } from './lib/functions'
+import {
+  badRequest,
+  forbidden,
+  notFound,
+  orgMutation,
+  orgQuery,
+  require,
+  rule,
+} from './lib/functions'
 import { logActivity } from './model/activity'
 import { cleanReason, moveProjectToTrash } from './model/deletedItems'
 import {
@@ -57,11 +66,12 @@ import {
   archiveProjectCore,
   assertGrantee,
   createProjectCore,
+  removalSummaryOf,
   unarchiveProjectCore,
   updateProjectCore,
 } from './model/projects'
 
-type MeCtx = MutationCtx & { me: Doc<'profiles'> }
+type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* Unknown and foreign-org rows are indistinguishable (0049/0056). The
  * sentence is delete_project's own (0081:479). */
@@ -259,6 +269,24 @@ export const deleteDeep = orgMutation({
       ts: now,
     })
     return null
+  },
+})
+
+/* --------------------------------------------------------- removalSummary
+ * What the Archive or delete window shows before either: the sub-projects,
+ * archived ones included, and how many tasks the tree holds, archived ones
+ * included (model/projects.ts removalSummaryOf, which stops counting past
+ * 5,000 and says so). The same gate as deleteDeep, because it names
+ * sub-projects and counts work a member who only navigates to the project
+ * cannot see; a top-level project's lead can see every sub-project. */
+export const removalSummary = orgQuery({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    const project = await myProject(ctx, id)
+    if (!(await hasProjectLevel(ctx, ctx.me, id, 'lead'))) {
+      throw rule('requires the project lead')
+    }
+    return await removalSummaryOf(ctx, project)
   },
 })
 
