@@ -145,6 +145,7 @@ const APP_OWNED: TableNames[] = [
   'background_uploads',
   'deleted_items',
   'deleted_item_jobs',
+  'deleted_item_parents',
   'deleted_rows',
   'deleted_tasks',
 ]

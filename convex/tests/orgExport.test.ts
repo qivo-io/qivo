@@ -102,6 +102,7 @@ const EXCLUDED_TABLES = [
   // Deleted items are not exported: restore an item to include its work.
   'deleted_items',
   'deleted_item_jobs',
+  'deleted_item_parents',
   'deleted_rows',
   'deleted_tasks',
 ] as const

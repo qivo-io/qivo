@@ -16,9 +16,11 @@
  * restoring or purging), and schedules the next. recover (every minute,
  * crons.ts) restarts a job whose step stopped, at half the budget each
  * time, and after its last retry makes an item stuck, or sends a restore
- * back to moving so the item is ready again. expire (daily at
- * 03:45 UTC) starts purging the ready items whose 30 days are over, one
- * bounded batch per run, and schedules the next run while more are due.
+ * back to moving so the item is ready again, or, once a restored project is
+ * live, leaves the tasks still waiting for their parent without it. expire
+ * (daily at 03:45 UTC) starts purging the ready items whose 30 days are
+ * over, one bounded batch per run, and schedules the next run while more
+ * are due.
  *
  * purgeOrg and purgeTasks are deploy-key seams for fixtures and live
  * drives, refused on production and public demo deployments like
