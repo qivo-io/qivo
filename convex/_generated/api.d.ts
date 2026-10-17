@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as activityRetention from "../activityRetention.js";
 import type * as admin from "../admin.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBilling from "../adminBilling.js";
@@ -47,6 +48,7 @@ import type * as internal_marketingDemo from "../internal/marketingDemo.js";
 import type * as internal_marketingDemoData from "../internal/marketingDemoData.js";
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
+import type * as internal_orgCountersBackfill from "../internal/orgCountersBackfill.js";
 import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
 import type * as jobs from "../jobs.js";
@@ -168,6 +170,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  activityRetention: typeof activityRetention;
   admin: typeof admin;
   adminAuth: typeof adminAuth;
   adminBilling: typeof adminBilling;
@@ -207,6 +210,7 @@ declare const fullApi: ApiFromModules<{
   "internal/marketingDemoData": typeof internal_marketingDemoData;
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/operator": typeof internal_operator;
+  "internal/orgCountersBackfill": typeof internal_orgCountersBackfill;
   invites: typeof invites;
   issues: typeof issues;
   jobs: typeof jobs;

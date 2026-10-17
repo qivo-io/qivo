@@ -10,6 +10,7 @@ import {
   activityFor,
   allMessages,
   as,
+  countersFor,
   expectRefusal,
   messagesFor,
   NOW,
@@ -158,8 +159,7 @@ describe('reporter attribution', () => {
         REPORTER_SENTENCE,
       )
     }
-    const org = await t.run(async (ctx) => ctx.db.get(f.org._id))
-    expect(org?.next_issue_num).toBe(1)
+    expect((await countersFor(t, f.org.id)).next_issue_num).toBe(1)
     expect(await t.run(async (ctx) => ctx.db.query('issues').collect())).toEqual([])
     expect(await t.run(async (ctx) => ctx.db.query('issue_subscriptions').collect())).toEqual([])
     expect(await activityFor(t, f.org.id)).toHaveLength(0)
@@ -181,7 +181,7 @@ describe('reporter attribution', () => {
       /^reporter_id must be a user uuid$/,
     )
     expect(await t.run(async (ctx) => ctx.db.query('issues').collect())).toEqual([])
-    expect((await t.run(async (ctx) => ctx.db.get(f.org._id)))?.next_issue_num).toBe(1)
+    expect((await countersFor(t, f.org.id)).next_issue_num).toBe(1)
   })
 
   it('also refuses an otherwise assignable same-org user who cannot see the project', async () => {

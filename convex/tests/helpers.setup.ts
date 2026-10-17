@@ -27,6 +27,7 @@ import type { ReapCounts } from '../files'
 import type { RestIssueJson } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { countersOf, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
 
 export type T = TestConvex<typeof schema>
@@ -582,11 +583,21 @@ export const activityFor = (t: T, orgId: string): Promise<Doc<'activity_events'>
 export async function drainActivity(t: T): Promise<void> {
   await t.run(async (ctx) => {
     for (const e of await ctx.db.query('activity_events').collect()) await ctx.db.delete(e._id)
-    for (const org of await ctx.db.query('organizations').collect()) {
-      await ctx.db.patch(org._id, { activity_count: undefined })
-    }
   })
 }
+
+/** The organization's task and project counters from its org_counters row,
+ * else from the legacy fields fixtures plant on the organization row
+ * (model/orgs.ts countersOf). */
+export const countersFor = (t: T, orgId: string): Promise<OrgCounters> =>
+  t.run(async (ctx) => {
+    const org = await ctx.db
+      .query('organizations')
+      .withIndex('by_uuid', (q) => q.eq('id', orgId))
+      .unique()
+    if (org === null) throw new Error(`organization ${orgId} not found`)
+    return await countersOf(ctx, org)
+  })
 
 /* Mutations stamp their own real-clock `now`; a short sleep guarantees the
  * next one lands at a strictly later ISO millisecond (the prune survivor and

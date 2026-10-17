@@ -1,11 +1,11 @@
 /* Background cleanup after a profile removal. model/cascade.ts removeProfile
  * deletes the profile and ends its access in one transaction. It also
- * clears the profile from project leads, the activity feed and as many open
- * tasks as one budget allows. It then inserts a profile_removals row and
- * schedules `step`. Each step clears a bounded part of the remaining rows
- * that name the removed id, phase by phase (REMOVAL_PHASES), and
- * schedules the next step until nothing names the id. Then it deletes the
- * row, which also frees the id for profiles.create.
+ * clears the profile from project leads, its newest activity rows and as
+ * many open tasks as one budget allows. It then inserts a profile_removals
+ * row and schedules `step`. Each step clears a bounded part of the
+ * remaining rows that name the removed id, phase by phase
+ * (REMOVAL_PHASES), and schedules the next step until nothing names the
+ * id. Then it deletes the row, which also frees the id for profiles.create.
  *
  * Every phase reads the same index prefix again with take(n). Clearing a
  * row moves it out of that range, so no cursor is kept, and a repeated step
@@ -139,6 +139,15 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       large: true,
     }),
   ),
+  // rows older than the newest ACTIVITY_CAP the removal transaction cleared,
+  // which the background trim has not deleted yet
+  activity: [
+    edge({
+      range: (ctx, profileId) =>
+        ctx.db.query('activity_events').withIndex('by_actor', (q) => q.eq('actor_id', profileId)),
+      clear: (ctx, row) => ctx.db.patch(row._id, { actor_id: undefined }),
+    }),
+  ],
   comments: [
     edge({
       range: (ctx, profileId) =>

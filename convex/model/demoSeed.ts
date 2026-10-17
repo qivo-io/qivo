@@ -14,12 +14,20 @@ import {
 } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
+import { ACTIVITY_CAP, requestActivityTrim } from './activity'
 import { markArchivedTask } from './archiveMarks'
 import { storeCommentCount } from './commentCounts'
 import { cleanDescription } from './issues'
 import { type NotifyPreload, notifyCommentInsert, notifyIssueInsert } from './messages'
 import { cleanMilestoneName } from './milestones'
-import { assertSlugAvailable, cleanOrgName, newOrgDefaults, newTeamDefaults } from './orgs'
+import {
+  assertSlugAvailable,
+  cleanOrgName,
+  insertOrgRows,
+  newOrgDefaults,
+  newTeamDefaults,
+  setCounters,
+} from './orgs'
 import { cleanProjectName, projectDescription } from './projects'
 import { cleanTeamName } from './teams'
 
@@ -85,8 +93,9 @@ export async function writeNorthstarWork(
     // Not a default (missing means 'users'), so clear it by hand: a reset
     // must not keep the setting from interactive use.
     project_creators: undefined,
+  })
+  await setCounters(ctx, org, {
     next_issue_num: data.issues.length,
-    activity_count: data.issues.length,
     next_project_num: data.projects.length,
   })
   for (const team of data.teams) {
@@ -249,6 +258,8 @@ export async function writeNorthstarWork(
     issueDocs.set(i.key, issue)
     await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
   }
+  // The rows above bypass logActivity. Past the cap they need a trim.
+  if (data.issues.length > ACTIVITY_CAP) await requestActivityTrim(ctx, org.id)
   for (const l of data.links) {
     const pair = [issueIds[l.source], issueIds[l.target]].sort()
     await ctx.db.insert('issue_links', {
@@ -334,7 +345,7 @@ export async function provisionPublicDemo(
   require((await byId(ctx, 'organizations', orgId)) === null, rule(
     'Demo organization already exists',
   ))
-  const docId = await ctx.db.insert('organizations', {
+  const docId = await insertOrgRows(ctx, {
     id: orgId,
     name: cleanOrgName(MARKETING_DEMO.organization.name),
     slug,

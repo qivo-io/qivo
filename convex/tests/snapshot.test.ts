@@ -11,10 +11,11 @@
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
+import { invokeSnapshot } from './backendPerformance.setup'
 import {
   as,
   expectRefusal,
@@ -244,6 +245,61 @@ describe('billing redaction', () => {
 
     const guest = await snapFor(f.guest)
     expect(guest.orgs[0]?.billing).toBeUndefined()
+  })
+
+  it('counters come from org_counters once they moved there; activity_count never rides', async () => {
+    // an organization whose counters are still on its row
+    expect((await snapFor(f.user)).orgs[0]).toMatchObject({
+      next_issue_num: 1,
+      next_project_num: 5,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.org._id, { activity_count: 500 })
+      await ctx.db.insert('org_counters', {
+        org_id: f.org.id,
+        next_issue_num: 7,
+        next_project_num: 9,
+      })
+    })
+    const [org] = (await snapFor(f.user)).orgs
+    expect(org).toMatchObject({ next_issue_num: 7, next_project_num: 9 })
+    expect(org).not.toHaveProperty('activity_count')
+  })
+})
+
+describe('snapshot size log', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('warns when the read uses half of a Convex limit, and only then', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // What the admin's snapshot of a fresh fixture reads.
+    const free = newT()
+    const fFree = await withOrg(free)
+    const { documentsRead } = await as(free, fFree.admin).query(async (ctx) => {
+      await invokeSnapshot(ctx)
+      return await ctx.meta.getTransactionMetrics()
+    })
+    expect(warn).not.toHaveBeenCalled()
+
+    const roomy = newT({ transactionLimits: { documentsRead: documentsRead.used * 3 } })
+    const fRoomy = await withOrg(roomy)
+    await as(roomy, fRoomy.admin).query(api.snapshot.forMe, {})
+    expect(warn).not.toHaveBeenCalled()
+
+    const tight = newT({
+      transactionLimits: { documentsRead: Math.ceil(documentsRead.used * 1.5) },
+    })
+    const fTight = await withOrg(tight)
+    await as(tight, fTight.admin).query(api.snapshot.forMe, {})
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith('Snapshot read near Convex limits', {
+      org_ids: [fTight.org.id],
+      seats: 1,
+      tasks: 0,
+      bytes_read: expect.any(Number),
+      documents_read: expect.any(Number),
+      index_ranges: expect.any(Number),
+    })
   })
 })
 

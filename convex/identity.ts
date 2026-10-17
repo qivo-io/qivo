@@ -29,6 +29,7 @@ import {
   createStarterLabels,
   createStarterTeam,
   generateSlug,
+  insertOrgRows,
   leaveAllTeams,
   nameInitials,
   newOrgDefaults,
@@ -208,7 +209,7 @@ export const createOrganization = authedMutation({
     ].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
     const retention = retentionSeats.length > 0 ? retentionSeats[0].message_retention_days : 7
     const orgId = newUuid()
-    await ctx.db.insert('organizations', {
+    await insertOrgRows(ctx, {
       id: orgId,
       name: nm,
       slug: await generateSlug(ctx, nm),

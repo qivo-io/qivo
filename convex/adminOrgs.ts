@@ -72,6 +72,7 @@ import {
   createStarterLabels,
   createStarterTeam,
   generateSlug,
+  insertOrgRows,
   nameInitials,
   newOrgDefaults,
   newUuid,
@@ -224,7 +225,7 @@ export const insertOrganization = internalMutation({
 
     const now = new Date().toISOString()
     const orgId = newUuid()
-    await ctx.db.insert('organizations', { id: orgId, name, slug, ...newOrgDefaults(now) })
+    await insertOrgRows(ctx, { id: orgId, name, slug, ...newOrgDefaults(now) })
     const org = await byId(ctx, 'organizations', orgId)
     require(org !== null, notFound('organization not found'))
     await createStarterLabels(ctx, { org_id: orgId, now })

@@ -6,7 +6,7 @@ import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { demoMonday, provisionPublicDemo } from '../model/demoSeed'
 import schema from '../schema'
-import { expectRefusal, newT, type T, uuid } from './helpers.setup'
+import { countersFor, expectRefusal, newT, type T, uuid } from './helpers.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -111,6 +111,8 @@ const APP_OWNED: TableNames[] = [
   'demo_uploads',
   'roadmap_history',
   'organizations',
+  'org_counters',
+  'activity_retention',
   'teams',
   'profiles',
   'projects',
@@ -252,7 +254,10 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(a.anchor).toBe('2026-09-14')
     expect(demoMonday(Date.parse('2026-09-20T23:59:59Z'))).toBe(a.anchor)
     expect(demoMonday(Date.parse('2026-09-21T00:00:00Z'))).toBe('2026-09-21')
-    expect(left.org?.next_issue_num).toBe(MARKETING_DEMO.issues.length)
+    expect(await countersFor(t, a.org_id!)).toEqual({
+      next_issue_num: MARKETING_DEMO.issues.length,
+      next_project_num: MARKETING_DEMO.projects.length,
+    })
     expect(
       left.tasks
         .filter((r) => r.remaining_hours !== undefined)

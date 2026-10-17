@@ -72,6 +72,7 @@ export type CredentialAccess = (typeof CREDENTIAL_ACCESS)[number]
  * (profileRemovals.ts). Stored on profile_removals only, never on the wire. */
 export const REMOVAL_PHASES = [
   'tasks',
+  'activity',
   'comments',
   'sent_messages',
   'inbox',

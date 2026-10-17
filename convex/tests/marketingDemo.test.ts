@@ -20,6 +20,7 @@ import { logActivity } from '../model/activity'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
+  countersFor,
   expectRefusal,
   NOW,
   newT,
@@ -1026,6 +1027,7 @@ describe('marketing demo rebuild ownership', () => {
         .query('organizations')
         .withIndex('by_uuid', (q) => q.eq('id', result.org_id))
         .unique())!
+      // a demo provisioned before org_counters kept this on its row
       await ctx.db.patch(org._id, { activity_count: 500 })
     })
     expect(await apply(t, 'wipe')).toMatchObject({
@@ -1069,8 +1071,10 @@ describe('marketing demo rebuild ownership', () => {
           .query('organizations')
           .withIndex('by_uuid', (q) => q.eq('id', result.org_id))
           .unique())!.activity_count,
-      ).toBe(1)
+      ).toBeUndefined()
     })
+    // the wipe rewinds the counters, so the reseed numbers tasks from 1
+    expect(await countersFor(t, result.org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })
     await apply(t, 'seed', NEXT_ANCHOR)
     expect((await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)).toEqual(
       issueIds,

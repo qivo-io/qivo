@@ -214,6 +214,8 @@ const orgRows = (t: T, orgId: string) =>
       'activity_events',
       'messages',
       'issue_attachments',
+      'org_counters',
+      'activity_retention',
     ] as const)
       counts[table] = (await ctx.db.query(table).collect()).filter(
         (row) => (row as { org_id?: string }).org_id === orgId,

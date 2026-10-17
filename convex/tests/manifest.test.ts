@@ -91,6 +91,7 @@ const actual = rows.map((r) => `${r.module}:${r.name} ${r.kind} ${r.vis} ${r.arg
 /* ------------------------------------------------- the committed baseline */
 
 const MANIFEST = `
+activityRetention:trim mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
@@ -239,6 +240,8 @@ internal/oauthSmoke:cleanup mutation internal {"type":"object","value":{"expecte
 internal/operator:provisionOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"password_hash":{"fieldType":{"type":"string"},"optional":false}}}
 internal/operator:retireLegacyFixtures mutation internal {"type":"object","value":{"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":true}}}
 internal/operator:testOperator action internal {"type":"object","value":{}}
+internal/orgCountersBackfill:remaining query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true}}}
+internal/orgCountersBackfill:start mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"page":{"fieldType":{"type":"number"},"optional":true},"orgs":{"fieldType":{"type":"number"},"optional":true},"changed":{"fieldType":{"type":"number"},"optional":true}}}
 invites:reserve mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"app":{"fieldType":{"type":"boolean"},"optional":false}}}
 invites:sendFromApp action internal {"type":"object","value":{"invites":{"fieldType":{"type":"array","value":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":true},"unless_sent":{"fieldType":{"type":"boolean"},"optional":true}}}},"optional":false}}}
 invites:settle mutation internal {"type":"object","value":{"row":{"fieldType":{"type":"id","tableName":"platform_audit_log"},"optional":false},"sent":{"fieldType":{"type":"boolean"},"optional":false},"uncertain":{"fieldType":{"type":"boolean"},"optional":false}}}

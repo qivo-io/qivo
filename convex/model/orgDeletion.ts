@@ -30,6 +30,7 @@ import {
   sweep,
 } from './cascade'
 import { estimateDocumentBytes } from './demoMetrics'
+import { deleteOrgBookkeeping } from './orgs'
 
 /* Rows read per index read for small documents. */
 const ROWS_PER_READ = 64
@@ -408,7 +409,7 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   ])
 
 /** The last step checks that every parent range is empty, then deletes the
- * organization and its removal row. */
+ * organization with its counters and retention rows, and its removal row. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
   for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels'] as const)
@@ -419,6 +420,7 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
   // the Northstar importer's ownership receipt names the org (one-row table)
   for (const receipt of await ctx.db.query('marketing_demo').collect())
     if (receipt.org_id === orgId) await ctx.db.delete(receipt._id)
+  await deleteOrgBookkeeping(ctx, orgId)
   const org = await byId(ctx, 'organizations', orgId)
   if (org) await ctx.db.delete(org._id)
   await ctx.db.delete(removal._id)

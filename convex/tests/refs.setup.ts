@@ -29,6 +29,8 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'billing_notices', field: 'org_id', target: 'organizations' },
   { table: 'org_removals', field: 'org_id', target: 'organizations' },
   { table: 'marketing_demo', field: 'org_id', target: 'organizations' },
+  { table: 'org_counters', field: 'org_id', target: 'organizations' },
+  { table: 'activity_retention', field: 'org_id', target: 'organizations' },
   { table: 'teams', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'team_id', target: 'teams' },
   { table: 'team_members', field: 'profile_id', target: 'profiles' },
