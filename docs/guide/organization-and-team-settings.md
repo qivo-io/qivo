@@ -39,14 +39,15 @@ projects over. Until an organization admin does, the agent cannot be made a
 **Viewer**, so set it to **Inactive** to stop it at once
 ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
-The line under the setting names who can create projects now, such as
-**Nora Berg, Leo Martins and 2 more can create projects.** It lists up to
-three names, organization admins first. With more, it shows two names and a
-count. Pending invitations and **Standard user** agents count, and an
-agent's name says so, such as **Atlas (agent)**. Inactive users, viewers and
-guests do not. With **Org admins**, it adds **Project leads still create
-sub-projects.** With **Selected users**, it adds **Choose who in Users.**
-The **Users** link opens **Organization → Users**.
+The line under the setting names who can create projects now. It lists up
+to three names, organization admins first. With more, it shows two names and
+a count, and says how many of the others are agents, such as **Nora Berg,
+Leo Martins and 3 more, including 1 agent, can create projects.** Pending
+invitations and **Standard user** agents count, and an agent's name says so,
+such as **Atlas (agent)**. Inactive users, viewers and guests do not. With
+**Org admins**, it adds **Project leads still create sub-projects.** With
+**Selected users**, it adds **Choose who in Users.** The **Users** link
+opens **Organization → Users**.
 
 ## Export data
 
