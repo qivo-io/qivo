@@ -922,6 +922,21 @@ export default defineSchema({
     .index('by_item', ['item_id'])
     .index('by_progress', ['progress_at']),
 
+  /* The parent each task of a restoring project item waits for. A task
+   * whose parent is outside the item goes back to issues without it while
+   * the item fills, so that parent stays as it is until the reveal. After
+   * the reveal the restore gives the task its parent by the parent table
+   * (model/deletedItems.ts attachParents). It keeps one row per task rather
+   * than a field on deleted_item_jobs, because an item can hold any number
+   * of such tasks and every step rewrites its job. The rows outlive the
+   * reveal with the item and its job and go with the item. A move that takes
+   * such a task back stores it with this parent again. */
+  deleted_item_parents: defineTable({
+    item_id: v.string(),
+    task_id: v.string(), // the task written back without its parent
+    parent_id: v.string(), // the parent it had in Deleted items
+  }).index('by_item_task', ['item_id', 'task_id']),
+
   /* One original document of a deleted item, typed by its table. Only
    * model/deletedItems.ts storeRow inserts here, writing `table` and `row`
    * together; restore writes `row.doc` back unchanged, which is why a

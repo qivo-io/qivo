@@ -107,6 +107,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'panorama_submissions', field: 'image_id', target: 'panorama_images' },
   { table: 'deleted_items', field: 'org_id', target: 'organizations' },
   { table: 'deleted_item_jobs', field: 'item_id', target: 'deleted_items' },
+  { table: 'deleted_item_parents', field: 'item_id', target: 'deleted_items' },
   { table: 'deleted_rows', field: 'org_id', target: 'organizations' },
   { table: 'deleted_rows', field: 'item_id', target: 'deleted_items' },
   { table: 'deleted_tasks', field: 'org_id', target: 'organizations' },
@@ -227,6 +228,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'deleted_tasks.project_id',
   'deleted_tasks.cross_project_id',
   'deleted_item_jobs.scheduled_id',
+  // a task a restore wrote back without its parent, and that parent, which
+  // the attach after the reveal reads again (model/deletedItems.ts
+  // attachParent); either may be gone or moved by then
+  'deleted_item_parents.task_id',
+  'deleted_item_parents.parent_id',
   // the platform audit log survives its subjects on purpose
   'platform_audit_log.actor_auth_id',
   'platform_audit_log.target_org_id',
