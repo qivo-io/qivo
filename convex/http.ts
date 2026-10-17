@@ -7,7 +7,7 @@ import { appOrigins, authComponent, createAuth } from './auth'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
 import { isDemoDeployment } from './lib/demo'
-import { DEMO_VISITOR_HEADER, demoVisitorPlatform, verifiedDemoCountry } from './lib/demoVisitor'
+import { demoVisitorPlatform } from './lib/demoVisitor'
 import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './lib/fileTokens'
 import { badRequest } from './lib/functions'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
@@ -28,7 +28,7 @@ registerBilling(http)
 registerDemoReporting(http)
 const recordDemoVisitor = makeFunctionReference<
   'mutation',
-  { auth_user_id: string; browser: string; os: string; country: string }
+  { auth_user_id: string; browser: string; os: string }
 >('demoVisitor:record')
 
 /* Auth lives at /api/auth/* (OAuth callbacks /api/auth/callback/{microsoft,google}).
@@ -96,7 +96,6 @@ const createHttpAuth: typeof createAuth = (ctx) => {
             await ctx.runMutation(recordDemoVisitor, {
               auth_user_id: user.id,
               ...demoVisitorPlatform(request.headers.get('User-Agent')),
-              country: await verifiedDemoCountry(request.headers.get(DEMO_VISITOR_HEADER)),
             })
           }
         } catch {
@@ -111,7 +110,10 @@ const createHttpAuth: typeof createAuth = (ctx) => {
 authComponent.registerRoutes(http, createHttpAuth, {
   cors: {
     allowedOrigins: isDemoDeployment() ? [] : ['http://localhost:5199'],
-    allowedHeaders: isDemoDeployment() ? [DEMO_VISITOR_HEADER] : [],
+    // Demo frontends from before country attribution was removed send this
+    // header, for example during a deployment or after a Vercel Instant
+    // Rollback. Allowing it keeps their sign-in working; Convex ignores it.
+    allowedHeaders: isDemoDeployment() ? ['X-Qivo-Demo-Visitor'] : [],
   },
 })
 

@@ -2,6 +2,9 @@
 export type DemoAudience = {
   browsers: { name: string; count: number }[]
   operatingSystems: { name: string; count: number }[]
+  /** Always empty. Demos no longer record countries, but admin pages and
+   * report receivers from earlier releases still read this field, so it stays
+   * until no earlier release can be served or rolled back to. */
   countries: { name: string; count: number }[]
 }
 
@@ -42,11 +45,13 @@ const date = (value: unknown): value is string => {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
+/** Reports from earlier demo releases also carry country totals. Projection
+ * replaces them with an empty list, so both report shapes stay readable. */
 function parseAudience(value: unknown): DemoAudience {
   if (!object(value)) throw new Error('The demo service returned invalid visitor statistics.')
-  const dimension = (rows: unknown, country = false) => {
+  const dimension = (rows: unknown) => {
     const seen = new Set<string>()
-    if (!Array.isArray(rows) || rows.length > (country ? 300 : 32))
+    if (!Array.isArray(rows) || rows.length > 32)
       throw new Error('The demo service returned invalid visitor statistics.')
     return rows.map((row) => {
       if (
@@ -54,7 +59,6 @@ function parseAudience(value: unknown): DemoAudience {
         typeof row.name !== 'string' ||
         !row.name ||
         row.name.length > 64 ||
-        (country && !/^[A-Z]{2}$/.test(row.name)) ||
         !count(row.count) ||
         seen.has(row.name)
       )
@@ -66,7 +70,7 @@ function parseAudience(value: unknown): DemoAudience {
   return {
     browsers: dimension(value.browsers),
     operatingSystems: dimension(value.operatingSystems),
-    countries: dimension(value.countries, true),
+    countries: [],
   }
 }
 

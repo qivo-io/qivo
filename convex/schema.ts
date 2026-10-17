@@ -329,6 +329,8 @@ export default defineSchema({
     metrics_counted_at: v.optional(v.number()),
     visitor_browser: v.optional(v.string()),
     visitor_os: v.optional(v.string()),
+    // No longer written. Earlier receipts with a country are purged with
+    // their demo; remove the field once none remain.
     visitor_country: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -394,6 +396,8 @@ export default defineSchema({
     file_bytes_sum: v.number(),
     browsers: v.optional(v.record(v.string(), v.number())),
     operating_systems: v.optional(v.record(v.string(), v.number())),
+    // No longer written. The hourly storage sample strips earlier country
+    // counts; remove the field once none remain.
     countries: v.optional(v.record(v.string(), v.number())),
   }).index('by_date', ['date']),
 

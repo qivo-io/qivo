@@ -15,7 +15,7 @@ const STAGING_HOST = 'preview.qivo.io'
 const DEMO_HOST = 'demo.qivo.io'
 const FONT = '/marketing/fonts/manrope-normal-latin.a30ddcd3.woff2'
 
-/** Files `vite build` writes, plus the demo visitor function. */
+/** Files `vite build` writes. */
 const APP_FILES = [
   '/app.html',
   '/admin.html',
@@ -25,7 +25,6 @@ const APP_FILES = [
   '/skill.md',
   '/auth.md',
   '/favicon.svg',
-  '/api/demo-visitor',
 ]
 /** Files website/scripts/build.mjs adds. The demo build has none of them. */
 const WEBSITE_FILES = [
@@ -178,9 +177,10 @@ describe('public demo', () => {
       expect(route(config, DEMO_HOST, path, DEMO_DEPLOYMENT).file, path).toBe(served)
   })
 
-  it('serves the demo visitor function and keeps demo noindex headers', () => {
+  it('answers the removed visitor function with 404 and keeps demo noindex headers', () => {
+    // Demo pages built before its removal can still request it.
     const result = route(config, DEMO_HOST, '/api/demo-visitor', DEMO_DEPLOYMENT)
-    expect(result.file).toBe('/api/demo-visitor')
+    expect(result.status).toBe(404)
     expect(result.headers['x-robots-tag']).toBe('noindex, nofollow')
     expect(result.headers['cache-control']).toBe('no-store')
   })

@@ -82,7 +82,6 @@ function audienceRows(counts: Record<string, number> | undefined, total: number,
 function audienceSummary(buckets: Doc<'demo_metrics_daily'>[], since: string) {
   const browsers: Record<string, number> = {}
   const operatingSystems: Record<string, number> = {}
-  const countries: Record<string, number> = {}
   const add = (target: Record<string, number>, values: { name: string; count: number }[]) => {
     for (const { name, count } of values)
       target[name] = (Object.hasOwn(target, name) ? target[name] : 0) + count
@@ -91,12 +90,11 @@ function audienceSummary(buckets: Doc<'demo_metrics_daily'>[], since: string) {
     if (row.date < since) continue
     add(browsers, audienceRows(row.browsers, row.created, 'Unknown'))
     add(operatingSystems, audienceRows(row.operating_systems, row.created, 'Unknown'))
-    add(countries, audienceRows(row.countries, row.created, 'ZZ'))
   }
   return {
     browsers: audienceRows(browsers, 0, 'Unknown'),
     operatingSystems: audienceRows(operatingSystems, 0, 'Unknown'),
-    countries: audienceRows(countries, 0, 'ZZ'),
+    countries: [],
   }
 }
 
@@ -138,12 +136,6 @@ export async function recordDemoCreated(
         bucket.created,
         'Unknown',
       ),
-      countries: incrementAudience(
-        bucket.countries,
-        receipt.visitor_country ?? 'ZZ',
-        bucket.created,
-        'ZZ',
-      ),
     })
   }
   await ctx.db.patch(receipt._id, { metrics_counted_at: Date.now() })
@@ -173,6 +165,13 @@ export async function recordStorageSample(
     .withIndex('by_date', (q) => q.lt('date', retainedSince(now)))
     .take(32)
   for (const row of expired) await ctx.db.delete(row._id)
+  // Country counts are no longer collected. Strip those that earlier releases
+  // recorded; daily retention bounds this scan.
+  const withCountries = await ctx.db
+    .query('demo_metrics_daily')
+    .filter((q) => q.neq(q.field('countries'), undefined))
+    .take(100)
+  for (const row of withCountries) await ctx.db.patch(row._id, { countries: undefined })
 }
 
 export async function demoMetricsSnapshot(ctx: QueryCtx): Promise<DemoMetricsReport> {

@@ -123,6 +123,7 @@ describe('durable demo creation analytics', () => {
       seed_version: undefined,
       visitor_browser: 'Safari',
       visitor_os: 'iOS',
+      // Recorded before country attribution was removed. It is never counted.
       visitor_country: 'NO',
     })
     await t.run((ctx) => recordDemoCreated(ctx, pending._id))
@@ -134,18 +135,21 @@ describe('durable demo creation analytics', () => {
     expect((await visitor.mutation(api.demo.ensureMine, {})).status).toBe('ready')
     await visitor.mutation(api.demo.ensureMine, {})
     await t.run((ctx) => recordDemoCreated(ctx, pending._id))
-    expect(await t.query(snapshot, {})).toMatchObject({
+    const report = await t.query(snapshot, {})
+    expect(report).toMatchObject({
       totalCreated: 1,
       active: 1,
       counts: [{ date: '2026-09-16', created: 1 }],
-      audience: {
-        last7Days: {
-          browsers: [{ name: 'Safari', count: 1 }],
-          operatingSystems: [{ name: 'iOS', count: 1 }],
-          countries: [{ name: 'NO', count: 1 }],
-        },
-      },
     })
+    // countries stays as an empty list so earlier admin pages and receivers
+    // can still read the report.
+    expect(report.audience.last7Days).toEqual({
+      browsers: [{ name: 'Safari', count: 1 }],
+      operatingSystems: [{ name: 'iOS', count: 1 }],
+      countries: [],
+    })
+    const [day] = await t.run((ctx) => ctx.db.query('demo_metrics_daily').collect())
+    expect(day.countries).toBeUndefined()
   })
 
   it('rolls the count and receipt marker back together if provisioning does not commit', async () => {
@@ -172,7 +176,7 @@ describe('durable demo creation analytics', () => {
     expect(report.trackingStartedAt).toBe(NOW)
     expect(report.historyCompleteSince).toBe(NOW)
     expect(report.counts.find((row) => row.date === '2026-09-15')?.created).toBe(70)
-    expect(report.audience.last7Days.countries).toEqual([{ name: 'ZZ', count: 70 }])
+    expect(report.audience.last7Days.browsers).toEqual([{ name: 'Unknown', count: 70 }])
     await sampleRun(t)
     expect((await t.query(snapshot, {})).totalCreated).toBe(70)
   })
@@ -188,7 +192,6 @@ describe('durable demo creation analytics', () => {
       status: 'deleting',
       cleanup_phase: 'finish',
       visitor_browser: 'Firefox',
-      visitor_country: 'SE',
     })
     await t.mutation(purge, { demo_id: old.id })
     await t.mutation(purge, { demo_id: old.id })
@@ -199,32 +202,36 @@ describe('durable demo creation analytics', () => {
       deleting: 0,
       counts: [{ date: '2026-09-15', created: 1 }],
       historyCompleteSince: NOW,
-      audience: { last7Days: { countries: [{ name: 'SE', count: 1 }] } },
+      audience: { last7Days: { browsers: [{ name: 'Firefox', count: 1 }] } },
     })
   })
 
   it('uses matching UTC audience windows and keeps expired storage days out of the report', async () => {
     const t = newT()
-    for (const [date, country] of [
-      ['2026-09-10T00:00:00Z', 'NO'],
-      ['2026-09-09T23:59:59Z', 'SE'],
-      ['2026-08-18T00:00:00Z', 'DK'],
-      ['2026-08-17T23:59:59Z', 'FI'],
-      ['2025-10-01T00:00:00Z', 'US'],
-      ['2025-09-30T23:59:59Z', 'GB'],
+    for (const [date, browser] of [
+      ['2026-09-10T00:00:00Z', 'Chrome'],
+      ['2026-09-09T23:59:59Z', 'Edge'],
+      ['2026-08-18T00:00:00Z', 'Firefox'],
+      ['2026-08-17T23:59:59Z', 'Opera'],
+      ['2025-10-01T00:00:00Z', 'Safari'],
+      ['2025-09-30T23:59:59Z', 'Samsung Internet'],
     ]) {
-      const row = await receipt(t, { created_at: Date.parse(date), visitor_country: country })
+      const row = await receipt(t, { created_at: Date.parse(date), visitor_browser: browser })
       await t.run((ctx) => recordDemoCreated(ctx, row._id))
     }
     const report = await t.query(snapshot, {})
-    expect(report.audience.last7Days.countries.map((row) => row.name)).toEqual(['NO'])
-    expect(report.audience.last30Days.countries.map((row) => row.name)).toEqual(['DK', 'NO', 'SE'])
-    expect(report.audience.last12Months.countries.map((row) => row.name)).toEqual([
-      'DK',
-      'FI',
-      'NO',
-      'SE',
-      'US',
+    expect(report.audience.last7Days.browsers.map((row) => row.name)).toEqual(['Chrome'])
+    expect(report.audience.last30Days.browsers.map((row) => row.name)).toEqual([
+      'Chrome',
+      'Edge',
+      'Firefox',
+    ])
+    expect(report.audience.last12Months.browsers.map((row) => row.name)).toEqual([
+      'Chrome',
+      'Edge',
+      'Firefox',
+      'Opera',
+      'Safari',
     ])
     expect(report.totalCreated).toBe(6)
   })
@@ -322,5 +329,42 @@ describe('bounded demo storage sampling', () => {
     expect(later.counts[0].created).toBe(0)
     expect(later.historyCompleteSince).toBe(Date.parse(`${retainedSince(Date.now())}T00:00:00Z`))
     expect(await t.run((ctx) => ctx.db.query('demo_metrics_daily').collect())).toHaveLength(1)
+  })
+
+  it('strips country counts from earlier releases in bounded batches and keeps other totals', async () => {
+    const t = newT()
+    await t.run(async (ctx) => {
+      for (let i = 1; i <= 150; i++)
+        await ctx.db.insert('demo_metrics_daily', {
+          date: new Date(NOW - i * 86_400_000).toISOString().slice(0, 10),
+          created: 2,
+          samples: 0,
+          database_bytes_sum: 0,
+          file_bytes_sum: 0,
+          browsers: { Firefox: 2 },
+          operating_systems: { Linux: 2 },
+          countries: { NO: 1, ZZ: 1 },
+        })
+    })
+    const days = () => t.run((ctx) => ctx.db.query('demo_metrics_daily').collect())
+    await t.run((ctx) => recordStorageSample(ctx, 1, 1))
+    expect((await days()).filter((row) => row.countries !== undefined)).toHaveLength(50)
+    await t.run((ctx) => recordStorageSample(ctx, 1, 1))
+    const rows = await days()
+    expect(rows.filter((row) => row.countries !== undefined)).toEqual([])
+    const history = rows.filter((row) => row.date !== '2026-09-16')
+    expect(history).toHaveLength(150)
+    for (const row of history)
+      expect(row).toMatchObject({
+        created: 2,
+        browsers: { Firefox: 2 },
+        operating_systems: { Linux: 2 },
+      })
+    const report = await t.query(snapshot, {})
+    expect(report.audience.last7Days).toEqual({
+      browsers: [{ name: 'Firefox', count: 12 }],
+      operatingSystems: [{ name: 'Linux', count: 12 }],
+      countries: [],
+    })
   })
 })
