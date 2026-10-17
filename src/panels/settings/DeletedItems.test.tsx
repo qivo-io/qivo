@@ -755,6 +755,8 @@ describe('Delete now', () => {
     await click(find('[data-deleted-row="item-155"] [data-row-menu]'))
     await click(find('[data-delete-now]'))
     expect(text('[data-modal-shell] h2')).toBe('Delete QN-155 for good?')
+    // this one cannot be undone, so the whole window is red
+    expect(find('[data-modal-shell]').className).toContain('var(--danger)')
     expect(text('[data-purge]')).toBe(
       'Deletes QN-155 Show battery level in the status bar and its comments and attachments. This cannot be undone.',
     )

@@ -76,6 +76,7 @@ function ModalShell({
   canSubmit,
   submitLabel,
   danger = false,
+  dangerSubmit = false,
   width = 500,
   footerLeft,
   footer,
@@ -92,8 +93,11 @@ function ModalShell({
   canSubmit?: boolean
   submitLabel?: ReactNodeM
   /** paints the icon, the border and the submit button red, for a submit
-   * that deletes or revokes */
+   * that cannot be undone (Delete now, revoking a credential) */
   danger?: boolean
+  /** paints only the submit button red, for a submit that moves something to
+   * Deleted items, where it can still be restored */
+  dangerSubmit?: boolean
   width?: number
   /** a status line left of Cancel and the submit button. Its container is a
    * polite live region from the start, so a line that appears as the form
@@ -214,7 +218,9 @@ function ModalShell({
               </Button>
               <Button
                 type="button"
-                variant={canSubmit ? (danger ? 'destructive' : 'primary') : 'default'}
+                variant={
+                  canSubmit ? (danger || dangerSubmit ? 'destructive' : 'primary') : 'default'
+                }
                 disabled={!canSubmit}
                 onClick={onSubmit}
                 className="font-semibold"
@@ -1435,7 +1441,7 @@ function ArchiveOrDeleteTaskModal({
       onClose={saving ? () => false : onClose}
       onSubmit={submit}
       canSubmit={canSubmit}
-      danger={!archiving}
+      dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={
         archiving
@@ -1659,7 +1665,7 @@ function ArchiveOrDeleteProjectModal({
       onClose={saving ? () => false : onClose}
       onSubmit={submit}
       canSubmit={!!summary && !saving}
-      danger={!archiving}
+      dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={
         archiving
