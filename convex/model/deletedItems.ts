@@ -20,11 +20,15 @@
  * write the rows back while what they name is still absent, and one
  * transaction at the end, the reveal, writes the item's root rows (a task
  * item's tasks; a project item's projects, milestones and grants), so the
- * work appears complete in one delivery. A task item first hands each
- * subtask whose project is no longer live to the item that holds that
- * project. References that no longer name what the item stored are dropped
- * (sameReference). A reveal whose checks fail sends the item back to
- * moving, and the move takes the rows back.
+ * work appears complete in one delivery. A project item's tasks whose
+ * parent is outside it go back without that parent and get it after the
+ * reveal, by the state then (attachParents). That happens in the reveal's
+ * own transaction when they fit in what its budget has left, otherwise in
+ * steps just after it, while the tasks show without their parent. A task
+ * item first hands each subtask whose project is no longer live to the item
+ * that holds that project. References that no longer name what the item stored
+ * are dropped (sameReference). A reveal whose checks fail sends the item
+ * back to moving, and the move takes the rows back.
  *
  * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
  * seat sees of an item, restoreBlock why that seat cannot restore it, and
@@ -45,14 +49,16 @@
  * so `recoverJobs` restarts a stalled job at half the budget, and an item
  * whose step still fails RETRY.atFloor times at the smallest budget becomes
  * stuck, for an admin's Delete now; a restore that fails that often goes
- * back to moving instead, as a failed reveal does. A step that commits
- * resets the job to the full budget and no retries.
+ * back to moving instead, as a failed reveal does, and one past its reveal
+ * leaves the tasks it has not attached without their parent. A step that
+ * commits resets the job to the full budget and no retries.
  *
  * Steps need neither the deleter's nor the restorer's profile: notices and
  * events then go out without an actor. Only a reveal needs the restorer,
- * whose permission it checks again; without them it sends the item back. A
- * step returns without work when its item or job is gone, or while its demo
- * organization is being deleted.
+ * whose permission it checks again; without them it sends the item back.
+ * The attach after a reveal keeps no parent that needs their Edit once
+ * they are gone. A step returns without work when its item or job is gone,
+ * or while its demo organization is being deleted.
  *
  * In a public demo, the rows a move or restore carries between the live
  * tables and Deleted items, with the bookkeeping rows that go with them,
@@ -683,7 +689,9 @@ const itemProjectIds = (item: Item): string[] => item.projects.map((p) => p.id)
  * the item's projects, then the task row. True once the task row is gone.
  * A task left half done stays hidden, because its project is absent, and
  * the next step picks it up. A task too large to store is purged instead.
- * Tasks of a deleted project emit no task.deleted. */
+ * A task that a restore of the item wrote back without its parent is
+ * stored with that parent again (takeParent). Tasks of a deleted project
+ * emit no task.deleted. */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   const live = { table: 'issues', doc: task } as const
   const how = mode === 'keep' && tooLarge(run.item, live, task.id) ? 'purge' : mode
@@ -721,7 +729,8 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     LARGE_ROWS_PER_READ,
   )
   if (!detached) return false
-  if (how === 'keep') await storeTask(run.ctx, run.item, tallyOf(run), task)
+  const parent_id = await takeParent(run, task)
+  if (how === 'keep') await storeTask(run.ctx, run.item, tallyOf(run), { ...task, parent_id })
   else {
     if (mode === 'keep') {
       console.error('A deleted item dropped a task too large to store', {
@@ -735,6 +744,23 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
+}
+
+/** The parent a move stores `task` with. A restore of the item may have
+ * written the task back without its parent outside the item, to give it
+ * back after the reveal (deleted_item_parents). Then it is that parent, and
+ * this deletes its row; otherwise it is the task's own. Only an item that
+ * was restoring has such rows, and it keeps restore_by until it is ready
+ * again. */
+async function takeParent(run: Run, task: Doc<'issues'>): Promise<string | undefined> {
+  if (run.item.restore_by === undefined) return task.parent_id
+  const waiting = await run.ctx.db
+    .query('deleted_item_parents')
+    .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id).eq('task_id', task.id))
+    .first()
+  if (waiting === null) return task.parent_id
+  await run.ctx.db.delete(waiting._id)
+  return waiting.parent_id
 }
 
 /** Clears (keep or purge) the tasks left in project `projectId`. */
@@ -1099,9 +1125,10 @@ async function purgeLeft(run: Run): Promise<boolean> {
 /** The most items one restore call takes. */
 export const RESTORE_MAX = 25
 
-/* The index ranges a reveal may read per task it writes back. A task item
- * of 41 tasks with holders, a parent outside, task.restored subscriptions
- * and the Restored notice measured about 6, so this leaves room. */
+/* The index ranges a reveal may read per task it writes back or attaches.
+ * A task item of 41 tasks with holders, a parent outside, task.restored
+ * subscriptions and the Restored notice measured about 6, so this leaves
+ * room. */
 const REVEAL_RANGES_PER_TASK = 16
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
@@ -1911,10 +1938,12 @@ type StoredTask = { row: Doc<'deleted_rows'>; doc: Stored<'issues'> }
 /* A project item's tasks, written back under its projects, which stay
  * absent until the reveal (design 5.1), so these tasks stay hidden. A task
  * whose parent is in the item keeps it. A task whose parent is outside the
- * item stays stored: its parent is decided at the reveal, by the state
- * then (design 5.2), and writing it now would make that parent a group
- * before the reveal (model/issues.ts hasSubtasks counts every child). The
- * bytes of a row read and left stored count, like those of a row written. */
+ * item goes back without it, and deleted_item_parents keeps that parent
+ * for attachParents, which applies the parent table after the reveal, by
+ * the state then (design 5.2). Writing the parent now would make it a group
+ * before the reveal (model/issues.ts hasSubtasks counts every child). A
+ * deleted_tasks row whose stored task is gone is deleted, so the reveal,
+ * which sends the item back here while the item has one, always moves on. */
 const restoreTasks = (run: Run): Promise<boolean> =>
   run.item.kind === 'task'
     ? Promise.resolve(true)
@@ -1925,13 +1954,22 @@ const restoreTasks = (run: Run): Promise<boolean> =>
             q.eq('item_id', run.item.id).eq('table', 'issues').eq('owner_id', task.task_id),
           )
           .first()
-        if (row === null) return true
-        const doc = docOf(row, 'issues')
-        if (doc.parent_id !== undefined && !(await inThisItem(run, doc.parent_id))) {
-          chargeRead(run.budget, row)
+        if (row === null) {
+          await run.ctx.db.delete(task._id)
           return true
         }
-        await writeTask(run, { row, doc }, doc.parent_id)
+        const doc = docOf(row, 'issues')
+        const { parent_id } = doc
+        if (parent_id === undefined || (await inThisItem(run, parent_id))) {
+          await writeTask(run, { row, doc }, parent_id)
+          return true
+        }
+        await writeTask(run, { row, doc }, undefined)
+        await uncountedWriter(run.ctx.db).insert('deleted_item_parents', {
+          item_id: run.item.id,
+          task_id: doc.id,
+          parent_id,
+        })
         return true
       })
 
@@ -2002,22 +2040,21 @@ async function writeTask(
 /* ----------------------------------------------------------- the reveal */
 
 /** The reveal (design 5.1), one transaction. Relation rows that reached
- * the item after their phase send it back to restore_rows, and a subtask
+ * the item after their phase send it back to restore_rows, a task that
+ * reached a project item after restore_tasks back there, and a subtask
  * whose project left since restore_split back there. A failed check (design
  * 5.3, asked again for the restorer) sends it back to moving. Otherwise it
- * writes back a project item's own rows, then the tasks still stored (every
- * task of a task item; a project item's tasks whose parent is outside it,
- * and late arrivals) and the links left, deletes the item and its
- * deleted_tasks rows, and narrates. Returns where to go on, or null once the
- * item is gone.
+ * writes back a task item's tasks, or a project item's own rows, then the
+ * links left, deletes the item's deleted_tasks rows, and narrates. A task
+ * item is then gone (null). A project item goes on to restore_attach
+ * (attachParents), which deletes the item once no task waits for its
+ * parent.
  *
- * A project item can leave any number of tasks for the reveal (those under
- * a parent outside it), so what the reveal reads per task stays small. It
- * checks no task's uuid, because the reservations keep them free (lib/db.ts
- * insertUnique) and blockOf checks the root rows; it decides each outside
- * parent once (outsideParent); it reads nothing back after a write. A task
- * item holds no more tasks than its delete handled in one transaction, and
- * the reveal checks each of them. */
+ * So a project item's reveal reads none of its tasks, however many it has.
+ * A task item holds no more tasks than its delete handled in one
+ * transaction, and the reveal checks each of their uuids and decides each
+ * parent outside it once (outsideParent), reading nothing back after a
+ * write. */
 async function reveal(run: Run): Promise<JobState | null> {
   for (const table of RESTORED_ROWS) {
     const late = await run.ctx.db
@@ -2026,19 +2063,28 @@ async function reveal(run: Run): Promise<JobState | null> {
       .first()
     if (late !== null) return { ...run.state, phase: 'restore_rows', cursor: undefined }
   }
+  if (run.item.kind === 'project') {
+    // a subtask another restore's split moved here (splitOff)
+    const late = await run.ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
+      .first()
+    if (late !== null) return { ...run.state, phase: 'restore_tasks', cursor: undefined }
+  }
   const restorer = run.actor
   if (restorer === undefined) return await sendBack(run, 'no_access')
   const block = await blockOf(run, restorer)
   if (block !== null) return await sendBack(run, block)
-  const tasks = (await storedOf(run, 'issues')).map((row) => ({ row, doc: docOf(row, 'issues') }))
-  if (run.item.kind === 'task')
+  let written: Id<'issues'>[] = []
+  if (run.item.kind === 'task') {
+    const tasks = (await storedOf(run, 'issues')).map((row) => ({ row, doc: docOf(row, 'issues') }))
     for (const { doc } of tasks) {
       if ((await byId(run.ctx, 'issues', doc.id)) !== null) return await sendBack(run, 'conflict')
       if ((await namedProject(run, doc.project_id, 'project')) === null)
         return { ...run.state, phase: 'restore_split', cursor: undefined }
     }
-  if (run.item.kind === 'project') await revealProjects(run)
-  const written = await revealTasks(run, tasks, restorer)
+    written = await revealTasks(run, tasks, restorer)
+  } else await revealProjects(run)
   for (;;) {
     const links = await run.ctx.db
       .query('deleted_rows')
@@ -2054,8 +2100,10 @@ async function reveal(run: Run): Promise<JobState | null> {
     .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
     .collect()
   for (const row of left) await run.ctx.db.delete(row._id)
-  await run.ctx.db.delete(run.item._id)
   await announce(run, written, restorer)
+  if (run.item.kind === 'project')
+    return { ...run.state, phase: 'restore_attach', cursor: undefined }
+  await run.ctx.db.delete(run.item._id)
   return null
 }
 
@@ -2099,12 +2147,12 @@ async function revealProjects(run: Run): Promise<void> {
   }
 }
 
-/** Writes the stored tasks `tasks` back, parents before children. A task
- * keeps a parent inside the item. A parent outside the item is kept or
- * cleared by the parent table (design 5.2) before the task is written,
- * from what the reveal reads once per parent (outsideParent), and each
- * parent the restore makes a group loses its own hours once. Returns the
- * ids of the tasks written. */
+/** Writes a task item's stored tasks `tasks` back, parents before
+ * children. A task keeps a parent inside the item. A parent outside the
+ * item is kept or cleared by the parent table (design 5.2) before the task
+ * is written, from what the reveal reads once per parent (outsideParent),
+ * and each parent the restore makes a group loses its own hours once.
+ * Returns the ids of the tasks written. */
 async function revealTasks(
   run: Run,
   tasks: StoredTask[],
@@ -2129,17 +2177,12 @@ async function revealTasks(
   const written: Id<'issues'>[] = []
   for (const t of [...tasks].sort((a, b) => depthOf(a) - depthOf(b))) {
     const parentId = t.doc.parent_id
-    // a project item's tasks already back sit in its projects (inThisItem)
-    const inside =
-      parentId === undefined ||
-      byTask.has(parentId) ||
-      (run.item.kind === 'project' && (await inThisItem(run, parentId)))
     let kept = parentId
-    if (parentId !== undefined && !inside) {
+    if (parentId !== undefined && !byTask.has(parentId)) {
       const outside = await memoRead(parents, parentId, () =>
         outsideParent(run, parentId, restorer),
       )
-      const attach = await keptParent(run, t, outside, children)
+      const attach = await keptParent(run, t.doc, outside, children)
       if (attach?.grouped) grouped.add(parentId)
       kept = attach?.id
     }
@@ -2150,23 +2193,25 @@ async function revealTasks(
   return written
 }
 
-/** A live task outside the item that stored tasks name as their parent, as
- * the reveal reads it once for all of them: the task, how many levels its
- * chain holds above the attach point (model/issues.ts levelsAbove), whether
- * the restorer may change it (sight and Edit on its project, as
- * assertParentChain asks) and whether it holds hours of its own that a new
- * child takes away. */
+/** A live task outside the item that tasks of the item name as their
+ * parent, as a reveal or an attach step reads it once for all of them: the
+ * task, how many levels its chain holds above the attach point
+ * (model/issues.ts levelsAbove), whether the restorer may change it (sight
+ * and Edit on its project, as assertParentChain asks) and whether it holds
+ * hours of its own that a new child takes away. */
 type OutsideParent = { parent: Doc<'issues'>; above: number; edits: boolean; clears: boolean }
 
 /** The OutsideParent for `parentId`, or null when no task of the item can
  * keep it: it is not live, it is not the task the item stored (the
- * reference predicate), or its chain is past 20 levels already. Its chain
- * cannot run through a task of the item, which is absent from issues or
- * under the item's absent projects, and nothing attaches to those. */
+ * reference predicate), or its chain is past 20 levels already. Without a
+ * restorer, whose profile is gone since the reveal, it edits nothing. In a
+ * reveal its chain cannot run through a task of the item, which is absent
+ * from issues or under the item's absent projects, and nothing attaches to
+ * those; after it heightBelow finds such a chain. */
 async function outsideParent(
   run: Run,
   parentId: string,
-  restorer: Doc<'profiles'>,
+  restorer: Doc<'profiles'> | undefined,
 ): Promise<OutsideParent | null> {
   const where = await whereIsTask(run.ctx, parentId)
   if (where.where !== 'live' || !sameReference(where.issue, run.item)) return null
@@ -2176,12 +2221,14 @@ async function outsideParent(
   return {
     parent,
     above,
-    edits: levelRank(await liveLevel(run, restorer, project)) >= LEVEL_RANK.user,
+    edits:
+      restorer !== undefined &&
+      levelRank(await liveLevel(run, restorer, project)) >= LEVEL_RANK.user,
     clears: parent.remaining_hours !== undefined || parent.review_at !== undefined,
   }
 }
 
-/** The parent stored task `t` keeps from outside the item, by the parent
+/** The parent `task` of the item keeps from outside it, by the parent
  * table (design 5.2), or undefined to clear it. Only a live parent that is
  * the task the item stored can stay. An active one stays when the restorer
  * may change it, within 20 levels; an archived one only for an archived
@@ -2191,30 +2238,40 @@ async function outsideParent(
  * (model/issues.ts clearParentRemaining). An archived parent that holds
  * hours of its own therefore needs the restorer's Edit too, so a restore
  * never changes a task in a project the restorer cannot edit. The depth
- * counts the levels under `t` (heightBelow), read only for a parent that
+ * counts the levels under `task` (heightBelow), read only for a parent that
  * passes the rest. */
 async function keptParent(
   run: Run,
-  t: StoredTask,
+  task: Pick<Stored<'issues'>, 'id' | 'archived_at'>,
   outside: OutsideParent | null,
   children: Map<string, string[]>,
 ): Promise<{ id: string; grouped: boolean } | undefined> {
   if (outside === null) return undefined
   const active = outside.parent.archived_at === undefined
-  const taskActive = t.doc.archived_at === undefined
+  const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
   if ((active || outside.clears) && !outside.edits) return undefined
-  if (outside.above + 1 + (await heightBelow(run, t.doc.id, children)) > 20) return undefined
+  const below = await heightBelow(run, task.id, outside.parent.id, children)
+  if (outside.above + 1 + below > 20) return undefined
   return { id: outside.parent.id, grouped: !active || taskActive }
 }
 
-/** The height of the subtree under stored task `id` once the item is back:
+/** The height of the subtree under task `id` of the item once it is back:
  * its children among the tasks the reveal writes (`children`) and, for a
- * project item, the tasks restore_tasks wrote back under it already. Capped
- * at 24, as parentChain caps its walk. A task item's tasks have no other
- * children, because its delete detached every live child outside it and
- * nothing can attach to a task in Deleted items. */
-async function heightBelow(run: Run, id: string, children: Map<string, string[]>): Promise<number> {
+ * project item, the tasks under it in issues, which restore_tasks wrote
+ * back or, after the reveal, anyone attached. Capped at 24, as parentChain
+ * caps its walk; a subtree that holds `parentId` counts as the cap, because
+ * attaching `id` there would close a cycle, which only a task that shows
+ * without its parent after a reveal can meet. A task item's tasks have no
+ * other children, because its delete detached every live child outside it
+ * and nothing can attach to a task in Deleted items. The bytes of what it
+ * reads count against the step's budget. */
+async function heightBelow(
+  run: Run,
+  id: string,
+  parentId: string,
+  children: Map<string, string[]>,
+): Promise<number> {
   let height = 0
   let frontier = [id]
   while (frontier.length > 0 && height < 24) {
@@ -2223,9 +2280,13 @@ async function heightBelow(run: Run, id: string, children: Map<string, string[]>
       next.push(...(children.get(at) ?? []))
       if (run.item.kind !== 'project') continue
       const kids = run.ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', at))
-      for await (const kid of kids) next.push(kid.id)
+      for await (const kid of kids) {
+        chargeRead(run.budget, kid)
+        next.push(kid.id)
+      }
     }
     if (next.length === 0) break
+    if (next.includes(parentId)) return 24
     height += 1
     frontier = next
   }
@@ -2330,6 +2391,87 @@ async function narrate(
   })
 }
 
+/* ----------------------------------------------------------- the attach */
+
+/** Up to `n` of the tasks a project item's restore wrote back without
+ * their parent outside the item (restoreTasks), in task order. */
+const waitingParents = (run: Run, n: number) =>
+  run.ctx.db
+    .query('deleted_item_parents')
+    .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id))
+    .take(n)
+
+/** What one attach step reads once: each parent's OutsideParent, whether a
+ * project is live, and the parents it made a group. */
+type Attach = {
+  parents: Map<string, Promise<OutsideParent | null>>
+  live: Map<string, Promise<boolean>>
+  grouped: Set<string>
+}
+
+/**
+ * After a project item's reveal (restore_attach), gives each task that
+ * restore_tasks wrote back without its parent outside the item that
+ * parent, by the parent table (design 5.2) as it reads now and with the
+ * helpers a task item's reveal uses. Each step stays within its budget,
+ * however many tasks wait. work runs the first in the reveal's own
+ * transaction, so a small item comes back whole there, and steps do the
+ * rest just after. Meanwhile the tasks show without their parent, and a
+ * parent that fails the table by the time its turn comes leaves them that
+ * way. Each parent a step makes a group loses its own hours once, with its
+ * notice (design 5.4); later steps find no hours left to clear. With
+ * `attach` false (restore_detach, after restore_attach failed its retries)
+ * the tasks left keep no parent. True once no task waits.
+ */
+async function attachParents(run: Run, attach: boolean): Promise<boolean> {
+  const step: Attach = { parents: new Map(), live: new Map(), grouped: new Set() }
+  const done = await drain(
+    run.budget,
+    (n) => waitingParents(run, n),
+    async (row) => {
+      if (attach) await attachParent(run, row, step)
+      await run.ctx.db.delete(row._id)
+    },
+    TASK_PAGE,
+  )
+  // a parent the restorer cannot edit never becomes a group with hours left
+  const restorer = run.actor
+  if (restorer !== undefined)
+    for (const parentId of step.grouped)
+      await clearParentRemaining(run.ctx, { parentId, actor: restorer, now: run.now })
+  return done
+}
+
+/** Gives the task of `row` its parent when the parent table keeps it. A
+ * task that is no longer where the reveal put it (deleted, moved to another
+ * project, its project deleted again) or that has a parent of its own by
+ * now stays as it is. Restoring a project item sends no notice for its
+ * tasks, so the task changes without one. */
+async function attachParent(
+  run: Run,
+  row: Doc<'deleted_item_parents'>,
+  step: Attach,
+): Promise<void> {
+  const task = await byId(run.ctx, 'issues', row.task_id)
+  if (task === null) return
+  chargeRead(run.budget, task)
+  run.budget.tasks -= 1
+  if (task.parent_id !== undefined || !itemProjectIds(run.item).includes(task.project_id)) return
+  const live = await memoRead(
+    step.live,
+    task.project_id,
+    async () => (await byId(run.ctx, 'projects', task.project_id)) !== null,
+  )
+  if (!live) return
+  const outside = await memoRead(step.parents, row.parent_id, () =>
+    outsideParent(run, row.parent_id, run.actor),
+  )
+  const kept = await keptParent(run, task, outside, new Map())
+  if (kept === undefined) return
+  await run.ctx.db.patch(task._id, { parent_id: kept.id, updated_at: run.now })
+  if (kept.grouped) step.grouped.add(kept.id)
+}
+
 /* ------------------------------------------------------------ restoring */
 
 /**
@@ -2342,9 +2484,9 @@ async function narrate(
  * restores or defers is deferred, for the client to send again once that
  * item has left the list. Every other item is refused with its
  * RestoreBlock or restored: it becomes restoring, with restore_by, and the
- * call's one shared budget fills and reveals as much as it can; the rest
- * goes on in steps. The reveals of this call share
- * one activity row, and an item revealed by a later step writes its own.
+ * call's one shared budget fills, reveals and attaches as much as it can;
+ * the rest goes on in steps. The reveals of this call share one activity
+ * row, and an item revealed by a later step writes its own.
  * The Restored notice goes out only when the call held a single task item,
  * whichever transaction reveals it.
  */
@@ -2407,11 +2549,15 @@ export async function restoreItems(
 /* --------------------------------------------------------------- the jobs */
 
 /* The work each phase does, true when it is complete, and the phase that
- * follows it. The finish phases and the reveal are handled in `work`. A
- * project item drains its stored tasks' rows only after a failed restore
- * (sendBack), and then moves its projects' tasks again. */
+ * follows it. The finish phases, the reveal and the attach after it are
+ * handled in `work`. A project item drains its stored tasks' rows only
+ * after a failed restore (sendBack), and then moves its projects' tasks
+ * again. */
 const PHASES: Record<
-  Exclude<TrashPhase, 'move_finish' | 'purge_finish' | 'restore_reveal'>,
+  Exclude<
+    TrashPhase,
+    'move_finish' | 'purge_finish' | 'restore_reveal' | 'restore_attach' | 'restore_detach'
+  >,
   { run: (run: Run) => Promise<boolean>; next: (item: Item) => TrashPhase }
 > = {
   move_edges: { run: moveEdges, next: () => 'move_tasks' },
@@ -2452,22 +2598,29 @@ async function actorOf(
   return sameReference(deleter, item) ? deleter : undefined
 }
 
-/** Whether what is left of `run`'s budget holds its reveal, which writes the
- * item's stored tasks back in one transaction whatever their number. */
-function revealFits(run: Run): boolean {
-  const tasks = run.state.tally?.tasks ?? 0
+/** Whether what is left of `run`'s budget holds its reveal, which writes a
+ * task item's stored tasks back in one transaction whatever their number,
+ * and, for a project item, the attach of every task that waits for its
+ * parent (attachParents), so that a small item comes back whole in one
+ * transaction. It reads at most one more waiting task than the budget
+ * holds. */
+async function revealFits(run: Run): Promise<boolean> {
   const b = run.budget
-  return (
-    !spent(b) && tasks <= b.tasks && tasks <= b.rows && tasks * REVEAL_RANGES_PER_TASK <= b.ranges
-  )
+  if (spent(b)) return false
+  const stored = run.state.tally?.tasks ?? 0
+  const waiting = run.item.kind === 'project' ? (await waitingParents(run, b.tasks + 1)).length : 0
+  const tasks = stored + waiting
+  return tasks <= b.tasks && tasks <= b.rows && tasks * REVEAL_RANGES_PER_TASK <= b.ranges
 }
 
 /** Runs `item`'s phases from `state` with `budget`, which `ctx` is metered
  * against. Returns null when the item's work is done: a move made it ready,
- * a restore revealed it, a purge deleted it. Otherwise returns where the
- * next step starts. The reveal runs in one transaction whatever its size, so
- * it runs where the budget left holds it (revealFits), else at the start of
- * a step of its own. */
+ * a restore revealed it and gave its tasks their parents, a purge deleted
+ * it. Otherwise returns where the next step starts. The reveal runs in one
+ * transaction whatever its size, so it runs where the budget left holds it
+ * and the attach after it (revealFits), else at the start of a step of its
+ * own. A project item's attach runs on with what the reveal left of the
+ * budget, and in steps after it when that is not enough. */
 async function work(
   ctx: MutationCtx,
   budget: Budget,
@@ -2509,11 +2662,16 @@ async function work(
       return null
     }
     if (phase === 'restore_reveal') {
-      if (run.budget.moved && !revealFits(run)) return run.state
+      if (run.budget.moved && !(await revealFits(run))) return run.state
       const next = await reveal(run)
       if (next === null) return null
       run.state = next
       continue
+    }
+    if (phase === 'restore_attach' || phase === 'restore_detach') {
+      if (!(await attachParents(run, phase === 'restore_attach'))) return run.state
+      await ctx.db.delete(item._id)
+      return null
     }
     if (!(await PHASES[phase].run(run))) return run.state
     run.state = { ...run.state, phase: PHASES[phase].next(run.item), cursor: undefined }
@@ -2582,9 +2740,13 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * does, at half the budget each time. A job that already failed
  * RETRY.atFloor times at the smallest budget makes its item stuck instead:
  * it leaves the steps and waits for an admin's Delete now. A restore that
- * fails that often goes back to moving, as a failed reveal does (sendBack):
- * the move takes back what it wrote, and the item is ready again for
- * whoever could restore it, rather than stuck. */
+ * fails that often before its reveal goes back to moving, as a failed
+ * reveal does (sendBack): the move takes back what it wrote, and the item
+ * is ready again for whoever could restore it, rather than stuck. After the
+ * reveal its projects are live, so neither applies. An attach that fails
+ * that often goes on as restore_detach, which leaves the tasks still
+ * waiting without their parent and deletes the item. restore_detach only
+ * deletes the item's own small rows, so it is retried until it finishes. */
 export async function recoverJobs(ctx: MutationCtx): Promise<void> {
   const now = Date.now()
   const halvings = Math.round(Math.log2(1 / RETRY.floor))
@@ -2603,7 +2765,28 @@ export async function recoverJobs(ctx: MutationCtx): Promise<void> {
       await ctx.db.delete(job._id)
       continue
     }
-    const exhausted = job.budget_scale <= RETRY.floor && job.attempts >= halvings + RETRY.atFloor
+    const exhausted =
+      job.phase !== 'restore_detach' &&
+      job.budget_scale <= RETRY.floor &&
+      job.attempts >= halvings + RETRY.atFloor
+    if (exhausted && job.phase === 'restore_attach') {
+      await ctx.db.patch(job._id, {
+        phase: 'restore_detach',
+        cursor: undefined,
+        progress_at: new Date(now).toISOString(),
+        scheduled_id: await ctx.scheduler.runAfter(0, stepRef, { item_id: job.item_id }),
+        attempts: 0,
+        budget_scale: 1,
+      })
+      console.error(
+        'A deleted item restore leaves the tasks it could not attach without a parent',
+        {
+          item_id: item.id,
+          attempts: job.attempts,
+        },
+      )
+      continue
+    }
     if (exhausted && job.phase.startsWith('restore')) {
       await ctx.db.patch(item._id, { state: 'moving' })
       await ctx.db.patch(job._id, {
@@ -2803,10 +2986,11 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
  * whatever state its items are in, for the teardowns that delete the
  * organization's work outright: model/cascade.ts deleteOrgDeep, the public
  * demo's cleanup (internal/demoCleanup.ts) and the Northstar wipe's
- * deletedItems:purgeOrg. Items and their jobs go first, so a step still
- * scheduled finds nothing to do. Then each stored task goes with the rows a
- * move or restore left of it in the live tables, and each stored row, an
- * attachment with its bytes, a project after the tasks still live under it.
+ * deletedItems:purgeOrg. Items go first with their jobs and the parents
+ * their restores wait to attach, so a step still scheduled finds nothing to
+ * do. Then each stored task goes with the rows a move or restore left of it
+ * in the live tables, and each stored row, an attachment with its bytes, a
+ * project after the tasks still live under it.
  * Nothing is narrated or detached, because the caller deletes the rest of
  * the organization's work too. Makes at most `budget.left` deletions and
  * returns true once nothing is left.
@@ -2824,6 +3008,19 @@ export async function clearOrgTrash(
         .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
         .take(n),
     async (item) => {
+      const waiting = await clearPages(
+        budget,
+        (n) =>
+          ctx.db
+            .query('deleted_item_parents')
+            .withIndex('by_item_task', (q) => q.eq('item_id', item.id))
+            .take(n),
+        async (row) => {
+          await ctx.db.delete(row._id)
+          return true
+        },
+      )
+      if (!waiting) return false
       const job = await jobOf(ctx, item.id)
       if (job !== null) await ctx.db.delete(job._id)
       await ctx.db.delete(item._id)
