@@ -110,7 +110,7 @@ const callerGone = (): ConvexError<Refusal> =>
  *
  * It does not read the caller's login for a platform ban. Each request
  * dispatches one call, and its credential lookup already refused a banned
- * login (machine/auth.ts lookupCredential for personal tokens,
+ * or missing login (machine/auth.ts lookupCredential for personal tokens,
  * oauthConnections.lookupAccess for OAuth before every call). Rereading it
  * here would add a Better Auth query to every call, so a ban that lands
  * mid-request lets that request finish, like a revocation does. Agent keys

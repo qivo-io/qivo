@@ -58,18 +58,8 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
   const f = await withOrg(t)
   const profile = f[role]
   const now = Date.now()
-  const user = await t.mutation(components.betterAuth.adapter.create, {
-    input: {
-      model: 'user',
-      data: {
-        name: profile.name,
-        email: profile.email!,
-        emailVerified: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-    },
-  })
+  // the fixture's real Better Auth login, given a password to sign in with
+  const user = { _id: profile.auth_user_id! }
   await t.mutation(components.betterAuth.adapter.create, {
     input: {
       model: 'account',
@@ -83,7 +73,6 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
       },
     },
   })
-  await t.run((ctx) => ctx.db.patch(profile._id, { auth_user_id: user._id as string }))
   const response = await http(t, '/api/auth/sign-in/email', {
     ...body({ email: profile.email, password: PASSWORD }),
     headers: {

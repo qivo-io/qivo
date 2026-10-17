@@ -22,8 +22,8 @@ import { expandWebhookEventsRef } from './webhookQueue'
  * authorization. Answers the owner's profile and what the credential may do
  * (lib/access.ts credentialAccess), or null once the credential stops
  * authorizing anything because it was revoked, expired or replaced, its
- * account is gone or deactivated, or a platform ban on its person's login is
- * in force.
+ * account is gone or deactivated, or its person's login is banned or no
+ * longer exists in Better Auth.
  */
 export async function eventOwner(
   ctx: QueryCtx,
@@ -62,15 +62,16 @@ export async function eventOwner(
     }
   }
   if ('token_hash' in credential) {
-    // A personal token acts as its person's login, so a platform ban stops
-    // its subscriptions like a deactivation. They get no events, their
-    // queued deliveries fail, and the rows stay for when the ban lifts.
-    // Each check of a token owner costs one Better Auth user read, as OAuth
-    // owners already do. Fan-out pays it once per credential and mutation
+    // A personal token acts as its person's login, so a platform ban, or a
+    // login Better Auth no longer has, stops its subscriptions like a
+    // deactivation, as for OAuth owners. They get no events, their queued
+    // deliveries fail, and the rows stay for when the ban lifts. Each check
+    // of a token owner costs one Better Auth user read, as OAuth owners
+    // already do. Fan-out pays it once per credential and mutation
     // (readableEventProject caches the owner). The checks above guarantee
     // auth_user_id; this only narrows its type.
     const user = profile.auth_user_id ? await findAuthUser(ctx, profile.auth_user_id) : null
-    if (user && loginBanned(user, now)) return null
+    if (user === null || loginBanned(user, now)) return null
     return {
       profile,
       access: credentialAccess({ table: 'mcp_tokens', token: credential, now }, profile),

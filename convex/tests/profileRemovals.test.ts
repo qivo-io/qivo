@@ -576,20 +576,9 @@ describe('access ends in the removal transaction', () => {
     t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const login = (await t.mutation(components.betterAuth.adapter.create, {
-      input: {
-        model: 'user',
-        data: {
-          name: f.user.name,
-          email: f.user.email!,
-          emailVerified: true,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      },
-    })) as { _id: string }
-    await t.run((ctx) => ctx.db.patch(f.user._id, { auth_user_id: login._id }))
-    const user = (await t.run((ctx) => ctx.db.get(f.user._id)))!
+    // the fixture's real Better Auth login for the user
+    const login = { _id: f.user.auth_user_id! }
+    const user = f.user
     const tokenHash = 'a1'.repeat(32)
     const keyHash = 'b2'.repeat(32)
     const grantHash = 'c3'.repeat(32)

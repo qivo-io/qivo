@@ -4,7 +4,8 @@
  * metered, and the webhook subscriptions they own receive no events and fail
  * their queued deliveries. A ban stops counting once its banExpires has
  * passed, lifting it restores everything, and agent keys, which belong to no
- * login, carry on. OAuth's ban checks are in tests/oauth.test.ts. */
+ * login, carry on. A login Better Auth no longer has stops its tokens the
+ * same way. OAuth's ban checks are in tests/oauth.test.ts. */
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -63,9 +64,9 @@ const mcp = (t: T, secret: string) =>
   })
 
 /* withOrg plus a recorded billing period, so every accepted call writes
- * usage, a real Better Auth login for the admin, the admin's personal token,
- * and an agent key the admin created. The agent reads the task projects so
- * its webhook subscription has events to receive. */
+ * usage, the admin's personal token, and an agent key the admin created. The
+ * admin signs in with the fixture's real Better Auth login. The agent reads
+ * the task projects so its webhook subscription has events to receive. */
 async function fixture() {
   const t = newT()
   const f = await withOrg(t)
@@ -106,20 +107,7 @@ async function fixture() {
       level: 'user',
     })
   })
-  const login = await t.mutation(components.betterAuth.adapter.create, {
-    input: {
-      model: 'user',
-      data: {
-        name: f.admin.name,
-        email: f.admin.email!,
-        emailVerified: true,
-        createdAt: AT,
-        updatedAt: AT,
-      },
-    },
-  })
-  const loginId = login._id as string
-  await t.run((ctx) => ctx.db.patch(f.admin._id, { auth_user_id: loginId }))
+  const loginId = f.admin.auth_user_id!
 
   const token = `qvt_${'b4a7'.repeat(12)}`
   const key = `qva_${'c9d2'.repeat(12)}`
@@ -169,6 +157,11 @@ async function fixture() {
         update: { banned, banExpires },
       },
     })
+  /** Removes the admin's login from Better Auth, leaving the seat as it is. */
+  const deleteLogin = () =>
+    t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: loginId }] },
+    })
   /** Calls recorded per credential, as "table:uuid". */
   const usage = async () =>
     Object.fromEntries(
@@ -181,7 +174,20 @@ async function fixture() {
     token: (await t.run((ctx) => ctx.db.get(rows.token)))?.last_used_at,
     key: (await t.run((ctx) => ctx.db.get(rows.key)))?.last_used_at,
   })
-  return { t, f, token, key, tokenId, keyId, tokenOwner, keyOwner, setBan, usage, lastUsed }
+  return {
+    t,
+    f,
+    token,
+    key,
+    tokenId,
+    keyId,
+    tokenOwner,
+    keyOwner,
+    setBan,
+    deleteLogin,
+    usage,
+    lastUsed,
+  }
 }
 
 type Fx = Awaited<ReturnType<typeof fixture>>
@@ -202,6 +208,43 @@ async function expectStopped(x: Fx) {
     status: 401,
     body: { error: 'Webhook credential is invalid or inactive' },
   })
+}
+
+/** One task.updated subscription for the token and one for the agent key,
+ * and a rename that answers the subscriptions its event reached. */
+async function subscriptions(x: Fx) {
+  const { t } = x
+  const issue = await plantIssue(t, { org_id: x.f.org.id, project_id: x.f.sub.id })
+  const subscribe = async (owner: EventOwner) => {
+    const id = uuid()
+    await t.mutation(internal.webhooks.save, {
+      owner,
+      id,
+      name: 'task.updated',
+      filters: {},
+      url: 'https://receiver.example/events',
+      encrypted_secret: 'encrypted-test-key',
+    })
+    return id
+  }
+  const viaToken = await subscribe(x.tokenOwner)
+  const viaKey = await subscribe(x.keyOwner)
+  const deliveries = () => t.run((ctx) => ctx.db.query('webhook_deliveries').collect())
+  const rename = async (title: string) => {
+    const before = new Set((await deliveries()).map((row) => row.id))
+    await t.run(async (ctx) => {
+      const old = (await ctx.db.get(issue._id))!
+      await ctx.db.patch(issue._id, { title })
+      const now = (await ctx.db.get(issue._id))!
+      await notifyIssueUpdate(ctx, { before: old, after: now, actor: x.f.user, now: iso(AT) })
+    })
+    await flushWebhookEvents(t)
+    return (await deliveries())
+      .filter((row) => !before.has(row.id))
+      .map((row) => row.subscription_id)
+      .sort()
+  }
+  return { viaToken, viaKey, deliveries, rename }
 }
 
 async function expectWorking(x: Fx, secret: string) {
@@ -262,37 +305,7 @@ describe('a platform ban', () => {
   it('stops the events of webhook subscriptions a banned login’s token owns and keeps them for when it lifts', async () => {
     const x = await fixture()
     const { t } = x
-    const issue = await plantIssue(t, { org_id: x.f.org.id, project_id: x.f.sub.id })
-    const subscribe = async (owner: EventOwner) => {
-      const id = uuid()
-      await t.mutation(internal.webhooks.save, {
-        owner,
-        id,
-        name: 'task.updated',
-        filters: {},
-        url: 'https://receiver.example/events',
-        encrypted_secret: 'encrypted-test-key',
-      })
-      return id
-    }
-    const viaToken = await subscribe(x.tokenOwner)
-    const viaKey = await subscribe(x.keyOwner)
-    const deliveries = () => t.run((ctx) => ctx.db.query('webhook_deliveries').collect())
-    /** Renames the task and returns the subscriptions its event reached. */
-    const rename = async (title: string) => {
-      const before = new Set((await deliveries()).map((row) => row.id))
-      await t.run(async (ctx) => {
-        const old = (await ctx.db.get(issue._id))!
-        await ctx.db.patch(issue._id, { title })
-        const now = (await ctx.db.get(issue._id))!
-        await notifyIssueUpdate(ctx, { before: old, after: now, actor: x.f.user, now: iso(AT) })
-      })
-      await flushWebhookEvents(t)
-      return (await deliveries())
-        .filter((row) => !before.has(row.id))
-        .map((row) => row.subscription_id)
-        .sort()
-    }
+    const { viaToken, viaKey, deliveries, rename } = await subscriptions(x)
 
     expect(await rename('Before the ban')).toEqual([viaToken, viaKey].sort())
     const queued = (await deliveries()).find((row) => row.subscription_id === viaToken)!
@@ -306,5 +319,18 @@ describe('a platform ban', () => {
 
     await x.setBan(false)
     expect(await rename('After the ban')).toEqual([viaToken, viaKey].sort())
+  })
+})
+
+describe('a personal token whose login Better Auth no longer has', () => {
+  it('is refused like a deactivated account, and its webhook subscriptions get no events', async () => {
+    const x = await fixture()
+    const { viaToken, viaKey, rename } = await subscriptions(x)
+    expect(await rename('Before the login is gone')).toEqual([viaToken, viaKey].sort())
+    await x.deleteLogin()
+    await expectStopped(x)
+    expect(await x.usage()).toEqual({})
+    expect(await x.lastUsed()).toEqual({ token: undefined, key: undefined })
+    expect(await rename('After the login is gone')).toEqual([viaKey])
   })
 })

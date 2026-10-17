@@ -64,7 +64,8 @@ export const sha256hex = async (text: string): Promise<string> => {
  *               a switched-off user needs no key revoked to go quiet. A
  *               person's token also answers inactive while a platform ban
  *               on the person's login is in force (lib/access.ts
- *               loginBanned), so lifting the ban restores it unchanged */
+ *               loginBanned), so lifting the ban restores it unchanged, and
+ *               once Better Auth no longer has that login at all */
 export type AuthFail = 'missing' | 'unknown' | 'revoked' | 'inactive' | 'wrong_kind'
 
 export type MachineCredential = {
@@ -128,14 +129,14 @@ export const lookupCredential = internalQuery({
     if (profile === null || !shapeOk) return { ok: false, why: 'wrong_kind', isAgent }
     if (!profile.active) return { ok: false, why: 'inactive', isAgent }
     // A personal token acts as its person's login, so a platform ban stops
-    // it here, before touchCredential stamps or meters anything. This costs
-    // one Better Auth user read per personal token request, made last so
-    // refused tokens never pay it. A login Better Auth no longer has is left
-    // to the checks above. Agent keys belong to no login, so a ban cannot
-    // reach them and they skip the read; the agent's active flag stops them.
+    // it here, before touchCredential stamps or meters anything, and so does
+    // a login Better Auth no longer has, as for OAuth. This costs one Better
+    // Auth user read per personal token request, made last so refused tokens
+    // never pay it. Agent keys belong to no login, so a ban cannot reach
+    // them and they skip the read; the agent's active flag stops them.
     if (personal !== null && profile.auth_user_id !== undefined) {
       const user = await findAuthUser(ctx, profile.auth_user_id)
-      if (user !== null && loginBanned(user, nowMs)) return { ok: false, why: 'inactive', isAgent }
+      if (user === null || loginBanned(user, nowMs)) return { ok: false, why: 'inactive', isAgent }
     }
     return {
       ok: true,

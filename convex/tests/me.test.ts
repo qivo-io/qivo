@@ -17,7 +17,16 @@ import type { CredentialAccess, ProjectCreators } from '../lib/enums'
 import { mcpResource } from '../lib/oauth'
 import type { EventOwner } from '../lib/taskEvents'
 import { sha256hex } from '../machine/auth'
-import { expectRefusal, NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
+import {
+  expectRefusal,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantLogin,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -129,19 +138,8 @@ async function plantViewerAgent(t: T, orgId: string): Promise<Doc<'profiles'>> {
 /* An approved OAuth connection for `profile` named "Claude" with these
  * scopes, and one live access token for it. */
 async function plantOauth(t: T, f: OrgFixture, profile: Doc<'profiles'>, scopes: string[]) {
-  const authUser = await t.mutation(components.betterAuth.adapter.create, {
-    input: {
-      model: 'user',
-      data: {
-        name: profile.name,
-        email: profile.email!,
-        emailVerified: true,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-    },
-  })
-  await t.run((ctx) => ctx.db.patch(profile._id, { auth_user_id: authUser._id as string }))
+  // the fixture person's real Better Auth login
+  const authUserId = profile.auth_user_id!
   const clientId = uuid()
   await t.mutation(components.betterAuth.adapter.create, {
     input: {
@@ -155,7 +153,7 @@ async function plantOauth(t: T, f: OrgFixture, profile: Doc<'profiles'>, scopes:
       id: connectionId,
       profile_id: profile.id,
       org_id: f.org.id,
-      auth_user_id: authUser._id as string,
+      auth_user_id: authUserId,
       client_id: clientId,
       client_name: 'Claude',
       resource: mcpResource(),
@@ -174,7 +172,7 @@ async function plantOauth(t: T, f: OrgFixture, profile: Doc<'profiles'>, scopes:
       data: {
         token: await sha256hex(token.slice(4)),
         clientId,
-        userId: authUser._id as string,
+        userId: authUserId,
         referenceId: connectionId,
         scopes,
         expiresAt: Date.now() + 60_000,
@@ -367,7 +365,7 @@ describe('get_me and GET /v1/me', () => {
   it('can_create_projects follows the organization setting for each seat', async () => {
     const { t, f } = await fixture()
     // a Standard user person with the per-person creation right
-    const selected = await t.run(async (ctx) => {
+    const planted = await t.run(async (ctx) => {
       const _id = await ctx.db.insert('profiles', {
         id: uuid(),
         auth_user_id: 'auth_selected',
@@ -384,6 +382,7 @@ describe('get_me and GET /v1/me', () => {
       })
       return (await ctx.db.get(_id)) as Doc<'profiles'>
     })
+    const selected = await plantLogin(t, planted)
     // a Standard user agent ticked like `selected`, and a Viewer agent with
     // the right planted raw, which its role never lets it use
     const selectedAgent = await plantViewerAgent(t, f.org.id)
