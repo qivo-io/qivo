@@ -341,7 +341,8 @@ export const gatewayAvatar = internalQuery({
 /* ------------------------------------------------------------ reapOrphans
  * Deletes bytes nothing references: an app upload never attached, a REST
  * upload never confirmed, and the private backgrounds of a login that no
- * longer exists. The references are issue_attachments.storage_id,
+ * longer exists. The references are issue_attachments.storage_id, the
+ * attachments held in Deleted items (deleted_rows.storage_id),
  * profiles.avatar_storage_id and the panorama_images and custom_backgrounds
  * originals and previews (model/attachments.ts storageIdInUse). Component
  * storage (Better Auth) is isolated from this _storage table.
@@ -367,11 +368,11 @@ export const gatewayAvatar = internalQuery({
  * Admin › Audit is the signal. */
 
 /** The most rows one reapOrphans leg handles in each phase. A stored file
- * older than the floor costs storageIdInUse's index ranges, six today, so a
- * files leg reads about 1,500 of Convex's 4,096 and has room for more
- * references. A tickets leg reads two ranges and deletes at most two pages.
- * An account costs a Better Auth lookup and, for a removed login, its
- * cleanup. Tests lower these. */
+ * older than the floor costs storageIdInUse's index ranges, seven with the
+ * Deleted items check, so a files leg reads about 1,800 of Convex's 4,096
+ * and has room for more references. A tickets leg reads two ranges and
+ * deletes at most two pages. An account costs a Better Auth lookup and, for
+ * a removed login, its cleanup. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
 /* A sweep never deletes a file younger than this when its run starts. REST

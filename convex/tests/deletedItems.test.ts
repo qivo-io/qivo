@@ -13,12 +13,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { PURGE_ORG } from '../deletedItems'
+import { REAP_PAGES } from '../files'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageIdInUse } from '../model/attachments'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
+  DELETE_REASON_TOO_LONG,
   EXPIRY,
   moveTasksToTrash,
   restoreBlock,
@@ -40,6 +42,7 @@ import {
   plantIssue,
   plantProject,
   plantSubscription,
+  reap,
   type T,
   uuid,
   withOrg,
@@ -198,18 +201,17 @@ describe('moving a task to Deleted items', () => {
     ])
   })
 
-  it('refuses a reason longer than 500 characters and stores a blank one as none', async () => {
+  it('refuses a trimmed reason over 500 characters, an emoji counting two, and stores a blank one as none', async () => {
     const t = newT()
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await expectRefusal(
-      deleteTask(t, f, task.id, { reason: 'é'.repeat(501) }),
-      'rule',
-      /a reason can be at most 500 characters/,
-    )
+    for (const reason of ['é'.repeat(501), `${'😀'.repeat(250)}a`, ` ${'a'.repeat(501)} `]) {
+      const e = await expectRefusal(deleteTask(t, f, task.id, { reason }), 'rule')
+      expect(e.data.message).toBe(DELETE_REASON_TOO_LONG)
+    }
     expect(await liveTask(t, task.id)).not.toBeNull()
-    await deleteTask(t, f, task.id, { reason: 'é'.repeat(500) })
-    expect((await itemFor(t, task.id)).reason).toHaveLength(500)
+    await deleteTask(t, f, task.id, { reason: ` ${'😀'.repeat(250)} ` })
+    expect((await itemFor(t, task.id)).reason).toBe('😀'.repeat(250))
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await deleteTask(t, f, other.id, { reason: '   ' })
     expect((await itemFor(t, other.id)).reason).toBeUndefined()
@@ -395,6 +397,19 @@ describe('webhook events', () => {
 })
 
 describe('moving a project to Deleted items', () => {
+  it('holds the reason to the cap a task delete has', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const e = await expectRefusal(
+      deleteProject(t, f, f.sub2.id, { reason: `${'😀'.repeat(250)}a` }),
+      'rule',
+    )
+    expect(e.data.message).toBe(DELETE_REASON_TOO_LONG)
+    expect(await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))).not.toBeNull()
+    await deleteProject(t, f, f.sub2.id, { reason: 'é'.repeat(500) })
+    expect((await itemFor(t, f.sub2.id)).reason).toBe('é'.repeat(500))
+  })
+
   it('hides the projects at once, moves the tasks people see first, and finishes in bounded steps', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: { databaseQueries: 150 } })
@@ -733,7 +748,14 @@ describe('bytes in Deleted items', () => {
 
     const orphan = await t.run((ctx) => ctx.storage.store(new Blob(['orphan']) as never))
     vi.setSystemTime(START + 2 * HOUR)
-    await t.mutation(internal.files.reapOrphans, {})
+    // one file per leg, so the sweep checks the trashed file in a leg of its own
+    const pages = { ...REAP_PAGES }
+    REAP_PAGES.files = 1
+    try {
+      expect(await reap(t)).toMatchObject({ deleted: 1, kept: 4 })
+    } finally {
+      Object.assign(REAP_PAGES, pages)
+    }
     expect(await blobExists(t, orphan)).toBe(false)
     expect(await blobExists(t, trashedFile.storage_id)).toBe(true)
   })

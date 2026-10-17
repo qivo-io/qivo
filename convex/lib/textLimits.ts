@@ -1,5 +1,5 @@
 /* Length caps for free text, shared by the server's model layer and the app.
- * Long text counts UTF-16 code units (String.prototype.length), the unit the
+ * Text counts UTF-16 code units (String.prototype.length), the unit the
  * browser's maxLength, the MCP schema check and the app's markdown parser use.
  * Names count code points instead (NAME_MAX). No imports, so the app can
  * import this file as it does projectLimits.ts. */
@@ -44,3 +44,9 @@ export function cutName(name: string): string {
   if (points.length <= NAME_MAX) return name
   return `${points.slice(0, NAME_MAX).join('').trimEnd()}…`
 }
+
+/** The longest reason the app's delete window may store on a Deleted items
+ * row (deleted_items.reason). It is far below TEXT_MAX because every row of
+ * the Deleted items list carries its reason, and one list reads up to 2,000
+ * rows. */
+export const DELETE_REASON_MAX = 500
