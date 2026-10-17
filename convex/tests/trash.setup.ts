@@ -15,6 +15,7 @@ import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import { PURGE_ORG } from '../deletedItems'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
+import { REMOVAL_BUDGET } from '../model/cascade'
 import { EXPIRY, HEIGHT_READ, RETRY, TRASH_BUDGET } from '../model/deletedItems'
 import { as, NOW, type OrgFixture, type T, uuid } from './helpers.setup'
 
@@ -30,10 +31,11 @@ const DEFAULT_RETRY = { ...RETRY }
 const DEFAULT_HEIGHT_READ = { ...HEIGHT_READ }
 const DEFAULT_EXPIRY = { ...EXPIRY }
 const DEFAULT_PURGE_ORG = { ...PURGE_ORG }
+const DEFAULT_REMOVAL_BUDGET = { ...REMOVAL_BUDGET }
 
 /** Fake timers from START for each test of the suite, and the default
- * budget, depth check, retries, expiry batch and purgeOrg batch back after
- * it. */
+ * budget, depth check, retries, expiry batch, purgeOrg batch and
+ * organization deletion budget back after it. */
 export function installTrashTimers(): void {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -45,6 +47,7 @@ export function installTrashTimers(): void {
     Object.assign(RETRY, DEFAULT_RETRY)
     Object.assign(EXPIRY, DEFAULT_EXPIRY)
     Object.assign(PURGE_ORG, DEFAULT_PURGE_ORG)
+    Object.assign(REMOVAL_BUDGET, DEFAULT_REMOVAL_BUDGET)
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
