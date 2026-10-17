@@ -254,6 +254,22 @@ async function search(value: string) {
 }
 /** Waits past the search's 250ms pause. */
 const pause = () => act(async () => await new Promise((r) => setTimeout(r, 300)))
+/** Picks the Deleted by choice labelled `label`. */
+async function deletedByChoice(label: string) {
+  const select = find<HTMLSelectElement>('[data-deleted-by]')
+  await act(async () => {
+    select.value = [...select.options].find((o) => o.text === label)?.value ?? ''
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await settle()
+}
+/** Answers the live list narrowed to `profile`, as a delivery does. */
+async function deliverNarrowed(profile: string, items: DeletedRow[], capped = false) {
+  const list = lists.find((l) => l.live && l.args.deleted_by === profile)
+  if (!list) throw new Error(`No list narrowed to ${profile}`)
+  await act(async () => list.next({ items: structuredClone(items), capped }))
+  await settle()
+}
 
 describe('who the page speaks to', () => {
   it('tells each role what it lists, and offers Deleted by to admins and leads only', async () => {
@@ -716,6 +732,72 @@ describe('items that wait for a deleted project', () => {
     await deliver([])
     await deliver([{ ...early, can_restore: true, blocked: undefined }])
     expect(calls('deletedItems:restore')).toHaveLength(1)
+  })
+
+  it('sends a waiting item when its project is back while another person is shown', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => {
+      const ids = args.ids as string[]
+      if (ids.includes('item-trial'))
+        return { restored: ['item-trial'], refused: [], deferred: ['item-5'] }
+      return { restored: ids, refused: [], deferred: [] }
+    }
+    const early = task(5, {
+      deleted_at: at(9, 0, 0, 14),
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: 'item-trial' },
+    })
+    const mira = task(1, { deleter: MIRA })
+    await deliver([mira, trial(), early], true)
+    await click(find('[data-deleted-row="item-5"] [data-restore]'))
+    await click(button('Restore Field trial Q3 and QN-5'))
+    // Mira's deletes do not hold Daniel's item, which still waits
+    await deletedByChoice('Mira Holm')
+    await deliverNarrowed('mira', [mira, trial({ state: 'restoring', can_restore: false })])
+    expect(rowIds()).toEqual(['item-1', 'item-trial'])
+    // nor does a capped list that stops before it prove it left
+    await deliver([mira], true)
+    expect(calls('deletedItems:restore')).toHaveLength(1)
+    // the project is back, and the main list shows the item restorable
+    await deliver([mira, { ...early, can_restore: true, blocked: undefined }], true)
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial', 'item-5'] },
+      { org_id: ORG, ids: ['item-5'] },
+    ])
+    expect(window.showToast).toHaveBeenLastCalledWith('Restored QN-5', undefined)
+  })
+
+  it('sends a waiting item that only a narrowed list holds once that list is back', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => {
+      const ids = args.ids as string[]
+      if (ids.includes('item-trial'))
+        return { restored: ['item-trial'], refused: [], deferred: ['item-5'] }
+      return { restored: ids, refused: [], deferred: [] }
+    }
+    const mira = task(1, { deleter: MIRA })
+    const early = task(5, {
+      deleter: MIRA,
+      deleted_at: at(9, 0, 0, 14),
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: 'item-trial' },
+    })
+    // the capped list holds none of Mira's older deletes
+    await deliver([mira, task(2)], true)
+    await deletedByChoice('Mira Holm')
+    await deliverNarrowed('mira', [mira, trial(), early])
+    await click(find('[data-deleted-row="item-5"] [data-restore]'))
+    await click(button('Restore Field trial Q3 and QN-5'))
+    // no list shown now holds the item, and the capped one is no proof it left
+    await deletedByChoice('Deleted by anyone')
+    await deliver([mira, task(2)], true)
+    expect(calls('deletedItems:restore')).toHaveLength(1)
+    await deletedByChoice('Mira Holm')
+    await deliverNarrowed('mira', [mira, { ...early, can_restore: true, blocked: undefined }])
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial', 'item-5'] },
+      { org_id: ORG, ids: ['item-5'] },
+    ])
   })
 })
 
@@ -1346,5 +1428,64 @@ describe('search hits follow the list', () => {
     expect(has('[data-deleted-match="QN-12"]')).toBe(false)
     expect(text('[data-deleted-items]')).toContain('No deleted items match the filter.')
     expect(text('[data-deleted-count]')).toBe('0 of 1 item')
+  })
+
+  it('shows and restores a hit whose project item a capped list stops before', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => ({
+      restored: args.ids as string[],
+      refused: [],
+      deferred: [],
+    })
+    // the capped list ends before the older project item that the search finds
+    await deliver([task(1, { title: 'Book a van' })], true)
+    await found('Book', [hit()])
+    expect(rowIds()).toEqual(['item-1', 'item-trial:QN-12'])
+    expect(text('[data-deleted-match="QN-12"] [data-row-place]')).toBe(
+      'Field trial Q3 › Site preparation, deleted with the project',
+    )
+    expect(text('[data-deleted-match="QN-12"] [data-row-who]')).toBe('Mira Holm')
+    expect(text('[data-deleted-count]')).toBe('2 of 2 items')
+    // the hit says where its task sat, but not the name or size of its project
+    await click(find('[data-select-all]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    expect(text('[data-modal-shell] h2')).toBe('Restore 2 items?')
+    expect(
+      [...document.querySelectorAll('[data-destination]')].map((el) => el.textContent),
+    ).toEqual([
+      'Field trial Q3 › Site preparationproject with QN-12',
+      'Luma Sensor › Firmware1 task',
+    ])
+    await click(button('Cancel'))
+    await click(button('Clear'))
+    await click(find('[data-deleted-match="QN-12"] [data-restore]'))
+    expect(text('[data-modal-shell] h2')).toBe('QN-12 is in a deleted project')
+    expect(text('[data-project-first]')).toBe(
+      'QN-12 was deleted together with its project. It can only come back with the project.The project comes back with all its tasks. They keep their keys.',
+    )
+    await click(button('Restore the project and QN-12'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-trial'] }])
+    expect(window.showToast).toHaveBeenCalledWith('Restored QN-12 and its project', undefined)
+    // no list will drop the restored project item, so its hit goes now
+    expect(rowIds()).toEqual(['item-1'])
+  })
+
+  it('shows hits when the capped list holds no row at all', async () => {
+    await open()
+    await deliver([], true)
+    expect(text('[data-deleted-items]')).toContain('No deleted items.')
+    await found('Book', [hit()])
+    expect(rowIds()).toEqual(['item-trial:QN-12'])
+    expect(text('[data-deleted-count]')).toBe('1 of 1 item')
+  })
+
+  it('shows a hit under an organization that the capped list stopped before', async () => {
+    await open()
+    await deliver([task(1), task(2, { org_id: 'org-two', org_name: 'Aurora Studio' })], true)
+    await found('Book', [hit({ org_id: 'org-three', org_name: 'Polar Works' })])
+    const groups = [...document.querySelectorAll<HTMLElement>('[data-org-group]')]
+    expect(groups.map((el) => el.dataset.orgGroup)).toEqual(['org-three'])
+    expect(groups[0].firstElementChild?.textContent).toBe('Polar Works')
+    expect(groups[0].querySelector('[data-deleted-match="QN-12"]')).not.toBeNull()
   })
 })

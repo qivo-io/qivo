@@ -1,8 +1,8 @@
 /* What the Deleted items page says about its rows, kept out of the page so it
    stays pure: the deleter line, the suffix after a title, the sentence of a
    row that cannot be restored, the Deleted by options, the search filter, the
-   order of rows and search hits, and how a long run of one person's deletes
-   folds. Types come from the deletedItems functions, so the page follows the
+   project item a search hit stands for when no list holds it, the order of
+   rows and search hits, and how a long run of one person's deletes folds. Types come from the deletedItems functions, so the page follows the
    server's projection (convex/model/deletedItemsList.ts). */
 
 import type { FunctionReturnType } from 'convex/server'
@@ -23,14 +23,45 @@ export type PurgeRefusal = FunctionReturnType<
   typeof api.deletedItems.purge
 >['refused'][number]['reason']
 
+/** An item the page acts on. It is a row of a list, or the project item of a
+    search hit that no list holds (hitItem), which carries that `hit`. */
+export type ItemRow = DeletedRow & { hit?: DeletedMatch }
+
 /** One line of the list: an item, or a task inside a deleted project that the
     search found. A match acts on its project item, `item`. */
 export type Line =
   | { kind: 'item'; row: DeletedRow }
-  | { kind: 'match'; match: DeletedMatch; item: DeletedRow }
+  | { kind: 'match'; match: DeletedMatch; item: ItemRow }
 
 /** The item a line acts on. */
-export const lineItem = (line: Line): DeletedRow => (line.kind === 'item' ? line.row : line.item)
+export const lineItem = (line: Line): ItemRow => (line.kind === 'item' ? line.row : line.item)
+
+/** The project item of a search hit, as far as the hit tells it, for a hit
+    whose item no list holds. A capped list can stop before older items that
+    the search still finds. The item has the hit's organization, deleter, time
+    and restore state. It has no name, counts or Delete now, which the hit
+    does not carry, so the page names it through `hit`. */
+export function hitItem(match: DeletedMatch): ItemRow {
+  return {
+    id: match.item_id,
+    org_id: match.org_id,
+    org_name: match.org_name,
+    kind: 'project',
+    key: '',
+    title: '',
+    counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+    projects: [],
+    path: [],
+    archived: false,
+    deleted_at: match.deleted_at,
+    deleter: match.deleter,
+    state: match.state,
+    can_restore: match.can_restore,
+    blocked: match.blocked,
+    can_purge: false,
+    hit: match,
+  }
+}
 
 /** "2 subtasks", "1 task", "2,000 items". */
 export function plural(n: number, noun: string, many = `${noun}s`): string {
@@ -440,11 +471,20 @@ export type Destination = { key: string; kind: 'task' | 'project'; name: string;
  * its own line ("Field trial Q3", "project with 2 sub-projects and 48
  * tasks"), then the task items grouped by the project they go back to, most
  * first ("Luma Sensor › Firmware", "74 tasks" or "3 tasks and 2 subtasks").
+ * A project item known only from a search hit is named by where the hit's
+ * task sat and by that task ("project with QN-12").
  */
-export function destinations(rows: DeletedRow[]): Destination[] {
+export function destinations(rows: ItemRow[]): Destination[] {
   const projects: Destination[] = rows
     .filter((row) => row.kind === 'project')
     .map((row) => {
+      if (row.hit)
+        return {
+          key: row.id,
+          kind: 'project',
+          name: row.hit.path.filter(Boolean).join(' › '),
+          count: `project with ${row.hit.key}`,
+        }
       const sub = isSubProject(row)
       const { tasks } = row.counts
       const holds = sub ? (tasks > 0 ? `with ${plural(tasks, 'task')}` : '') : projectHolds(row)
