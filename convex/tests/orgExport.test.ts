@@ -488,7 +488,7 @@ describe('organization export', () => {
     await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
     const inFlight = await firstChildPage()
-    expect(inFlight.rows).toHaveLength(10)
+    expect(inFlight.rows).toHaveLength(4)
     expect(inFlight.isDone).toBe(false)
     exported = childRows(await readAll(caller, f.org.id, 'issues'))
     expect(exported.size).toBe(100)

@@ -31,6 +31,11 @@ const PAGE_SIZE = 100
  * related documents at Convex's 1 MiB document cap stay inside its 16 MiB
  * read limit with the page itself. */
 const JOINED_PAGE_SIZE = 10
+/* An issues page read while a project item is in flight. Each row can also
+ * read its project, its parent task and the parent's project, each up to
+ * Convex's 1 MiB document limit, so 4 rows plus the page's own rows stay
+ * under the 16 MiB read limit. */
+const IN_FLIGHT_ISSUES_PAGE_SIZE = 4
 const PAGE_BYTES = 1024 * 1024
 const JOINED_SECTIONS: ReadonlySet<OrgExportSection> = new Set([
   'team_members',
@@ -67,7 +72,7 @@ type PagedSection = Exclude<OrgExportSection, 'organizations'>
  * `pageSize` is JOINED_PAGE_SIZE when each row costs another read. Endpoint
  * validation reads another document per row, and for a link also the
  * target's project, once per page, and an issues page in flight reads each
- * task's parent. A task can carry a large description, so these pages need
+ * task's parent on a page of IN_FLIGHT_ISSUES_PAGE_SIZE. A task can carry a large description, so these pages need
  * headroom beyond the pagination byte budget for the source rows themselves. */
 async function readPage(
   ctx: QueryCtx,
@@ -291,10 +296,14 @@ export const page = orgQuery({
     // A task under a parent whose project is moving to Deleted items keeps
     // that parent until the move detaches it. The export leaves out the
     // parent task, so it leaves out the reference too. Only an item in
-    // flight leaves such a parent, so the page reads parents only then, at
-    // the joined page size, because a parent can carry a large description.
+    // flight leaves such a parent, so the page reads parents only then, on
+    // a small page, because a parent can carry a large description.
     const checkParents = section === 'issues' && (await hasItemInFlight(ctx, orgId))
-    const pageSize = JOINED_SECTIONS.has(section) || checkParents ? JOINED_PAGE_SIZE : PAGE_SIZE
+    const pageSize = checkParents
+      ? IN_FLIGHT_ISSUES_PAGE_SIZE
+      : JOINED_SECTIONS.has(section)
+        ? JOINED_PAGE_SIZE
+        : PAGE_SIZE
     const result = await readPage(ctx, section, scope, cursor, pageSize)
     const rows: OrgExportRow[] = []
     for (const doc of result.page) {
