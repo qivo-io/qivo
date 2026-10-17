@@ -48,11 +48,11 @@
  * notifications included. The parent checks of a restore (keptParent) also
  * count the bytes they read, and a check that runs out of the step's reads
  * waits for the next step, where it comes first and runs whole within
- * HEIGHT_READ and SIGHT_READ. Progress is counted in rows. A step always
- * moves at least one row, documents without a size cap are read
- * LARGE_ROWS_PER_READ at a time, and most phases read the start of a range
- * again rather than keep a cursor, because moving a row takes it out of the
- * range. The user's mutation spends the first budget itself, so most
+ * CHAIN_READ, HEIGHT_READ and SIGHT_READ. Progress is counted in rows. A
+ * step always moves at least one row, documents without a size cap are
+ * read LARGE_ROWS_PER_READ at a time, and most phases read the start of a
+ * range again rather than keep a cursor, because moving a row takes it out
+ * of the range. The user's mutation spends the first budget itself, so most
  * deletes never schedule a step. Convex drops what a failed step scheduled,
  * so `recoverJobs` restarts a stalled job at half the budget, and an item
  * whose step still fails RETRY.atFloor times at the smallest budget becomes
@@ -281,7 +281,7 @@ function chargeRead(b: Budget, doc: unknown): number {
 
 /** Whether a step has no reads left, once it has moved a row and spent its
  * index ranges or bytes. A parent check that would read past them waits
- * for the next step (allSee). */
+ * for the next step (chainOver, allSee). */
 const readsSpent = (b: Budget): boolean => b.moved && (b.ranges <= 0 || b.bytes <= 0)
 
 /** Clears the rows `read` returns until the range is empty (true) or the
@@ -2423,10 +2423,12 @@ type LiveTasks = Map<string, Doc<'issues'> | null>
 
 /** What one reveal or attach step reads once for the parent table, after
  * the reveal wrote back what it writes. That is the live tasks of the
- * parent chains it walks, each parent's OutsideParent, the organization's
- * projects (liveProjects) and what each person sees of them (seenBy). */
+ * parent chains it walks, with the bytes of each task document it holds
+ * (weightOf), each parent's OutsideParent, the organization's projects
+ * (liveProjects) and what each person sees of them (seenBy). */
 type ParentReads = {
   tasks: LiveTasks
+  weights: WeakMap<Doc<'issues'>, number>
   parents: Map<string, Promise<OutsideParent | null>>
   projects: Promise<Doc<'projects'>[]> | undefined
   people: Map<string, Promise<Seen>>
@@ -2434,10 +2436,24 @@ type ParentReads = {
 
 const newParentReads = (): ParentReads => ({
   tasks: new Map(),
+  weights: new WeakMap(),
   parents: new Map(),
   projects: undefined,
   people: new Map(),
 })
+
+/** The estimated bytes of live task `task`, worked out once for each
+ * document the step holds, so a chain that many tasks of a step share is
+ * weighed once. An attach puts back a new document for the task it gives a
+ * parent, which is weighed again. */
+function weightOf(reads: ParentReads, task: Doc<'issues'>): number {
+  let bytes = reads.weights.get(task)
+  if (bytes === undefined) {
+    bytes = estimateDocumentBytes(task)
+    reads.weights.set(task, bytes)
+  }
+  return bytes
+}
 
 /** Live task `id` from `live`, read and charged to the step's budget the
  * first time. */
@@ -2538,7 +2554,8 @@ type StoredChildren = Map<string, Stored<'issues'>[]>
 
 /** What the parent table answers for one task. That is the parent it keeps
  * from outside the item, undefined to clear it, or 'later' when the check
- * ran out of the step's reads (allSee) and must run again in the next step. */
+ * ran out of the step's reads (chainOver, allSee) and must run again in the
+ * next step. */
 type Kept = { id: string; grouped: boolean } | undefined | 'later'
 
 /** The parent `task` of the item keeps from outside it, by the parent table
@@ -2570,7 +2587,8 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * (chainOver) and the subtree under `task` (workersBelow) are read only for
  * a parent that passes the rest, and for each task, because an attach
  * earlier in the step can deepen a chain. Who sees the chain (allSee) is
- * read last, and answers 'later' when the step's reads run out first. */
+ * read last. The chain and who sees it answer 'later' when the step's reads
+ * run out before they read what the step has not read yet. */
 async function keptParent(
   run: Run,
   task: Worker,
@@ -2584,7 +2602,8 @@ async function keptParent(
   const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
   if ((active || outside.clears) && !outside.edits) return undefined
-  const chain = await chainOver(run, outside.parent, task.id, reads.tasks)
+  const chain = await chainOver(run, outside.parent, task.id, reads)
+  if (chain === 'later') return 'later'
   if (chain === null) return undefined
   const workers = await workersBelow(run, task, 20 - chain.levels - 1, children)
   if (workers === null) return undefined
@@ -2597,20 +2616,46 @@ async function keptParent(
  * projects of its tasks. */
 type Chain = { levels: number; projects: Set<string> }
 
+/** The most bytes the chain above a parent (chainOver) reads, the parent
+ * included. Its tasks count from the start, whether the step read them for
+ * an earlier task or not, so the answer depends only on the data. A chain
+ * past it does not fit, so its task keeps no parent from outside, with a
+ * warning, as for HEIGHT_READ, and a retry answers the same. Someone with
+ * Edit can still give the task that parent by hand. Twenty tasks of 200 KB
+ * fit, while a description within TEXT_MAX holds at most 120 KB. Tasks
+ * stored before that cap can hold almost 1 MiB, and twenty of them would
+ * pass what one transaction can read. A mutable object, so tests can lower
+ * it. */
+export const CHAIN_READ = { bytes: 4 * 1024 * 1024 }
+
 /** The chain from live task `parent` to the top, `parent` included, as the
  * upward walk of model/issues.ts assertParentChain counts its levels and
- * ancestorsFrom collects its tasks, or null past 20 levels or when the
- * chain runs through task `taskId`, so attaching it there would close a
- * cycle. Only a task that shows without its parent after a project item's
- * reveal can meet a cycle. It reads through `live`, so the tasks of a step
- * read the chains they share once, and an attach sees the levels an earlier
- * attach of its step added. */
+ * ancestorsFrom collects its tasks. Null past 20 levels, past CHAIN_READ,
+ * or when the chain runs through task `taskId`, so attaching it there would
+ * close a cycle. Only a task that shows without its parent after a project
+ * item's reveal can meet a cycle. It reads through the step's live tasks,
+ * so the tasks of a step read the chains they share once, and an attach
+ * sees the levels an earlier attach of its step added. A walk that needs a
+ * task the step has not read once the step's reads are spent (readsSpent)
+ * answers 'later', as allSee does, and runs whole first in the next step. */
 async function chainOver(
   run: Run,
   parent: Doc<'issues'>,
   taskId: string,
-  live: LiveTasks,
-): Promise<Chain | null> {
+  reads: ParentReads,
+): Promise<Chain | null | 'later'> {
+  let bytes = 0
+  // whether the chain still fits once it holds `task`
+  const fits = (task: Doc<'issues'>): boolean => {
+    bytes += weightOf(reads, task)
+    if (bytes <= CHAIN_READ.bytes) return true
+    console.warn('A deleted item restore cannot check the chain above the parent of a task', {
+      item_id: run.item.id,
+      task_id: taskId,
+    })
+    return false
+  }
+  if (!fits(parent)) return null
   const projects = new Set([parent.project_id])
   let levels = 1
   let at = parent
@@ -2618,8 +2663,10 @@ async function chainOver(
     if (at.parent_id === taskId) return null
     levels += 1
     if (levels > 20) return null
-    const above = await liveTaskOf(run, live, at.parent_id)
+    if (!reads.tasks.has(at.parent_id) && readsSpent(run.budget)) return 'later'
+    const above = await liveTaskOf(run, reads.tasks, at.parent_id)
     if (above === null) break
+    if (!fits(above)) return null
     projects.add(above.project_id)
     at = above
   }
@@ -2635,9 +2682,9 @@ async function chainOver(
  * that parent by hand. A person without teams costs 3 ranges and each team
  * 2 more, so 2,000 ranges hold several hundred people. The first check of a
  * step, which never waits, then reads at most these 2,000 ranges and 2 MiB,
- * the walk under the task (HEIGHT_READ) and a chain of 20 tasks, within
- * Convex's 4,096 ranges and 16 MiB. A mutable object, so tests can lower
- * it. */
+ * the walk under the task (HEIGHT_READ, 500 tasks and 4 MiB) and a chain of
+ * 20 tasks within CHAIN_READ (4 MiB), 10 MiB in all, within Convex's 4,096
+ * ranges and 16 MiB. A mutable object, so tests can lower it. */
 export const SIGHT_READ = { ranges: 2000, bytes: 2 * 1024 * 1024 }
 
 /**
@@ -2883,7 +2930,7 @@ type Attach = ParentReads & {
  * helpers a task item's reveal uses. Each step stays within its budget,
  * however many tasks wait. A task whose check runs out of the step's reads
  * keeps its row for the next step, where it comes first and its check runs
- * whole (allSee). work runs the first in the reveal's own transaction, so
+ * whole (chainOver, allSee). work runs the first in the reveal's own transaction, so
  * a small item comes back whole there, and steps do the rest just after.
  * Meanwhile the tasks show without their parent, and a parent that fails
  * the table by the time its turn comes leaves them that way. Each parent a
@@ -3080,9 +3127,10 @@ async function actorOf(
  * parent (attachParents), so that a small item comes back whole in one
  * transaction. It counts tasks, not the bytes their parents' chains and
  * subtrees hold. An attach that spends the bytes left stops there, as any
- * step does, and steps finish it. A check of who sees a parent that runs
- * out of what is left waits too, a task item's reveal for a step of its
- * own and a project item's task for the next attach step. It reads at most
+ * step does, and steps finish it. A parent check whose chain or people
+ * (chainOver, allSee) run out of what is left waits too, a task item's
+ * reveal for a step of its own and a project item's task for the next
+ * attach step. It reads at most
  * one more waiting task than the budget holds. */
 async function revealFits(run: Run): Promise<boolean> {
   const b = run.budget

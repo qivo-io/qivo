@@ -16,6 +16,7 @@ import type { EventOwner } from '../lib/taskEvents'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
+  CHAIN_READ,
   HEIGHT_READ,
   type RestoreResult,
   restoreItems,
@@ -1550,6 +1551,21 @@ describe('parents outside a restored project', () => {
   /** 19,000 CJK characters, under TEXT_MAX: about 57 KB of UTF-8. */
   const HEAVY = '漢'.repeat(19_000)
 
+  /** A chain of `n` tasks in Firmware, each with `description`, top first.
+   * Answers its lowest task. */
+  async function chainOf(t: T, f: OrgFixture, n: number, description = '') {
+    let low: Doc<'issues'> | undefined
+    for (let i = 0; i < n; i++)
+      low = await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        parent_id: low?.id,
+        description,
+      })
+    if (low === undefined) throw new Error('a chain holds at least one task')
+    return low
+  }
+
   it('brings back 500 tasks of 16 KB under one parent outside the project within the real limits', async () => {
     // 8 MiB of tasks under a parent outside, which no single transaction
     // can read and write back with their parent
@@ -2032,7 +2048,12 @@ describe('parents outside a restored project', () => {
     }
     const { tasks, item } = await oneUnderEach(t, f, stories)
     TRASH_BUDGET.bytes = 100_000
+    // the restore call runs out of bytes partway up the first chain, so its
+    // task waits for a step
     await restore(t, f.user, [item.id])
+    expect(await parentsOf(t, tasks)).toEqual(stories.map(() => undefined))
+    // a step reads its first chain whole and stops on the bytes it held
+    await step(t, item.id)
     expect(await parentsOf(t, tasks)).toEqual([
       stories[0].id,
       ...stories.slice(1).map(() => undefined),
@@ -2167,6 +2188,66 @@ describe('parents outside a restored project', () => {
     expect(await assignedUnder(t, three.id)).toEqual(pairs(subtasks, people.slice(2)))
   })
 
+  it('restores a task and a project under nineteen tasks of 900 KiB within the real limits, without that parent', async () => {
+    // the chain holds 17 MiB, more than one transaction can read, so a
+    // restore that read it whole failed, and so did every retry
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT({ transactionLimits: true })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const low = await chainOf(t, f, 19, 'Field note. '.repeat(76_800))
+    // a task of Firmware deleted alone, and one of Board rev deleted with it
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: low.id })
+    await deleteTask(t, f, root.id)
+    const taskItem = await itemFor(t, root.id)
+    const {
+      tasks: [task],
+      item: projectItem,
+    } = await oneUnderEach(t, f, [low])
+    await runSteps(t)
+    expect((await itemById(t, projectItem.id))?.state).toBe('ready')
+
+    for (const item of [taskItem, projectItem]) {
+      const result = await as(t, f.user).mutation(api.deletedItems.restore, {
+        org_id: f.org.id,
+        ids: [item.id],
+      })
+      expect(result.restored).toEqual([item.id])
+      await stepThrough(t, item.id)
+      expect(await itemById(t, item.id)).toBeNull()
+    }
+    expect(await parentsOf(t, [root, task])).toEqual([undefined, undefined])
+    const warning = 'A deleted item restore cannot check the chain above the parent of a task'
+    expect(warn.mock.calls).toEqual([
+      [warning, { item_id: taskItem.id, task_id: root.id }],
+      [warning, { item_id: projectItem.id, task_id: task.id }],
+    ])
+    expect(await waitingParents(t)).toEqual([])
+  }, 300_000)
+
+  it('reads no more above a parent than CHAIN_READ allows, and leaves that task without it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    // two chains of three tasks, the second of tasks of 57 KB
+    const light = await chainOf(t, f, 3)
+    const heavy = await chainOf(t, f, 3, HEAVY)
+    const { tasks, item } = await oneUnderEach(t, f, [light, heavy])
+    CHAIN_READ.bytes = 100_000
+
+    await restore(t, f.user, [item.id])
+    await stepThrough(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await parentsOf(t, tasks)).toEqual([light.id, undefined])
+    expect(warn.mock.calls).toEqual([
+      [
+        'A deleted item restore cannot check the chain above the parent of a task',
+        { item_id: item.id, task_id: tasks[1].id },
+      ],
+    ])
+    expect(await waitingParents(t)).toEqual([])
+  })
+
   it('checks a task again in the next step when its step runs out of reads during the check', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -2200,6 +2281,34 @@ describe('parents outside a restored project', () => {
     await stepThrough(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
     expect(await assignedUnder(t, wide.id)).toHaveLength(30)
+  })
+
+  it('checks a task again in the next step when its step runs out of reads before the chain above its parent', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // a story of 57 KB under three epics of 57 KB
+    const story = await chainOf(t, f, 4, HEAVY)
+    const tasks = await plantUnder(t, f, [epic, epic, story])
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    // the reveal's step attaches the first task only
+    TRASH_BUDGET.tasks = 1
+    await untilAttach(t, f, item.id)
+    expect(await parentsOf(t, tasks)).toEqual([epic.id, undefined, undefined])
+
+    // the step attaches the second task, then reads the story and has no
+    // bytes left for the epics above it
+    TRASH_BUDGET.tasks = 100
+    TRASH_BUDGET.bytes = 50_000
+    await step(t, item.id)
+    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, undefined])
+    expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([tasks[2].id])
+    // the next step checks it first, whole, though that passes its budget,
+    // and attaches it
+    await step(t, item.id)
+    expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, story.id])
+    expect(await waitingParents(t)).toEqual([])
   })
 
   it('brings back under its parent a subtask that another restore moved into it after its fill', async () => {
