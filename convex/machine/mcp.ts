@@ -142,7 +142,6 @@ import {
   MCP_PROVENANCE as PROVENANCE,
   pretty,
   readBody,
-  withIgnored,
 } from './shared'
 import { TEAM_TOOLS } from './teams'
 
@@ -152,8 +151,9 @@ import { TEAM_TOOLS } from './teams'
  * fn. tools/list answers the defs in this order. Titles, descriptions and
  * JSON-Schema literals are wire bytes (LLM-facing prose is
  * behavior-load-bearing), with key order preserved and hashes pinned by the
- * transport tests. `run` receives validated, stripped wire arguments, so its
- * casts are honest. validateArgs and pickArgs already enforced the shapes. */
+ * transport tests. `run` receives validated wire arguments, so its casts are
+ * honest. validateArgs already enforced the shapes and refused any argument
+ * the schema does not know. */
 
 type SchemaProp = {
   type?: string
@@ -195,12 +195,10 @@ type ToolDef = {
 }
 
 /** The principal, the credential row that authenticated the request (for
- *  get_me), the arguments a tool's `run` receives and the names of the
- *  arguments its schema does not know, which were dropped. */
+ *  get_me) and the arguments a tool's `run` receives. */
 type ToolInput = Principal & {
   credential: EventOwner
   args: Record<string, unknown>
-  ignored: string[]
 }
 
 /** One MCP tool. `run` answers the already pretty-printed result text. */
@@ -509,7 +507,7 @@ export const TOOLS: McpTool[] = [
       name: 'create_task',
       title: 'Create task',
       description:
-        'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects. A task is never created under another project\'s sub-project (create it in the right project, or move it later with update_task). `parent` (a task ref) makes it a subtask of that task; the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it as week starts in YYYY-MM-DD, both or neither. Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left. Arguments this tool does not know are listed in `ignored_arguments`.',
+        'Create a task in a sub-project you can write to. `project` is a project number, a key like ENC, or a uuid; when it names a type "meta" project, `sub_project` must name one of ITS sub-projects. A task is never created under another project\'s sub-project (create it in the right project, or move it later with update_task). `parent` (a task ref) makes it a subtask of that task; the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it as week starts in YYYY-MM-DD, both or neither. Description is markdown. `reporter_id` attributes the task to a real Qivo user who can see the destination project; omit it to use your authenticated user. Null is not accepted, and the reporter cannot be changed after creation. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the destination project; use `list_project_users` and select a row with `assignable: true`. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. A task that enters `review`, created there or moved there, gets its project\'s review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -609,32 +607,29 @@ export const TOOLS: McpTool[] = [
         required: ['project', 'title'],
       },
     },
-    run: async (r, { callerId, access, args, ignored }) =>
-      withIgnored(
-        await r.runMutation(internal.machine.mcp.createIssue, {
-          callerId,
-          access,
-          ...(args as {
-            project: string
-            sub_project?: string
-            parent?: string | null
-            title: string
-            description?: string
-            status?: Doc<'issues'>['status']
-            priority?: Doc<'issues'>['priority']
-            assignee_id?: string | null
-            reviewer_id?: string | null
-            reporter_id?: string
-            start_week?: string | null
-            end_week?: string | null
-            due_date?: string | null
-            remaining_hours?: number | null
-            paused?: boolean
-            archived?: boolean
-          }),
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.mcp.createIssue, {
+        callerId,
+        access,
+        ...(args as {
+          project: string
+          sub_project?: string
+          parent?: string | null
+          title: string
+          description?: string
+          status?: Doc<'issues'>['status']
+          priority?: Doc<'issues'>['priority']
+          assignee_id?: string | null
+          reviewer_id?: string | null
+          reporter_id?: string
+          start_week?: string | null
+          end_week?: string | null
+          due_date?: string | null
+          remaining_hours?: number | null
+          paused?: boolean
+          archived?: boolean
         }),
-        ignored,
-      ),
+      }),
   },
   {
     access: 'write',
@@ -642,7 +637,7 @@ export const TOOLS: McpTool[] = [
       name: 'update_task',
       title: 'Update task',
       description:
-        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and `status`, `start_week` and `end_week` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents); `archive_reason` with `archived: true` posts the reason as a comment. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. `project` and `sub_project` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (`parent` null, or a task in that project). `parent` (a task ref) makes it a subtask, null detaches it. `add_labels` and `remove_labels` take label ids or names. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left. Arguments this tool does not know are listed in `ignored_arguments`.",
+        "Patch fields on a task in a project you can write to. `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Omitted fields stay unchanged. A task with subtasks is a group. Its stored status and dates are dormant, and `status`, `start_week` and `end_week` cannot be changed until its last active subtask is removed. The reporter is set at creation and cannot be changed or cleared. A non-null `assignee_id` must name an active Qivo user with effective Edit or Lead permission on the task's project; use `list_project_users` and select a row with `assignable: true`. `archived: true/false` archives / restores the task (archiving carries its subtasks along; restoring surfaces its parents); `archive_reason` with `archived: true` posts the reason as a comment. `reviewer_id` follows the same rule as `assignee_id` (a row with `assignable: true`); null clears it; a task with subtasks takes no reviewer. `project` and `sub_project` move the task, named as in create_task; a move to another top-level project carries its subtasks along, and a subtask moved there must leave its parent in the same call (`parent` null, or a task in that project). `parent` (a task ref) makes it a subtask, null detaches it. `add_labels` and `remove_labels` take label ids or names. A task that enters `review`, created there or moved there, gets its project's review time as `remaining_hours` (2 hours unless the project sets another) unless the same call sends a non-null `remaining_hours`; leaving `review` keeps whatever is left.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -749,35 +744,32 @@ export const TOOLS: McpTool[] = [
         required: ['ref'],
       },
     },
-    run: async (r, { callerId, access, args, ignored }) =>
-      withIgnored(
-        await r.runMutation(internal.machine.mcp.updateIssue, {
-          callerId,
-          access,
-          ...(args as {
-            ref: string
-            title?: string
-            description?: string
-            status?: Doc<'issues'>['status']
-            priority?: Doc<'issues'>['priority']
-            assignee_id?: string | null
-            reviewer_id?: string | null
-            due_date?: string | null
-            start_week?: string | null
-            end_week?: string | null
-            remaining_hours?: number | null
-            paused?: boolean
-            archived?: boolean
-            archive_reason?: string
-            project?: string
-            sub_project?: string
-            parent?: string | null
-            add_labels?: string[]
-            remove_labels?: string[]
-          }),
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.mcp.updateIssue, {
+        callerId,
+        access,
+        ...(args as {
+          ref: string
+          title?: string
+          description?: string
+          status?: Doc<'issues'>['status']
+          priority?: Doc<'issues'>['priority']
+          assignee_id?: string | null
+          reviewer_id?: string | null
+          due_date?: string | null
+          start_week?: string | null
+          end_week?: string | null
+          remaining_hours?: number | null
+          paused?: boolean
+          archived?: boolean
+          archive_reason?: string
+          project?: string
+          sub_project?: string
+          parent?: string | null
+          add_labels?: string[]
+          remove_labels?: string[]
         }),
-        ignored,
-      ),
+      }),
   },
   {
     access: 'write',
@@ -983,11 +975,17 @@ const LEGACY_INIT_NO_PARAMS = JSON.stringify(
  * for tool <name>: `. Only the wrong-primitive-type message is byte-pinned by
  * the capture (`limit: Invalid input: expected number, received string`); the
  * other messages follow zod v4's grammar as closely as hand-rolling allows.
- * Unknown keys are stripped (zod object() default), except immutable reporter
- * updates are refused explicitly. Null satisfies only the
- * anyOf-nullable properties. Unlike zod, a string with an unpaired surrogate
- * is refused, inside an object argument too, because Convex cannot pass it
- * on to the tool's function. */
+ * A tool that takes arguments refuses one its schema does not know, as zod's
+ * strict objects do, so a misspelled argument never changes what a call does.
+ * An immutable reporter on update_task is refused with its own sentence.
+ * Null satisfies only the anyOf-nullable properties. Unlike zod, a string
+ * with an unpaired surrogate is refused, inside an object argument too,
+ * because Convex cannot pass it on to the tool's function.
+ *
+ * Never remove an argument from a schema. Keep the name and refuse it with
+ * its own sentence in the tool (as create_task does for `archived`), because
+ * a client holding a cached catalogue would otherwise meet a bare
+ * `Unrecognized key`. */
 
 const typeName = (x: unknown): string => {
   if (x === null) return 'null'
@@ -1135,11 +1133,26 @@ function validateArgs(tool: ToolDef, args: Record<string, unknown>): string | nu
     const msg = checkValue(prop, value, CODE_POINT_ARGS.has(key))
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
+  // Arguments the schema does not know are refused rather than dropped. A
+  // tool that takes no arguments ignores them, because some clients send a
+  // placeholder argument to such tools and there is nothing it could change.
+  if (Object.keys(props).length > 0) {
+    const unknown = Object.keys(args).filter(
+      (key) =>
+        !Object.hasOwn(props, key) && !(tool.name === 'update_task' && key === 'reporter_id'),
+    )
+    if (unknown.length > 0) {
+      // names only, never values, so the log shows whether clients send them routinely
+      console.info('MCP call refused unknown arguments', { tool: tool.name, keys: unknown })
+      const keys = unknown.map((key) => `"${key}"`).join(', ')
+      problems.push(`Unrecognized key${unknown.length > 1 ? 's' : ''}: ${keys}`)
+    }
+  }
   return problems.length > 0 ? problems.join(', ') : null
 }
 
-/* Known keys with defined values only — zod strips the rest, and the internal
- * fns' validators refuse unknown keys. */
+/* Known keys with defined values only. validateArgs refused unknown keys
+ * already, and the internal fns' validators would refuse them too. */
 function pickArgs(tool: ToolDef, args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const key of Object.keys(tool.inputSchema.properties)) {
@@ -1148,31 +1161,20 @@ function pickArgs(tool: ToolDef, args: Record<string, unknown>): Record<string, 
   return out
 }
 
-/* The argument names pickArgs drops because the schema does not know them,
- * in the order sent. create_task, update_task and update_project report
- * them (machine/shared.ts withIgnored), so a client with an outdated cached
- * schema learns they changed nothing. */
-const unknownArgs = (tool: ToolDef, args: Record<string, unknown>): string[] =>
-  Object.keys(args).filter((key) => !Object.hasOwn(tool.inputSchema.properties, key))
-
 /* --------------------------------------------------- JSON-RPC dispatch core
  * Everything from body parse on, exported so the conformance suite can drive
- * it byte-for-byte without transport plumbing. `runTool` receives validated,
- * stripped arguments; it throws ConvexError refusals (rendered as isError
- * with the bare sentence) — except the auth-race reasons CALLER_GONE /
- * CALLER_DEACTIVATED, which are rethrown for the HTTP action to answer as its
- * own 401 sentence. */
+ * it byte-for-byte without transport plumbing. `runTool` receives validated
+ * arguments, unknown ones already refused; it throws ConvexError refusals
+ * (rendered as isError with the bare sentence) — except the auth-race
+ * reasons CALLER_GONE / CALLER_DEACTIVATED, which are rethrown for the HTTP
+ * action to answer as its own 401 sentence. */
 
 export type McpHeaders = { get(name: string): string | null }
 /* Returns the tool result ALREADY 2-space-pretty-printed (the deployed
  * `text()` bytes). Stringification happens INSIDE the internal fn, before the
  * function-boundary crossing: Convex canonically SORTS object keys in values
  * that cross it, and the deployed projections' key order is the wire. */
-export type ToolRunner = (
-  name: string,
-  args: Record<string, unknown>,
-  ignored: string[],
-) => Promise<string>
+export type ToolRunner = (name: string, args: Record<string, unknown>) => Promise<string>
 
 type ToolOutcome =
   | { kind: 'protocol'; error: { code: number; message: string } }
@@ -1208,7 +1210,7 @@ async function callTool(
     }
   }
   try {
-    const text = await run(tool.name, pickArgs(tool, args), unknownArgs(tool, args))
+    const text = await run(tool.name, pickArgs(tool, args))
     return { kind: 'result', result: { content: [{ type: 'text', text }] } }
   } catch (e) {
     if (e instanceof ConvexError) {
@@ -1773,8 +1775,8 @@ export const createIssue = internalMutation({
     const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     // declared in the schema so the call is refused outright, FIRST and
-    // before any other validation, rather than only named in
-    // ignored_arguments while an active task is created
+    // before any other validation, and the refusal names the fix rather than
+    // a bare unknown key
     if (a.archived !== undefined) {
       throw badRequest('tasks are created active — archive with update_task after creating')
     }
@@ -2103,7 +2105,7 @@ export const setLabel = internalMutation({
 })
 
 /* --------------------------------------------------------- tool dispatcher
- * Validated, stripped wire arguments → the tool's registry entry, run with
+ * Validated wire arguments → the tool's registry entry, run with
  * the narrowest runner its access flag allows. */
 
 async function runTool(
@@ -2112,12 +2114,11 @@ async function runTool(
   credential: EventOwner,
   name: string,
   args: Record<string, unknown>,
-  ignored: string[],
 ): Promise<string> {
   const tool = TOOL_INDEX.get(name)
   // Unreachable, because callTool resolves names against TOOL_INDEX first.
   if (tool === undefined) throw new Error(`unknown tool ${name}`)
-  return await runEntry(ctx, tool, { ...principal, credential, args, ignored })
+  return await runEntry(ctx, tool, { ...principal, credential, args })
 }
 
 /* Whether the named tool needs qivo:write. A known tool does unless its flag
@@ -2264,7 +2265,7 @@ const mcpPost = httpAction(async (ctx, request) => {
             params_json: JSON.stringify(params),
           })
         },
-        runTool: async (name, args, ignored) => {
+        runTool: async (name, args) => {
           // Both protocol versions enter this same gate. Recheck the live grant
           // on every tool in a batch, alongside the existing permission checks,
           // and pass its live access, so scopes narrowed mid-session apply.
@@ -2282,7 +2283,6 @@ const mcpPost = httpAction(async (ctx, request) => {
             oauthOwner(live),
             name,
             args,
-            ignored,
           )
         },
       })
@@ -2326,8 +2326,8 @@ const mcpPost = httpAction(async (ctx, request) => {
     return await dispatchMcp({
       headers: request.headers,
       bodyText: body.text,
-      runTool: (name, args, ignored) =>
-        runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args, ignored),
+      runTool: (name, args) =>
+        runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args),
       runEvent: (method, params) =>
         ctx.runAction(internal.webhookActions.manage, {
           owner,

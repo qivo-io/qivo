@@ -111,6 +111,19 @@ export function wholeParam(
 export const optionalJson = (raw: string): Record<string, unknown> =>
   raw.trim() === '' ? {} : needJson(raw)
 
+/** Refuses the fields of a REST body that `known` does not name. Used where a
+ * dropped field would change whose access a request changes, so a misspelled
+ * field is refused instead of falling back to a default. Other routes ignore
+ * unknown fields, as the REST docs say. */
+export function refuseUnknownFields(b: Record<string, unknown>, known: readonly string[]): void {
+  const unknown = Object.keys(b).filter((key) => !known.includes(key))
+  if (unknown.length === 0) return
+  const names = unknown.map((key) => `"${key}"`).join(', ')
+  throw badRequest(
+    `unknown field${unknown.length > 1 ? 's' : ''} ${names}; this request takes ${known.join(', ')}`,
+  )
+}
+
 /** The largest REST or MCP request body, in bytes (1 MiB). A field at the
  * 20,000-character text cap is at most about 120 KB of JSON. Uploaded files
  * go to signed upload URLs, never through these bodies. The at most 256 KiB
@@ -185,12 +198,3 @@ export async function readBody(request: Request): Promise<RequestBody | null> {
  * insertion key order survives the Convex value boundary, which sorts
  * object keys. */
 export const pretty = (value: unknown): string => JSON.stringify(value, null, 2)
-
-/** An MCP result with `ignored_arguments` appended when the tool dropped
- * arguments its schema does not know, so a client learns they changed
- * nothing. Without any, the result bytes are unchanged. create_task,
- * update_task and update_project report them. */
-export function withIgnored(text: string, ignored: readonly string[]): string {
-  if (ignored.length === 0) return text
-  return pretty({ ...(JSON.parse(text) as Record<string, unknown>), ignored_arguments: ignored })
-}

@@ -163,16 +163,32 @@ async function restCreate(fx: Fx, agent: Doc<'profiles'>, name: string) {
   return { status: res.status, body: JSON.parse(await res.text()) as Json }
 }
 
-/* One MCP tools/call over HTTP with a new key of `agent`, answering the
- * tool's result text parsed. The HTTP route, unlike the internal function,
- * drops and reports arguments the tool's schema does not know. */
-async function mcpTool(fx: Fx, agent: Doc<'profiles'>, name: string, args: Json): Promise<Json> {
-  const key = await mintAgentKey(fx, agent)
+/* A new personal token of `person` that writes, as the bearer secret. */
+async function mintToken(fx: Fx, person: Doc<'profiles'>): Promise<string> {
+  const token = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
+  await fx.t.run(async (ctx) => {
+    await ctx.db.insert('mcp_tokens', {
+      id: uuid(),
+      profile_id: person.id,
+      name: 'Lead token',
+      token_prefix: token.slice(0, 11),
+      token_hash: await sha256hex(token),
+      access: 'write',
+      created_at: NOW,
+    })
+  })
+  return token
+}
+
+/* One MCP tools/call over HTTP with `bearer`, answering the tool's result
+ * text and whether it is an error. The HTTP route, unlike the internal
+ * function, refuses arguments the tool's schema does not know. */
+async function mcpCall(fx: Fx, bearer: string, name: string, args: Json) {
   const res = await httpPost(
     fx,
     '/mcp',
     {
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${bearer}`,
       'Content-Type': 'application/json',
       'Mcp-Method': 'tools/call',
       'Mcp-Name': name,
@@ -191,8 +207,10 @@ async function mcpTool(fx: Fx, agent: Doc<'profiles'>, name: string, args: Json)
       },
     },
   )
-  const body = JSON.parse(await res.text()) as { result: { content: { text: string }[] } }
-  return JSON.parse(body.result.content[0].text) as Json
+  const body = JSON.parse(await res.text()) as {
+    result: { content: { text: string }[]; isError?: boolean }
+  }
+  return { text: body.result.content[0].text, isError: body.result.isError === true }
 }
 
 /* ---------------------------------------------------- 1. creating projects */
@@ -207,21 +225,27 @@ describe('creating projects and sub-projects', () => {
         description: 'Housing',
       }),
     )
-    expect(out).toMatchObject({
+    const row = await projectRow(fx.t, out.id as string)
+    expect(out).toEqual({
+      id: row?.id,
       key: 'LM',
       num: 6,
       name: 'Luma Mount',
       type: 'meta',
       parent_id: null,
+      team_id: null,
       description: 'Housing',
       archived: false,
+      archived_at: null,
       access: { read: true, write: true },
       lead_id: fx.admin.id,
       lead_name: 'admin',
+      review_hours: null,
+      effective_review_hours: 2,
+      track_delay: true,
       milestones: [],
       grants: { users: [], teams: [] },
     })
-    const row = await projectRow(fx.t, out.id as string)
     // after both existing top-level projects
     expect(row).toMatchObject({ sort_order: 2, track_delay: true })
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
@@ -599,8 +623,35 @@ describe('changing a project', () => {
         }),
       )
     const archived = await update({ archived: true })
-    expect(archived.archived_at).not.toBeNull()
-    expect(archived).toMatchObject({ archived: true, access: { read: true, write: true } })
+    const stored = await projectRow(fx.t, fx.meta.id)
+    expect(stored?.archived_at).toEqual(expect.any(String))
+    // the whole answer, so a field added or lost on the way out shows
+    const tbed = {
+      id: fx.meta.id,
+      key: 'TBED',
+      num: fx.meta.num,
+      name: 'Testbed platform',
+      type: 'meta',
+      parent_id: null,
+      team_id: null,
+      description: fx.meta.description,
+      access: { read: true, write: true },
+      lead_id: fx.user.id,
+      lead_name: 'user',
+      review_hours: null,
+      effective_review_hours: 2,
+      track_delay: false,
+      milestones: [],
+      grants: {
+        users: [
+          { id: fx.guest.id, name: 'guest', level: 'user' },
+          { id: fx.agent.id, name: 'Relay', level: 'user' },
+          { id: fx.viewer.id, name: 'viewer', level: 'user' },
+        ],
+        teams: [],
+      },
+    }
+    expect(archived).toEqual({ ...tbed, archived: true, archived_at: stored?.archived_at })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBe(archived.archived_at)
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'archived',
@@ -608,7 +659,7 @@ describe('changing a project', () => {
     })
     // one call restores first, so the rename lands on the active project
     const back = await update({ archived: false, name: 'Back' })
-    expect(back).toMatchObject({ archived: false, archived_at: null, name: 'Back' })
+    expect(back).toEqual({ ...tbed, name: 'Back', archived: false, archived_at: null })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
     const verbs = (await activityFor(fx.t, fx.org.id)).slice(-2).map((e) => e.verb)
     expect(verbs).toEqual(['restored', 'renamed'])
@@ -622,7 +673,7 @@ describe('changing a project', () => {
     )
   })
 
-  it('takes no archive reason, which only tasks have: REST refuses it, MCP names it', async () => {
+  it('takes no archive reason, which only tasks have, and both surfaces refuse it', async () => {
     const fx = await setup()
     const patch = (body: unknown) =>
       fx.t.mutation(internal.machine.projects.restUpdateProject, {
@@ -637,21 +688,24 @@ describe('changing a project', () => {
     )
     expect((await projectRow(fx.t, fx.meta.id))?.archived_at).toBeUndefined()
     expect((await patch({ archived: true })).archived_at).not.toBeNull()
-    // MCP clients cache schemas, so the tool archives and names what it dropped
-    await plantProject(fx.t, { org_id: fx.org.id, key: 'BOT', lead_id: fx.agent.id })
-    const archived = await mcpTool(fx, fx.agent, 'update_project', {
-      project: 'BOT',
-      archived: true,
-      archive_reason: 'Shipped',
+    // the tool's schema does not know the argument, so the call changes nothing
+    const bot = await plantProject(fx.t, { org_id: fx.org.id, key: 'BOT', lead_id: fx.agent.id })
+    const key = await mintAgentKey(fx, fx.agent)
+    expect(
+      await mcpCall(fx, key, 'update_project', {
+        project: 'BOT',
+        archived: true,
+        archive_reason: 'Shipped',
+      }),
+    ).toEqual({
+      text: 'Input validation error: Invalid arguments for tool update_project: Unrecognized key: "archive_reason"',
+      isError: true,
     })
-    expect(archived.archived_at).not.toBeNull()
-    expect(archived.ignored_arguments).toEqual(['archive_reason'])
-    const restored = await mcpTool(fx, fx.agent, 'update_project', {
-      project: 'BOT',
-      archived: false,
-    })
-    expect(restored.archived_at).toBeNull()
-    expect(restored).not.toHaveProperty('ignored_arguments')
+    expect((await projectRow(fx.t, bot.id))?.archived_at).toBeUndefined()
+    const archived = await mcpCall(fx, key, 'update_project', { project: 'BOT', archived: true })
+    expect(archived.isError).toBe(false)
+    expect(JSON.parse(archived.text)).toMatchObject({ key: 'BOT', archived: true })
+    expect(JSON.parse(archived.text)).not.toHaveProperty('ignored_arguments')
   })
 
   it('hands over the lead; the old lead keeps User, the new one loses their own grant', async () => {
@@ -1013,18 +1067,7 @@ describe('project access, one user or team at a time', () => {
   it('REST takes PUT {level} and DELETE with an optional on_held_tasks body over HTTP', async () => {
     const fx = await setup()
     await held(fx)
-    const token = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
-    await fx.t.run(async (ctx) => {
-      await ctx.db.insert('mcp_tokens', {
-        id: uuid(),
-        profile_id: fx.user.id,
-        name: 'Lead token',
-        token_prefix: token.slice(0, 11),
-        token_hash: await sha256hex(token),
-        access: 'write',
-        created_at: NOW,
-      })
-    })
+    const token = await mintToken(fx, fx.user)
     const call = async (method: string, path: string, body?: string) => {
       const res = await (
         fx.t as unknown as {
@@ -1077,6 +1120,66 @@ describe('project access, one user or team at a time', () => {
       status: 404,
       body: { error: 'team not found' },
     })
+  })
+
+  it('refuses a body field or an argument the change does not take, so nothing falls back to leave', async () => {
+    const fx = await setup()
+    await held(fx)
+    const token = await mintToken(fx, fx.user)
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await (
+        fx.t as unknown as {
+          fetch(
+            path: string,
+            init: { method: string; headers: Record<string, string>; body?: string },
+          ): Promise<{ status: number; text(): Promise<string> }>
+        }
+      ).fetch(path, {
+        method,
+        headers: { Authorization: `Bearer ${token}` },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      return { status: res.status, body: JSON.parse(await res.text()) as Json }
+    }
+    // a misspelled on_held_tasks would otherwise remove Pia and leave her tasks
+    expect(
+      await mcpCall(fx, token, 'set_project_access', {
+        project: 'FW',
+        user_id: fx.pia.id,
+        level: null,
+        on_held_task: 'keep_as_viewer',
+      }),
+    ).toEqual({
+      text: 'Input validation error: Invalid arguments for tool set_project_access: Unrecognized key: "on_held_task"',
+      isError: true,
+    })
+    const path = `/v1/projects/FW/access/users/${fx.pia.id}`
+    expect(await call('DELETE', path, { on_held_task: 'keep_as_viewer' })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "on_held_task"; this request takes on_held_tasks' },
+    })
+    expect(await call('PUT', path, { level: 'viewer', levle: 'user' })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "levle"; this request takes level' },
+    })
+    const team = `/v1/projects/FW/access/teams/${fx.team.id}`
+    expect(await call('PUT', team, { level: 'viewer', on_held_tasks: 'leave' })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "on_held_tasks"; this request takes level' },
+    })
+    expect(await call('DELETE', team, { level: null })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "level"; this request takes on_held_tasks' },
+    })
+    expect(await grants(fx.t, fx.sub.id)).toEqual({ [fx.pia.id]: 'user' })
+    expect(await activityFor(fx.t, fx.org.id)).toEqual([])
+    // the field each route takes still passes, and an empty object is no field
+    expect(await call('DELETE', team, {})).toMatchObject({ status: 200, body: { removed: false } })
+    expect(await call('DELETE', path, { on_held_tasks: 'leave' })).toMatchObject({
+      status: 200,
+      body: { removed: true, kept_as_viewer: [] },
+    })
+    expect((await grants(fx.t, fx.sub.id))[fx.pia.id]).toBeUndefined()
   })
 
   it('parseHeldTasks takes the three choices and refuses anything else', () => {

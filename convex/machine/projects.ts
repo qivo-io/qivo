@@ -91,9 +91,9 @@ import {
   needJson,
   optionalJson,
   pretty,
+  refuseUnknownFields,
   restProvenance,
   vKeyName,
-  withIgnored,
 } from './shared'
 
 type McpTool = (typeof TOOLS)[number]
@@ -424,8 +424,8 @@ export const mcpCreateProject = internalMutation({
 })
 
 /* update_project: settings, the lead and archive/restore of one project.
- * Its registry entry names the arguments the schema dropped, such as an
- * `archive_reason` only tasks take, in `ignored_arguments`. */
+ * An argument the schema does not know, such as an `archive_reason` only
+ * tasks take, is refused before this runs (mcp.ts validateArgs). */
 export const mcpUpdateProject = internalMutation({
   args: {
     callerId: v.string(),
@@ -716,7 +716,9 @@ export const restUpdateProject = internalMutation({
 
 /* The arguments of each access route's function: the project and subject
  * from the path, and the body ({level} on PUT, an optional {on_held_tasks}
- * on DELETE). */
+ * on DELETE). A body field the route does not take is refused
+ * (refuseUnknownFields), so a misspelled one never falls back to a
+ * default. */
 const vRestAccessArgs = {
   callerId: v.string(),
   access: vCredentialAccess,
@@ -735,7 +737,9 @@ async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' 
   const me = await asMachineCaller(ctx, a.callerId, a.access)
   const project = await restProject(ctx, me, a.ref)
   const subject = await restSubject(ctx, me, kind, a.subject)
-  const level = restLevel(needJson(a.body))
+  const b = needJson(a.body)
+  refuseUnknownFields(b, ['level'])
+  const level = restLevel(b)
   const { changed } = await setProjectGrantCore(ctx, {
     me,
     project,
@@ -751,7 +755,9 @@ async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' 
  * body {on_held_tasks}, which each kind's own internal function below runs. */
 async function restRemoveAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
   const me = await asMachineCaller(ctx, a.callerId, a.access)
-  const held: HeldTasks = parseHeldTasks(optionalJson(a.body).on_held_tasks)
+  const b = optionalJson(a.body)
+  refuseUnknownFields(b, ['on_held_tasks'])
+  const held: HeldTasks = parseHeldTasks(b.on_held_tasks)
   const project = await restProject(ctx, me, a.ref)
   const subject = await restSubject(ctx, me, kind, a.subject)
   const removal = await removeProjectGrantCore(ctx, {
@@ -963,7 +969,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'update_project',
       title: 'Update project',
       description:
-        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason. Arguments this tool does not know are listed in `ignored_arguments`.',
+        'Change a project you lead: `name`, `description`, `review_hours` (null uses the parent or default), `track_delay`, or `archived: true/false` to archive or restore it. `lead_id` hands the lead to another user, which only a person may do; the old lead keeps User access. Only tasks take an archive reason.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
@@ -995,23 +1001,20 @@ export const PROJECT_TOOLS: McpTool[] = [
         required: ['project'],
       },
     },
-    run: async (r, { callerId, access, args, ignored }) =>
-      withIgnored(
-        await r.runMutation(internal.machine.projects.mcpUpdateProject, {
-          callerId,
-          access,
-          ...(args as {
-            project: string
-            name?: string
-            description?: string
-            review_hours?: number | null
-            track_delay?: boolean
-            lead_id?: string
-            archived?: boolean
-          }),
+    run: (r, { callerId, access, args }) =>
+      r.runMutation(internal.machine.projects.mcpUpdateProject, {
+        callerId,
+        access,
+        ...(args as {
+          project: string
+          name?: string
+          description?: string
+          review_hours?: number | null
+          track_delay?: boolean
+          lead_id?: string
+          archived?: boolean
         }),
-        ignored,
-      ),
+      }),
   },
   {
     access: 'write',

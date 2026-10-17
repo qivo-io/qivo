@@ -59,10 +59,8 @@ own comments need only read access to the task.
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
   allows at most 200; page active lists with `offset` until a shorter page
   arrives. Archived tasks need `project` and page with `cursor`; pass back
-  `next_cursor` until it is null. If
-  `create_task`, `update_task` or `update_project` answers with
-  `ignored_arguments`, those arguments did nothing. Refresh the tool list and
-  retry with current names.
+  `next_cursor` until it is null. A tool refuses an argument it does not
+  know and names it. Refresh the tool list and retry with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
   token for scripts, large paginated reads or setting someone's plannable
   hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
@@ -332,7 +330,8 @@ Useful field rules:
   credential is refused. Before removing someone, choose `on_held_tasks`:
   `leave` (default) lists the open tasks they lose sight of, `keep_as_viewer`
   keeps them as Viewers, and `{"reassign_to": user id or null}` hands those
-  tasks over. Confirm the choice with the user when it is not clear.
+  tasks over. Confirm the choice with the user when it is not clear. A
+  misspelled `on_held_tasks` is refused, on MCP and on these REST routes.
 - **Milestones:** they live on the top-level project; naming a sub-project
   adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them.
 
@@ -353,7 +352,8 @@ Useful field rules:
   (default) lists the open tasks the member loses sight of,
   `keep_as_viewer` keeps them as a Viewer of the project the team shared,
   and `{"reassign_to": user id or null}` hands those tasks over. Confirm the
-  choice with the user when it is not clear.
+  choice with the user when it is not clear. A misspelled `on_held_tasks` is
+  refused, on MCP and on these REST routes.
 - Teams are named by uuid; two teams may share a name.
 
 ## Receive task events
