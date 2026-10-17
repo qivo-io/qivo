@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'e666c595272d737222f7b8188ca6ac76833077fa9a39e56c376bdab977f29372'
-const SHA_TOOLS_MODERN = '4fbe0f5ac53b2fdc6110536f4ad989d5224fd3dd3615b5a424f21bc3a384528c'
+const SHA_TOOLS_LEGACY = '8c79634bc97a64eb44a0c8786e0b8814827e11a37930c863ad7d12ab8115e0e0'
+const SHA_TOOLS_MODERN = '606ab7112493780d4b0d572eeb215e14e7fa80b53ec4de816efbee1781431aaa'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1201,8 +1201,8 @@ describe('read tools', () => {
       JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, { callerId, access: 'read', ...args }),
       ) as Record<string, unknown>[]
-    // no scope: everything readable, active only, oldest first by creation
-    // as on REST, not by project key
+    // without a scope, everything readable and active, oldest first by
+    // creation as on REST, not by project key
     expect((await list(fx.admin.id)).map((i) => i.title)).toEqual([
       'Beta gadget',
       'Sneaky task',
@@ -1215,7 +1215,7 @@ describe('read tools', () => {
     }
     // sub scope stays put
     expect((await list(fx.guest.id, { project: 'FW' })).map((i) => i.id)).toEqual([i1.id])
-    // archived axis: one project's archived tasks, as a page
+    // the archived axis answers one project's archived tasks as a page
     const archived = JSON.parse(
       await fx.t.query(internal.machine.mcp.listIssues, {
         callerId: fx.guest.id,

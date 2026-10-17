@@ -1075,7 +1075,10 @@ Pass `next_cursor` unchanged as `cursor` for the next page and stop when it
 is `null`. A page can hold fewer than `limit` tasks, or none, while
 `next_cursor` is set, because each page reads a bounded amount however large
 the archive is. Tasks archived after you start paging appear at the start of
-the list, so start again to see them.
+the list, so start again to see them. If an archived group has more tasks
+under it than one request can read, such as thousands of subtasks or hundreds
+with very long descriptions, its row has `start_week` and `end_week` set to
+`null`, so paging still moves past it.
 
 To find every archived task you can read, take two steps. First call
 `list_projects`, once without arguments and once with `archived: true`.

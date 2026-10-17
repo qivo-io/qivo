@@ -797,8 +797,8 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
                                            (see Archived tasks below). The
                                            default lists active ones only.
                                            A task's archive and its PROJECT's
-                                           are different axes: this flag is
-                                           the first, `project=` is the second
+                                           are different axes. This flag is
+                                           the first, `project=` the second
        &limit=100 &offset=0                limit ≤ 200; offset pages active
                                            lists only
        &cursor=<next_cursor>               the next page of archived tasks
@@ -849,7 +849,10 @@ Pass `next_cursor` unchanged, URL-encoded like any query value, as `cursor`
 for the next page, and stop when it is `null`. A page can hold fewer than
 `limit` tasks, or none, while `next_cursor` is set, because each page reads a
 bounded amount however large the archive is. Tasks archived after you start
-paging appear at the start of the list, so start again to see them.
+paging appear at the start of the list, so start again to see them. If an
+archived group has more tasks under it than one request can read, such as
+thousands of subtasks or hundreds with very long descriptions, its row has
+`start_week` and `end_week` set to `null`, so paging still moves past it.
 
 To find every archived task you can read, take two steps. First list
 projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
@@ -1658,8 +1661,8 @@ curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users"
 # open high-priority tasks in Enclosure
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks?project=ENC&priority=high"
 
-# archived tasks of Enclosure, a page at a time: repeat with the answer's
-# next_cursor until it is null
+# archived tasks of Enclosure, a page at a time. Repeat with the answer's
+# next_cursor until it is null.
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks?project=ENC&archived=true&limit=200"
 curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<next_cursor>" \
   "$BASE/tasks?project=ENC&archived=true&limit=200"

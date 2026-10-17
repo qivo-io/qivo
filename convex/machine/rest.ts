@@ -493,7 +493,7 @@ export const updateUser = internalMutation({
  * → 100, limit -5 → 1, offset NaN → 0, `archived=maybe` → 400. Active tasks
  * answer an array paged with `offset`. Archived tasks need `project` and
  * answer `{next_cursor, tasks}`, paged with `cursor` (lib/core.ts
- * listArchivedIssuesCore). */
+ * listArchivedIssuesCore), and refuse any `offset` but 0, `abc` and -5 too. */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
@@ -529,7 +529,9 @@ export const listIssues = internalQuery({
     if (a.assignee && !UUID.test(a.assignee)) throw badRequest('assignee must be a profile uuid')
     if (a.owner && !UUID.test(a.owner)) throw badRequest('owner must be a profile uuid')
     const limit = Math.min(Math.max(Number(a.limit ?? 100) || 100, 1), 200)
-    const offset = Math.max(Number(a.offset ?? 0) || 0, 0)
+    const archived = a.archived === 'true'
+    // an archived list refuses any offset but 0, so it takes the value as sent
+    const offset = archived ? Number(a.offset || 0) : Math.max(Number(a.offset ?? 0) || 0, 0)
     const filters = {
       statuses: statuses as IssueStatus[],
       priority: a.priority ? (a.priority as IssuePriority) : undefined,
@@ -547,7 +549,7 @@ export const listIssues = internalQuery({
      * (taskListScope). */
     const req = taskListRequest(view, {
       flag: 'archived=true',
-      archived: a.archived === 'true',
+      archived,
       project,
       offset,
       // an empty cursor, like any empty filter, counts as absent

@@ -343,7 +343,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_tasks',
       title: 'List tasks',
       description:
-        "Tasks you can see, optionally filtered, oldest first by creation. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default. `archived: true` lists archived tasks instead and needs `project`, which then includes all its sub-projects, archived ones too; to cover them all, name each top-level project that `list_projects` returns with and without `archived: true`. That answer is `{next_cursor, tasks}`, most recently archived first; pass `next_cursor` back as `cursor` until it is null, because a page may hold fewer than `limit` tasks, even none. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
+        "Tasks you can see, optionally filtered, oldest first by creation. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default. `archived: true` lists archived tasks instead and needs `project`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that `list_projects` returns with and without `archived: true`. That answer is `{next_cursor, tasks}`, most recently archived first; pass `next_cursor` back as `cursor` until it is null, because a page may hold fewer than `limit` tasks, even none. Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1582,7 +1582,7 @@ export const updateUser = internalMutation({
   },
 })
 
-/* list_tasks: active tasks as an array paged with `offset`, or with
+/* list_tasks answers active tasks as an array paged with `offset`, or with
  * `archived: true` one project's archived tasks as `{next_cursor, tasks}`,
  * paged with `cursor` (lib/core.ts listArchivedIssuesCore). */
 export const listIssues = internalQuery({

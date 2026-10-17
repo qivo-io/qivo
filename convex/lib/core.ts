@@ -28,6 +28,7 @@
  * forbidden 403, bad_request 400, rule 400 — readable beats a 500); MCP
  * collapses every refusal into the one isError sentence. */
 
+import type { TransactionMetric } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -568,9 +569,31 @@ export async function listActiveIssuesCore(
 /** What one page of archived tasks may read, counted from the page's start
  * with Convex's own transaction metrics, inside the limits of one
  * transaction (4,096 index ranges, 32,000 documents and 16 MiB) once the
- * catalogue, access flags and roster are read. A page also stops after
- * looking at `tasks` archived tasks. Tests lower these. */
-export const ARCHIVE_PAGE = { tasks: 1000, ranges: 1500, documents: 16_000, bytes: 8 << 20 }
+ * catalogue, access flags and roster are read, and never more than the
+ * request has left. A page also stops after looking at `tasks` archived
+ * tasks. Opening the scope's projects side by side, a task each, may read
+ * the `opening` share of the page before the page reads the organization's
+ * archive instead (archivedTasksAfter). Tests lower these. */
+export const ARCHIVE_PAGE = {
+  tasks: 1000,
+  ranges: 1500,
+  documents: 16_000,
+  bytes: 8 << 20,
+  opening: 1 / 4,
+}
+
+/** What an archived page keeps back from the request's limits, for the
+ * reads of a row after its subtree walk, of the walk past its last check
+ * and of the page's end. The first task a page looks at may walk the rest.
+ * Tests lower these. */
+export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 1 << 20 }
+
+/* The first subtask stored under `task`, whoever can read it. */
+const firstSubtask = (ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'issues'> | null> =>
+  ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
+    .first()
 
 /** One page of archived tasks, with its rows and where the next page
  * starts, or null when no archived task follows. */
@@ -583,10 +606,15 @@ export type ArchivedPage<Row> = { rows: Row[]; next: ArchiveCursor | null }
  * rows or once it has spent ARCHIVE_PAGE, so it can hold fewer rows than
  * `o.limit`, even none, while `next` is set. `next` is the last task the page
  * looked at, not the last row, so the next page never rereads tasks the
- * filters left out. Each row walks its own subtree (subtreeIndex), as an
- * archived task's group facts need its archived subtasks. A walk that does
- * not fit the rest of the page's ranges ends the page before that task,
- * unless it is the first task the page looks at, so every page moves on.
+ * filters left out.
+ *
+ * Each row walks its own subtree (subtreeIndex), as an archived task's group
+ * facts need its archived subtasks, and never reads the organization's
+ * tasks instead. A walk that does not fit the rest of the page ends the page
+ * before that task, so the next page starts with it. The first task a page
+ * looks at may walk everything the request has left. A group whose subtree
+ * does not fit even that is listed with null plan weeks, so every page
+ * moves on.
  */
 export async function listArchivedIssuesCore(
   ctx: QueryCtx,
@@ -610,6 +638,7 @@ export async function listArchivedIssuesCore(
   const names = await rosterNames(ctx, me)
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
   const projectOf = (id: string) => cat.byUuid.get(id)
+  const scope = new Set(o.scope)
   const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
   const matches = o.search ? allWordsMatcher(o.search, o.stars) : null
   const labels = o.search
@@ -624,12 +653,7 @@ export async function listArchivedIssuesCore(
     if (o.priority && task.priority !== o.priority) return false
     if (o.assignee && task.assignee_id !== o.assignee) return false
     let group: boolean | undefined
-    const isGroup = async () =>
-      (group ??=
-        (await ctx.db
-          .query('issues')
-          .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
-          .first()) !== null)
+    const isGroup = async () => (group ??= (await firstSubtask(ctx, task)) !== null)
     if (statuses !== null && ((await isGroup()) || !statuses.includes(task.status))) return false
     if (o.owner && taskOwnerId(task, await isGroup()) !== o.owner) return false
     if (matches === null) return true
@@ -639,31 +663,62 @@ export async function listArchivedIssuesCore(
     return matches(taskSearchText({ ...fields, group: await isGroup(), labelNames }))
   }
 
+  // the request's room less ARCHIVE_RESERVE, the page's budget inside it
+  // and the share of that budget that opening the projects may read
   const start = await ctx.meta.getTransactionMetrics()
-  const spent = async () => {
-    const now = await ctx.meta.getTransactionMetrics()
-    return {
-      ranges: now.databaseQueries.used - start.databaseQueries.used,
-      documents: now.documentsRead.used - start.documentsRead.used,
-      bytes: now.bytesRead.used - start.bytesRead.used,
-    }
+  const used = {
+    ranges: start.databaseQueries.used,
+    documents: start.documentsRead.used,
+    bytes: start.bytesRead.used,
+  }
+  const room: ReadCeiling = {
+    ranges: limitOf(start.databaseQueries) - ARCHIVE_RESERVE.ranges,
+    documents: limitOf(start.documentsRead) - ARCHIVE_RESERVE.documents,
+    bytes: limitOf(start.bytesRead) - ARCHIVE_RESERVE.bytes,
+  }
+  const budget: ReadCeiling = {
+    ranges: Math.min(room.ranges, used.ranges + ARCHIVE_PAGE.ranges),
+    documents: Math.min(room.documents, used.documents + ARCHIVE_PAGE.documents),
+    bytes: Math.min(room.bytes, used.bytes + ARCHIVE_PAGE.bytes),
+  }
+  const opening: ReadCeiling = {
+    ranges: used.ranges + (budget.ranges - used.ranges) * ARCHIVE_PAGE.opening,
+    documents: used.documents + (budget.documents - used.documents) * ARCHIVE_PAGE.opening,
+    bytes: used.bytes + (budget.bytes - used.bytes) * ARCHIVE_PAGE.opening,
   }
   const rows: (RestIssueJson | McpIssueOut)[] = []
-  const stream = await archivedTasksAfter(ctx, o.scope, o.cursor)
+  const stream = await archivedTasksAfter(
+    ctx,
+    { orgId: me.org_id, projectIds: o.scope },
+    o.cursor,
+    () => readsUnder(ctx, opening),
+  )
   let last: ArchiveCursor | null = null
   let looked = 0
   try {
     for (let task = await stream.next(); task !== null; task = await stream.next()) {
       looked++
       const project = projectOf(task.project_id)
-      // the scope holds readable projects only; checked again to fail closed
-      if (project !== undefined && readable(project.id) && (await keeps(task))) {
+      // a wide scope's stream hands out other projects' tasks too; the
+      // organization and readability are checked again to fail closed
+      if (
+        task.org_id === me.org_id &&
+        scope.has(task.project_id) &&
+        project !== undefined &&
+        readable(project.id) &&
+        (await keeps(task))
+      ) {
         const counts = groupCounter(ctx, me, task, project, readable, projectOf)
-        const maxReads =
-          last === null ? undefined : ARCHIVE_PAGE.ranges - (await spent()).ranges - 2
-        const children = await subtreeIndex(ctx, task, counts, maxReads)
-        // the walk does not fit this page, so the next page starts with it
-        if (children === null) return { rows, next: last }
+        let children = await subtreeIndex(ctx, task, counts, last === null ? room : budget)
+        let partial = false
+        if (children === null) {
+          // the walk does not fit this page, so the next page starts with it
+          if (last !== null) return { rows, next: last }
+          // nor any page, so the group is listed without its plan weeks
+          const kid = await firstSubtask(ctx, task)
+          children = new Map(kid === null ? [] : [[task.id, [kid]]])
+          partial = true
+        }
         rows.push(
           await listRow(ctx, task, {
             surface: view.surface,
@@ -675,17 +730,15 @@ export async function listArchivedIssuesCore(
             orgSlug,
             children,
             counts,
+            partial,
           }),
         )
       }
       last = cursorAfter(task)
-      const used = await spent()
       if (
         rows.length >= o.limit ||
         looked >= ARCHIVE_PAGE.tasks ||
-        used.ranges >= ARCHIVE_PAGE.ranges - 4 ||
-        used.documents >= ARCHIVE_PAGE.documents ||
-        used.bytes >= ARCHIVE_PAGE.bytes
+        !(await readsUnder(ctx, budget))
       ) {
         return { rows, next: stream.more() ? last : null }
       }
@@ -749,9 +802,10 @@ export function taskListScope(
   return [project.id, ...subs.sort(byKeyOrder).map((c) => c.id)]
 }
 
-/** What a task list reads: active tasks paged with `offset`, or archived
- * ones paged with `cursor`, with the project ids it covers (taskListScope),
- * or null for every readable project that is not archived. */
+/** What a task list reads, either active tasks paged with `offset` or
+ * archived ones paged with `cursor`, with the project ids it covers
+ * (taskListScope), or null for every readable project that is not
+ * archived. */
 export type TaskListRequest =
   | { archived: false; scope: string[] | null; offset: number }
   | { archived: true; scope: string[]; cursor: ArchiveCursor | null }
@@ -1060,6 +1114,23 @@ export function taskUrl(orgSlug: string, num: number): string | null {
  * `reads`. */
 export const SUBTREE_WALK = { reads: 1000 }
 
+/** Transaction totals (ctx.meta.getTransactionMetrics) that a read keeps
+ * below, in index ranges, documents and bytes read. */
+type ReadCeiling = { ranges: number; documents: number; bytes: number }
+
+/* A transaction's limit on one count, from what it used and has left. */
+const limitOf = (m: TransactionMetric): number => m.used + m.remaining
+
+/* Whether the request has read less than `ceiling` on every count. */
+async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<boolean> {
+  const m = await ctx.meta.getTransactionMetrics()
+  return (
+    m.databaseQueries.used < ceiling.ranges &&
+    m.documentsRead.used < ceiling.documents &&
+    m.bytesRead.used < ceiling.bytes
+  )
+}
+
 /* The subtasks a single-task read of `root` uses, indexed by parent. They
  * are the root's own and those of every task under it that counts toward
  * its totals (`counts`, groupCounter). is_group and the subtask list need
@@ -1070,8 +1141,12 @@ export const SUBTREE_WALK = { reads: 1000 }
  * SUBTREE_WALK reads it reads the organization's tasks once instead. An
  * active task's walk enters only active tasks, and each decision about one
  * needs only its active subtasks (hasSubtasksIn), so the organization's
- * active tasks are all it needs. With `maxReads` it makes at most that many
- * reads and never the organization-wide one, answering null instead. */
+ * active tasks are all it needs.
+ *
+ * With a `ceiling` it never reads the organization's tasks. It checks the
+ * request's reads before each by_parent read and after each task, since one
+ * read can hold many large tasks, and answers null once they reach the
+ * ceiling. */
 async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
@@ -1081,13 +1156,13 @@ async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
-  maxReads: number | undefined,
+  ceiling: ReadCeiling,
 ): Promise<ChildIndex | null>
 async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
-  maxReads?: number,
+  ceiling?: ReadCeiling,
 ): Promise<ChildIndex | null> {
   const index = new Map<string, Doc<'issues'>[]>()
   const seen = new Set<string>([root.id])
@@ -1096,8 +1171,9 @@ async function subtreeIndex(
   for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
     const next: string[] = []
     for (const id of frontier) {
-      if (++reads > Math.min(SUBTREE_WALK.reads, maxReads ?? Number.POSITIVE_INFINITY)) {
-        if (maxReads !== undefined) return null
+      if (ceiling !== undefined) {
+        if (!(await readsUnder(ctx, ceiling))) return null
+      } else if (++reads > SUBTREE_WALK.reads) {
         const rows =
           root.archived_at === undefined
             ? await ctx.db
@@ -1112,10 +1188,12 @@ async function subtreeIndex(
                 .collect()
         return childIndexOf(rows)
       }
-      const kids = await ctx.db
-        .query('issues')
-        .withIndex('by_parent', (q) => q.eq('parent_id', id))
-        .collect()
+      const kids: Doc<'issues'>[] = []
+      const read = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
+      for await (const kid of read) {
+        kids.push(kid)
+        if (ceiling !== undefined && !(await readsUnder(ctx, ceiling))) return null
+      }
       index.set(id, kids)
       for (const kid of kids) {
         if (seen.has(kid.id) || !(await counts(kid))) continue
@@ -1224,8 +1302,10 @@ type Reader = {
 /** The tasks by parent that a row's group facts come from. An active list
  * passes the organization's active tasks, and an archived list and a
  * single-task read the task's subtreeIndex with the groupCounter that walk
- * used, which the totals then share. */
-type Subtree = { children: ChildIndex; counts?: GroupCounter }
+ * used, which the totals then share. `partial` says the subtree was too
+ * large to read and `children` holds only a subtask of the root, so a group
+ * answers null plan weeks. */
+type Subtree = { children: ChildIndex; counts?: GroupCounter; partial?: boolean }
 
 export async function issueOut(
   ctx: QueryCtx,
@@ -1248,13 +1328,15 @@ export async function issueOut(
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
-  const weeks = is_group
-    ? await groupWeeks(
-        issue,
-        opts.children,
-        opts.counts ?? groupCounter(ctx, opts.me, issue, project, opts.readable, opts.projectOf),
-      )
-    : { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
+  const weeks = !is_group
+    ? { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
+    : opts.partial === true
+      ? { start_week: null, end_week: null }
+      : await groupWeeks(
+          issue,
+          opts.children,
+          opts.counts ?? groupCounter(ctx, opts.me, issue, project, opts.readable, opts.projectOf),
+        )
   const parent = await parentOut(ctx, opts.me, issue, opts.readable, opts.tasks)
   const owner_id = taskOwnerId(issue, is_group) ?? null
   const orgSlug = opts.orgSlug ?? (await byId(ctx, 'organizations', issue.org_id))?.slug ?? '~'
