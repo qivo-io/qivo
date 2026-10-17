@@ -43,6 +43,7 @@ import {
   type Caller,
   findProject,
   issueKey,
+  loadCatalogue,
   projectJson,
   UUID,
 } from '../lib/core'
@@ -187,14 +188,15 @@ export async function projectDetailJson(
 }
 
 /* projectDetailJson for one project the caller resolved itself, such as one
- * it just changed, with the caller's flags read for it alone. */
+ * it just changed, with the caller's flags read over the organization's
+ * catalogue, which a sub-project's flags need for its parent. */
 async function projectOut(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
   access: CredentialAccess,
 ) {
-  const flags = await accessFlags(ctx, me, [project], access)
+  const flags = await accessFlags(ctx, me, await loadCatalogue(ctx, me), access)
   return await projectDetailJson(
     ctx,
     project,

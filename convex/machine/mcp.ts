@@ -1411,11 +1411,12 @@ async function mustFindParent(ctx: QueryCtx, me: Caller, ref: string): Promise<D
 }
 
 /* The caller's flags and readable/writable predicates over the whole org
- * catalogue, from one by_org scan and the access predicates, shared by every
- * scoped read. Writable also needs a credential that may write. */
+ * catalogue, from one by_org scan and the caller's batched project levels
+ * (accessFlags), shared by every scoped read. Writable also needs a
+ * credential that may write. */
 async function catalogueFlags(ctx: QueryCtx, me: Caller, access: CredentialAccess) {
   const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat.projects, access)
+  const flags = await accessFlags(ctx, me, cat, access)
   return {
     cat,
     flags,

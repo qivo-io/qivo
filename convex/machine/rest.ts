@@ -172,7 +172,7 @@ async function withAccess(
 /* withAccess for a caller already resolved. */
 async function accessOf(ctx: QueryCtx, me: Caller, access: CredentialAccess): Promise<Access> {
   const cat = await loadCatalogue(ctx, me)
-  const flags = await accessFlags(ctx, me, cat.projects, access)
+  const flags = await accessFlags(ctx, me, cat, access)
   return {
     me,
     cat,

@@ -50,6 +50,19 @@ export async function rootMetaOf(
   return current
 }
 
+/* Access lives on a top-level meta and its direct sub-projects, where `root`
+ * is the project itself or the top-level project above it. A row outside
+ * that tree, such as a top-level project that is not a meta or a sub-project
+ * of a sub-project, carries no access for anyone, so the per-project
+ * predicates and projectLevelsForOrg hide it alike. */
+function inMetaTree(project: Doc<'projects'>, root: Doc<'projects'>): boolean {
+  return (
+    root.parent_id === undefined &&
+    root.type === 'meta' &&
+    (project.id === root.id || project.parent_id === root.id)
+  )
+}
+
 async function grantOn(ctx: QueryCtx, projectId: string, profileId: string) {
   return await ctx.db
     .query('project_access')
@@ -131,6 +144,7 @@ async function projectLevel(
 ): Promise<AccessLevel | null> {
   const root = await rootMetaOf(ctx, project)
   if (project.org_id !== me.org_id || root.org_id !== me.org_id) return null
+  if (!inMetaTree(project, root)) return null
   if (me.org_role === 'admin' || isProjectLead(me, project, root)) return 'lead'
   let level = await directLevel(ctx, me, project)
   if (project.id !== root.id) {
@@ -246,7 +260,8 @@ export async function isTeamLeader(
   return await leadsTeam(ctx, me.id, teamId)
 }
 
-/* Only the named lead and organization administrators control permissions. */
+/* Only the named lead and organization administrators control permissions,
+ * and nobody controls those of a project outside a meta tree (inMetaTree). */
 export async function canManageOwnProjectAccess(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -254,7 +269,11 @@ export async function canManageOwnProjectAccess(
 ): Promise<boolean> {
   if (!me.active || project.org_id !== me.org_id) return false
   const root = await rootMetaOf(ctx, project)
-  return root.org_id === me.org_id && (me.org_role === 'admin' || isProjectLead(me, project, root))
+  return (
+    root.org_id === me.org_id &&
+    inMetaTree(project, root) &&
+    (me.org_role === 'admin' || isProjectLead(me, project, root))
+  )
 }
 
 export const canManageProjectUsers = canManageOwnProjectAccess
@@ -313,7 +332,7 @@ export async function projectLevelsForOrg(
   const effective = new Map<string, AccessLevel | null>()
   for (const project of projects) {
     const root = project.parent_id === undefined ? project : byUuid.get(project.parent_id)
-    if (!root || root.parent_id !== undefined || root.type !== 'meta') continue
+    if (!root || !inMetaTree(project, root)) continue
     let level = levels.get(project.id) ?? null
     if (me.org_role === 'admin' || isProjectLead(me, project, root)) level = 'lead'
     else if (project.id !== root.id) {

@@ -51,22 +51,24 @@ import { attachmentLimitMb } from '../model/orgs'
 import {
   canAccessProject,
   canSeeProject,
-  hasProjectLevel,
+  levelRank,
   liveCredentialRow,
   machineAccess,
   profileCanBeAssigned,
+  projectLevelsForOrg,
   readOnlyRefusal,
 } from './access'
 import { assertBillingWritable, BILLING_READ_ONLY, billingReadOnly } from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
-import type {
-  CredentialAccess,
-  IssuePriority,
-  IssueStatus,
-  OrgRole,
-  ProfileKind,
-  ProjectType,
+import {
+  type CredentialAccess,
+  type IssuePriority,
+  type IssueStatus,
+  LEVEL_RANK,
+  type OrgRole,
+  type ProfileKind,
+  type ProjectType,
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
 import { canCreateProjects } from './projectCreators'
@@ -258,29 +260,40 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
 }
 
 /* ------------------------------------------------------------ access flags
- * What the caller holds on each named project (core.ts:307-318's successor):
- * read = canSeeProject, write = hasProjectLevel 'user' through a credential
- * that may write (machineAccess). hasProjectLevel already applies the viewer
- * ceiling (cappedLevel), so an org-role-viewer agent and a grant-viewer agent
- * both get `write: false`, and so does every project seen through a
+ * What the caller holds on each project of its organization (core.ts:307-318's
+ * successor). `read` is canSeeProject and `write` is hasProjectLevel 'user'
+ * through a credential that may write (machineAccess). projectLevelsForOrg,
+ * the snapshot's batched form of those rules, answers both for every project
+ * from the caller's grants and team shares, a few index ranges in all. Asking
+ * the predicates project by project read about three ranges per project for
+ * a writer who is not an admin, so such a writer's every call passed Convex's
+ * 4,096 at about 1,300 projects. A project outside a top-level meta, such as
+ * one whose parent is missing, gets neither flag. The level carries the
+ * viewer ceiling (cappedLevel), so an org-role-viewer agent and a grant-viewer
+ * agent both get `write: false`, and so does every project seen through a
  * read-only credential. (asMachineCaller refuses those writes before they get
  * this far.) Here code sees everything and CHOOSES what to disclose; these
  * flags are that choice's only input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 
+/** The caller's flags on every project of `cat`, which must be its
+ * organization's whole catalogue, because a sub-project's level comes from
+ * its parent's row. */
 export async function accessFlags(
   ctx: QueryCtx,
   me: Caller,
-  projects: Doc<'projects'>[],
+  cat: Catalogue,
   access: CredentialAccess,
 ): Promise<Map<string, AccessFlag>> {
   const writes = machineAccess(me, access) === 'write'
+  const { levelOf } = await projectLevelsForOrg(ctx, me, cat.projects)
   const out = new Map<string, AccessFlag>()
-  for (const p of projects) {
+  for (const p of cat.projects) {
+    const level = levelOf(p)
     out.set(p.id, {
-      read: await canSeeProject(ctx, me, p),
-      write: writes && (await hasProjectLevel(ctx, me, p.id, 'user')),
+      read: level !== null,
+      write: writes && levelRank(level) >= LEVEL_RANK.user,
     })
   }
   return out
