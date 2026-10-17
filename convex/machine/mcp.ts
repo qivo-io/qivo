@@ -1009,8 +1009,11 @@ function hasType(p: SchemaProp, x: unknown): boolean {
  * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
-/* The issue for a string holding an unpaired surrogate, which is not text. */
+/* The issue for a string holding an unpaired surrogate, which is not text.
+ * In a /u pattern a whole pair reads as one code point, so only half a pair
+ * matches the Surrogate category. */
 const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
+const LONE_SURROGATE = /\p{Surrogate}/u
 
 /* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
 function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
@@ -1024,7 +1027,7 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
       if (typeof x !== 'string') return `Invalid input: expected string, received ${typeName(x)}`
       // a JSON escape such as \ud800 can leave half a surrogate pair, which
       // Convex cannot pass to a function, so the call would fail later
-      if (!x.isWellFormed()) return UNPAIRED_SURROGATE
+      if (LONE_SURROGATE.test(x)) return UNPAIRED_SURROGATE
       if (p.enum !== undefined && !p.enum.includes(x)) {
         return `Invalid option: expected one of ${p.enum.map((e) => `"${e}"`).join('|')}`
       }
