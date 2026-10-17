@@ -15,7 +15,6 @@ import {
   demoSmokeCanvasRequestAllowed,
   demoSmokeConfiguration,
   demoSmokeRequestAllowed,
-  demoSmokeSuppressedFontRequest,
   loadDemoSmokeCanvas,
   readDemoSmokeOwnerJournal,
 } from './demo-smoke.mjs'
@@ -170,31 +169,11 @@ describe('isolated public-demo smoke target', () => {
       'https://normal-fixture-123.convex.cloud/api/query',
       'wss://normal-fixture-123.convex.cloud/api/1.45.0/sync',
       'http://127.0.0.1:3210/',
+      // Google Fonts lies outside the demo boundary. The application hosts its own fonts.
+      'https://fonts.googleapis.com/css2?family=Instrument+Sans&display=swap',
+      'https://fonts.gstatic.com/s/instrumentsans/v4/example.woff2',
     ])
       expect(demoSmokeRequestAllowed(config, url), url).toBe(false)
-  })
-
-  it('keeps known Google Fonts requests blocked while excluding their suppression from failures', () => {
-    const config = demoSmokeConfiguration(target)
-    for (const url of [
-      'https://fonts.googleapis.com/css2?family=Inter&display=swap',
-      'https://fonts.gstatic.com/s/inter/v18/example.woff2',
-    ]) {
-      expect(demoSmokeRequestAllowed(config, url), url).toBe(false)
-      expect(demoSmokeSuppressedFontRequest(url, 'GET'), url).toBe(true)
-      expect(demoSmokeSuppressedFontRequest(url, 'POST'), url).toBe(false)
-    }
-    for (const url of [
-      'http://127.0.0.1:3211/api/auth/get-session',
-      'http://localhost:3210/api/query',
-      'https://fonts.googleapis.com/other',
-      'https://fonts.gstatic.com/api/auth/get-session',
-      'https://fonts.googleapis.com.evil.test/css2',
-      'https://fonts.googleapis.com@foreign.example/css2',
-      'http://fonts.googleapis.com/css2',
-      'wss://fonts.googleapis.com/css2',
-    ])
-      expect(demoSmokeSuppressedFontRequest(url, 'GET'), url).toBe(false)
   })
 
   it('refuses production, mismatched and malformed keys before any browser or network work', () => {

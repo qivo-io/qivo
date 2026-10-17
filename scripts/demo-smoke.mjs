@@ -173,19 +173,6 @@ export function demoSmokeRequestAllowed(config, value, method = 'GET', canvas = 
   )
 }
 
-/** app.html already references Google Fonts. Keep those requests offline in
- * this drive; their deliberate suppression is separate from a transport leak. */
-export function demoSmokeSuppressedFontRequest(value, method) {
-  if (method !== 'GET') return false
-  const request = new URL(value)
-  if (request.username || request.password) return false
-  return (
-    (request.origin === 'https://fonts.googleapis.com' && request.pathname === '/css2') ||
-    (request.origin === 'https://fonts.gstatic.com' &&
-      /^\/s\/[^?]+\.(woff2?|ttf)$/.test(request.pathname))
-  )
-}
-
 const inspectRef = makeFunctionReference('internal/demoTest:inspect')
 const expireRef = makeFunctionReference('internal/demoTest:expireOwned')
 
@@ -352,8 +339,6 @@ export async function runDemoSmoke(env = process.env) {
     await context.route('**/*', (route) => {
       if (demoSmokeRequestAllowed(config, route.request().url(), route.request().method(), canvas))
         return route.continue()
-      if (demoSmokeSuppressedFontRequest(route.request().url(), route.request().method()))
-        return route.abort()
       const request = new URL(route.request().url())
       browserError(
         `Blocked ${route.request().method()} outside the demo boundary: ${request.origin}/${request.pathname.split('/')[1]}`,
