@@ -28,6 +28,8 @@ import { accessRemovalMutation, forbidden, notFound, orgQuery, require } from '.
 import { logActivity } from './model/activity'
 import { usageAllowance } from './model/billing'
 import {
+  billedPeriod,
+  includedApiCalls,
   type UsageKeyRange,
   type UsagePeriod,
   usageKeyRanges,
@@ -75,9 +77,10 @@ export type ApiCredential = {
   calls: number
 }
 
-/** The selected period's totals. Allowance figures come from the
- * subscription's plan, else the default plan, else none (`plan: null`).
- * `waived` says the period's calls are not charged. */
+/** The selected period's totals. The current period's allowance comes from
+ * the subscription's plan, else the default plan, else none (`plan: null`); a
+ * past paid period's from the plan and seats it was billed with, and other
+ * past periods have none. `waived` says the period's calls are not charged. */
 export type ApiUsageSummary = {
   calls: number
   included_calls: number | null
@@ -122,18 +125,28 @@ async function usagePeriods(
   ]
 }
 
-/** Whether the period's calls are charged. A month bucket and an open one
- * (an old free-access bucket or an unconfirmed interval) never are. The
- * current period follows the Billing page (model/billing.ts billingUsage); a
- * past paid period was charged when billing was on. */
+/** Whether the period's calls are charged. Only a paid period's are:
+ * recordApiCall never charges a month bucket, a pending interval or an open
+ * one (an old free-access bucket or an interval that was never confirmed).
+ * The current period follows the Billing page (model/billing.ts
+ * billingUsage); a past paid period was charged when billing was on. */
 function waivedPeriod(
   period: ApiUsagePeriod,
   sub: Doc<'billing_subscriptions'> | null,
   now: number,
 ): boolean {
-  if (period.kind === 'month' || period.kind === 'open') return true
+  if (period.kind !== 'paid') return true
   if (!billingEnabled() || !sub?.polar_subscription_id) return true
   return period.current && !!sub.complimentary_until && Date.parse(sub.complimentary_until) > now
+}
+
+/** The allowance of a past paid period billed with `billed`, or none. */
+async function pastAllowance(
+  ctx: QueryCtx,
+  billed: { plan_id: string; seats: number } | null,
+): Promise<{ plan: Doc<'billing_plans'> | null; includedCalls: number | null }> {
+  const plan = billed ? await byId(ctx, 'billing_plans', billed.plan_id) : null
+  return { plan, includedCalls: plan && billed ? includedApiCalls(plan, billed.seats) : null }
 }
 
 const stateOf = (
@@ -320,7 +333,12 @@ export const list = orgQuery({
     }
     credentials.sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name))
 
-    const { plan, includedCalls } = await usageAllowance(ctx, orgId, sub)
+    // The current period shows the Billing page's allowance. A past paid
+    // period shows the plan and seats it was billed with, and any other past
+    // period had no allowance.
+    const { plan, includedCalls } = period.current
+      ? await usageAllowance(ctx, orgId, sub)
+      : await pastAllowance(ctx, await billedPeriod(ctx, orgId, sub, period.key))
     const summary: ApiUsageSummary = {
       calls: usageRows.reduce((total, row) => total + row.calls, 0),
       included_calls: includedCalls,

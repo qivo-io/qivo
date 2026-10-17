@@ -85,8 +85,10 @@ and every agent key. Each row shows the person, kind, whether it can make
 changes or only read, the expiry of a token that has one, its last use and
 its calls in the selected period. The summary above it shows the period's
 calls against the plan's included calls. Choose an earlier period to see its
-calls; credentials and calls of people who left the organization stay listed
-as **Removed user**, and deleted credentials as **deleted**.
+calls. An earlier paid period shows the allowance of the seats it was billed
+for, and other earlier periods show only their calls. Credentials and calls
+of people who left the organization stay listed as **Removed user**, and
+deleted credentials as **deleted**.
 
 Filter by kind, by **Active** or **All**, by person, or by name, prefix or
 person. Revoked and expired credentials stay listed because their calls in

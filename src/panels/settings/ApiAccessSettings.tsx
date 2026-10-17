@@ -94,6 +94,8 @@ function ApiAccessPage() {
 
   const load = async (key: string | undefined) => {
     const n = ++sequence.current
+    // the list on screen when this request starts
+    const shown = data
     setLoading(true)
     const result = await P.listApiAccess(key)
     if (n !== sequence.current) return
@@ -101,7 +103,10 @@ function ApiAccessPage() {
     setNow(new Date())
     if (result === null) {
       setFailed(true)
-      setData((shown) => shown || false)
+      setData(shown || false)
+      // A failed switch keeps the old figures, so the period control goes
+      // back to the period they belong to.
+      if (shown) setPeriod(shown.period)
       return
     }
     setFailed(false)

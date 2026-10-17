@@ -383,6 +383,31 @@ describe('apiAccess.list', () => {
     expect((await list(t, f, 'month:1999-01')).period).toBe(PERIOD)
   })
 
+  it('shows a past paid period with the seats it was billed with, no allowance for other past periods, and a pending interval as not charged', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    // renewal raised the seats from 7 to 10 (25,000 calls each)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { billed_seats: 10, next_seats: 10 }))
+    expect((await list(t, f)).summary.included_calls).toBe(250_000)
+    expect((await list(t, f, PAST)).summary).toMatchObject({
+      included_calls: 175_000,
+      waived: false,
+    })
+    expect((await list(t, f, MONTH)).summary).toMatchObject({ included_calls: null, plan: null })
+    expect((await list(t, f, FREE)).summary).toMatchObject({ included_calls: null, plan: null })
+
+    // Renewal confirmation is late, so calls go to a pending interval, which
+    // is never charged. The period before it keeps its subscription's seats.
+    vi.mocked(Date.now).mockReturnValue(Date.parse(END) + 60_000)
+    const pending = await list(t, f)
+    expect(pending.periods[0]).toMatchObject({ key: END, kind: 'pending', current: true })
+    expect(pending.summary.waived).toBe(true)
+    expect((await list(t, f, PERIOD)).summary).toMatchObject({
+      included_calls: 250_000,
+      waived: false,
+    })
+  })
+
   it('counts a month bucket without a paid period, and shows only the count without a plan', async () => {
     const t = newT()
     const f = await fixture(t)

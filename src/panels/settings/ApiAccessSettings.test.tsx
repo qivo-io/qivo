@@ -120,7 +120,8 @@ function fixtureLists(): Record<string, ApiAccessList> {
     [PREVIOUS]: {
       periods,
       period: PREVIOUS,
-      summary: { calls: 640, included_calls: 175_000, plan, waived: true },
+      // a past calendar month had no allowance
+      summary: { calls: 640, included_calls: null, plan: null, waived: true },
       credentials: [credential('Cursor', { calls: 640 })],
     },
   }
@@ -329,9 +330,11 @@ describe('the API access page', () => {
     ])
     await choose(period, PREVIOUS)
     expect(listCalls().at(-1)?.[1]).toMatchObject({ period: PREVIOUS })
-    expect(find('[data-api-access-summary]').textContent).toContain(
-      'Calls are not charged without a paid period.',
-    )
+    // only the count: no allowance bar and no plan line
+    const summary = find('[data-api-access-summary]')
+    expect(find('p', summary).textContent).toBe('640 API calls')
+    expect(summary.querySelectorAll('p')).toHaveLength(1)
+    expect(summary.querySelector('[aria-label="Included API calls used"]')).toBeNull()
     expect(listed()).toEqual(['Cursor'])
     await click(find('[data-api-access-refresh]'))
     expect(listCalls()).toHaveLength(3)
@@ -375,6 +378,19 @@ describe('the API access page', () => {
     await click(buttonIn(find('[data-modal-shell]'), 'Revoke'))
     expect(find('[data-modal-shell]').textContent).toContain("That didn't go through. Try again.")
     expect(window.showToast).not.toHaveBeenCalled()
+  })
+
+  it('goes back to the period shown when switching to another one fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render(<ui.OrgApiAccessPage />)
+    const period = find<HTMLSelectElement>('[data-api-access-period]')
+    network.query.mockRejectedValueOnce(new Error('offline'))
+    await choose(period, PREVIOUS)
+    expect(find('[role="alert"]').textContent).toContain("Couldn't refresh API access.")
+    // the figures on screen are still the current period's, and so is the control
+    expect(period.value).toBe(CURRENT)
+    expect(find('[data-api-access-summary]').textContent).toContain('43,230')
+    expect(listed()).toHaveLength(7)
   })
 
   it('says when the list could not be loaded, and loads it on Retry', async () => {
