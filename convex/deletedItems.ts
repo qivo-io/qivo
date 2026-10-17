@@ -73,9 +73,11 @@ export const list = authedQuery({
 })
 
 /* ---------------------------------------------------------------- matches
- * Tasks inside the deleted projects the caller sees whose task key or title
- * matches `text`, at most 50, fewer once the call spent the same read
- * budget; each comes back with its project item. */
+ * Deleted tasks the caller sees whose task key or title matches `text`, the
+ * roots and subtasks of task items and the tasks inside deleted projects,
+ * at most 50, fewer once the call spent the same read budget. Each comes
+ * back with its item, whose kind `item_kind` names, so a capped list still
+ * finds older items. */
 export const matches = authedQuery({
   args: { text: v.string() },
   handler: async (ctx, { text }) => await matchesFor(ctx, ctx.myProfiles.values(), text),

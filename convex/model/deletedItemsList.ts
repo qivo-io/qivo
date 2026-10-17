@@ -1,9 +1,17 @@
 /* Deleted items as people read them (design 6.2): the Settings list and the
- * search for tasks inside deleted projects. Both read every active seat of
+ * search for deleted tasks by key or title. Both read every active seat of
  * the login, because Deleted items spans organizations as Archived projects
  * does, and judge each item with the seat in its own organization, never
  * the home one. Rows are projections for that seat (model/deletedItems.ts
  * viewOf), never stored documents.
+ *
+ * The search finds any stored task, a task item's root or subtask or a task
+ * inside a deleted project, so it reaches the older items a capped list
+ * leaves out. Each match names the kind of its item: a task item's match
+ * is restored with that item like a row of the list, a project item's only
+ * with its whole project. It judges each item as the list does and shows
+ * only tasks in the projects the seat's view of the item holds, so the
+ * match of a redacted task item never names its root.
  *
  * A seat reads only the index ranges that can hold what it sees. An admin
  * reads the organization's items newest first. Anyone else reads their own
@@ -166,10 +174,14 @@ export type DeletedRow = {
   can_purge: boolean
 }
 
-/** A task inside a deleted project that a search found, with what the row
- * of its project item says: it can only come back with that item. */
+/** A deleted task that a search found, with what the row of its item says:
+ * it can only come back with that item, which `item_kind` names. `key`,
+ * `title`, `archived` and `path` are the task's own; `path` is where it
+ * sat, its project after the top-level or parent project, empty for a
+ * redacted task item as on its row. */
 export type DeletedMatch = {
   item_id: string
+  item_kind: Item['kind']
   org_id: string
   org_name: string
   key: string
@@ -179,6 +191,7 @@ export type DeletedMatch = {
   deleted_at: string
   deleter: Deleter
   state: DeletedRow['state']
+  redacted?: true
   can_restore: boolean
   blocked?: BlockDetail
 }
@@ -481,13 +494,16 @@ function deleterOf(sight: Sight, item: Item): Deleter {
 const TASK_REF = /^(?:QN-)?(\d+)$/i
 
 /**
- * The tasks inside deleted projects that `text` names, by task key or by
- * title (deleted_tasks search_title), at most MATCHES.max, for every seat in
- * `seats`. Only tasks of project items the seat sees, in projects their
- * level reaches, count; task items are listed whole by listFor already.
- * Every read of the call spends one LIST.call budget, as a list call's do:
- * the hits, each seat's sight and each project item it judges. Once it is
- * spent, the search answers the matches it found so far.
+ * The deleted tasks that `text` names, by task key or by title
+ * (deleted_tasks search_title), at most MATCHES.max, for every seat in
+ * `seats`: the roots and subtasks of task items and the tasks inside
+ * project items. Only tasks of items the seat sees (viewOf), in projects
+ * their view of the item holds, count, and each match says what the row of
+ * its item would: a redacted task item's match has no path and cannot be
+ * restored by the seat, as its row (rowOf). Every read of the call spends
+ * one LIST.call budget, as a list call's do: the hits, each seat's sight
+ * and each item it judges. Once it is spent, the search answers the
+ * matches it found so far.
  */
 export async function matchesFor(
   ctx: QueryCtx,
@@ -525,44 +541,66 @@ export async function matchesFor(
       seen.add(task.task_id)
       let read = items.get(task.item_id)
       if (read === undefined) {
-        read = visibleProjectItem(reader, sight, task.item_id)
+        read = visibleItem(reader, sight, task.item_id)
         items.set(task.item_id, read)
       }
       const visible = await read
+      // a task in a project hidden from the seat, a redacted item's root too
       const project = visible?.view.projects.find((p) => p.id === task.project_id)
       if (visible === null || project === undefined) continue
-      const { item } = visible
+      const { item, view } = visible
       // viewOf never shows a purging item; the check narrows the state
       if (item.state === 'purging') continue
-      const block = await restoreBlock(reader, me, item, sight.memo)
       const ready = item.state === 'ready'
+      const block = view.redacted ? 'no_access' : await restoreBlock(reader, me, item, sight.memo)
+      let blocked: BlockDetail | undefined
+      if (ready && block !== null)
+        blocked = view.redacted
+          ? { reason: block }
+          : await blockDetail(reader, sight.memo, item, block)
       out.push({
         item_id: item.id,
+        item_kind: item.kind,
         org_id: org,
         org_name: orgName,
         key: issueKey(task.num),
         title: task.title,
         archived: task.archived,
-        path: [
-          project.id === item.target_id ? (pathOf(sight, item)[0] ?? '') : item.name,
-          project.name,
-        ],
+        path: view.redacted ? [] : hitPath(sight, item, project),
         deleted_at: item.deleted_at,
         deleter: deleterOf(sight, item),
         state: item.state,
+        redacted: view.redacted || undefined,
         can_restore: ready && block === null,
-        blocked:
-          ready && block !== null ? await blockDetail(reader, sight.memo, item, block) : undefined,
+        blocked,
       })
     }
   }
   return out
 }
 
-/** Project item `id` with what `sight`'s person sees of it, when they see it. */
-async function visibleProjectItem(ctx: QueryCtx, sight: Sight, id: string) {
+/** Item `id` with what `sight`'s person sees of it, when they see it. */
+async function visibleItem(ctx: QueryCtx, sight: Sight, id: string) {
   const item = await byId(ctx, 'deleted_items', id)
-  if (item === null || item.kind !== 'project') return null
+  if (item === null) return null
   const view = await viewOf(ctx, sight.memo, sight.me, item)
   return view === null ? null : { item, view }
+}
+
+/** Where a task of `item` in its project `project` sat. A project item's
+ * task: the parent of the item's root project, or the item's root, then
+ * the task's project. A task item's task in the root's project: the
+ * item's path; in another project, that project after its top-level
+ * project, with the names they carry now. */
+function hitPath(sight: Sight, item: Item, project: Item['projects'][number]): string[] {
+  if (item.kind === 'project')
+    return [
+      project.id === item.target_id ? (pathOf(sight, item)[0] ?? '') : item.name,
+      project.name,
+    ]
+  if (project.id === item.project_id) return pathOf(sight, item)
+  const live = sight.projects.get(project.id)
+  if (!sameReference(live, item)) return [project.name]
+  const top = live.parent_id === undefined ? undefined : sight.projects.get(live.parent_id)
+  return sameReference(top, item) ? [top.name, live.name] : [live.name]
 }
