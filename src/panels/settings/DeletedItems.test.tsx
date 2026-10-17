@@ -669,6 +669,33 @@ describe('items that wait for a deleted project', () => {
     expect(window.showToast).toHaveBeenLastCalledWith('Restored QN-5', undefined)
   })
 
+  it('sends a deferred item at once when the list showed it restorable before the answer', async () => {
+    await open()
+    const early = task(5, {
+      deleted_at: at(9, 0, 0, 14),
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: 'item-trial' },
+    })
+    let answer: (value: Answer) => void = () => {}
+    answers['deletedItems:restore'] = (args) => {
+      const ids = args.ids as string[]
+      if (ids.includes('item-trial')) return new Promise((resolve) => (answer = resolve))
+      return Promise.resolve({ restored: ids, refused: [], deferred: [] })
+    }
+    await deliver([trial(), early])
+    await click(find('[data-deleted-row="item-5"] [data-restore]'))
+    await click(button('Restore Field trial Q3 and QN-5'))
+    // a small project is back within the call, and its list arrives before the answer
+    await deliver([{ ...early, can_restore: true, blocked: undefined }])
+    await act(async () => answer({ restored: ['item-trial'], refused: [], deferred: ['item-5'] }))
+    await settle()
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial', 'item-5'] },
+      { org_id: ORG, ids: ['item-5'] },
+    ])
+    expect(window.showToast).toHaveBeenLastCalledWith('Restored QN-5', undefined)
+  })
+
   it('forgets a waiting item that left the list', async () => {
     await open()
     answers['deletedItems:restore'] = async () => ({
@@ -783,6 +810,64 @@ describe('Delete now', () => {
     expect(calls('deletedItems:purge')).toEqual([])
     expect(has('[data-deleted-row="item-trial"]')).toBe(true)
   })
+
+  it('says a project also deletes the items deleted from it earlier', async () => {
+    await open()
+    const empty = trial({
+      can_purge: true,
+      counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+    })
+    const waits = (id: string) => ({
+      can_restore: false,
+      can_purge: true,
+      deleted_at: at(9, 0, 0, 14),
+      blocked: { reason: 'project_deleted' as const, item_id: id },
+    })
+    const blog = task(0, {
+      ...waits('item-trial'),
+      id: 'item-blog',
+      kind: 'project',
+      title: 'Blog migration',
+      status: undefined,
+      path: ['Field trial Q3'],
+      counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+      blocked: { reason: 'parent_deleted', item_id: 'item-trial' },
+    })
+    const purgeText = async (id: string) => {
+      await click(find(`[data-deleted-row="${id}"] [data-row-menu]`))
+      await click(find('[data-delete-now]'))
+      const said = text('[data-purge]')
+      await click(button('Cancel'))
+      return said
+    }
+    // one task waits for the project, and a sub-project with a task of its own
+    await deliver([
+      empty,
+      task(5, waits('item-trial')),
+      blog,
+      task(6, waits('item-blog')),
+      task(7, waits('item-other')),
+      task(1, { can_purge: true }),
+    ])
+    expect(await purgeText('item-trial')).toBe(
+      'Deletes Field trial Q3. It also deletes 3 items deleted from the project earlier. This cannot be undone.',
+    )
+    expect(await purgeText('item-blog')).toBe(
+      'Deletes Blog migration. It also deletes 1 item deleted from the project earlier. This cannot be undone.',
+    )
+    // a capped list may not hold them all, and a stuck row no longer says what it waits for
+    await deliver([empty, task(1, { can_purge: true })], true)
+    const unsure =
+      'Deletes Field trial Q3. It also deletes any items deleted from the project earlier. This cannot be undone.'
+    expect(await purgeText('item-trial')).toBe(unsure)
+    expect(await purgeText('item-1')).toBe(
+      'Deletes QN-1 Task 1 and its comments and attachments. This cannot be undone.',
+    )
+    await deliver([empty, task(8, { state: 'stuck', can_restore: false, can_purge: true })])
+    expect(await purgeText('item-trial')).toBe(unsure)
+    await deliver([empty, task(1, { can_purge: true })])
+    expect(await purgeText('item-trial')).toBe('Deletes Field trial Q3. This cannot be undone.')
+  })
 })
 
 describe('searching inside deleted projects', () => {
@@ -863,6 +948,46 @@ describe('searching inside deleted projects', () => {
     ).toEqual(['', 'Close'])
     await click(button('Close'))
     expect(calls('deletedItems:restore')).toEqual([])
+  })
+
+  it('restores what only the list narrowed to one person holds', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => ({
+      restored: args.ids as string[],
+      refused: [],
+      deferred: [],
+    })
+    // the capped list holds none of Mira's older deletes
+    await deliver([task(1, { deleter: MIRA }), task(2)], true)
+    const select = find<HTMLSelectElement>('[data-deleted-by]')
+    await act(async () => {
+      select.value = [...select.options].find((o) => o.text === 'Mira Holm')?.value ?? ''
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const narrowed = lists.find((l) => l.live && l.args.deleted_by === 'mira')
+    const early = task(5, {
+      deleter: MIRA,
+      deleted_at: at(9, 0, 0, 14),
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: 'item-trial' },
+    })
+    await act(async () =>
+      narrowed?.next({ items: [task(1, { deleter: MIRA }), trial(), early], capped: false }),
+    )
+    await settle()
+    expect(text('[data-deleted-row="item-5"] [data-row-note="blocked"]')).toBe(
+      'Its project, Field trial Q3, is in Deleted items too.',
+    )
+    await search('Book')
+    await pause()
+    await act(async () => searches[0].resolve([hit()]))
+    await settle()
+    await click(find('[data-deleted-match="QN-12"] [data-restore]'))
+    expect(text('[data-project-first]')).toContain(
+      'Field trial Q3 comes back with its 2 sub-projects and all 48 tasks',
+    )
+    await click(button('Restore Field trial Q3 and QN-12'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-trial'] }])
   })
 
   it('clears the search on Escape before Settings sees the key', async () => {
@@ -1151,6 +1276,53 @@ describe('search hits follow the list', () => {
       { org_id: ORG, ids: ['item-trial'] },
       { org_id: ORG, ids: ['item-1'] },
     ])
+  })
+
+  it('searches again when a deleted project arrives or finishes moving, keeping the hits meanwhile', async () => {
+    await open()
+    const website = (patch: Partial<DeletedRow> = {}) =>
+      trial({
+        id: 'item-web',
+        key: 'WEB',
+        title: 'Website',
+        deleter: DANIEL,
+        deleted_at: at(14, 30),
+        ...patch,
+      })
+    await deliver([trial({ state: 'moving', can_restore: false })])
+    await found('Book', [])
+    // the project finishes moving, so its tasks can be found now
+    await deliver([trial()])
+    await pause()
+    expect(searches.map((s) => s.text)).toEqual(['Book', 'Book'])
+    await act(async () => searches[1].resolve([hit()]))
+    await settle()
+    expect(has('[data-deleted-match="QN-12"]')).toBe(true)
+    // another project arrives and finishes moving; the hits stay while it searches
+    await deliver([website({ state: 'moving', can_restore: false }), trial()])
+    await pause()
+    await deliver([website(), trial()])
+    await pause()
+    expect(searches).toHaveLength(4)
+    expect(has('[data-deleted-match="QN-12"]')).toBe(true)
+    const photographer = hit({
+      item_id: 'item-web',
+      key: 'QN-40',
+      title: 'Book a photographer',
+      path: ['Website', 'Website'],
+      deleted_at: at(14, 30),
+      deleter: DANIEL,
+    })
+    await act(async () => searches[3].resolve([hit(), photographer]))
+    // the older answer arrives last and changes nothing
+    await act(async () => searches[2].resolve([]))
+    await settle()
+    expect(has('[data-deleted-match="QN-12"]')).toBe(true)
+    expect(has('[data-deleted-match="QN-40"]')).toBe(true)
+    // a delivery that changes no project item cannot change the hits
+    await deliver([website(), trial(), task(1)])
+    await pause()
+    expect(searches).toHaveLength(4)
   })
 
   it('drops hits the new text does not hold before its answer, and counts each item once', async () => {

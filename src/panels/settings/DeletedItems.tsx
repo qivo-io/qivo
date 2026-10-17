@@ -28,6 +28,7 @@ import {
   type DeletedList,
   type DeletedMatch,
   type DeletedRow,
+  deletedAlong,
   deletedBy,
   deletedByOptions,
   deleterName,
@@ -115,11 +116,12 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
 /** The windows the page opens: restore several items, restore an item that
     waits for a deleted project, or delete one for good. `key` is the line
     that opened it, for focus. `selection` marks a project window that
-    Restore N selected opened, which hands focus back like the bulk one. */
+    Restore N selected opened, which hands focus back like the bulk one.
+    `along` is what Delete now takes with the row, counted as it opens. */
 type Ask =
   | { kind: 'bulk'; rows: DeletedRow[] }
   | { kind: 'project'; line: Line; key: string; selection?: boolean }
-  | { kind: 'purge'; row: DeletedRow; key: string }
+  | { kind: 'purge'; row: DeletedRow; key: string; along: ReturnType<typeof deletedAlong> }
 
 /** The key of a line in the list, which also names it for focus. */
 const lineKey = (line: Line) =>
@@ -129,6 +131,12 @@ const lineKey = (line: Line) =>
 type Around = { next?: string; previous?: string }
 
 const toast = (text: string, tone?: 'error') => window.showToast?.(text, tone)
+
+/** The newest search answer and the text it answers. */
+type Found = { text: string; matches: DeletedMatch[] }
+/** No search. One shared object, so setting it again while the box stays
+    empty does not render the page again. */
+const NOTHING_FOUND: Found = { text: '', matches: [] }
 
 export function DeletedItemsPage() {
   const main = useDeletedList(undefined, true)
@@ -146,12 +154,13 @@ export function DeletedItemsPage() {
   const loaded = source.list !== undefined && source.list !== null
   const byId = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows])
   const allById = useMemo(() => new Map(all.map((row) => [row.id, row])), [all])
+  /** Item `id` as the shown list has it, else as the main one does. A list
+      narrowed to one person holds their older deletes, which the capped main
+      list may not, and the main list holds the project items others deleted. */
+  const findItem = (id: string | undefined) =>
+    id === undefined ? undefined : (byId.get(id) ?? allById.get(id))
 
-  // the newest search answer and the text it answers
-  const [found, setFound] = useState<{ text: string; matches: DeletedMatch[] }>(() => ({
-    text: '',
-    matches: [],
-  }))
+  const [found, setFound] = useState<Found>(NOTHING_FOUND)
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   const [refusals, setRefusals] = useState<ReadonlyMap<string, RestoreRefusal>>(() => new Map())
@@ -162,7 +171,7 @@ export function DeletedItemsPage() {
   const acted = useRef(false)
   // Items deferred behind a project item of the same restore. They are sent
   // again once the list shows them restorable (design 5).
-  const waiting = useRef(new Set<string>())
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(() => new Set())
   const pageRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   // a focus move for after the next commit, once rows that left are gone
@@ -176,14 +185,26 @@ export function DeletedItemsPage() {
     run?.()
   })
 
-  /* Search hits inside deleted projects, 250ms after typing stops. The
-     sequence drops an answer that a newer text overtook. */
+  /* Search hits inside deleted projects, 250ms after typing stops, and again
+     250ms after the list's project items change: a project deleted after the
+     search, or one whose tasks finished moving, holds tasks the last answer
+     could not name. Only project items hold hits, so other deliveries ask
+     nothing. The last answer shows until the next one replaces it, and the
+     sequence drops an answer that a newer search overtook. */
   const text = search.trim()
+  const projectItems = useMemo(
+    () =>
+      rows
+        .filter((row) => row.kind === 'project')
+        .map((row) => `${row.id}:${row.state}`)
+        .join(' '),
+    [rows],
+  )
   const sequence = useRef(0)
   useEffect(() => {
     const mine = ++sequence.current
     if (!text) {
-      setFound({ text: '', matches: [] })
+      setFound(NOTHING_FOUND)
       return
     }
     const timer = window.setTimeout(() => {
@@ -193,12 +214,14 @@ export function DeletedItemsPage() {
         },
         (cause) => {
           console.error('[qivo] deleted items search failed:', cause)
-          if (sequence.current === mine) setFound({ text, matches: [] })
+          // a failed refresh keeps the hits it would have replaced
+          if (sequence.current === mine)
+            setFound((current) => (current.text === text ? current : { text, matches: [] }))
         },
       )
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [text])
+  }, [text, projectItems])
   const lower = text.toLowerCase()
   // Until the new text has its answer, the hits of the previous one show only
   // when they still hold the new text.
@@ -257,22 +280,20 @@ export function DeletedItemsPage() {
     })
   }, [byId, lineIds, loaded, refusals, busy])
 
-  /* Each delivery sends again the deferred items it shows restorable, and
-     forgets those that left the list. */
+  /* Sends again the deferred items the list shows restorable, and forgets
+     those that left it. It runs on each delivery and when an answer defers
+     items, because the list that shows a small project back can arrive
+     before the answer that defers its items. */
   useEffect(() => {
     if (!loaded) return
-    const ready: DeletedRow[] = []
-    for (const id of waiting.current) {
-      const row = byId.get(id)
-      if (row === undefined) waiting.current.delete(id)
-      else if (row.can_restore) {
-        waiting.current.delete(id)
-        ready.push(row)
-      }
-    }
+    // a deferred id the list holds as restorable, or no longer holds
+    const settled = [...waiting].filter((id) => byId.get(id)?.can_restore !== false)
+    if (settled.length === 0) return
+    setWaiting((current) => new Set([...current].filter((id) => !settled.includes(id))))
+    const ready = settled.flatMap((id) => byId.get(id) ?? [])
     if (ready.length) void restore(ready)
     // restore reads the newest state through refs and setters
-  }, [byId, loaded])
+  }, [byId, loaded, waiting])
 
   const options = useMemo(
     () => deletedByOptions(all, new Set(all.map((row) => row.org_id)).size > 1),
@@ -387,7 +408,8 @@ export function DeletedItemsPage() {
     setBusy((current) => new Set([...current, ...ids]))
     setRefusals((current) => new Map([...current].filter(([id]) => !ids.includes(id))))
     const outcome = await P.restoreDeletedItems(items)
-    for (const id of outcome.deferred) waiting.current.add(id)
+    if (outcome.deferred.length > 0)
+      setWaiting((current) => new Set([...current, ...outcome.deferred]))
     if (settle) focusNext.current = settle
     setBusy((current) => new Set([...current].filter((id) => !ids.includes(id))))
     setRefusals((current) => {
@@ -537,7 +559,7 @@ export function DeletedItemsPage() {
       blocked?.reason === 'project_deleted' ||
       blocked?.reason === 'parent_deleted'
     const canRestore = ready && !item.redacted && (item.can_restore || opensWindow)
-    const holder = blocked?.item_id ? allById.get(blocked.item_id) : undefined
+    const holder = findItem(blocked?.item_id)
     const refused = refusals.get(item.id)
     // the reason given at deletion, then why the row cannot be restored now
     const notes: { key: string; text: ReactNode }[] = []
@@ -692,7 +714,17 @@ export function DeletedItemsPage() {
                 <MenuItem
                   danger
                   data-delete-now
-                  onClick={() => close(() => openAsk({ kind: 'purge', row: item, key }))}
+                  onClick={() =>
+                    close(() =>
+                      openAsk({
+                        kind: 'purge',
+                        row: item,
+                        key,
+                        // the main list holds every item of an admin's organization unless capped
+                        along: deletedAlong(item, all, main.list?.capped !== false),
+                      }),
+                    )
+                  }
                 >
                   <Icon name="trash" size={14} />
                   Delete now…
@@ -908,8 +940,7 @@ export function DeletedItemsPage() {
           line={ask.line}
           holder={(() => {
             const item = lineItem(ask.line)
-            const id = ask.line.kind === 'match' ? item.id : item.blocked?.item_id
-            return id === undefined ? undefined : allById.get(id)
+            return findItem(ask.line.kind === 'match' ? item.id : item.blocked?.item_id)
           })()}
           saving={saving}
           onClose={() => setAsk(null)}
@@ -934,6 +965,7 @@ export function DeletedItemsPage() {
       {ask?.kind === 'purge' && (
         <PurgeWindow
           row={ask.row}
+          along={ask.along}
           saving={saving}
           onClose={() => setAsk(null)}
           onPurge={async () => {
@@ -1108,15 +1140,19 @@ function ProjectFirstWindow({
 }
 
 /** The Delete now window, where an organization admin deletes one item for
-    good. */
+    good. `along` counts the items deleted from a project earlier that go
+    with it (deletedAlong), named without a number when the list may not
+    hold them all. */
 function PurgeWindow({
   row,
+  along,
   saving,
   onClose,
   onPurge,
   focusAfterClose,
 }: {
   row: DeletedRow
+  along: ReturnType<typeof deletedAlong>
   saving: boolean
   onClose: () => void
   onPurge: () => void
@@ -1133,6 +1169,11 @@ function PurgeWindow({
   else if (tasks) rest = ` and its ${plural(tasks, 'task')} with their comments and attachments.`
   else if (subs) rest = ` and its ${plural(subs, 'sub-project')}.`
   else rest = '.'
+  const earlier = !along.exact
+    ? ' It also deletes any items deleted from the project earlier.'
+    : along.count > 0
+      ? ` It also deletes ${plural(along.count, 'item')} deleted from the project earlier.`
+      : ''
   return (
     <ModalShell
       icon="warning"
@@ -1150,7 +1191,8 @@ function PurgeWindow({
         <b className="font-semibold text-text-1">
           {row.kind === 'task' ? `${row.key} ${row.title}` : row.title}
         </b>
-        {rest} This cannot be undone.
+        {rest}
+        {earlier} This cannot be undone.
       </p>
     </ModalShell>
   )

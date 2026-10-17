@@ -6,6 +6,7 @@ import {
   type DeletedMatch,
   type DeletedRow,
   type Deleter,
+  deletedAlong,
   deletedBy,
   deletedByOptions,
   fold,
@@ -267,5 +268,44 @@ describe('what a row says', () => {
     )
     // the redacted row says it in its own words
     expect(blockedText({ reason: 'no_access' })).toBeNull()
+  })
+})
+
+describe('what Delete now deletes along with a project', () => {
+  const project = (id: string, patch: Partial<DeletedRow> = {}) =>
+    row(id, { kind: 'project', status: undefined, path: [], ...patch })
+  const waits = (id: string, holder: string, patch: Partial<DeletedRow> = {}) =>
+    row(id, {
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: holder },
+      ...patch,
+    })
+
+  it('counts the items that wait for a project item, and those that wait for them', () => {
+    const trial = project('trial')
+    const blog = project('blog', {
+      can_restore: false,
+      blocked: { reason: 'parent_deleted', item_id: 'trial' },
+    })
+    // a row can come before the item it waits for
+    const rows = [trial, waits('2', 'blog'), waits('1', 'trial'), blog, waits('3', 'web'), row('4')]
+    expect(deletedAlong(trial, rows, false)).toEqual({ count: 3, exact: true })
+    expect(deletedAlong(blog, rows, false)).toEqual({ count: 1, exact: true })
+    // a task item takes nothing along, whatever the list holds
+    expect(deletedAlong(rows[2], rows, true)).toEqual({ count: 0, exact: true })
+  })
+
+  it('does not count when the list may hold more than it names', () => {
+    const trial = project('trial')
+    expect(deletedAlong(trial, [trial, waits('1', 'trial')], true)).toEqual({
+      count: 1,
+      exact: false,
+    })
+    const stuck = row('5', { state: 'stuck', can_restore: false })
+    expect(deletedAlong(trial, [trial, stuck], false).exact).toBe(false)
+    // a stuck row of another organization cannot wait for it, nor can the item itself
+    expect(deletedAlong(trial, [trial, { ...stuck, org_id: 'other' }], false).exact).toBe(true)
+    const stuckTrial = project('trial', { state: 'stuck', can_restore: false })
+    expect(deletedAlong(stuckTrial, [stuckTrial], false).exact).toBe(true)
   })
 })

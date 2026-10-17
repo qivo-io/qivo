@@ -221,9 +221,9 @@ You can restore what you see when you can still edit where it goes back:
 **Delete now…** in a row's menu deletes an item for good at once, with its
 comments and attachments. Only organization admins have it, and only while
 the organization can make changes. It cannot be undone. Deleting a project
-for good also deletes the tasks that were deleted from it before it. An item
-that could not finish moving shows **Couldn't finish moving this item.** to
-admins. It does not expire, so delete it with **Delete now…** or contact
+for good also deletes the tasks and sub-projects that were deleted from it
+before it, and its window says so. An item that could not finish moving shows
+**Couldn't finish moving this item.** to admins. It does not expire, so delete it with **Delete now…** or contact
 support.
 
 Deleted items do not count toward the organization's storage
