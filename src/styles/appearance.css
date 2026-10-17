@@ -124,8 +124,9 @@ html[data-appearance][data-background-state="ready"]
   backdrop-filter: var(--window-blur);
 }
 /* Over a photo, menus, popovers, selects, AnchoredPop, toasts, the app
-   update notice, the roadmap plan card, the editor's link and mention menus
-   and the search palette sit a step above the window on floating glass.
+   update and snapshot notices, the roadmap plan card, the editor's link and
+   mention menus and the search palette sit a step above the window on
+   floating glass.
    Its :is() holds (0,2,0) arguments, so this is (0,4,1) and beats the
    sheet rule above. */
 html[data-appearance][data-background-state="ready"]
@@ -135,6 +136,7 @@ html[data-appearance][data-background-state="ready"]
   [data-anchoredpop-backdrop] + [data-floating-surface],
   .planner-toast-host > [data-floating-surface],
   [data-app-update],
+  [data-snapshot-notice],
   [data-plan-card],
   .mdmenu,
   .mentionpop,

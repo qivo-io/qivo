@@ -30,6 +30,7 @@ import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
+import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import {
@@ -661,15 +662,14 @@ function TopBar({
 /* ---------- toasts ---------- */
 type Toast = { id: number; text: string; tone?: ToastTone }
 
-/* The visible toasts. A screen reader hears them through announce() (see
-   showToast), so they carry no live role and are not read twice. */
+/* The visible toasts, at the top of the floating column so the app update and
+   snapshot notices never cover them (lib/floatStack). A screen reader hears
+   them through announce() (see showToast), so they carry no live role and are
+   not read twice. */
 function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   if (!toasts.length) return null
   return createPortal(
-    <div
-      data-top-layer
-      className="planner-toast-host [position:fixed] [bottom:20px] [left:50%] [transform:translateX(-50%)] [z-index:130] [display:flex] [flex-direction:column] [gap:8px] [align-items:center]"
-    >
+    <div className="planner-toast-host">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -702,7 +702,7 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
         </div>
       ))}
     </div>,
-    document.body,
+    floatSlot('toasts'),
   )
 }
 
@@ -1317,6 +1317,8 @@ function App() {
   }
 
   const createIssue = (issue) => {
+    // while edits are paused the dialog stays open with what was typed
+    if (P.refusePausedEdit()) return false
     // the issue's key exists only once the row does — addIssue returns it.
     // The preview can be invalidated by ANY concurrent create in the org
     // (0050's shared counter): onKeyFixed re-anchors the newly opened
@@ -1358,6 +1360,8 @@ function App() {
   // task and the move into the project wait for the server. A refused create
   // must not leave the user inside a project that then disappears.
   const createProject = (p, { withStarter }) => {
+    // while edits are paused the dialog stays open with what was typed
+    if (P.refusePausedEdit()) return
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
     const placeAtCreate = placeRef.current

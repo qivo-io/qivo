@@ -651,11 +651,66 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
 
+/* --- snapshot health ---------------------------------------------------------
+   The live snapshot (snapshot.forMe) can stop loading mid-session: a size
+   limit as an organization grows, a lost sign-in, or a faulty deploy. The
+   last good snapshot stays on screen and the snapshot notice says so. While
+   it is stale, write() refuses edits to shared data before they reach the
+   server: an edit made from stale data can overwrite newer work, and run()'s
+   rollback would re-adopt the stale snapshot over edits that did save.
+   Personal state (read marks, preferences, appearance, following) still
+   saves. Convex reruns a failed query when the data it read changes, so a
+   later delivery ends the trouble without a reload. */
+
+/** The sentence every paused edit shows. */
+export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
+
+/** Why the live snapshot is not current, while it is not. `asOf` is the last
+    good delivery's server time, null before any. `detail` is the error text
+    for support. `retrying` holds for one RETRY_GAP_MS window after Try again,
+    or until a delivery ends the trouble. */
+export type SnapshotTrouble = {
+  kind: 'failed' | 'signed_out'
+  since: number
+  asOf: string | null
+  retrying: boolean
+  detail: string
+}
+let snapshotTrouble: SnapshotTrouble | null = null
+
+/* Mutations that change only the signed-in person's own state, plus the OAuth
+   consent page's read of its request. Every other mutation pauses while the
+   snapshot is stale, including ones added later. */
+const PERSONAL_WRITES = new Set([
+  'prefs:save',
+  'issues:subscribe',
+  'issues:unsubscribe',
+  'issues:setSubscriber',
+  'profiles:setMessageRetention',
+  'oauthConnections:getContext',
+])
+const isPersonalWrite = (name: string) =>
+  /^(messages|appearance):/.test(name) || PERSONAL_WRITES.has(name)
+
+/** Toasts the pause and answers true while shared edits are paused. Actions
+    that take typed text call it before they clear or close anything, so a
+    paused save keeps the text in its field. */
+function refusePausedEdit(): boolean {
+  if (!snapshotTrouble) return false
+  toast(PAUSED_TEXT)
+  return true
+}
+
 /* 'rule' sentences are the P0001 successors and show VERBATIM; everything
    else is deliberately generic — the wording says "reverted", never
-   "reloading", because rollback is a repaint, not a refetch. */
+   "reloading", because rollback is a repaint, not a refetch. A paused write
+   never left the browser, so its sentence is the pause itself. */
 function toastWriteError(e: unknown) {
   const d = errData(e)
+  if (d.code === 'paused') {
+    toast(PAUSED_TEXT)
+    return
+  }
   if (readOnly(d) && d.message) {
     toast(`${d.message} — reverted`)
     return
@@ -677,6 +732,7 @@ function toastWriteError(e: unknown) {
    sentence is quoted, forbidden reads the fixed permission line. */
 function restoreErrorText(e: unknown): string {
   const d = errData(e)
+  if (d.code === 'paused') return PAUSED_TEXT
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore — ${String(d.message)}`
@@ -689,6 +745,10 @@ function restoreErrorText(e: unknown): string {
    "Couldn't save", which does not say a project is gone. */
 function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
+  if (d.code === 'paused') {
+    toast(PAUSED_TEXT)
+    return
+  }
   const m = d.message ? String(d.message) : ''
   const reason = m && m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
   if ((d.code === 'rule' || readOnly(d)) && reason) {
@@ -736,16 +796,22 @@ function slugErrorText(e: unknown): string {
   return "Couldn't change the address"
 }
 
-// Awaited writes (invitations, credentials, restores, account settings) do
-// not use run()'s optimistic paint gate. They still need to finish before a
-// version reload; preserve the Convex client's exact generic wire signature.
+// Every store mutation passes through write(). Awaited writes (invitations,
+// credentials, restores, account settings) do not use run()'s optimistic
+// paint gate. They still need to finish before a version reload; preserve the
+// Convex client's exact generic wire signature. While the live snapshot is
+// stale, a shared-data write is refused here with code `paused` before it is
+// sent (see snapshot health above).
 const write: typeof convex.mutation = (mutation, args, options) => {
   const epoch = storeEpoch
   if (DEMO_MODE && demoDisposed)
     return Promise.reject(new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' }))
+  const name = getFunctionName(mutation)
+  if (snapshotTrouble && !isPersonalWrite(name))
+    return Promise.reject(new ConvexError({ code: 'paused', message: PAUSED_TEXT }))
   const releaseUpdate = beginUpdateBlock()
   const visit = roadmapVisit
-  const clearsHistory = visit && !visit.disabled && isTaskContentWrite(getFunctionName(mutation))
+  const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
   try {
     return convex
       .mutation(mutation, args, options)
@@ -2090,9 +2156,13 @@ export const PLANNER = {
         emit()
       },
       (error) => {
-        const detail = errData(error).message
+        const { code, message: detail } = errData(error)
         toast(
-          detail ? `Couldn't undo: ${detail}. No changes reverted.` : "Couldn't undo. Try again.",
+          code === 'paused'
+            ? PAUSED_TEXT
+            : detail
+              ? `Couldn't undo: ${detail}. No changes reverted.`
+              : "Couldn't undo. Try again.",
         )
       },
     )
@@ -3033,6 +3103,14 @@ export const PLANNER = {
   updates: updates.channels,
   emit,
 
+  /** Why the live snapshot is stale, or null while it is current. Observe
+      it through the `health` channel. */
+  snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
+  /** Whether edits to shared data are paused (the snapshot is stale). */
+  editsPaused: () => snapshotTrouble !== null,
+  refusePausedEdit,
+  retrySnapshot,
+
   /* Groups retain a dormant workflow status; only their leaf work completes. */
   isGroup: (x: IssueVM | ArchivedIssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
@@ -3927,8 +4005,9 @@ export const PLANNER = {
 
   /** Post a comment (issue uuid — modal-side, like addAttachment). Returns
       the new comment id, or null when the issue is gone/refused. A body over
-      TEXT_MAX after trimming is refused here with a toast, before the
-      optimistic row, so the caller can keep the draft. */
+      TEXT_MAX after trimming, or any comment while edits are paused, is
+      refused here with a toast, before the optimistic row, so the caller
+      can keep the draft. */
   addComment: (issueUuid: string, body: string): string | null => {
     const row = rows.issues.get(issueUuid)
     if (!row) return null
@@ -3938,6 +4017,7 @@ export const PLANNER = {
       toast(TEXT_TOO_LONG.comment)
       return null
     }
+    if (refusePausedEdit()) return null
     const rec: Row<'comments'> = {
       id: crypto.randomUUID(),
       issue_id: issueUuid,
@@ -5515,7 +5595,14 @@ export const PLANNER = {
   },
 }
 
-/* --- loading -------------------------------------------------------------- */
+/* --- loading --------------------------------------------------------------
+   One subscription to snapshot.forMe carries the whole workspace. Its first
+   result settles initStore; every later one is adopted (behind run()'s paint
+   gate). Its error callback fires when the query itself fails, not for
+   network drops, which only delay results until Convex reconnects and
+   resubscribes. A failure after the first result is snapshot trouble (see
+   snapshot health): the last snapshot stays on screen and shared edits pause
+   until a later result succeeds. */
 
 /* The last snapshot the server delivered — run()'s rollback anchor
    (rollback = re-adopt serverSnap + rebuild + emit; no refetch, no reload). */
@@ -5523,6 +5610,9 @@ let serverSnap: Snapshot | null = null
 let snapUnsub: (() => void) | null = null
 let cancelDemoBoot: (() => void) | null = null
 let stopDayWatch: (() => void) | null = null
+/* Try again resubscribes at most once per window; `retrying` lasts it. */
+const RETRY_GAP_MS = 5000
+let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 function isDemoLifecycleRefusal(error: unknown) {
   const data = errData(error)
@@ -5533,6 +5623,113 @@ function isDemoLifecycleRefusal(error: unknown) {
     (data.code === 'forbidden' &&
       /demo.*(expired|missing|unavailable)|active demo/i.test(data.message || ''))
   )
+}
+
+/** Forgets any snapshot trouble without notifying (boot and disposal). */
+function resetSnapshotTrouble() {
+  snapshotTrouble = null
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = null
+}
+
+/** Records a failed snapshot query after the first delivery. A lost sign-in
+    (the server's `forbidden('not signed in')`) is `signed_out`; anything
+    else is `failed`. Keeps when the trouble began and a running retry. */
+function snapshotFailed(err: unknown) {
+  const d = errData(err)
+  const text = err instanceof Error ? err.message : String(err)
+  snapshotTrouble = {
+    kind: d.code === 'forbidden' && d.message === 'not signed in' ? 'signed_out' : 'failed',
+    since: snapshotTrouble?.since ?? Date.now(),
+    asOf: lastDeliveryAt,
+    retrying: snapshotTrouble?.retrying ?? false,
+    // Convex appends where the call came from; support needs the rest
+    detail: text.replace(/\s*Called by client\s*$/, '').trim(),
+  }
+  emit('health')
+}
+
+/** Ends snapshot trouble when a delivery succeeds, and says so. */
+function snapshotRecovered() {
+  if (!snapshotTrouble) return
+  resetSnapshotTrouble()
+  toast('Qivo is up to date again.', 'success')
+  emit('health')
+}
+
+/** Subscribes to the live snapshot. With `first`, the subscription's first
+    result settles it (boot); without, every result updates the store (a
+    retry's fresh subscription). */
+function subscribeSnapshot(
+  stillCurrent: () => boolean,
+  first?: { resolve: (snap: Snapshot | null) => void; reject: (err: unknown) => void },
+) {
+  let settled = !first
+  return convex.onUpdate(
+    api.snapshot.forMe,
+    {},
+    (snap) => {
+      if (!stillCurrent()) return
+      serverSnap = snap
+      if (!settled) {
+        settled = true
+        first?.resolve(snap)
+        return
+      }
+      // a later delivery of null = every seat vanished mid-session; keep the
+      // last paint rather than tearing the app down under the user
+      if (snap === null) {
+        if (DEMO_MODE) notifyDemoEnded()
+        return
+      }
+      // the data is current again even while the gate below holds its paint
+      snapshotRecovered()
+      // Gate the paint, never the data. While our own writes are in flight
+      // the optimistic patches own the screen. serverSnap is recorded above,
+      // and run()'s last settle flushes the newest held delivery.
+      if (inFlight > 0) {
+        snapDirty = true
+        return
+      }
+      adopt(snap)
+      rebuild()
+      emit()
+    },
+    (err) => {
+      if (!stillCurrent()) return
+      const demoEnded = DEMO_MODE && isDemoLifecycleRefusal(err)
+      if (demoEnded) notifyDemoEnded()
+      if (!settled) {
+        settled = true
+        first?.reject(err)
+        return
+      }
+      // The query failed mid-session. Convex keeps the subscription and
+      // reruns the query when the data it read changes; a later result ends
+      // the trouble. The demo's own ending is handled above.
+      console.error('[qivo] snapshot query failed:', err)
+      if (!demoEnded) snapshotFailed(err)
+    },
+  )
+}
+
+/** Try again: a fresh subscription runs the failed query again (Convex never
+    caches a failed run). Does nothing unless the snapshot failed, and at most
+    once per RETRY_GAP_MS; it cannot cure a limit the data itself exceeds. */
+function retrySnapshot() {
+  const trouble = snapshotTrouble
+  if (trouble?.kind !== 'failed' || trouble.retrying) return
+  snapshotTrouble = { ...trouble, retrying: true }
+  emit('health')
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    if (!snapshotTrouble?.retrying) return
+    snapshotTrouble = { ...snapshotTrouble, retrying: false }
+    emit('health')
+  }, RETRY_GAP_MS)
+  const epoch = storeEpoch
+  snapUnsub?.()
+  snapUnsub = subscribeSnapshot(() => epoch === storeEpoch && !demoDisposed)
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.
@@ -5547,6 +5744,7 @@ export function disposeDemoStore() {
   cancelDemoBoot = null
   snapUnsub?.()
   snapUnsub = null
+  resetSnapshotTrouble()
   commentsUnsub?.()
   commentsUnsub = null
   watchedComments = null
@@ -5758,50 +5956,15 @@ export async function initStore(
     snapUnsub()
     snapUnsub = null
   }
+  // A new subscription starts from a clean state; its first result settles
+  // the boot, so it never reports recovery from an earlier one's trouble.
+  if (snapshotTrouble) {
+    resetSnapshotTrouble()
+    emit('health')
+  }
   const first = await new Promise<Snapshot | null>((resolve, reject) => {
-    let settled = false
     if (DEMO_MODE) cancelDemoBoot = () => resolve(null)
-    snapUnsub = convex.onUpdate(
-      api.snapshot.forMe,
-      {},
-      (snap) => {
-        if (!stillCurrent()) return
-        serverSnap = snap
-        if (!settled) {
-          settled = true
-          resolve(snap)
-          return
-        }
-        // a later delivery of null = every seat vanished mid-session; keep the
-        // last paint rather than tearing the app down under the user
-        if (snap === null) {
-          if (DEMO_MODE) notifyDemoEnded()
-          return
-        }
-        // gate the paint, never the data: while our own writes are in flight
-        // the optimistic patches own the screen — serverSnap is recorded
-        // above, and run()'s last settle flushes the newest held delivery
-        if (inFlight > 0) {
-          snapDirty = true
-          return
-        }
-        adopt(snap)
-        rebuild()
-        emit()
-      },
-      (err) => {
-        if (!stillCurrent()) return
-        if (DEMO_MODE && isDemoLifecycleRefusal(err)) notifyDemoEnded()
-        if (!settled) {
-          settled = true
-          reject(err)
-          return
-        }
-        // transient subscription error mid-session: keep the current snapshot
-        // (Convex resubscribes on reconnect and redelivers)
-        console.error('[qivo] snapshot subscription error:', err)
-      },
-    )
+    snapUnsub = subscribeSnapshot(stillCurrent, { resolve, reject })
   })
   if (epoch === storeEpoch) cancelDemoBoot = null
   if (!stillCurrent()) return null

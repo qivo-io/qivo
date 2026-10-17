@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { type AppUpdateState, createAppUpdateMonitor } from '../lib/appUpdates'
+import { floatSlot } from '../lib/floatStack'
 import { isUpdateBlocked, subscribeUpdateSafety } from '../lib/updateSafety'
 import { Button } from './ui/button'
 
@@ -121,8 +122,10 @@ export function AppUpdates() {
 
   // Radix dialogs hide the app root from assistive technology. Keep this
   // live region mounted outside that root before a draft dialog can open.
+  // The floating column places it, above the snapshot notice and below the
+  // toasts (lib/floatStack).
   return createPortal(
-    <div aria-live="polite" aria-atomic="true" data-top-layer>
+    <div aria-live="polite" aria-atomic="true">
       {state?.available && !noticeHidden && (
         <div
           data-app-update
@@ -131,7 +134,7 @@ export function AppUpdates() {
           // an outside press that closes the very draft holding this update.
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.preventDefault()}
-          className="pointer-events-auto fixed top-4 left-1/2 z-[10000] flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-xl min-[761px]:top-auto min-[761px]:bottom-4"
+          className="pointer-events-auto flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-xl"
         >
           <div className="min-w-0 flex-1 basis-60 text-sm">
             <div className="font-semibold">A new version of Qivo is ready</div>
@@ -166,6 +169,6 @@ export function AppUpdates() {
         </div>
       )}
     </div>,
-    document.body,
+    floatSlot('update'),
   )
 }
