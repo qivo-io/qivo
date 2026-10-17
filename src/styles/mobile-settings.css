@@ -308,12 +308,13 @@
   .settings-content-scroll [data-fresh-key] {
     flex-basis: 100%;
   }
-  .settings-danger-zone div:has(> button) {
+  /* the project's Archive or delete row: its sentence over a full-width button */
+  [data-project-removal] div:has(> button) {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
   }
-  .settings-danger-zone button {
+  [data-project-removal] button {
     height: auto;
     white-space: normal;
   }

@@ -28,8 +28,8 @@
     "reason": "task-window and backdrop animation, editor sizing, anchors, and picker label colors; selected task labels use scoped CSS, edited-comment hover styling uses the shared tooltip and utility classes, and the Remaining box is the shared Input"
   },
   "src/panels/Modals.tsx": {
-    "count": 3,
-    "reason": "dialog width, picker geometry, and task/delete state colors; field layout uses classes"
+    "count": 2,
+    "reason": "dialog width and the armed milestone delete color; field layout uses classes"
   },
   "src/panels/settings/LabelsSettings.tsx": {
     "count": 3,
