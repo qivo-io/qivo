@@ -20,6 +20,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
+import { ACTIVITY_CAP } from './activity'
 import { hasPendingCheckout } from './billing'
 import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -109,8 +110,9 @@ export async function deleteIssueDeep(
  * grants are swept per project defensively), and issues (0001:88
  * CASCADE) each through deleteIssueDeep, which detaches cross-project
  * children WITH the issues_touch stamp + notify and reaps attachment bytes.
- * Activity rows are KEPT with project_id nulled (0001:155 SET NULL) —
- * "History survives its subjects" (0001:144). Without a project, the snapshot
+ * Activity rows are KEPT, "History survives its subjects" (0001:144), with
+ * project_id nulled (0001:155 SET NULL) on the newest ACTIVITY_CAP rows,
+ * the ones readers show. Without a project, the snapshot
  * sends those rows to org admins only, except the rows of a task that moved
  * out before the delete (snapshot.ts memberSeesActivity). The caller
  * (projects.deleteDeep) writes the 'deleted' narration AFTER this returns,
@@ -147,10 +149,15 @@ export async function deleteProjectDeep(
     for (const i of issues)
       await deleteIssueDeep(ctx, { issue: i, actor, now, deletingProjectIds: doomedIds })
   }
-  const events = ctx.db
+  // Only the newest ACTIVITY_CAP rows, the ones readers show, are cleared.
+  // Older rows, thousands in a busy organization, are never shown again and
+  // wait for the background trim (model/activity.ts).
+  const events = await ctx.db
     .query('activity_events')
     .withIndex('by_org_ts', (q) => q.eq('org_id', project.org_id))
-  for await (const e of events) {
+    .order('desc')
+    .take(ACTIVITY_CAP)
+  for (const e of events) {
     if (e.project_id !== undefined && doomedIds.has(e.project_id)) {
       await ctx.db.patch(e._id, { project_id: undefined })
     }
@@ -316,15 +323,16 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
  * revokes the OAuth connections as 'deleted', so the person's own list
  * hides them at once. Every session, credential and OAuth path requires the
  * profile row, so access fails closed here. It also clears the profile from
- * project leads, the activity feed (trimmed to about 500 rows per
- * organization) and as many open tasks as REMOVAL_BUDGET allows, assignee
- * and reviewer fields first. That is every open task unless the profile
- * holds hundreds. Then it inserts the profile_removals row and schedules
- * the first background step (profileRemovals.ts), which clears the open
- * tasks left over, archived tasks, comments, messages, subscriptions,
- * attachments, agent keys it created and the revoked connections in
- * bounded steps. Readers already show an id that no longer resolves as
- * "Someone" or "Unknown user" until then.
+ * project leads, its newest ACTIVITY_CAP activity rows (readers show an
+ * organization's newest ACTIVITY_CAP) and as many open tasks as
+ * REMOVAL_BUDGET allows, assignee and reviewer fields first. That is every
+ * open task unless the profile holds hundreds. Then it inserts the
+ * profile_removals row and schedules the first background step
+ * (profileRemovals.ts), which clears the open tasks left over, archived
+ * tasks, older activity rows the trim has not deleted yet, comments,
+ * messages, subscriptions, attachments, agent keys it created and the
+ * revoked connections in bounded steps. Readers already show an id that no
+ * longer resolves as "Someone" or "Unknown user" until then.
  *
  * Three FK behaviors, spelled out:
  * - SET NULL + touch: issues.assignee_id (0001:94), issues.reviewer_id,
@@ -371,10 +379,13 @@ export async function removeProfile(
     .withIndex('by_lead', (q) => q.eq('lead_id', profile.id))
     .collect()
   for (const p of led) await ctx.db.patch(p._id, { lead_id: undefined })
+  // The newest rows first, the ones readers show. A busy agent can have
+  // thousands more waiting for the trim; the activity phase clears them.
   const acted = await ctx.db
     .query('activity_events')
     .withIndex('by_actor', (q) => q.eq('actor_id', profile.id))
-    .collect()
+    .order('desc')
+    .take(ACTIVITY_CAP)
   for (const e of acted) await ctx.db.patch(e._id, { actor_id: undefined })
   // DELETE
   const memberships = ctx.db

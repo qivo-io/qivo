@@ -27,7 +27,8 @@
  *   clear       clearParentRemaining on attach (0066/0067) — also notifies
  *               and touches the parent
  *   notify      notifyIssueInsert/Update fan-out for the row itself
- *   activity    logActivity + newest-500 trim
+ *   activity    logActivity (a background trim keeps the newest 500,
+ *               model/activity.ts)
  *
  * The archive cascade's descendant/ancestor echoes are the ONE suppressed
  * notification (0114:308-313, pg_trigger_depth's successor): only the

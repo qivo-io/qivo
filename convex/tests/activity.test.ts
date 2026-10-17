@@ -16,10 +16,11 @@
 
 import type { FunctionArgs } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { taskActivity } from '../lib/activityVisibility'
 import {
+  ACTIVITY_CAP,
   ACTIVITY_TRIM_BUDGET,
   ACTIVITY_TRIM_DELAY_MS,
   ACTIVITY_TRIM_STALE_MS,
@@ -28,6 +29,7 @@ import {
   namedTaskNums,
   trimActivity,
 } from '../model/activity'
+import { pendingRemoval } from '../model/cascade'
 import {
   activityFor,
   allMessages,
@@ -43,6 +45,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { assertNoDanglingRefs } from './refs.setup'
 
 type Patch = FunctionArgs<typeof api.issues.update>['patch']
 
@@ -170,14 +173,21 @@ describe('activity retention, newest 500 shown and older rows trimmed in the bac
       return ctx.meta.getTransactionMetrics()
     })
 
-  /* `count` rows of `orgId`, one second apart from `from`, inserted raw. */
-  const plantRows = (t: T, orgId: string, count: number, from: number, prefix = 'seed') =>
+  /* `count` rows of `orgId`, `step` ms apart from `from`, inserted raw. */
+  const plantRows = (
+    t: T,
+    orgId: string,
+    count: number,
+    from: number,
+    prefix = 'seed',
+    step = 1000,
+  ) =>
     t.run(async (ctx) => {
       for (let i = 0; i < count; i++)
         await ctx.db.insert('activity_events', {
           id: `${prefix}-${i}`,
           org_id: orgId,
-          ts: at(from + i * 1000),
+          ts: at(from + i * step),
           verb: 'seeded',
           target_type: 'issue',
           target_id: `${prefix}-${i}`,
@@ -305,7 +315,8 @@ describe('activity retention, newest 500 shown and older rows trimmed in the bac
     await plantRows(t, f.org.id, 510, START - 3_600_000)
     await plantRows(t, f.org.id, 5, START - 2_000, 'recent')
     await plantRows(t, f.otherOrg.id, 3, START - 3_600_000, 'other')
-    expect(await t.run((ctx) => trimActivity(ctx, f.org.id))).toBe('done')
+    // the 5 recent rows still hold the organization past the cap
+    expect(await t.run((ctx) => trimActivity(ctx, f.org.id))).toBe('later')
     const kept = await newestFirst(t, f.org.id)
     expect(kept).toHaveLength(505)
     expect(kept.slice(0, 5).map((row) => row.id)).toEqual([
@@ -318,6 +329,116 @@ describe('activity retention, newest 500 shown and older rows trimmed in the bac
     expect(kept.at(-1)?.id).toBe('seed-10') // seeds 0..9 were the overflow
     expect(await activityFor(t, f.otherOrg.id)).toHaveLength(3)
   })
+
+  it('a trim answers later only while rows too new to trim hold the organization past the cap', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const trimmed = () => t.run((ctx) => trimActivity(ctx, f.org.id))
+    // 300 settled rows leave room for 200 recent ones
+    await plantRows(t, f.org.id, 300, START - 3_600_000)
+    await plantRows(t, f.org.id, 200, START - 5_000, 'recent', 0)
+    expect(await trimmed()).toBe('done')
+    await plantRows(t, f.org.id, 1, START - 2_000, 'late')
+    expect(await trimmed()).toBe('later')
+    expect(await activityFor(t, f.org.id)).toHaveLength(501) // nothing was old enough to go
+  })
+
+  it('rows too new to trim keep the trim pending until it brings the organization to the cap', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantRows(t, f.org.id, 500, START - 3_600_000)
+    await plantRows(t, f.org.id, 10, START - 2_000, 'recent', 0)
+    await t.run((ctx) =>
+      ctx.db.insert('activity_retention', { org_id: f.org.id, trim_due_at: START }),
+    )
+    await t.mutation(internal.activityRetention.trim, { org_id: f.org.id })
+    expect(await activityFor(t, f.org.id)).toHaveLength(510)
+    const due = START + ACTIVITY_TRIM_DELAY_MS
+    expect((await stateOf(t, f.org.id))?.trim_due_at).toBe(due)
+    expect((await trims(t)).map((job) => [job.scheduledTime, job.state.kind])).toEqual([
+      [due, 'pending'],
+    ])
+    // no write follows, and the scheduled trim alone removes the excess
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const kept = await newestFirst(t, f.org.id)
+    expect(kept).toHaveLength(500)
+    expect(kept.slice(0, 10).every((row) => row.id.startsWith('recent-'))).toBe(true)
+    expect((await stateOf(t, f.org.id))?.trim_due_at).toBeUndefined()
+    expect((await trims(t)).map((job) => job.state.kind)).toEqual(['success'])
+  })
+
+  it('a trim run while another is due later leaves the schedule to that one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantRows(t, f.org.id, 505, START - 3_600_000)
+    await plantRows(t, f.org.id, 10, START - 2_000, 'recent', 0)
+    await plantRows(t, f.otherOrg.id, 3, START - 3_600_000, 'other')
+    const due = START + 60_000
+    await t.run(async (ctx) => {
+      for (const org_id of [f.org.id, f.otherOrg.id])
+        await ctx.db.insert('activity_retention', { org_id, trim_due_at: due })
+    })
+    for (const org_id of [f.org.id, f.otherOrg.id])
+      await t.mutation(internal.activityRetention.trim, { org_id })
+    // it deletes what it may but neither reschedules nor clears the due trim
+    expect(await activityFor(t, f.org.id)).toHaveLength(510)
+    for (const org_id of [f.org.id, f.otherOrg.id])
+      expect((await stateOf(t, org_id))?.trim_due_at).toBe(due)
+    expect(await trims(t)).toEqual([])
+  })
+
+  it('project deletion and profile removal stay within limits with a trim backlog', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // More rows about one project by one agent than a transaction may write
+    // (16,000), as a lost trim and a busy agent could leave them.
+    const count = 16_100
+    for (let from = 0; from < count; from += count / 2)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + count / 2; i++)
+          await ctx.db.insert('activity_events', {
+            id: `row-${i}`,
+            org_id: f.org.id,
+            ts: at(START - 3_600_000 + i * 100),
+            actor_id: f.agent.id,
+            verb: 'updated',
+            target_type: 'project',
+            target_id: f.sub2.id,
+            label: 'x',
+            project_id: f.sub2.id,
+          })
+      })
+    const naming = (field: 'actor_id' | 'project_id', id: string) =>
+      t.run(
+        async (ctx) =>
+          (await ctx.db.query('activity_events').collect()).filter((row) => row[field] === id)
+            .length,
+      )
+    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
+    // the rows readers show lose the project; older ones wait for the trim
+    expect(await naming('project_id', f.sub2.id)).toBe(count - ACTIVITY_CAP)
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.agent.id })
+    expect(await naming('actor_id', f.agent.id)).toBe(count - ACTIVITY_CAP)
+    const shown = await t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .withIndex('by_org_ts', (q) => q.eq('org_id', f.org.id))
+        .order('desc')
+        .take(ACTIVITY_CAP),
+    )
+    expect(
+      shown.filter((row) => row.actor_id === f.agent.id || row.project_id === f.sub2.id),
+    ).toEqual([])
+    // the removal's activity phase clears the rest before any trim runs
+    while ((await t.run((ctx) => pendingRemoval(ctx, f.agent.id))) !== null)
+      await t.mutation(internal.profileRemovals.step, { profile_id: f.agent.id })
+    expect(await naming('actor_id', f.agent.id)).toBe(0)
+    expect(await activityFor(t, f.org.id)).toHaveLength(count + 2) // plus both narrations
+    // then the trim deletes the backlog
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await activityFor(t, f.org.id)).toHaveLength(ACTIVITY_CAP)
+    await assertNoDanglingRefs(t, 'after deletions over a trim backlog')
+  }, 120_000)
 
   it('a backlog larger than one step is trimmed over several steps', async () => {
     const t = newT()

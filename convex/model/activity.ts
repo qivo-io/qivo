@@ -12,9 +12,12 @@ import { newUuid } from './orgs'
  * by_org_ts index order (ts, then creation time). Writers only insert. A
  * background trim (activityRetention.ts) deletes the older rows a few minutes
  * later, so concurrent writers in one organization never conflict over
- * deleting the oldest row, and storage holds the cap plus at most the rows
- * written since the last trim. The organization's activity_retention row
- * records a pending trim, so writes schedule at most one at a time. */
+ * deleting the oldest row. Storage holds the cap plus about the last
+ * ACTIVITY_TRIM_DELAY_MS of writes, or up to ACTIVITY_TRIM_STALE_MS of them
+ * when a trim is lost, so code that walks an organization's activity in one
+ * transaction reads only the newest ACTIVITY_CAP rows or works in bounded
+ * steps. The organization's activity_retention row records a pending trim,
+ * so writes schedule at most one at a time. */
 
 /** The newest rows of an organization's activity that every reader shows.
  * The feed displays 30 of them. */
@@ -23,8 +26,9 @@ export const ACTIVITY_CAP = 500
 export const ACTIVITY_TRIM_DELAY_MS = 5 * 60_000
 /** A pending trim this far past due is assumed lost and scheduled again. */
 export const ACTIVITY_TRIM_STALE_MS = 60 * 60_000
-/** Rows newer than this stay for the next trim, so a trim does not read the
- * range that writes in flight insert into. */
+/** Rows newer than this stay for a later trim, which only counts the oldest
+ * of them, so a trim seldom reads the range that writes in flight insert
+ * into. */
 const TRIM_SETTLE_MS = 10_000
 /** Rows one trim step deletes before it schedules the next. Tests lower it. */
 export const ACTIVITY_TRIM_BUDGET = { rows: 1_000 }
@@ -67,28 +71,42 @@ export async function requestActivityTrim(ctx: MutationCtx, orgId: string): Prom
 
 /** One trim step. Deletes, oldest first and at most ACTIVITY_TRIM_BUDGET.rows,
  * the rows beyond the newest ACTIVITY_CAP among those older than the settle
- * time. Readers order rows the same way, so the kept rows are exactly the
- * newest ones. Returns 'more' when such rows remain. */
-export async function trimActivity(ctx: MutationCtx, orgId: string): Promise<'done' | 'more'> {
+ * time. Readers order rows the same way, so the kept rows include every row
+ * they show. Returns 'more' when such rows remain, 'later' when rows newer
+ * than the settle time still hold the organization past the cap, and 'done'
+ * when it holds at most ACTIVITY_CAP rows. */
+export async function trimActivity(
+  ctx: MutationCtx,
+  orgId: string,
+): Promise<'done' | 'more' | 'later'> {
   const cutoff = new Date(Date.now() - TRIM_SETTLE_MS).toISOString()
   const kept = await ctx.db
     .query('activity_events')
     .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lt('ts', cutoff))
     .order('desc')
     .take(ACTIVITY_CAP)
-  if (kept.length < ACTIVITY_CAP) return 'done'
-  const oldestKept = kept[kept.length - 1]
-  let deleted = 0
-  for await (const row of ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lte('ts', oldestKept.ts))
-    .order('asc')) {
-    if (row._id === oldestKept._id) return 'done'
-    if (deleted === ACTIVITY_TRIM_BUDGET.rows) return 'more'
-    await ctx.db.delete(row._id)
-    deleted++
+  if (kept.length === ACTIVITY_CAP) {
+    const oldestKept = kept[kept.length - 1]
+    let deleted = 0
+    for await (const row of ctx.db
+      .query('activity_events')
+      .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lte('ts', oldestKept.ts))
+      .order('asc')) {
+      if (row._id === oldestKept._id) break
+      if (deleted === ACTIVITY_TRIM_BUDGET.rows) return 'more'
+      await ctx.db.delete(row._id)
+      deleted++
+    }
   }
-  return 'done'
+  // Only as many newer rows as would pass the cap are read, so the read
+  // stops short of the newest rows, where writes in flight insert, whenever
+  // the organization has more.
+  const room = ACTIVITY_CAP - kept.length
+  const unsettled = await ctx.db
+    .query('activity_events')
+    .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).gte('ts', cutoff))
+    .take(room + 1)
+  return unsettled.length > room ? 'later' : 'done'
 }
 
 // Activity commits with the mutation it describes. Retention runs later in
