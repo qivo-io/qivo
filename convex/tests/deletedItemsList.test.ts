@@ -1050,8 +1050,8 @@ describe('the list (design 6.2)', () => {
   })
 })
 
-describe('searching inside deleted projects', () => {
-  it('finds tasks of visible project items by key or title, and nothing else', async () => {
+describe('searching for deleted tasks', () => {
+  it('finds tasks of visible items by key or title with the kind of their item, and nothing else', async () => {
     const t = newT()
     const f = await withOrg(t)
     const kept = await plantIssue(t, {
@@ -1071,6 +1071,7 @@ describe('searching inside deleted projects', () => {
 
     const hit = {
       item_id: item.id,
+      item_kind: 'project',
       org_id: f.org.id,
       org_name: 'Testbed Labs',
       key: `QN-${kept.num}`,
@@ -1088,8 +1089,14 @@ describe('searching inside deleted projects', () => {
       state: 'ready',
       can_restore: true,
     }
-    // the loose task is a task item: the list holds it, not the search
-    expect(await matches(t, f.user, 'route')).toEqual([hit])
+    // the loose task is a task item of its own, which the search finds too
+    const routes = await matches(t, f.user, 'route')
+    expect(routes.map((m) => [m.title, m.item_kind]).sort()).toEqual([
+      ['Route the antenna', 'task'],
+      ['Route the power plane', 'project'],
+    ])
+    expect(routes).toContainEqual(hit)
+    expect(await matches(t, f.user, 'power')).toEqual([hit])
     expect(await matches(t, f.user, `qn-${kept.num}`)).toEqual([hit])
     expect(await matches(t, f.user, `${kept.num}`)).toEqual([hit])
     expect(await matches(t, f.user, '   ')).toEqual([])
@@ -1097,6 +1104,155 @@ describe('searching inside deleted projects', () => {
     // a member who can see Board rev, and neither deleted nor leads it
     expect(await matches(t, f.guest, 'power')).toEqual([])
     expect(await matches(t, f.otherAdmin, 'power')).toEqual([])
+  })
+
+  it('finds an older task item a capped list leaves out, by key and by title, to restore as a row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    LIST.cap = 1
+    const older = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Calibrate the strain gauge',
+    })
+    await deleteTask(t, f.user, older.id)
+    later()
+    const newer = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, f.user, newer.id)
+    const item = await itemFor(t, older.id)
+    expect(await list(t, f.user)).toEqual({
+      items: [expect.objectContaining({ id: (await itemFor(t, newer.id)).id })],
+      capped: true,
+    })
+
+    const hit = {
+      item_id: item.id,
+      item_kind: 'task',
+      org_id: f.org.id,
+      org_name: 'Testbed Labs',
+      key: `QN-${older.num}`,
+      title: 'Calibrate the strain gauge',
+      archived: false,
+      path: ['Testbed platform', 'Firmware'],
+      deleted_at: item.deleted_at,
+      deleter: {
+        you: true,
+        profile_id: f.user.id,
+        name: 'user',
+        kind: 'app',
+        who: `${f.user.id}|app`,
+      },
+      state: 'ready',
+      can_restore: true,
+    }
+    expect(await matches(t, f.user, `QN-${older.num}`)).toEqual([hit])
+    expect(await matches(t, f.user, 'gauge')).toEqual([hit])
+    // its item restores like a row of the list
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    expect(await liveTask(t, older.id)).not.toBeNull()
+  })
+
+  it('finds a task item only for those who see it, without Restore once its deleter can only view it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Tune the gain stage',
+    })
+    await deleteTask(t, f.guest, task.id)
+    const item = await itemFor(t, task.id)
+    const found = async (who: Doc<'profiles'>) =>
+      (await matches(t, who, 'gain')).map((m) => [m.item_id, m.item_kind, m.can_restore])
+
+    // its deleter, the lead of Firmware's top-level project and an admin
+    for (const who of [f.guest, f.user, f.admin])
+      expect(await found(who)).toEqual([[item.id, 'task', true]])
+    // a member who can see Firmware, and neither deleted nor leads it
+    expect(await matches(t, f.viewer, 'gain')).toEqual([])
+    expect(await matches(t, f.viewer, `QN-${task.num}`)).toEqual([])
+    expect(await matches(t, f.otherAdmin, 'gain')).toEqual([])
+    // its deleter who can only view Firmware now, as on the row
+    await setGrant(t, f.meta.id, f.guest.id, 'viewer')
+    expect(await matches(t, f.guest, 'gain')).toEqual([
+      expect.objectContaining({
+        item_id: item.id,
+        can_restore: false,
+        blocked: { reason: 'view_only', project: 'Firmware', lead: 'user' },
+      }),
+    ])
+    // and nothing once they lost all access to it
+    await setGrant(t, f.meta.id, f.guest.id)
+    expect(await matches(t, f.guest, 'gain')).toEqual([])
+  })
+
+  it('finds only the tasks a redacted task item shows, never its root', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const omar = await person(t, f.org.id, 'Omar')
+    const dana = await person(t, f.org.id, 'Dana')
+    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
+    const infra = ops.subs[0]
+    await grant(t, f.meta.id, dana.id, 'user')
+    await grant(t, ops.top.id, dana.id, 'user')
+    const root = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Contoso acquisition due diligence',
+    })
+    const sub = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: infra.id,
+      title: 'Provision the data room',
+      parent_id: root.id,
+    })
+    await deleteTask(t, dana, root.id, { subtask_ids: [sub.id], reason: 'confidential' })
+    const item = await itemFor(t, root.id)
+
+    // Omar leads Infra and cannot see Firmware, where the root was
+    expect(await matches(t, omar, 'contoso')).toEqual([])
+    expect(await matches(t, omar, `QN-${root.num}`)).toEqual([])
+    const hits = await matches(t, omar, 'room')
+    expect(hits).toEqual([
+      {
+        item_id: item.id,
+        item_kind: 'task',
+        org_id: f.org.id,
+        org_name: 'Testbed Labs',
+        key: `QN-${sub.num}`,
+        title: 'Provision the data room',
+        archived: false,
+        path: [],
+        deleted_at: item.deleted_at,
+        deleter: {
+          you: false,
+          profile_id: dana.id,
+          name: 'Dana',
+          kind: 'app',
+          who: `${dana.id}|app`,
+        },
+        state: 'ready',
+        redacted: true,
+        can_restore: false,
+        blocked: { reason: 'no_access' },
+      },
+    ])
+    expect(JSON.stringify(hits)).not.toMatch(/Contoso|confidential|Firmware/)
+    // the root's lead finds the root, not the subtask in Infra
+    expect(await matches(t, f.user, 'room')).toEqual([])
+    expect(await matches(t, f.user, 'contoso')).toEqual([
+      expect.objectContaining({
+        key: `QN-${root.num}`,
+        path: ['Testbed platform', 'Firmware'],
+        blocked: { reason: 'subtask_project' },
+      }),
+    ])
+    // the deleter sees both projects, and the subtask where it was
+    const theirs = await matches(t, dana, 'room')
+    expect(theirs).toEqual([
+      expect.objectContaining({ key: `QN-${sub.num}`, path: ['Operations', 'Infra'] }),
+    ])
+    expect(theirs[0]).not.toHaveProperty('redacted')
   })
 
   it('answers instead of failing when many project items it cannot show match in many seats', async () => {
