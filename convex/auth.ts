@@ -10,6 +10,13 @@ import type { DataModel } from './_generated/dataModel'
 import authConfig from './auth.config'
 import authSchema from './betterAuth/schema'
 import {
+  fieldsSetTo,
+  holdsAny,
+  PROVIDER_TOKEN_FIELDS,
+  SESSION_REQUEST_FIELDS,
+  USER_PROFILE_FIELDS,
+} from './lib/authData'
+import {
   clampDemoSession,
   DEMO_TTL_MS,
   demoRefusal,
@@ -87,6 +94,11 @@ export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
   return origins
 }
 
+/* Better Auth routes that answer from a social login's stored provider
+ * tokens. Qivo stores none (databaseHooks below), so they could only fail
+ * or answer with an empty token, and nothing in Qivo calls them. */
+const PROVIDER_TOKEN_PATHS = ['/get-access-token', '/refresh-token', '/account-info']
+
 const authFunctions = {
   onCreate: makeFunctionReference('demo:onCreate'),
   onDelete: makeFunctionReference('demo:onDelete'),
@@ -140,6 +152,7 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
           '/link-social',
           '/delete-user',
           '/delete-anonymous-user',
+          ...PROVIDER_TOKEN_PATHS,
         ]
       : [
           '/sign-in/anonymous',
@@ -154,24 +167,50 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
           '/oauth2/delete-client',
           '/oauth2/get-client',
           '/oauth2/get-clients',
+          ...PROVIDER_TOKEN_PATHS,
         ],
+    /* No deployment stores the personal data lib/authData.ts lists. A create
+     * leaves those fields out. An update that carries a provider token or a
+     * picture writes null instead, which also clears what an older row held.
+     * Writes without one, such as a password change or a ban, pass through
+     * unchanged. The OAuth provider's own tables are other models and keep
+     * what MCP connections need. */
     databaseHooks: {
-      ...(demo
-        ? {
-            session: {
-              create: {
-                // Marketing analytics retain broad categories separately.
-                // Clear Better Auth's default raw network/browser metadata
-                // before it reaches the demo session database.
-                before: async (session) => ({
-                  data: { ...session, ipAddress: undefined, userAgent: undefined },
-                }),
-              },
-            },
-          }
-        : {}),
+      session: {
+        create: {
+          before: async (session) => ({
+            data: { ...session, ...fieldsSetTo(SESSION_REQUEST_FIELDS, undefined) },
+          }),
+        },
+      },
+      account: {
+        create: {
+          before: async (account) =>
+            holdsAny(account, PROVIDER_TOKEN_FIELDS)
+              ? { data: { ...account, ...fieldsSetTo(PROVIDER_TOKEN_FIELDS, undefined) } }
+              : undefined,
+        },
+        update: {
+          before: async (update) =>
+            holdsAny(update, PROVIDER_TOKEN_FIELDS)
+              ? { data: { ...update, ...fieldsSetTo(PROVIDER_TOKEN_FIELDS, null) } }
+              : undefined,
+        },
+      },
       verification: { create: { after: (verification) => registerOAuthCode(ctx, verification) } },
       user: {
+        create: {
+          before: async (user) =>
+            holdsAny(user, USER_PROFILE_FIELDS)
+              ? { data: { ...user, ...fieldsSetTo(USER_PROFILE_FIELDS, undefined) } }
+              : undefined,
+        },
+        update: {
+          before: async (update) =>
+            holdsAny(update, USER_PROFILE_FIELDS)
+              ? { data: { ...update, ...fieldsSetTo(USER_PROFILE_FIELDS, null) } }
+              : undefined,
+        },
         delete: {
           after: async (user) => {
             await requireRunMutationCtx(ctx).runMutation(internal.appearance.clearForDeletedLogin, {
@@ -224,6 +263,17 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
               clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
               tenantId: 'common',
               prompt: 'select_account' as const,
+              /* better-auth reads the id, name and email from the ID token,
+               * so sign-in needs only the OpenID scopes. The defaults also
+               * asked for User.Read, used only to fetch the profile photo,
+               * and offline_access, a refresh token Qivo never stores.
+               * better-auth still requests the photo with the access token,
+               * and Microsoft may still grant User.Read to people or tenants
+               * that consented earlier, so disableProfilePhoto is what keeps
+               * the photo out of user.image. */
+              disableDefaultScope: true,
+              scope: ['openid', 'profile', 'email'],
+              disableProfilePhoto: true,
             },
           }
         : {}),

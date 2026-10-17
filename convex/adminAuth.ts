@@ -317,13 +317,29 @@ export const insertBreakGlass = internalMutation({
 
 /* ----------------------------------------------------------- delete orphan */
 
-/* Adapter-level removal of a Better Auth user and everything session/account
- * shaped it holds (auth.api.removeUser needs an admin session; internal
- * mutations have none). Verification rows are keyed by identifier, not
- * userId, and expire on their own — removeUser leaves them too. */
+/* Adapter-level removal of a Better Auth user and every row keyed by its id
+ * (auth.api.removeUser needs an admin session; internal mutations have
+ * none). That covers its sessions and accounts, and the MCP OAuth provider's
+ * access tokens, refresh tokens and consents. The app side loses the login's
+ * appearance settings, custom backgrounds and roadmap undo receipts, which
+ * only that login could use. Verification rows are keyed by identifier, not
+ * userId, and expire on their own, as removeUser leaves them too. An OAuth
+ * client registered while the login was signed in keeps its row, because
+ * other logins may hold grants through the same client. */
 async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<void> {
   await ctx.runMutation(internal.appearance.clearForDeletedLogin, { auth_user_id: userId })
-  for (const model of ['session', 'account'] as const) {
+  for (const row of await ctx.db
+    .query('roadmap_history')
+    .withIndex('by_owner_session', (q) => q.eq('auth_user_id', userId))
+    .collect())
+    await ctx.db.delete(row._id)
+  for (const model of [
+    'oauthAccessToken',
+    'oauthRefreshToken',
+    'oauthConsent',
+    'session',
+    'account',
+  ] as const) {
     let cursor: string | null = null
     for (;;) {
       const res = (await ctx.runMutation(components.betterAuth.adapter.deleteMany, {
@@ -349,7 +365,9 @@ export const removeAuthUser = internalMutation({
 })
 
 /* Sign-up leftovers: a login no profile references. Cut from the console;
- * the edge's 20-page listUsers walk becomes one indexed lookup. Name the
+ * the edge's 20-page listUsers walk becomes one indexed lookup. A platform
+ * operator's login is refused too, because its platform_admins row would
+ * outlive it and admin:removeOperator owns the last-operator guard. Name the
  * deployment with the private helper, which refuses to run without the
  * target's key, because a bare `npx convex run` lands on the deployment in
  * .env.local. TARGET is development, staging or production:
@@ -382,6 +400,16 @@ export const deleteOrphanLogin = internalMutation({
       .first()
     if (byEmail !== null || byAuth !== null) {
       throw conflict('that login belongs to a member — remove the member instead', 'login_in_use')
+    }
+    const operator = await ctx.db
+      .query('platform_admins')
+      .withIndex('by_auth_user', (q) => q.eq('auth_user_id', user._id))
+      .first()
+    if (operator !== null) {
+      throw conflict(
+        'that login is a platform operator; run admin:removeOperator first',
+        'operator_login',
+      )
     }
     await removeAuthUserRows(ctx, user._id)
     await audit(ctx, { actor_email: 'cli', action: 'delete_orphan', detail: { email } })

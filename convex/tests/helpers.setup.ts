@@ -538,29 +538,38 @@ export async function plantHiddenSibling(
 type AuthComponentCtx = GenericMutationCtx<DataModelFromSchemaDefinition<typeof authSchema>>
 
 /**
- * Creates one Better Auth user per person, in one transaction, and answers
- * their ids in the same order. It writes the component's `user` table
- * directly. components.betterAuth.adapter.create would first load Better
- * Auth's adapter module, which takes seconds per test file, in every suite
- * that builds a fixture. convex-test 0.0.58 provides runInComponent at
- * runtime but does not declare it.
+ * Runs `handler` in one transaction directly over the Better Auth
+ * component's own tables, to plant or read rows without loading Better
+ * Auth. convex-test 0.0.58 provides runInComponent at runtime but does not
+ * declare it.
  */
-export async function plantLogins(
+export async function runInAuth<R>(
   t: T,
-  people: readonly { name: string; email: string }[],
-): Promise<string[]> {
+  handler: (ctx: AuthComponentCtx) => Promise<R>,
+): Promise<R> {
   const raw = t as unknown as {
-    runInComponent?: (
-      path: string,
-      handler: (ctx: AuthComponentCtx) => Promise<string[]>,
-    ) => Promise<string[]>
+    runInComponent?: (path: string, handler: (ctx: AuthComponentCtx) => Promise<R>) => Promise<R>
   }
   if (raw.runInComponent === undefined)
     throw new Error(
       'convex-test no longer provides runInComponent; plant logins with components.betterAuth.adapter.create',
     )
+  return await raw.runInComponent('betterAuth', handler)
+}
+
+/**
+ * Creates one Better Auth user per person, in one transaction, and answers
+ * their ids in the same order. It writes the component's `user` table
+ * directly. components.betterAuth.adapter.create would first load Better
+ * Auth's adapter module, which takes seconds per test file, in every suite
+ * that builds a fixture.
+ */
+export async function plantLogins(
+  t: T,
+  people: readonly { name: string; email: string }[],
+): Promise<string[]> {
   const at = Date.parse(NOW)
-  return await raw.runInComponent('betterAuth', async (ctx) => {
+  return await runInAuth(t, async (ctx) => {
     const ids: string[] = []
     for (const { name, email } of people)
       ids.push(
