@@ -37,6 +37,8 @@ import {
   FOLD,
   fold,
   foldText,
+  hitItem,
+  type ItemRow,
   itemName,
   itemSuffix,
   type KindFilter,
@@ -119,7 +121,7 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
     Restore N selected opened, which hands focus back like the bulk one.
     `along` is what Delete now takes with the row, counted as it opens. */
 type Ask =
-  | { kind: 'bulk'; rows: DeletedRow[] }
+  | { kind: 'bulk'; rows: ItemRow[] }
   | { kind: 'project'; line: Line; key: string; selection?: boolean }
   | { kind: 'purge'; row: DeletedRow; key: string; along: ReturnType<typeof deletedAlong> }
 
@@ -170,8 +172,11 @@ export function DeletedItemsPage() {
   // whether the open window did what it asks, for where focus goes after it
   const acted = useRef(false)
   // Items deferred behind a project item of the same restore. They are sent
-  // again once the list shows them restorable (design 5).
+  // again once a list shows them restorable (design 5).
   const [waiting, setWaiting] = useState<ReadonlySet<string>>(() => new Set())
+  // The items this page restored. A capped list need not have held them, so
+  // their search hits cannot go by the item leaving it (the lines).
+  const [restored, setRestored] = useState<ReadonlySet<string>>(() => new Set())
   const pageRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   // a focus move for after the next commit, once rows that left are gone
@@ -233,8 +238,10 @@ export function DeletedItemsPage() {
 
   /* ---------------------------------------------------------- the lines */
   // A search hit acts on its project item and shows that item's live state,
-  // since matches is not reactive. A hit whose project item left the list
-  // goes.
+  // since matches is not reactive. A hit whose project item left a complete
+  // list goes. A capped list can stop before an older project item, so there
+  // the hit stands for its item itself (hitItem) until this page restores it.
+  const capped = source.list?.capped === true
   const lines = useMemo(() => {
     const out: Line[] = []
     for (const row of rows)
@@ -246,13 +253,28 @@ export function DeletedItemsPage() {
         out.push({ kind: 'item', row })
     if (lower && kind !== 'project')
       for (const match of hits) {
-        const item = byId.get(match.item_id)
+        const id = match.item_id
+        const item =
+          byId.get(id) ??
+          allById.get(id) ??
+          (capped && !restored.has(id) ? hitItem(match) : undefined)
         if (item && deletedBy(item, by)) out.push({ kind: 'match', match, item })
       }
     return out.sort(byTime)
-  }, [rows, byId, kind, by, lower, hits])
+  }, [rows, byId, allById, capped, restored, kind, by, lower, hits])
   // the items the lines show, each once however many hits it has
   const lineIds = useMemo(() => new Set(lines.map((line) => lineItem(line).id)), [lines])
+  // the project items that only a search hit names, by id
+  const hitItems = useMemo(() => {
+    const out = new Map<string, ItemRow>()
+    for (const line of lines)
+      if (line.kind === 'match' && line.item.hit && !out.has(line.item.id))
+        out.set(line.item.id, line.item)
+    return out
+  }, [lines])
+  /** Item `id` as a line acts on it. That is a list's row, else a project
+      item that only a search hit names. */
+  const itemOf = (id: string): ItemRow | undefined => findItem(id) ?? hitItems.get(id)
 
   /* The selection holds only what the person can still act on. A delivery or
      a filter change drops a selected id whose row is no longer shown, or that
@@ -264,7 +286,7 @@ export function DeletedItemsPage() {
     setSelected((current) => {
       const next = new Set(
         [...current].filter((id) => {
-          const row = byId.get(id)
+          const row = itemOf(id)
           return (
             row !== undefined &&
             lineIds.has(id) &&
@@ -275,25 +297,38 @@ export function DeletedItemsPage() {
       return next.size === current.size ? current : next
     })
     setRefusals((current) => {
-      const next = new Map([...current].filter(([id]) => byId.has(id)))
+      const next = new Map([...current].filter(([id]) => itemOf(id) !== undefined))
       return next.size === current.size ? current : next
     })
-  }, [byId, lineIds, loaded, refusals, busy])
+  }, [byId, allById, hitItems, lineIds, loaded, refusals, busy])
 
-  /* Sends again the deferred items the list shows restorable, and forgets
-     those that left it. It runs on each delivery and when an answer defers
-     items, because the list that shows a small project back can arrive
-     before the answer that defers its items. */
+  /* Sends again the deferred items a list shows restorable. It reads the
+     main list as well as the shown one. No Deleted by choice narrows the
+     main list, so an item that another choice hides is still sent once its
+     project is back. An item leaves the waiting set when it is sent, and the
+     answer speaks for it from then on (deferred again, it waits again). A
+     waiting item that no list holds stays, since a list narrowed to one
+     person or a capped one need not hold it, unless the main list is
+     complete and no longer holds it. It runs on each delivery of either list
+     and when an answer defers items, because the list that shows a small
+     project back can arrive before the answer that defers its items. */
   useEffect(() => {
-    if (!loaded) return
-    // a deferred id the list holds as restorable, or no longer holds
-    const settled = [...waiting].filter((id) => byId.get(id)?.can_restore !== false)
-    if (settled.length === 0) return
-    setWaiting((current) => new Set([...current].filter((id) => !settled.includes(id))))
-    const ready = settled.flatMap((id) => byId.get(id) ?? [])
+    if (waiting.size === 0) return
+    const complete = main.list?.capped === false
+    const ready: DeletedRow[] = []
+    const gone: string[] = []
+    for (const id of waiting) {
+      const held = [byId.get(id), allById.get(id)]
+      const row = held.find((r) => r?.can_restore)
+      if (row) ready.push(row)
+      else if (complete && held.every((r) => r === undefined)) gone.push(id)
+    }
+    if (ready.length === 0 && gone.length === 0) return
+    const settled = new Set([...gone, ...ready.map((row) => row.id)])
+    setWaiting((current) => new Set([...current].filter((id) => !settled.has(id))))
     if (ready.length) void restore(ready)
     // restore reads the newest state through refs and setters
-  }, [byId, loaded, waiting])
+  }, [byId, allById, main.list, waiting])
 
   const options = useMemo(
     () => deletedByOptions(all, new Set(all.map((row) => row.org_id)).size > 1),
@@ -305,13 +340,15 @@ export function DeletedItemsPage() {
   }, [main.list, by, options])
 
   const filtered = kind !== 'all' || !!lower || by !== ANYONE
-  const orgs = [...new Set(all.map((row) => row.org_id))]
+  // a search hit can come from an organization that a capped list stopped before
+  const orgRows = [...all, ...hitItems.values()]
+  const orgs = [...new Set(orgRows.map((row) => row.org_id))]
   const grouped = orgs.length > 1
   const groups = grouped
     ? orgs
         .map((org) => ({
           org,
-          name: all.find((row) => row.org_id === org)?.org_name ?? '',
+          name: orgRows.find((row) => row.org_id === org)?.org_name ?? '',
           lines: lines.filter((line) => lineItem(line).org_id === org),
         }))
         .filter((group) => group.lines.length > 0)
@@ -321,8 +358,8 @@ export function DeletedItemsPage() {
             a.name.localeCompare(b.name),
         )
     : [{ org: '', name: '', lines }]
-  const shownIds = [...lineIds].filter((id) => byId.get(id)?.can_restore)
-  const chosen = [...selected].flatMap((id) => byId.get(id) ?? [])
+  const shownIds = [...lineIds].filter((id) => itemOf(id)?.can_restore)
+  const chosen = [...selected].flatMap((id) => itemOf(id) ?? [])
   const chosenReady = chosen.filter((row) => row.can_restore)
   const wide = rows.some((row) => row.can_purge)
   const now = new Date()
@@ -401,15 +438,24 @@ export function DeletedItemsPage() {
 
   /* ----------------------------------------------------------- restoring */
   /** Restores `items` and says how it went. `announce` are the items the
-      person asked for; others in the call are what they wait for. `settle`
-      moves focus once the page shows the answer. */
-  async function restore(items: DeletedRow[], announce = items, settle?: () => void) {
+      person asked for; others in the call are what they wait for. `name`
+      names the one announced item where the page has no name for it.
+      `settle` moves focus once the page shows the answer. */
+  async function restore(
+    items: ItemRow[],
+    {
+      announce = items,
+      name,
+      settle,
+    }: { announce?: ItemRow[]; name?: string; settle?: () => void } = {},
+  ) {
     const ids = items.map((row) => row.id)
     setBusy((current) => new Set([...current, ...ids]))
     setRefusals((current) => new Map([...current].filter(([id]) => !ids.includes(id))))
     const outcome = await P.restoreDeletedItems(items)
     if (outcome.deferred.length > 0)
       setWaiting((current) => new Set([...current, ...outcome.deferred]))
+    if (outcome.done.length > 0) setRestored((current) => new Set([...current, ...outcome.done]))
     if (settle) focusNext.current = settle
     setBusy((current) => new Set([...current].filter((id) => !ids.includes(id))))
     setRefusals((current) => {
@@ -419,16 +465,18 @@ export function DeletedItemsPage() {
     })
     const back = new Set([...outcome.done, ...outcome.deferred])
     setSelected((current) => new Set([...current].filter((id) => !back.has(id))))
-    announceRestore(announce, outcome, back)
+    announceRestore(announce, outcome, back, name)
     return outcome
   }
 
   /* The toast after a restore (the review's spec): one item by name, many by
-     count, and a partial failure as an error that counts what failed. */
+     count, and a partial failure as an error that counts what failed. `name`
+     stands for the one item's own name. */
   function announceRestore(
-    items: DeletedRow[],
+    items: ItemRow[],
     outcome: DeletedItemsOutcome<RestoreRefusal>,
     back: ReadonlySet<string>,
+    name?: string,
   ) {
     const done = items.filter((row) => back.has(row.id))
     const missed = items.length - done.length
@@ -438,6 +486,10 @@ export function DeletedItemsPage() {
         return
       }
       const row = done[0]
+      if (name !== undefined) {
+        toast(`Restored ${name}`)
+        return
+      }
       if (row.kind === 'task') {
         toast(`Restored ${row.key}${row.archived ? ' to Archived tasks' : ''}`)
         return
@@ -456,11 +508,11 @@ export function DeletedItemsPage() {
     if (items.length === 1) {
       const row = items[0]
       const reason = outcome.refused.find((r) => r.id === row.id)?.reason
-      const name = row.kind === 'task' ? row.key : `“${row.title}”`
+      const label = name ?? (row.kind === 'task' ? row.key : `“${row.title}”`)
       toast(
         reason
-          ? `Couldn't restore ${name}. ${refusalText(reason)}`
-          : (outcome.error ?? `Couldn't restore ${name}.`),
+          ? `Couldn't restore ${label}. ${refusalText(reason)}`
+          : (outcome.error ?? `Couldn't restore ${label}.`),
         'error',
       )
       return
@@ -485,7 +537,7 @@ export function DeletedItemsPage() {
       return
     }
     if (!row.can_restore || busy.has(row.id)) return
-    void restore([row], [row], settleFocus(key, around(key)))
+    void restore([row], { settle: settleFocus(key, around(key)) })
   }
 
   /** Restore N selected. One item restores at once, and more open the bulk
@@ -504,15 +556,16 @@ export function DeletedItemsPage() {
       openAsk({ kind: 'project', line: hit, key: lineKey(hit), selection: true })
       return
     }
-    void restore(chosenReady, chosenReady, () => restoreFocus(selectAllOrSearch()))
+    void restore(chosenReady, { settle: () => restoreFocus(selectAllOrSearch()) })
   }
 
   /* --------------------------------------------------------------- render */
   // The count names items, so a project with three search hits counts once.
-  // A list narrowed to one person on the server has no total to count against.
+  // The total holds the project items that only a hit names. A list narrowed
+  // to one person on the server has no total to count against.
   const countText =
     filtered && person === undefined
-      ? `${lineIds.size.toLocaleString('en-US')} of ${plural(rows.length, 'item')}`
+      ? `${lineIds.size.toLocaleString('en-US')} of ${plural(rows.length + hitItems.size, 'item')}`
       : plural(lineIds.size, 'item')
 
   const selectionBar = (place: 'top' | 'bottom') => (
@@ -807,7 +860,8 @@ export function DeletedItemsPage() {
         </Button>
       </div>
     )
-  else if (rows.length === 0) body = <ListNote>No deleted items.</ListNote>
+  // a capped list with no rows can still have search hits to show
+  else if (rows.length === 0 && lines.length === 0) body = <ListNote>No deleted items.</ListNote>
   else if (lines.length === 0) body = <ListNote>No deleted items match the filter.</ListNote>
   else
     body = groups.map((group) => (
@@ -944,19 +998,26 @@ export function DeletedItemsPage() {
           line={ask.line}
           holder={(() => {
             const item = lineItem(ask.line)
-            return findItem(ask.line.kind === 'match' ? item.id : item.blocked?.item_id)
+            if (ask.line.kind !== 'match') return findItem(item.blocked?.item_id)
+            // the hit's own item stands in while no list holds its project item
+            return itemOf(item.id) ?? (item.hit ? item : undefined)
           })()}
           saving={saving}
           onClose={() => setAsk(null)}
           onRestore={async (holder) => {
-            const item = lineItem(ask.line)
+            const { line } = ask
             windowSides.current = around(ask.key)
             setSaving(true)
             // a search hit comes back with its project; an item that waits
             // for its project goes in the same call and is deferred
-            const outcome = await restore(ask.line.kind === 'match' ? [holder] : [holder, item], [
-              holder,
-            ])
+            const outcome = await restore(line.kind === 'match' ? [holder] : [holder, line.row], {
+              announce: [holder],
+              // a project item known only from a hit has no name of its own
+              name:
+                line.kind === 'match' && holder.hit
+                  ? `${line.match.key} and its project`
+                  : undefined,
+            })
             setSaving(false)
             // a call refused whole (billing, offline) keeps it open for another try
             if (outcome.error === null || outcome.done.length > 0) closeActed()
@@ -1012,7 +1073,7 @@ function BulkRestoreWindow({
   onRestore,
   focusAfterClose,
 }: {
-  rows: DeletedRow[]
+  rows: ItemRow[]
   now: Date
   saving: boolean
   onClose: () => void
@@ -1074,7 +1135,9 @@ function comesBack(holder: DeletedRow): string {
     project, or (for admins) an item deleted before its project, can only
     come back with that project item, so Restore brings the project back
     first. When the project item cannot be restored, the window says why and
-    offers Close. */
+    offers Close. A project item that only a search hit names (a capped list
+    stopped before it) has no name or counts here, so the window speaks of
+    "the project". */
 function ProjectFirstWindow({
   line,
   holder,
@@ -1084,14 +1147,15 @@ function ProjectFirstWindow({
   focusAfterClose,
 }: {
   line: Line
-  holder: DeletedRow | undefined
+  holder: ItemRow | undefined
   saving: boolean
   onClose: () => void
-  onRestore: (holder: DeletedRow) => void
+  onRestore: (holder: ItemRow) => void
   focusAfterClose: () => HTMLElement | null
 }) {
   const item = lineItem(line)
   const name = line.kind === 'match' ? line.match.key : itemName(item)
+  const project = holder?.hit ? undefined : holder?.title
   const canRestore = holder?.can_restore === true
   const reason = !holder
     ? null
@@ -1106,7 +1170,7 @@ function ProjectFirstWindow({
       onClose={saving ? () => false : onClose}
       onSubmit={() => holder && onRestore(holder)}
       canSubmit={canRestore && !saving}
-      submitLabel={saving ? 'Restoring…' : `Restore ${holder?.title ?? 'the project'} and ${name}`}
+      submitLabel={saving ? 'Restoring…' : `Restore ${project ?? 'the project'} and ${name}`}
       focusAfterClose={focusAfterClose}
       footer={
         canRestore ? undefined : (
@@ -1124,9 +1188,14 @@ function ProjectFirstWindow({
           <p>
             <b className="font-semibold text-text-1">{name}</b>
             {line.kind === 'match'
-              ? ' was deleted together with its project '
-              : ' was deleted before its project '}
-            <b className="font-semibold text-text-1">{holder.title}</b>
+              ? ' was deleted together with its project'
+              : ' was deleted before its project'}
+            {project !== undefined && (
+              <>
+                {' '}
+                <b className="font-semibold text-text-1">{project}</b>
+              </>
+            )}
             {line.kind === 'match'
               ? '. It can only come back with the project.'
               : ', which is in Deleted items too. It can only come back after the project.'}
@@ -1137,7 +1206,14 @@ function ProjectFirstWindow({
             items too. It can only come back after the project.
           </p>
         )}
-        {holder && <p className="text-sm">{reason ?? comesBack(holder)}</p>}
+        {holder && (
+          <p className="text-sm">
+            {reason ??
+              (project === undefined
+                ? 'The project comes back with all its tasks. They keep their keys.'
+                : comesBack(holder))}
+          </p>
+        )}
       </div>
     </ModalShell>
   )
