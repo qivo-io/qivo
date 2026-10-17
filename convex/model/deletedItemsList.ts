@@ -13,8 +13,13 @@
  * for a sub-project) and the task items with a subtask in it
  * (deleted_tasks.by_org_cross_project). Every range is read newest first up
  * to LIST.cap items, and a seat lists at most LIST.cap; `capped` says when
- * more may exist. A `deleted_by` filter narrows every seat to one person's
- * deletes, so an admin can reach older ones. */
+ * more may exist. A `deleted_by` filter keeps one person's deletes, judged
+ * by the reference predicate, so a seat that reuses the id of someone
+ * removed does not take over their deletes. An admin's seat reads that
+ * person's range instead of the newest items, so it reaches older ones.
+ * Every other seat filters the ranges it reads anyway: a range of someone
+ * else's deletes would hold items hidden from the seat, and `capped` would
+ * then tell how many there are. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -23,6 +28,7 @@ import type { CredentialTable } from '../lib/enums'
 import { issueKey } from '../lib/taskRefs'
 import {
   type BlockDetail,
+  billingPaused,
   blockDetail,
   type ItemView,
   namesProfile,
@@ -47,7 +53,9 @@ export const MATCHES = { max: 50, scan: 256 }
  * personal token's or connected app's name shows only to organization
  * admins and to its owner, the deleter; an agent key's to everyone. `who`
  * is an opaque key for grouping rows by person and credential: it names the
- * credential only to those who may see its name. */
+ * credential only to those who may see its name, and the person only while
+ * their profile is the one that deleted, so every "Someone" row shares one
+ * key and none folds into a later seat that reuses a removed person's id. */
 export type Deleter = {
   /** the viewer deleted it */
   you: boolean
@@ -134,8 +142,11 @@ async function seatList(
   const sight = await sightOf(ctx, me)
   const orgName = (await byId(ctx, 'organizations', me.org_id))?.name ?? ''
   const { items, truncated } = await candidatesOf(ctx, sight, deletedBy)
+  const deleter = deletedBy === undefined ? undefined : sight.profiles.get(deletedBy)
   const rows: DeletedRow[] = []
   for (const item of items) {
+    if (deletedBy !== undefined && !(item.deleted_by === deletedBy && sameReference(deleter, item)))
+      continue
     const row = await rowOf(ctx, sight, orgName, item)
     if (row !== null) rows.push(row)
   }
@@ -144,7 +155,8 @@ async function seatList(
 }
 
 /** The items `sight`'s person may see, from the ranges that can hold them
- * (see the file comment). `truncated` when a range held more than it read. */
+ * (see the file comment). `truncated` when a range held more than it read.
+ * Only an admin's seat reads `deletedBy`'s range; seatList filters. */
 async function candidatesOf(
   ctx: QueryCtx,
   sight: Sight,
@@ -170,7 +182,7 @@ async function candidatesOf(
       if (item !== null) found.set(id, item)
     }
   }
-  if (deletedBy !== undefined || me.org_role === 'admin') {
+  if (me.org_role === 'admin') {
     add(
       await take(
         deletedBy === undefined
@@ -262,7 +274,11 @@ async function rowOf(
     state: item.state,
     can_restore: ready && block === null,
     blocked,
-    can_purge: me.org_role === 'admin' && (ready || item.state === 'stuck'),
+    // Delete now is an adminMutation, which billing's read-only state refuses
+    can_purge:
+      me.org_role === 'admin' &&
+      (ready || item.state === 'stuck') &&
+      !(await billingPaused(ctx, memo, item.org_id)),
   }
   if (shown !== null)
     return {
@@ -337,7 +353,7 @@ function deleterOf(sight: Sight, item: Item): Deleter {
     name: known ? profile.name : undefined,
     kind: via?.table ?? 'app',
     credential_name: named ? via.name : undefined,
-    who: `${id ?? ''}|${how}`,
+    who: `${known ? id : ''}|${how}`,
   }
 }
 

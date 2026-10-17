@@ -13,7 +13,13 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
-import { type RestoreResult, restoreItems, startPurge, TRASH_BUDGET } from '../model/deletedItems'
+import {
+  type RestoreResult,
+  restoreItems,
+  STALLED_MS,
+  startPurge,
+  TRASH_BUDGET,
+} from '../model/deletedItems'
 import {
   activityFor,
   as,
@@ -34,6 +40,7 @@ import {
   blobExists,
   comment,
   DAY,
+  DEFAULT_BUDGET,
   deleteProject,
   deleteTask,
   HOUR,
@@ -1002,6 +1009,86 @@ describe('restoring a project item', () => {
     for (const task of tasks) expect(await liveTask(t, task.id)).not.toBeNull()
     await assertNoDanglingRefs(t, 'after a restore that was sent back')
   })
+
+  it('reveals tasks that hang under one parent outside the project in a few reads each', async () => {
+    // the reveal writes every task under a parent outside in one
+    // transaction, so it must not read a dozen ranges for each
+    const t = newT({ transactionLimits: { databaseQueries: 150 } })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const epic = await plantIssue(t, { org_id, project_id: f.hidden.id })
+    await plantSubscription(t, { issue_id: epic.id, profile_id: f.admin.id })
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 40; i++)
+      tasks.push(await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: epic.id }))
+    TRASH_BUDGET.ranges = 60
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.sub2.id)
+    expect(item.state).toBe('ready')
+    // without its subtasks the epic holds hours of its own
+    await patch(t, 'issues', epic.id, { remaining_hours: 8, remaining_set_at: NOW })
+
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    await stepThrough(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    for (const task of tasks) expect((await liveTask(t, task.id))?.parent_id).toBe(epic.id)
+    // the epic is a group again and lost its hours once
+    expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
+    expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
+      'Remaining cleared (was 8 h)',
+    ])
+    await assertNoDanglingRefs(t, 'after tasks came back under a parent outside')
+  })
+
+  it('sends a restore whose steps keep failing back to Deleted items rather than stuck', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 3; i++) {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+      await comment(t, task)
+      tasks.push(task)
+    }
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await restore(t, f.user, [item.id])
+    expect((await itemById(t, item.id))?.state).toBe('restoring')
+    // every step fails: it leaves the job at its last committed progress
+    let now = START
+    for (let round = 0; round < 20; round++) {
+      const job = await jobFor(t, item.id)
+      if (job === null || job.phase.startsWith('move')) break
+      await t.run((ctx) => ctx.scheduler.cancel(job.scheduled_id!))
+      now += STALLED_MS + 1
+      vi.setSystemTime(now)
+      await t.mutation(internal.deletedItems.recover, {})
+    }
+    expect(await itemById(t, item.id)).toMatchObject({ state: 'moving', restore_by: f.user.id })
+    expect(await jobFor(t, item.id)).toMatchObject({
+      phase: 'move_drain',
+      attempts: 0,
+      budget_scale: 1,
+    })
+    expect(error).toHaveBeenCalledWith(
+      'A deleted item restore could not finish and goes back',
+      expect.objectContaining({ item_id: item.id }),
+    )
+    // the move takes back what the restore wrote, and the item can be
+    // restored again
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await runSteps(t)
+    const ready = await itemFor(t, f.sub2.id)
+    expect(ready).toMatchObject({ state: 'ready', counts: { tasks: 3 } })
+    expect(ready.restore_by).toBeUndefined()
+    expect(await t.run((ctx) => ctx.db.query('comments').collect())).toEqual([])
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    await runSteps(t)
+    for (const task of tasks) expect(await liveTask(t, task.id)).not.toBeNull()
+  })
 })
 
 describe('restore calls', () => {
@@ -1181,5 +1268,127 @@ describe('restore calls', () => {
     expect((await storedTasks(t, projectItem.id)).map((x) => x.task_id)).toEqual([sub.id])
     expect((await itemFor(t, f.sub2.id)).counts.tasks).toBe(1)
     await assertNoDanglingRefs(t, 'after a late split')
+  })
+
+  /** A task in Firmware whose subtask in Board rev has a comment, a file and
+   * a link to a live task, deleted together and restored with one row per
+   * step, paused once every stored row but the tasks is back in the live
+   * tables. Then Board rev is deleted, so the reveal sends the restore back
+   * to the split. */
+  async function lateSplit() {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
+    await comment(t, sub)
+    const file = await attach(t, sub)
+    const other = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await t.run((ctx) =>
+      ctx.db.insert('issue_links', {
+        org_id,
+        id: uuid(),
+        source_id: sub.id,
+        target_id: other.id,
+        type: 'relates',
+        pair_key: [sub.id, other.id].sort().join(':'),
+        created_at: NOW,
+      }),
+    )
+    await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
+    const item = await itemFor(t, root.id)
+    TRASH_BUDGET.rows = 1
+    await restore(t, f.user, [item.id])
+    for (let i = 0; (await storedRows(t, item.id)).some((r) => r.table !== 'issues'); i++) {
+      expect(i).toBeLessThan(20)
+      await step(t, item.id)
+    }
+    expect((await jobFor(t, item.id))?.phase).toBe('restore_links')
+    const back = await liveRowsOf(t, sub.id)
+    expect([back.comments, back.issue_attachments, back.issue_links].map((r) => r.length)).toEqual([
+      1, 1, 1,
+    ])
+    TRASH_BUDGET.rows = 300
+    await deleteProject(t, f, f.sub2.id)
+    return { t, f, root, sub, file, item, projectItem: await itemFor(t, f.sub2.id) }
+  }
+
+  it('moves the rows a late split finds back in the live tables with the subtask', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { t, root, sub, file, item, projectItem } = await lateSplit()
+    await stepThrough(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await liveTask(t, root.id)).not.toBeNull()
+    expect(await liveTask(t, sub.id)).toBeNull()
+    // nothing of the subtask stays live; it all waits in its project's item
+    expect(await liveRowsOf(t, sub.id)).toEqual({
+      comments: [],
+      issue_labels: [],
+      issue_subscriptions: [],
+      issue_attachments: [],
+      issue_links: [],
+    })
+    const owned = (await storedRows(t, projectItem.id)).filter((r) => r.owner_id === sub.id)
+    expect(owned.map((r) => r.table).sort()).toEqual([
+      'comments',
+      'issue_attachments',
+      'issue_links',
+      'issues',
+    ])
+    await assertNoDanglingRefs(t, 'after a late split moved the rows back')
+    // and the project item's purge takes all of it, the bytes included
+    await t.run(async (ctx) => startPurge(ctx, (await byId(ctx, 'deleted_items', projectItem.id))!))
+    await runSteps(t)
+    expect(await itemById(t, projectItem.id)).toBeNull()
+    expect(await blobExists(t, file.storage_id)).toBe(false)
+    await assertNoDanglingRefs(t, 'after the project item of a late split was purged')
+  })
+
+  it('deletes the rows a late split finds back once the subtask is gone for good', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { t, root, sub, file, item, projectItem } = await lateSplit()
+    // the project item is purged before the restore reaches its reveal
+    await t.run(async (ctx) => startPurge(ctx, projectItem, { inline: true }))
+    await runSteps(t)
+    expect(await itemById(t, projectItem.id)).toBeNull()
+    await stepThrough(t, item.id)
+    expect(await liveTask(t, root.id)).not.toBeNull()
+    expect(await liveTask(t, sub.id)).toBeNull()
+    expect(await liveRowsOf(t, sub.id)).toEqual({
+      comments: [],
+      issue_labels: [],
+      issue_subscriptions: [],
+      issue_attachments: [],
+      issue_links: [],
+    })
+    expect(await blobExists(t, file.storage_id)).toBe(false)
+    await assertNoDanglingRefs(t, 'after a late split deleted the subtask for good')
+  })
+
+  it('defers what waits for a project item of the same call, whatever the order of the ids', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, f, task.id)
+    await deleteProject(t, f, f.sub.id)
+    await deleteProject(t, f, f.meta.id)
+    const ids = {
+      task: (await itemFor(t, task.id)).id,
+      sub: (await itemFor(t, f.sub.id)).id,
+      meta: (await itemFor(t, f.meta.id)).id,
+    }
+    // Firmware waits for Testbed platform, and the task for Firmware
+    expect(await restore(t, f.admin, [ids.task, ids.sub, ids.meta])).toEqual({
+      restored: [ids.meta],
+      refused: [],
+      deferred: [ids.sub, ids.task],
+    })
+    expect(await restore(t, f.admin, [ids.task, ids.sub])).toEqual({
+      restored: [ids.sub],
+      refused: [],
+      deferred: [ids.task],
+    })
+    expect((await restore(t, f.admin, [ids.task])).restored).toEqual([ids.task])
+    expect(await liveTask(t, task.id)).not.toBeNull()
   })
 })

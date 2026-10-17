@@ -497,10 +497,10 @@ export async function assertParentChain(
 
 /**
  * assertParentChain as an answer instead of a throw: the parent row, or the
- * refusal assertParentChain would throw. A restore from Deleted items
- * (model/deletedItems.ts) keeps a task's parent only when this passes for
- * the person restoring. Without an `actor` only the hierarchy is checked:
- * the parent exists in the organization, no cycle, at most 20 levels.
+ * refusal assertParentChain would throw. Without an `actor` only the
+ * hierarchy is checked: the parent exists in the organization, no cycle, at
+ * most 20 levels. A restore from Deleted items (model/deletedItems.ts)
+ * applies the same rules once per parent, with levelsAbove.
  */
 export async function parentChain(
   ctx: QueryCtx,
@@ -524,16 +524,8 @@ export async function parentChain(
   if (actor !== undefined && !(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) {
     return { refusal: forbidden('no write access to the parent task') }
   }
-  // upward walk: bound the chain above the attach point
-  let cur: string | undefined = parentId
-  let up = 0
-  while (cur !== undefined) {
-    up += 1
-    if (up > 20) return { refusal: rule('task hierarchy too deep or cyclic') }
-    const row: Doc<'issues'> | null = await byId(ctx, 'issues', cur)
-    cur = row?.parent_id
-    if (cur === issue.id) return { refusal: rule('task parent cycle detected') }
-  }
+  const up = await levelsAbove(ctx, parentId, issue.id)
+  if (typeof up !== 'number') return { refusal: up }
   // downward measure (0038 fix 1): the height of the subtree hanging under
   // the row, capped at 24 so the walk stays finite over corrupt cycles — a
   // reparent must not merge two legal chains into one deeper than the
@@ -552,6 +544,26 @@ export async function parentChain(
   }
   if (up + 1 + down > 20) return { refusal: rule('task hierarchy too deep') }
   return { parent }
+}
+
+/** The upward walk of parentChain: how many levels the chain from
+ * `parentId`, the attach point, to the top holds, or the refusal past 20
+ * levels, or when the walk meets `issueId` (the task to attach), a cycle. */
+export async function levelsAbove(
+  ctx: QueryCtx,
+  parentId: string,
+  issueId?: string,
+): Promise<number | ConvexError<Refusal>> {
+  let cur: string | undefined = parentId
+  let up = 0
+  while (cur !== undefined) {
+    up += 1
+    if (up > 20) return rule('task hierarchy too deep or cyclic')
+    const row: Doc<'issues'> | null = await byId(ctx, 'issues', cur)
+    cur = row?.parent_id
+    if (cur !== undefined && cur === issueId) return rule('task parent cycle detected')
+  }
+  return up
 }
 
 /* issue_archive_parent_guard (0070:65-82): an ACTIVE row under an ARCHIVED
