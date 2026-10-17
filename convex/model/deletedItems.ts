@@ -564,8 +564,8 @@ export type Memo = {
   /** whether a task belongs to the project item a step restores, by task
    * (inThisItem); its answer holds for the whole step */
   inItem: Map<string, Promise<boolean>>
-  /** the project a stored task of the item a step restores goes back to, by
-   * task (restoredProject) */
+  /** the project a task of the item a step restores goes back to, by task
+   * (restoredProject) */
   restoredProjects: Map<string, Promise<string | undefined>>
 }
 
@@ -1900,21 +1900,30 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   await run.ctx.db.delete(row._id)
 }
 
-/** The project stored task `taskId` of the restoring item goes back to,
- * from its deleted_tasks row, read once per step. Rows stored before
- * attachments carried their project have none, so this is where a restored
- * attachment gets it. Every task of the item has that row until the restore
- * writes the task, which comes after its relation rows. A task the item does
- * not hold answers undefined, and a row without a project counts in its
- * task's, as storageUsage reads it, so it never counts in a project its
- * task is not in. */
+/** The project task `taskId` of the restoring item goes back to, read
+ * once per step. Rows stored before attachments carried their project
+ * have none, so this is where a restored attachment gets it. A task of the
+ * item has its deleted_tasks row until the restore writes the task, which
+ * usually comes after the task's relation rows. A project item can meet a
+ * task's rows after it wrote the task, when a split (splitOff) hands it a
+ * subtask past restore_rows and restore_tasks writes that subtask before
+ * the reveal sends the item back for its rows. That task is live under one
+ * of the item's projects, and answers that project. Any other task answers
+ * undefined, and a row without a project counts in its task's, as
+ * storageUsage reads it, so it never counts in a project its task is not
+ * in. */
 function restoredProject(run: Run, taskId: string): Promise<string | undefined> {
   return memoRead(run.memo.restoredProjects, taskId, async () => {
     const light = await run.ctx.db
       .query('deleted_tasks')
       .withIndex('by_task', (q) => q.eq('task_id', taskId))
       .collect()
-    return light.find((row) => row.item_id === run.item.id)?.project_id
+    const stored = light.find((row) => row.item_id === run.item.id)
+    if (stored !== undefined) return stored.project_id
+    const written = await byId(run.ctx, 'issues', taskId)
+    if (written === null) return undefined
+    chargeRead(run.budget, written)
+    return itemProjectIds(run.item).includes(written.project_id) ? written.project_id : undefined
   })
 }
 
