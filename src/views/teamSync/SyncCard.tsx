@@ -37,6 +37,7 @@ import { useMenuBackLayer, useMobileBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { fmtHours, plannableHoursOf } from '@/lib/workload'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
+import { TEXT_MAX } from '../../../convex/lib/textLimits'
 import { DelayBanner } from '../kanbanCards'
 
 /** What every card on one page shares: whose page it is, their reading
@@ -278,7 +279,9 @@ export function MentionCtl({
   const ready = !!person && text.trim() !== ''
   const send = () => {
     if (!ready) return
-    P.addComment(it.uuid, mentionBody(person, text))
+    // a refused note (the store toasts why, such as a body over the length
+    // cap once escaped) keeps the window open, so the note is not lost
+    if (P.addComment(it.uuid, mentionBody(person, text)) === null) return
     close()
     onSent()
   }
@@ -339,6 +342,7 @@ export function MentionCtl({
           rows={2}
           aria-label="Note"
           placeholder="A short note…"
+          maxLength={TEXT_MAX}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {

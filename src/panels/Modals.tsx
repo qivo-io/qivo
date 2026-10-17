@@ -16,6 +16,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
+import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
+import { TEXT_MAX } from '../../convex/lib/textLimits'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -529,6 +531,7 @@ function NewProjectModal({
       <MField label="Description">
         <Input
           aria-label="Description"
+          maxLength={PROJECT_DESCRIPTION_MAX}
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
           className={ctlClass}
@@ -1363,6 +1366,7 @@ function ArchiveIssueModal({
           aria-label="Reason for archiving"
           autoFocus
           rows={3}
+          maxLength={TEXT_MAX}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           className={`${ctlClass} h-auto min-h-[72px] resize-y px-2.5 py-2 leading-normal`}

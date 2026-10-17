@@ -48,8 +48,10 @@ const ORG_PAGE = 64
  * scheduleArchivedReads step takes, so a page schedules one step. */
 const TASK_PAGE = ARCHIVED_READ_TASKS
 
-/* The most bytes of tasks one `org` step reads. Task descriptions have no
- * size cap, so a page also ends early on bytes. */
+/* The most bytes of tasks one `org` step reads. Descriptions hold up to
+ * TEXT_MAX characters (lib/textLimits.ts, about 60 KB stored), and tasks
+ * saved before that cap can be near the 1 MiB document limit, so a page
+ * also ends early on bytes. */
 const TASK_PAGE_BYTES = 8 * 1024 * 1024
 
 /* Projects per `org` step. Each archived one is one scheduled call. */

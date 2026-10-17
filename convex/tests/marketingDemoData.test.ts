@@ -13,6 +13,7 @@ import {
   marketingWeek,
 } from '../internal/marketingDemoData'
 import { taskOwnerId } from '../lib/review'
+import { TEXT_MAX } from '../lib/textLimits'
 import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
@@ -488,6 +489,13 @@ describe('marketing text uses the application Markdown dialect', () => {
       expect(astToMd(blocks)).toBe(text)
       expect(text).not.toMatch(/<\/?p>/)
     }
+  })
+
+  it('keeps every description and comment within the text limit', () => {
+    for (const issue of issues)
+      expect(issue.description.length, issue.key).toBeLessThanOrEqual(TEXT_MAX)
+    for (const comment of comments)
+      expect(comment.body.length, comment.key).toBeLessThanOrEqual(TEXT_MAX)
   })
 })
 

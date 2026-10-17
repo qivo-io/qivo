@@ -917,7 +917,13 @@ then the parent, then the other fields with the archive toggle, then the
 labels, and finally posts `archive_reason`. All of it lands or none of it
 does, and each step writes its own activity row. `title` is trimmed and capped at 80
 characters (a longer one is a `400`; the same shared rule holds in the app
-and over MCP). `status` ∈ backlog · todo · progress ·
+and over MCP). `description` is markdown of at most 20,000 characters, on
+POST and PATCH (a longer one is a `400`, `description must be at most 20,000
+characters`). Characters are counted as UTF-16 code units, the length
+JavaScript reports, so a character outside the Basic Multilingual Plane,
+such as most emoji, counts as two. A task saved earlier with a longer
+description keeps it. Sending that same text back is accepted, and any other
+text over the limit is refused. `status` ∈ backlog · todo · progress ·
 review · done; `priority` ∈ urgent · high · medium · low. `paused` (a
 boolean) holds the work. Only a To Do, In Progress or In Review task can be
 paused. Asking for it on a Done or Backlog task, on POST or PATCH, is a
@@ -1018,7 +1024,9 @@ same way, as a comment by the caller, trimmed, at the moment of the archive.
 It is posted only when that PATCH archives the task, so not for a task that
 was already archived, and a blank reason posts nothing. `archive_reason`
 without `archived: true` is a `400` (`archive_reason needs archived set to
-true`).
+true`). It is at most 20,000 characters after trimming, counted like a
+description; a longer one is a `400` (`archive_reason must be at most 20,000
+characters`) and the PATCH changes nothing.
 
 Task shape of a list row from `GET /v1/tasks`:
 
@@ -1162,8 +1170,10 @@ server-stamped precisely so it cannot be forged, and passing
 over the API — a comment is always authored by the agent posting it`, or for
 a personal token `comments cannot be attributed over the API; a comment is
 always authored by the person posting it`). You are only ever yourself. `POST` returns `201` with
-the created comment; a blank `body` is a `400`. Comments are deleted with
-their task.
+the created comment; a blank `body` is a `400`. A comment body is at most
+20,000 characters after trimming, counted like a description, on `POST` and
+`PATCH`; a longer one is a `400` (`a comment must be at most 20,000
+characters`). Comments are deleted with their task.
 
 `PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":
@@ -1173,7 +1183,8 @@ project (an organization admin leads every project); anyone else gets `403`
 (`only the author or a project lead can edit this comment`, or `delete`). A
 comment on a task the caller cannot read answers `404` (`comment not found`),
 like an unknown id. The body is trimmed and may not be blank (`400` `a comment
-cannot be empty`). Sending the text it already has changes nothing. An edit
+cannot be empty`). Sending the text it already has changes nothing, even for
+a comment saved earlier with more than 20,000 characters. An edit
 records `edited_at` and `edited_by_id`, and people it newly mentions follow
 the task and get an inbox message, as on a new comment. Neither writes an
 activity row or a webhook event.

@@ -55,6 +55,7 @@ import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound, type Refusal } from '../lib/functions'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
+import { TEXT_MAX } from '../lib/textLimits'
 import { inWorkingSet } from '../lib/workingSet'
 import { deleteComment, editComment } from '../model/comments'
 import {
@@ -697,6 +698,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
           body: {
             type: 'string',
             minLength: 1,
+            maxLength: TEXT_MAX,
           },
         },
         required: ['comment', 'body'],

@@ -69,6 +69,7 @@ import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { reviewStamp } from '../lib/review'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
+import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { issueChanges, logActivity, machineDetail } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import { deleteIssueDeep } from './cascade'
@@ -145,6 +146,20 @@ export function cleanTitle(raw: unknown): string {
   if ([...title].length > TITLE_MAX)
     throw badRequest(`title must be at most ${TITLE_MAX} characters`)
   return title
+}
+
+/* A `rule`, so the app shows the sentence to a tab that skipped its own
+ * check (one loaded before the cap); REST answers it as a 400 either way. */
+export const DESCRIPTION_TOO_LONG = `description must be at most ${TEXT_MAX_LABEL} characters`
+
+/** Answers the description to store, which is the text as sent, untrimmed,
+ * or '' for null or absent. Refuses text longer than TEXT_MAX unless it
+ * equals `current`, the task's stored description, so a task saved before
+ * the cap keeps its text through writes that send it back unchanged. */
+export function cleanDescription(raw: string | null | undefined, current?: string): string {
+  const text = raw ?? ''
+  if (text !== current && text.length > TEXT_MAX) throw rule(DESCRIPTION_TOO_LONG)
+  return text
 }
 
 /* assertOwnUser + assertAssignable (core.ts:327-347). Checked in this order
@@ -869,6 +884,10 @@ export type CreateIssueArgs = {
   paused?: boolean | null
 }
 
+/** Creates the task `args` describes as `me`, who needs Edit on its
+ * sub-project, and answers the stored row. The app, REST and MCP all create
+ * through it, so every shared field rule runs here, including the title cap
+ * and the TEXT_MAX description cap. */
 export async function createIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; args: CreateIssueArgs; now: string; machine?: MachineNarration },
@@ -890,6 +909,7 @@ export async function createIssueCore(
   const org_id = project.org_id
   const num = await nextIssueNum(ctx, org)
   const title = cleanTitle(args.title)
+  const description = cleanDescription(args.description)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
     const parent = await assertParentChain(ctx, { id: args.id, org_id }, parent_id, me)
@@ -935,7 +955,7 @@ export async function createIssueCore(
       org_id,
       num,
       title,
-      description: args.description ?? '',
+      description,
       status,
       priority: args.priority ?? 'low',
       assignee_id,
@@ -1002,6 +1022,11 @@ export type IssuePatch = {
   paused?: boolean
 }
 
+/** Applies `patch` to `issue` as `me`, who needs Edit on its project, and
+ * answers the stored row. A key present in the patch sets that field and null
+ * clears it. A description over TEXT_MAX is refused unless it equals the
+ * stored text. `machine` carries a REST or MCP caller's provenance and
+ * archive toggle (MachineUpdate). */
 export async function updateIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1124,7 +1149,7 @@ export async function updateIssueCore(
     if (changed) w.remaining_set_at = next === undefined ? undefined : now
   }
   if ('title' in patch) w.title = cleanTitle(patch.title)
-  if ('description' in patch) w.description = patch.description ?? ''
+  if ('description' in patch) w.description = cleanDescription(patch.description, issue.description)
   const entersReview = patch.status === 'review' && issue.status !== 'review'
   if ('status' in patch && patch.status !== undefined) {
     if (await isGroup()) {

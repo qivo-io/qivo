@@ -53,12 +53,13 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { createPortal } from 'react-dom'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
+import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { compressImage } from '../lib/images'
 import type { MdBlock, MdInline } from '../lib/md'
 import { MAX_PARSE, parseMd, sanitizeHref } from '../lib/md'
 import { astToMd } from '../lib/mdSerialize'
 import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
-import { P } from '../store/planner'
+import { P, TEXT_TOO_LONG } from '../store/planner'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
 import { copyImage, downloadImage, openImageFull, toast } from './imgActions'
@@ -127,8 +128,8 @@ const canonical = (text: string) => astToMd(parseMd(text))
 /** Commit form: canonical AND a parse fixpoint (one extra parse catches the
     cases docToAst can't know about, e.g. bare URLs autolinking on reparse).
     Past the parse cap the re-parse would hit parseMd's literal fallback and
-    re-escape everything — the single-pass form is already safe to store, and
-    the next load renders it read-only behind the MAX_PARSE guard. */
+    re-escape everything, so the single-pass form is returned as is. commit
+    then refuses it, because the parse cap is also the save cap (TEXT_MAX). */
 const serialize = (editor: Editor) => {
   const md = astToMd(docToAst(editor.getJSON() as PMNode))
   return md.length > MAX_PARSE ? md : canonical(md)
@@ -143,21 +144,32 @@ const liveEditors = new Map<
   (src: string, repl: { attId: string; alt: string } | null) => boolean
 >()
 
+/** Settles one inline image upload for `issueKey`. The placeholder `src`
+    becomes the attachment `attId`, shown with `alt`, in the live draft and
+    in the committed description, wherever it still is. A failed upload (no
+    `attId`), or a reference that would take the committed description over
+    TEXT_MAX, removes the image instead, and the attachment is deleted again
+    when no text keeps it. */
 function finishUpload(issueKey: string, src: string, attId: string | null, alt: string) {
-  const live = liveEditors.get(issueKey)
-  const inDraft = live ? live(src, attId ? { attId, alt } : null) : false
   const token = `![Uploading image…](${src})`
   const it = P.issueById[issueKey]
   const committed = !!it && typeof it.description === 'string' && it.description.includes(token)
-  if (committed) {
-    const replacement = attId ? `![${alt}](att:${attId})` : ''
-    P.updateIssue(issueKey, {
-      description: it.description.split(token).join(replacement).trim() || null,
-    })
+  const patched = (repl: string) => it.description.split(token).join(repl).trim()
+  const ref = attId ? `![${alt}](att:${attId})` : ''
+  // the image reference is longer than its placeholder, so it can take saved
+  // text over TEXT_MAX. Then the image leaves the draft and the saved text
+  // alike, or the store would refuse the patch and leave the placeholder for
+  // good, and the draft would keep an image it cannot save
+  const overflow = committed && patched(ref).length > TEXT_MAX
+  const live = liveEditors.get(issueKey)
+  const inDraft = live ? live(src, attId && !overflow ? { attId, alt } : null) : false
+  if (committed) P.updateIssue(issueKey, { description: patched(overflow ? '' : ref) || null })
+  if (overflow) {
+    toast(`Image not added. The description would go over the ${TEXT_MAX_LABEL} character limit.`)
   }
-  // gone from both draft and committed text: the paste was discarded before
-  // the upload landed — drop the attachment again
-  if (!inDraft && !committed && attId) P.removeAttachment(attId)
+  // in neither the draft nor the committed text (the paste was discarded
+  // before the upload landed), or too long to keep, so drop the attachment
+  if (attId && (overflow || (!inDraft && !committed))) P.removeAttachment(attId)
 }
 
 /* ---- image node view ------------------------------------------------------ */
@@ -724,10 +736,10 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     if (cm) {
       const text = serialize(ed)
       if (!text.trim()) return // an empty comment isn't a thing — Discard is the way out
-      if (text.length > MAX_PARSE) {
-        // past the parse cap the stored form couldn't be re-edited safely
-        // (the outer guard renders read-only) — refuse instead of trapping
-        toast('Comment too long. Shorten it to save.')
+      if (text.trim().length > TEXT_MAX) {
+        // the server's cap, on the trimmed text the store sends; refusing
+        // here keeps the draft and the edit mode
+        toast(TEXT_TOO_LONG.comment)
         return
       }
       cm.onCommit(text) // the store no-ops a same-body save; still exits edit mode
@@ -752,6 +764,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const text = serialize(ed)
     if (text !== canonRef.current) {
       // no-op otherwise (undo-back-to-original too)
+      if (text.length > TEXT_MAX) {
+        // the server's cap. Returning before the baseline moves keeps the
+        // draft dirty, with the Save bar up, as a refused comment does
+        toast(TEXT_TOO_LONG.description)
+        return
+      }
       rawRef.current = text
       canonRef.current = text
       // ids entering committed text are the store's from here on — its
@@ -1011,7 +1029,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
             ? `pasted-image-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.${ext}`
             : c.name
           const file = generic ? new File([c], name, { type: c.type }) : c
-          const alt = name.replace(/[[\]()\n\\]/g, '_')
+          // at most 60 code points, so a long file name adds little to the
+          // description's length
+          const alt = [...name.replace(/[[\]()\n\\]/g, '_')].slice(0, 60).join('')
           return P.addAttachment(issueKey, file, { inline: true }).then(
             (attId: string | null) => {
               if (attId) sessionUploadsRef.current.push(attId)

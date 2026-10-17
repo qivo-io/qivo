@@ -21,6 +21,7 @@ import {
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
+import { TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -525,6 +526,14 @@ declare global {
 /* Store toasts are refusals and failures unless the caller names a tone. */
 function toast(msg: string, tone: ToastTone = 'error') {
   window.showToast?.(msg, tone)
+}
+
+/** The save-time refusals for text over TEXT_MAX, the server's cap. The cap
+    counts the stored markdown, so formatting, link targets and mentions
+    count too. The editor and the store guards below share them. */
+export const TEXT_TOO_LONG = {
+  description: `Description too long to save. The limit is ${TEXT_MAX_LABEL} characters, including formatting.`,
+  comment: `Comment too long to save. The limit is ${TEXT_MAX_LABEL} characters, including formatting.`,
 }
 
 /* --- the write path ---------------------------------------------------------
@@ -3170,6 +3179,16 @@ export const PLANNER = {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
+    // text over the server's cap is refused before the paint, so a draft is
+    // never lost to a rollback; a task saved before the cap may send its
+    // stored text back unchanged, as the server allows
+    if ('description' in patch) {
+      const text = patch.description ?? ''
+      if (text !== row.description && text.length > TEXT_MAX) {
+        toast(TEXT_TOO_LONG.description)
+        return Promise.resolve(false)
+      }
+    }
     // whoever holds a subtask must see every task above it: refuse here, with
     // the server's reason, before anything is painted (a hidden parent is
     // left to the server)
@@ -3809,12 +3828,18 @@ export const PLANNER = {
   },
 
   /** Post a comment (issue uuid — modal-side, like addAttachment). Returns
-      the new comment id, or null when the issue is gone/refused. */
+      the new comment id, or null when the issue is gone/refused. A body over
+      TEXT_MAX after trimming is refused here with a toast, before the
+      optimistic row, so the caller can keep the draft. */
   addComment: (issueUuid: string, body: string): string | null => {
     const row = rows.issues.get(issueUuid)
     if (!row) return null
     const text = (body || '').trim()
     if (!text) return null
+    if (text.length > TEXT_MAX) {
+      toast(TEXT_TOO_LONG.comment)
+      return null
+    }
     const rec: Row<'comments'> = {
       id: crypto.randomUUID(),
       issue_id: issueUuid,
@@ -3838,10 +3863,18 @@ export const PLANNER = {
     return rec.id
   },
 
+  /** Replaces a comment's body with `body`, trimmed, and stamps the edit.
+      A missing comment, a blank body or the same text changes nothing. A
+      body over TEXT_MAX is refused here with a toast, before the paint, so
+      the editor keeps the draft. */
   updateComment: (id: string, body: string) => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
     if (!rec || !text || rec.body === text) return
+    if (text.length > TEXT_MAX) {
+      toast(TEXT_TOO_LONG.comment)
+      return
+    }
     const issue = rows.issues.get(rec.issue_id)
     const org = issue ? issue.org_id : HOME_ORG
     rec.body = text

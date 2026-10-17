@@ -909,8 +909,10 @@ export async function readArchivedTaskMessages(
   }
 }
 
-/* The most bytes of tasks one project walk step reads. Task descriptions
- * have no size cap, so the page also ends early on bytes. */
+/* The most bytes of tasks one project walk step reads. Descriptions hold up
+ * to TEXT_MAX characters (lib/textLimits.ts, about 60 KB stored), and tasks
+ * saved before that cap can be near the 1 MiB document limit, so the page
+ * also ends early on bytes. */
 const ARCHIVED_READ_TASK_BYTES = 8 * 1024 * 1024
 
 /**

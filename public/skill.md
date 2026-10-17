@@ -153,8 +153,9 @@ Useful field rules:
 
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,
   `high`, `medium`, `low`. Titles must be nonblank and at most 80 characters.
-- Descriptions and comments use Markdown. Omitted update fields stay
-  unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
+- Descriptions and comments use Markdown, up to 20,000 characters each
+  (JavaScript string length, so an emoji can count as two). Omitted update
+  fields stay unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
   `remaining_hours`; use `""` to clear a description.
 - While a task is in `review` with a reviewer set, it is the reviewer's to act
   on; otherwise it is the assignee's. A task with subtasks takes no reviewer.
