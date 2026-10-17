@@ -139,6 +139,7 @@ import {
   MCP_NO_WRITE,
   MCP_PROVENANCE as PROVENANCE,
   pretty,
+  readBody,
   withIgnored,
 } from './shared'
 import { TEAM_TOOLS } from './teams'
@@ -934,6 +935,14 @@ const ack202 = (): Response => new Response(null, { status: 202, headers: withCo
 const INVALID_MESSAGE = {
   jsonrpc: '2.0',
   error: { code: -32600, message: 'Bad Request: the request body is not a valid JSON-RPC message' },
+  id: null,
+}
+
+/* The 413 body for a request over BODY_MAX_BYTES (shared.ts readBody), in
+ * INVALID_MESSAGE's form. */
+const TOO_LARGE = {
+  jsonrpc: '2.0',
+  error: { code: -32600, message: 'Bad Request: the request body is too large' },
   id: null,
 }
 
@@ -2184,7 +2193,8 @@ const mcpPost = httpAction(async (ctx, request) => {
       }))
     )
       return rateLimited()
-    const bodyText = await request.text()
+    const bodyText = await readBody(request)
+    if (bodyText === null) return jsonRes(413, TOO_LARGE)
     const challenge = scopeChallenge(bodyText, credential.scopes)
     if (challenge) return challenge
     try {
@@ -2257,7 +2267,8 @@ const mcpPost = httpAction(async (ctx, request) => {
   })
   if (allowed === null) return unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
-  const bodyText = await (request as unknown as { text(): Promise<string> }).text()
+  const bodyText = await readBody(request)
+  if (bodyText === null) return jsonRes(413, TOO_LARGE)
   // the exact credential row this request runs as, for get_me and events/*
   const owner: EventOwner = {
     profile_id: cred.profileId,

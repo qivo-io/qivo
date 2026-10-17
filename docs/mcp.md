@@ -260,6 +260,12 @@ MCP requests follow the same metering and limits as personal tokens and agent
 keys; this does not meter authorization or token-exchange endpoints as tool
 calls.
 
+A request body may hold at most **1 MiB** (1,048,576 bytes of UTF-8). Qivo
+checks the size after authentication and answers a longer body with HTTP
+`413` and `{"jsonrpc": "2.0", "error": {"code": -32600, "message": "Bad
+Request: the request body is too large"}, "id": null}`. Such a request still
+counts as a call.
+
 When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
 The same happens while an organization is read-only before its deletion, and

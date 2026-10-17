@@ -205,6 +205,13 @@ counted per calendar month (UTC) and are never charged. Requests rejected for
 missing/invalid credentials or rate limiting are not counted. The separate
 curation API keeps its own limits below.
 
+A request body may hold at most **1 MiB** (1,048,576 bytes of UTF-8). Qivo
+checks the size after authentication, before routing, and answers a longer
+body with `413` `{"error": "request body is too large"}`. Such a request
+still counts as a call. A declared `Content-Length` over the limit is refused
+without reading the body. Files never travel in these bodies; see
+[Attachments](#attachments).
+
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
 existing access rules. An organization admin can subscribe or update payment
