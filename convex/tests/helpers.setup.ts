@@ -89,6 +89,175 @@ export async function settleScheduled(t: T): Promise<void> {
   throw new Error('Scheduled functions were still running after 100 rounds')
 }
 
+/* ------------------------------------------------- filtered reads
+ * The backend charges a query for every document of its index range that it
+ * reads before it has the rows asked for, those a `.filter` rejects
+ * included ("Data not returned due to a filter counts as scanned",
+ * docs.convex.dev/production/state/limits). convex-test 0.0.58 charges only
+ * the rows a query returns, so its transactionLimits never see a filter
+ * that passes over large documents. */
+
+/** The syscalls convex-test installs as globalThis.Convex. */
+type Syscalls = {
+  syscall: (op: string, json: string) => string
+  asyncSyscall: (op: string, json: string) => Promise<string>
+  jsSyscall: (op: string, args: Record<string, unknown>) => unknown
+}
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
+type Operator = { filter: Json } | { limit: number }
+/** A filtered query this helper runs: convex-test's id for it unfiltered,
+ * its filters and how many rows it may still return. */
+type Filtered = { id: number; filters: Json[]; left: number }
+
+/**
+ * Makes convex-test charge what a filtered query reads, as the backend does,
+ * until the current test finishes. Each filtered query runs without its
+ * filters and limit, and this applies them to the rows as they come, so
+ * every document the query passes over is read, and counted against the
+ * transaction's limits, once. It covers streamed reads (collect, take, first,
+ * unique, iteration), not paginate. Filters may compare plain values and
+ * combine them with and, or and not; anything else throws.
+ */
+export function chargeFilteredReads(): void {
+  const global = globalThis as unknown as { Convex: Syscalls | undefined }
+  const real = global.Convex
+  // convex-test installs the syscalls with its first instance
+  if (real === undefined) throw new Error('call chargeFilteredReads after newT')
+  // our ids for filtered queries are negative, so they never collide with
+  // convex-test's, which count up from 1 in each component
+  const filtered = new Map<number, Filtered>()
+  let last = 0
+  global.Convex = {
+    get syscall() {
+      const call = real.syscall
+      return (op: string, json: string) => {
+        if (op === '1.0/queryCleanup') {
+          const { queryId } = JSON.parse(json) as { queryId: number }
+          const query = filtered.get(queryId)
+          if (query === undefined) return call(op, json)
+          filtered.delete(queryId)
+          return call(op, JSON.stringify({ queryId: query.id }))
+        }
+        if (op !== '1.0/queryStream') return call(op, json)
+        const args = JSON.parse(json) as { query: { operators: Operator[] } }
+        const { operators } = args.query
+        const filters = operators.flatMap((o) => ('filter' in o ? [o.filter] : []))
+        if (filters.length === 0) return call(op, json)
+        const limitAt = operators.findIndex((o) => 'limit' in o)
+        if (limitAt !== -1 && limitAt !== operators.length - 1)
+          throw new Error('chargeFilteredReads takes a limit only after the filters')
+        const limit = operators[limitAt]
+        const { queryId } = JSON.parse(
+          call(op, JSON.stringify({ ...args, query: { ...args.query, operators: [] } })),
+        ) as { queryId: number }
+        last -= 1
+        filtered.set(last, {
+          id: queryId,
+          filters,
+          left: limit !== undefined && 'limit' in limit ? limit.limit : Number.POSITIVE_INFINITY,
+        })
+        return JSON.stringify({ queryId: last })
+      }
+    },
+    get asyncSyscall() {
+      const call = real.asyncSyscall
+      return async (op: string, json: string) => {
+        const query =
+          op === '1.0/queryStreamNext'
+            ? filtered.get((JSON.parse(json) as { queryId: number }).queryId)
+            : undefined
+        if (query === undefined) return await call(op, json)
+        const next = JSON.stringify({ queryId: query.id })
+        while (query.left > 0) {
+          const out = await call(op, next)
+          const { value, done } = JSON.parse(out) as { value: Json; done: boolean }
+          if (done) return out
+          if (query.filters.every((f) => evaluate(f, value) === true)) {
+            query.left -= 1
+            return out
+          }
+        }
+        return JSON.stringify({ value: null, done: true })
+      }
+    },
+    get jsSyscall() {
+      return real.jsSyscall
+    },
+  }
+  onTestFinished(() => {
+    global.Convex = real
+  })
+}
+
+/** A filter expression's value for document `doc`, both in Convex's JSON
+ * encoding; undefined stands for a missing field. */
+function evaluate(expr: Json, doc: Json): Json | undefined {
+  if (typeof expr !== 'object' || expr === null || Array.isArray(expr))
+    throw new Error(`chargeFilteredReads cannot read ${JSON.stringify(expr)}`)
+  const [[op, arg]] = Object.entries(expr)
+  const args = Array.isArray(arg) ? arg : [arg]
+  switch (op) {
+    case '$field': {
+      let at: Json | undefined = doc
+      for (const key of String(arg).split('.'))
+        at = at !== null && typeof at === 'object' && !Array.isArray(at) ? at[key] : undefined
+      return at
+    }
+    case '$literal':
+      return arg !== null && typeof arg === 'object' && '$undefined' in arg ? undefined : arg
+    case '$and':
+      return args.every((e) => evaluate(e, doc) === true)
+    case '$or':
+      return args.some((e) => evaluate(e, doc) === true)
+    case '$not':
+      return evaluate(arg, doc) !== true
+    case '$eq':
+      return same(evaluate(args[0], doc), evaluate(args[1], doc))
+    case '$neq':
+      return !same(evaluate(args[0], doc), evaluate(args[1], doc))
+    case '$lt':
+      return order(evaluate(args[0], doc), evaluate(args[1], doc)) < 0
+    case '$lte':
+      return order(evaluate(args[0], doc), evaluate(args[1], doc)) <= 0
+    case '$gt':
+      return order(evaluate(args[0], doc), evaluate(args[1], doc)) > 0
+    case '$gte':
+      return order(evaluate(args[0], doc), evaluate(args[1], doc)) >= 0
+    default:
+      throw new Error(`chargeFilteredReads cannot evaluate ${op}`)
+  }
+}
+
+/** Whether two encoded values are equal, whatever the order of their keys. */
+function same(a: Json | undefined, b: Json | undefined): boolean {
+  const canonical = (v: Json | undefined): string =>
+    v === undefined
+      ? 'undefined'
+      : JSON.stringify(v, (_key, x: Json) =>
+          x !== null && typeof x === 'object' && !Array.isArray(x)
+            ? Object.fromEntries(Object.entries(x).sort(([k], [l]) => (k < l ? -1 : 1)))
+            : x,
+        )
+  return canonical(a) === canonical(b)
+}
+
+/** Convex's order of two plain values: missing, null, numbers, booleans,
+ * then strings. Other values throw. */
+function order(a: Json | undefined, b: Json | undefined): number {
+  const rank = (v: Json | undefined): number => {
+    if (v === undefined) return 0
+    if (v === null) return 1
+    if (typeof v === 'number') return 2
+    if (typeof v === 'boolean') return 3
+    if (typeof v === 'string') return 4
+    throw new Error(`chargeFilteredReads cannot order ${JSON.stringify(v)}`)
+  }
+  const byRank = rank(a) - rank(b)
+  if (byRank !== 0) return byRank
+  if (a === undefined || a === null || b === undefined || b === null) return 0
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 /** Runs one orphan sweep (files.reapOrphans) through all of its legs and
  * returns the counts from the one reap_orphans audit row it wrote. Works with
  * real timers, a faked Date alone, or fully faked timers. With faked timers

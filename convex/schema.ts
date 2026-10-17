@@ -179,6 +179,11 @@ const issuesTable = defineTable({
   .index('by_parent', ['parent_id'])
   // The nightly leaf guard asks whether a parent has an unarchived child.
   .index('by_parent_archived', ['parent_id', 'archived_at'])
+  // A project's move to Deleted items reads a task's children outside the
+  // moving projects through ranges between their ids, so it never reads the
+  // children inside, however many there are (model/deletedItems.ts
+  // childrenOutside).
+  .index('by_parent_project', ['parent_id', 'project_id'])
   // Profile refs for removeProfile's SET NULLs. The removal transaction
   // reads only open tasks (archived_at absent), the background steps the
   // whole range.
