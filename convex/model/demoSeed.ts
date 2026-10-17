@@ -15,6 +15,7 @@ import {
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
 import { markArchivedTask } from './archiveMarks'
+import { cleanDescription } from './issues'
 import { type NotifyPreload, notifyCommentInsert, notifyIssueInsert } from './messages'
 import { assertSlugAvailable, newOrgDefaults, newTeamDefaults } from './orgs'
 import { projectDescription } from './projects'
@@ -191,7 +192,7 @@ export async function writeNorthstarWork(
       project_id: projectIds[i.project],
       num: index + 1,
       title: i.title,
-      description: i.description,
+      description: cleanDescription(i.description),
       status: i.status,
       priority: i.priority,
       assignee_id: i.assignee ? personIds[i.assignee] : undefined,

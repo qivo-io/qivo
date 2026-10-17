@@ -89,6 +89,7 @@ import {
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
+import { TEXT_MAX } from '../lib/textLimits'
 import { postComment } from '../model/comments'
 import {
   assertAssignable,
@@ -467,6 +468,7 @@ export const TOOLS: McpTool[] = [
           body: {
             type: 'string',
             minLength: 1,
+            maxLength: TEXT_MAX,
           },
         },
         required: ['ref', 'body'],
@@ -506,6 +508,7 @@ export const TOOLS: McpTool[] = [
           },
           description: {
             type: 'string',
+            maxLength: TEXT_MAX,
           },
           status: {
             type: 'string',
@@ -632,6 +635,7 @@ export const TOOLS: McpTool[] = [
           },
           description: {
             type: 'string',
+            maxLength: TEXT_MAX,
           },
           status: {
             type: 'string',
@@ -700,6 +704,7 @@ export const TOOLS: McpTool[] = [
           },
           archive_reason: {
             type: 'string',
+            maxLength: TEXT_MAX,
           },
           project: {
             type: 'string',

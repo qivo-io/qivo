@@ -29,7 +29,9 @@ Paste or drag images into descriptions. Hover for Copy or Download, or
 double-click for full size. Inline images cannot be pasted across tasks.
 **Save / Discard** appears when the draft changes. Press **Save** or
 Ctrl/Cmd+S to save. The formatting row and save controls remain visible while
-long drafts scroll.
+long drafts scroll. Descriptions and comments can hold up to 20,000
+characters, including formatting. A longer draft cannot be saved until you
+shorten it. Older text over this limit can be read but not edited.
 
 **Comments** use the same editor but accept text only. Add images as
 attachments. The composer sits below the newest message, or below the scrolling

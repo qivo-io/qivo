@@ -13,16 +13,25 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { insertUnique } from '../lib/db'
-import { badRequest, forbidden } from '../lib/functions'
+import { badRequest, forbidden, rule } from '../lib/functions'
+import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
+
+/* Both caps count the trimmed text, which is what is stored. They are `rule`
+ * refusals, so the app shows the sentence (model/issues.ts
+ * DESCRIPTION_TOO_LONG says why). */
+export const COMMENT_TOO_LONG = `a comment must be at most ${TEXT_MAX_LABEL} characters`
+export const ARCHIVE_REASON_TOO_LONG = `an archive reason must be at most ${TEXT_MAX_LABEL} characters`
 
 /**
  * Posts `body` on `issue` as `author`, stamped `now`, which the comment and
  * every message its fan-out posts share. `id` is the app's client-made id;
  * machine callers omit it and get a new one. Refuses an author without Edit
- * on the task's project, a blank body and an id already in use.
+ * on the task's project, a blank body, a body longer than TEXT_MAX and an id
+ * already in use. Every caller trims `body` first, so the cap measures the
+ * stored text.
  */
 export async function postComment(
   ctx: MutationCtx,
@@ -31,6 +40,7 @@ export async function postComment(
   const { issue, author, now } = a
   await assertCanEdit(ctx, author, issue.project_id)
   if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
+  if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
   const id = a.id ?? newUuid()
   const docId = await insertUnique(
     ctx,
@@ -49,7 +59,8 @@ export async function postComment(
  * Posts the reason given for archiving `issue` as a normal comment by
  * `author`, trimmed and sharing the archive's `now`. The app's archive and
  * the machine archive call it only when their write archived the task; a
- * blank or missing reason posts nothing.
+ * blank or missing reason posts nothing, and one longer than TEXT_MAX after
+ * trimming is refused with a sentence that names the reason.
  */
 export async function postArchiveReason(
   ctx: MutationCtx,
@@ -57,6 +68,7 @@ export async function postArchiveReason(
 ): Promise<Doc<'comments'> | null> {
   const body = (a.reason ?? '').trim()
   if (body === '') return null
+  if (body.length > TEXT_MAX) throw rule(ARCHIVE_REASON_TOO_LONG)
   return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
 }
 
@@ -82,10 +94,12 @@ export async function assertCommentEditor(
 /**
  * Replaces the body of `comment` with `body`, trimmed, as `me`, in place and
  * without history. Refuses anyone but the author or a project lead, then a
- * blank body. The same text again changes nothing and stamps nothing.
- * Otherwise the comment records who edited it and when, stamped `now`, and
- * people the edit newly mentions follow the task and hear about it. Returns
- * the comment as stored and whether it changed.
+ * blank body. The same text again changes nothing and stamps nothing, even
+ * when a comment saved before the cap is longer than TEXT_MAX; any other
+ * text longer than that is refused. Otherwise the comment records who edited
+ * it and when, stamped `now`, and people the edit newly mentions follow the
+ * task and hear about it. Returns the comment as stored and whether it
+ * changed.
  */
 export async function editComment(
   ctx: MutationCtx,
@@ -102,6 +116,7 @@ export async function editComment(
   const text = a.body.trim()
   if (text === '') throw badRequest('a comment cannot be empty')
   if (text === comment.body) return { comment, changed: false }
+  if (text.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
   await ctx.db.patch(comment._id, { body: text, edited_at: now, edited_by: me.id })
   const after = (await ctx.db.get(comment._id)) as Doc<'comments'>
   await notifyCommentUpdate(ctx, { before: comment, after, issue, actor: me, now })

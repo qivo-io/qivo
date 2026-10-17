@@ -87,6 +87,7 @@ import type * as lib_snapshotRelations from "../lib/snapshotRelations.js";
 import type * as lib_taskEvents from "../lib/taskEvents.js";
 import type * as lib_taskRefs from "../lib/taskRefs.js";
 import type * as lib_teamSync from "../lib/teamSync.js";
+import type * as lib_textLimits from "../lib/textLimits.js";
 import type * as lib_visibility from "../lib/visibility.js";
 import type * as lib_webhookTransport from "../lib/webhookTransport.js";
 import type * as lib_workingSet from "../lib/workingSet.js";
@@ -237,6 +238,7 @@ declare const fullApi: ApiFromModules<{
   "lib/taskEvents": typeof lib_taskEvents;
   "lib/taskRefs": typeof lib_taskRefs;
   "lib/teamSync": typeof lib_teamSync;
+  "lib/textLimits": typeof lib_textLimits;
   "lib/visibility": typeof lib_visibility;
   "lib/webhookTransport": typeof lib_webhookTransport;
   "lib/workingSet": typeof lib_workingSet;
