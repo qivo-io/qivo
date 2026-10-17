@@ -1,20 +1,23 @@
 /* The comment writes the app, REST and MCP share. postComment inserts the
  * row and runs its fan-out (model/messages.ts notifyCommentInsert), so the
  * author follows the task, mentions are notified and followers read 'New
- * comment'. editComment and deleteComment hold the app's rule that only a
- * comment's author or a lead of the task's project may change it. A comment
- * writes no activity row, because the comment is its own entry in the
- * discussion.
+ * comment'. It holds a task to COMMENT_MAX comments, and it and
+ * deleteComment keep the task's comment count (model/commentCounts.ts).
+ * editComment and deleteComment hold the app's rule that only a comment's
+ * author or a lead of the task's project may change it. A comment writes no
+ * activity row, because the comment is its own entry in the discussion.
  * Each caller resolves the task, which the caller must be able to see, and
  * refuses with its own sentences in its own order first; postComment only
  * repeats the write gate as defense in depth. */
 
+import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
 import { insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
 import { newUuid } from './orgs'
@@ -25,22 +28,39 @@ import { newUuid } from './orgs'
 export const COMMENT_TOO_LONG = `a comment must be at most ${TEXT_MAX_LABEL} characters`
 export const ARCHIVE_REASON_TOO_LONG = `an archive reason must be at most ${TEXT_MAX_LABEL} characters`
 
+type NewComment = {
+  id?: string
+  issue: Doc<'issues'>
+  author: Doc<'profiles'>
+  body: string
+  now: string
+}
+
 /**
  * Posts `body` on `issue` as `author`, stamped `now`, which the comment and
  * every message its fan-out posts share. `id` is the app's client-made id;
  * machine callers omit it and get a new one. Refuses an author without Edit
- * on the task's project, a blank body, a body longer than TEXT_MAX and an id
- * already in use. Every caller trims `body` first, so the cap measures the
- * stored text.
+ * on the task's project, a blank body, a body longer than TEXT_MAX, a task
+ * that holds COMMENT_MAX comments (model/commentCounts.ts
+ * TOO_MANY_COMMENTS) and an id already in use. Every caller trims `body`
+ * first, so the cap measures the stored text.
  */
-export async function postComment(
+export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<'comments'>> {
+  return await insertComment(ctx, a, { capped: true })
+}
+
+/* postComment, and with `capped` false, without the comment count cap.
+ * Either way the comment counts toward the task's count. */
+async function insertComment(
   ctx: MutationCtx,
-  a: { id?: string; issue: Doc<'issues'>; author: Doc<'profiles'>; body: string; now: string },
+  a: NewComment,
+  o: { capped: boolean },
 ): Promise<Doc<'comments'>> {
   const { issue, author, now } = a
   await assertCanEdit(ctx, author, issue.project_id)
   if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
   if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
+  if (o.capped) await assertRoomForComment(ctx, issue.id)
   const id = a.id ?? newUuid()
   const docId = await insertUnique(
     ctx,
@@ -50,6 +70,7 @@ export async function postComment(
     { id, issue_id: issue.id, author: author.id, body: a.body, created_at: now },
     badRequest('a comment with this id already exists'),
   )
+  await noteCommentAdded(ctx, issue.id)
   const comment = (await ctx.db.get(docId)) as Doc<'comments'>
   await notifyCommentInsert(ctx, { comment, issue, actor: author, now })
   return comment
@@ -60,7 +81,10 @@ export async function postComment(
  * `author`, trimmed and sharing the archive's `now`. The app's archive and
  * the machine archive call it only when their write archived the task; a
  * blank or missing reason posts nothing, and one longer than TEXT_MAX after
- * trimming is refused with a sentence that names the reason.
+ * trimming is refused with a sentence that names the reason. The comment
+ * count cap does not apply, so archiving never fails on it. Each archive
+ * with a reason can add one comment past COMMENT_MAX, so a task archived,
+ * restored and archived again can pass it by more than one.
  */
 export async function postArchiveReason(
   ctx: MutationCtx,
@@ -69,7 +93,11 @@ export async function postArchiveReason(
   const body = (a.reason ?? '').trim()
   if (body === '') return null
   if (body.length > TEXT_MAX) throw rule(ARCHIVE_REASON_TOO_LONG)
-  return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
+  return await insertComment(
+    ctx,
+    { issue: a.issue, author: a.author, body, now: a.now },
+    { capped: false },
+  )
 }
 
 /**
@@ -125,7 +153,8 @@ export async function editComment(
 
 /**
  * Deletes `comment` as `me`, its author or a project lead. The thread just
- * loses the row. Nothing is narrated and nobody is notified.
+ * loses the row, and the task's comment count one comment. Nothing is
+ * narrated and nobody is notified.
  */
 export async function deleteComment(
   ctx: MutationCtx,
@@ -133,4 +162,120 @@ export async function deleteComment(
 ): Promise<void> {
   await assertCommentEditor(ctx, { ...a, verb: 'delete' })
   await ctx.db.delete(a.comment._id)
+  await noteCommentRemoved(ctx, a.comment)
+}
+
+/* -------------------------------------------------------------- reading */
+
+/** The most comments one page holds. The app's task window loads the
+ * newest page of a thread (snapshot.ts commentsForIssue), and a REST or MCP
+ * read answers one unless it asks for fewer (lib/core.ts listCommentsCore). */
+export const COMMENT_PAGE_MAX = 50
+
+/** The most one page of comments reads, in bytes as Convex counts a
+ * document's size. Half of Convex's 16 MiB read limit per transaction leaves
+ * room for the task, the roster and the access checks. */
+export const COMMENT_PAGE_BYTES = 8 * 1024 * 1024
+
+/* Convex's limit on one document's size. A comment can come close to it, so
+ * a page reads no more rows at a time than its unspent budget could hold at
+ * this size. */
+const DOCUMENT_MAX_BYTES = 1024 * 1024
+
+/**
+ * The newest comments on the task `issueId`, newest first. A page holds at
+ * most `limit`, and with `before`, a comment on that task, only those the
+ * thread holds before it. A page stops once it has read about
+ * COMMENT_PAGE_BYTES, so long comments make it shorter than `limit`. It
+ * still holds at least one comment when an earlier one exists, so an empty
+ * page means there are none.
+ *
+ * The thread's order is the by_issue index, _creationTime and then the
+ * document id. Convex does not make _creationTime unique, and no index range
+ * can name a document id. So each index read after the first starts at the
+ * time of the last comment it passed, that time included, and skips the
+ * comments at that time it already passed. The byte count includes that
+ * reread, which is one comment unless comments share that time. A page so
+ * reads at most COMMENT_PAGE_BYTES and one comment more.
+ *
+ * With `before`, the page first reads every comment that shares its time,
+ * once, to find where `before` stands among them, and reads that group whole
+ * on top of the bound. Convex gives each insert in a transaction a later
+ * _creationTime than the one before, so only posts from separate
+ * transactions that start at the same instant, or an import that sets the
+ * times, make such a group. A group larger than Convex's 16 MiB read limit,
+ * such as 17 comments near the 1 MiB document limit at one time, so fails
+ * every page before one of its comments. The newest page and the comment
+ * count (model/commentCounts.ts) still work on such a thread.
+ *
+ * The index orders a thread by insertion, so a task's comments must be
+ * inserted in the order they were posted (teamSync.ts lastComments relies
+ * on this too).
+ */
+export async function newestComments(
+  ctx: QueryCtx,
+  issueId: string,
+  a: { limit: number; before?: Doc<'comments'> },
+): Promise<Doc<'comments'>[]> {
+  const out: Doc<'comments'>[] = []
+  let bytes = 0
+  // The next read resumes at `at`, the _creationTime of the last comment
+  // passed. `passed` comments at that time are behind it already, and
+  // `passedBytes` is their size, which that read spends again. With
+  // `below`, every comment at that time is behind it, so the read starts
+  // under that time and rereads none.
+  let at = a.before?._creationTime
+  let passed = 0
+  let passedBytes = 0
+  let below = false
+  if (a.before !== undefined) {
+    const anchor = a.before
+    const tied = await ctx.db
+      .query('comments')
+      .withIndex('by_issue', (q) =>
+        q.eq('issue_id', issueId).eq('_creationTime', anchor._creationTime),
+      )
+      .order('desc')
+      .collect()
+    for (const comment of tied) bytes += getDocumentSize(comment)
+    // Newest first, so the comments after `before` are the earlier ones.
+    const earlier = tied.slice(tied.findIndex((comment) => comment._id === anchor._id) + 1)
+    out.push(...earlier.slice(0, a.limit))
+    below = true
+  }
+  while (out.length < a.limit && (bytes + passedBytes < COMMENT_PAGE_BYTES || out.length === 0)) {
+    const fits = Math.floor((COMMENT_PAGE_BYTES - bytes - passedBytes) / DOCUMENT_MAX_BYTES)
+    const n = Math.min(a.limit - out.length, Math.max(1, fits))
+    const skip = passed
+    const from = at
+    const under = below
+    const rows = await ctx.db
+      .query('comments')
+      .withIndex('by_issue', (q) =>
+        from === undefined
+          ? q.eq('issue_id', issueId)
+          : under
+            ? q.eq('issue_id', issueId).lt('_creationTime', from)
+            : q.eq('issue_id', issueId).lte('_creationTime', from),
+      )
+      .order('desc')
+      .take(skip + n)
+    bytes += passedBytes
+    below = false
+    for (const comment of rows.slice(skip)) {
+      const size = getDocumentSize(comment)
+      bytes += size
+      if (comment._creationTime === at) {
+        passed += 1
+        passedBytes += size
+      } else {
+        at = comment._creationTime
+        passed = 1
+        passedBytes = size
+      }
+      out.push(comment)
+    }
+    if (rows.length < skip + n) break
+  }
+  return out
 }

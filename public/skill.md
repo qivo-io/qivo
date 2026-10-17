@@ -136,9 +136,13 @@ the credential's user as the actor. Comments are authored by that user too.
 
 For an existing task, use `list_tasks` with the resolved `project` and useful
 filters, then `get_task` with the returned task reference. Read
-`list_comments` with the same `ref` when the discussion matters. REST
-reads and posts comments at `/v1/tasks/{ref}/comments`; its comment records
-identify the task by `task_id`. Search matches every
+`list_comments` with the same `ref` when the discussion matters. It answers
+up to 50 of the newest comments (`limit` asks for fewer), oldest first, and
+fewer when they are long. To read further back, pass the first comment's
+`id` as `before`; an empty list means there are no earlier comments. REST
+reads and posts comments at `/v1/tasks/{ref}/comments` and takes the same
+`limit` and `before` as query parameters; its comment records identify the
+task by `task_id`. Search matches every
 whitespace-separated fragment across task ID, title, description, status,
 priority, assignee name and label names, case-insensitively and in any order,
 like the app's task filter. MCP treats `*` literally; REST supports
@@ -154,7 +158,8 @@ Useful field rules:
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,
   `high`, `medium`, `low`. Titles must be nonblank and at most 80 characters.
 - Descriptions and comments use Markdown, up to 20,000 characters each
-  (JavaScript string length, so an emoji can count as two). Omitted update
+  (JavaScript string length, so an emoji can count as two). A task holds at
+  most 400 comments; past that, post in a new task. Omitted update
   fields stay unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
   `remaining_hours`; use `""` to clear a description.
 - While a task is in `review` with a reviewer set, it is the reviewer's to act

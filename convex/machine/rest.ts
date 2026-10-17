@@ -51,6 +51,7 @@ import {
   CALLER_GONE,
   type Caller,
   type Catalogue,
+  COMMENT_PAGE_MAX,
   commentOut,
   destinationOf,
   findIssue,
@@ -135,7 +136,13 @@ import { DISCUSSION_ROUTES } from './discussion'
 import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
-import { REST_CALLER as CALLER, needJson, restProvenance as provenanceOf, vKeyName } from './shared'
+import {
+  REST_CALLER as CALLER,
+  needJson,
+  restProvenance as provenanceOf,
+  vKeyName,
+  wholeParam,
+} from './shared'
 import { TEAM_ROUTES } from './teams'
 
 type RestProjectJson = ReturnType<typeof projectJson>
@@ -772,14 +779,25 @@ export const deleteIssue = internalMutation({
 
 /* ------------------------------------------------------------- comments -- */
 
-/* GET /v1/tasks/{ref}/comments — the discussion thread, oldest first. */
+/* GET /v1/tasks/{ref}/comments?limit=&before= answers the newest comments
+ * of the discussion thread, or those before the comment `before` names,
+ * oldest first (lib/core.ts listCommentsCore). */
 export const listComments = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    limit: v.optional(v.string()),
+    before: v.optional(v.string()),
+  },
   handler: async (ctx, a): Promise<RestCommentJson[]> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    const rows = await listCommentsCore(ctx, issue.id)
+    const rows = await listCommentsCore(ctx, issue.id, {
+      limit: wholeParam(a.limit, 'limit', COMMENT_PAGE_MAX, 1, COMMENT_PAGE_MAX),
+      before: a.before,
+    })
     const names = await orgNames(ctx, me.org_id)
     return (await Promise.all(
       rows.map((c) => commentOut(ctx, c, { surface: 'rest', names })),
@@ -1156,8 +1174,14 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref/comments',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access, param }) =>
-      r.runQuery(internal.machine.rest.listComments, { callerId, access, ref: param('ref') }),
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.rest.listComments, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        before: query('before'),
+      }),
   }),
   route({
     method: 'POST',

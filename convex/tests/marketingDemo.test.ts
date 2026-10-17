@@ -584,12 +584,21 @@ describe('marketing demo rebuild ownership', () => {
       const roster = await ctx.db.query('profiles').collect()
       const messages = await ctx.db.query('messages').collect()
       const subscriptions = await ctx.db.query('issue_subscriptions').collect()
+      const counts = await ctx.db.query('comment_counts').collect()
       expect(comments).toHaveLength(MARKETING_DEMO.comments.length)
       expect(new Set(comments.map((comment) => comment.id)).size).toBe(comments.length)
+      expect(counts).toHaveLength(tasks.length)
       for (const task of tasks) {
         const thread = comments.filter((comment) => comment.issue_id === task.id)
         expect(thread.length, task.title).toBeGreaterThanOrEqual(1)
         expect(thread.length, task.title).toBeLessThanOrEqual(5)
+        // the seed stores each new task's whole comment count
+        expect(
+          counts
+            .filter((row) => row.issue_id === task.id)
+            .map(({ count, cursor }) => ({ count, cursor })),
+          task.title,
+        ).toEqual([{ count: thread.length, cursor: undefined }])
         expect(new Set(thread.map((comment) => comment.created_at)).size, task.title).toBe(
           thread.length,
         )
@@ -869,6 +878,7 @@ describe('marketing demo rebuild ownership', () => {
       t.run(async (ctx) => ({
         messages: await ctx.db.query('messages').collect(),
         comments: await ctx.db.query('comments').collect(),
+        counts: await ctx.db.query('comment_counts').collect(),
         subscriptions: await ctx.db.query('issue_subscriptions').collect(),
         teams: await ctx.db.query('teams').collect(),
         memberships: await ctx.db.query('team_members').collect(),
@@ -949,6 +959,7 @@ describe('marketing demo rebuild ownership', () => {
       for (const table of [
         'messages',
         'comments',
+        'counts',
         'subscriptions',
         'teams',
         'memberships',

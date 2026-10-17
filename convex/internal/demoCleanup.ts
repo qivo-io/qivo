@@ -92,6 +92,17 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       ))
     )
       return false
+    // The count goes before the comments it counts, so a task never keeps a
+    // stale one between batches (model/commentCounts.ts).
+    if (
+      !(await drain(ctx, budget, (n) =>
+        ctx.db
+          .query('comment_counts')
+          .withIndex('by_issue', (q) => q.eq('issue_id', id))
+          .take(n),
+      ))
+    )
+      return false
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db

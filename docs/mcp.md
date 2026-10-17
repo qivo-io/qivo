@@ -71,6 +71,13 @@ message. Because the schema checks the value as sent, `update_task` refuses
 even the unchanged text of a longer description saved earlier; leave
 `description` out to keep it.
 
+Comment paging added `limit` and `before` to `list_comments`, which now
+answers a task's newest 50 comments unless asked for fewer, and
+`add_comment`'s description now says that a task holds at most 400
+comments. A client holding an older catalogue keeps working and reads the
+newest comments, but its model does not learn how to read further back, or
+about the limit, until the client refreshes its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -732,8 +739,8 @@ with a cached tool catalogue must refresh discovery or reconnect.
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
-| `list_comments` | The task's discussion thread, oldest first, with author and edit attribution |
-| `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
+| `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
+| `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; a task holds at most 400 comments; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key`, plus `ignored_arguments` when you sent arguments the tool does not know |
 | `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, and `description` and `archive_reason` at 20,000. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `ignored_arguments` names arguments the tool does not know |
 | `delete_task` | Delete a task (attachment bytes are reaped) |
@@ -1149,6 +1156,14 @@ Roadmap's Team strip and the planning panel count them:
 
 ### Comments, inbox and following
 
+`list_comments` answers a task's newest comments, oldest first. It holds at
+most `limit` comments (50 by default and at most), and fewer when they are
+long, because one call reads at most about 8 MiB of comments. To read
+further back, pass the `id` of the first comment in the result as `before`,
+and repeat until the result is an empty list. Only an empty list means there
+are no earlier comments. A `before` that is not the id of a comment on this
+task is refused with `before must be the id of a comment on this task`.
+
 `update_comment` and `delete_comment` take the comment's `id` from
 `list_comments`. As in the app, the comment's author may edit or delete it,
 and so may a lead of the task's project (an organization admin leads every
@@ -1167,6 +1182,13 @@ as two. The schema checks the value as sent, before trimming, and refuses a
 longer one with `Input validation error: Invalid arguments for tool
 add_comment: body: Too big: expected string to have <=20000 characters` (the
 same form for `update_comment`).
+
+A task holds at most 400 comments. `add_comment` on a task that has 400 is
+refused with `this task has 400 comments, the most a task can have; start a
+new task to continue`, as REST and the app refuse it. Deleting a comment
+makes room again. A task that had more than 400 comments before the limit
+keeps them, and only new comments are refused. An `archive_reason` is posted
+even on a task at the limit, so archiving never fails on it.
 
 `set_following` follows a task (`following: true`) or stops following it.
 Following needs only read access to the task, and the result's `changed`
@@ -1386,7 +1408,9 @@ comment. `update_task { archived: true }` does not require one, but
 `archive_reason` in the same call posts it the same way, as your comment at
 the moment of the archive. It is posted only when the call archives the
 task, so not for a task that is already archived, and a blank reason posts
-nothing. `archive_reason` without `archived: true` is refused.
+nothing. `archive_reason` without `archived: true` is refused. The reason is
+posted even when the task already holds 400 comments, the most a task can
+otherwise have.
 
 Archived **projects** (0106) are the same idea one altitude up, and a
 separate axis again. A project that has been put away in the app keeps
