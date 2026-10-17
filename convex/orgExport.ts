@@ -296,11 +296,12 @@ export const page = orgQuery({
       return { rows: [row], continueCursor: '', isDone: true }
     }
 
-    // A task under a parent whose project is moving to Deleted items keeps
-    // that parent until the move detaches it. The export leaves out the
-    // parent task, so it leaves out the reference too. Only an item in
-    // flight leaves such a parent, so the page reads parents only then, on
-    // a small page, because a parent can carry a large description.
+    // Only an item in flight leaves a task in issues under an absent project,
+    // or a task under a parent whose project is absent (the move detaches it
+    // only when it gets there). The export leaves out such a task, and such
+    // a parent reference, so an issues page reads tasks' projects and parents
+    // only then, on a small page, because a project or a parent can carry a
+    // large description. Otherwise every task's project and parent are live.
     const checkParents = section === 'issues' && (await hasItemInFlight(ctx, orgId))
     const pageSize = checkParents
       ? IN_FLIGHT_ISSUES_PAGE_SIZE
@@ -311,7 +312,7 @@ export const page = orgQuery({
     const rows: OrgExportRow[] = []
     for (const doc of result.page) {
       // a task under a project in Deleted items stays out, like the project
-      const projectId = section === 'issues' && 'project_id' in doc ? doc.project_id : undefined
+      const projectId = checkParents && 'project_id' in doc ? doc.project_id : undefined
       if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
       if (checkParents && typeof row.parent_id === 'string' && !(await liveParent(row.parent_id)))

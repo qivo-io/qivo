@@ -453,7 +453,7 @@ describe('organization export', () => {
     )
   })
 
-  it('reads the parents of a page of tasks only while a deleted item is in flight, ten tasks a page then', async () => {
+  it('reads the parents of a page of tasks only while a deleted item is in flight, four tasks a page then', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // 100 parents with descriptions from before the 20,000-character cap,
@@ -522,6 +522,27 @@ describe('organization export', () => {
     for (const [index, id] of children.slice(0, 99).entries())
       expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
     expect(exported.get(children[99])).not.toHaveProperty('parent_id')
+  }, 120_000)
+
+  it('reads no task projects while nothing is in flight, however large the projects are', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 100 sub-projects with descriptions from before the 500-character cap,
+    // 200 KiB each, and one small task in each. A page of 100 tasks that read
+    // their projects would read 20 MiB.
+    const description = 'Project notes. '.repeat(14_000).slice(0, 200 * 1024)
+    const tasks: string[] = []
+    for (let i = 0; i < 100; i++) {
+      const project = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+        description,
+      })
+      tasks.push((await plantIssue(t, { org_id: f.org.id, project_id: project.id })).id)
+    }
+    const exported = await readAll(as(t, f.admin), f.org.id, 'issues')
+    expect(tasks.every((id) => exported.some((row) => row.id === id))).toBe(true)
   }, 120_000)
 
   it('requires owned parents and refuses malformed section scopes', async () => {
