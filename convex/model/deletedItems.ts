@@ -43,8 +43,11 @@
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
  * job's budget_scale: rows moved, their bytes, task rows moved and index
  * ranges read. `metered` counts the ranges of every read a step makes,
- * notifications included. Progress is counted in rows. A step always moves
- * at least one row, documents without a size cap are read
+ * notifications included. The parent checks of a restore (keptParent) also
+ * count the bytes they read, and a check that runs out of the step's reads
+ * waits for the next step, where it comes first and runs whole within
+ * HEIGHT_READ and SIGHT_READ. Progress is counted in rows. A step always
+ * moves at least one row, documents without a size cap are read
  * LARGE_ROWS_PER_READ at a time, and most phases read the start of a range
  * again rather than keep a cursor, because moving a row takes it out of the
  * range. The user's mutation spends the first budget itself, so most
@@ -270,21 +273,28 @@ function chargeRead(b: Budget, doc: unknown): number {
   return bytes
 }
 
+/** Whether a step has no reads left, once it has moved a row and spent its
+ * index ranges or bytes. A parent check that would read past them waits
+ * for the next step (allSee). */
+const readsSpent = (b: Budget): boolean => b.moved && (b.ranges <= 0 || b.bytes <= 0)
+
 /** Clears the rows `read` returns until the range is empty (true) or the
  * budget is spent (false). `clear` must take each row out of the range,
  * because every read starts at the beginning of the range again
- * (model/cascade.ts sweep, with this file's budget). */
+ * (model/cascade.ts sweep, with this file's budget). A `clear` that answers
+ * false leaves its row where it is, for the next step, and ends the drain
+ * (false). */
 async function drain<Row>(
   b: Budget,
   read: (n: number) => Promise<Row[]>,
-  clear: (row: Row) => Promise<void>,
+  clear: (row: Row) => Promise<void> | Promise<boolean>,
   perRead: number,
 ): Promise<boolean> {
   while (!spent(b)) {
     const n = Math.max(1, Math.min(b.rows, perRead))
     const rows = await read(n)
     for (const row of rows) {
-      await clear(row)
+      if ((await clear(row)) === false) return false
       charge(b, row)
       if (spent(b)) return false
     }
@@ -304,45 +314,107 @@ const READS = new Set<string | symbol>([
   Symbol.asyncIterator,
 ])
 
-/** `query` whose reads each spend one range of `budget`. The queries it
- * returns (withIndex, filter, order) are metered too. */
-function meterQuery<Q extends object>(query: Q, budget: Budget): Q {
+/** How a metered database counts its reads. `range` runs once for each
+ * index range a read takes, and `doc`, when given, for each document a read
+ * returns. */
+type Meter = { range: () => void; doc?: (doc: unknown) => void }
+
+/** What reads cost, in index ranges and the bytes of the documents they
+ * return. */
+type Cost = { ranges: number; bytes: number }
+
+/** `query` whose reads `meter` counts. The queries it returns (withIndex,
+ * filter, order) are metered too. */
+function meterQuery<Q extends object>(query: Q, meter: Meter): Q {
   return new Proxy(query, {
     get(target, key) {
       const value: unknown = Reflect.get(target, key)
       if (typeof value !== 'function') return value
       return (...args: unknown[]) => {
-        if (READS.has(key)) budget.ranges -= 1
+        const reads = READS.has(key)
+        if (reads) meter.range()
         const result: unknown = value.apply(target, args)
+        if (reads) return weighed(key, result, meter.doc)
         return typeof result === 'object' && result !== null && 'take' in result
-          ? meterQuery(result, budget)
+          ? meterQuery(result, meter)
           : result
       }
     },
   })
 }
 
-/** `ctx` whose database reads each spend one range of `budget`, wherever in
- * the step they happen. It wraps the database the way lib/demo.ts
- * demoWriter does for its own accounting, and passes properties that are
- * not functions on as they are, demoWriter's uncounted writer included. */
-function metered(ctx: MutationCtx, budget: Budget): MutationCtx {
+/** What read `key` (a READS method or db.get) returns, passing each
+ * document it yields to `doc`. Those are the rows of collect, take and
+ * paginate, the row of first, unique and get, and each row an iteration
+ * reaches. */
+function weighed(key: string | symbol, result: unknown, doc: Meter['doc']): unknown {
+  if (doc === undefined) return result
+  if (key === Symbol.asyncIterator) {
+    // the query itself, which iterates its rows (convex/server QueryImpl)
+    const rows = result as AsyncIterator<unknown>
+    const iterator: AsyncIterableIterator<unknown> = {
+      async next() {
+        const next = await rows.next()
+        if (next.done !== true) doc(next.value)
+        return next
+      },
+      async return(value?: unknown) {
+        return (await rows.return?.(value)) ?? { done: true, value }
+      },
+      [Symbol.asyncIterator]: () => iterator,
+    }
+    return iterator
+  }
+  return (result as Promise<unknown>).then((out) => {
+    const docs = key === 'paginate' ? (out as { page: unknown[] }).page : out
+    for (const row of Array.isArray(docs) ? docs : [docs]) if (row !== null) doc(row)
+    return out
+  })
+}
+
+/** `ctx` whose database reads `meter` counts, wherever they happen. It
+ * wraps the database the way lib/demo.ts demoWriter does for its own
+ * accounting, and passes properties that are not functions on as they are,
+ * demoWriter's uncounted writer included. */
+function meterDb(ctx: MutationCtx, meter: Meter): MutationCtx {
   const db = new Proxy(ctx.db, {
     get(target, key) {
       const value: unknown = Reflect.get(target, key)
       if (typeof value !== 'function') return value
       if (key === 'get')
         return (...args: unknown[]) => {
-          budget.ranges -= 1
-          return value.apply(target, args)
+          meter.range()
+          return weighed(key, value.apply(target, args), meter.doc)
         }
       if (key === 'query')
-        return (...args: unknown[]) => meterQuery(value.apply(target, args), budget)
+        return (...args: unknown[]) => meterQuery(value.apply(target, args), meter)
       return value.bind(target)
     },
   })
   return { ...ctx, db }
 }
+
+/** `ctx` whose database reads each spend one range of `budget`, wherever in
+ * the step they happen. */
+const metered = (ctx: MutationCtx, budget: Budget): MutationCtx =>
+  meterDb(ctx, {
+    range: () => {
+      budget.ranges -= 1
+    },
+  })
+
+/** `ctx` whose reads also add to `cost`, one range each and the bytes of
+ * each document they return. Over a step's metered ctx, the step's budget
+ * still counts the ranges, and the caller charges the bytes. */
+const measured = (ctx: MutationCtx, cost: Cost): MutationCtx =>
+  meterDb(ctx, {
+    range: () => {
+      cost.ranges += 1
+    },
+    doc: (doc) => {
+      cost.bytes += estimateDocumentBytes(doc)
+    },
+  })
 
 /* ------------------------------------------------------------ stored rows */
 
@@ -1184,9 +1256,12 @@ export const RESTORE_MAX = 25
 /* The index ranges a reveal may read per task it writes back or attaches.
  * A task item of 41 tasks with holders, a parent outside, task.restored
  * subscriptions and the Restored notice measured about 6. With a different
- * assignee and reviewer on each task, every one of whom must see the
- * parent's project (keptParent), it measured about 15, so this leaves
- * room. */
+ * assignee and reviewer on each task, 80 people who must all see the
+ * parent's project (keptParent), it measured about 22, most of it each
+ * person's assignment check (keepsHolder). Convex's 4,096 ranges leave room
+ * for that above TRASH_BUDGET's 2,500, and a check of who sees a parent that
+ * runs out of what the budget has left makes the reveal wait for a step of
+ * its own (revealTasks). */
 const REVEAL_RANGES_PER_TASK = 20
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
@@ -2184,7 +2259,10 @@ async function reveal(run: Run): Promise<JobState | null> {
       if ((await namedProject(run, doc.project_id, 'project')) === null)
         return { ...run.state, phase: 'restore_split', cursor: undefined }
     }
-    written = await revealTasks(run, tasks, restorer)
+    const back = await revealTasks(run, tasks, restorer)
+    // a parent check ran out of reads before any task was written
+    if (back === null) return run.state
+    written = back
   } else await revealProjects(run)
   for (;;) {
     const links = await run.ctx.db
@@ -2250,16 +2328,20 @@ async function revealProjects(run: Run): Promise<void> {
 
 /** Writes a task item's stored tasks `tasks` back, parents before
  * children. A task keeps a parent inside the item. A parent outside the
- * item is kept or cleared by the parent table (design 5.2) before the task
- * is written, from what the reveal reads once per parent (outsideParent)
- * and the task's subtasks among `tasks`, with the people they come back
- * with, and each parent the restore makes a group loses its own hours once.
- * Returns the ids of the tasks written. */
+ * item is kept or cleared by the parent table (design 5.2), from what the
+ * reveal reads once per parent (outsideParent) and the task's subtasks
+ * among `tasks`, with the people they come back with, and each parent the
+ * restore makes a group loses its own hours once. Every parent is decided
+ * before the first task is written, and no decision reads a task the
+ * reveal writes. Returns the ids of the tasks written, or null, with
+ * nothing written, when a check runs out of the reads the transaction has
+ * left ('later'). The reveal then waits for a step of its own, where no
+ * check waits. */
 async function revealTasks(
   run: Run,
   tasks: StoredTask[],
   restorer: Doc<'profiles'>,
-): Promise<Id<'issues'>[]> {
+): Promise<Id<'issues'>[] | null> {
   const byTask = new Map(tasks.map((t) => [t.doc.id, t]))
   const children: StoredChildren = new Map()
   for (const { doc } of tasks) {
@@ -2274,22 +2356,26 @@ async function revealTasks(
       up = byTask.get(up)?.doc.parent_id
     return depth
   }
-  const live: LiveTasks = new Map()
-  const parents = new Map<string, Promise<OutsideParent | null>>()
+  const ordered = [...tasks].sort((a, b) => depthOf(a) - depthOf(b))
+  const reads = newParentReads()
   const grouped = new Set<string>()
-  const written: Id<'issues'>[] = []
-  for (const t of [...tasks].sort((a, b) => depthOf(a) - depthOf(b))) {
+  // the parent each task with a parent outside the item comes back with
+  const outsideKept = new Map<string, string | undefined>()
+  for (const t of ordered) {
     const parentId = t.doc.parent_id
-    let kept = parentId
-    if (parentId !== undefined && !byTask.has(parentId)) {
-      const outside = await memoRead(parents, parentId, () =>
-        outsideParent(run, parentId, restorer, live),
-      )
-      const task = { ...t.doc, ...(await restoredHolders(run, t.doc)) }
-      const attach = await keptParent(run, task, outside, children, live)
-      if (attach?.grouped) grouped.add(parentId)
-      kept = attach?.id
-    }
+    if (parentId === undefined || byTask.has(parentId)) continue
+    const outside = await memoRead(reads.parents, parentId, () =>
+      outsideParent(run, parentId, restorer, reads),
+    )
+    const task = { ...t.doc, ...(await restoredHolders(run, t.doc)) }
+    const kept = await keptParent(run, task, outside, children, reads)
+    if (kept === 'later') return null
+    if (kept?.grouped) grouped.add(parentId)
+    outsideKept.set(t.doc.id, kept?.id)
+  }
+  const written: Id<'issues'>[] = []
+  for (const t of ordered) {
+    const kept = outsideKept.has(t.doc.id) ? outsideKept.get(t.doc.id) : t.doc.parent_id
     written.push(await writeTask(run, t, kept, true))
   }
   for (const parentId of grouped)
@@ -2302,6 +2388,24 @@ async function revealTasks(
  * gives a parent, so the map stays as the transaction left the tasks. */
 type LiveTasks = Map<string, Doc<'issues'> | null>
 
+/** What one reveal or attach step reads once for the parent table, after
+ * the reveal wrote back what it writes. That is the live tasks of the
+ * parent chains it walks, each parent's OutsideParent, the organization's
+ * projects (liveProjects) and what each person sees of them (seenBy). */
+type ParentReads = {
+  tasks: LiveTasks
+  parents: Map<string, Promise<OutsideParent | null>>
+  projects: Promise<Doc<'projects'>[]> | undefined
+  people: Map<string, Promise<Seen>>
+}
+
+const newParentReads = (): ParentReads => ({
+  tasks: new Map(),
+  parents: new Map(),
+  projects: undefined,
+  people: new Map(),
+})
+
 /** Live task `id` from `live`, read and charged to the step's budget the
  * first time. */
 async function liveTaskOf(run: Run, live: LiveTasks, id: string): Promise<Doc<'issues'> | null> {
@@ -2312,6 +2416,44 @@ async function liveTaskOf(run: Run, live: LiveTasks, id: string): Promise<Doc<'i
     live.set(id, task)
   }
   return task
+}
+
+/** The organization's projects, every one of them, as lib/access.ts
+ * projectLevelsForOrg works levels out over them, read once per reveal or
+ * attach step and charged to its budget. */
+function liveProjects(run: Run, reads: ParentReads): Promise<Doc<'projects'>[]> {
+  reads.projects ??= (async () => {
+    const projects = await run.ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', run.item.org_id))
+      .collect()
+    for (const project of projects) chargeRead(run.budget, project)
+    return projects
+  })()
+  return reads.projects
+}
+
+/** What one person sees for the parent table, their levels on the
+ * organization's projects (null for someone switched off or gone), with
+ * what reading them costs from the start. SIGHT_READ counts that cost
+ * whether the step read them for an earlier task or not. */
+type Seen = { levels: OrgProjectLevels | null; cost: Cost }
+
+/** What profile `id` sees (Seen), read once per reveal or attach step. It
+ * reads the profile, then its grants and team shares in one batched read
+ * (lib/access.ts projectLevelsForOrg), which answers every project at once.
+ * The step's budget counts the ranges and the bytes of every document read. */
+function seenBy(run: Run, reads: ParentReads, id: string): Promise<Seen> {
+  return memoRead(reads.people, id, async () => {
+    const profile = await profileOf(run, id)
+    const cost: Cost = { ranges: 1, bytes: profile === null ? 0 : chargeRead(run.budget, profile) }
+    if (profile === null || !profile.active) return { levels: null, cost }
+    const projects = await liveProjects(run, reads)
+    const read: Cost = { ranges: 0, bytes: 0 }
+    const levels = await projectLevelsForOrg(measured(run.ctx, read), profile, projects)
+    run.budget.bytes -= read.bytes
+    return { levels, cost: { ranges: cost.ranges + read.ranges, bytes: cost.bytes + read.bytes } }
+  })
 }
 
 /** A live task outside the item that tasks of the item name as their
@@ -2326,22 +2468,23 @@ type OutsideParent = { parent: Doc<'issues'>; edits: boolean; clears: boolean }
 /** The OutsideParent for `parentId`, or null when no task of the item can
  * keep it: it is not live, or it is not the task the item stored (the
  * reference predicate). Without a restorer, whose profile is gone since the
- * reveal, it edits nothing. */
+ * reveal, it edits nothing. The restorer's level comes from what they see
+ * (seenBy). */
 async function outsideParent(
   run: Run,
   parentId: string,
   restorer: Doc<'profiles'> | undefined,
-  live: LiveTasks,
+  reads: ParentReads,
 ): Promise<OutsideParent | null> {
-  const parent = await liveTaskOf(run, live, parentId)
+  const parent = await liveTaskOf(run, reads.tasks, parentId)
   if (parent === null || !sameReference(parent, run.item)) return null
   const project = await byId(run.ctx, 'projects', parent.project_id)
   if (project === null) return null
+  chargeRead(run.budget, project)
+  const levels = restorer === undefined ? null : (await seenBy(run, reads, restorer.id)).levels
   return {
     parent,
-    edits:
-      restorer !== undefined &&
-      levelRank(await liveLevel(run, restorer, project)) >= LEVEL_RANK.user,
+    edits: levelRank(levels?.levelOf(project) ?? null) >= LEVEL_RANK.user,
     clears: parent.remaining_hours !== undefined || parent.review_at !== undefined,
   }
 }
@@ -2353,6 +2496,11 @@ type Worker = Pick<Doc<'issues'>, 'id' | 'archived_at' | 'assignee_id' | 'review
 
 /** A task item's stored tasks by the id of their parent among them. */
 type StoredChildren = Map<string, Stored<'issues'>[]>
+
+/** What the parent table answers for one task. That is the parent it keeps
+ * from outside the item, undefined to clear it, or 'later' when the check
+ * ran out of the step's reads (allSee) and must run again in the next step. */
+type Kept = { id: string; grouped: boolean } | undefined | 'later'
 
 /** The parent `task` of the item keeps from outside it, by the parent
  * table (design 5.2), or undefined to clear it. Only a live parent that is
@@ -2372,24 +2520,27 @@ type StoredChildren = Map<string, Stored<'issues'>[]>
  * its people, as for the table's other refusals. The chain above the parent
  * (chainOver) and the subtree under `task` (workersBelow) are read only for
  * a parent that passes the rest, and for each task, because an attach
- * earlier in the step can deepen a chain. */
+ * earlier in the step can deepen a chain. Who sees the chain (allSee) is
+ * read last, and answers 'later' when the step's reads run out first. */
 async function keptParent(
   run: Run,
   task: Worker,
   outside: OutsideParent | null,
   children: StoredChildren,
-  live: LiveTasks,
-): Promise<{ id: string; grouped: boolean } | undefined> {
+  reads: ParentReads,
+): Promise<Kept> {
   if (outside === null) return undefined
   const active = outside.parent.archived_at === undefined
   const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
   if ((active || outside.clears) && !outside.edits) return undefined
-  const chain = await chainOver(run, outside.parent, task.id, live)
+  const chain = await chainOver(run, outside.parent, task.id, reads.tasks)
   if (chain === null) return undefined
   const workers = await workersBelow(run, task, 20 - chain.levels - 1, children)
-  if (workers === null || !(await allSee(run, workers, chain.projects))) return undefined
-  return { id: outside.parent.id, grouped: !active || taskActive }
+  if (workers === null) return undefined
+  const sees = await allSee(run, reads, task, workers, chain.projects)
+  if (sees === 'later') return 'later'
+  return sees ? { id: outside.parent.id, grouped: !active || taskActive } : undefined
 }
 
 /** The chain from a live task to the top: how many levels it holds and the
@@ -2425,18 +2576,58 @@ async function chainOver(
   return { levels, projects }
 }
 
-/** Whether everyone in `people` can see each of `projects` (model/issues.ts
- * chainSight), passing over someone switched off or gone, as a reparent
- * does, because they take on no new work. Each level is read once per
- * transaction (liveLevel). */
-async function allSee(s: Scope, people: Set<string>, projects: Set<string>): Promise<boolean> {
+/** The most one check of who sees a parent (allSee) reads, counted from the
+ * start. Each person counts their profile and the batched read of their
+ * levels (seenBy), whether the step read them for an earlier task or not,
+ * so the answer depends only on the data. A check past it does not fit, so
+ * its task keeps no parent from outside, with a warning, as for HEIGHT_READ,
+ * and a retry answers the same. Someone with Edit can still give the task
+ * that parent by hand. A person without teams costs 3 ranges and each team
+ * 2 more, so 2,000 ranges hold several hundred people. The first check of a
+ * step, which never waits, then reads at most these 2,000 ranges and 2 MiB,
+ * the walk under the task (HEIGHT_READ) and a chain of 20 tasks, within
+ * Convex's 4,096 ranges and 16 MiB. A mutable object, so tests can lower
+ * it. */
+export const SIGHT_READ = { ranges: 2000, bytes: 2 * 1024 * 1024 }
+
+/**
+ * Whether everyone in `people`, the people working on `task` and the open
+ * subtasks under it (workersBelow), can see each of `projects`, the
+ * projects of the parent's chain (model/issues.ts chainSight), passing over
+ * someone switched off or gone, as a reparent does, because they take on no
+ * new work. Each person costs one read of what they see, however many
+ * projects the chain crosses (seenBy).
+ *
+ * A step whose reads run out (readsSpent) before the check has read
+ * everyone answers 'later', and the task waits for the next step. There it
+ * comes first, before the step has moved a row, so its check runs whole. A
+ * check that reads past SIGHT_READ answers false, with a warning naming the
+ * item and the task.
+ */
+async function allSee(
+  run: Run,
+  reads: ParentReads,
+  task: Worker,
+  people: Set<string>,
+  projects: Set<string>,
+): Promise<boolean | 'later'> {
+  const cost: Cost = { ranges: 0, bytes: 0 }
   for (const id of people) {
-    const profile = await profileOf(s, id)
-    if (profile === null || !profile.active) continue
-    for (const projectId of projects) {
-      const project = await projectOf(s, projectId)
-      if (project === null || (await liveLevel(s, profile, project)) === null) return false
+    if (!reads.people.has(id) && readsSpent(run.budget)) return 'later'
+    const seen = await seenBy(run, reads, id)
+    cost.ranges += seen.cost.ranges
+    cost.bytes += seen.cost.bytes
+    if (cost.ranges > SIGHT_READ.ranges || cost.bytes > SIGHT_READ.bytes) {
+      console.warn('A deleted item restore cannot check who sees the parent of a task', {
+        item_id: run.item.id,
+        task_id: task.id,
+      })
+      return false
     }
+    const { levels } = seen
+    if (levels === null) continue
+    for (const projectId of projects)
+      if (levels.levelOf({ id: projectId, org_id: run.item.org_id }) === null) return false
   }
   return true
 }
@@ -2626,12 +2817,10 @@ const waitingParents = (run: Run, n: number) =>
     .withIndex('by_item_task', (q) => q.eq('item_id', run.item.id))
     .take(n)
 
-/** What one attach step reads once: the live tasks of the parent chains it
- * walks, as its own attaches leave them, each parent's OutsideParent,
- * whether a project is live, and the parents it made a group. */
-type Attach = {
-  tasks: LiveTasks
-  parents: Map<string, Promise<OutsideParent | null>>
+/** What one attach step reads once, which is what any parent check reads
+ * (ParentReads), with the live tasks as its own attaches leave them, and
+ * whether a project is live. It also keeps the parents it made a group. */
+type Attach = ParentReads & {
   live: Map<string, Promise<boolean>>
   grouped: Set<string>
 }
@@ -2641,30 +2830,23 @@ type Attach = {
  * restore_tasks wrote back without its parent outside the item that
  * parent, by the parent table (design 5.2) as it reads now and with the
  * helpers a task item's reveal uses. Each step stays within its budget,
- * however many tasks wait. work runs the first in the reveal's own
- * transaction, so a small item comes back whole there, and steps do the
- * rest just after. Meanwhile the tasks show without their parent, and a
- * parent that fails the table by the time its turn comes leaves them that
- * way. Each parent a step makes a group loses its own hours once, with its
- * notice (design 5.4); later steps find no hours left to clear. With
- * `attach` false (restore_detach, after restore_attach failed its retries)
- * the tasks left keep no parent. True once no task waits.
+ * however many tasks wait. A task whose check runs out of the step's reads
+ * keeps its row for the next step, where it comes first and its check runs
+ * whole (allSee). work runs the first in the reveal's own transaction, so
+ * a small item comes back whole there, and steps do the rest just after.
+ * Meanwhile the tasks show without their parent, and a parent that fails
+ * the table by the time its turn comes leaves them that way. Each parent a
+ * step makes a group loses its own hours once, with its notice (design
+ * 5.4); later steps find no hours left to clear. With `attach` false
+ * (restore_detach, after restore_attach failed its retries) the tasks left
+ * keep no parent. True once no task waits.
  */
 async function attachParents(run: Run, attach: boolean): Promise<boolean> {
-  const step: Attach = {
-    tasks: new Map(),
-    parents: new Map(),
-    live: new Map(),
-    grouped: new Set(),
-  }
+  const step: Attach = { ...newParentReads(), live: new Map(), grouped: new Set() }
   const done = await drain(
     run.budget,
     (n) => waitingParents(run, n),
-    async (row) => {
-      const holder = attach ? await attachParent(run, row, step) : undefined
-      if (holder === undefined) await run.ctx.db.delete(row._id)
-      else await run.ctx.db.patch(row._id, { item_id: holder })
-    },
+    (row) => (attach ? attachParent(run, row, step) : run.ctx.db.delete(row._id)),
     TASK_PAGE,
   )
   // a parent the restorer cannot edit never becomes a group with hours left
@@ -2675,38 +2857,46 @@ async function attachParents(run: Run, attach: boolean): Promise<boolean> {
   return done
 }
 
-/** Gives the task of `row` its parent when the parent table keeps it. A
- * task that is gone or that someone changed since the reveal (waitsFor)
- * stays as it is. A task whose project went to Deleted items again is
- * hidden with it, and the item that holds that project takes the row, so
- * its move stores the task with this parent (takeParent). This returns
- * that item's id. Restoring a project item sends no notice for its tasks,
- * so the task changes without one. */
+/** Gives the task of `row` its parent when the parent table keeps it, and
+ * takes the row out of the item's waiting tasks. A task that is gone or
+ * that someone changed since the reveal (waitsFor) stays as it is. A task
+ * whose project went to Deleted items again is hidden with it, and the item
+ * that holds that project takes the row, so its move stores the task with
+ * this parent (takeParent). Restoring a project item sends no notice for
+ * its tasks, so the task changes without one. False, leaving the row as it
+ * is, when the check ran out of the step's reads ('later'). */
 async function attachParent(
   run: Run,
   row: Doc<'deleted_item_parents'>,
   step: Attach,
-): Promise<string | undefined> {
+): Promise<boolean> {
+  const settle = async (holder?: string) => {
+    if (holder === undefined) await run.ctx.db.delete(row._id)
+    else await run.ctx.db.patch(row._id, { item_id: holder })
+    return true
+  }
   const task = await liveTaskOf(run, step.tasks, row.task_id)
-  if (task === null) return undefined
+  if (task === null) return await settle()
   run.budget.tasks -= 1
-  if (!waitsFor(run.item, task)) return undefined
+  if (!waitsFor(run.item, task)) return await settle()
   const live = await memoRead(
     step.live,
     task.project_id,
     async () => (await byId(run.ctx, 'projects', task.project_id)) !== null,
   )
-  if (!live) return await holderOf(run, task.project_id)
+  if (!live) return await settle(await holderOf(run, task.project_id))
   const outside = await memoRead(step.parents, row.parent_id, () =>
-    outsideParent(run, row.parent_id, run.actor, step.tasks),
+    outsideParent(run, row.parent_id, run.actor, step),
   )
-  const kept = await keptParent(run, task, outside, new Map(), step.tasks)
-  if (kept === undefined) return undefined
-  const fields = { parent_id: kept.id, updated_at: run.now }
-  await run.ctx.db.patch(task._id, fields)
-  step.tasks.set(task.id, { ...task, ...fields })
-  if (kept.grouped) step.grouped.add(kept.id)
-  return undefined
+  const kept = await keptParent(run, task, outside, new Map(), step)
+  if (kept === 'later') return false
+  if (kept !== undefined) {
+    const fields = { parent_id: kept.id, updated_at: run.now }
+    await run.ctx.db.patch(task._id, fields)
+    step.tasks.set(task.id, { ...task, ...fields })
+    if (kept.grouped) step.grouped.add(kept.id)
+  }
+  return await settle()
 }
 
 /* ------------------------------------------------------------ restoring */
@@ -2841,8 +3031,10 @@ async function actorOf(
  * parent (attachParents), so that a small item comes back whole in one
  * transaction. It counts tasks, not the bytes their parents' chains and
  * subtrees hold. An attach that spends the bytes left stops there, as any
- * step does, and steps finish it. It reads at most one more waiting task
- * than the budget holds. */
+ * step does, and steps finish it. A check of who sees a parent that runs
+ * out of what is left waits too, a task item's reveal for a step of its
+ * own and a project item's task for the next attach step. It reads at most
+ * one more waiting task than the budget holds. */
 async function revealFits(run: Run): Promise<boolean> {
   const b = run.budget
   if (spent(b)) return false
@@ -2903,7 +3095,9 @@ async function work(
     if (phase === 'restore_reveal') {
       if (run.budget.moved && !(await revealFits(run))) return run.state
       const next = await reveal(run)
-      if (next === null) return null
+      // restore_reveal again when a parent check ran out of what the
+      // transaction had left, for a step of its own
+      if (next === null || next.phase === 'restore_reveal') return next
       run.state = next
       continue
     }
