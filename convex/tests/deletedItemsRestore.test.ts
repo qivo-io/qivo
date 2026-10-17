@@ -13,6 +13,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
+import { ACTIVITY_CAP } from '../model/activity'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
@@ -1121,6 +1122,56 @@ describe('notices, activity and events', () => {
     t.run(async (ctx) =>
       (await ctx.db.query('webhook_events').collect()).map((e) => [e.name, e.task_id]),
     )
+
+  it('leaves the activity a delete and a restore write to one background trim each', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // an organization at the cap, with no trim pending
+    await t.run(async (ctx) => {
+      for (let i = 0; i < ACTIVITY_CAP; i++)
+        await ctx.db.insert('activity_events', {
+          id: uuid(),
+          org_id,
+          ts: iso(START - HOUR + i),
+          actor_id: f.admin.id,
+          verb: 'updated',
+          target_type: 'project',
+          target_id: f.sub.id,
+          label: 'Earlier',
+          project_id: f.sub.id,
+        })
+    })
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const subtasks: string[] = []
+    for (let i = 0; i < 2; i++)
+      subtasks.push((await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })).id)
+    const trims = () =>
+      t.run(
+        async (ctx) =>
+          (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+            (job) => job.name.includes('activityRetention:trim') && job.state.kind === 'pending',
+          ).length,
+      )
+    const newest = async (n: number) =>
+      (await activityFor(t, org_id))
+        .slice(-n)
+        .map((e) => `${e.verb} ${e.target_id}`)
+        .toSorted()
+
+    // a 'deleted' row for each of the three tasks, and one trim for them
+    await deleteTask(t, f, root.id, { subtask_ids: subtasks })
+    expect(await trims()).toBe(1)
+    await runSteps(t)
+    expect(await activityFor(t, org_id)).toHaveLength(ACTIVITY_CAP)
+    expect(await newest(3)).toEqual([...subtasks, root.id].map((id) => `deleted ${id}`).toSorted())
+
+    await restore(t, f.user, [(await itemFor(t, root.id)).id])
+    expect(await trims()).toBe(1)
+    await runSteps(t)
+    expect(await activityFor(t, org_id)).toHaveLength(ACTIVITY_CAP)
+    expect(await newest(1)).toEqual([`restored ${root.id}`])
+  })
 
   it('sends the Restored notice only for a task item restored alone, and one activity row per call', async () => {
     const t = newT()
@@ -2458,8 +2509,10 @@ describe('parents outside a restored project', () => {
     const attached = async () =>
       (await parentsOf(t, tasks)).filter((parent) => parent === epic.id).length
     expect(await attached()).toBe(1)
-    // a failed step leaves the job at its last committed progress
-    let now = START
+    // a failed step leaves the job at its last committed progress; the
+    // clock starts where the steps above left it, after the activity trim
+    // the delete scheduled a few minutes ahead
+    let now = Date.now()
     const fail = async () => {
       const job = await jobFor(t, item.id)
       if (job?.scheduled_id === undefined) throw new Error('no step to fail')

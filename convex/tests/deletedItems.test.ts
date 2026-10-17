@@ -38,6 +38,7 @@ import { estimateDocumentBytes } from '../model/demoMetrics'
 import {
   as,
   chargeFilteredReads,
+  countersFor,
   expectRefusal,
   NOW,
   newT,
@@ -867,6 +868,49 @@ describe('reservations while items are in Deleted items', () => {
     })
     await rekey(f.user)
     expect((await t.run((ctx) => byId(ctx, 'projects', f.sub.id)))?.key).toBe('PCB')
+  })
+
+  it('keeps the numbers of trashed work while the counters move off the organization row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // an organization created before org_counters, with one task
+    const first = await plantIssue(t, { org_id, project_id: f.sub.id, num: 1 })
+    await deleteTask(t, f, first.id)
+    await deleteProject(t, f, f.sub2.id)
+    const items = [(await itemFor(t, first.id)).id, (await itemFor(t, f.sub2.id)).id]
+    const task = async () =>
+      (
+        await as(t, f.user).mutation(api.issues.create, {
+          org_id,
+          id: uuid(),
+          project_id: f.sub.id,
+          title: 'Numbered',
+        })
+      ).num
+    const project = async (key: string) =>
+      (
+        await as(t, f.admin).mutation(api.projects.create, {
+          org_id,
+          id: uuid(),
+          type: 'project',
+          parent_id: f.meta.id,
+          key,
+          name: key,
+          sort_order: 9,
+        })
+      ).num
+    // the first numbers after the deletes move the counters and go on past
+    // the trashed work
+    expect(await task()).toBe(2)
+    expect(await project('NEW')).toBe(6)
+    const result = await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: items })
+    expect(result.restored.toSorted()).toEqual(items.toSorted())
+    expect((await liveTask(t, first.id))?.num).toBe(1)
+    expect((await t.run((ctx) => byId(ctx, 'projects', f.sub2.id)))?.num).toBe(f.sub2.num)
+    expect(await task()).toBe(3)
+    expect(await project('NEWER')).toBe(7)
+    expect(await countersFor(t, org_id)).toEqual({ next_issue_num: 3, next_project_num: 7 })
   })
 })
 

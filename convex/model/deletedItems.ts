@@ -120,7 +120,7 @@ import {
 } from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
-import { logActivity } from './activity'
+import { ACTIVITY_CAP, insertActivity, logActivity, requestActivityTrim } from './activity'
 import { storageIdInUse } from './attachments'
 import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -1226,15 +1226,19 @@ async function purgeRows(run: Run): Promise<boolean> {
 
 /* Clears project_id on the organization's activity rows filed under the
  * item's projects, as deleteProjectDeep does, while the stored project rows
- * still reserve their uuids. The feed keeps at most 500 rows
- * (model/activity.ts), so one pass fits. */
+ * still reserve their uuids. It reads only the newest ACTIVITY_CAP rows,
+ * the ones readers show (model/activity.ts), so one pass fits. Storage can
+ * hold thousands of older rows until the background trim deletes them, and
+ * readers never show those again. */
 async function purgeActivity(run: Run): Promise<boolean> {
   if (run.item.kind !== 'project') return true
   const ids = new Set(itemProjectIds(run.item))
-  const events = run.ctx.db
+  const events = await run.ctx.db
     .query('activity_events')
     .withIndex('by_org_ts', (q) => q.eq('org_id', run.item.org_id))
-  for await (const event of events)
+    .order('desc')
+    .take(ACTIVITY_CAP)
+  for (const event of events)
     if (event.project_id !== undefined && ids.has(event.project_id))
       await run.ctx.db.patch(event._id, { project_id: undefined })
   return true
@@ -3737,13 +3741,15 @@ async function liveProject(ctx: QueryCtx, id: string): Promise<Doc<'projects'>> 
  * deleted, its live children outside the item are detached (the SET NULL's
  * touch, 'Detached from its parent' and task.updated), task.deleted is
  * emitted, the task row is stored and the 'deleted' activity row written as
- * before, its detail the machine `provenance`. A child inside the item keeps
- * its parent, and a task that still waits for its parent after a project
- * item's restore is stored with it (takeParent). The tasks are then hidden;
- * their other rows follow within the same budget, and steps take the rest.
- * A task too large to store is deleted with its rows instead, as today; the
- * item neither counts it nor lists its project, so nobody needs access
- * there to restore the rest. Returns the item.
+ * before, its detail the machine `provenance`. One request for the
+ * background trim (model/activity.ts) covers all of those rows. A child
+ * inside the item keeps its parent, and a task that still waits for its
+ * parent after a project item's restore is stored with it (takeParent).
+ * The tasks are then hidden; their other rows follow within the same
+ * budget, and steps take the rest. A task too large to store is deleted
+ * with its rows instead, as today; the item neither counts it nor lists
+ * its project, so nobody needs access there to restore the rest. Returns
+ * the item.
  */
 export async function moveTasksToTrash(
   ctx: MutationCtx,
@@ -3822,7 +3828,7 @@ export async function moveTasksToTrash(
         ...task,
         parent_id: await takeParent(counted, task, item),
       })
-    await logActivity(counted, {
+    await insertActivity(counted, {
       org_id: task.org_id,
       actor_id: actor.id,
       verb: 'deleted',
@@ -3834,6 +3840,8 @@ export async function moveTasksToTrash(
       ts: now,
     })
   }
+  // one retention read for the item's rows, not one per task
+  await requestActivityTrim(counted, actor.org_id)
   await startJob(ctx, item, { phase: 'move_drain', tally }, budget)
   return item
 }
