@@ -1,12 +1,10 @@
 /// <reference types="vite/client" />
 import type { FunctionReturnType } from 'convex/server'
-import { convexTest } from 'convex-test'
 import type { api } from '../_generated/api'
 import type { QueryCtx } from '../_generated/server'
 import { logActivity } from '../model/activity'
-import schema from '../schema'
 import { forMe } from '../snapshot'
-import { NOW, withOrg } from './helpers.setup'
+import { NOW, newT, withOrg } from './helpers.setup'
 
 declare const performance: { now(): number }
 
@@ -30,7 +28,7 @@ type Baseline = {
 export async function benchmarkBackend(baseline: Baseline) {
   const results: Record<string, string | number>[] = []
   for (const count of [100, 1000, 10000]) {
-    const t = convexTest(schema, import.meta.glob('../**/*.*s'))
+    const t = newT()
     const f = await withOrg(t)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.org._id, { next_issue_num: count, activity_count: 500 })
