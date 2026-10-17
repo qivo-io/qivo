@@ -80,8 +80,9 @@ about the limit, until the client refreshes its tool list.
 
 The name limits added `maxLength` 80 to `name` on `create_project`,
 `update_project`, `set_milestone` and `set_team`. The schema check of `title`
-and `name` now counts Unicode code points, as the server's rules do, so an
-emoji counts as one character there; longer text keeps counting UTF-16 code
+and `name` now counts Unicode code points, as the server's rules do, so most
+single emoji count as one character there, while flags, skin tones and
+joined emoji count as several; longer text keeps counting UTF-16 code
 units. A client holding the older catalogue keeps working, and the server
 refuses a longer name with the schema message. A project, milestone or team
 named before the limit keeps its longer name while the call leaves `name`
@@ -97,13 +98,13 @@ requested manual setup; agent keys give automation its own identity.
 - **OAuth approval.** A supported client opens Qivo's browser sign-in and
   consent screen, which shows the name the client registered, folded to one
   line and cut to 80 characters followed by `…` when it is longer. Approval
-  binds the client to the displayed home profile and organization. The default request includes `qivo:read`, `qivo:write`
-  and `offline_access`; the person can turn off **Allow changes** to approve
-  reading only. Opaque access tokens (`qvo_…`) and rotating refresh tokens (`qvr_…`, when
-  `offline_access` is approved) go directly to the client. Delete the
-  connection under **Settings → Your preferences → MCP access → Connected apps**
-  to stop its access and remove it from the list. Previously revoked
-  connections can also be deleted.
+  binds the client to the displayed home profile and organization. The default
+  request includes `qivo:read`, `qivo:write` and `offline_access`; the person
+  can turn off **Allow changes** to approve reading only. Opaque access tokens
+  (`qvo_…`) and rotating refresh tokens (`qvr_…`, when `offline_access` is
+  approved) go directly to the client. Delete the connection under **Settings
+  → Your preferences → MCP access → Connected apps** to stop its access and
+  remove it from the list. Previously revoked connections can also be deleted.
 - **A person's token.** Each person mints their own under **Settings → Your
   preferences → MCP access → Personal access tokens**; the secret (`qvt_…`, shown once,
   stored as SHA-256 + display prefix, migration 0030) maps to that account,

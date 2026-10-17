@@ -26,7 +26,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON, canChangeAccess, canLeadTeams, isTeamLeader } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
-import { NAME_MAX, nameTooLong } from '../lib/textLimits'
+import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { ICON_COLOR_SHAPE, newTeamDefaults } from './orgs'
 import {
@@ -48,7 +48,7 @@ export const TEAM_NAME_TOO_LONG = `a team name must be at most ${NAME_MAX} chara
 export function cleanTeamName(raw: string, current?: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a team name cannot be blank')
-  if (name !== current && nameTooLong(name)) throw rule(TEAM_NAME_TOO_LONG)
+  if (nameOverCap(name, current)) throw rule(TEAM_NAME_TOO_LONG)
   return name
 }
 

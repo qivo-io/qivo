@@ -31,7 +31,7 @@ import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGr
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
-import { NAME_MAX, nameTooLong } from '../lib/textLimits'
+import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { scheduleArchivedReads } from './messages'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
@@ -55,7 +55,7 @@ export const PROJECT_NAME_TOO_LONG = `a project name must be at most ${NAME_MAX}
 export function cleanProjectName(raw: string, current?: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a project name cannot be blank')
-  if (name !== current && nameTooLong(name)) throw rule(PROJECT_NAME_TOO_LONG)
+  if (nameOverCap(name, current)) throw rule(PROJECT_NAME_TOO_LONG)
   return name
 }
 

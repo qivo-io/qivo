@@ -423,7 +423,8 @@ read, `access` flags included.
   project stays in their sight.
 - `name` is trimmed, may not be blank and holds at most 80 characters (`a
   project name must be at most 80 characters`). Names count Unicode code
-  points, so an emoji counts as one character. `description` is at most 500
+  points, so most single emoji count as one character, while flags, skin
+  tones and joined emoji count as several. `description` is at most 500
   characters, and `null` means none.
 - The body takes no grants. `access` and `team_access` are refused with
   `give access one user or team at a time, under /v1/projects/{ref}/access`,
@@ -561,7 +562,8 @@ week. `name` is trimmed, may not be blank and holds at most 80 characters (`a
 milestone name must be at most 80 characters`); a milestone named before
 that limit keeps its longer name through a `PATCH` that sends it back
 unchanged. `POST` answers `201` and `PATCH` `200` with `{"id", "name",
-"date", "project_id"}`, where `project_id` is the top-level project; `DELETE` answers `{"deleted": true, "id"}`.
+"date", "project_id"}`, where `project_id` is the top-level project;
+`DELETE` answers `{"deleted": true, "id"}`.
 `GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
 `renamed milestone`, `moved milestone` or `deleted milestone`.
 

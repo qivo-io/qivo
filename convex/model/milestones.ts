@@ -15,7 +15,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
-import { NAME_MAX, nameTooLong } from '../lib/textLimits'
+import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { weekLabel } from './orgs'
 import { calendarDay } from './taskValues'
@@ -96,7 +96,7 @@ export const MILESTONE_NAME_TOO_LONG = `a milestone name must be at most ${NAME_
 export function cleanMilestoneName(raw: string, current?: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a milestone name cannot be blank')
-  if (name !== current && nameTooLong(name)) throw rule(MILESTONE_NAME_TOO_LONG)
+  if (nameOverCap(name, current)) throw rule(MILESTONE_NAME_TOO_LONG)
   return name
 }
 

@@ -1740,6 +1740,7 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
           ref={ref}
           data-create-org
           value={name}
+          maxLength={NAME_MAX}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit()

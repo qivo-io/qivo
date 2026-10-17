@@ -1,9 +1,10 @@
 /* The 80-character cap on project, sub-project, team, milestone and
  * organization names and on agent key and personal token names
- * (lib/textLimits.ts NAME_MAX). Names count code points, so an emoji counts
- * once. The model layer enforces the cap for the app, REST and MCP alike, and
- * MCP's tool schemas declare it as maxLength. Rows named before the cap are
- * planted raw and keep their names through writes that resend them. */
+ * (lib/textLimits.ts NAME_MAX). Names count code points, so most single
+ * emoji count once. The model layer enforces the cap for the app, REST and
+ * MCP alike, and MCP's tool schemas declare it as maxLength. Rows named
+ * before the cap are planted raw and keep their names through writes that
+ * resend them. */
 
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -45,12 +46,13 @@ const rowOf = <Table extends Named>(t: T, table: Table, id: string) =>
       (await ctx.db.query(table).collect()).find((row) => row.id === id) ?? null,
   )
 
-/* Renames a stored row to LEGACY, as a write before the cap could. */
-const plantLegacyName = (t: T, table: Named, id: string) =>
+/* Renames a stored row to `name` (LEGACY by default), as a write before the
+ * cap could. */
+const plantLegacyName = (t: T, table: Named, id: string, name = LEGACY) =>
   t.run(async (ctx) => {
     const row = (await ctx.db.query(table).collect()).find((r) => r.id === id)
     if (row === undefined) throw new Error(`${table} ${id} missing`)
-    await ctx.db.patch(row._id, { name: LEGACY })
+    await ctx.db.patch(row._id, { name })
   })
 
 describe('project names', () => {
@@ -104,6 +106,22 @@ describe('project names', () => {
     await expectRefusal(update({ name: LEGACY.slice(1) }), 'rule', sentence(PROJECT_NAME_TOO_LONG))
     await update({ name: 'Testbed' })
     expect((await rowOf(t, 'projects', f.meta.id))?.name).toBe('Testbed')
+  })
+
+  it('compares a longer stored name with surrounding spaces trimmed', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantLegacyName(t, 'projects', f.meta.id, `  ${LEGACY} `)
+    // the app trims the name it shows before it sends it back
+    await as(t, f.user).mutation(api.projects.update, {
+      org_id: f.org.id,
+      id: f.meta.id,
+      patch: { name: LEGACY, description: 'Saved with the name' },
+    })
+    expect(await rowOf(t, 'projects', f.meta.id)).toMatchObject({
+      name: LEGACY,
+      description: 'Saved with the name',
+    })
   })
 })
 
@@ -220,6 +238,22 @@ describe('organization names', () => {
       week_start: 0,
     })
     await expectRefusal(update({ name: LEGACY.slice(1) }), 'rule', sentence(ORG_NAME_TOO_LONG))
+  })
+
+  it('keeps a longer stored name with surrounding spaces when it is sent back unchanged', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // orgs.update stored names untrimmed before the cap
+    const padded = ` ${LEGACY}  `
+    await plantLegacyName(t, 'organizations', f.org.id, padded)
+    await as(t, f.admin).mutation(api.orgs.update, {
+      org_id: f.org.id,
+      patch: { name: padded, week_start: 0 },
+    })
+    expect(await rowOf(t, 'organizations', f.org.id)).toMatchObject({
+      name: LEGACY,
+      week_start: 0,
+    })
   })
 
   it('refuses an operator-created organization with a longer name and leaves nothing', async () => {

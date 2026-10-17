@@ -996,9 +996,9 @@ function hasType(p: SchemaProp, x: unknown): boolean {
 }
 
 /* Arguments whose minLength and maxLength count code points, as the server's
- * rules for them do (cleanTitle, NAME_MAX), so an emoji counts once. Every
- * other argument counts UTF-16 code units, the unit of the long text caps
- * (TEXT_MAX) and of zod's string checks. */
+ * rules for them do (cleanTitle, NAME_MAX), so most single emoji count once.
+ * Every other argument counts UTF-16 code units, the unit of the long text
+ * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
 /* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */

@@ -157,7 +157,8 @@ Useful field rules:
 
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,
   `high`, `medium`, `low`. Titles, and project, milestone and team names, must
-  be nonblank and at most 80 characters (an emoji counts as one).
+  be nonblank and at most 80 characters, counted as Unicode code points (most
+  single emoji count as one, a flag or a skin-tone emoji as two).
 - Descriptions and comments use Markdown, up to 20,000 characters each
   (JavaScript string length, so an emoji can count as two). A task holds at
   most 400 comments; past that, post in a new task. Omitted update

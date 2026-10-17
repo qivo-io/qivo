@@ -15,14 +15,25 @@ export const TEXT_MAX_LABEL = '20,000'
 
 /** The longest name of a project, sub-project, team, milestone or
  * organization, and of an agent key or personal token. Names count code
- * points ([...name].length), as task titles and display names do, so an emoji
- * counts once. The browser's maxLength counts UTF-16 code units, which is
- * stricter, so an app input with maxLength={NAME_MAX} never sends a name the
- * server refuses. */
+ * points ([...name].length), as task titles and display names do, so most
+ * single emoji count once, while a flag, a skin tone or a joined emoji counts
+ * as several. The browser's maxLength counts UTF-16 code units, which is
+ * stricter, so an app input with maxLength={NAME_MAX} never lets a person
+ * type a name the server refuses. A longer name stored before the cap and
+ * shown in such an input must still be shortened to NAME_MAX before it
+ * saves. */
 export const NAME_MAX = 80
 
 /** Whether `name` has more than NAME_MAX code points. */
 export const nameTooLong = (name: string): boolean => [...name].length > NAME_MAX
+
+/** Whether `name`, already trimmed, must be refused for having more than
+ * NAME_MAX code points. A name equal to `current`, the stored one, passes, so
+ * a row named before the cap keeps its name through writes that resend it.
+ * The stored name is compared trimmed, because writes before the cap could
+ * store a name with surrounding spaces. */
+export const nameOverCap = (name: string, current?: string): boolean =>
+  name !== current?.trim() && nameTooLong(name)
 
 /** `name` cut to its first NAME_MAX code points followed by "…" when it is
  * longer, for display text copied from a name nobody here chose, such as an

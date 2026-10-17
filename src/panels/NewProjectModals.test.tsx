@@ -173,6 +173,11 @@ describe('New project for a standard user', () => {
     expect(find<HTMLInputElement>('input[aria-label="Description"]').maxLength).toBe(500)
   })
 
+  it('stops a new organization name at the server limit of 80 characters', async () => {
+    await render(<dialogs.CreateOrgModal onClose={vi.fn()} />)
+    expect(find<HTMLInputElement>('input[aria-label="Organization name"]').maxLength).toBe(80)
+  })
+
   it('names the creator first beside other shares', async () => {
     await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
     await pickLead('leo')
