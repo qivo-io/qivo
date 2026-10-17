@@ -134,7 +134,7 @@ function SettingsScreen({
       { id: 'projects', label: 'All projects', icon: 'layers' },
       // Keep the archive discoverable even when empty.
       { id: 'projects-archived', label: 'Archived projects', icon: 'archive' },
-      // every role has one: it lists what each person may see and restore
+      // every role has one, listing what each person may see and restore
       { id: 'projects-deleted', label: 'Deleted items', icon: 'trash' },
     ],
   })

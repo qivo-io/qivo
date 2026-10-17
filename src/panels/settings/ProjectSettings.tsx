@@ -246,10 +246,36 @@ export function ArchivedProjectsPage() {
   const [busy, setBusy] = useStateS(() => new Set<string>())
   // the project whose Delete window is open
   const [deleting, setDeleting] = useStateS<ArchivedProjectVM | null>(null)
+  // the rows on either side of it when the window opened, for focus
+  const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
   const all = P.archivedProjects
   // rows = what a person can act on: every archived project, plus the
   // sub-projects whose own project is still active. The rest are chips.
   const rows = all.filter((r) => !r.parentArchived)
+  const askDelete = (r: ArchivedProjectVM) => {
+    const at = rows.findIndex((row) => row.id === r.id)
+    deleteSides.current = { next: rows[at + 1]?.id, previous: rows[at - 1]?.id }
+    setDeleting(r)
+  }
+  /* Where focus goes when the Delete window closes. That is the row's Delete
+     while the row is there, else the next row's first button, the previous
+     row's, or the page heading, so focus never falls to the page body. */
+  const afterDelete = (id: string) => {
+    const own = document.querySelector<HTMLElement>(`[data-delete-project="${id}"]`)
+    if (own) return own
+    const buttonOf = (row?: string) =>
+      row === undefined
+        ? null
+        : document.querySelector<HTMLElement>(
+            `[data-archived-project="${row}"] button:not(:disabled)`,
+          )
+    const { next, previous } = deleteSides.current
+    return (
+      buttonOf(next) ??
+      buttonOf(previous) ??
+      document.querySelector<HTMLElement>('.settings-page-title h1')
+    )
+  }
   const restore = (r: ArchivedProjectVM) => {
     if (busy.has(r.id)) return
     setBusy((s: Set<string>) => new Set(s).add(r.id))
@@ -324,7 +350,7 @@ export function ArchivedProjectsPage() {
                         type="button"
                         data-delete-project={r.id}
                         className="text-danger"
-                        onClick={() => setDeleting(r)}
+                        onClick={() => askDelete(r)}
                       >
                         <Icon name="trash" size={16} />
                         Delete
@@ -384,9 +410,7 @@ export function ArchivedProjectsPage() {
           deleteOnly
           onClose={() => setDeleting(null)}
           onDelete={(reason) => del(deleting, reason)}
-          focusAfterClose={() =>
-            document.querySelector<HTMLElement>(`[data-delete-project="${deleting.id}"]`)
-          }
+          focusAfterClose={() => afterDelete(deleting.id)}
         />
       )}
     </>
@@ -405,8 +429,8 @@ export function ProjectPage({
   onBackPage?: (page: string) => void
   onProjectGone?: (parent: string | null) => void
   /** told the project's id while its delete waits for the server, and null
-      when the server refused it: the delivery that drops the project usually
-      lands before the answer, and this page leaves on its own after it */
+      when the server refused it. The delivery that drops the project usually
+      lands before the answer, and this page leaves on its own after it. */
   onLeaving?: (projectId: string | null) => void
 }) {
   const proj = P.project(projectId)
@@ -428,8 +452,8 @@ export function ProjectPage({
   const removeButton = React.useRef<HTMLButtonElement>(null)
   const removalWindow = (shown: ProjectVM) => {
     // Archiving lands on the Archived projects page rather than back on the
-    // list: the page that can take it back is where you should be standing
-    // when the toast appears.
+    // list, because the page that can take it back is where you should be
+    // standing when the toast appears.
     const archive = () => {
       // a paused archive keeps the window open
       if (P.refusePausedEdit()) return

@@ -24,7 +24,12 @@ vi.mock('../../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
-type Answer = { restored?: string[]; purged?: string[]; refused?: { id: string; reason: string }[] }
+type Answer = {
+  restored?: string[]
+  purged?: string[]
+  refused?: { id: string; reason: string }[]
+  deferred?: string[]
+}
 type Subscription = {
   args: { deleted_by?: string }
   next: (value: unknown) => void
@@ -64,6 +69,8 @@ const MIRA: Deleter = {
   kind: 'app',
   who: 'mira|app',
 }
+/** The viewer's own delete, as a standard user's list holds only these. */
+const ME: Deleter = { you: true, profile_id: 'me', name: 'Planner', kind: 'app', who: 'me|app' }
 
 function task(num: number, patch: Partial<DeletedRow> = {}): DeletedRow {
   return {
@@ -108,15 +115,20 @@ const burst = (n: number, from = 100) =>
     }),
   )
 
-function fixture(role: 'admin' | 'lead' | 'user') {
+/** Who the fixture's person is. `archived lead` leads only an archived
+    project. */
+type Role = 'admin' | 'lead' | 'archived lead' | 'user'
+
+function fixture(role: Role) {
   const next = plannerFixture()
   const me = next.profiles[0]
   if (role !== 'admin') me.org_role = 'user'
-  if (role === 'lead') next.projects[0].lead_id = me.id
+  if (role === 'lead' || role === 'archived lead') next.projects[0].lead_id = me.id
+  if (role === 'archived lead') next.projects[0].archived_at = '2026-10-01T08:00:00.000Z'
   return next
 }
 
-async function load(role: 'admin' | 'lead' | 'user' = 'admin') {
+async function load(role: Role = 'admin') {
   vi.resetModules()
   snap = fixture(role)
   ORG = snap.orgs[0].id
@@ -183,7 +195,7 @@ const settle = async () => {
   for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
 }
 /** Renders the page as Settings does, re-rendering on store changes. */
-async function open(role: 'admin' | 'lead' | 'user' = 'admin') {
+async function open(role: Role = 'admin') {
   await load(role)
   const page = await import('./DeletedItems')
   const version = await import('../../store/usePlannerVersion')
@@ -264,10 +276,29 @@ describe('who the page speaks to', () => {
     await act(async () => root.unmount())
     root = createRoot(container)
     await open('user')
-    await deliver([task(1)])
+    await deliver([task(1, { deleter: ME })])
     expect(text('.settings-page-title')).toContain('Tasks and projects you deleted.')
     expect(text('.settings-page-title')).not.toContain('organization')
     expect(has('[data-deleted-by]')).toBe(false)
+  })
+
+  it('speaks to a lead whose projects are archived or in Deleted items as a lead', async () => {
+    const lead = 'Tasks and projects you deleted, and those deleted in projects you lead.'
+    await open('archived lead')
+    await deliver([task(1, { deleter: ME })])
+    expect(text('.settings-page-title')).toContain(lead)
+    expect(has('[data-deleted-by]')).toBe(true)
+
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await open('user')
+    await deliver([task(1, { deleter: ME })])
+    expect(text('.settings-page-title')).not.toContain(lead)
+    // only a lead's list holds deletes by other people, here in a project
+    // the person led before it went to Deleted items
+    await deliver([task(1, { deleter: ME }), trial()])
+    expect(text('.settings-page-title')).toContain(lead)
+    expect(has('[data-deleted-by]')).toBe(true)
   })
 
   it('says when it is loading, failed or empty, and tries again', async () => {
@@ -383,10 +414,11 @@ describe('the rows', () => {
         redacted: true,
         path: [],
         status: undefined,
+        deleter: ME,
         can_restore: false,
         blocked: { reason: 'no_access' },
       }),
-      task(8),
+      task(8, { deleter: ME }),
     ])
     expect(text('[data-deleted-row="item-305"] [data-row-note="blocked"]')).toBe(
       'You can only view Website now. Ask its lead, Aisha Khan, to restore it.',
@@ -487,7 +519,7 @@ describe('selecting and restoring', () => {
     // a blocked row's box does nothing
     await click(checkbox('item-3'))
     expect(text('[data-deleted-count]')).toBe('2 selected')
-    // someone archived the project of item-2: it leaves the selection
+    // someone archived the project of item-2, so it leaves the selection
     await deliver([
       task(1),
       task(2, { can_restore: false, blocked: { reason: 'project_archived', project: 'Docs' } }),
@@ -628,7 +660,7 @@ describe('items that wait for a deleted project', () => {
     // while the project is not back yet, nothing more is sent
     await deliver([trial({ state: 'restoring', can_restore: false }), early])
     expect(calls('deletedItems:restore')).toHaveLength(1)
-    // the project is back: the item is restorable now and goes on its own
+    // the project is back, so the item is restorable now and goes on its own
     await deliver([{ ...early, can_restore: true, blocked: undefined }])
     expect(calls('deletedItems:restore')).toEqual([
       { org_id: ORG, ids: ['item-trial', 'item-5'] },
@@ -848,5 +880,295 @@ describe('searching inside deleted projects', () => {
     })
     expect(settings).toHaveBeenCalledTimes(1)
     window.removeEventListener('keydown', settings)
+  })
+})
+
+/* ------------------------------------------------ review fixes (gate) */
+
+describe('a restore the server refuses in part', () => {
+  for (const order of ['before', 'after'] as const)
+    it(`keeps the refused row selected when the list arrives ${order} the answer`, async () => {
+      await open()
+      await deliver([task(1), task(2), task(3)])
+      const blocked = task(2, {
+        can_restore: false,
+        blocked: { reason: 'project_archived', project: 'Docs' },
+      })
+      answers['deletedItems:restore'] = async () => {
+        // Convex delivers the list that follows a mutation before its answer
+        if (order === 'before') push([blocked])
+        return {
+          restored: ['item-1', 'item-3'],
+          refused: [{ id: 'item-2', reason: 'project_archived' }],
+          deferred: [],
+        }
+      }
+      await click(find('[data-select-all]'))
+      await click(find('.deleted-selection-actions [data-restore-selected]'))
+      await click(button('Restore 3 tasks'))
+      if (order === 'after') await deliver([blocked])
+      expect(window.showToast).toHaveBeenCalledWith(
+        "Restored 2 of 3 tasks. 1 couldn't be restored.",
+        'error',
+      )
+      expect(text('[data-deleted-count]')).toBe('1 selected')
+      expect(checkbox('item-2').getAttribute('data-state')).toBe('checked')
+      expect(text('[data-deleted-row="item-2"] [data-row-note="blocked"]')).toBe(
+        'Restore Docs from Archived projects first.',
+      )
+      // nothing selected can come back now, and the row's box still clears it
+      expect(find<HTMLButtonElement>('[data-restore-selected]').disabled).toBe(true)
+      await click(checkbox('item-2'))
+      expect(text('[data-deleted-count]')).toBe('1 item')
+      expect(checkbox('item-2').disabled).toBe(true)
+    })
+})
+
+describe('restoring the selection', () => {
+  it('sends one call per organization', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => ({
+      restored: args.ids as string[],
+      refused: [],
+      deferred: [],
+    })
+    const other = { org_id: 'org-other', org_name: 'Aurora Studio' }
+    await deliver([task(1), task(2, { ...other, deleted_at: at(14, 30) }), task(3)])
+    await click(find('[data-select-all]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    await click(button('Restore 3 tasks'))
+    const sent = calls('deletedItems:restore')
+      .map((a) => ({ org: a.org_id, ids: [...(a.ids as string[])].sort() }))
+      .sort((a, b) => String(a.org).localeCompare(String(b.org)))
+    expect(sent).toEqual(
+      [
+        { org: ORG, ids: ['item-1', 'item-3'] },
+        { org: 'org-other', ids: ['item-2'] },
+      ].sort((a, b) => a.org.localeCompare(b.org)),
+    )
+    expect(window.showToast).toHaveBeenCalledWith('Restored 3 tasks', undefined)
+  })
+
+  it('gives focus back to Restore N selected when its window is cancelled', async () => {
+    await open()
+    await deliver([task(1), task(2)])
+    await click(find('[data-select-all]'))
+    const opener = find<HTMLButtonElement>('.deleted-selection-actions [data-restore-selected]')
+    opener.focus()
+    await click(opener)
+    expect(text('[data-modal-shell] h2')).toBe('Restore 2 tasks?')
+    await click(button('Cancel'))
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(document.activeElement).toBe(find('.deleted-selection-actions [data-restore-selected]'))
+    expect(text('[data-deleted-count]')).toBe('2 selected')
+  })
+
+  it('keeps the selection inside the filter', async () => {
+    await open()
+    await deliver([task(1), task(2), trial()])
+    await click(find('[data-select-all]'))
+    expect(text('[data-deleted-count]')).toBe('3 selected')
+    await click(button('Projects'))
+    expect(rowIds()).toEqual(['item-trial'])
+    expect(text('[data-deleted-count]')).toBe('1 selected')
+    expect(text('[data-restore-selected]')).toBe('Restore 1 selected')
+    // the tasks the filter hid did not come back selected with it
+    await click(button('All'))
+    expect(text('[data-deleted-count]')).toBe('1 selected')
+    expect(checkbox('item-1').getAttribute('data-state')).toBe('unchecked')
+  })
+})
+
+describe('windows that wait for the server', () => {
+  it('keep the bulk restore and Delete now windows open while they wait', async () => {
+    await open()
+    let restored: (answer: Answer) => void = () => {}
+    let purged: (answer: Answer) => void = () => {}
+    answers['deletedItems:restore'] = () => new Promise((resolve) => (restored = resolve))
+    answers['deletedItems:purge'] = () => new Promise((resolve) => (purged = resolve))
+    await deliver([task(1, { can_purge: true }), task(2, { can_purge: true })])
+    const close = () => find('[data-modal-shell] button[aria-label="Close"]')
+
+    await click(find('[data-select-all]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    await click(button('Restore 2 tasks'))
+    expect(button('Restoring…').disabled).toBe(true)
+    await click(button('Cancel'))
+    await click(close())
+    expect(has('[data-bulk-restore]')).toBe(true)
+    await act(async () => restored({ restored: ['item-1', 'item-2'], refused: [], deferred: [] }))
+    await settle()
+    expect(has('[data-bulk-restore]')).toBe(false)
+
+    // a window that waits for nothing closes at once
+    await click(find('[data-deleted-row="item-1"] [data-row-menu]'))
+    await click(find('[data-delete-now]'))
+    await click(button('Cancel'))
+    expect(has('[data-purge]')).toBe(false)
+    await click(find('[data-deleted-row="item-1"] [data-row-menu]'))
+    await click(find('[data-delete-now]'))
+    await click(button('Delete for good'))
+    expect(button('Deleting…').disabled).toBe(true)
+    await click(button('Cancel'))
+    await click(close())
+    expect(has('[data-purge]')).toBe(true)
+    await act(async () => purged({ purged: ['item-1'], refused: [] }))
+    await settle()
+    expect(has('[data-purge]')).toBe(false)
+  })
+
+  it('says Restoring while a project comes back in steps', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => {
+      push([trial({ state: 'restoring', can_restore: false })])
+      return { restored: args.ids as string[], refused: [], deferred: [] }
+    }
+    await deliver([trial()])
+    await click(find('[data-deleted-row="item-trial"] [data-restore]'))
+    expect(window.showToast).toHaveBeenCalledWith('Restoring “Field trial Q3”…', undefined)
+    expect(window.showToast).not.toHaveBeenCalledWith('Restored “Field trial Q3”', undefined)
+    expect(text('[data-deleted-row="item-trial"] [data-row-note="state"]')).toBe('Restoring…')
+    expect(has('[data-deleted-row="item-trial"] [data-restore]')).toBe(false)
+  })
+
+  it('opens the project window for a sub-project whose project is deleted too', async () => {
+    await open()
+    const website = task(0, {
+      id: 'item-web',
+      kind: 'project',
+      title: 'Website',
+      status: undefined,
+      path: [],
+      counts: { tasks: 30, archived_tasks: 0, subtasks: 0, sub_projects: 1 },
+      deleted_at: at(10, 0),
+    })
+    const blog = task(0, {
+      id: 'item-blog',
+      kind: 'project',
+      title: 'Blog migration',
+      status: undefined,
+      path: ['Website'],
+      counts: { tasks: 12, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+      deleted_at: at(9, 0, 0, 14),
+      can_restore: false,
+      blocked: { reason: 'parent_deleted', item_id: 'item-web' },
+    })
+    const archivedParent = task(0, {
+      id: 'item-docs',
+      kind: 'project',
+      title: 'API docs',
+      status: undefined,
+      path: ['Developer portal'],
+      deleted_at: at(8, 0, 0, 14),
+      can_restore: false,
+      blocked: { reason: 'parent_archived', project: 'Developer portal' },
+    })
+    await deliver([website, blog, archivedParent])
+    expect(text('[data-deleted-row="item-blog"] [data-row-note="blocked"]')).toBe(
+      'Its project, Website, is in Deleted items too.',
+    )
+    // a sub-project whose project is archived has no Restore
+    expect(has('[data-deleted-row="item-docs"] [data-restore]')).toBe(false)
+    await click(find('[data-deleted-row="item-blog"] [data-restore]'))
+    expect(text('[data-modal-shell] h2')).toBe('Blog migration is in a deleted project')
+    expect(calls('deletedItems:restore')).toEqual([])
+  })
+})
+
+describe('search hits follow the list', () => {
+  const hit = (patch: Partial<DeletedMatch> = {}): DeletedMatch => ({
+    item_id: 'item-trial',
+    org_id: ORG,
+    org_name: 'Testbed Labs',
+    key: 'QN-12',
+    title: 'Book test sites in Umeå',
+    archived: false,
+    path: ['Field trial Q3', 'Site preparation'],
+    deleted_at: at(16, 40, 0, 15),
+    deleter: MIRA,
+    state: 'ready',
+    can_restore: true,
+    ...patch,
+  })
+  /** Types `value`, waits past the pause and answers the search with `matches`. */
+  async function found(value: string, matches: DeletedMatch[]) {
+    await search(value)
+    await pause()
+    const last = searches[searches.length - 1]
+    await act(async () => last.resolve(matches))
+    await settle()
+  }
+
+  it('shows the live state of the project item a hit belongs to', async () => {
+    await open()
+    await deliver([trial({ state: 'moving', can_restore: false })])
+    await found('Book', [hit({ state: 'moving', can_restore: false })])
+    expect(text('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe(
+      'Moving to Deleted items…',
+    )
+    expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(false)
+    // the project item is ready now, which the one-shot search does not know
+    await deliver([trial()])
+    expect(has('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe(false)
+    expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(true)
+    // and it starts restoring in steps, from its own row or another tab
+    await deliver([trial({ state: 'restoring', can_restore: false })])
+    expect(text('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe('Restoring…')
+    expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(false)
+  })
+
+  it('asks before a project ticked through a hit comes back, and restores a task at once', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => ({
+      restored: args.ids as string[],
+      refused: [],
+      deferred: [],
+    })
+    await deliver([trial(), task(1)])
+    await found('Book', [hit()])
+    await click(find('[data-deleted-match="QN-12"] [data-select]'))
+    expect(text('[data-deleted-count]')).toBe('1 selected')
+    const opener = find<HTMLButtonElement>('.deleted-selection-actions [data-restore-selected]')
+    opener.focus()
+    await click(opener)
+    expect(calls('deletedItems:restore')).toEqual([])
+    expect(text('[data-modal-shell] h2')).toBe('QN-12 is in a deleted project')
+    await click(button('Cancel'))
+    expect(document.activeElement).toBe(find('.deleted-selection-actions [data-restore-selected]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    await click(button('Restore Field trial Q3 and QN-12'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-trial'] }])
+
+    // a task ticked on its own row needs no window
+    await search('')
+    await deliver([task(1)])
+    await click(checkbox('item-1'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial'] },
+      { org_id: ORG, ids: ['item-1'] },
+    ])
+  })
+
+  it('drops hits the new text does not hold before its answer, and counts each item once', async () => {
+    await open()
+    await deliver([trial()])
+    await found('Boo', [
+      hit(),
+      hit({ key: 'QN-13', title: 'Boots for the field team' }),
+      hit({ key: 'QN-14', title: 'Book a van' }),
+    ])
+    // three hits in one project item are one item
+    expect(text('[data-deleted-count]')).toBe('1 of 1 item')
+    // a longer text keeps the hits that still hold it while its answer is on the way
+    await search('Book')
+    expect(has('[data-deleted-match="QN-12"]')).toBe(true)
+    expect(has('[data-deleted-match="QN-14"]')).toBe(true)
+    expect(has('[data-deleted-match="QN-13"]')).toBe(false)
+    await search('Zebra')
+    expect(has('[data-deleted-match="QN-12"]')).toBe(false)
+    expect(text('[data-deleted-items]')).toContain('No deleted items match the filter.')
+    expect(text('[data-deleted-count]')).toBe('0 of 1 item')
   })
 })

@@ -1,11 +1,12 @@
-/* Settings › Projects › Deleted items (design 10): the tasks and projects in
-   the trash that this login may see in each of its organizations, live from
-   deletedItems.list, with tasks inside deleted projects found by search
-   (deletedItems.matches). One item restores without asking; several open a
-   window that says where they go back. An organization admin can delete an
-   item for good from its row menu. The page never names the 30 days an item
-   stays: only the user guide does. Row text, folding and the filters live in
-   lib/deletedItems.ts; times in lib/deletedTime.ts. */
+/* Settings › Projects › Deleted items (design 10). The page lists the tasks
+   and projects in the trash that this login may see in each of its
+   organizations, live from deletedItems.list, and search finds tasks inside
+   deleted projects (deletedItems.matches). One item restores without asking,
+   and several open a window that says where they go back. An organization
+   admin can delete an item for good from its row menu. The page never names
+   the 30 days an item stays, which only the user guide does. Row text,
+   folding and the filters live in lib/deletedItems.ts, and times in
+   lib/deletedTime.ts. */
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
@@ -40,6 +41,7 @@ import {
   type KindFilter,
   type Line,
   lineItem,
+  matchHasText,
   type Piece,
   placeText,
   plural,
@@ -64,16 +66,20 @@ const SUBTITLES: Record<Role, string> = {
   user: 'Tasks and projects you deleted.',
 }
 
-/* Who the page speaks to: an organization admin sees every delete, a lead
-   their own and those in the projects they lead, everyone else their own
-   (design 6.1). A lead of any project in any of the login's organizations
-   reads as a lead. */
-function viewerRole(): Role {
+/* Who the page speaks to (design 6.1). An organization admin sees every
+   delete, a lead their own and those in the projects they lead, and everyone
+   else their own. A lead of any project in any of the login's organizations
+   reads as a lead, archived projects included. Only a lead's list holds
+   deletes by other people, so a person who led only projects that are now
+   in Deleted items reads as a lead once the list arrives. */
+function viewerRole(rows: DeletedRow[]): Role {
   if (P.isAdmin()) return 'admin'
-  return P.projects.some((p) => P.levelOn(p.id) === 'lead') ? 'lead' : 'user'
+  const leads =
+    P.projects.some((p) => P.levelOn(p.id) === 'lead') || P.archivedProjects.some((p) => p.manage)
+  return leads || rows.some((row) => !row.deleter.you) ? 'lead' : 'user'
 }
 
-/** deletedItems.list, live: undefined while loading, null after an error.
+/** deletedItems.list, live. It is undefined while loading and null after an error.
     `deleted_by` narrows it to one person on the server. `latest` holds the
     newest answer at once, for code that runs before the page renders it. */
 function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
@@ -107,12 +113,17 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
 }
 
 /** The windows the page opens: restore several items, restore an item that
-    waits for a deleted project, or delete one for good. `line` is the row
-    that opened it, for focus. */
+    waits for a deleted project, or delete one for good. `key` is the line
+    that opened it, for focus. `selection` marks a project window that
+    Restore N selected opened, which hands focus back like the bulk one. */
 type Ask =
   | { kind: 'bulk'; rows: DeletedRow[] }
-  | { kind: 'project'; line: Line; key: string }
+  | { kind: 'project'; line: Line; key: string; selection?: boolean }
   | { kind: 'purge'; row: DeletedRow; key: string }
+
+/** The key of a line in the list, which also names it for focus. */
+const lineKey = (line: Line) =>
+  line.kind === 'item' ? line.row.id : `${line.match.item_id}:${line.match.key}`
 
 /** The rows on either side of a row that may leave the list. */
 type Around = { next?: string; previous?: string }
@@ -120,12 +131,12 @@ type Around = { next?: string; previous?: string }
 const toast = (text: string, tone?: 'error') => window.showToast?.(text, tone)
 
 export function DeletedItemsPage() {
-  const role = viewerRole()
   const main = useDeletedList(undefined, true)
   const [kind, setKind] = useState<KindFilter>('all')
   const [search, setSearch] = useState('')
   const [by, setBy] = useState(ANYONE)
   const all = main.list?.items ?? []
+  const role = viewerRole(all)
   // A capped list may not hold a person's older deletes; ask the server for
   // that person alone then (only an admin's seat reaches further).
   const person = main.list?.capped ? chosenProfile(by, all) : undefined
@@ -136,15 +147,21 @@ export function DeletedItemsPage() {
   const byId = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows])
   const allById = useMemo(() => new Map(all.map((row) => [row.id, row])), [all])
 
-  const [found, setFound] = useState<DeletedMatch[]>([])
+  // the newest search answer and the text it answers
+  const [found, setFound] = useState<{ text: string; matches: DeletedMatch[] }>(() => ({
+    text: '',
+    matches: [],
+  }))
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   const [refusals, setRefusals] = useState<ReadonlyMap<string, RestoreRefusal>>(() => new Map())
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
   const [ask, setAsk] = useState<Ask | null>(null)
   const [saving, setSaving] = useState(false)
-  // items deferred behind a project item of the same restore: sent again once
-  // the list shows them restorable (design 5)
+  // whether the open window did what it asks, for where focus goes after it
+  const acted = useRef(false)
+  // Items deferred behind a project item of the same restore. They are sent
+  // again once the list shows them restorable (design 5).
   const waiting = useRef(new Set<string>())
   const pageRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -166,34 +183,70 @@ export function DeletedItemsPage() {
   useEffect(() => {
     const mine = ++sequence.current
     if (!text) {
-      setFound([])
+      setFound({ text: '', matches: [] })
       return
     }
     const timer = window.setTimeout(() => {
       convex.query(api.deletedItems.matches, { text }).then(
         (answer) => {
-          if (sequence.current === mine) setFound(answer)
+          if (sequence.current === mine) setFound({ text, matches: answer })
         },
         (cause) => {
           console.error('[qivo] deleted items search failed:', cause)
-          if (sequence.current === mine) setFound([])
+          if (sequence.current === mine) setFound({ text, matches: [] })
         },
       )
     }, 250)
     return () => window.clearTimeout(timer)
   }, [text])
+  const lower = text.toLowerCase()
+  // Until the new text has its answer, the hits of the previous one show only
+  // when they still hold the new text.
+  const hits = useMemo(
+    () =>
+      found.text === text ? found.matches : found.matches.filter((m) => matchHasText(m, lower)),
+    [found, text, lower],
+  )
 
-  /* Each delivery: drop selected ids that left the list or became blocked
-     (an id the last restore refused stays, with its reason), forget
-     refusals of rows that left, and send again the deferred items the list
-     now shows restorable. */
+  /* ---------------------------------------------------------- the lines */
+  // A search hit acts on its project item and shows that item's live state,
+  // since matches is not reactive. A hit whose project item left the list
+  // goes.
+  const lines = useMemo(() => {
+    const out: Line[] = []
+    for (const row of rows)
+      if (
+        (kind === 'all' || row.kind === kind) &&
+        deletedBy(row, by) &&
+        (!lower || rowHasText(row, lower))
+      )
+        out.push({ kind: 'item', row })
+    if (lower && kind !== 'project')
+      for (const match of hits) {
+        const item = byId.get(match.item_id)
+        if (item && deletedBy(item, by)) out.push({ kind: 'match', match, item })
+      }
+    return out.sort(byTime)
+  }, [rows, byId, kind, by, lower, hits])
+  // the items the lines show, each once however many hits it has
+  const lineIds = useMemo(() => new Set(lines.map((line) => lineItem(line).id)), [lines])
+
+  /* The selection holds only what the person can still act on. A delivery or
+     a filter change drops a selected id whose row is no longer shown, or that
+     became blocked. An id the last restore refused stays, with its reason,
+     and so does one a restore still waits for, since Convex delivers the list
+     before the restore's answer. Refusals of rows that left the list go. */
   useEffect(() => {
     if (!loaded) return
     setSelected((current) => {
       const next = new Set(
         [...current].filter((id) => {
           const row = byId.get(id)
-          return row !== undefined && (row.can_restore || refusals.has(id))
+          return (
+            row !== undefined &&
+            lineIds.has(id) &&
+            (row.can_restore || refusals.has(id) || busy.has(id))
+          )
         }),
       )
       return next.size === current.size ? current : next
@@ -202,6 +255,12 @@ export function DeletedItemsPage() {
       const next = new Map([...current].filter(([id]) => byId.has(id)))
       return next.size === current.size ? current : next
     })
+  }, [byId, lineIds, loaded, refusals, busy])
+
+  /* Each delivery sends again the deferred items it shows restorable, and
+     forgets those that left the list. */
+  useEffect(() => {
+    if (!loaded) return
     const ready: DeletedRow[] = []
     for (const id of waiting.current) {
       const row = byId.get(id)
@@ -213,7 +272,7 @@ export function DeletedItemsPage() {
     }
     if (ready.length) void restore(ready)
     // restore reads the newest state through refs and setters
-  }, [byId, loaded, refusals])
+  }, [byId, loaded])
 
   const options = useMemo(
     () => deletedByOptions(all, new Set(all.map((row) => row.org_id)).size > 1),
@@ -224,23 +283,6 @@ export function DeletedItemsPage() {
     if (main.list && by !== ANYONE && !options.some((o) => o.value === by)) setBy(ANYONE)
   }, [main.list, by, options])
 
-  /* ---------------------------------------------------------- the lines */
-  const lower = text.toLowerCase()
-  const lines: Line[] = []
-  for (const row of rows)
-    if (
-      (kind === 'all' || row.kind === kind) &&
-      deletedBy(row.deleter, by) &&
-      (!lower || rowHasText(row, lower))
-    )
-      lines.push({ kind: 'item', row })
-  // matches are not reactive: a hit whose project item left the list goes
-  if (lower && kind !== 'project')
-    for (const match of found) {
-      const item = byId.get(match.item_id)
-      if (item && deletedBy(match.deleter, by)) lines.push({ kind: 'match', match, item })
-    }
-  lines.sort(byTime)
   const filtered = kind !== 'all' || !!lower || by !== ANYONE
   const orgs = [...new Set(all.map((row) => row.org_id))]
   const grouped = orgs.length > 1
@@ -258,14 +300,7 @@ export function DeletedItemsPage() {
             a.name.localeCompare(b.name),
         )
     : [{ org: '', name: '', lines }]
-  const shownIds = [
-    ...new Set(
-      lines
-        .map(lineItem)
-        .filter((row) => row.can_restore)
-        .map((r) => r.id),
-    ),
-  ]
+  const shownIds = [...lineIds].filter((id) => byId.get(id)?.can_restore)
   const chosen = [...selected].flatMap((id) => byId.get(id) ?? [])
   const chosenReady = chosen.filter((row) => row.can_restore)
   const wide = rows.some((row) => row.can_purge)
@@ -311,8 +346,8 @@ export function DeletedItemsPage() {
       controlOf(findLine(sides.next)) ?? controlOf(findLine(sides.previous)) ?? searchRef.current
     )
   }
-  /* After an action that did not open a window: move focus only when it was
-     on the row (or fell to the page when the row left). */
+  /* After an action that did not open a window, focus moves only when it was
+     on the row, or fell to the page when the row left. */
   const settleFocus = (key: string, sides: Around) => () => {
     const active = document.activeElement
     const here = findLine(key)
@@ -321,11 +356,27 @@ export function DeletedItemsPage() {
     restoreFocus(targetAround(key, sides))
   }
 
-  /** After a restore of the selection: the select-all box, or the search box
-      when nothing is left to select. */
+  /** Where focus goes after a restore of the selection. That is the
+      select-all box, or the search box when nothing is left to select. */
   const selectAllOrSearch = () =>
     pageRef.current?.querySelector<HTMLElement>('[data-select-all]:not(:disabled)') ??
     searchRef.current
+  /** Focus after a window that Restore N selected opened. A restore sends it
+      to the select-all box, and a Cancel back to the button (ModalShell's
+      own return, when this answers null). */
+  const afterSelectionWindow = () => (acted.current ? selectAllOrSearch() : null)
+
+  /** Opens a window, which has not acted yet. */
+  const openAsk = (next: Ask) => {
+    acted.current = false
+    windowSides.current = {}
+    setAsk(next)
+  }
+  /** Closes the window after it did what it asks. */
+  const closeActed = () => {
+    acted.current = true
+    setAsk(null)
+  }
 
   /* ----------------------------------------------------------- restoring */
   /** Restores `items` and says how it went. `announce` are the items the
@@ -402,36 +453,45 @@ export function DeletedItemsPage() {
     )
   }
 
-  /** A row's Restore: at once for one item, through the project window for
-      a search hit or an item whose project is deleted too. */
+  /** A row's Restore. One item restores at once, and a search hit or an item
+      whose project is deleted too goes through the project window. */
   const restoreLine = (line: Line, key: string) => {
     const row = lineItem(line)
     const reason = row.blocked?.reason
     if (line.kind === 'match' || reason === 'project_deleted' || reason === 'parent_deleted') {
-      windowSides.current = {}
-      setAsk({ kind: 'project', line, key })
+      openAsk({ kind: 'project', line, key })
       return
     }
     if (!row.can_restore || busy.has(row.id)) return
     void restore([row], [row], settleFocus(key, around(key)))
   }
 
-  /** Restore N selected: one item at once, more after the window asks. */
+  /** Restore N selected. One item restores at once, and more open the bulk
+      window. A project item ticked through a search hit, while its own row
+      is filtered out, opens the project window instead, so the person learns
+      that the whole project comes back and not only the task. */
   const restoreSelected = () => {
     if (chosenReady.length === 0) return
     if (chosenReady.length > 1) {
-      setAsk({ kind: 'bulk', rows: chosenReady })
+      openAsk({ kind: 'bulk', rows: chosenReady })
+      return
+    }
+    const [row] = chosenReady
+    const hit = lines.find((line) => line.kind === 'match' && line.item.id === row.id)
+    if (hit && !lines.some((line) => line.kind === 'item' && line.row.id === row.id)) {
+      openAsk({ kind: 'project', line: hit, key: lineKey(hit), selection: true })
       return
     }
     void restore(chosenReady, chosenReady, () => restoreFocus(selectAllOrSearch()))
   }
 
   /* --------------------------------------------------------------- render */
-  // a list narrowed to one person on the server has no total to count against
+  // The count names items, so a project with three search hits counts once.
+  // A list narrowed to one person on the server has no total to count against.
   const countText =
     filtered && person === undefined
-      ? `${lines.length.toLocaleString('en-US')} of ${plural(rows.length, 'item')}`
-      : plural(lines.length, 'item')
+      ? `${lineIds.size.toLocaleString('en-US')} of ${plural(rows.length, 'item')}`
+      : plural(lineIds.size, 'item')
 
   const selectionBar = (place: 'top' | 'bottom') => (
     <>
@@ -468,10 +528,9 @@ export function DeletedItemsPage() {
   const renderLine = (line: Line, key: string) => {
     const item = lineItem(line)
     const match = line.kind === 'match' ? line.match : null
-    const state = match ? match.state : item.state
+    // a search hit shows its project item as the list has it now
+    const { state, blocked, deleter } = item
     const ready = state === 'ready'
-    const blocked = match ? match.blocked : item.blocked
-    const deleter = match ? match.deleter : item.deleter
     const name = match ? match.key : itemName(item)
     const opensWindow =
       match !== null ||
@@ -498,6 +557,8 @@ export function DeletedItemsPage() {
     else if (refused) notes.push({ key: 'refused', text: refusalText(refused) })
     const place = match ? match.path.filter(Boolean).join(' › ') : placeText(item)
     const archived = match ? match.archived : item.archived
+    // a row with no place line puts its deleter there on a phone
+    const placed = !!place || item.redacted === true || archived
     const time = new Date(item.deleted_at)
     const status = !match && !item.redacted && item.kind === 'task' ? item.status : undefined
     return (
@@ -509,6 +570,7 @@ export function DeletedItemsPage() {
         data-state={state}
         className={cn(
           'deleted-row rounded-md border border-border bg-surface-1 p-2',
+          !placed && 'deleted-row-unplaced',
           selected.has(item.id) && 'bg-lit',
           (state === 'moving' || state === 'restoring') && 'opacity-60',
         )}
@@ -519,7 +581,8 @@ export function DeletedItemsPage() {
               data-select
               aria-label={`Select ${name}`}
               checked={selected.has(item.id)}
-              disabled={!item.can_restore}
+              // a refused row that stays selected can still be cleared
+              disabled={!item.can_restore && !selected.has(item.id)}
               onCheckedChange={(on) => choose([item.id], on === true)}
             />
           ) : (
@@ -547,7 +610,7 @@ export function DeletedItemsPage() {
           )}
         </div>
         <div className="deleted-row-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-2">
-          {(place || item.redacted || archived) && (
+          {placed && (
             <span data-row-place className="deleted-row-where flex flex-wrap gap-x-3">
               {item.redacted && !match ? (
                 <span>Deleted with a task in a project you can't open</span>
@@ -629,12 +692,7 @@ export function DeletedItemsPage() {
                 <MenuItem
                   danger
                   data-delete-now
-                  onClick={() =>
-                    close(() => {
-                      windowSides.current = {}
-                      setAsk({ kind: 'purge', row: item, key })
-                    })
-                  }
+                  onClick={() => close(() => openAsk({ kind: 'purge', row: item, key }))}
                 >
                   <Icon name="trash" size={14} />
                   Delete now…
@@ -648,11 +706,7 @@ export function DeletedItemsPage() {
   }
 
   const renderPiece = (piece: Piece) => {
-    if (piece.kind === 'line') {
-      const { line } = piece
-      const key = line.kind === 'item' ? line.row.id : `${line.match.item_id}:${line.match.key}`
-      return renderLine(line, key)
-    }
+    if (piece.kind === 'line') return renderLine(piece.line, lineKey(piece.line))
     if (piece.kind === 'fewer')
       return (
         <div key={`fewer-${piece.key}`} className="flex min-h-control items-center px-[9px]">
@@ -748,7 +802,7 @@ export function DeletedItemsPage() {
                 { value: 'project', label: 'Projects' },
               ]}
             />
-            <div className="flex h-control w-[220px] shrink-0 items-center gap-2 rounded-md border border-border bg-surface-1 px-2">
+            <div className="deleted-search flex h-control items-center gap-2 rounded-md border border-border bg-surface-1 px-2">
               <Icon name="search" size={16} color="var(--text-3)" />
               <Input
                 ref={searchRef}
@@ -789,7 +843,7 @@ export function DeletedItemsPage() {
                 data-deleted-by
                 value={by}
                 onChange={(e) => setBy(e.target.value)}
-                className="h-control w-[270px] shrink-0 cursor-pointer bg-surface-1 font-sans text-sm"
+                className="deleted-by h-control cursor-pointer bg-surface-1 font-sans text-sm"
               >
                 {options.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -823,7 +877,7 @@ export function DeletedItemsPage() {
             )}
           </div>
         </div>
-        {body}
+        <div className="deleted-list">{body}</div>
         {source.list?.capped && (
           <p className="mt-3 px-1 text-sm text-text-2">Showing the newest 2,000 items.</p>
         )}
@@ -843,10 +897,10 @@ export function DeletedItemsPage() {
             setSaving(true)
             const outcome = await restore(ask.rows)
             setSaving(false)
-            // refused whole (billing, offline): stay open for another try
-            if (outcome.error === null || outcome.done.length > 0) setAsk(null)
+            // a call refused whole (billing, offline) keeps it open for another try
+            if (outcome.error === null || outcome.done.length > 0) closeActed()
           }}
-          focusAfterClose={selectAllOrSearch}
+          focusAfterClose={afterSelectionWindow}
         />
       )}
       {ask?.kind === 'project' && (
@@ -869,10 +923,12 @@ export function DeletedItemsPage() {
               holder,
             ])
             setSaving(false)
-            // refused whole (billing, offline): stay open for another try
-            if (outcome.error === null || outcome.done.length > 0) setAsk(null)
+            // a call refused whole (billing, offline) keeps it open for another try
+            if (outcome.error === null || outcome.done.length > 0) closeActed()
           }}
-          focusAfterClose={() => targetAround(ask.key, windowSides.current)}
+          focusAfterClose={
+            ask.selection ? afterSelectionWindow : () => targetAround(ask.key, windowSides.current)
+          }
         />
       )}
       {ask?.kind === 'purge' && (
@@ -892,11 +948,11 @@ export function DeletedItemsPage() {
             else if (refused)
               toast(`Couldn't delete ${name} for good. ${refusalText(refused.reason)}`, 'error')
             else {
-              // refused whole (billing, offline): stay open for another try
+              // a call refused whole (billing, offline) keeps it open for another try
               toast(outcome.error ?? `Couldn't delete ${name} for good.`, 'error')
               return
             }
-            setAsk(null)
+            closeActed()
           }}
           focusAfterClose={() => targetAround(ask.key, windowSides.current, '[data-row-menu]')}
         />
@@ -978,10 +1034,11 @@ function comesBack(holder: DeletedRow): string {
   return `${holder.title} comes back with ${andList(parts)}${kept}. They keep their keys.`
 }
 
-/** "<key> is in a deleted project": a search hit inside a deleted project, or
-    (for admins) an item deleted before its project, can only come back with
-    that project item. Restore brings the project back first. When the
-    project item cannot be restored, the window says why and offers Close. */
+/** The "<key> is in a deleted project" window. A search hit inside a deleted
+    project, or (for admins) an item deleted before its project, can only
+    come back with that project item, so Restore brings the project back
+    first. When the project item cannot be restored, the window says why and
+    offers Close. */
 function ProjectFirstWindow({
   line,
   holder,
@@ -1050,7 +1107,8 @@ function ProjectFirstWindow({
   )
 }
 
-/** Delete now: an organization admin deletes one item for good. */
+/** The Delete now window, where an organization admin deletes one item for
+    good. */
 function PurgeWindow({
   row,
   saving,

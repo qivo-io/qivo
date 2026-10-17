@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   ANYONE,
   blockedText,
+  chosenProfile,
+  type DeletedMatch,
   type DeletedRow,
   type Deleter,
   deletedBy,
@@ -10,6 +12,7 @@ import {
   foldText,
   itemSuffix,
   type Line,
+  matchHasText,
   type Piece,
   placeText,
   viaText,
@@ -145,11 +148,75 @@ describe('who deleted it', () => {
       'Daniel Berg',
     ])
     const [, , person, hidden] = deletedByOptions(rows, false)
-    expect(deletedBy(CURSOR, person.value) && deletedBy(DANIEL, person.value)).toBe(true)
-    expect(deletedBy(HIDDEN, hidden.value)).toBe(true)
-    expect(deletedBy(CURSOR, hidden.value)).toBe(false)
-    expect(deletedBy(you, person.value)).toBe(false)
-    expect(deletedBy(you, ANYONE)).toBe(true)
+    const by = (deleter: Deleter, value: string) => deletedBy(row('x', { deleter }), value)
+    expect(by(CURSOR, person.value) && by(DANIEL, person.value)).toBe(true)
+    expect(by(HIDDEN, hidden.value)).toBe(true)
+    expect(by(CURSOR, hidden.value)).toBe(false)
+    expect(by(you, person.value)).toBe(false)
+    expect(by(you, ANYONE)).toBe(true)
+  })
+
+  it('keeps people of two organizations apart, and names the organization last', () => {
+    const gone: Deleter = { you: false, kind: 'app', who: '|app' }
+    const claude: Deleter = {
+      you: true,
+      profile_id: 'me-a',
+      name: 'Aisha Khan',
+      kind: 'oauth_connections',
+      credential_name: 'Claude',
+      who: 'me-a|oauth_connections:c1',
+    }
+    const acme = { org_id: 'acme', org_name: 'Acme' }
+    const rows = [
+      row('1', { ...acme, deleter: gone }),
+      row('2', { deleter: gone }),
+      row('3', { deleter: claude }),
+      row('4', { deleter: { ...claude, kind: 'app', who: 'me-a|app' } }),
+    ]
+    const options = deletedByOptions(rows, true)
+    expect(options.map((o) => o.label)).toEqual([
+      'Deleted by anyone',
+      'You, Northstar Labs',
+      'You via Claude, Northstar Labs',
+      'Someone, Acme',
+      'Someone, Northstar Labs',
+    ])
+    // every choice has its own value, so the select can tell them apart
+    const values = options.map((o) => o.value)
+    expect(new Set(values).size).toBe(values.length)
+    // a "Someone" choice filters its own organization only
+    const acmeSomeone = options[3].value
+    expect(deletedBy(rows[0], acmeSomeone)).toBe(true)
+    expect(deletedBy(rows[1], acmeSomeone)).toBe(false)
+    expect(chosenProfile(acmeSomeone, rows)).toBeUndefined()
+    // a "via" choice names the profile the server can narrow to
+    expect(chosenProfile(options[2].value, rows)).toBe('me-a')
+    expect(deletedBy(rows[2], options[2].value)).toBe(true)
+    expect(deletedBy(rows[3], options[2].value)).toBe(false)
+    expect(deletedBy(rows[2], 'person:')).toBe(false)
+  })
+})
+
+describe('search hits', () => {
+  const hit: DeletedMatch = {
+    item_id: 'p',
+    org_id: 'org',
+    org_name: 'Northstar Labs',
+    key: 'QN-12',
+    title: 'Book test sites in Umeå',
+    archived: false,
+    path: ['Field trial Q3', 'Site preparation'],
+    deleted_at: at(14, 9),
+    deleter: CURSOR,
+    state: 'ready',
+    can_restore: true,
+  }
+  it('keeps a hit of an older text only while its key or title holds the new one', () => {
+    expect(matchHasText(hit, 'book t')).toBe(true)
+    expect(matchHasText(hit, 'qn-12')).toBe(true)
+    expect(matchHasText(hit, 'zebra')).toBe(false)
+    // the path is not what the server searched
+    expect(matchHasText(hit, 'field trial')).toBe(false)
   })
 })
 
@@ -184,6 +251,10 @@ describe('what a row says', () => {
     )
     expect(blockedText({ reason: 'not_lead', project: 'Specs', lead: 'Daniel Berg' })).toBe(
       'Specs has its own lead, Daniel Berg. Ask them or an organization admin to restore it.',
+    )
+    // no lead passes today's lead rule, so the row names none
+    expect(blockedText({ reason: 'not_lead', project: 'Specs' })).toBe(
+      'Specs has no lead now. Ask an organization admin to restore it.',
     )
     expect(blockedText({ reason: 'project_archived', project: 'Website' })).toBe(
       'Restore Website from Archived projects first.',

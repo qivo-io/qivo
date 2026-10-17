@@ -4,6 +4,7 @@ import {
   Fragment,
   type ReactNode as ReactNodeM,
   useEffect as useEffectM,
+  useId as useIdM,
   useRef as useRefM,
   useState as useStateM,
 } from 'react'
@@ -1084,8 +1085,8 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
 }
 
 /* ---------- Archive or delete ----------
-   One window for the two ways work leaves the board: Archive puts it away
-   where its editors can restore it, Delete moves it to Deleted items. The
+   One window for the two ways work leaves the board. Archive puts it away
+   where its editors can restore it, and Delete moves it to Deleted items. The
    two choices are radio cards; the arrow keys move between them, and the
    reason typed under them survives a switch. What either choice takes along
    (subtasks, sub-projects) is listed above the cards. */
@@ -1228,8 +1229,10 @@ function FateList({
 
 const fateRow = 'flex items-baseline gap-2 px-2.5 py-[5px] text-sm leading-[1.4]'
 
-/** The reason field under the cards. Archive's is a comment on the task;
-    Delete's is shown in Deleted items. */
+/** The reason field under the cards. Archive's is a comment on the task and
+    is required, since the field shows for an archive only when work is
+    unfinished. Delete's is optional and shown in Deleted items. The field
+    tells assistive technology both, and its hint. */
 function FateReason({
   archiving,
   value,
@@ -1239,11 +1242,14 @@ function FateReason({
   value: string
   onChange: (value: string) => void
 }) {
+  const hint = useIdM()
   return (
     <MField data-fate-reason-field label={archiving ? 'Reason (required)' : 'Reason (optional)'}>
       <Textarea
         data-fate-reason
         aria-label={archiving ? 'Reason for archiving' : 'Reason for deleting'}
+        aria-required={archiving}
+        aria-describedby={hint}
         rows={archiving ? 3 : 2}
         maxLength={TEXT_MAX}
         value={value}
@@ -1254,7 +1260,7 @@ function FateReason({
           archiving ? 'min-h-[72px]' : 'min-h-[56px]',
         )}
       />
-      <p className="mt-2 text-sm text-text-2">
+      <p id={hint} className="mt-2 text-sm text-text-2">
         {archiving ? "Saved to the task's comments." : 'Shown in Deleted items.'}
       </p>
     </MField>
@@ -1264,7 +1270,7 @@ function FateReason({
 const plural = (n: number, noun: string) =>
   `${n.toLocaleString('en-US')} ${noun}${n === 1 ? '' : 's'}`
 
-/** A subtask the window lists for an archive: `editable` is whether I can
+/** A subtask the window lists for an archive. `editable` is whether I can
     change it, which the archive needs for every subtask it takes along. */
 type ArchiveRow = { task: IssueVM; depth: number; editable: boolean }
 
@@ -1307,7 +1313,7 @@ const planKey = (plans: TaskPlans, fate: Fate) =>
 /* ---------- Archive or delete a task ----------
    Opened from the task menu by people who can edit the task, for every task.
    Archive takes it off the board with its whole subtree, or alone when the
-   subtasks are kept: they become top-level tasks. A subtree with a subtask
+   subtasks are kept, which become top-level tasks. A subtree with a subtask
    in a project I can't edit can't be archived, so Archive waits for the
    subtasks to be kept. Unfinished work needs a reason, saved as a comment.
    Delete moves it to Deleted items, with the subtasks I can delete unless
@@ -1355,8 +1361,9 @@ function ArchiveOrDeleteTaskModal({
   const unfinishedRows = rows.filter((r) => !P.isDone(live(r.task))).length
   const readOnly = rows.some((r) => !r.editable)
   const withSubtasks = archiving ? archiveAll && hasSubtasks : deleteAll && n > 0
-  // archiving takes unfinished work off the board: the task itself when its
-  // subtasks are kept (it is a task of its own then), else its whole subtree
+  // Archiving takes unfinished work off the board when the task itself is
+  // unfinished and its subtasks are kept (it is a task of its own then), or
+  // when anything in its whole subtree is.
   const unfinished = archiving && (withSubtasks ? !P.isDone(it) : it.status !== 'done')
   const showReason = !archiving || unfinished
   const archiveBlocked = archiving && withSubtasks && readOnly
@@ -1613,7 +1620,7 @@ function ArchiveOrDeleteProjectModal({
     return () => {
       current = false
     }
-    // attempt: Try again asks once more
+    // a new attempt, from Try again, asks once more
   }, [project.id, attempt])
   const archiving = fate === 'archive'
   const noun = project.type === 'meta' ? 'project' : 'sub-project'

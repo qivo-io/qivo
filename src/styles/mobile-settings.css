@@ -308,7 +308,7 @@
   .settings-content-scroll [data-fresh-key] {
     flex-basis: 100%;
   }
-  /* the project's Archive or delete row: its sentence over a full-width button */
+  /* the project's Archive or delete row puts its sentence over a full-width button */
   [data-project-removal] div:has(> button) {
     flex-direction: column;
     align-items: stretch;
