@@ -9,7 +9,7 @@
    popovers and the landscape Roadmap hide the rest of the page with
    aria-hidden's hideOthers(), which leaves [aria-live] elements exposed. The
    task window makes the page behind inert but skips [data-top-layer], which
-   also marks the toasts and the update notice. The app avoids
+   also marks the floating column of toasts and notices (lib/floatStack). The app avoids
    aria-modal="true" for the same reason: Safari, and Chrome on macOS and
    Android, ignore everything outside such a dialog, these regions included. */
 

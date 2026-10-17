@@ -742,6 +742,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         toast(TEXT_TOO_LONG.comment)
         return
       }
+      // while edits are paused (snapshot trouble) the draft and edit mode stay
+      if (P.refusePausedEdit()) return
       cm.onCommit(text) // the store no-ops a same-body save; still exits edit mode
       if (cm.reset) {
         // composer: posting clears the field for the next comment
@@ -770,6 +772,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         toast(TEXT_TOO_LONG.description)
         return
       }
+      // A paused save would roll back to the stale text and, once the editor
+      // blurs, replace the draft. Keep the draft dirty with the Save bar up.
+      if (P.refusePausedEdit()) return
       rawRef.current = text
       canonRef.current = text
       // ids entering committed text are the store's from here on — its

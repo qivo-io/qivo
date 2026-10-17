@@ -1,0 +1,63 @@
+/* The floating column (src/lib/floatStack.ts): the toasts, the app update
+   notice and the snapshot notice, stacked so none covers another.
+
+   Beside a workspace it spans the space right of the sidebar column, so its
+   center is the content column's center, the axis of the page header pill.
+   That holds on every workspace page because the shell is centered and its
+   first column is --sidebar-w wide on the planner, Settings and the Archive
+   (workspace.css). Without a workspace, such as on the sign-in screens and
+   in the operator console, and on phones, it spans the window. */
+.float-stack {
+  position: fixed;
+  inset: 16px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  pointer-events: none;
+}
+.float-stack > [data-float-slot] {
+  width: 100%;
+}
+/* Every member keeps 8px above it. Empty slots add no space, and the
+   topmost member's margin is empty room. */
+.float-stack .planner-toast-host {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* Toasts are as wide as their text, up to half the window (their width
+   before they joined the column). */
+.float-stack .planner-toast-host > * {
+  max-width: min(100%, 50vw);
+}
+.float-stack :is([data-app-update], [data-snapshot-notice]) {
+  width: 100%;
+  max-width: 512px;
+  margin: 8px auto 0;
+}
+@media (min-width: 761px) {
+  html:has(.workspace-shell) .float-stack {
+    left: calc(var(--sidebar-w) + 16px);
+  }
+}
+/* Phones put the notices at the top, over the page header, and keep the
+   toasts above the bottom navigation, at the window's full width. */
+@media (max-width: 760px) {
+  .float-stack {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  .float-stack > [data-float-slot="toasts"] {
+    order: 1;
+    margin-top: auto;
+  }
+  .float-stack .planner-toast-host > * {
+    max-width: 100%;
+  }
+  .float-stack :is([data-app-update], [data-snapshot-notice]) {
+    margin: 0 auto 8px;
+  }
+}

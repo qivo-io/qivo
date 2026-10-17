@@ -34,6 +34,25 @@ describe('planner update channels', () => {
     expect(legacy).toHaveBeenCalledTimes(2)
   })
 
+  it('notifies the snapshot notice on health and workspace changes only', () => {
+    const updates = createPlannerUpdates()
+    const health = vi.fn()
+    const views = vi.fn()
+    updates.channels.health.subscribe(health)
+    updates.channels.workspace.subscribe(views)
+    updates.channels.comments.subscribe(views)
+    const before = updates.channels.health.getSnapshot()
+    updates.emit('health')
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(views).not.toHaveBeenCalled()
+    expect(updates.channels.health.getSnapshot()).not.toBe(before)
+    updates.emit('comments')
+    expect(health).toHaveBeenCalledTimes(1)
+    updates.emit()
+    expect(health).toHaveBeenCalledTimes(2)
+    expect(updates.channels.health.getSnapshot()).toBe(updates.channels.workspace.getSnapshot())
+  })
+
   it('removes observers and isolates a failing observer from other views', () => {
     const updates = createPlannerUpdates()
     const removed = vi.fn()

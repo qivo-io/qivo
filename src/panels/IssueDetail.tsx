@@ -631,6 +631,8 @@ function IssuePickerPopup({
     else setQ('')
   }
   const create = () => {
+    // a paused create keeps the typed title and the picker open
+    if (P.refusePausedEdit()) return
     onCreate?.(q.trim())
     if (single) onDone()
     else setQ('')
@@ -1293,7 +1295,8 @@ function IssueDetail({
       // The Inbox task lives inside main. Isolate sibling branches on the way
       // to body, rather than making its own ancestor inert. Menus and dialogs
       // created later in portals remain available above the task, and so do
-      // the announcer, the toasts and the update notice ([data-top-layer]).
+      // the announcer and the floating column of toasts and notices
+      // ([data-top-layer]).
       let branch: HTMLElement = frame
       while (branch.parentElement) {
         for (const sibling of branch.parentElement.children) {

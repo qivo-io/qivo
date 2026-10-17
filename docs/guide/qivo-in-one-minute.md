@@ -62,6 +62,13 @@ If a view or dialog fails to load, close its recovery message or reload to
 retry. A failed dialog leaves the page and other drafts open. Reload stays
 disabled while a draft or save needs to finish.
 
+If Qivo can't load the latest changes, a notice says so and shows when your
+view was last current. Editing pauses until the changes load again, and Qivo
+keeps trying. **Try again** asks right away, and **Details** shows the error
+to pass on to support. Text you were typing stays in its field. Marking
+messages read and your own preferences still save. If you were signed out,
+the notice offers **Reload** to sign in again.
+
 ## Desktop app
 
 Windows and Linux desktop apps are in development and not available to
