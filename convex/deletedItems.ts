@@ -1,13 +1,13 @@
 /* The background work of Deleted items. model/deletedItems.ts holds the
  * rules: how deleting moves a task or a project into the trash, the step
- * machine and purging.
+ * machine, restoring and purging.
  *
- * step runs one bounded step of an item's job, whatever its phase, and
- * schedules the next. recover (every minute, crons.ts) restarts a job whose
- * step stopped, at half the budget each time, and makes an item stuck after
- * its last retry. expire (daily at 03:45 UTC) starts purging the ready items
- * whose 30 days are over, one bounded batch per run, and schedules the next
- * run while more are due. */
+ * step runs one bounded step of an item's job, whatever its phase (moving,
+ * restoring or purging), and schedules the next. recover (every minute,
+ * crons.ts) restarts a job whose step stopped, at half the budget each
+ * time, and makes an item stuck after its last retry. expire (daily at
+ * 03:45 UTC) starts purging the ready items whose 30 days are over, one
+ * bounded batch per run, and schedules the next run while more are due. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
