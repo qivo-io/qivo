@@ -15,7 +15,7 @@ import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import { TRASH_BUDGET } from '../model/deletedItems'
-import { LIST } from '../model/deletedItemsList'
+import { LIST, listFor } from '../model/deletedItemsList'
 import { REMOVAL_COUNT } from '../model/projects'
 import {
   as,
@@ -147,6 +147,57 @@ async function tree(
  * (the user) and admins can see. */
 const hiddenSub = (t: T, f: OrgFixture) =>
   plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+
+/** Project `p` as a deleted item lists it. */
+const entryOf = (p: Doc<'projects'>, tasks = 1) => ({
+  id: p.id,
+  name: p.name,
+  key: p.key,
+  type: p.type,
+  tasks,
+  archived_tasks: 0,
+})
+
+/** A ready task item of one task in sub-project `p`, deleted by the guest,
+ * as a deleted_items row planted without its stored rows. */
+const plantedItem = (
+  f: OrgFixture,
+  p: Doc<'projects'>,
+  fields: Partial<Doc<'deleted_items'>> = {},
+) => ({
+  id: uuid(),
+  org_id: f.org.id,
+  kind: 'task' as const,
+  target_id: uuid(),
+  num: 1,
+  name: 'Waiting',
+  archived: false,
+  project_id: p.id,
+  parent_project_id: f.meta.id,
+  path: ['Testbed platform', p.name],
+  projects: [entryOf(p)],
+  counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+  deleted_at: new Date(START).toISOString(),
+  deleted_by: f.guest.id,
+  state: 'ready' as const,
+  purge_after: START + 30 * 86_400_000,
+  ...fields,
+})
+
+/** What one list call for `who` reads, as Convex counts it. */
+const listMetrics = (t: T, who: Doc<'profiles'>) =>
+  as(t, who).query(async (ctx) => {
+    await listFor(ctx, [who], undefined)
+    return await ctx.meta.getTransactionMetrics()
+  })
+
+/** Expects a call to read less than three quarters of what Convex allows
+ * one query (16 MiB, 32,000 documents and 4,096 index ranges). */
+function expectWellInside(metrics: Awaited<ReturnType<typeof listMetrics>>) {
+  expect(metrics.bytesRead.used).toBeLessThan(12 * 1024 * 1024)
+  expect(metrics.documentsRead.used).toBeLessThan(24_000)
+  expect(metrics.databaseQueries.used).toBeLessThan(3072)
+}
 
 describe('who sees an item (design 6.1)', () => {
   it('shows an admin every item, and everyone else their own deletes', async () => {
@@ -629,12 +680,17 @@ describe('the list (design 6.2)', () => {
       items: newer.map((id) => expect.objectContaining({ id })),
       capped: true,
     })
-    // the range also stops once it has read LIST.bytes, and says so
-    LIST.bytes = 1
+    // The range also stops once the list spent its read budget, and says
+    // so. Two documents are the newest stored row and its item.
+    LIST.rows = 2
     expect(await list(t, lena)).toEqual({
       items: [expect.objectContaining({ id: newer[0] })],
       capped: true,
     })
+    // and a budget the first stored row spends reads no item
+    LIST.rows = DEFAULT_LIST.rows
+    LIST.bytes = 1
+    expect(await list(t, lena)).toEqual({ items: [], capped: true })
   })
 
   it('reads the subtasks in a led project newest first, one item however many of them it holds', async () => {
@@ -686,6 +742,134 @@ describe('the list (design 6.2)', () => {
     expect(await list(t, f.admin, f.admin.id)).toMatchObject({ capped: true })
   })
 
+  it('spends one read budget across every range and seat of a call, and says when it ran out', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const omar = await person(t, f.org.id, 'Omar')
+    const { subs } = await tree(t, f, 'Operations', undefined, [
+      { name: 'Infra', lead: omar },
+      { name: 'Lab', lead: omar },
+    ])
+    const deleteIn = async (who: Doc<'profiles'>, project: Doc<'projects'>) => {
+      const task = await plantIssue(t, { org_id: project.org_id, project_id: project.id })
+      later()
+      await deleteTask(t, who, task.id)
+      return (await itemFor(t, task.id)).id
+    }
+    const infra = [await deleteIn(f.admin, subs[0]), await deleteIn(f.admin, subs[0])]
+    const lab = [await deleteIn(f.admin, subs[1]), await deleteIn(f.admin, subs[1])]
+    // Omar also has a seat in Other, which the list reads after his first
+    const pilot = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    const away = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      name: 'Omar',
+      org_role: 'user',
+      auth_user_id: omar.auth_user_id,
+    })
+    await grant(t, pilot.id, away.id, 'user')
+    const elsewhere = await deleteIn(away, pilot)
+    const ids = (listed: string[]) => listed.map((id) => expect.objectContaining({ id }))
+
+    expect(await list(t, omar)).toEqual({
+      items: ids([elsewhere, lab[1], lab[0], infra[1], infra[0]]),
+      capped: false,
+    })
+    // three documents: Infra's two items and Lab's newest
+    LIST.rows = 3
+    expect(await list(t, omar)).toEqual({ items: ids([lab[1], infra[1], infra[0]]), capped: true })
+    // three ranges: Omar's deletes, the projects he led and Infra's items
+    LIST.rows = DEFAULT_LIST.rows
+    LIST.ranges = 3
+    expect(await list(t, omar)).toEqual({ items: ids([infra[1], infra[0]]), capped: true })
+    // the first seat spends four documents, so the second reads nothing
+    LIST.ranges = DEFAULT_LIST.ranges
+    LIST.rows = 4
+    expect(await list(t, omar)).toEqual({
+      items: ids([lab[1], lab[0], infra[1], infra[0]]),
+      capped: true,
+    })
+  })
+
+  it('stops before the document limit when the subtasks in led projects name few items', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const omar = await person(t, f.org.id, 'Omar')
+    const sites = Array.from({ length: 8 }, (_, i) => ({ name: `Site ${i}`, lead: omar }))
+    const { top, subs } = await tree(t, f, 'Operations', undefined, sites)
+    // Each site holds 4,200 subtasks of three task items rooted in Firmware.
+    // The repeated rows name few items, so no range reaches LIST.cap items,
+    // and the eight ranges hold 33,600 rows, past Convex's 32,000 documents.
+    for (const [index, sub] of subs.entries())
+      await t.run(async (ctx) => {
+        for (let k = 0; k < 3; k++) {
+          const item = plantedItem(f, f.sub, {
+            name: 'Survey the north gate',
+            path: [top.name, f.sub.name],
+            projects: [entryOf(f.sub), entryOf(sub, 1400)],
+            counts: { tasks: 1401, archived_tasks: 0, subtasks: 1400, sub_projects: 0 },
+            deleted_at: new Date(START + index * 3 + k).toISOString(),
+            deleted_by: f.admin.id,
+          })
+          await ctx.db.insert('deleted_items', item)
+          for (let n = 0; n < 1400; n++)
+            await ctx.db.insert('deleted_tasks', {
+              org_id: f.org.id,
+              item_id: item.id,
+              task_id: uuid(),
+              num: n,
+              title: 'Replace the corroded junction box at the north gate',
+              project_id: sub.id,
+              archived: false,
+              cross_project_id: sub.id,
+            })
+        }
+      })
+
+    const listed = await list(t, omar)
+    expect(listed.capped).toBe(true)
+    expect(listed.items.length).toBeGreaterThan(0)
+    // the whole call, its sight and rows included, stays well inside them
+    expectWellInside(await listMetrics(t, omar))
+  }, 120_000)
+
+  it('stops before 16 MiB when the projects a lead leads hold many long delete reasons', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const omar = await person(t, f.org.id, 'Omar')
+    const sites = Array.from({ length: 7 }, (_, i) => ({ name: `Site ${i}`, lead: omar }))
+    const { top, subs } = await tree(t, f, 'Operations', undefined, sites)
+    // LIST.cap + 1 task items per site, each with a 500-character reason,
+    // so the seven ranges hold over 18 MiB of rows
+    const reason = 'Duplicate of the survey at the north gate. '.repeat(12).slice(0, 500)
+    for (const [index, sub] of subs.entries())
+      await t.run(async (ctx) => {
+        for (let k = 0; k <= LIST.cap; k++)
+          await ctx.db.insert(
+            'deleted_items',
+            plantedItem(f, sub, {
+              parent_project_id: top.id,
+              path: [top.name, sub.name],
+              reason,
+              deleted_at: new Date(START + index * 10_000 + k).toISOString(),
+              deleted_by: f.admin.id,
+            }),
+          )
+      })
+
+    const listed = await list(t, omar)
+    expect(listed).toMatchObject({ capped: true })
+    // the budget's 8 MiB hold the items of the first sites it reads, more
+    // than one organization lists, and none of the last site's
+    expect(listed.items).toHaveLength(LIST.cap)
+    expect(listed.items.map((row) => row.path[1])).not.toContain(subs[6].name)
+    // the whole call, its sight and rows included, stays well inside them
+    expectWellInside(await listMetrics(t, omar))
+  }, 120_000)
+
   it('reads a fixed number of ranges, however many items a lead or an admin sees', async () => {
     const t = newT({ transactionLimits: { databaseQueries: 40 } })
     const f = await withOrg(t)
@@ -694,37 +878,10 @@ describe('the list (design 6.2)', () => {
     // it, and 60 task items in Firmware, which the user leads
     const gone = { ...f.sub, id: uuid(), key: 'GON', name: 'Gone' }
     const holder = uuid()
-    const entry = (p: Doc<'projects'>) => ({
-      id: p.id,
-      name: p.name,
-      key: p.key,
-      type: p.type,
-      tasks: 1,
-      archived_tasks: 0,
-    })
-    const item = (p: Doc<'projects'>, fields: Partial<Doc<'deleted_items'>> = {}) => ({
-      id: uuid(),
-      org_id: f.org.id,
-      kind: 'task' as const,
-      target_id: uuid(),
-      num: 1,
-      name: 'Waiting',
-      archived: false,
-      project_id: p.id,
-      parent_project_id: f.meta.id,
-      path: ['Testbed platform', p.name],
-      projects: [entry(p)],
-      counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
-      deleted_at: new Date(START).toISOString(),
-      deleted_by: f.guest.id,
-      state: 'ready' as const,
-      purge_after: START + 30 * 86_400_000,
-      ...fields,
-    })
     await t.run(async (ctx) => {
       await ctx.db.insert(
         'deleted_items',
-        item(gone, { id: holder, kind: 'project', target_id: gone.id, key: gone.key }),
+        plantedItem(f, gone, { id: holder, kind: 'project', target_id: gone.id, key: gone.key }),
       )
       const { _id, _creationTime, ...doc } = gone
       await ctx.db.insert('deleted_rows', {
@@ -737,8 +894,8 @@ describe('the list (design 6.2)', () => {
         project_key: gone.key,
         row: { table: 'projects', doc },
       })
-      for (let i = 0; i < 60; i++) await ctx.db.insert('deleted_items', item(gone))
-      for (let i = 0; i < 60; i++) await ctx.db.insert('deleted_items', item(f.sub))
+      for (let i = 0; i < 60; i++) await ctx.db.insert('deleted_items', plantedItem(f, gone))
+      for (let i = 0; i < 60; i++) await ctx.db.insert('deleted_items', plantedItem(f, f.sub))
     })
 
     const admin = await rowsOf(t, f.admin)

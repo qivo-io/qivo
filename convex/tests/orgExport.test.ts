@@ -1,6 +1,8 @@
 import { makeFunctionReference } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
+import type { Doc } from '../_generated/dataModel'
+import type { DeletedItemState } from '../lib/enums'
 import {
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
@@ -129,6 +131,39 @@ async function readAll(
   }
   throw new Error('export pagination did not finish')
 }
+
+/* A Deleted items row for a project item of `project` in `state`, planted
+ * without its stored rows. */
+const plantProjectItem = (t: T, project: Doc<'projects'>, state: DeletedItemState) =>
+  t.run((ctx) =>
+    ctx.db.insert('deleted_items', {
+      id: uuid(),
+      org_id: project.org_id,
+      kind: 'project',
+      target_id: project.id,
+      num: project.num,
+      name: project.name,
+      key: project.key,
+      archived: false,
+      project_id: project.id,
+      parent_project_id: project.parent_id,
+      path: [],
+      projects: [
+        {
+          id: project.id,
+          name: project.name,
+          key: project.key,
+          type: project.type,
+          tasks: 0,
+          archived_tasks: 0,
+        },
+      ],
+      counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+      deleted_at: NOW,
+      state,
+      purge_after: Date.parse(NOW) + 30 * 86_400_000,
+    }),
+  )
 
 describe('organization export', () => {
   it('classifies every schema table, with parent tables visited first', () => {
@@ -395,6 +430,7 @@ describe('organization export', () => {
       project_id: f.sub.id,
       parent_id: stranded.id,
     })
+    await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
 
     const caller = as(t, f.admin)
@@ -416,6 +452,77 @@ describe('organization export', () => {
       /export parent not found/,
     )
   })
+
+  it('reads the parents of a page of tasks only while a deleted item is in flight, ten tasks a page then', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 100 parents with descriptions from before the 20,000-character cap,
+    // 200 KiB each, then a small child under each. One page of 100 children
+    // that read their parents would read 20 MiB.
+    const description = 'Field notes. '.repeat(16_000).slice(0, 200 * 1024)
+    const parents: Doc<'issues'>[] = []
+    for (let i = 0; i < 100; i++)
+      parents.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description }))
+    const children: string[] = []
+    for (const parent of parents)
+      children.push(
+        (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })).id,
+      )
+    const caller = as(t, f.admin)
+    const childRows = (rows: OrgExportRow[]) =>
+      new Map(rows.filter((row) => children.includes(row.id as string)).map((row) => [row.id, row]))
+    const firstChildPage = async () => {
+      let cursor: string | null = null
+      for (let guard = 0; guard < 100; guard++) {
+        const result: OrgExportPage = await caller.query(page, {
+          org_id: f.org.id,
+          section: 'issues',
+          cursor,
+        })
+        if (result.rows.some((row) => row.id === children[0])) return result
+        cursor = result.continueCursor
+      }
+      throw new Error('no page holds the first child')
+    }
+
+    // With nothing in flight, as a ready item leaves nothing in the live
+    // tables, no parent is read and every child keeps its own.
+    const done = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    await plantProjectItem(t, done, 'ready')
+    await t.run((ctx) => ctx.db.delete(done._id))
+    let exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    expect(exported.size).toBe(100)
+    for (const [index, id] of children.entries())
+      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
+    expect((await firstChildPage()).rows.length).toBeGreaterThan(10)
+
+    // While a project item is in flight, a page holds ten tasks and reads
+    // their parents, so the one parent under the moving project is left out.
+    const moving = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', children[99]))
+        .unique()
+      if (row === null) throw new Error('the last child vanished')
+      await ctx.db.patch(row._id, { parent_id: stranded.id })
+    })
+    await plantProjectItem(t, moving, 'moving')
+    await t.run((ctx) => ctx.db.delete(moving._id))
+    const inFlight = await firstChildPage()
+    expect(inFlight.rows).toHaveLength(10)
+    expect(inFlight.isDone).toBe(false)
+    exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    expect(exported.size).toBe(100)
+    for (const [index, id] of children.slice(0, 99).entries())
+      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
+    expect(exported.get(children[99])).not.toHaveProperty('parent_id')
+  }, 120_000)
 
   it('requires owned parents and refuses malformed section scopes', async () => {
     const t = newT()
