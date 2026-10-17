@@ -43,12 +43,30 @@ import {
   orgMutation,
   rule,
 } from './lib/functions'
+import { NAME_MAX, nameTooLong } from './lib/textLimits'
 import { logActivity } from './model/activity'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
 /* key_hash / token_hash CHECK (0100:50 / 0030:14). */
 const HASH_RE = /^[0-9a-f]{64}$/
+
+/* The display identifiers the app derives from a fresh secret
+ * (src/store/planner.ts createAgentKey and createMcpToken): an agent key's
+ * first 7 and last 5 characters, a personal token's first 11. Nothing else is
+ * stored, so the settings lists only ever show these. */
+const KEY_PREFIX_RE = /^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}$/
+const TOKEN_PREFIX_RE = /^qvt_[0-9a-f]{7}$/
+
+/** A key or token name as stored: trimmed, and refused when nothing is left
+ * or when it has more than NAME_MAX code points. `what` names the credential
+ * in the sentences. */
+function credentialName(raw: string, what: 'key' | 'token'): string {
+  const name = raw.trim()
+  if (name === '') throw badRequest(`a ${what} needs a name`)
+  if (nameTooLong(name)) throw rule(`a ${what} name must be at most ${NAME_MAX} characters`)
+  return name
+}
 
 /* The listing shape the Settings page renders — the old client's camelCase
  * mapping, nulls included (the P.* contract carried Postgres nulls). */
@@ -141,8 +159,13 @@ export const createAgentKey = orgMutation({
       throw notFound('agent not found')
     }
     if (ctx.me.org_role !== 'admin') throw forbidden('admin only')
-    if (name.trim() === '') throw badRequest('a key needs a name')
+    const keyName = credentialName(name, 'key')
     if (!HASH_RE.test(key_hash)) throw badRequest('a key hash is 64 lowercase hex characters')
+    if (!KEY_PREFIX_RE.test(key_prefix)) {
+      throw badRequest(
+        'a key prefix is the first 7 and last 5 characters of the key, such as qva_012...abcde',
+      )
+    }
     if ((await byId(ctx, 'agent_keys', id)) !== null) {
       throw badRequest('a key with this id already exists')
     }
@@ -154,7 +177,7 @@ export const createAgentKey = orgMutation({
       {
         id,
         profile_id: agent.id,
-        name,
+        name: keyName,
         key_prefix,
         key_hash,
         created_by: ctx.me.id,
@@ -171,7 +194,7 @@ export const createAgentKey = orgMutation({
       target_type: 'user',
       target_id: agent.id,
       label: agent.name,
-      detail: `a new key “${name}”`,
+      detail: `a new key “${keyName}”`,
       ts: now,
     })
     return { id }
@@ -248,8 +271,13 @@ export const createMcpToken = authedMutation({
     refuseDemoFeature()
     const now = new Date().toISOString()
     if (!isMine(ctx.myProfiles, profile_id)) throw notFound('profile not found')
-    if (name.trim() === '') throw badRequest('a token needs a name')
+    const tokenName = credentialName(name, 'token')
     if (!HASH_RE.test(token_hash)) throw badRequest('a token hash is 64 lowercase hex characters')
+    if (!TOKEN_PREFIX_RE.test(token_prefix)) {
+      throw badRequest(
+        'a token prefix is the first 11 characters of the token, such as qvt_0123456',
+      )
+    }
     const expiry = expires_at === undefined ? undefined : cleanTokenExpiry(expires_at)
     if (expiry !== undefined && expiry <= now) throw badRequest('expires_at must be in the future')
     if ((await byId(ctx, 'mcp_tokens', id)) !== null) {
@@ -263,7 +291,7 @@ export const createMcpToken = authedMutation({
       {
         id,
         profile_id,
-        name,
+        name: tokenName,
         token_prefix,
         token_hash,
         access,

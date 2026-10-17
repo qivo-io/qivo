@@ -8,6 +8,7 @@ import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
+import { NAME_MAX } from '../lib/textLimits'
 import { sha256hex } from '../machine/auth'
 import { TOOLS } from '../machine/mcp'
 import { expectRefusal, newT, plantIssue, plantSeat, type T, uuid, withOrg } from './helpers.setup'
@@ -852,6 +853,27 @@ describe('OAuth consent and resource binding', () => {
       const projects = (await toolData(await mcp(f, token, 'list_projects'))) as Json[]
       expect(projects.some((project) => project.id === f.otherProject.id)).toBe(false)
     }
+  })
+})
+
+describe('OAuth client names', () => {
+  it('cuts a long registered name to 80 code points on the consent screen and in stored connections', async () => {
+    const f = await fixture()
+    const clientId = await register(f, WRITE, `  Spoof\n\n${'x'.repeat(5_000)}  `)
+    const cut = `Spoof ${'x'.repeat(NAME_MAX - 6)}…`
+    expect([...cut]).toHaveLength(NAME_MAX + 1)
+    // the consent page reads the context first, which stores the connection
+    const request = await authorization(f, clientId)
+    const oauthQuery = await consentPage(request)
+    const context = await f.as.mutation(api.oauthConnections.getContext, {
+      oauth_query: oauthQuery,
+    })
+    expect(context.clientName).toBe(cut)
+    expect((await consent(request, oauthQuery)).status).toBe(200)
+    // approving without that read stores the connection at consent instead
+    await connect(f, WRITE, clientId)
+    const connections = await f.as.query(api.oauthConnections.list, {})
+    expect(connections.map((connection) => connection.clientName)).toEqual([cut, cut])
   })
 })
 

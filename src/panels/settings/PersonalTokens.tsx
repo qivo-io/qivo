@@ -367,6 +367,7 @@ export function NewTokenDialog({
             aria-label="Name"
             data-autofocus=""
             value={name}
+            maxLength={P.NAME_MAX}
             placeholder="e.g. Claude on my laptop"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {

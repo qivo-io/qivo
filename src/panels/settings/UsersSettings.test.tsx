@@ -133,6 +133,7 @@ async function openKeys() {
 describe('New key', () => {
   it('creates a key and shows its secret once', async () => {
     await openKeys()
+    expect(nameField().maxLength).toBe(80)
     await type(nameField(), 'CI runner')
     await click(newKey())
     await settle()
@@ -145,6 +146,8 @@ describe('New key', () => {
         /qva_[0-9a-f]{48}/,
       )?.[0] ?? ''
     expect(secret).toMatch(/^qva_[0-9a-f]{48}$/)
+    // the shape convex/tokens.ts requires
+    expect(args.key_prefix).toMatch(/^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}$/)
     expect(args.key_prefix).toBe(`${secret.slice(0, 7)}...${secret.slice(-5)}`)
     // the server only ever sees the SHA-256 of the secret
     expect(args.key_hash).toBe(createHash('sha256').update(secret).digest('hex'))

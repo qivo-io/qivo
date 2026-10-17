@@ -48,7 +48,8 @@ An agent signs in with an **API key**, without an email address or password.
 In **Organization → Users**, choose **Agent**, enter a name and copy the key.
 Qivo shows it once and stores only its hash and a display fingerprint, such as
 `qva_d9e...58b76`. To rotate a key, create another from the agent's row, update
-your client, then revoke the old key.
+your client, then revoke the old key. Agent and key names, like personal token
+names, allow up to 80 characters.
 
 Agents use the same project roles as people. They cannot be organization
 admins or lead a team. Set the organization role to **Viewer** for read-only
@@ -111,10 +112,10 @@ can choose **New project** and set its name, lead and optional team/user
 shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
 
 Project settings includes the name, description, lead, access, delay tracking
-and review time. Descriptions allow up to 500 characters and save when you
-click outside; clearing the field removes the description. Lead access is
-required to change **Review time**. An empty sub-project value follows its
-parent project ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
+and review time. Names allow up to 80 characters. Descriptions allow up to
+500 characters and save when you click outside; clearing the field removes
+the description. Lead access is required to change **Review time**. An empty
+sub-project value follows its parent project ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
 
 Choose **Create an account** on the pricing or sign-in page to sign up. Email
 confirmation links expire after one hour; **Confirm your email address** can

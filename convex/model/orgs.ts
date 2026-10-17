@@ -2,6 +2,7 @@
  * the new-org/starter-team defaults and the org guards:
  *
  *   nameInitials     fold, THEN cut to two
+ *   cleanOrgName     the organization name's length cap
  *   slug machinery   the generator, the shape check and the reserved-word
  *                    list (the reserved word is `qivo`)
  *   counters         the per-org issue number and project number
@@ -21,6 +22,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
 import { conflict, notFound, require, rule } from '../lib/functions'
+import { NAME_MAX, nameTooLong } from '../lib/textLimits'
 import { logActivity } from './activity'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
@@ -44,6 +46,20 @@ export function nameInitials(name: string | null | undefined): string {
   const folded = [...letters].slice(0, 2).join('').toUpperCase()
   const cut = [...folded].slice(0, 2).join('')
   return cut === '' ? '?' : cut
+}
+
+/* ---------------------------------------------------------------------- name */
+
+export const ORG_NAME_TOO_LONG = `an organization name must be at most ${NAME_MAX} characters`
+
+/** An organization name as stored: trimmed, and refused when it has more
+ * than NAME_MAX code points unless it equals `current`, the stored name, so
+ * an organization named before the cap keeps its name. Each caller refuses a
+ * blank name with its own sentence. */
+export function cleanOrgName(raw: string, current?: string): string {
+  const name = raw.trim()
+  if (name !== current && nameTooLong(name)) throw rule(ORG_NAME_TOO_LONG)
+  return name
 }
 
 /* ---------------------------------------------------------------------- slug

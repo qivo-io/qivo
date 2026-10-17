@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
+import { NAME_MAX } from '../lib/textLimits'
 import {
   as,
   expectRefusal,
@@ -420,6 +421,24 @@ describe('createOrganization guards (0118)', () => {
     // the full path is asserted in orgs.test.ts; here only that the door opens
     const orgId = await login.as.mutation(api.identity.createOrganization, { name: 'Nimbus' })
     expect(typeof orgId).toBe('string')
+  })
+
+  it('takes a name of up to 80 code points, trimmed, and refuses a longer one', async () => {
+    const login = await withLogin(t, 'founder@example.test')
+    await expectRefusal(
+      login.as.mutation(api.identity.createOrganization, { name: 'a'.repeat(NAME_MAX + 1) }),
+      'rule',
+      /^an organization name must be at most 80 characters$/,
+    )
+    const name = '😀'.repeat(NAME_MAX)
+    const orgId = await login.as.mutation(api.identity.createOrganization, { name: ` ${name} ` })
+    const stored = await t.run(async (ctx) => ({
+      orgs: (await ctx.db.query('organizations').collect()).filter((o) => o.id === orgId),
+      teams: (await ctx.db.query('teams').collect()).filter((team) => team.org_id === orgId),
+    }))
+    expect(stored.orgs.map((o) => o.name)).toEqual([name])
+    // the starter team takes the organization's name
+    expect(stored.teams.map((team) => team.name)).toEqual([name])
   })
 
   it('an unaccepted non-guest seat is not a home — the guard reads accepted_at', async () => {

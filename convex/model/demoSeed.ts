@@ -18,8 +18,10 @@ import { markArchivedTask } from './archiveMarks'
 import { storeCommentCount } from './commentCounts'
 import { cleanDescription } from './issues'
 import { type NotifyPreload, notifyCommentInsert, notifyIssueInsert } from './messages'
-import { assertSlugAvailable, newOrgDefaults, newTeamDefaults } from './orgs'
-import { projectDescription } from './projects'
+import { cleanMilestoneName } from './milestones'
+import { assertSlugAvailable, cleanOrgName, newOrgDefaults, newTeamDefaults } from './orgs'
+import { cleanProjectName, projectDescription } from './projects'
+import { cleanTeamName } from './teams'
 
 export const SAMPLE_AVATARS = [
   'nora',
@@ -91,7 +93,7 @@ export async function writeNorthstarWork(
     await ctx.db.insert('teams', {
       id: teamIds[team.key],
       org_id: org.id,
-      name: team.name,
+      name: cleanTeamName(team.name),
       icon: team.icon,
       icon_color: team.color,
       ...teamDefaults,
@@ -135,7 +137,7 @@ export async function writeNorthstarWork(
       type: p.parent ? 'project' : 'meta',
       ...(p.parent ? { parent_id: projectIds[p.parent] } : { icon: p.icon, icon_color: p.color }),
       key: p.code,
-      name: p.name,
+      name: cleanProjectName(p.name),
       description: projectDescription(p.description),
       lead_id: personIds[p.lead],
       sort_order: index,
@@ -263,7 +265,7 @@ export async function writeNorthstarWork(
     await ctx.db.insert('milestones', {
       id: await id(`milestone:${m.key}`),
       project_id: projectIds[m.project],
-      name: m.name,
+      name: cleanMilestoneName(m.name),
       week: marketingWeek(anchor, m.week),
       created_at: now,
     })
@@ -334,7 +336,7 @@ export async function provisionPublicDemo(
   ))
   const docId = await ctx.db.insert('organizations', {
     id: orgId,
-    name: MARKETING_DEMO.organization.name,
+    name: cleanOrgName(MARKETING_DEMO.organization.name),
     slug,
     ...newOrgDefaults(now),
     gravatar_avatars: false,

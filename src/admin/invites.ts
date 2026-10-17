@@ -2,6 +2,7 @@
    The server repeats every check in convex/adminOrgs.ts. These let a dialog
    point at the row to fix before anything is sent. */
 import { addCalendarMonths } from '../../convex/lib/billingAccess'
+import { NAME_MAX } from '../../convex/lib/textLimits'
 import type { InviteRole, PeopleCheck, PersonInput } from './api'
 
 /* convex/model/people.ts EMAIL_SHAPE, copied so the console bundle does not
@@ -9,10 +10,11 @@ import type { InviteRole, PeopleCheck, PersonInput } from './api'
 export const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 /* The server allows an address of at most 40 characters
-   (convex/model/orgs.ts SLUG_MAX), a name of at most 80 and at most 50
-   people in one request. */
+   (convex/model/orgs.ts SLUG_MAX), a person or organization name of at most
+   80 (convex/lib/textLimits.ts NAME_MAX) and at most 50 people in one
+   request. */
 export const ADDRESS_MAX = 40
-export const NAME_MAX = 80
+export { NAME_MAX }
 export const MAX_PEOPLE = 50
 
 /* The complimentary months offered while creating an organization. */

@@ -191,7 +191,7 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       range: (ctx, profileId) =>
         ctx.db.query('agent_keys').withIndex('by_created_by', (q) => q.eq('created_by', profileId)),
       clear: (ctx, key) => ctx.db.patch(key._id, { created_by: undefined }),
-      large: true, // key names have no size cap
+      large: true, // key names stored before NAME_MAX capped them can be large
     }),
   ],
   oauth: [oauthEdge],

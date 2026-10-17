@@ -13,7 +13,7 @@ import type { Doc } from './_generated/dataModel'
 import { byId } from './lib/db'
 import { vProjectCreators } from './lib/enums'
 import { adminMutation, badRequest, notFound, require } from './lib/functions'
-import { assertSlugAvailable, narrateSlugChange } from './model/orgs'
+import { assertSlugAvailable, cleanOrgName, narrateSlugChange } from './model/orgs'
 
 /* organizations_date_format_check (0020) / organizations_week_one_rule_check
  * (0039), member-for-member. */
@@ -62,7 +62,7 @@ export const update = adminMutation({
     > = {}
     if (patch.name !== undefined) {
       if (patch.name.trim() === '') throw badRequest('an organization name cannot be blank')
-      fields.name = patch.name
+      fields.name = cleanOrgName(patch.name, org.name)
     }
     if (patch.date_format !== undefined) fields.date_format = patch.date_format
     if (patch.week_start !== undefined) {

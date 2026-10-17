@@ -486,6 +486,7 @@ export function ProjectPage({
         <TextField
           label="Name"
           value={proj.name}
+          maxLength={P.NAME_MAX}
           disabled={!isLead}
           onCommit={(v) => {
             P.updateProject(proj.id, { name: v })

@@ -11,6 +11,7 @@
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
+import { cutName } from '../lib/textLimits'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
 
 /** MCP's refusal for a readable project the caller cannot write, which
@@ -59,11 +60,13 @@ export function internalError(e: unknown): string {
 export const MCP_PROVENANCE = 'via MCP'
 
 /** The provenance a REST write's activity row carries. An agent key's writes
- * name the key. A personal token's writes name no token, because the person
- * is the actor and only they and organization admins (on API access) see
- * their tokens, while the activity row reaches other members too. */
+ * name the key, cut to NAME_MAX code points, because a key named before that
+ * cap would otherwise repeat a long name in every write's row. A personal
+ * token's writes name no token, because the person is the actor and only
+ * they and organization admins (on API access) see their tokens, while the
+ * activity row reaches other members too. */
 export const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${keyName})`
+  keyName === null ? 'via the REST API' : `via the REST API (${cutName(keyName)})`
 
 /** The agent key's name for its writes' provenance, or null for a personal
  * token. */

@@ -146,7 +146,7 @@ and the assistant's Qivo access approval are separate steps.
 
 The default request includes reading, changes and automatic renewal. Approve
 only a connection you started in the intended assistant; the client supplies
-its displayed app name.
+its displayed app name, and Qivo shows at most its first 80 characters.
 
 Manage connections in **Settings → Your preferences → MCP access → Connected
 apps**. **Delete** asks for confirmation, stops further access and renewal,

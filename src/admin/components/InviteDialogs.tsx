@@ -595,6 +595,7 @@ export function NewOrganizationDialog({
             <Input
               id={`${ids}-name`}
               value={name}
+              maxLength={NAME_MAX}
               onChange={(event) => setName(event.target.value)}
               aria-describedby={`${ids}-name-hint`}
               disabled={busy}

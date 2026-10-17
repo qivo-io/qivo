@@ -156,6 +156,7 @@ function AgentKeyPanel({
       <div className="[display:flex] [gap:8px] [align-items:center]">
         <Input
           value={name}
+          maxLength={P.NAME_MAX}
           onChange={(e) => setName(e.target.value)}
           placeholder="Key name, e.g. CI runner"
           onKeyDown={(e) => {
@@ -449,6 +450,7 @@ export function OrgUsersPage({
             <div className="settings-add-user-form [display:flex] [gap:8px] [align-items:center]">
               <Input
                 value={addName}
+                maxLength={P.NAME_MAX}
                 onChange={(e) => setAddName(e.target.value)}
                 placeholder={agentMode ? 'Agent name, e.g. Release Bot' : 'Full name'}
                 aria-label={agentMode ? 'New agent name' : 'New person name'}

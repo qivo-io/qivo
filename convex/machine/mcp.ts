@@ -986,11 +986,18 @@ function hasType(p: SchemaProp, x: unknown): boolean {
   }
 }
 
-function checkValue(p: SchemaProp, x: unknown): string | null {
+/* Arguments whose minLength and maxLength count code points, as the server's
+ * rules for them do (cleanTitle, NAME_MAX), so an emoji counts once. Every
+ * other argument counts UTF-16 code units, the unit of the long text caps
+ * (TEXT_MAX) and of zod's string checks. */
+const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
+
+/* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
+function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
   if (p.anyOf !== undefined) {
     // the alternative of the value's own type decides, else the first one
     const alternative = p.anyOf.find((option) => hasType(option, x)) ?? p.anyOf[0]
-    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x)
+    return alternative.type === 'null' && x === null ? null : checkValue(alternative, x, codePoints)
   }
   switch (p.type) {
     case 'string': {
@@ -998,10 +1005,11 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       if (p.enum !== undefined && !p.enum.includes(x)) {
         return `Invalid option: expected one of ${p.enum.map((e) => `"${e}"`).join('|')}`
       }
-      if (p.minLength !== undefined && x.length < p.minLength) {
+      const length = codePoints ? [...x].length : x.length
+      if (p.minLength !== undefined && length < p.minLength) {
         return `Too small: expected string to have >=${p.minLength} characters`
       }
-      if (p.maxLength !== undefined && x.length > p.maxLength) {
+      if (p.maxLength !== undefined && length > p.maxLength) {
         return `Too big: expected string to have <=${p.maxLength} characters`
       }
       if (p.format === 'uuid') {
@@ -1043,7 +1051,7 @@ function checkValue(p: SchemaProp, x: unknown): string | null {
       }
       if (p.items === undefined) return null
       for (const item of x) {
-        const problem = checkValue(p.items, item)
+        const problem = checkValue(p.items, item, codePoints)
         if (problem !== null) return problem
       }
       return null
@@ -1070,7 +1078,7 @@ function validateArgs(tool: ToolDef, args: Record<string, unknown>): string | nu
       }
       continue
     }
-    const msg = checkValue(prop, value)
+    const msg = checkValue(prop, value, CODE_POINT_ARGS.has(key))
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
   return problems.length > 0 ? problems.join(', ') : null

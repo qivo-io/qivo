@@ -78,6 +78,15 @@ comments. A client holding an older catalogue keeps working and reads the
 newest comments, but its model does not learn how to read further back, or
 about the limit, until the client refreshes its tool list.
 
+The name limits added `maxLength` 80 to `name` on `create_project`,
+`update_project`, `set_milestone` and `set_team`. The schema check of `title`
+and `name` now counts Unicode code points, as the server's rules do, so an
+emoji counts as one character there; longer text keeps counting UTF-16 code
+units. A client holding the older catalogue keeps working, and the server
+refuses a longer name with the schema message. A project, milestone or team
+named before the limit keeps its longer name while the call leaves `name`
+out.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -86,8 +95,9 @@ a fallback for clients without compatible OAuth support or for explicitly
 requested manual setup; agent keys give automation its own identity.
 
 - **OAuth approval.** A supported client opens Qivo's browser sign-in and
-  consent screen. Approval binds the client to the displayed home profile
-  and organization. The default request includes `qivo:read`, `qivo:write`
+  consent screen, which shows the name the client registered, folded to one
+  line and cut to 80 characters followed by `…` when it is longer. Approval
+  binds the client to the displayed home profile and organization. The default request includes `qivo:read`, `qivo:write`
   and `offline_access`; the person can turn off **Allow changes** to approve
   reading only. Opaque access tokens (`qvo_…`) and rotating refresh tokens (`qvr_…`, when
   `offline_access` is approved) go directly to the client. Delete the
@@ -734,12 +744,12 @@ answers `internal error` there instead, and outside a tool call it is an HTTP
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
 | `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
-| `create_project` | Create a top-level project from `name`, or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
-| `update_project` | Change a project you lead: `name`, `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`, plus `ignored_arguments` when you sent arguments the tool does not know, such as `archive_reason`, which only tasks take |
+| `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
+| `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`, plus `ignored_arguments` when you sent arguments the tool does not know, such as `archive_reason`, which only tasks take |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
-| `set_milestone` | Add a milestone (`name`, `date`) to a `project`'s top-level project, or with `milestone` rename or move one |
+| `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one |
 | `delete_milestone` | Delete a `milestone` of a `project` |
-| `set_team` | Without `team_id`, create a team called `name` (organization admins only); with `team_id`, rename it (an organization admin or a leader of the team). Answers the `list_teams` row with `created` |
+| `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team). Answers the `list_teams` row with `created` |
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
@@ -861,6 +871,10 @@ shows them; a sub-project also inherits its parent's. A project you cannot
 read answers `project "<ref>" not found (or not visible to you)`, exactly
 like an unknown one.
 
+**Names.** Project and milestone names are trimmed, may not be blank and hold
+at most 80 characters, counted as Unicode code points. The schema refuses a
+longer one. A name stored before the limit stays until it is renamed.
+
 **Creating.** `create_project` without `parent` makes a top-level project,
 which follows the organization's **Who can create new projects?** setting
 (`get_me` reports it as `can_create_projects`). A Standard user agent counts
@@ -949,10 +963,10 @@ organization answers `team "<id>" not found in your organization`.
 `name`, which only an organization admin may do (`only organization admins
 can create teams`). With `team_id` it renames that team, which an
 organization admin or a leader of the team may do (`requires an organization
-admin or a leader of this team` otherwise). `name` is trimmed and may not be
-blank. The result is the `list_teams` row plus `created`. Neither writes an
-activity row, as in the app. The team's other settings and deleting a team
-stay in the app.
+admin or a leader of this team` otherwise). `name` is trimmed, may not be
+blank and holds at most 80 characters. The result is the `list_teams` row
+plus `created`. Neither writes an activity row, as in the app. The team's
+other settings and deleting a team stay in the app.
 
 **Members and leaders.** `set_team_member` changes one `user_id` in a team.
 Members decide who sees the projects shared with the team, so it needs a

@@ -26,6 +26,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON, canChangeAccess, canLeadTeams, isTeamLeader } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
+import { NAME_MAX, nameTooLong } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { ICON_COLOR_SHAPE, newTeamDefaults } from './orgs'
 import {
@@ -38,12 +39,16 @@ import {
 
 export const TEAM_RUNS_RULE = 'requires an organization admin or a leader of this team'
 
-/** A team name as stored: trimmed, and refused when nothing is left. The app
- * trims and skips a blank name before it writes and sets no length limit, so
- * neither does this. */
-export function cleanTeamName(raw: string): string {
+export const TEAM_NAME_TOO_LONG = `a team name must be at most ${NAME_MAX} characters`
+
+/** A team name as stored: trimmed, and refused when nothing is left or when
+ * it has more than NAME_MAX code points. A name equal to `current`, the
+ * team's stored one, passes, so a team named before the cap keeps its name
+ * through writes that resend it. */
+export function cleanTeamName(raw: string, current?: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a team name cannot be blank')
+  if (name !== current && nameTooLong(name)) throw rule(TEAM_NAME_TOO_LONG)
   return name
 }
 
@@ -190,7 +195,7 @@ export async function updateTeamCore(
   await assertRunsTeam(ctx, a.me, team)
   const upd: Partial<WithoutSystemFields<Doc<'teams'>>> = {}
   if (patch.name !== undefined) {
-    const name = cleanTeamName(patch.name)
+    const name = cleanTeamName(patch.name, team.name)
     if (name !== team.name) upd.name = name
   }
   if (patch.icon !== undefined) {

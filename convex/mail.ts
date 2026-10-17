@@ -10,6 +10,7 @@
 import { v } from 'convex/values'
 import { internalAction } from './_generated/server'
 import { localAuthEmailLogging, requireAuthMailDelivery } from './lib/mailConfig'
+import { cutName } from './lib/textLimits'
 
 /* Web-platform globals the Convex isolate provides; convex/tsconfig's lib is
  * ESNext only, which does not declare them (same move as model/orgs). */
@@ -262,9 +263,6 @@ export async function sendBillingReminder(input: {
   })
 }
 
-/* Longest organization name a letter repeats. */
-const ORG_NAME_MAX = 80
-
 export type InviteOutcome = 'sent' | 'unsent' | 'uncertain'
 
 /** Organization invitations (invites.ts), from the operator console and the
@@ -291,9 +289,8 @@ export async function sendInviteEmail(input: {
   const key = process.env.AGENTMAIL_API_KEY
   const inbox = process.env.AGENTMAIL_INBOX
   if (!key || !inbox || process.env.APP_MODE === 'demo') return 'unsent'
-  const folded = input.org_name.replace(/\s+/g, ' ').trim()
-  const org =
-    [...folded].length > ORG_NAME_MAX ? `${[...folded].slice(0, ORG_NAME_MAX).join('')}…` : folded
+  // a name stored before the NAME_MAX cap can be longer, so it is cut here
+  const org = cutName(input.org_name.replace(/\s+/g, ' ').trim())
   const join = (name: string) =>
     `${name} has invited you to join their organization${input.as_guest ? ' as a guest' : ''}.`
   const letter: Letter = {
@@ -340,9 +337,7 @@ export async function sendDeletionNotice(input: {
   const key = process.env.AGENTMAIL_API_KEY
   const inbox = process.env.AGENTMAIL_INBOX
   if (!key || !inbox || process.env.APP_MODE === 'demo') return false
-  const folded = input.org_name.replace(/\s+/g, ' ').trim()
-  const org =
-    [...folded].length > ORG_NAME_MAX ? `${[...folded].slice(0, ORG_NAME_MAX).join('')}…` : folded
+  const org = cutName(input.org_name.replace(/\s+/g, ' ').trim())
   const lead = (name: string) =>
     `${name} is read-only and will be deleted on ${input.delete_after.slice(0, 10)}, with all of its projects, tasks, comments and files.`
   const rest = [
