@@ -1,11 +1,14 @@
 import { makeFunctionReference } from 'convex/server'
 import { describe, expect, it } from 'vitest'
+import type { Doc } from '../_generated/dataModel'
+import type { DeletedItemState } from '../lib/enums'
 import {
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
   type OrgExportRow,
   type OrgExportSection,
 } from '../lib/orgExport'
+import { moveTasksToTrash } from '../model/deletedItems'
 import schema from '../schema'
 import {
   as,
@@ -13,6 +16,7 @@ import {
   NOW,
   newT,
   plantIssue,
+  plantProject,
   plantSeat,
   type T,
   uuid,
@@ -92,6 +96,12 @@ const EXCLUDED_TABLES = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // Deleted items are not exported: restore an item to include its work.
+  'deleted_items',
+  'deleted_item_jobs',
+  'deleted_item_parents',
+  'deleted_rows',
+  'deleted_tasks',
 ] as const
 
 async function readAll(
@@ -116,6 +126,39 @@ async function readAll(
   }
   throw new Error('export pagination did not finish')
 }
+
+/* A Deleted items row for a project item of `project` in `state`, planted
+ * without its stored rows. */
+const plantProjectItem = (t: T, project: Doc<'projects'>, state: DeletedItemState) =>
+  t.run((ctx) =>
+    ctx.db.insert('deleted_items', {
+      id: uuid(),
+      org_id: project.org_id,
+      kind: 'project',
+      target_id: project.id,
+      num: project.num,
+      name: project.name,
+      key: project.key,
+      archived: false,
+      project_id: project.id,
+      parent_project_id: project.parent_id,
+      path: [],
+      projects: [
+        {
+          id: project.id,
+          name: project.name,
+          key: project.key,
+          type: project.type,
+          tasks: 0,
+          archived_tasks: 0,
+        },
+      ],
+      counts: { tasks: 0, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+      deleted_at: NOW,
+      state,
+      purge_after: Date.parse(NOW) + 30 * 86_400_000,
+    }),
+  )
 
 describe('organization export', () => {
   it('classifies every schema table, with parent tables visited first', () => {
@@ -312,6 +355,147 @@ describe('organization export', () => {
     expect(JSON.stringify(exported)).not.toContain(f.otherOrg.id)
     expect(JSON.stringify(exported)).not.toContain(f.admin.auth_user_id)
   })
+
+  it('leaves out Deleted items, the tasks a moving project still has in the live tables and links to them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const comment = (issue_id: string) =>
+      t.run((ctx) =>
+        ctx.db.insert('comments', { id: uuid(), issue_id, body: 'Notes', created_at: NOW }),
+      )
+    const link = (source_id: string, target_id: string) =>
+      t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('issue_links', {
+          org_id: f.org.id,
+          id,
+          source_id,
+          target_id,
+          type: 'blocks',
+          pair_key: [source_id, target_id].sort().join(':'),
+          created_at: NOW,
+        })
+        return id
+      })
+    const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await comment(kept.id)
+    const blocked = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const liveLink = await link(kept.id, blocked.id)
+    const trashed = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run((ctx) =>
+      moveTasksToTrash(ctx, { actor: f.admin, root: trashed, subtasks: [], now: NOW }),
+    )
+    // a project item hides its project first and moves its tasks in steps,
+    // so a task can sit in issues under a project row that is gone
+    const moving = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
+    await comment(stranded.id)
+    // a kept task's link to the stranded task stays out with that task
+    await link(kept.id, stranded.id)
+    // so does a live task's reference to it as a parent, until the move
+    // detaches that task
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: stranded.id,
+    })
+    await plantProjectItem(t, moving, 'moving')
+    await t.run((ctx) => ctx.db.delete(moving._id))
+
+    const caller = as(t, f.admin)
+    const tasks = await readAll(caller, f.org.id, 'issues')
+    expect(tasks.map((row) => row.id)).toEqual([kept.id, blocked.id, child.id])
+    expect(tasks.find((row) => row.id === child.id)).not.toHaveProperty('parent_id')
+    expect(await readAll(caller, f.org.id, 'comments', kept.id)).toHaveLength(1)
+    expect((await readAll(caller, f.org.id, 'issue_links', kept.id)).map((row) => row.id)).toEqual([
+      liveLink,
+    ])
+    await expectRefusal(
+      caller.query(page, {
+        org_id: f.org.id,
+        section: 'comments',
+        parent_id: stranded.id,
+        cursor: null,
+      }),
+      'not_found',
+      /export parent not found/,
+    )
+  })
+
+  it('reads the parents of a page of tasks only while a deleted item is in flight, ten tasks a page then', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 100 parents with descriptions from before the 20,000-character cap,
+    // 200 KiB each, then a small child under each. One page of 100 children
+    // that read their parents would read 20 MiB.
+    const description = 'Field notes. '.repeat(16_000).slice(0, 200 * 1024)
+    const parents: Doc<'issues'>[] = []
+    for (let i = 0; i < 100; i++)
+      parents.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description }))
+    const children: string[] = []
+    for (const parent of parents)
+      children.push(
+        (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })).id,
+      )
+    const caller = as(t, f.admin)
+    const childRows = (rows: OrgExportRow[]) =>
+      new Map(rows.filter((row) => children.includes(row.id as string)).map((row) => [row.id, row]))
+    const firstChildPage = async () => {
+      let cursor: string | null = null
+      for (let guard = 0; guard < 100; guard++) {
+        const result: OrgExportPage = await caller.query(page, {
+          org_id: f.org.id,
+          section: 'issues',
+          cursor,
+        })
+        if (result.rows.some((row) => row.id === children[0])) return result
+        cursor = result.continueCursor
+      }
+      throw new Error('no page holds the first child')
+    }
+
+    // With nothing in flight, as a ready item leaves nothing in the live
+    // tables, no parent is read and every child keeps its own.
+    const done = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    await plantProjectItem(t, done, 'ready')
+    await t.run((ctx) => ctx.db.delete(done._id))
+    let exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    expect(exported.size).toBe(100)
+    for (const [index, id] of children.entries())
+      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
+    expect((await firstChildPage()).rows.length).toBeGreaterThan(10)
+
+    // While a project item is in flight, a page holds ten tasks and reads
+    // their parents, so the one parent under the moving project is left out.
+    const moving = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', children[99]))
+        .unique()
+      if (row === null) throw new Error('the last child vanished')
+      await ctx.db.patch(row._id, { parent_id: stranded.id })
+    })
+    await plantProjectItem(t, moving, 'moving')
+    await t.run((ctx) => ctx.db.delete(moving._id))
+    const inFlight = await firstChildPage()
+    expect(inFlight.rows).toHaveLength(4)
+    expect(inFlight.isDone).toBe(false)
+    exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    expect(exported.size).toBe(100)
+    for (const [index, id] of children.slice(0, 99).entries())
+      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
+    expect(exported.get(children[99])).not.toHaveProperty('parent_id')
+  }, 120_000)
 
   it('requires owned parents and refuses malformed section scopes', async () => {
     const t = newT()

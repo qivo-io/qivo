@@ -18,10 +18,10 @@ import {
   workingSetOf,
 } from '../lib/workingSet'
 import { postComment } from '../model/comments'
+import { moveTasksToTrash } from '../model/deletedItems'
 import {
   archiveIssueCore,
   createIssueCore,
-  deleteIssueCore,
   moveIssueCore,
   NO_WRITE_ACCESS,
   unarchiveIssueCore,
@@ -43,13 +43,15 @@ import {
 
 const GATE = /^no write access to this project$/
 
-/* Every task, comment and activity row, to prove a refusal wrote nothing. */
+/* Every task, comment, activity row and Deleted item, to prove a refusal
+ * wrote nothing. */
 const everything = (t: T) =>
   t.run(async (ctx) => ({
     issues: await ctx.db.query('issues').collect(),
     comments: await ctx.db.query('comments').collect(),
     activity: await ctx.db.query('activity_events').collect(),
     messages: await ctx.db.query('messages').collect(),
+    deleted: await ctx.db.query('deleted_items').collect(),
   }))
 
 /* A sub-project under the SKNK meta, which the fixture's guest cannot see. */
@@ -88,7 +90,11 @@ describe('the write gate inside the task cores', () => {
     ],
     ['archive', (ctx, f, task) => archiveIssueCore(ctx, { me: f.viewer, issue: task, now: NOW })],
     ['restore', (ctx, f, task) => unarchiveIssueCore(ctx, { me: f.viewer, issue: task, now: NOW })],
-    ['delete', (ctx, f, task) => deleteIssueCore(ctx, { me: f.viewer, issue: task, now: NOW })],
+    [
+      'delete',
+      (ctx, f, task) =>
+        moveTasksToTrash(ctx, { actor: f.viewer, root: task, subtasks: [], now: NOW }),
+    ],
     [
       'comment',
       (ctx, f, task) => postComment(ctx, { issue: task, author: f.viewer, body: 'No', now: NOW }),
@@ -159,11 +165,18 @@ describe('the write gate inside the task cores', () => {
     })
     await t.run(async (ctx) => {
       const issue = (await ctx.db.get(created._id)) as Doc<'issues'>
-      await deleteIssueCore(ctx, { me: f.guest, issue, now: NOW, provenance: 'via MCP' })
+      await moveTasksToTrash(ctx, {
+        actor: f.guest,
+        root: issue,
+        subtasks: [],
+        now: NOW,
+        provenance: 'via MCP',
+      })
     })
     const rows = await everything(t)
     expect(rows.issues).toEqual([])
     expect(rows.comments).toEqual([])
+    expect(rows.deleted).toMatchObject([{ target_id: created.id, state: 'ready' }])
     expect((await activityFor(t, f.org.id)).map((e) => [e.verb, e.detail])).toEqual([
       ['created', undefined],
       ['renamed', 'from “Guest work”'],

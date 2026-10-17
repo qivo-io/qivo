@@ -36,6 +36,9 @@ import {
   vActivityTarget,
   vAppearanceMode,
   vCredentialAccess,
+  vCredentialTable,
+  vDeletedItemKind,
+  vDeletedItemState,
   vGrantLevel,
   vImageSource,
   vIssuePriority,
@@ -49,6 +52,8 @@ import {
   vProjectCreators,
   vProjectType,
   vRemovalPhase,
+  vStoredTable,
+  vTrashPhase,
 } from './lib/enums'
 import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
@@ -66,6 +71,225 @@ import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
  * existed, stays unmarked, and readers filter it as before. Every other
  * reader sees marked rows like any other. */
 const taskArchived = v.optional(v.literal(true))
+
+/* The ten tables whose rows a deleted task or project keeps in deleted_rows
+ * (lib/enums.ts STORED_TABLES), defined first so deleted_rows can reuse each
+ * one's validator. Convex validates the stored copies against it, so a shape
+ * change fails the deploy until they fit. A semantic change does not: restore
+ * writes a stored document back unchanged, so a migration or backfill of one
+ * of these tables must also walk the deleted_rows rows with that `table`. */
+const projectsTable = defineTable({
+  id: v.string(),
+  org_id: v.string(),
+  // Legacy ownership column. New projects and sub-projects are teamless;
+  // teams receive permissions through project_team_access.
+  team_id: v.optional(v.string()),
+  type: vProjectType,
+  parent_id: v.optional(v.string()), // parent must be a meta; type/parent/org immutable
+  key: v.string(), // ^[A-Z0-9]{1,5}$, unique (org_id, key)
+  name: v.string(),
+  lead_id: v.optional(v.string()), // same org, never a viewer
+  description: v.string(), // PROJECT_DESCRIPTION_MAX UTF-16 units, enforced by model/projects
+  sort_order: v.number(),
+  num: v.number(), // org-scoped, assigned by counter, immutable
+  icon: v.optional(v.string()), // sub-projects carry no icon (0069)
+  icon_color: v.optional(v.string()),
+  track_delay: v.boolean(),
+  // remaining time a task gets on entering Review; absent = the parent
+  // project's value, else DEFAULT_REVIEW_HOURS (2); 0..REVIEW_HOURS_MAX
+  // (999), 0.1 h grain
+  review_hours: v.optional(v.number()),
+  archived_at: v.optional(v.string()),
+  created_at: v.string(),
+})
+  .index('by_uuid', ['id'])
+  .index('by_org', ['org_id'])
+  .index('by_org_key', ['org_id', 'key'])
+  .index('by_org_num', ['org_id', 'num'])
+  .index('by_parent', ['parent_id'])
+  .index('by_team', ['team_id'])
+  .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
+
+const projectAccessTable = defineTable({
+  project_id: v.string(), // explicit grants may target a project or sub-project
+  profile_id: v.string(),
+  level: vGrantLevel, // the validator IS project_access_level_ck
+})
+  .index('by_project', ['project_id'])
+  .index('by_profile', ['profile_id'])
+  .index('by_project_profile', ['project_id', 'profile_id'])
+
+const projectTeamAccessTable = defineTable({
+  project_id: v.string(), // explicit shares may target a project or sub-project
+  team_id: v.string(), // same organization as the project
+  level: vGrantLevel,
+})
+  .index('by_project', ['project_id'])
+  .index('by_team', ['team_id'])
+  .index('by_project_team', ['project_id', 'team_id'])
+
+const issuesTable = defineTable({
+  id: v.string(),
+  project_id: v.string(), // always a sub-project, never a meta
+  org_id: v.string(), // denormalized, pinned from the project, immutable
+  num: v.number(), // org-scoped, assigned by counter, immutable
+  title: v.string(), // ≤80 chars (0061)
+  description: v.string(),
+  status: vIssueStatus,
+  priority: vIssuePriority,
+  assignee_id: v.optional(v.string()), // same org, active, never a viewer
+  // same rule as the assignee (same org, active, never a viewer, Edit+);
+  // owns the task while it is In Review (lib/review.ts)
+  reviewer_id: v.optional(v.string()),
+  parent_id: v.optional(v.string()), // no self-parent, cycle walk ≤20, same org
+  // (start absent) = (end absent), start <= end; dormant while the task has
+  // active subtasks, whose leaves give its dates
+  start_week: v.optional(v.string()),
+  end_week: v.optional(v.string()),
+  due_date: v.optional(v.string()),
+  remaining_hours: v.optional(v.number()), // >= 0; parents with children have none
+  remaining_set_at: v.optional(v.string()), // server-owned; (hours absent) = (stamp absent)
+  paused: v.boolean(), // work on hold; never true on a Done or Backlog task
+  created_by: v.optional(v.string()), // internal writer audit; absent after profile removal
+  reporter_id: v.optional(v.string()), // immutable; project access checked at creation
+  done_at: v.optional(v.string()),
+  // server-owned review hand-off (lib/review.ts reviewStamp): when the task
+  // last entered In Review or went to a different reviewer there; kept into
+  // Done, cleared by any other move out, never on a group
+  review_at: v.optional(v.string()),
+  archived_at: v.optional(v.string()),
+  // server-owned: some relation rows of this task may carry task_archived
+  // (above). Never sent to clients, REST, MCP, webhooks or the export.
+  relations_marked: v.optional(v.literal(true)),
+  created_at: v.string(),
+  updated_at: v.string(),
+})
+  .index('by_uuid', ['id'])
+  .index('by_org', ['org_id'])
+  // The working snapshot and planning reads do not scan archived task bodies.
+  .index('by_org_archived', ['org_id', 'archived_at'])
+  // The nightly archive reads only Done tasks past the shortest threshold.
+  .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
+  // The nightly repair finds active tasks still flagged relations_marked.
+  .index('by_org_archived_marked', ['org_id', 'archived_at', 'relations_marked'])
+  .index('by_org_num', ['org_id', 'num'])
+  .index('by_project', ['project_id'])
+  // An access removal reads only the open tasks of the projects it touches.
+  .index('by_project_archived', ['project_id', 'archived_at'])
+  .index('by_parent', ['parent_id'])
+  // The nightly leaf guard asks whether a parent has an unarchived child.
+  .index('by_parent_archived', ['parent_id', 'archived_at'])
+  // A project's move to Deleted items reads a task's children outside the
+  // moving projects through ranges between their ids, so it never reads the
+  // children inside, however many there are (model/deletedItems.ts
+  // childrenOutside).
+  .index('by_parent_project', ['parent_id', 'project_id'])
+  // Profile refs for removeProfile's SET NULLs. The removal transaction
+  // reads only open tasks (archived_at absent), the background steps the
+  // whole range.
+  .index('by_assignee_archived', ['assignee_id', 'archived_at'])
+  .index('by_reviewer_archived', ['reviewer_id', 'archived_at'])
+  .index('by_created_by_archived', ['created_by', 'archived_at'])
+  .index('by_reporter_archived', ['reporter_id', 'archived_at'])
+
+const issueLinksTable = defineTable({
+  org_id: v.optional(v.string()),
+  id: v.string(),
+  source_id: v.string(), // source <> target; 'relates' stored with source < target
+  target_id: v.string(),
+  type: vLinkType,
+  // sorted `${min(source,target)}:${max(...)}` — at most one link per pair,
+  // unique-checked on by_pair (replaces the (least, greatest) unique index)
+  pair_key: v.string(),
+  created_at: v.string(),
+  task_archived: taskArchived,
+})
+  // The snapshot's org-wide read of unmarked rows (org, mark), and the
+  // archive steps' reads of one end's unmarked or marked rows (all three).
+  .index('by_org_task_archived_source', ['org_id', 'task_archived', 'source_id'])
+  .index('by_org_task_archived_target', ['org_id', 'task_archived', 'target_id'])
+  .index('by_uuid', ['id'])
+  .index('by_source', ['source_id'])
+  .index('by_target', ['target_id'])
+  .index('by_pair', ['pair_key'])
+
+const issueLabelsTable = defineTable({
+  org_id: v.optional(v.string()),
+  issue_id: v.string(), // label and issue must share an org
+  label_id: v.string(),
+  task_archived: taskArchived,
+})
+  .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
+  .index('by_issue', ['issue_id'])
+  // a label's assignments; REST and MCP search read only its unmarked ones
+  .index('by_label', ['label_id', 'task_archived'])
+  .index('by_issue_label', ['issue_id', 'label_id'])
+
+const issueSubscriptionsTable = defineTable({
+  issue_id: v.string(),
+  profile_id: v.string(), // recipient must be able to see the project
+  created_at: v.string(),
+  task_archived: taskArchived,
+})
+  // a task's follows, and the archive steps' unmarked or marked ones
+  .index('by_issue_task_archived', ['issue_id', 'task_archived'])
+  // the snapshot reads one's unmarked follows; profile cleanup takes the
+  // whole profile range
+  .index('by_profile_task_archived', ['profile_id', 'task_archived'])
+  .index('by_issue_profile', ['issue_id', 'profile_id'])
+
+const issueAttachmentsTable = defineTable({
+  org_id: v.optional(v.string()),
+  // The task's project. attachFileCore and moveIssueCore keep it equal to
+  // issues.project_id, so storage totals group by project without reading
+  // tasks (model/billing.ts storageUsage). Any new code that changes a
+  // task's project or writes attachment rows back must set it too, as a
+  // restore from Deleted items does (model/deletedItems.ts writeRowBack).
+  // Rows stored before it existed lack it until
+  // internal/attachmentScopeBackfill fills them, and readers use the task's
+  // project meanwhile.
+  project_id: v.optional(v.string()),
+  id: v.string(),
+  issue_id: v.string(),
+  name: v.string(),
+  size_bytes: v.number(), // copied from _storage metadata in attach, never client-sent
+  mime: v.optional(v.string()),
+  storage_id: v.id('_storage'), // replaces storage_path
+  inline: v.boolean(),
+  uploaded_by: v.optional(v.string()),
+  created_at: v.string(),
+  task_archived: taskArchived,
+})
+  .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
+  .index('by_uuid', ['id'])
+  .index('by_issue', ['issue_id'])
+  .index('by_storage', ['storage_id'])
+  .index('by_uploaded_by', ['uploaded_by']) // removeProfile's SET NULL
+
+const milestonesTable = defineTable({
+  id: v.string(),
+  project_id: v.string(), // writes store a top-level project (model/milestones.ts)
+  name: v.string(),
+  week: v.string(), // YYYY-MM-DD calendar day, usually the first day of its week
+  created_at: v.string(),
+})
+  .index('by_uuid', ['id'])
+  .index('by_project', ['project_id'])
+
+const commentsTable = defineTable({
+  id: v.string(),
+  issue_id: v.string(),
+  author: v.optional(v.string()),
+  body: v.string(),
+  created_at: v.string(), // shares its instant with the comment's inbox message (0111)
+  edited_at: v.optional(v.string()),
+  edited_by: v.optional(v.string()),
+})
+  .index('by_uuid', ['id'])
+  .index('by_issue', ['issue_id'])
+  // comments_author_idx / comments_edited_by_idx — removeProfile's SET NULLs
+  .index('by_author', ['author'])
+  .index('by_edited_by', ['edited_by'])
 
 export default defineSchema({
   // Durable ownership for public demo copies. This outlives profiles and
@@ -439,6 +663,9 @@ export default defineSchema({
   // It changes rarely, unlike the organization row's activity_count, so the
   // read does not re-run queries on every write. `phase` is set once deletion
   // begins; until then admins can still export and the deletion can stop.
+  // Deleted items background work (deletedItems.ts) also reads it: items
+  // keep expiring while the organization is read-only, and nothing touches
+  // its items once `phase` is set.
   org_removals: defineTable({
     org_id: v.string(),
     reason: vOrgRemovalReason,
@@ -546,135 +773,11 @@ export default defineSchema({
     .index('by_profile', ['profile_id'])
     .index('by_progress', ['progress_at']),
 
-  projects: defineTable({
-    id: v.string(),
-    org_id: v.string(),
-    // Legacy ownership column. New projects and sub-projects are teamless;
-    // teams receive permissions through project_team_access.
-    team_id: v.optional(v.string()),
-    type: vProjectType,
-    parent_id: v.optional(v.string()), // parent must be a meta; type/parent/org immutable
-    key: v.string(), // ^[A-Z0-9]{1,5}$, unique (org_id, key)
-    name: v.string(),
-    lead_id: v.optional(v.string()), // same org, never a viewer
-    description: v.string(), // PROJECT_DESCRIPTION_MAX UTF-16 units, enforced by model/projects
-    sort_order: v.number(),
-    num: v.number(), // org-scoped, assigned by counter, immutable
-    icon: v.optional(v.string()), // sub-projects carry no icon (0069)
-    icon_color: v.optional(v.string()),
-    track_delay: v.boolean(),
-    // remaining time a task gets on entering Review; absent = the parent
-    // project's value, else DEFAULT_REVIEW_HOURS (2); 0..REVIEW_HOURS_MAX
-    // (999), 0.1 h grain
-    review_hours: v.optional(v.number()),
-    archived_at: v.optional(v.string()),
-    created_at: v.string(),
-  })
-    .index('by_uuid', ['id'])
-    .index('by_org', ['org_id'])
-    .index('by_org_key', ['org_id', 'key'])
-    .index('by_org_num', ['org_id', 'num'])
-    .index('by_parent', ['parent_id'])
-    .index('by_team', ['team_id'])
-    .index('by_lead', ['lead_id']), // projects_lead_idx — removeProfile's SET NULL
-
-  project_access: defineTable({
-    project_id: v.string(), // explicit grants may target a project or sub-project
-    profile_id: v.string(),
-    level: vGrantLevel, // the validator IS project_access_level_ck
-  })
-    .index('by_project', ['project_id'])
-    .index('by_profile', ['profile_id'])
-    .index('by_project_profile', ['project_id', 'profile_id']),
-
-  project_team_access: defineTable({
-    project_id: v.string(), // explicit shares may target a project or sub-project
-    team_id: v.string(), // same organization as the project
-    level: vGrantLevel,
-  })
-    .index('by_project', ['project_id'])
-    .index('by_team', ['team_id'])
-    .index('by_project_team', ['project_id', 'team_id']),
-
-  issues: defineTable({
-    id: v.string(),
-    project_id: v.string(), // always a sub-project, never a meta
-    org_id: v.string(), // denormalized, pinned from the project, immutable
-    num: v.number(), // org-scoped, assigned by counter, immutable
-    title: v.string(), // ≤80 chars (0061)
-    description: v.string(),
-    status: vIssueStatus,
-    priority: vIssuePriority,
-    assignee_id: v.optional(v.string()), // same org, active, never a viewer
-    // same rule as the assignee (same org, active, never a viewer, Edit+);
-    // owns the task while it is In Review (lib/review.ts)
-    reviewer_id: v.optional(v.string()),
-    parent_id: v.optional(v.string()), // no self-parent, cycle walk ≤20, same org
-    // (start absent) = (end absent), start <= end; dormant while the task has
-    // active subtasks, whose leaves give its dates
-    start_week: v.optional(v.string()),
-    end_week: v.optional(v.string()),
-    due_date: v.optional(v.string()),
-    remaining_hours: v.optional(v.number()), // >= 0; parents with children have none
-    remaining_set_at: v.optional(v.string()), // server-owned; (hours absent) = (stamp absent)
-    paused: v.boolean(), // work on hold; never true on a Done or Backlog task
-    created_by: v.optional(v.string()), // internal writer audit; absent after profile removal
-    reporter_id: v.optional(v.string()), // immutable; project access checked at creation
-    done_at: v.optional(v.string()),
-    // server-owned review hand-off (lib/review.ts reviewStamp): when the task
-    // last entered In Review or went to a different reviewer there; kept into
-    // Done, cleared by any other move out, never on a group
-    review_at: v.optional(v.string()),
-    archived_at: v.optional(v.string()),
-    // server-owned: some relation rows of this task may carry task_archived
-    // (above). Never sent to clients, REST, MCP, webhooks or the export.
-    relations_marked: v.optional(v.literal(true)),
-    created_at: v.string(),
-    updated_at: v.string(),
-  })
-    .index('by_uuid', ['id'])
-    .index('by_org', ['org_id'])
-    // The working snapshot and planning reads do not scan archived task bodies.
-    .index('by_org_archived', ['org_id', 'archived_at'])
-    // The nightly archive reads only Done tasks past the shortest threshold.
-    .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
-    // The nightly repair finds active tasks still flagged relations_marked.
-    .index('by_org_archived_marked', ['org_id', 'archived_at', 'relations_marked'])
-    .index('by_org_num', ['org_id', 'num'])
-    .index('by_project', ['project_id'])
-    // An access removal reads only the open tasks of the projects it touches.
-    .index('by_project_archived', ['project_id', 'archived_at'])
-    .index('by_parent', ['parent_id'])
-    // The nightly leaf guard asks whether a parent has an unarchived child.
-    .index('by_parent_archived', ['parent_id', 'archived_at'])
-    // Profile refs for removeProfile's SET NULLs. The removal transaction
-    // reads only open tasks (archived_at absent), the background steps the
-    // whole range.
-    .index('by_assignee_archived', ['assignee_id', 'archived_at'])
-    .index('by_reviewer_archived', ['reviewer_id', 'archived_at'])
-    .index('by_created_by_archived', ['created_by', 'archived_at'])
-    .index('by_reporter_archived', ['reporter_id', 'archived_at']),
-
-  issue_links: defineTable({
-    org_id: v.optional(v.string()),
-    id: v.string(),
-    source_id: v.string(), // source <> target; 'relates' stored with source < target
-    target_id: v.string(),
-    type: vLinkType,
-    // sorted `${min(source,target)}:${max(...)}` — at most one link per pair,
-    // unique-checked on by_pair (replaces the (least, greatest) unique index)
-    pair_key: v.string(),
-    created_at: v.string(),
-    task_archived: taskArchived,
-  })
-    // The snapshot's org-wide read of unmarked rows (org, mark), and the
-    // archive steps' reads of one end's unmarked or marked rows (all three).
-    .index('by_org_task_archived_source', ['org_id', 'task_archived', 'source_id'])
-    .index('by_org_task_archived_target', ['org_id', 'task_archived', 'target_id'])
-    .index('by_uuid', ['id'])
-    .index('by_source', ['source_id'])
-    .index('by_target', ['target_id'])
-    .index('by_pair', ['pair_key']),
+  projects: projectsTable,
+  project_access: projectAccessTable,
+  project_team_access: projectTeamAccessTable,
+  issues: issuesTable,
+  issue_links: issueLinksTable,
 
   labels: defineTable({
     id: v.string(),
@@ -688,17 +791,7 @@ export default defineSchema({
     .index('by_org', ['org_id'])
     .index('by_org_name_lower', ['org_id', 'name_lower']),
 
-  issue_labels: defineTable({
-    org_id: v.optional(v.string()),
-    issue_id: v.string(), // label and issue must share an org
-    label_id: v.string(),
-    task_archived: taskArchived,
-  })
-    .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
-    .index('by_issue', ['issue_id'])
-    // a label's assignments; REST and MCP search read only its unmarked ones
-    .index('by_label', ['label_id', 'task_archived'])
-    .index('by_issue_label', ['issue_id', 'label_id']),
+  issue_labels: issueLabelsTable,
 
   // A deleted label whose task assignments background steps still remove
   // (labelRemovals.ts). The row reserves the id, so labels.create cannot
@@ -713,45 +806,8 @@ export default defineSchema({
     .index('by_label', ['label_id'])
     .index('by_progress', ['progress_at']),
 
-  issue_subscriptions: defineTable({
-    issue_id: v.string(),
-    profile_id: v.string(), // recipient must be able to see the project
-    created_at: v.string(),
-    task_archived: taskArchived,
-  })
-    // a task's follows, and the archive steps' unmarked or marked ones
-    .index('by_issue_task_archived', ['issue_id', 'task_archived'])
-    // the snapshot reads one's unmarked follows; profile cleanup takes the
-    // whole profile range
-    .index('by_profile_task_archived', ['profile_id', 'task_archived'])
-    .index('by_issue_profile', ['issue_id', 'profile_id']),
-
-  issue_attachments: defineTable({
-    org_id: v.optional(v.string()),
-    // The task's project. attachFileCore and moveIssueCore keep it equal to
-    // issues.project_id, so storage totals group by project without reading
-    // tasks (model/billing.ts storageUsage). Any new code that changes a
-    // task's project, or writes attachment rows back such as a restore, must
-    // set it too. Rows stored before it existed lack it until
-    // internal/attachmentScopeBackfill fills them, and readers use the task's
-    // project meanwhile.
-    project_id: v.optional(v.string()),
-    id: v.string(),
-    issue_id: v.string(),
-    name: v.string(),
-    size_bytes: v.number(), // copied from _storage metadata in attach, never client-sent
-    mime: v.optional(v.string()),
-    storage_id: v.id('_storage'), // replaces storage_path
-    inline: v.boolean(),
-    uploaded_by: v.optional(v.string()),
-    created_at: v.string(),
-    task_archived: taskArchived,
-  })
-    .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
-    .index('by_uuid', ['id'])
-    .index('by_issue', ['issue_id'])
-    .index('by_storage', ['storage_id'])
-    .index('by_uploaded_by', ['uploaded_by']), // removeProfile's SET NULL
+  issue_subscriptions: issueSubscriptionsTable,
+  issue_attachments: issueAttachmentsTable,
 
   // A REST upload in progress (model/attachments.ts). It names the caller
   // that asked for the upload URL, the task it attaches to and when it
@@ -772,15 +828,199 @@ export default defineSchema({
     .index('by_profile_expiry', ['profile_id', 'expires_at'])
     .index('by_expiry', ['expires_at']),
 
-  milestones: defineTable({
-    id: v.string(),
-    project_id: v.string(), // writes store a top-level project (model/milestones.ts)
-    name: v.string(),
-    week: v.string(), // YYYY-MM-DD calendar day, usually the first day of its week
-    created_at: v.string(),
+  milestones: milestonesTable,
+
+  /* Deleted items (model/deletedItems.ts). Deleting a task or a project
+   * moves its rows out of the live tables into deleted_rows, so every
+   * existing reader treats it as gone. One deleted_items row stands for one
+   * deletion as people see it in Settings: a task with the subtasks chosen
+   * with it, or a project with its sub-projects and every task in them. It
+   * has a fixed size, because Deleted items pages read many of them; nothing
+   * in it grows with the project. Restore writes the rows back with their
+   * uuids, numbers and keys, and the nightly expiry deletes them for good 30
+   * days after the deletion. */
+  deleted_items: defineTable({
+    id: v.string(), // server-generated
+    org_id: v.string(),
+    kind: vDeletedItemKind,
+    target_id: v.string(), // the root task or root project
+    num: v.number(), // the root's task or project number
+    name: v.string(), // root task title or project name at deletion
+    key: v.optional(v.string()), // project items: the project key
+    status: v.optional(vIssueStatus), // task items: the root's status
+    archived: v.boolean(), // the root was archived when deleted
+    // task item: the root task's project; project item: the root project
+    project_id: v.string(),
+    parent_project_id: v.optional(v.string()), // the top-level project above project_id
+    // display names at deletion: [top, sub] for a task, [parent] for a
+    // sub-project, [] for a top-level project. Readers prefer live names.
+    path: v.array(v.string()),
+    // The projects whose tasks are in the item: a task item's root project
+    // and each cross-project subtask's, a project item's root and each
+    // sub-project. Bounded by the sub-project count.
+    projects: v.array(
+      v.object({
+        id: v.string(),
+        name: v.string(),
+        key: v.string(),
+        type: vProjectType,
+        tasks: v.number(),
+        archived_tasks: v.number(),
+      }),
+    ),
+    counts: v.object({
+      tasks: v.number(),
+      archived_tasks: v.number(),
+      subtasks: v.number(),
+      sub_projects: v.number(),
+    }),
+    deleted_at: v.string(),
+    deleted_by: v.optional(v.string()), // the deleter's profile id
+    // the credential of a REST or MCP delete, as it was named then
+    via: v.optional(v.object({ table: vCredentialTable, id: v.string(), name: v.string() })),
+    reason: v.optional(v.string()), // app deletes only, trimmed, ≤500 characters
+    state: vDeletedItemState,
+    purge_after: v.number(), // epoch ms, deleted_at + 30 days
+    // the profile restoring it, for the steps and the final activity row.
+    // Kept until the item is ready again after a failed restore, because
+    // rows may be back in the live tables under its stored tasks until then.
+    restore_by: v.optional(v.string()),
+    dropped_rows: v.optional(v.number()), // rows too large to store, deleted instead
   })
     .index('by_uuid', ['id'])
-    .index('by_project', ['project_id']),
+    .index('by_target', ['target_id'])
+    .index('by_org_deleted', ['org_id', 'deleted_at'])
+    .index('by_org_deleter', ['org_id', 'deleted_by', 'deleted_at'])
+    .index('by_org_project', ['org_id', 'project_id', 'deleted_at'])
+    .index('by_org_parent', ['org_id', 'parent_project_id', 'deleted_at'])
+    .index('by_state_purge', ['state', 'purge_after'])
+    // whether an organization has an item in flight, which decides whether
+    // its export reads each task's parent (orgExport.ts)
+    .index('by_org_state', ['org_id', 'state']),
+
+  /* The background steps of one moving, restoring or purging item. Kept off
+   * deleted_items, so a step never invalidates an open Deleted items page.
+   * recover (deletedItems.ts) restarts a row whose last step committed more
+   * than a minute ago with no step waiting, at half the budget each time.
+   * Once its organization's deletion has begun, its steps stand down and
+   * recover leaves it for that deletion to delete (model/orgDeletion.ts). */
+  deleted_item_jobs: defineTable({
+    item_id: v.string(),
+    phase: vTrashPhase,
+    // Where a phase that reads a range it does not empty goes on: an index
+    // into the item's projects (or 0) and the _creationTime last done there.
+    cursor: v.optional(v.object({ index: v.number(), after: v.number() })),
+    // The tasks the item stores, as its steps count them: a move adds each
+    // task it stores, and a restore subtracts each one it writes back. The
+    // item takes these numbers when it becomes ready, so the steps never
+    // rewrite the listed row.
+    tally: v.optional(
+      v.object({
+        tasks: v.number(),
+        archived_tasks: v.number(),
+        dropped_rows: v.number(),
+        projects: v.array(
+          v.object({ id: v.string(), tasks: v.number(), archived_tasks: v.number() }),
+        ),
+      }),
+    ),
+    progress_at: v.string(), // the last committed step
+    scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+    attempts: v.number(), // restarts since the last committed step
+    budget_scale: v.number(), // 1, halved by each restart down to 1/16
+    // a restore whose call held this task item alone: its reveal sends the
+    // Restored notice (model/deletedItems.ts)
+    alone: v.optional(v.boolean()),
+  })
+    .index('by_item', ['item_id'])
+    .index('by_progress', ['progress_at']),
+
+  /* The parent each task of a restoring project item waits for. A task
+   * whose parent is outside the item goes back to issues without it while
+   * the item fills, so that parent stays as it is until the reveal. After
+   * the reveal the restore gives the task its parent by the parent table
+   * (model/deletedItems.ts attachParents). It keeps one row per task rather
+   * than a field on deleted_item_jobs, because an item can hold any number
+   * of such tasks and every step rewrites its job. The rows outlive the
+   * reveal with the item and its job and go with the item. Any move of such
+   * a task to Deleted items, by this item or another, takes its row by task
+   * and stores the task with this parent while it still waits for it
+   * (takeParent). The row of a task whose project went to Deleted items
+   * again before its turn goes to the item that holds that project. */
+  deleted_item_parents: defineTable({
+    item_id: v.string(),
+    task_id: v.string(), // the task written back without its parent
+    parent_id: v.string(), // the parent it had in Deleted items
+  })
+    .index('by_item_task', ['item_id', 'task_id'])
+    .index('by_task', ['task_id']),
+
+  /* One original document of a deleted item, typed by its table. Only
+   * model/deletedItems.ts storeRow inserts here, writing `table` and `row`
+   * together; restore writes `row.doc` back unchanged, which is why a
+   * migration or backfill of a stored table must walk these rows too (see
+   * the stored tables above). The indexed copies reserve what the live
+   * tables would: uuids (by_row, lib/db.ts insertUnique), project keys
+   * (by_org_key, model/projects.ts keyHolder) and attachment bytes
+   * (by_storage, model/attachments.ts storageIdInUse). */
+  deleted_rows: defineTable({
+    item_id: v.string(),
+    org_id: v.string(),
+    table: vStoredTable,
+    owner_id: v.string(), // the task the row travels with, or the project for project rows
+    row_id: v.optional(v.string()), // the row's own uuid, for tables that have one
+    created_ts: v.number(), // the original _creationTime
+    storage_id: v.optional(v.id('_storage')), // issue_attachments: the bytes
+    project_key: v.optional(v.string()), // projects: the key
+    // projects: the stored lead, so a lead finds the projects they led in
+    // Deleted items (model/deletedItemsList.ts)
+    lead_id: v.optional(v.string()),
+    row: v.union(
+      v.object({ table: v.literal('issues'), doc: issuesTable.validator }),
+      v.object({ table: v.literal('comments'), doc: commentsTable.validator }),
+      v.object({ table: v.literal('issue_labels'), doc: issueLabelsTable.validator }),
+      v.object({
+        table: v.literal('issue_subscriptions'),
+        doc: issueSubscriptionsTable.validator,
+      }),
+      v.object({ table: v.literal('issue_attachments'), doc: issueAttachmentsTable.validator }),
+      v.object({ table: v.literal('issue_links'), doc: issueLinksTable.validator }),
+      v.object({ table: v.literal('projects'), doc: projectsTable.validator }),
+      v.object({ table: v.literal('milestones'), doc: milestonesTable.validator }),
+      v.object({ table: v.literal('project_access'), doc: projectAccessTable.validator }),
+      v.object({
+        table: v.literal('project_team_access'),
+        doc: projectTeamAccessTable.validator,
+      }),
+    ),
+  })
+    .index('by_item_table_owner', ['item_id', 'table', 'owner_id'])
+    .index('by_item_owner', ['item_id', 'owner_id'])
+    .index('by_row', ['table', 'row_id'])
+    .index('by_storage', ['storage_id'])
+    .index('by_org_key', ['org_id', 'project_key'])
+    .index('by_org_lead', ['org_id', 'lead_id'])
+    .index('by_org', ['org_id']),
+
+  /* One light row per stored task, written and deleted with its issues row
+   * in deleted_rows: what search, counts and finding a task's item need. */
+  deleted_tasks: defineTable({
+    org_id: v.string(),
+    item_id: v.string(),
+    task_id: v.string(),
+    num: v.number(),
+    title: v.string(),
+    project_id: v.string(),
+    archived: v.boolean(),
+    // a task item's subtask in another project than the item's root: that
+    // project, so its lead finds the item (model/deletedItemsList.ts)
+    cross_project_id: v.optional(v.string()),
+  })
+    .index('by_task', ['task_id'])
+    .index('by_item', ['item_id'])
+    .index('by_org_num', ['org_id', 'num'])
+    .index('by_org_cross_project', ['org_id', 'cross_project_id'])
+    .searchIndex('search_title', { searchField: 'title', filterFields: ['org_id'] }),
 
   webhook_subscriptions: defineTable({
     id: v.string(),
@@ -901,20 +1141,7 @@ export default defineSchema({
     .index('by_org_ts', ['org_id', 'ts'])
     .index('by_actor', ['actor_id']), // removeProfile's SET NULL — rows survive their actor
 
-  comments: defineTable({
-    id: v.string(),
-    issue_id: v.string(),
-    author: v.optional(v.string()),
-    body: v.string(),
-    created_at: v.string(), // shares its instant with the comment's inbox message (0111)
-    edited_at: v.optional(v.string()),
-    edited_by: v.optional(v.string()),
-  })
-    .index('by_uuid', ['id'])
-    .index('by_issue', ['issue_id'])
-    // comments_author_idx / comments_edited_by_idx — removeProfile's SET NULLs
-    .index('by_author', ['author'])
-    .index('by_edited_by', ['edited_by']),
+  comments: commentsTable,
 
   // How many comments a task holds, for the per-task cap
   // (model/commentCounts.ts). It is its own table and not a task field,

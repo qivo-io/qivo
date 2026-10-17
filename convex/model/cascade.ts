@@ -2,7 +2,9 @@
  * spelled out. This file is phase 5's home for deleteProjectDeep /
  * deleteTeamDeep / removeProfile; deleteIssueDeep is pulled forward because
  * phase 4's issues.deleteDeep must not ship without the message/subscription/
- * link edges.
+ * link edges. Every task and project delete, in the app and over REST and
+ * MCP, now moves the work to Deleted items instead (model/deletedItems.ts);
+ * these hard deletes remain for the Northstar wipe.
  *
  * deleteIssueDeep deletes ONE issue. It does NOT delete the subtree:
  * issues.parent_id is `on delete set null` (0001:95) — deleting a parent
@@ -18,10 +20,12 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { hasPendingCheckout } from './billing'
 import { dropCommentCount } from './commentCounts'
+import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { notifyIssueUpdate } from './messages'
 import { emitTaskEvent } from './taskEvents'
@@ -111,9 +115,9 @@ export async function deleteIssueDeep(
  * Activity rows are KEPT with project_id nulled (0001:155 SET NULL) —
  * "History survives its subjects" (0001:144). Without a project, the snapshot
  * sends those rows to org admins only, except the rows of a task that moved
- * out before the delete (snapshot.ts memberSeesActivity). The caller
- * (projects.deleteDeep) writes the 'deleted' narration AFTER this returns,
- * hung on the parent/team branch — the project the event names is gone. */
+ * out before the delete (snapshot.ts memberSeesActivity). Its one caller is
+ * the Northstar wipe (internal/marketingDemo.ts clearWork); the app's project
+ * delete moves the project to Deleted items (model/deletedItems.ts). */
 export async function deleteProjectDeep(
   ctx: MutationCtx,
   a: { project: Doc<'projects'>; actor: Doc<'profiles'>; now: string },
@@ -249,11 +253,6 @@ export async function clearHolder(
  * open tasks, and each background step (profileRemovals.ts) spends one. A
  * mutable object, so tests can lower it. */
 export const REMOVAL_BUDGET = { rows: 256, bytes: 4 * 1024 * 1024 }
-
-/* Comments and tasks can approach Convex's 1 MiB document limit, so their
- * ranges are read a few rows at a time. Unused rows of the last read then
- * add at most three such documents to what a transaction reads. */
-export const LARGE_ROWS_PER_READ = 4
 
 /** The most OAuth connections removeProfile revokes itself. The background
  * step deletes the rest, which can no longer be used anyway. */
@@ -448,7 +447,10 @@ export async function removeProfile(
  * audit log (history survives its subjects). Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
  * profiles' inboxes and OAuth connections, which this sweep only reaches
- * through live profiles. No narration: nothing is left to read it. */
+ * through live profiles. Deleted items go first, whatever state they are in,
+ * with the rows they still kept in the live tables and their bytes
+ * (model/deletedItems.ts clearOrgTrash); tasks a moving project left behind
+ * are then gone too. No narration: nothing is left to read it. */
 export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>): Promise<void> {
   const subscriptions = await ctx.db
     .query('billing_subscriptions')
@@ -484,6 +486,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .collect()) {
     await ctx.db.delete(a._id)
   }
+
+  await clearOrgTrash(ctx, org.id, { left: Number.POSITIVE_INFINITY })
 
   for (const table of [
     'webhook_events',

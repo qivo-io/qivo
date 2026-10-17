@@ -46,16 +46,24 @@ import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
 
 /* The cross-tenant byte-destruction fence (0089 §3's vector, reborn as
- * storage ids): a storage id referenced by ANY attachment row or ANY
- * profile's avatar, curated background, or private custom background must
- * never gain a second referent, because the second row's delete would
- * destroy the first row's bytes. */
+ * storage ids): a storage id referenced by ANY attachment row, live or held
+ * in Deleted items, or ANY profile's avatar, curated background, or private
+ * custom background must never gain a second referent, because the second
+ * row's delete would destroy the first row's bytes. The same answer keeps
+ * files.ts reapOrphans and the demo sweepers away from trashed bytes. The
+ * trash is checked after the live attachments, so a file a live attachment
+ * names still costs one read. */
 export async function storageIdInUse(ctx: QueryCtx, storageId: Id<'_storage'>): Promise<boolean> {
   const att = await ctx.db
     .query('issue_attachments')
     .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
     .first()
   if (att !== null) return true
+  const trashed = await ctx.db
+    .query('deleted_rows')
+    .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
+    .first()
+  if (trashed !== null) return true
   const prof = await ctx.db
     .query('profiles')
     .withIndex('by_avatar', (q) => q.eq('avatar_storage_id', storageId))

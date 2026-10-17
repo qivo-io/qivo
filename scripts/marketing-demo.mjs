@@ -47,6 +47,7 @@ const SAFE_REFUSALS = new Set([
   'marketing demo: credential set belongs to a different provisioning run',
   'marketing demo: work was added after wipe; use reset to replace it',
   'marketing demo: use reset to change dates or dataset version',
+  'marketing demo: Deleted items must be empty; run the same command again',
 ])
 const references = Object.fromEntries(
   ['inspect', 'provision', 'apply', 'avatarUpload', 'adoptAvatar'].map((name) => [
@@ -54,6 +55,10 @@ const references = Object.fromEntries(
     makeFunctionReference(`internal/marketingDemo:${name}`),
   ]),
 )
+// Empties the demo organization's Deleted items, one bounded batch per call.
+const purgeTrash = makeFunctionReference('deletedItems:purgeOrg')
+// Calls of purgeTrash before the CLI gives up; each deletes up to 256 rows.
+const TRASH_BATCHES = 400
 
 class DemoCliError extends Error {}
 
@@ -484,6 +489,9 @@ function printPlan(options, target, log) {
   log(
     'Reset runs two steps, wipe then seed. The demo is empty between them; if the seed step fails, re-run the same reset.',
   )
+  log(
+    "Reset and wipe first delete everything in the demo organization's Deleted items for good, which the wipe requires.",
+  )
   log('No network requests, credentials, or data changes were made.')
 }
 
@@ -607,6 +615,20 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
     remote(`demo work ${mode}`, () =>
       client.mutation(references.apply, { ...guard, anchor: options.anchor, mode }),
     )
+  // The wipe refuses while Deleted items hold anything, so empty them first.
+  if (options.command === 'wipe' || options.command === 'reset') {
+    let done = false
+    for (let batch = 0; batch < TRASH_BATCHES && !done; batch++) {
+      const result = await remote('Deleted items purge', () =>
+        client.mutation(purgeTrash, { org_id: state.org_id }),
+      )
+      done = result?.done === true
+    }
+    if (!done)
+      throw new DemoCliError(
+        'Deleted items in the demo organization are not empty yet. Re-run the same command to continue.',
+      )
+  }
   if (options.command === 'reset') {
     // Two transactions, wipe then seed: as one they come too close to
     // Convex's 1 s mutation limit. Repeating the reset is always safe.

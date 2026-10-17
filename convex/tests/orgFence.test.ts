@@ -129,6 +129,7 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
   let otherKeyId: string
   let otherTokenId: string
   let otherConnectionId: string
+  let otherItemId: string
 
   beforeAll(async () => {
     t = newT()
@@ -203,20 +204,63 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         approved_at: NOW,
       })
     })
+    // a ready project item in the other org, with one stored task whose
+    // title a search could find
+    otherItemId = uuid()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('deleted_items', {
+        id: otherItemId,
+        org_id: f.otherOrg.id,
+        kind: 'project',
+        target_id: f.otherProject.id,
+        num: f.otherProject.num,
+        name: f.otherProject.name,
+        key: f.otherProject.key,
+        archived: false,
+        project_id: f.otherProject.id,
+        path: [],
+        projects: [],
+        counts: { tasks: 1, archived_tasks: 0, subtasks: 0, sub_projects: 0 },
+        deleted_at: NOW,
+        deleted_by: f.otherAdmin.id,
+        state: 'ready',
+        purge_after: Date.parse(NOW) + 30 * 86_400_000,
+      })
+      await ctx.db.insert('deleted_tasks', {
+        org_id: f.otherOrg.id,
+        item_id: otherItemId,
+        task_id: uuid(),
+        num: 7,
+        title: 'Elsewhere ledger',
+        project_id: f.otherProject.id,
+        archived: false,
+      })
+    })
   })
   afterEach(() => settleScheduled(t))
 
   /* One row per door: `ref()` yields the foreign-org ref, `call` drives the
    * door as f.admin (its natural caller), `answer` pins the byte sentence the
    * pair must share ('<ref>' where the sentence echoes the probe). A row
-   * without `answer` resolves null on BOTH sides — the silent-no-op doors,
-   * where "foreign behaves like the missing row" means resolving alike. */
+   * without `answer` resolves on BOTH sides to `value` (null unless given) —
+   * the silent-no-op doors and the per-item answers, where "foreign behaves
+   * like the missing row" means resolving alike. */
   type Door = {
     name: string
     ref: () => string
     call: (ref: string) => Promise<unknown>
     answer?: { code: RefusalCode; message: string }
+    value?: unknown
   }
+
+  /* A resolved value with the probed ref written as '<ref>', for the doors
+   * that answer per id. */
+  const scrub = async (value: Promise<unknown>, ref: string): Promise<unknown> =>
+    JSON.parse(
+      JSON.stringify(await value)
+        .split(ref)
+        .join('<ref>'),
+    )
 
   const DOORS: Door[] = [
     {
@@ -622,17 +666,59 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         answer: { code: 'not_found', message: 'credential not found' },
       }),
     ),
+    // Deleted items: myItem answers a foreign item like an unknown one, and
+    // the list and the search read only the caller's own seats
+    {
+      name: 'deletedItems.list (foreign deleter)',
+      ref: () => f.otherAdmin.id,
+      call: (ref) => as(t, f.admin).query(api.deletedItems.list, { deleted_by: ref }),
+      value: { items: [], capped: false },
+    },
+    {
+      name: 'deletedItems.matches (a foreign task title)',
+      ref: () => 'Elsewhere ledger',
+      call: (ref) => as(t, f.admin).query(api.deletedItems.matches, { text: ref }),
+      value: [],
+    },
+    {
+      name: 'deletedItems.restore',
+      ref: () => otherItemId,
+      call: (ref) =>
+        scrub(
+          as(t, f.admin).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [ref] }),
+          ref,
+        ),
+      value: { restored: [], refused: [{ id: '<ref>', reason: 'not_found' }], deferred: [] },
+    },
+    {
+      name: 'deletedItems.purge',
+      ref: () => otherItemId,
+      call: (ref) =>
+        scrub(
+          as(t, f.admin).mutation(api.deletedItems.purge, { org_id: f.org.id, ids: [ref] }),
+          ref,
+        ),
+      value: { purged: [], refused: [{ id: '<ref>', reason: 'not_found' }] },
+    },
+    {
+      name: 'projects.removalSummary',
+      ref: () => f.otherProject.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.projects.removalSummary, { org_id: f.org.id, id: ref }),
+      answer: { code: 'not_found', message: 'project not found' },
+    },
   ]
 
   for (const door of DOORS) {
-    it(`${door.name}: foreign == unknown${door.answer === undefined ? ' (silent no-op)' : ''}`, async () => {
+    const silent = door.answer === undefined && door.value === undefined
+    it(`${door.name}: foreign == unknown${silent ? ' (silent no-op)' : ''}`, async () => {
       const foreignRef = door.ref()
       const strangerRef = uuid()
       const foreign = await capture(door.call(foreignRef), foreignRef)
       const unknown = await capture(door.call(strangerRef), strangerRef)
       expect(foreign).toEqual(unknown) // the no-oracle proof
       if (door.answer === undefined) {
-        expect(foreign).toEqual({ resolved: true, value: null })
+        expect(foreign).toEqual({ resolved: true, value: door.value ?? null })
       } else {
         expect(foreign).toEqual({ resolved: false, ...door.answer })
       }

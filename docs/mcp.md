@@ -96,6 +96,13 @@ number, so restart any paging with `offset` after this change. With
 [Task results](#task-results)). A client holding the older catalogue does
 not see `cursor` until it refreshes its tool list.
 
+Deleted items changed the `delete_task` description to "Move a task to
+Deleted items, where a person can restore it in the app." The tool takes the
+same arguments and answers the same way, so a client holding the older
+catalogue keeps working. Its model reads the old description, which does not
+say that a person can restore the task, until the client refreshes its tool
+list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -248,6 +255,12 @@ the deliberate exception — adding one writes no activity row, matching the
 app, where the comment itself is the feed entry on the discussion spine.
 So is `update_user`: capacity is a setting on a person, not an event in a
 project's history, and the app writes no feed row for it either.
+
+The feed never names the credential. `delete_task` also records it in
+Deleted items, with a name longer than 80 characters cut to its first 80
+followed by `…`. Everyone who sees the deleted task there sees an agent key's
+name, while a personal token's or connected app's name shows only to
+organization admins and to the person who deleted.
 
 ## Request limits and billing
 
@@ -468,16 +481,19 @@ and its [draft specification](https://github.com/modelcontextprotocol/experiment
 Client support is required. Connecting a tool-only MCP client does not make it
 receive events or start work automatically.
 
-Available events are `task.created`, `task.updated`, `task.deleted` and
-`comment.created`. `task.updated` covers stored task-field changes made through
+Available events are `task.created`, `task.updated`, `task.deleted`,
+`task.restored` and `comment.created`. `task.deleted` means the task moved to
+Deleted items, and `task.restored` that a person restored it there.
+`task.updated` covers stored task-field changes made through
 the app, REST and MCP model paths, subtree archiving, restoration, automatic
 archiving and profile-removal cleanup. No-op updates do not emit events. A
 group's dates are calculated from its subtasks, so a subtask date change emits
 no event for the group. Comment edits/deletes, labels, links, attachments, project
 changes and seed/import writes do not have event types in this version.
-Project and organization deletion do not deliver events for their removed tasks.
-Deleting a project can still emit `task.updated` when it detaches a child task
-in a surviving project.
+Deleting or restoring a project, deleting an organization and deleting work
+for good from Deleted items deliver no events for their tasks. Deleting a
+project can still emit `task.updated` when it detaches a child task in a
+surviving project.
 
 Optional `arguments.task_id` and `arguments.project_id` filters take UUIDs,
 not QN refs or project keys. A project filter must name a task-containing
@@ -602,8 +618,9 @@ Each delivery contains one event:
 `actor_id` is null for maintenance and profile-removal cleanup. Payloads carry
 identifiers and changed field names, not task titles, descriptions or comment
 bodies. Use the existing read tools to retrieve current content. Creation,
-deletion and comment events use an empty `changed_fields` list. A deleted task
-cannot be fetched afterward. `changed_fields` contains stored task-column names,
+deletion, restore and comment events use an empty `changed_fields` list. A
+deleted task cannot be fetched while it is in Deleted items. After
+`task.restored` it can, with the same uuid and key. `changed_fields` contains stored task-column names,
 including server-maintained fields such as `remaining_set_at`. These names do
 not form an API write payload. Names can include `created_by`, `done_at`,
 `review_at`, `start_week`, `end_week` and `parent_id`. For example, the event
@@ -773,7 +790,7 @@ answers `internal error` there instead, and outside a tool call it is an HTTP
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; a task holds at most 400 comments; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key`, plus `ignored_arguments` when you sent arguments the tool does not know |
 | `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, and `description` and `archive_reason` at 20,000. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `ignored_arguments` names arguments the tool does not know |
-| `delete_task` | Delete a task (attachment bytes are reaped) |
+| `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks stay as top-level tasks and its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
@@ -1313,7 +1330,8 @@ back the items still stored, with their messages read. A restore that comes
 before the marking leaves the messages as they were. Other followers of a
 restored task also receive an unread `Restored` message, which replaces the
 item's read messages as any new message does. Deleting a task or a project
-deletes the messages about its tasks. `messages` run oldest first, `kind` is
+deletes the messages about its tasks, and restoring it from Deleted items does
+not bring them back. `messages` run oldest first, `kind` is
 `mention`, `comment` or `change`, and `detail` is the line the app shows.
 `latest_at` is the newest message's time, or the end of a snooze when that
 is later. Snoozed items are left out unless `include_snoozed` is `true`. An

@@ -270,6 +270,14 @@ async function* filesByTask(ctx: QueryCtx, orgId: string): AsyncGenerator<Counte
  * row carries. A row stored before rows carried their project takes its
  * task's, and each task is read at most once.
  *
+ * Files in Deleted items are not billed. A task item's rows leave
+ * issue_attachments with its move, in the delete's transaction or in the
+ * steps just after it, and count until then. A project item's project rows
+ * leave projects first, so the rows of its tasks still moving count
+ * nowhere. A restore writes the rows back with the project of their task
+ * (model/deletedItems.ts writeRowBack) before it reveals the task, and
+ * they count from then on where that project is live.
+ *
  * A row stored before rows carried their organization is in no
  * organization's range. While the deployment holds few such rows, they are
  * read from their own range and count when their task belongs to this

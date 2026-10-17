@@ -4,6 +4,7 @@ import { components } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
+import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { demoMonday, provisionPublicDemo } from '../model/demoSeed'
 import schema from '../schema'
 import { expectRefusal, newT, type T, uuid } from './helpers.setup'
@@ -22,8 +23,8 @@ const recover = makeFunctionReference<'mutation', Record<string, never>, null>(
   'internal/demoCleanup:recover',
 )
 
-function testBackend() {
-  const t = newT()
+function testBackend(options: Parameters<typeof newT>[0] = {}) {
+  const t = newT(options)
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   return t
 }
@@ -83,12 +84,19 @@ async function rows(t: T, orgId: string) {
   }))
 }
 
-async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>) {
+/** Deletes `receipt`'s demo batch by batch, as its scheduled purges would,
+ * and returns the phase each batch started in. */
+async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>): Promise<string[]> {
   await t.run((ctx) => ctx.db.patch(receipt._id, { status: 'deleting' }))
-  let batches = 0
-  while (await t.run((ctx) => ctx.db.get(receipt._id))) {
-    if (++batches > 80)
+  const phases: string[] = []
+  for (
+    let current = await t.run((ctx) => ctx.db.get(receipt._id));
+    current !== null;
+    current = await t.run((ctx) => ctx.db.get(receipt._id))
+  ) {
+    if (phases.length >= 80)
       throw new Error('demo deletion did not finish within its bounded batch target')
+    phases.push(current.cleanup_phase ?? 'sessions')
     await t.mutation(purge, { demo_id: receipt.id })
     const progress = await t.run((ctx) => ctx.db.get(receipt._id))
     if (progress?.cleanup_phase === 'uploads') {
@@ -101,7 +109,7 @@ async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>) {
       )
     }
   }
-  return batches
+  return phases
 }
 
 // New tables require a deliberate ownership decision. Disabled capabilities
@@ -140,6 +148,11 @@ const APP_OWNED: TableNames[] = [
   'account_appearance',
   'custom_backgrounds',
   'background_uploads',
+  'deleted_items',
+  'deleted_item_jobs',
+  'deleted_item_parents',
+  'deleted_rows',
+  'deleted_tasks',
 ]
 const APP_SHARED = [
   'webhook_workers', // shared background reservations contain no tenant data
@@ -211,7 +224,9 @@ beforeEach(() => {
   vi.stubEnv('APP_MODE', 'demo')
   vi.stubEnv('SITE_URL', 'https://demo.qivo.io')
 })
+const DEFAULT_TRASH_BUDGET = { ...TRASH_BUDGET }
 afterEach(() => {
+  Object.assign(TRASH_BUDGET, DEFAULT_TRASH_BUDGET)
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.unstubAllEnvs()
@@ -522,8 +537,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
       })
       return { attachment, avatar, background, preview, shared }
     })
-    const batches = await deleteDemo(t, a)
-    expect(batches).toBeGreaterThan(1)
+    expect((await deleteDemo(t, a)).length).toBeGreaterThan(1)
     await t.mutation(purge, { demo_id: a.id }) // lost completion acknowledgement is safe
     expect(await rows(t, b.org_id!)).toEqual(otherBefore)
     expect(await ownedSnapshot(t)).toEqual(allOtherRows)
@@ -568,6 +582,114 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(remainder.tables.account_appearance).toBe(1)
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
   }, 30_000)
+
+  it('deletes Deleted items still moving, with their leftover rows and bytes, before the tasks', async () => {
+    const t = testBackend()
+    const b = await makeDemo(t)
+    const others = await ownedSnapshot(t)
+    const a = await makeDemo(t)
+    const bytes = await t.run(async (ctx) => {
+      const admin = (await ctx.db
+        .query('profiles')
+        .withIndex('by_auth', (q) => q.eq('auth_user_id', a.auth_user_id))
+        .first())!
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', a.org_id!))
+        .collect()
+      const sub = projects.find((p) => p.type === 'project')!
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_project', (q) => q.eq('project_id', sub.id))
+        .collect()
+      const root = tasks.find((task) => task.parent_id === undefined)!
+      const file = await ctx.storage.store(new Blob(['trashed attachment']) as never)
+      await ctx.db.insert('issue_attachments', {
+        org_id: a.org_id!,
+        id: uuid(),
+        issue_id: root.id,
+        name: 'trashed.txt',
+        size_bytes: 18,
+        storage_id: file,
+        inline: false,
+        created_at: new Date(NOW).toISOString(),
+      })
+      const now = new Date(NOW).toISOString()
+      // both stop after one row: the task's rows and the project's tasks
+      // are still in the live tables, and each job waits for its next step
+      Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+      await moveTasksToTrash(ctx, { actor: admin, root, subtasks: [], now })
+      const meta = projects.find((p) => p.type === 'meta' && p.id !== sub.parent_id)!
+      await moveProjectToTrash(ctx, { actor: admin, project: meta, now })
+      return file
+    })
+    const inFlight = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_org_deleted', (q) => q.eq('org_id', a.org_id!))
+        .collect(),
+    )
+    expect(inFlight.map((item) => item.state)).toEqual(['moving', 'moving'])
+    expect(await t.run((ctx) => ctx.db.query('deleted_item_jobs').collect())).toHaveLength(2)
+
+    await deleteDemo(t, a)
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await ownedSnapshot(t)).toEqual(others)
+    expect(await t.run((ctx) => ctx.db.system.get(bytes))).toBeNull()
+    expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  }, 60_000)
+
+  it('deletes stored rows of about 900 KB in several batches within the real limits', async () => {
+    const t = testBackend({ transactionLimits: true })
+    const a = await makeDemo(t)
+    const { admin, root } = await t.run(async (ctx) => {
+      const admin = (await ctx.db
+        .query('profiles')
+        .withIndex('by_auth', (q) => q.eq('auth_user_id', a.auth_user_id))
+        .first())!
+      const root = (await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', a.org_id!))
+        .filter((q) => q.eq(q.field('parent_id'), undefined))
+        .first())!
+      return { admin, root }
+    })
+    // 24 comments of about 900 KB, over 20 MiB together: a batch of 64
+    // rows would read them all
+    const body = 'Field note. '.repeat(75_000)
+    for (let i = 0; i < 24; i++)
+      await t.run(async (ctx) => {
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: root.id,
+          body,
+          created_at: new Date(NOW).toISOString(),
+        })
+      })
+    await t.run((ctx) =>
+      moveTasksToTrash(ctx, {
+        actor: admin,
+        root,
+        subtasks: [],
+        now: new Date(NOW).toISOString(),
+      }),
+    )
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const item = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', root.id))
+        .unique(),
+    )
+    expect(item).toMatchObject({ state: 'ready' })
+    expect(item?.dropped_rows).toBeUndefined()
+
+    const phases = await deleteDemo(t, a)
+    // the trash phase took several batches, each within 16 MiB
+    expect(phases.filter((phase) => phase === 'trash').length).toBeGreaterThan(3)
+    for (const table of ['deleted_items', 'deleted_rows', 'deleted_tasks', 'comments'] as const)
+      expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
+  }, 120_000)
 
   it('keeps the receipt during an in-flight upload and resumes after its lease', async () => {
     const t = testBackend()

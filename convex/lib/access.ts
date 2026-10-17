@@ -24,7 +24,7 @@ export function cappedLevel(role: OrgRole, level: AccessLevel | null): AccessLev
 }
 
 // Enumerate staff roles positively so new roles fail closed.
-export function isOrgStaff(me: Doc<'profiles'>): boolean {
+export function isOrgStaff(me: Pick<Doc<'profiles'>, 'org_role'>): boolean {
   return me.org_role === 'admin' || me.org_role === 'user'
 }
 
@@ -50,12 +50,16 @@ export async function rootMetaOf(
   return current
 }
 
+/* The project fields that decide levels: the hierarchy and the leads. */
+type LevelProject = Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>
+
 /* Access lives on a top-level meta and its direct sub-projects, where `root`
  * is the project itself or the top-level project above it. A row outside
  * that tree, such as a top-level project that is not a meta or a sub-project
  * of a sub-project, carries no access for anyone, so the per-project
- * predicates and projectLevelsForOrg hide it alike. */
-function inMetaTree(project: Doc<'projects'>, root: Doc<'projects'>): boolean {
+ * predicates and levelsFrom (behind projectLevelsForOrg and the levels of a
+ * project item in Deleted items) hide it alike. */
+function inMetaTree(project: LevelProject, root: LevelProject): boolean {
   return (
     root.parent_id === undefined &&
     root.type === 'meta' &&
@@ -115,16 +119,23 @@ async function leadsTeam(
   return tm?.is_leader ?? false
 }
 
+/** Whether a profile's role lets it lead a project. Guests may lead a
+ * project they were explicitly invited to; viewers and unknown future roles
+ * cannot. Creating a new top-level project follows the organization's
+ * project_creators setting (lib/projectCreators.ts), and team administration
+ * still requires organization staff. */
+export const canLeadProjects = (me: Pick<Doc<'profiles'>, 'org_role'>): boolean =>
+  me.org_role === 'admin' || me.org_role === 'user' || me.org_role === 'guest'
+
 /* A named lead controls its project. A parent lead has Edit on children
  * with a different lead; legacy children without a lead use their parent's.
  * Team leadership never confers project authority. */
-function isProjectLead(me: Doc<'profiles'>, project: Doc<'projects'>, root: Doc<'projects'>) {
-  // Guests may lead a project they were explicitly invited to; viewers and
-  // unknown future roles cannot. Creating a new top-level project follows the
-  // organization's project_creators setting (lib/projectCreators.ts), and
-  // team administration still requires organization staff.
-  const canLead = me.org_role === 'admin' || me.org_role === 'user' || me.org_role === 'guest'
-  return canLead && (project.lead_id ?? root.lead_id) === me.id
+function isProjectLead(
+  me: Doc<'profiles'>,
+  project: Pick<LevelProject, 'lead_id'>,
+  root: Pick<LevelProject, 'lead_id'>,
+) {
+  return canLeadProjects(me) && (project.lead_id ?? root.lead_id) === me.id
 }
 
 async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'projects'>) {
@@ -134,9 +145,11 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
   )
 }
 
-/* includeNavigation: whether a parent visible only for navigation to one of
- * its sub-projects counts (it then answers 'viewer'). */
-async function projectLevel(
+/* The effective level of `me` on a live project, the one rule behind
+ * canSeeProject and hasProjectLevel. includeNavigation: whether a parent
+ * visible only for navigation to one of its sub-projects counts (it then
+ * answers 'viewer'). */
+export async function projectLevel(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   project: Doc<'projects'>,
@@ -213,19 +226,20 @@ export async function hasProjectLevel(
   return levelRank(await projectLevel(ctx, me, project)) >= levelRank(min)
 }
 
+/** The seat half of profileCanBeAssigned: an active profile whose role can
+ * hold work. Positively enumerate eligible org roles so new roles fail
+ * closed. */
+export const canHoldWork = (profile: Pick<Doc<'profiles'>, 'active' | 'org_role'>): boolean =>
+  profile.active && (isOrgStaff(profile) || profile.org_role === 'guest')
+
 /* Assignment is new work: the recipient must be active and hold effective
- * Edit access, including inherited individual/team grants and leadership.
- * Positively enumerate eligible org roles so new roles fail closed. */
+ * Edit access, including inherited individual/team grants and leadership. */
 export async function profileCanBeAssigned(
   ctx: QueryCtx,
   profile: Doc<'profiles'>,
   project: Doc<'projects'>,
 ): Promise<boolean> {
-  return (
-    profile.active &&
-    (isOrgStaff(profile) || profile.org_role === 'guest') &&
-    (await hasProjectLevel(ctx, profile, project.id, 'user'))
-  )
+  return canHoldWork(profile) && (await hasProjectLevel(ctx, profile, project.id, 'user'))
 }
 
 /* Only a person with an org staff role can lead a team. The kind is named
@@ -281,7 +295,7 @@ export const canManageProjectUsers = canManageOwnProjectAccess
 export const canManageProjectTeams = canManageProjectUsers
 
 export type OrgProjectLevels = {
-  levelOf: (project: Doc<'projects'>) => AccessLevel | null
+  levelOf: (project: Pick<Doc<'projects'>, 'id' | 'org_id'>) => AccessLevel | null
   /* true when levelOf answers 'viewer' only because the person can access
    * one of the project's sub-projects */
   navigationOnly: (projectId: string) => boolean
@@ -302,12 +316,11 @@ export async function projectLevelsForOrg(
       .query('projects')
       .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
       .collect())
-  const byUuid = new Map(projects.map((p) => [p.id, p]))
   const grants = await ctx.db
     .query('project_access')
     .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
     .collect()
-  const levels = new Map<string, AccessLevel>(grants.map((g) => [g.project_id, g.level]))
+  const shares: Doc<'project_team_access'>[] = []
   if (receivesTeamAccess(me)) {
     const memberships = ctx.db
       .query('team_members')
@@ -318,17 +331,33 @@ export async function projectLevelsForOrg(
         .withIndex('by_uuid', (q) => q.eq('id', membership.team_id))
         .unique()
       if (team === null || team.org_id !== me.org_id) continue
-      const shares = ctx.db
+      const teamShares = ctx.db
         .query('project_team_access')
         .withIndex('by_team', (q) => q.eq('team_id', team.id))
-      for await (const share of shares) {
-        levels.set(
-          share.project_id,
-          higherLevel(levels.get(share.project_id) ?? null, share.level) ?? share.level,
-        )
-      }
+      for await (const share of teamShares) shares.push(share)
     }
   }
+  return levelsFrom(me, projects, grants, shares)
+}
+
+/** The levels `me` holds on `projects`, the pure part of
+ * projectLevelsForOrg. `grants` are `me`'s own grants and `shares` the
+ * shares of the teams `me` belongs to (counted only for roles that receive
+ * team access); each project gets the higher of the two. A project item in
+ * Deleted items is evaluated over its stored rows the same way
+ * (model/deletedItems.ts). */
+export function levelsFrom(
+  me: Doc<'profiles'>,
+  projects: readonly LevelProject[],
+  grants: Iterable<Pick<Doc<'project_access'>, 'project_id' | 'level'>>,
+  shares: Iterable<Pick<Doc<'project_team_access'>, 'project_id' | 'level'>>,
+): OrgProjectLevels {
+  const byUuid = new Map(projects.map((p) => [p.id, p]))
+  const levels = new Map<string, AccessLevel>()
+  const add = (g: { project_id: string; level: AccessLevel }) =>
+    levels.set(g.project_id, higherLevel(levels.get(g.project_id) ?? null, g.level) ?? g.level)
+  for (const grant of grants) add(grant)
+  if (receivesTeamAccess(me)) for (const share of shares) add(share)
   const effective = new Map<string, AccessLevel | null>()
   for (const project of projects) {
     const root = project.parent_id === undefined ? project : byUuid.get(project.parent_id)
