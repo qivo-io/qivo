@@ -167,6 +167,11 @@ describe('New project for a standard user', () => {
     expect(checkbox.closest('div')?.textContent).toContain('Aisha Rahman (you)')
   })
 
+  it('stops the description at the server limit of 500 characters', async () => {
+    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
+    expect(find<HTMLInputElement>('input[aria-label="Description"]').maxLength).toBe(500)
+  })
+
   it('names the creator first beside other shares', async () => {
     await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
     await pickLead('leo')

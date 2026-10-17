@@ -18,6 +18,8 @@
    editor's transient placeholder while a paste is in flight).
    ========================================================================= */
 
+import { TEXT_MAX } from '../../convex/lib/textLimits'
+
 export type MdInline =
   | { t: 'text'; text: string }
   | { t: 'br' }
@@ -290,8 +292,10 @@ const ORDERED = /^(\d{1,3})[.)]\s+/
    input (e.g. one long run of asterisks); past this size the text renders as
    plain paragraphs instead of freezing every viewer of the issue. The editor
    checks it too: the fallback AST must never round-trip through a commit
-   (re-escaping would corrupt the whole text). */
-export const MAX_PARSE = 20_000
+   (re-escaping would corrupt the whole text). The limit equals the server's
+   save cap, so every text saved within it stays editable; only a longer text
+   saved before the cap renders as plain paragraphs, read-only. */
+export const MAX_PARSE = TEXT_MAX
 
 export function parseMd(src: string): MdBlock[] {
   if (src.length > MAX_PARSE) {
