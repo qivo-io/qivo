@@ -3,9 +3,9 @@
  * login and project each item for that seat; restore and purge answer per
  * item behind the same fence; projects.removalSummary feeds the Archive or
  * delete window; issues.archive can keep the subtasks. Fake timers keep
- * steps from running until a test releases them, and LIST.cap,
- * REMOVAL_COUNT.cap and TRASH_BUDGET are lowered where a test needs many
- * rows or an unfinished item. */
+ * steps from running until a test releases them, and LIST, REMOVAL_COUNT
+ * and TRASH_BUDGET are lowered where a test needs many rows or an
+ * unfinished item. */
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
@@ -599,6 +599,75 @@ describe('the list (design 6.2)', () => {
     expect((await list(t, f.viewer, f.guest.id)).items).toEqual([])
   })
 
+  it('reads the projects a lead led newest first, one item however many of its projects they led', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    LIST.cap = 2
+    const lena = await person(t, f.org.id, 'Lena')
+    // an admin deletes them, so only Lena's stored leads find them for her
+    const deleteTree = async (name: string, subs: string[] = []) => {
+      const { top } = await tree(
+        t,
+        f,
+        name,
+        lena,
+        subs.map((sub) => ({ name: sub, lead: lena })),
+      )
+      later()
+      await deleteProject(t, f.admin, top.id)
+      return (await itemFor(t, top.id)).id
+    }
+    const old = await deleteTree('Pilot')
+    // three stored rows name Lena, all of one item
+    const trial = await deleteTree('Field trial', ['Site', 'Lab'])
+    expect(await list(t, lena)).toEqual({
+      items: [trial, old].map((id) => expect.objectContaining({ id })),
+      capped: false,
+    })
+    const newer = [await deleteTree('Survey'), await deleteTree('Rollout')].reverse()
+    expect(await list(t, lena)).toEqual({
+      items: newer.map((id) => expect.objectContaining({ id })),
+      capped: true,
+    })
+    // the range also stops once it has read LIST.bytes, and says so
+    LIST.bytes = 1
+    expect(await list(t, lena)).toEqual({
+      items: [expect.objectContaining({ id: newer[0] })],
+      capped: true,
+    })
+  })
+
+  it('reads the subtasks in a led project newest first, one item however many of them it holds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    LIST.cap = 1
+    const omar = await person(t, f.org.id, 'Omar')
+    const infra = (await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])).subs[0]
+    const deleteWith = async (subtasks: number) => {
+      const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      const subtask_ids: string[] = []
+      for (let i = 0; i < subtasks; i++)
+        subtask_ids.push(
+          (await plantIssue(t, { org_id: f.org.id, project_id: infra.id, parent_id: root.id })).id,
+        )
+      later()
+      await deleteTask(t, f.admin, root.id, { subtask_ids })
+      return (await itemFor(t, root.id)).id
+    }
+    const old = await deleteWith(1)
+    // two subtasks in Infra, both of one item
+    const recent = await deleteWith(2)
+    expect(await list(t, omar)).toEqual({
+      items: [expect.objectContaining({ id: recent })],
+      capped: true,
+    })
+    LIST.cap = 2
+    expect(await list(t, omar)).toEqual({
+      items: [recent, old].map((id) => expect.objectContaining({ id })),
+      capped: false,
+    })
+  })
+
   it('tells a member nothing through capped about deletes a filter cannot show them', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -851,12 +920,13 @@ describe('projects.removalSummary', () => {
         { ...named(f.sub2), archived: true, tasks: 1, archived_tasks: 1, more: false },
       ],
     })
+    // the third task is read past the cap but not counted, so it says more than 2
     REMOVAL_COUNT.cap = 2
     expect(await summary(f.user)).toMatchObject({
       tasks: 2,
       more: true,
       sub_projects: [
-        { tasks: 3, more: true },
+        { tasks: 2, more: true },
         { tasks: 0, more: true },
       ],
     })
@@ -867,6 +937,27 @@ describe('projects.removalSummary', () => {
     for (const who of [nav, f.guest, f.viewer])
       await expectRefusal(summary(who), 'rule', /^requires the project lead$/)
     await expectRefusal(summary(f.user, uuid()), 'not_found', /^project not found$/)
+  })
+
+  it('stops counting before long task descriptions pass the read limit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 1,000 tasks at the 20,000-character description cap pass 16 MiB
+    const description = 'Measured on site. '.repeat(1112).slice(0, 20_000)
+    for (let i = 0; i < 1000; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
+
+    const summary = await as(t, f.user).query(api.projects.removalSummary, {
+      org_id: f.org.id,
+      id: f.meta.id,
+    })
+    expect(summary.more).toBe(true)
+    expect(summary.tasks).toBeGreaterThan(0)
+    expect(summary.tasks).toBeLessThan(1000)
+    expect(summary.sub_projects).toMatchObject([
+      { id: f.sub.id, tasks: summary.tasks, more: true },
+      { id: f.sub2.id, tasks: 0, more: true },
+    ])
   })
 })
 

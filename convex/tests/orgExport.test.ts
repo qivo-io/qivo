@@ -321,15 +321,31 @@ describe('organization export', () => {
     expect(JSON.stringify(exported)).not.toContain(f.admin.auth_user_id)
   })
 
-  it('leaves out Deleted items and the tasks a moving project still has in the live tables', async () => {
+  it('leaves out Deleted items, the tasks a moving project still has in the live tables and links to them', async () => {
     const t = newT()
     const f = await withOrg(t)
     const comment = (issue_id: string) =>
       t.run((ctx) =>
         ctx.db.insert('comments', { id: uuid(), issue_id, body: 'Notes', created_at: NOW }),
       )
+    const link = (source_id: string, target_id: string) =>
+      t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('issue_links', {
+          org_id: f.org.id,
+          id,
+          source_id,
+          target_id,
+          type: 'blocks',
+          pair_key: [source_id, target_id].sort().join(':'),
+          created_at: NOW,
+        })
+        return id
+      })
     const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await comment(kept.id)
+    const blocked = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const liveLink = await link(kept.id, blocked.id)
     const trashed = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await t.run((ctx) =>
       moveTasksToTrash(ctx, { actor: f.admin, root: trashed, subtasks: [], now: NOW }),
@@ -343,12 +359,17 @@ describe('organization export', () => {
     })
     const stranded = await plantIssue(t, { org_id: f.org.id, project_id: moving.id })
     await comment(stranded.id)
+    // a kept task's link to the stranded task stays out with that task
+    await link(kept.id, stranded.id)
     await t.run((ctx) => ctx.db.delete(moving._id))
 
     const caller = as(t, f.admin)
     const tasks = await readAll(caller, f.org.id, 'issues')
-    expect(tasks.map((row) => row.id)).toEqual([kept.id])
+    expect(tasks.map((row) => row.id)).toEqual([kept.id, blocked.id])
     expect(await readAll(caller, f.org.id, 'comments', kept.id)).toHaveLength(1)
+    expect((await readAll(caller, f.org.id, 'issue_links', kept.id)).map((row) => row.id)).toEqual([
+      liveLink,
+    ])
     await expectRefusal(
       caller.query(page, {
         org_id: f.org.id,

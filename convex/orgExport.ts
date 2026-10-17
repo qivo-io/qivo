@@ -61,9 +61,10 @@ async function readPage(
   scope: string,
   cursor: string | null,
 ): Promise<PaginationResult<Doc<PagedSection>>> {
-  // Endpoint validation reads another document per row. In particular, a
-  // linked task can carry a large description, so these pages need headroom
-  // beyond the pagination byte budget for the source rows themselves.
+  // Endpoint validation reads another document per row, and for a link also
+  // the target's project, once per page. A linked task can carry a large
+  // description, so these pages need headroom beyond the pagination byte
+  // budget for the source rows themselves.
   const pageSize = JOINED_SECTIONS.has(section) ? 10 : PAGE_SIZE
   const opts = {
     numItems: pageSize,
@@ -152,12 +153,15 @@ async function readPage(
 }
 
 /* Model writers enforce these second endpoints too. Recheck them at this
- * boundary so a damaged join cannot disclose another organization's IDs. */
+ * boundary so a damaged join cannot disclose another organization's IDs. A
+ * link's target must also be a task the export includes, one under a live
+ * project (`liveProject`), so no exported link names a skipped task. */
 async function hasOwnedEndpoint(
   ctx: QueryCtx,
   section: OrgExportSection,
   row: OrgExportRow,
   orgId: string,
+  liveProject: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   switch (section) {
     case 'team_members':
@@ -165,8 +169,10 @@ async function hasOwnedEndpoint(
       return (await byId(ctx, 'profiles', row.profile_id as string))?.org_id === orgId
     case 'project_team_access':
       return (await byId(ctx, 'teams', row.team_id as string))?.org_id === orgId
-    case 'issue_links':
-      return (await byId(ctx, 'issues', row.target_id as string))?.org_id === orgId
+    case 'issue_links': {
+      const target = await byId(ctx, 'issues', row.target_id as string)
+      return target?.org_id === orgId && (await liveProject(target.project_id))
+    }
     case 'issue_labels':
       return (await byId(ctx, 'labels', row.label_id as string))?.org_id === orgId
     default:
@@ -246,7 +252,7 @@ export const page = orgQuery({
       const projectId = section === 'issues' && 'project_id' in doc ? doc.project_id : undefined
       if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
-      if (await hasOwnedEndpoint(ctx, section, row, orgId)) rows.push(row)
+      if (await hasOwnedEndpoint(ctx, section, row, orgId, liveProject)) rows.push(row)
     }
     return { rows, continueCursor: result.continueCursor, isDone: result.isDone }
   },
