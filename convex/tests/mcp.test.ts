@@ -758,6 +758,36 @@ describe('body shape and leg selection', () => {
         '{"result":{"content":[{"type":"text","text":"Input validation error: Invalid arguments for tool add_comment: body: Invalid string: has an unpaired surrogate, which UTF-8 cannot encode"}],"isError":true},"jsonrpc":"2.0","id":8}',
       ),
     )
+    // so does a string inside an object argument, which the tool passes on
+    // to its function
+    const callText = async (name: string, args: Record<string, unknown>) => {
+      const res = await post(
+        fx.t,
+        QVT,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'tools/call',
+          params: { name, arguments: args },
+          id: 9,
+        }),
+      )
+      const data = (await bodyOf(res)).replace(/^event: message\ndata: /, '')
+      return (JSON.parse(data) as { result: { content: { text: string }[] } }).result.content[0]
+        .text
+    }
+    const access = { project: 'ZZZ', user_id: uuid(), level: null }
+    expect(
+      await callText('set_project_access', { ...access, on_held_tasks: { reassign_to: '\ud83c' } }),
+    ).toBe(
+      'Input validation error: Invalid arguments for tool set_project_access: on_held_tasks: Invalid string: has an unpaired surrogate, which UTF-8 cannot encode',
+    )
+    // a whole pair is text, and the call reaches the tool
+    expect(
+      await callText('set_project_access', {
+        ...access,
+        on_held_tasks: { reassign_to: '\ud83c\udf21' },
+      }),
+    ).toBe('project "ZZZ" not found (or not visible to you)')
     // 17: app refusal is the BARE sentence (legacy)
     const r17 = await post(
       fx.t,

@@ -986,7 +986,8 @@ const LEGACY_INIT_NO_PARAMS = JSON.stringify(
  * Unknown keys are stripped (zod object() default), except immutable reporter
  * updates are refused explicitly. Null satisfies only the
  * anyOf-nullable properties. Unlike zod, a string with an unpaired surrogate
- * is refused, because Convex cannot pass it on to the tool's function. */
+ * is refused, inside an object argument too, because Convex cannot pass it
+ * on to the tool's function. */
 
 const typeName = (x: unknown): string => {
   if (x === null) return 'null'
@@ -1023,6 +1024,22 @@ const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
  * matches the Surrogate category. */
 const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
 const LONE_SURROGATE = /\p{Surrogate}/u
+
+/* Whether a string anywhere in `x` holds an unpaired surrogate. It walks
+ * with its own stack, so a deeply nested value cannot overflow the call
+ * stack. */
+function hasLoneSurrogate(x: unknown): boolean {
+  const stack = [x]
+  while (stack.length > 0) {
+    const item = stack.pop()
+    if (typeof item === 'string') {
+      if (LONE_SURROGATE.test(item)) return true
+    } else if (typeof item === 'object' && item !== null) {
+      for (const value of Object.values(item)) stack.push(value)
+    }
+  }
+  return false
+}
 
 /* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
 function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
@@ -1092,7 +1109,9 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
       return null
     }
     default:
-      return null
+      // the tool reads an object argument's fields itself, but a string in
+      // it would fail at the function boundary like a top-level one
+      return hasLoneSurrogate(x) ? UNPAIRED_SURROGATE : null
   }
 }
 

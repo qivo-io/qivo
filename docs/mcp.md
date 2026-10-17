@@ -107,8 +107,9 @@ learn the rule until the client refreshes its tool list.
 File uploads added `start_attachment_upload`, `confirm_attachment_upload`
 and `attach_text_file` (see [Attachments](#attachments)). A client holding
 an older catalogue does not see them until it refreshes its tool list. At
-the same time every tool began to refuse a string argument holding an
-unpaired surrogate, such as a lone `\ud83c` escape, with the schema message
+the same time every tool began to refuse a string argument, or a string
+inside an object argument such as `on_held_tasks`, holding an unpaired
+surrogate, such as a lone `\ud83c` escape, with the schema message
 `Invalid string: has an unpaired surrogate, which UTF-8 cannot encode`.
 Such a call answered `internal error` before. A request body that is not
 UTF-8 is now refused with a parse error (see
