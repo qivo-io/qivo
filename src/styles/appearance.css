@@ -483,7 +483,12 @@ html[data-appearance="light"] [data-on] ~ [data-filter-x] {
 }
 /* Light: unchecked checkboxes get a 3:1 rim; focus and invalid keep theirs. */
 html[data-appearance="light"]
-[data-slot="checkbox"]:not([data-state="checked"], :focus-visible, [aria-invalid="true"]) {
+[data-slot="checkbox"]:not(
+  [data-state="checked"],
+  [data-state="indeterminate"],
+  :focus-visible,
+  [aria-invalid="true"]
+) {
   border-color: var(--border-strong);
 }
 /* Light: inline rename fields drop the input's shadow ghost box. */

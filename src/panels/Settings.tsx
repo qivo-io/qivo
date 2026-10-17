@@ -11,6 +11,7 @@ import '../styles/settings-layout.css'
 import '../styles/mobile-settings.css'
 import { AccountPage } from './settings/AccountSettings'
 import { OrgApiAccessPage } from './settings/ApiAccessSettings'
+import { DeletedItemsPage } from './settings/DeletedItems'
 import { DesktopSettingsPage } from './settings/DesktopSettings'
 import { OrgLabelsPage } from './settings/LabelsSettings'
 import { OrgGeneralPage } from './settings/OrganizationSettings'
@@ -133,6 +134,8 @@ function SettingsScreen({
       { id: 'projects', label: 'All projects', icon: 'layers' },
       // Keep the archive discoverable even when empty.
       { id: 'projects-archived', label: 'Archived projects', icon: 'archive' },
+      // every role has one: it lists what each person may see and restore
+      { id: 'projects-deleted', label: 'Deleted items', icon: 'trash' },
     ],
   })
   let content = null
@@ -157,6 +160,7 @@ function SettingsScreen({
       />
     )
   else if (page === 'projects-archived') content = <ArchivedProjectsPage />
+  else if (page === 'projects-deleted') content = <DeletedItemsPage />
   else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
   else if (page === 'org-billing') content = <BillingSettings setPage={setPage} />
   else if (page === 'org-api') content = <OrgApiAccessPage />
