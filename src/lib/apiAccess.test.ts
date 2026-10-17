@@ -4,6 +4,7 @@ import {
   type ApiCredentialRow,
   type ApiUsagePeriod,
   credentialPrefix,
+  expiryNote,
   filterCredentials,
   lastUsedLabel,
   periodLabel,
@@ -101,12 +102,27 @@ describe('API access labels', () => {
     expect(planLine({ ...summary, plan: null, included_calls: null }, paid)).toBeNull()
   })
 
+  it('names the last day a working token works, as its owner sees it', () => {
+    const expiring = (y: number, m: number, d: number) =>
+      row('a', { expires_at: local(y, m, d, 0) })
+    // stored as the start of 3 Dec, so 2 Dec is the last day
+    expect(expiryNote(expiring(2026, 12, 3), NOW)).toBe('expires 2 Dec')
+    expect(expiryNote(expiring(2026, 10, 17), NOW)).toBe('expires tomorrow')
+    expect(expiryNote(expiring(2026, 10, 20), NOW)).toBe('expires in 4 days')
+    expect(expiryNote(row('a'), NOW)).toBeNull()
+    expect(
+      expiryNote(row('a', { state: 'revoked', expires_at: local(2026, 12, 3, 0) }), NOW),
+    ).toBeNull()
+  })
+
   it('tags credentials that do not work and shortens a connected app client id', () => {
     expect(stateTag(row('a'), NOW)).toBeNull()
     expect(stateTag(row('a', { state: 'revoked', revoked_at: local(2026, 10, 6) }), NOW)).toBe(
       'revoked 6 Oct',
     )
-    expect(stateTag(row('a', { state: 'expired', expires_at: local(2026, 9, 9) }), NOW)).toBe(
+    // a token stores the start of the day after its last one; the tag names
+    // the last day it worked, as its owner's list does
+    expect(stateTag(row('a', { state: 'expired', expires_at: local(2026, 9, 10, 0) }), NOW)).toBe(
       'expired 9 Sep',
     )
     expect(stateTag(row('a', { state: 'inactive' }), NOW)).toBe('account inactive')

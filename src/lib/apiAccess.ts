@@ -6,6 +6,7 @@ import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
 import { fmtDateYear } from './dates'
 import { matchesAllWords } from './search'
+import { expiryLabel, lastDay } from './tokenExpiry'
 
 export type ApiAccessList = FunctionReturnType<typeof api.apiAccess.list>
 export type ApiCredentialRow = ApiAccessList['credentials'][number]
@@ -111,8 +112,11 @@ export function stateTag(row: ApiCredentialRow, now: Date): string | null {
   switch (row.state) {
     case 'revoked':
       return row.revoked_at ? `revoked ${day(row.revoked_at)}` : 'revoked'
-    case 'expired':
-      return row.expires_at ? `expired ${day(row.expires_at)}` : 'expired'
+    case 'expired': {
+      // the last day it worked, as its owner's token list names it
+      const last = row.expires_at ? lastDay(row.expires_at) : null
+      return last ? `expired ${fmtDateYear(last, now)}` : 'expired'
+    }
     case 'inactive':
       return 'account inactive'
     case 'deleted':
@@ -122,10 +126,14 @@ export function stateTag(row: ApiCredentialRow, now: Date): string | null {
   }
 }
 
-/** The expiry under a working token's access, "expires 18 Nov". */
+/** The expiry under a working token's access, as its owner's token list
+    shows it: the last day it works ("expires 18 Nov"), or "expires today",
+    "expires tomorrow" or "expires in 6 days" when that is close. A token
+    stores the instant after its last day (lib/tokenExpiry.ts). */
 export function expiryNote(row: ApiCredentialRow, now: Date): string | null {
   if (row.expires_at === null || credentialEnded(row)) return null
-  return `expires ${fmtDateYear(new Date(row.expires_at), now)}`
+  const { text, soon } = expiryLabel(row.expires_at, now)
+  return text ? `expires ${soon ? text.toLowerCase() : text}` : null
 }
 
 /** The rows that pass every filter, in the server's order (calls, then name). */

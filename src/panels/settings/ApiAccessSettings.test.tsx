@@ -98,7 +98,8 @@ function fixtureLists(): Record<string, ApiAccessList> {
         }),
         credential('Sheets export script', {
           access: 'read',
-          expires_at: local(2026, 12, 2),
+          // stored as the start of the day after its last day, 2 Dec
+          expires_at: local(2026, 12, 3, 0),
           calls: 2_980,
         }),
         credential('Cursor, old', {
