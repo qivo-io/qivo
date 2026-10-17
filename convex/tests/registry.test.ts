@@ -11,7 +11,9 @@
  * kinds below cover every one of those modules. A domain module keeps each surface's
  * functions apart, and each entry calls a function of its own, so routes
  * that differ only in a fixed argument (the inbox actions, PUT and DELETE on
- * a task's following, a project's user and team access) each have one. */
+ * a task's following, a project's user and team access) each have one. An
+ * entry that runs an action reaches the mutations that action runs through
+ * it (RUN_BY_ACTIONS), since only an action can store a file. */
 
 import { getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
@@ -68,6 +70,16 @@ function registeredKinds(module: string, exports: Record<string, unknown>): Map<
     if (kind !== null) kinds.set(`${module}:${name}`, kind)
   }
   return kinds
+}
+
+/* Internal functions an entry reaches through the action it runs rather
+ * than directly, keyed by that action. credentialAccess.test.ts walks the
+ * action into them and holds each to the access argument. */
+const RUN_BY_ACTIONS: Record<string, string[]> = {
+  'machine/records:mcpAttachTextFile': [
+    'machine/records:mcpCheckTextFile',
+    'machine/records:mcpAttachStoredText',
+  ],
 }
 
 /* The principal every entry below runs as, and its credential row (only
@@ -195,7 +207,9 @@ describe('the machine action registry', () => {
     // that two entries call fails here, whichever surfaces they belong to
     const reached: string[] = []
     for (const surface of SURFACES) {
-      for (const { calls } of await callsOf(surface)) reached.push(...calls.map((c) => c.name))
+      for (const { calls } of await callsOf(surface)) {
+        reached.push(...calls.flatMap((c) => [c.name, ...(RUN_BY_ACTIONS[c.name] ?? [])]))
+      }
     }
     expect(reached.sort()).toEqual([...KINDS.keys()].sort())
   })

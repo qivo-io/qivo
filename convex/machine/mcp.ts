@@ -976,7 +976,8 @@ const LEGACY_INIT_NO_PARAMS = JSON.stringify(
  * other messages follow zod v4's grammar as closely as hand-rolling allows.
  * Unknown keys are stripped (zod object() default), except immutable reporter
  * updates are refused explicitly. Null satisfies only the
- * anyOf-nullable properties. */
+ * anyOf-nullable properties. Unlike zod, a string with an unpaired surrogate
+ * is refused, because Convex cannot pass it on to the tool's function. */
 
 const typeName = (x: unknown): string => {
   if (x === null) return 'null'
@@ -1008,6 +1009,9 @@ function hasType(p: SchemaProp, x: unknown): boolean {
  * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
+/* The issue for a string holding an unpaired surrogate, which is not text. */
+const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
+
 /* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
 function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
   if (p.anyOf !== undefined) {
@@ -1018,6 +1022,9 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
   switch (p.type) {
     case 'string': {
       if (typeof x !== 'string') return `Invalid input: expected string, received ${typeName(x)}`
+      // a JSON escape such as \ud800 can leave half a surrogate pair, which
+      // Convex cannot pass to a function, so the call would fail later
+      if (!x.isWellFormed()) return UNPAIRED_SURROGATE
       if (p.enum !== undefined && !p.enum.includes(x)) {
         return `Invalid option: expected one of ${p.enum.map((e) => `"${e}"`).join('|')}`
       }
