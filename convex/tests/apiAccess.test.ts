@@ -4,17 +4,21 @@
  * live paid period, beside an earlier paid period, a calendar-month bucket
  * and an old free-access bucket. */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
+import type { EventOwner } from '../lib/taskEvents'
 import { sha256hex } from '../machine/auth'
+import { notifyIssueUpdate } from '../model/messages'
 import {
   activityFor,
   as,
   expectRefusal,
+  flushWebhookEvents,
   newT,
   type OrgFixture,
+  plantIssue,
   plantSeat,
   type T,
   uuid,
@@ -309,18 +313,21 @@ describe('apiAccess.list', () => {
     expect(row('Raycast')).toMatchObject({ person: 'Elin Sand', access: 'read' })
     // the owner deleted it, but its calls in the period still count
     expect(row('ChatGPT')).toMatchObject({ prefix: 'client-chatgpt', access: 'read' })
-    // a deleted token keeps its owner; a departed member's key is "Removed user"
+    // a deleted token keeps its owner; a departed agent's key is "Removed
+    // user", still an agent's
     expect(row('Zapier')).toMatchObject({
       table: 'mcp_tokens',
       id: f.ids.gone,
       prefix: null,
       person: 'user',
+      agent: false,
       access: null,
     })
     expect(row('Night job')).toMatchObject({
       table: 'agent_keys',
       profile_id: f.removedProfile,
       person: 'Removed user',
+      agent: true,
     })
     // unfinished authorizations, connections deleted without calls and other
     // organizations' credentials never show
@@ -548,6 +555,75 @@ describe('apiAccess.revoke', () => {
       status: 401,
       body: '{"error":"this agent key has been revoked"}',
     })
+  })
+
+  it('stops a revoked connection getting new tokens and a revoked token’s webhook events', async () => {
+    // Fake timers keep scheduled webhook delivery from sending a real request.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    onTestFinished(() => {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    })
+    const t = newT()
+    const f = await fixture(t)
+
+    // the connection's refresh, as the OAuth token endpoint claims it
+    const refresh = (hash: string) =>
+      t.mutation(internal.oauthConnections.claimIssuance, {
+        id: f.ids.claude,
+        authUserId: f.admin.auth_user_id ?? '',
+        clientId: 'client-claude',
+        resource: 'https://qivo.test/mcp',
+        scopes: ['qivo:read'],
+        credentialHash: hash,
+        kind: 'refresh_token',
+      })
+    expect(await refresh('refresh-before')).toBe(true)
+
+    // a task.updated subscription owned by Cursor, the user's token
+    const cursor = (await stored(t, f)).cursor
+    if (!cursor) throw new Error('fixture token vanished')
+    const owner: EventOwner = {
+      profile_id: f.user.id,
+      credential_table: 'mcp_tokens',
+      credential_id: cursor.id,
+      credential_row_id: cursor._id,
+    }
+    const subscription = uuid()
+    await t.mutation(internal.webhooks.save, {
+      owner,
+      id: subscription,
+      name: 'task.updated',
+      filters: {},
+      url: 'https://receiver.example/events',
+      encrypted_secret: 'encrypted-test-key',
+    })
+    // a task in the project the user leads, so the token can see its events
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id })
+    const deliveries = () => t.run((ctx) => ctx.db.query('webhook_deliveries').collect())
+    /** Renames the task and answers how many deliveries its event queued. */
+    const rename = async (title: string) => {
+      const before = (await deliveries()).length
+      await t.run(async (ctx) => {
+        const old = await ctx.db.get(issue._id)
+        if (!old) throw new Error('fixture task vanished')
+        await ctx.db.patch(issue._id, { title })
+        const now = await ctx.db.get(issue._id)
+        if (now) await notifyIssueUpdate(ctx, { before: old, after: now, actor: f.admin, now: NOW })
+      })
+      await flushWebhookEvents(t)
+      return (await deliveries()).length - before
+    }
+    expect(await rename('Before the revoke')).toBe(1)
+    const [queued] = await deliveries()
+
+    await revoke(t, f.admin, f.org.id, 'oauth_connections', f.ids.claude)
+    await revoke(t, f.admin, f.org.id, 'mcp_tokens', f.ids.cursor)
+    expect(await refresh('refresh-after')).toBe(false)
+    // the delivery queued before the revoke fails, and new events skip it
+    expect(await t.mutation(internal.webhooks.claim, { id: queued.id })).toBeNull()
+    expect((await deliveries()).find((row) => row.id === queued.id)?.status).toBe('failed')
+    expect(await rename('After the revoke')).toBe(0)
   })
 
   it('answers another organization, an unknown id and an unfinished authorization alike, and refuses members', async () => {

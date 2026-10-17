@@ -321,7 +321,8 @@ export const list = orgQuery({
         prefix: null,
         profile_id: use.profile_id,
         person: profile?.name ?? 'Removed user',
-        agent: profile?.kind === 'agent',
+        // agent keys belong to agents only, so a gone profile's key still says so
+        agent: profile ? profile.kind === 'agent' : ref.table === 'agent_keys',
         access: null,
         expires_at: null,
         last_used_at: null,
