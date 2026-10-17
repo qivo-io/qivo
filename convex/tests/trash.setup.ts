@@ -106,6 +106,20 @@ export const storedIssue = async (t: T, id: string) => {
   return row?.row.table === 'issues' ? row.row.doc : undefined
 }
 export const liveTask = (t: T, id: string) => t.run((ctx) => byId(ctx, 'issues', id))
+/** A whole comment count of `count` for `task`, as posts leave one
+ * (model/commentCounts.ts). */
+export const plantCount = (t: T, task: Doc<'issues'>, count = 1) =>
+  t.run(async (ctx) => {
+    await ctx.db.insert('comment_counts', { issue_id: task.id, count })
+  })
+/** The comment count rows of task `id`. */
+export const countsOf = (t: T, id: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('comment_counts')
+      .withIndex('by_issue', (q) => q.eq('issue_id', id))
+      .collect(),
+  )
 export const blobExists = (t: T, id: Id<'_storage'>) =>
   t.run(async (ctx) => (await ctx.storage.get(id)) !== null)
 export const deleteTask = (t: T, f: OrgFixture, id: string, extra: object = {}) =>
