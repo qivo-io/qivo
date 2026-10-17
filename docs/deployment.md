@@ -54,9 +54,11 @@ Website, docs and app changes all ship the same way.
 4. Open the draft release it links. Its first section names the commit and
    links the changes since what `qivo.io` serves now. Do not change the
    draft's tag or target. To ship something else, run **Prepare release**
-   again. Once the new draft exists, it deletes the older drafts it made.
-   Delete any draft you made yourself and will not publish, because publishing
-   it later deploys its own, older commit.
+   again. Once the new draft exists, it deletes the older drafts it made. The
+   Actions run summary repeats these instructions. The release text leaves
+   them out, because a published release keeps its text. Delete any draft you
+   made yourself and will not publish, because publishing it later deploys its
+   own, older commit.
 5. Publish the draft. **Production release** deploys it in about two minutes.
    Check `https://qivo.io/version.json` for the commit.
 
