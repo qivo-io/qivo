@@ -82,6 +82,7 @@ const RECOVER_SCAN = 512
  * these. */
 export const SWEEP_PAGES = { removals: 128, subscriptions: 64 }
 
+/** The current time as an ISO string, as the tables store it. */
 const isoNow = () => new Date().toISOString()
 
 const orgArg = { org_id: v.string() }
@@ -152,7 +153,7 @@ export async function revokeLiveSubscriptions(
   return revoked
 }
 
-/* Whether the organization's last checkout could still become a
+/** Whether the organization's last checkout could still become a
  * subscription. Polar answers for it; an ended one is cleared, so the
  * mutation that starts a deletion can refuse any checkout saved since. A
  * checkout naming another customer throws, and the caller waits. */
@@ -169,7 +170,7 @@ async function checkoutOpen(
   return false
 }
 
-/* Sets the first phase, which refuses all access from here on, and starts
+/** Sets the first phase, which refuses all access from here on, and starts
  * the steps. */
 async function beginDeletion(ctx: MutationCtx, orgId: string): Promise<void> {
   const removal = await orgRemovalFor(ctx, orgId)
@@ -187,7 +188,7 @@ const sweepArgs = {
 type SweepLeg = ObjectType<typeof sweepArgs>
 const sweepRef = makeFunctionReference<'mutation', SweepLeg, null>('orgRemovals:sweep')
 
-/* One leg of the hourly sweep. Empty arguments start a run, and each leg
+/** One leg of the hourly sweep. Empty arguments start a run, and each leg
  * reads one page and schedules the next, as files.reapOrphans does. The
  * removals phase stops billing-driven periods whose access returned and
  * hands removals whose date has passed to `begin`. The subscriptions phase
@@ -235,6 +236,8 @@ export const sweep = internalMutation({
   },
 })
 
+/** The saved checkout of an organization past its checkout deadline, or
+ * null when the deadline no longer applies. */
 export const noCheckoutCandidate = internalQuery({
   args: orgArg,
   handler: async (ctx, { org_id }) => {
@@ -268,6 +271,8 @@ export const verifyNoCheckout = internalAction({
   },
 })
 
+/** Records the no-checkout removal and begins the deletion at once, after
+ * checking again that the deadline applies and no checkout is pending. */
 export const startNoCheckout = internalMutation({
   args: orgArg,
   handler: async (ctx, { org_id }): Promise<null> => {
@@ -281,6 +286,8 @@ export const startNoCheckout = internalMutation({
   },
 })
 
+/** What `begin` needs about a removal whose date has passed, or null when
+ * none is due. */
 export const beginDue = internalQuery({
   args: orgArg,
   handler: async (ctx, { org_id }): Promise<Due | null> => {
@@ -329,11 +336,14 @@ export const begin = internalAction({
   },
 })
 
+/** Drops a billing-driven removal that has not begun, because Polar shows
+ * a live subscription. A deletion an admin asked for stays, including one
+ * asked for after `begin` read the removal. */
 export const abort = internalMutation({
   args: orgArg,
   handler: async (ctx, { org_id }): Promise<null> => {
     const removal = await orgRemovalFor(ctx, org_id)
-    if (!removal || removal.phase !== undefined) return null
+    if (!removal || removal.phase !== undefined || removal.reason === 'requested') return null
     await ctx.db.delete(removal._id)
     console.warn('Organization deletion stopped because a subscription is live', {
       org_id,
@@ -343,6 +353,8 @@ export const abort = internalMutation({
   },
 })
 
+/** Begins a due deletion after `begin` asked Polar, unless access returned
+ * or a checkout was saved since. */
 export const markDeleting = internalMutation({
   args: orgArg,
   handler: async (ctx, { org_id }): Promise<null> => {
@@ -431,6 +443,8 @@ export const request = orgAction({
   },
 })
 
+/** Records an admin's deletion request and its audit row once `request`
+ * has ended any paid subscription. */
 export const recordRequest = internalMutation({
   args: { org_id: v.string(), auth_user_id: v.string() },
   handler: async (ctx, { org_id, auth_user_id }): Promise<{ delete_after: string }> => {
@@ -546,6 +560,8 @@ export const recordCancellation = internalMutation({
 
 /* ----------------------------------------------------------------- notices */
 
+/** What one admin's deletion email needs, or null when it should not be
+ * sent: already sent, deletion begun or stopped, or the admin is gone. */
 export const noticeReady = internalQuery({
   args: { key: v.string() },
   handler: async (ctx, { key }): Promise<Delivery | null> => {
@@ -578,6 +594,7 @@ export const noticeReady = internalQuery({
   },
 })
 
+/** Marks a deletion email delivered. */
 export const noticeSent = internalMutation({
   args: { key: v.string() },
   handler: async (ctx, { key }): Promise<null> => {

@@ -36,7 +36,7 @@ const ROWS_PER_READ = 64
 
 type Row = { _id: Id<TableNames> }
 
-/* Deletes the rows `read` returns until the range is empty (true) or the
+/** Deletes the rows `read` returns until the range is empty (true) or the
  * budget is spent (false), running `before` on each row first. */
 const drain = <R extends Row>(
   ctx: MutationCtx,
@@ -54,11 +54,12 @@ const drain = <R extends Row>(
     options.perRead ?? ROWS_PER_READ,
   )
 
+/** Deletes a stored file if it still exists. */
 async function removeFile(ctx: MutationCtx, id: Id<'_storage'> | undefined) {
   if (id !== undefined && (await ctx.db.system.get(id))) await ctx.storage.delete(id)
 }
 
-/* Deletes the parent rows `first` finds, each after `children` reports its
+/** Deletes the parent rows `first` finds, each after `children` reports its
  * own ranges empty. */
 async function parents<R extends Row>(
   ctx: MutationCtx,
@@ -79,12 +80,13 @@ async function parents<R extends Row>(
   return false
 }
 
-/* Runs each range in order and stops at the first one left unfinished. */
+/** Runs each range in order and stops at the first one left unfinished. */
 async function inOrder(steps: (() => Promise<boolean>)[]): Promise<boolean> {
   for (const step of steps) if (!(await step())) return false
   return true
 }
 
+/** Profiles with everything that hangs off them, then their pictures. */
 const profileRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
@@ -184,6 +186,7 @@ const profileRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     (profile) => removeFile(ctx, profile.avatar_storage_id),
   )
 
+/** Tasks with their links, labels, subscriptions, comments, messages and files. */
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
@@ -259,6 +262,7 @@ const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ]),
   )
 
+/** Projects with their milestones and access grants. */
 const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
@@ -294,6 +298,7 @@ const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ]),
   )
 
+/** Teams with their members and project grants. */
 const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
@@ -322,6 +327,7 @@ const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ]),
   )
 
+/** Labels with any task labels left on them. */
 const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
@@ -340,6 +346,7 @@ const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ),
   )
 
+/** The organization's activity history. */
 const activityRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   drain(
     ctx,
@@ -352,6 +359,7 @@ const activityRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     { perRead: LARGE_ROWS_PER_READ },
   )
 
+/** Webhook events, health, deliveries and subscriptions. */
 const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder(
     (
@@ -367,6 +375,7 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     ),
   )
 
+/** Usage, billing events, periods, notices and the subscription row. */
 const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     ...(['billing_usage', 'billing_usage_totals', 'billing_events'] as const).map(
@@ -389,7 +398,7 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     ),
   ])
 
-/* The last step checks that every parent range is empty, then deletes the
+/** The last step checks that every parent range is empty, then deletes the
  * organization and its removal row. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id

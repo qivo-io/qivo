@@ -554,6 +554,9 @@ describe('deleting the organization', () => {
     const held = await removalOf(t, f.org.id)
     expect(held).toMatchObject({ reason: 'requested' })
     expect(held?.phase).toBeUndefined()
+    // a request made after begin read the removal survives its abort too
+    await t.mutation(internal.orgRemovals.abort, { org_id: f.org.id })
+    expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'requested' })
   })
 
   it.each([
@@ -651,9 +654,12 @@ describe('an organization that never completes checkout', () => {
   it('shows no checkout deadline once complimentary access was granted', async () => {
     const { t, f, operator } = await billed()
     const status = () => as(t, f.user).query(api.billing.status, { org_id: f.org.id })
+    const summary = () => as(t, f.admin).query(api.billing.summary, { org_id: f.org.id })
     expect((await status()).checkout_due_at).toBe(at(3))
+    expect((await summary()).checkout_due_at).toBe(at(3))
     await operator.mutation(grant, { org_id: f.org.id, months: 1 })
     expect((await status()).checkout_due_at).toBeNull()
+    expect((await summary()).checkout_due_at).toBeNull()
   })
 
   it('is deleted 3 days after enrollment once Polar confirms nothing is pending', async () => {

@@ -14,7 +14,7 @@ import { badRequest, notFound, require, rule } from '../lib/functions'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
 import { estimateDocumentBytes } from './demoMetrics'
-import { CHECKOUT_DAYS, DAY_MS, syncOrgRemoval } from './orgRetention'
+import { CHECKOUT_DAYS, checkoutDeadline, DAY_MS, syncOrgRemoval } from './orgRetention'
 import { newUuid } from './orgs'
 
 export const GB = 1_000_000_000
@@ -182,6 +182,7 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
       !!sub?.polar_subscription_id &&
       ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(sub.status) &&
       !removal,
+    checkout_due_at: checkoutDeadline(sub),
     last_export_at: org.last_export_at ?? null,
     deletion: removal ? { reason: removal.reason, delete_after: removal.delete_after } : null,
     sync_pending: !!sub?.polar_subscription_id && next !== sub.next_seats,

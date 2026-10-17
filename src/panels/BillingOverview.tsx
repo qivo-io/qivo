@@ -26,6 +26,8 @@ const statusLabels: Record<BillingSummary['status'], string> = {
   paused: 'Paused',
 }
 
+/** The sentence under the status: what the organization can do now and
+ * what happens next. */
 function statusExplanation(billing: BillingSummary): string {
   if (billing.deletion)
     return `Your organization is read-only and will be deleted on ${billingDate(billing.deletion.delete_after)}. ${
@@ -38,14 +40,17 @@ function statusExplanation(billing: BillingSummary): string {
   if (billing.status === 'complimentary')
     return 'Your organization has free access without a payment card.'
   if (billing.cancel_at_period_end && billing.writable)
-    return 'Your subscription ends at the end of the current paid period.'
+    return 'Your subscription ends at the end of the current paid period. The organization then stays read-only for 30 days and is deleted unless someone subscribes.'
   if (billing.status === 'past_due')
     return 'Update your payment method in the customer portal. Polar retries failed payments automatically.'
+  if (!billing.writable && billing.checkout_due_at)
+    return `Your organization is read-only until you subscribe. Without a subscription, it is deleted on ${billingDate(billing.checkout_due_at)}.`
   if (!billing.writable)
     return 'Your organization is read-only until you subscribe or restore payment. Your existing work remains available.'
   return 'Your subscription renews automatically with your current number of billable users.'
 }
 
+/** The organization's subscription, allowances and payment actions. */
 export function BillingOverview({
   billing,
   busy,
@@ -240,7 +245,7 @@ export function BillingOverview({
   )
 }
 
-/* Cancelling ends the subscription at once and starts the read-only period
+/** Cancelling ends the subscription at once and starts the read-only period
  * before deletion, so the dialog says so and offers the export first. */
 function CancelSubscription({
   lastExportAt,

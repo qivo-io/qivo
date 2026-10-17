@@ -11,6 +11,7 @@ import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { forbidden, orgQuery, require } from './lib/functions'
 import { billingSummary, billingUsage } from './model/billing'
+import { checkoutDeadline } from './model/orgRetention'
 
 // Explicit admin-only query keeps amounts/customer state outside the planner.
 export const summary = orgQuery({
@@ -33,8 +34,8 @@ export const usage = orgQuery({
   },
 })
 
-// Members may see why writes are paused and when a read-only organization
-// will be deleted, but never billing terms or IDs.
+/** Why writes are paused and when a read-only organization will be
+ * deleted, for every member. Billing terms and IDs stay admin-only. */
 export const status = orgQuery({
   args: {},
   handler: async (ctx) => {
@@ -46,11 +47,7 @@ export const status = orgQuery({
       status: sub?.status ?? 'pending',
       complimentary_until: sub?.complimentary_until ?? null,
       current_period_end: sub?.current_period_end ?? null,
-      // only while the checkout deadline applies (model/orgRetention.ts)
-      checkout_due_at:
-        sub && !sub.complimentary_until && !sub.polar_subscription_id
-          ? (sub.checkout_due_at ?? null)
-          : null,
+      checkout_due_at: checkoutDeadline(sub),
       deletion: removal ? { reason: removal.reason, delete_after: removal.delete_after } : null,
     }
   },

@@ -87,6 +87,8 @@ export type BillingSummary = {
   portal_available: boolean
   // An admin can end a paid subscription at once from the Billing page.
   cancel_available: boolean
+  // When an organization that never completed checkout is deleted.
+  checkout_due_at: string | null
   last_export_at: string | null
   // Present while the organization is read-only before its deletion.
   deletion: { reason: OrgRemovalReason; delete_after: string } | null

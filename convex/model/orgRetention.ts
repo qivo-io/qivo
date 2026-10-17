@@ -52,20 +52,25 @@ export function serviceEndedAt(
   return null
 }
 
+/** The checkout deadline that applies to an organization, or null. Only an
+ * organization enrolled while billing runs has one, and complimentary access
+ * or a provider subscription ends it for good. */
+export function checkoutDeadline(sub: Doc<'billing_subscriptions'> | null): string | null {
+  if (!billingEnabled() || sub?.status !== 'pending') return null
+  if (sub.complimentary_until || sub.polar_subscription_id) return null
+  return sub.checkout_due_at ?? null
+}
+
 /** Whether an organization has gone CHECKOUT_DAYS without completing
  * checkout. Organizations enrolled before billing started have no
  * checkout_due_at and never qualify. A checkout still being prepared waits;
  * orgRemovals.ts asks Polar about any other checkout before deleting. */
 export function noCheckoutDue(sub: Doc<'billing_subscriptions'> | null, now = Date.now()): boolean {
+  const due = checkoutDeadline(sub)
   return (
-    billingEnabled() &&
-    !!sub &&
-    sub.status === 'pending' &&
-    !!sub.checkout_due_at &&
-    Date.parse(sub.checkout_due_at) <= now &&
-    !sub.complimentary_until &&
-    !sub.polar_subscription_id &&
-    !(sub.checkout_lock_until && Date.parse(sub.checkout_lock_until) > now)
+    !!due &&
+    Date.parse(due) <= now &&
+    !(sub?.checkout_lock_until && Date.parse(sub.checkout_lock_until) > now)
   )
 }
 
@@ -134,8 +139,9 @@ export async function syncOrgRemoval(
   if (endedAt) await scheduleRemoval(ctx, { orgId, reason: 'service_ended', endedAt })
 }
 
-/* One notice per active admin with an address, keyed by the removal so a
- * repeated call cannot send twice. orgRemovals.ts delivers them. */
+/** Queues one notice per active admin with an address, keyed by the
+ * removal so a repeated call cannot send twice. orgRemovals.ts delivers
+ * them. */
 async function queueDeletionNotices(ctx: MutationCtx, removal: Doc<'org_removals'>) {
   const org = await byId(ctx, 'organizations', removal.org_id)
   if (!org) return

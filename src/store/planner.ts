@@ -646,7 +646,7 @@ function isTaskContentWrite(name: string) {
    read stays undefined and the caller lands on its generic fallback. */
 type ErrData = { code?: string; message?: string; reason?: string }
 const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as ErrData) || {} : {})
-/* Refusals that mean the whole organization is read-only. Their sentences
+/** Refusals that mean the whole organization is read-only. Their sentences
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'

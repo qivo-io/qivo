@@ -53,7 +53,7 @@ export function require(cond: unknown, err: ConvexError<Refusal>): asserts cond 
   if (!cond) throw err
 }
 
-/* The signed-in login's active profiles, keyed by org_id. An organization
+/** The signed-in login's active profiles, keyed by org_id. An organization
  * whose deletion has begun is left out and listed in `deleting`, so reads
  * across organizations, such as the snapshot, stop showing it while its
  * profiles are deleted. MutationCtx satisfies this too (writer db/storage
@@ -78,12 +78,13 @@ async function loadMemberships(ctx: QueryCtx) {
   return { authUserId, myProfiles, deleting }
 }
 
+/** The signed-in login and its active profiles outside a deletion. */
 async function loadAuthed(ctx: QueryCtx) {
   const { authUserId, myProfiles } = await loadMemberships(ctx)
   return { authUserId, myProfiles }
 }
 
-/* private.profile_in's successor for people. A member of an organization
+/** private.profile_in's successor for people. A member of an organization
  * whose deletion has begun learns why they are refused. */
 async function loadMember(ctx: QueryCtx, orgId: string) {
   const { authUserId, myProfiles, deleting } = await loadMemberships(ctx)

@@ -8,6 +8,8 @@ import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
 import { useOrgRemovalState } from './OrganizationDeletion'
 
+/** Lets an admin download the organization's data as a ZIP and records
+ * when the browser finished it. */
 export function OrganizationExport({ orgId }: { orgId: string }) {
   const removal = useOrgRemovalState(orgId)
   const [busy, setBusy] = useState(false)
@@ -19,9 +21,10 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
 
   useEffect(() => () => active.current?.abort(), [])
 
-  // The browser started the download. Qivo cannot see the file reach disk,
-  // so the date only decides whether admins get a deletion email. A failure
-  // is shown, because a missing date can send that email needlessly.
+  /** Records the export date once the browser started the download. Qivo
+   * cannot see the file reach disk, so the date only decides whether admins
+   * get a deletion email. A failure is shown, because a missing date can
+   * send that email needlessly. */
   async function recordExport() {
     try {
       await convex.mutation(api.orgRemovals.recordExport, { org_id: orgId })

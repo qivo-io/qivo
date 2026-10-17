@@ -15,6 +15,8 @@ type BillingStatus = {
   deletion: { reason: string; delete_after: string } | null
 }
 
+/** The banner that explains why an organization is read-only and, when it
+ * will be deleted, the date. */
 export function BillingNotice({
   orgId,
   orgName,
@@ -90,7 +92,7 @@ export function BillingNotice({
   )
 }
 
-/* A read-only organization waiting for deletion. Members learn the date;
+/** A read-only organization waiting for deletion. Members learn the date;
  * admins get the export, which still works until then. */
 function DeletionNotice({
   orgName,

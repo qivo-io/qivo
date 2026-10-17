@@ -32,6 +32,7 @@ export function useOrgRemovalState(orgId: string): OrgRemovalState | null {
   return state
 }
 
+/** A refusal's own sentence, or `fallback` for any other failure. */
 const failure = (cause: unknown, fallback: string) => {
   const message = cause instanceof ConvexError ? cause.data?.message : null
   return typeof message === 'string' ? message : fallback
@@ -48,6 +49,8 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   useUpdateBlocker(busy)
   if (!state) return null
 
+  /** Runs one admin action, closing the dialog on success and showing the
+   * refusal otherwise. */
   async function run(work: () => Promise<unknown>, fallback: string) {
     setBusy(true)
     setError('')

@@ -14,6 +14,8 @@ import { P } from '../store/planner'
 import { BillingOverview } from './BillingOverview'
 import { BillingUsage } from './BillingUsage'
 
+/** The organization's Billing page. `setPage` opens another settings page,
+ * such as the export before cancelling. */
 export function BillingSettings({ setPage }: { setPage: (page: string) => void }) {
   if (DEMO_MODE) {
     return (
@@ -44,6 +46,7 @@ export function BillingSettings({ setPage }: { setPage: (page: string) => void }
   return <LiveBillingSettings key={P.org.id} orgId={P.org.id} setPage={setPage} />
 }
 
+/** Billing for one organization outside the demo. */
 function LiveBillingSettings({
   orgId,
   setPage,
@@ -131,9 +134,9 @@ function LiveBillingSettings({
     }
   }
 
-  // Cancelling ends the subscription at once. The summary then reports the
-  // deletion date that the read-only period counts towards. Answers the
-  // refusal for the dialog to show, or null once the subscription ended.
+  /** Cancelling ends the subscription at once. The summary then reports the
+   * deletion date that the read-only period counts towards. Answers the
+   * refusal for the dialog to show, or null once the subscription ended. */
   async function cancelSubscription(): Promise<string | null> {
     if (actionInFlight.current) return 'Another billing action is still running.'
     actionInFlight.current = true
