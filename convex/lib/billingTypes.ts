@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import type { OrgRemovalReason } from './enums'
 
 // Commercial terms are immutable. Changing the default chooses a version for
 // future assignments; it never rewrites a customer's existing agreement.
@@ -84,6 +85,11 @@ export type BillingSummary = {
   cancel_at_period_end: boolean
   checkout_available: boolean
   portal_available: boolean
+  // An admin can end a paid subscription at once from the Billing page.
+  cancel_available: boolean
+  last_export_at: string | null
+  // Present while the organization is read-only before its deletion.
+  deletion: { reason: OrgRemovalReason; delete_after: string } | null
   sync_pending: boolean
   sync_error: string | null
 }

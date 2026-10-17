@@ -245,8 +245,8 @@ export async function sendBillingReminder(input: {
   const expired = Date.parse(input.until) <= Date.now()
   const date = input.until.slice(0, 10)
   const message = expired
-    ? `Your complimentary Qivo access ended on ${date}. Your organization is read-only until an administrator subscribes. Your existing work is preserved.`
-    : `Your complimentary Qivo access ends on ${date}. No card is on file for this free access, and you will not be charged automatically. You can subscribe in Billing when the free period ends.`
+    ? `Your complimentary Qivo access ended on ${date}. Your organization is read-only, and it will be deleted 30 days later unless an administrator subscribes.`
+    : `Your complimentary Qivo access ends on ${date}. No card is on file for this free access, and you will not be charged automatically. You can subscribe in Billing when the free period ends. Without a subscription, the organization becomes read-only and is deleted 30 days later.`
   const letter = {
     to: input.to,
     subject: expired
@@ -322,6 +322,54 @@ ${input.url}`,
     },
   })
   return ok ? 'sent' : ambiguous ? 'uncertain' : 'unsent'
+}
+
+/** Tells one admin that the organization is read-only and will be deleted.
+ * orgRemovals.ts sends it when the read-only period starts and nobody has
+ * exported in the week before. The organization name stays in the body,
+ * folded and capped as in an invitation. A stable notice key deduplicates
+ * provider retries. */
+export async function sendDeletionNotice(input: {
+  to: string
+  org_name: string
+  delete_after: string
+  reason: string
+  url: string
+  notice_key: string
+}): Promise<boolean> {
+  const key = process.env.AGENTMAIL_API_KEY
+  const inbox = process.env.AGENTMAIL_INBOX
+  if (!key || !inbox || process.env.APP_MODE === 'demo') return false
+  const folded = input.org_name.replace(/\s+/g, ' ').trim()
+  const org =
+    [...folded].length > ORG_NAME_MAX ? `${[...folded].slice(0, ORG_NAME_MAX).join('')}…` : folded
+  const lead = (name: string) =>
+    `${name} is read-only and will be deleted on ${input.delete_after.slice(0, 10)}, with all of its projects, tasks, comments and files.`
+  const rest = [
+    'Nobody has exported its data in the last 7 days. Export it in Settings if you want a copy.',
+    input.reason === 'requested'
+      ? 'An organization admin can stop the deletion in Settings before then.'
+      : 'Subscribing in Billing before then keeps the organization.',
+  ].join(' ')
+  const letter: Letter = {
+    to: input.to,
+    subject: 'Export your Qivo data before it is deleted',
+    text: `Hi,
+
+${lead(org)} ${rest}
+
+Open Settings:
+${input.url}`,
+    html: shell(['Hi,', `${lead(`<strong>${esc(org)}</strong>`)} ${esc(rest)}`], {
+      href: input.url,
+      label: 'Export data',
+    }),
+  }
+  return await postLetter(letter, 'deletion', {
+    key,
+    inbox,
+    idempotencyKey: await sha256Hex(input.notice_key),
+  })
 }
 
 // ------------------------------------------------------------------- action

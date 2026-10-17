@@ -4,6 +4,7 @@ import { getBillableUsers } from '../lib/billableUsers'
 import {
   addCalendarMonths,
   billingEnabled,
+  orgRemovalFor,
   subscriptionFor,
   subscriptionWritable,
 } from '../lib/billingAccess'
@@ -13,6 +14,7 @@ import { badRequest, notFound, require, rule } from '../lib/functions'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
 import { estimateDocumentBytes } from './demoMetrics'
+import { CHECKOUT_DAYS, DAY_MS, syncOrgRemoval } from './orgRetention'
 import { newUuid } from './orgs'
 
 export const GB = 1_000_000_000
@@ -56,6 +58,10 @@ export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId
     billed_seats: 0,
     next_seats: Math.max(plan.minimum_seats, count.total),
     cancel_at_period_end: false,
+    // Only organizations enrolled while billing runs get a checkout deadline.
+    ...(billingEnabled()
+      ? { checkout_due_at: new Date(Date.parse(now) + CHECKOUT_DAYS * DAY_MS).toISOString() }
+      : {}),
     created_at: now,
     updated_at: now,
   })
@@ -95,12 +101,16 @@ export async function grantComplimentaryMonths(
     checkout_lock: undefined,
     checkout_lock_until: undefined,
   })
+  // Restored access stops a deletion that billing started.
+  await syncOrgRemoval(ctx, orgId)
   return { until, plan_id: sub.plan_id }
 }
 
 export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<BillingSummary> {
-  require(await byId(ctx, 'organizations', orgId), notFound('organization not found'))
+  const org = await byId(ctx, 'organizations', orgId)
+  require(org, notFound('organization not found'))
   const sub = await subscriptionFor(ctx, orgId)
+  const removal = await orgRemovalFor(ctx, orgId)
   const plan = sub ? await byId(ctx, 'billing_plans', sub.plan_id) : await defaultPlan(ctx)
   const count = await getBillableUsers(ctx, orgId)
   const profiles = await ctx.db
@@ -140,7 +150,7 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
     status: complimentary
       ? 'complimentary'
       : (sub?.status ?? (enabled ? 'pending' : 'unconfigured')),
-    writable: subscriptionWritable(sub),
+    writable: subscriptionWritable(sub) && !removal,
     active_users: profiles.filter((p) => p.active).length,
     inactive_users: excluded.filter((account) => account.reason === 'inactive').length,
     invited_users_with_own_billing: excluded.filter(
@@ -166,6 +176,14 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
       !complimentary &&
       (!sub?.polar_subscription_id || sub.status === 'canceled'),
     portal_available: enabled && configured && !!sub?.polar_customer_id,
+    cancel_available:
+      enabled &&
+      polarConfigured() &&
+      !!sub?.polar_subscription_id &&
+      ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(sub.status) &&
+      !removal,
+    last_export_at: org.last_export_at ?? null,
+    deletion: removal ? { reason: removal.reason, delete_after: removal.delete_after } : null,
     sync_pending: !!sub?.polar_subscription_id && next !== sub.next_seats,
     sync_error: sub?.sync_error ?? null,
   }

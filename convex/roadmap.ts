@@ -8,7 +8,7 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
-import { assertBillingWritable } from './lib/billingAccess'
+import { assertOrgWritable } from './lib/billingAccess'
 import { byId, insertUnique } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
 import { logActivity } from './model/activity'
@@ -73,7 +73,7 @@ async function writer(ctx: Context, projectId: string) {
     throw notFound('project not found')
   if (!(await hasProjectLevel(ctx, me, projectId, 'user')))
     throw forbidden('no write access to this project')
-  await assertBillingWritable(ctx, project.org_id)
+  await assertOrgWritable(ctx, project.org_id)
   return { project, me }
 }
 
@@ -252,7 +252,7 @@ export const change = authedMutation({
           const me = await seatFor(ctx, op.project_id)
           if (!me) throw notFound('project not found')
           const project = await milestoneTarget(ctx, me, op.project_id)
-          await assertBillingWritable(ctx, project.org_id)
+          await assertOrgWritable(ctx, project.org_id)
           const after = {
             id: op.id,
             project_id: project.id,
@@ -273,7 +273,7 @@ export const change = authedMutation({
           const me = await seatFor(ctx, existing?.project_id)
           if (!existing || !me) throw notFound('milestone not found')
           await changeableMilestone(ctx, me, op.id)
-          await assertBillingWritable(ctx, me.org_id)
+          await assertOrgWritable(ctx, me.org_id)
           const before = milestoneValues(existing)
           if (op.kind === 'milestone_remove') {
             await ctx.db.delete(existing._id)

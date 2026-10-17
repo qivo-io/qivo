@@ -245,6 +245,9 @@ calls.
 
 When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
+The same happens while an organization is read-only before its deletion, and
+that refusal names the deletion date. Once deletion begins, every call into
+the organization is refused.
 An organization admin restores editing through **Settings → Organization →
 Billing**, where they can subscribe, open the customer portal and inspect
 usage by account and key or OAuth connection. **API access** shows each

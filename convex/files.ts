@@ -43,7 +43,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
-import { assertBillingWritable } from './lib/billingAccess'
+import { assertOrgWritable } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { isDemoDeployment } from './lib/demo'
 import {
@@ -128,7 +128,7 @@ async function avatarTarget(ctx: AuthedCtx, profileId: string): Promise<Doc<'pro
   if (!mine && !admin) throw forbidden(AVATAR_RIGHT)
   // Personal account settings remain available during billing recovery.
   // Managing another org account's picture is an organization write.
-  if (!mine) await assertBillingWritable(ctx, target.org_id)
+  if (!mine) await assertOrgWritable(ctx, target.org_id)
   return target
 }
 

@@ -42,6 +42,8 @@ import {
   vIssueStatus,
   vLinkType,
   vMessageKind,
+  vOrgRemovalPhase,
+  vOrgRemovalReason,
   vOrgRole,
   vProfileKind,
   vProjectCreators,
@@ -294,6 +296,10 @@ export default defineSchema({
     checkout_expires_at: v.optional(v.string()),
     checkout_lock: v.optional(v.string()),
     checkout_lock_until: v.optional(v.string()),
+    // When an organization that never completes checkout is deleted
+    // (orgRemovals.ts). Set only on enrollment while billing is enabled, so
+    // organizations enrolled before billing started are never deleted by it.
+    checkout_due_at: v.optional(v.string()),
     sync_lock: v.optional(v.string()),
     sync_lock_until: v.optional(v.string()),
     sync_error: v.optional(v.string()),
@@ -381,7 +387,9 @@ export default defineSchema({
     kind: v.string(),
     sent_at: v.optional(v.string()),
     created_at: v.string(),
-  }).index('by_key', ['key']),
+  })
+    .index('by_key', ['key'])
+    .index('by_org', ['org_id']),
 
   machine_rate_limits: defineTable({
     key: v.string(),
@@ -419,9 +427,32 @@ export default defineSchema({
         renewal_date: v.union(v.string(), v.null()),
       }),
     ),
+    // The last time an admin's browser finished an export. Qivo cannot see
+    // the file reach disk, so this only decides whether to remind admins.
+    last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
     .index('by_slug', ['slug']),
+
+  // An organization that is read-only before its deletion, or being deleted
+  // (orgRemovals.ts). Every org-scoped call reads this row through by_org.
+  // It changes rarely, unlike the organization row's activity_count, so the
+  // read does not re-run queries on every write. `phase` is set once deletion
+  // begins; until then admins can still export and the deletion can stop.
+  org_removals: defineTable({
+    org_id: v.string(),
+    reason: vOrgRemovalReason,
+    ended_at: v.string(), // when the read-only period began
+    delete_after: v.string(), // when deletion may begin
+    requested_by: v.optional(v.string()), // the admin profile, for 'requested'
+    phase: v.optional(vOrgRemovalPhase),
+    progress_at: v.optional(v.string()), // the last committed step
+    scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+    created_at: v.string(),
+  })
+    .index('by_org', ['org_id'])
+    .index('by_delete_after', ['delete_after'])
+    .index('by_progress', ['progress_at']),
 
   teams: defineTable({
     id: v.string(),

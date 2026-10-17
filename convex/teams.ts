@@ -29,7 +29,7 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { assertBillingWritable } from './lib/billingAccess'
+import { assertOrgWritable } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { accessRemovalMutation, adminMutation, notFound, orgMutation, rule } from './lib/functions'
 import { deleteTeamDeep } from './model/cascade'
@@ -139,7 +139,7 @@ export const removeMember = accessRemovalMutation({
   args: { team_id: v.string(), profile_id: v.string(), on_held_tasks: v.optional(vHeldTasks) },
   handler: async (ctx, { team_id, profile_id, on_held_tasks }) => {
     const held = on_held_tasks ?? 'leave'
-    if (held !== 'leave') await assertBillingWritable(ctx, ctx.me.org_id)
+    if (held !== 'leave') await assertOrgWritable(ctx, ctx.me.org_id)
     await removeTeamMemberCore(ctx, {
       me: ctx.me,
       team: await myTeam(ctx, team_id),

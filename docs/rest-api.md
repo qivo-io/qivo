@@ -265,9 +265,11 @@ be refused.
   whether this user may create a top-level project under it, by the same
   rule as the app's **New project** button. A Standard user agent counts as
   a standard user, and a Viewer agent never may.
-- `billing.read_only` is `true` while organization billing pauses editing.
-  `reason` is then the sentence every write is refused with, otherwise
-  `null`. No plan, price or usage is included.
+- `billing.read_only` is `true` while organization billing pauses editing,
+  and while the organization is read-only before its deletion. `reason` is
+  then the sentence every write is refused with, which names the deletion
+  date in the second case, otherwise `null`. No plan, price or usage is
+  included. Once deletion begins, every request is refused with `403`.
 - `credential.access` is `write` when this credential may make changes and
   `read` when it can only read, such as a Viewer agent's key. It is the same
   rule that refuses writes (see Authentication). A write still needs Edit

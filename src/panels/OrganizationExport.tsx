@@ -2,9 +2,14 @@ import { ConvexError } from 'convex/values'
 import { useEffect, useRef, useState } from 'react'
 import { SettingsSection } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
+import { billingDate } from '@/lib/billingDisplay'
+import { convex } from '@/lib/convex'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
+import { api } from '../../convex/_generated/api'
+import { useOrgRemovalState } from './OrganizationDeletion'
 
 export function OrganizationExport({ orgId }: { orgId: string }) {
+  const removal = useOrgRemovalState(orgId)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
@@ -40,6 +45,9 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
       setStatus('Export downloaded.')
+      // The browser started the download. Qivo cannot see the file reach
+      // disk, so this only decides whether admins get a deletion reminder.
+      void convex.mutation(api.orgRemovals.recordExport, { org_id: orgId }).catch(() => {})
     } catch (cause) {
       if (controller.signal.aborted) {
         setStatus('Export cancelled.')
@@ -89,6 +97,13 @@ export function OrganizationExport({ orgId }: { orgId: string }) {
         Keep this page open until the download finishes. Changes made during export may appear at
         different points in the files.
       </p>
+      {removal && (
+        <p data-org-last-export className="mt-2 text-sm text-text-2">
+          {removal.last_export_at
+            ? `Last export ${billingDate(removal.last_export_at)}.`
+            : 'No export has been made yet.'}
+        </p>
+      )}
     </SettingsSection>
   )
 }

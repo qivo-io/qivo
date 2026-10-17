@@ -78,6 +78,36 @@ Your browser assembles the ZIP. It must fit in available memory, remain under
 made during preparation may appear in only part of the archive. Qivo has no
 import or restore workflow for these exports.
 
+When the browser finishes a ZIP, the panel shows that date as the last export.
+Qivo cannot see whether the file was saved. Exports keep working while an
+organization is read-only before its deletion.
+
+## Deleting an organization
+
+An organization's service ends in one of these ways:
+
+- **Cancelling.** An admin chooses **Cancel subscription** in **Billing**. The
+  subscription ends at once.
+- **Deleting.** An admin chooses **Delete organization** under **Settings →
+  Organization → General** and types the organization address. Any paid
+  subscription ends at once.
+- **Access ending.** Polar ends a subscription, for example after failed
+  payments, or complimentary access ends without a subscription. Overdue
+  payments alone only pause editing.
+
+The organization then stays read-only for 30 days. Members can still read
+their work, and admins can export it. Qivo emails the admins unless one of
+them finished an export in the 7 days before. On the deletion date, Qivo
+deletes everything the organization owns, including uploaded files. Each
+person's sign-in and their other organizations remain.
+
+Until that date, subscribing again keeps an organization whose subscription
+ended, and an admin can stop a deletion an admin asked for with **Keep
+organization**.
+
+A new organization that has not completed checkout within 3 days, and has no
+complimentary access, is deleted.
+
 ## Organization address
 
 The address is the organization name used in URLs, such as `acme` in

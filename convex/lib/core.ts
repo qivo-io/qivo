@@ -58,7 +58,7 @@ import {
   projectLevelsForOrg,
   readOnlyRefusal,
 } from './access'
-import { assertBillingWritable, BILLING_READ_ONLY, billingReadOnly } from './billingAccess'
+import { assertOrgAvailable, assertOrgWritable, orgWriteBlock } from './billingAccess'
 import { byId } from './db'
 import { refuseDemoFeature } from './demo'
 import {
@@ -133,9 +133,10 @@ export async function asMachineCaller(
       reason: CALLER_DEACTIVATED,
     })
   }
+  await assertOrgAvailable(ctx, me.org_id)
   if ('insert' in ctx.db) {
     if (machineAccess(me, access) !== 'write') throw readOnlyRefusal(me)
-    await assertBillingWritable(ctx, me.org_id)
+    await assertOrgWritable(ctx, me.org_id)
   }
   return me
 }
@@ -1358,7 +1359,7 @@ export async function meCore(
   if (row === null || row.profile_id !== me.id) throw callerGone()
   const org = await byId(ctx, 'organizations', me.org_id)
   if (org === null) throw callerGone()
-  const readOnly = await billingReadOnly(ctx, org.id)
+  const block = await orgWriteBlock(ctx, org.id)
   return {
     user: { ...userJson(me), email: me.kind === 'person' ? (me.email ?? null) : null },
     organization: {
@@ -1373,7 +1374,7 @@ export async function meCore(
       project_creators: org.project_creators ?? 'users',
       can_create_projects: canCreateProjects(me, org.project_creators),
     },
-    billing: { read_only: readOnly, reason: readOnly ? BILLING_READ_ONLY : null },
+    billing: { read_only: block !== null, reason: block?.message ?? null },
     credential: {
       kind: CREDENTIAL_KIND[credential.credential_table],
       access: machineAccess(me, access),

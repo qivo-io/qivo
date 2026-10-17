@@ -1,4 +1,15 @@
+import { useState } from 'react'
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { billingDate, billingMoney } from '@/lib/billingDisplay'
 import type { BillingSummary } from '../../convex/lib/billingTypes'
@@ -16,6 +27,12 @@ const statusLabels: Record<BillingSummary['status'], string> = {
 }
 
 function statusExplanation(billing: BillingSummary): string {
+  if (billing.deletion)
+    return `Your organization is read-only and will be deleted on ${billingDate(billing.deletion.delete_after)}. ${
+      billing.deletion.reason === 'requested'
+        ? 'An organization admin can stop the deletion in Organization settings.'
+        : 'Subscribe before then to keep it.'
+    }`
   if (!billing.enabled)
     return 'Billing is not enabled. You can continue using your organization and adding users.'
   if (billing.status === 'complimentary')
@@ -34,11 +51,15 @@ export function BillingOverview({
   busy,
   onCheckout,
   onManage,
+  onCancel,
+  onExport,
 }: {
   billing: BillingSummary
   busy: boolean
   onCheckout: () => void
   onManage: () => void
+  onCancel: () => Promise<void>
+  onExport: () => void
 }) {
   const plan = billing.plan
   return (
@@ -72,14 +93,17 @@ export function BillingOverview({
             </FieldHint>
           </SettingsField>
         )}
-        {billing.current_period_end && (
-          <SettingsField
-            label={billing.cancel_at_period_end ? 'Subscription ends' : 'Next renewal'}
-            width={550}
-          >
-            <p className="text-base">{billingDate(billing.current_period_end)}</p>
-          </SettingsField>
-        )}
+        {/* An ended subscription renews nothing, and a pending deletion shows its own date. */}
+        {billing.current_period_end &&
+          !billing.deletion &&
+          (billing.status !== 'canceled' || billing.cancel_at_period_end) && (
+            <SettingsField
+              label={billing.cancel_at_period_end ? 'Subscription ends' : 'Next renewal'}
+              width={550}
+            >
+              <p className="text-base">{billingDate(billing.current_period_end)}</p>
+            </SettingsField>
+          )}
         {plan && (
           <SettingsGroup legend="Shared usage allowances">
             <p className="text-sm text-text-2">
@@ -107,13 +131,21 @@ export function BillingOverview({
                 {busy ? 'Opening…' : 'Manage billing'}
               </Button>
             )}
+            {billing.cancel_available && (
+              <CancelSubscription
+                lastExportAt={billing.last_export_at}
+                busy={busy}
+                onCancel={onCancel}
+                onExport={onExport}
+              />
+            )}
           </div>
           <FieldHint>
             {billing.status === 'complimentary'
               ? `Subscribe from ${billingDate(billing.complimentary_until)}. Your organization admins will receive reminders before free access ends.`
               : !billing.configured
                 ? 'Payment setup is not available yet.'
-                : 'Pay by card through Polar. Manage payment details, invoices and cancellation in the customer portal. Applicable taxes are shown at checkout.'}
+                : 'Pay by card through Polar. Manage payment details and invoices in the customer portal. Applicable taxes are shown at checkout.'}
           </FieldHint>
         </SettingsGroup>
       </SettingsSection>
@@ -205,5 +237,63 @@ export function BillingOverview({
         </SettingsGroup>
       </SettingsSection>
     </>
+  )
+}
+
+/* Cancelling ends the subscription at once and starts the read-only period
+ * before deletion, so the dialog says so and offers the export first. */
+function CancelSubscription({
+  lastExportAt,
+  busy,
+  onCancel,
+  onExport,
+}: {
+  lastExportAt: string | null
+  busy: boolean
+  onCancel: () => Promise<void>
+  onExport: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <AlertDialog open={open} onOpenChange={(next) => !busy && setOpen(next)}>
+      <Button
+        type="button"
+        variant="outline"
+        data-billing-cancel
+        disabled={busy}
+        onClick={() => setOpen(true)}
+      >
+        Cancel subscription
+      </Button>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The subscription ends now. The organization becomes read-only for 30 days so admins can
+            export its data, and is then deleted.{' '}
+            {lastExportAt
+              ? `The last export was made on ${billingDate(lastExportAt)}.`
+              : 'No export has been made yet.'}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Keep subscription</AlertDialogCancel>
+          <Button type="button" variant="outline" disabled={busy} onClick={onExport}>
+            Export data first
+          </Button>
+          <AlertDialogAction
+            variant="destructive"
+            data-billing-cancel-confirm
+            disabled={busy}
+            onClick={(event) => {
+              event.preventDefault()
+              void onCancel().then(() => setOpen(false))
+            }}
+          >
+            {busy ? 'Cancelling…' : 'Cancel subscription'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

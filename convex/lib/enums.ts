@@ -84,4 +84,26 @@ export const REMOVAL_PHASES = [
 export const vRemovalPhase = literals(...REMOVAL_PHASES)
 export type RemovalPhase = (typeof REMOVAL_PHASES)[number]
 
+/* Why an organization is read-only before its deletion (orgRemovals.ts): its
+ * service ended, an admin asked for deletion, or checkout never completed. */
+export const ORG_REMOVAL_REASONS = ['service_ended', 'requested', 'no_checkout'] as const
+export const vOrgRemovalReason = literals(...ORG_REMOVAL_REASONS)
+export type OrgRemovalReason = (typeof ORG_REMOVAL_REASONS)[number]
+
+/* The background steps of an organization deletion, in the order they run
+ * (orgRemovals.ts). Stored on org_removals only, never on the wire. */
+export const ORG_REMOVAL_PHASES = [
+  'profiles',
+  'tasks',
+  'projects',
+  'teams',
+  'labels',
+  'activity',
+  'webhooks',
+  'billing',
+  'finish',
+] as const
+export const vOrgRemovalPhase = literals(...ORG_REMOVAL_PHASES)
+export type OrgRemovalPhase = (typeof ORG_REMOVAL_PHASES)[number]
+
 export const LEVEL_RANK: Record<AccessLevel, number> = { admin: 3, lead: 3, user: 2, viewer: 1 }

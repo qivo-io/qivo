@@ -14,7 +14,7 @@ import { P } from '../store/planner'
 import { BillingOverview } from './BillingOverview'
 import { BillingUsage } from './BillingUsage'
 
-export function BillingSettings() {
+export function BillingSettings({ setPage }: { setPage: (page: string) => void }) {
   if (DEMO_MODE) {
     return (
       <>
@@ -41,10 +41,16 @@ export function BillingSettings() {
       </>
     )
   }
-  return <LiveBillingSettings key={P.org.id} orgId={P.org.id} />
+  return <LiveBillingSettings key={P.org.id} orgId={P.org.id} setPage={setPage} />
 }
 
-function LiveBillingSettings({ orgId }: { orgId: string }) {
+function LiveBillingSettings({
+  orgId,
+  setPage,
+}: {
+  orgId: string
+  setPage: (page: string) => void
+}) {
   const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [usage, setUsage] = useState<BillingUsageData | null>(null)
   const [summaryError, setSummaryError] = useState('')
@@ -125,6 +131,26 @@ function LiveBillingSettings({ orgId }: { orgId: string }) {
     }
   }
 
+  // Cancelling ends the subscription at once. The summary then reports the
+  // deletion date that the read-only period counts towards.
+  async function cancelSubscription() {
+    if (actionInFlight.current) return
+    actionInFlight.current = true
+    const release = beginUpdateBlock()
+    setBusy(true)
+    setActionError('')
+    try {
+      await convex.action(api.billingActions.cancelSubscription, { org_id: orgId })
+      window.showToast?.('Subscription cancelled')
+    } catch (cause) {
+      setActionError(billingError(cause))
+    } finally {
+      actionInFlight.current = false
+      setBusy(false)
+      release()
+    }
+  }
+
   return (
     <>
       <PageTitle
@@ -164,6 +190,8 @@ function LiveBillingSettings({ orgId }: { orgId: string }) {
           busy={busy}
           onCheckout={() => void openPayment('checkout')}
           onManage={() => void openPayment('portal')}
+          onCancel={cancelSubscription}
+          onExport={() => setPage('org-general')}
         />
       )}
       {usageError && (
