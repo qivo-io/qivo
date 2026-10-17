@@ -152,8 +152,9 @@ import { TEAM_TOOLS } from './teams'
  * JSON-Schema literals are wire bytes (LLM-facing prose is
  * behavior-load-bearing), with key order preserved and hashes pinned by the
  * transport tests. `run` receives validated wire arguments, so its casts are
- * honest. validateArgs already enforced the shapes and refused any argument
- * the schema does not know. */
+ * honest. validateArgs already enforced the shapes and, for a tool that takes
+ * arguments, refused any the schema does not know. pickArgs then passes only
+ * the arguments the schema names, so a tool that takes none gets none. */
 
 type SchemaProp = {
   type?: string
@@ -1113,9 +1114,22 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
   }
 }
 
-/* null = valid; else the joined issue list for the isError text. */
-function validateArgs(tool: ToolDef, args: Record<string, unknown>): string | null {
+/* null = valid; else the joined issue list for the isError text. `raw` is the
+ * call's `arguments`, where absent and null both mean none. */
+function validateArgs(tool: ToolDef, raw: unknown): string | null {
   const props = tool.inputSchema.properties
+  // A tool that takes no arguments ignores what it is sent, because some
+  // clients send a placeholder argument to such tools and there is nothing it
+  // could change.
+  if (Object.keys(props).length === 0) return null
+  // `arguments` that is not an object, such as a string or an array, is
+  // refused too, because reading it as none would run a filtered list
+  // unfiltered.
+  const given = raw ?? {}
+  if (typeof given !== 'object' || Array.isArray(given)) {
+    return `Invalid input: expected object, received ${typeName(given)}`
+  }
+  const args = given as Record<string, unknown>
   const required = tool.inputSchema.required ?? []
   const problems: string[] = []
   if (tool.name === 'update_task' && 'reporter_id' in args) {
@@ -1133,28 +1147,27 @@ function validateArgs(tool: ToolDef, args: Record<string, unknown>): string | nu
     const msg = checkValue(prop, value, CODE_POINT_ARGS.has(key))
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
-  // Arguments the schema does not know are refused rather than dropped. A
-  // tool that takes no arguments ignores them, because some clients send a
-  // placeholder argument to such tools and there is nothing it could change.
-  if (Object.keys(props).length > 0) {
-    const unknown = Object.keys(args).filter(
-      (key) =>
-        !Object.hasOwn(props, key) && !(tool.name === 'update_task' && key === 'reporter_id'),
-    )
-    if (unknown.length > 0) {
-      // names only, never values, so the log shows whether clients send them routinely
-      console.info('MCP call refused unknown arguments', { tool: tool.name, keys: unknown })
-      const keys = unknown.map((key) => `"${key}"`).join(', ')
-      problems.push(`Unrecognized key${unknown.length > 1 ? 's' : ''}: ${keys}`)
-    }
+  // Arguments the schema does not know are refused rather than dropped.
+  const unknown = Object.keys(args).filter(
+    (key) => !Object.hasOwn(props, key) && !(tool.name === 'update_task' && key === 'reporter_id'),
+  )
+  if (unknown.length > 0) {
+    // names only, never values, so the log shows whether clients send them routinely
+    console.info('MCP call refused unknown arguments', { tool: tool.name, keys: unknown })
+    const keys = unknown.map((key) => `"${key}"`).join(', ')
+    problems.push(`Unrecognized key${unknown.length > 1 ? 's' : ''}: ${keys}`)
   }
   return problems.length > 0 ? problems.join(', ') : null
 }
 
-/* Known keys with defined values only. validateArgs refused unknown keys
- * already, and the internal fns' validators would refuse them too. */
-function pickArgs(tool: ToolDef, args: Record<string, unknown>): Record<string, unknown> {
+/* The arguments the schema names, with defined values only. For a tool that
+ * takes arguments, validateArgs refused unknown keys already. For one that
+ * takes none, this is what drops whatever it was sent, such as a placeholder
+ * argument, so the internal fns' validators never see it. */
+function pickArgs(tool: ToolDef, raw: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  if (typeof raw !== 'object' || raw === null) return out
+  const args = raw as Record<string, unknown>
   for (const key of Object.keys(tool.inputSchema.properties)) {
     if (args[key] !== undefined) out[key] = args[key]
   }
@@ -1164,10 +1177,10 @@ function pickArgs(tool: ToolDef, args: Record<string, unknown>): Record<string, 
 /* --------------------------------------------------- JSON-RPC dispatch core
  * Everything from body parse on, exported so the conformance suite can drive
  * it byte-for-byte without transport plumbing. `runTool` receives validated
- * arguments, unknown ones already refused; it throws ConvexError refusals
- * (rendered as isError with the bare sentence) — except the auth-race
- * reasons CALLER_GONE / CALLER_DEACTIVATED, which are rethrown for the HTTP
- * action to answer as its own 401 sentence. */
+ * arguments, the ones pickArgs keeps. It throws ConvexError refusals, which
+ * render as isError with the bare sentence. The auth-race reasons CALLER_GONE
+ * and CALLER_DEACTIVATED are the exception, rethrown for the HTTP action to
+ * answer as its own 401 sentence. */
 
 export type McpHeaders = { get(name: string): string | null }
 /* Returns the tool result ALREADY 2-space-pretty-printed (the deployed
@@ -1190,11 +1203,7 @@ async function callTool(
     return { kind: 'protocol', error: { code: -32602, message: `Tool ${String(name)} not found` } }
   }
   const raw = params?.arguments
-  const args =
-    typeof raw === 'object' && raw !== null && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {}
-  const issues = validateArgs(tool, args)
+  const issues = validateArgs(tool, raw)
   if (issues !== null) {
     return {
       kind: 'result',
@@ -1210,7 +1219,7 @@ async function callTool(
     }
   }
   try {
-    const text = await run(tool.name, pickArgs(tool, args))
+    const text = await run(tool.name, pickArgs(tool, raw))
     return { kind: 'result', result: { content: [{ type: 'text', text }] } }
   } catch (e) {
     if (e instanceof ConvexError) {

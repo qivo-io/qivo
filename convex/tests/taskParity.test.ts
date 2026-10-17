@@ -1148,7 +1148,7 @@ describe('MCP task parity', () => {
         init: { method: string; headers: Record<string, string>; body: string },
       ): Promise<{ text(): Promise<string> }>
     }
-    const result = async (name: string, args: Record<string, unknown>) => {
+    const result = async (name: string, args: unknown) => {
       const res = await http.fetch('/mcp', {
         method: 'POST',
         headers: {
@@ -1203,6 +1203,9 @@ describe('MCP task parity', () => {
       ],
       // a misspelled filter would otherwise answer an unfiltered list
       ['list_tasks', { project: 'FW', statuses: ['todo'] }, 'Unrecognized key: "statuses"'],
+      // and so would arguments that are not an object
+      ['list_tasks', 'status=done', 'Invalid input: expected object, received string'],
+      ['list_tasks', ['status'], 'Invalid input: expected object, received array'],
     ] as const) {
       expect(await result(name, args)).toMatchObject({
         content: [{ type: 'text', text: `${invalid} ${name}: ${problem}` }],
@@ -1212,9 +1215,17 @@ describe('MCP task parity', () => {
     expect((await row(fx.t, t1.id)).title).toBe('Echo')
     expect(await taskCount()).toBe(before)
     // a tool that takes no arguments ignores the placeholder some clients send
-    const me = await result('get_me', { random_string: 'x' })
-    expect(me.isError).toBeUndefined()
-    expect(JSON.parse(me.content[0].text)).toMatchObject({ user: { id: fx.agent.id } })
+    for (const args of [{ random_string: 'x' }, 'x']) {
+      const me = await result('get_me', args)
+      expect(me.isError).toBeUndefined()
+      expect(JSON.parse(me.content[0].text)).toMatchObject({ user: { id: fx.agent.id } })
+    }
+    // null arguments mean none
+    const all = await result('list_tasks', null)
+    expect(all.isError).toBeUndefined()
+    expect(JSON.parse(all.content[0].text)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: t1.id })]),
+    )
     // known arguments alone run, and the answer carries nothing extra
     expect(await callJson('update_task', { ref: t1.id, title: 'Again' })).toEqual({
       id: t1.id,

@@ -119,10 +119,11 @@ dropped, and only `create_task`, `update_task` and `update_project` named it
 in `ignored_arguments`, which no tool returns now. Their descriptions no
 longer mention it, and a client holding the older catalogue reads the old
 sentence until it refreshes its tool list. A misspelled `on_held_tasks`
-therefore no longer removes access with the default. A tool that takes no
-arguments (`get_me`, `list_teams`, `list_users` and `list_labels`) still
-ignores what it is sent, because some clients send a placeholder argument to
-such tools.
+therefore no longer removes access with the default. `arguments` that is not
+an object, such as a string, is refused too, rather than read as no
+arguments. A tool that takes no arguments (`get_me`, `list_teams`,
+`list_users` and `list_labels`) still ignores what it is sent, because some
+clients send a placeholder argument to such tools.
 
 ## Access model: the credential is a user
 
@@ -794,9 +795,11 @@ An argument the schema does not know is refused, and the call changes
 nothing. For example, `set_project_access` with a misspelled `on_held_task`
 answers `Input validation error: Invalid arguments for tool
 set_project_access: Unrecognized key: "on_held_task"`, and several unknown
-arguments read `Unrecognized keys: "a", "b"`. Only the tools that take no
-arguments, `get_me`, `list_teams`, `list_users` and `list_labels`, ignore
-what they are sent.
+arguments read `Unrecognized keys: "a", "b"`. `arguments` must be a JSON
+object, or absent or `null` for none. Any other value is refused, for
+example `Invalid input: expected object, received string`. Only the
+tools that take no arguments, `get_me`, `list_teams`, `list_users` and
+`list_labels`, ignore what they are sent.
 
 | Tool | What it does |
 |---|---|
