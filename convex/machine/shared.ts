@@ -116,27 +116,55 @@ export const optionalJson = (raw: string): Record<string, unknown> =>
  * signed upload URLs, never through these bodies. */
 export const BODY_MAX_BYTES = 1024 * 1024
 
-/* convex/tsconfig's lib is ESNext only, which does not declare the encoder
- * the Convex runtime has. */
-declare class TextEncoder {
-  encode(input: string): Uint8Array
+/* convex/tsconfig's lib is ESNext only, which declares neither the decoder
+ * nor the request body stream the Convex runtime has. */
+declare class TextDecoder {
+  decode(value: Uint8Array): string
+}
+type BodyStream = {
+  getReader(): {
+    read(): Promise<{ done: boolean; value?: Uint8Array }>
+    cancel(): Promise<void>
+  }
 }
 
 /**
  * A REST or MCP request body as text, or null when it is longer than
- * BODY_MAX_BYTES in UTF-8. A Content-Length over the cap answers before the
- * body is read. A body sent without one (chunked) is read first, which Convex
- * limits to 20 MB, and then measured. Callers read it after authentication,
- * so an unauthenticated caller learns nothing new and an oversized request
- * still counts as a call.
+ * BODY_MAX_BYTES. A Content-Length over the cap answers before the body is
+ * read. Otherwise the bytes are counted as they arrive, before decoding, so
+ * a body sent without Content-Length (chunked) stops being read once it
+ * passes the cap, and a byte-order mark counts too. The text decodes as
+ * request.text() would. Callers read it after authentication, so an
+ * unauthenticated caller learns nothing new and an oversized request still
+ * counts as a call.
  */
 export async function readBody(request: Request): Promise<string | null> {
   if (Number(request.headers.get('Content-Length')) > BODY_MAX_BYTES) return null
-  const text = await request.text()
-  // every UTF-16 code unit takes at least one UTF-8 byte, so a longer text is
-  // over the cap without encoding it
-  if (text.length > BODY_MAX_BYTES) return null
-  return new TextEncoder().encode(text).byteLength > BODY_MAX_BYTES ? null : text
+  const body = (request as Request & { body: BodyStream | null }).body
+  if (body === null) return ''
+  const reader = body.getReader()
+  try {
+    const chunks: Uint8Array[] = []
+    let size = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) continue
+      size += value.byteLength
+      if (size > BODY_MAX_BYTES) return null
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return new TextDecoder().decode(bytes)
+  } finally {
+    // stops an oversized body; a no-op once the body has been read
+    await reader.cancel().catch(() => {})
+  }
 }
 
 /** An MCP tool's result text, the deployed `text()` body. It is 2-space

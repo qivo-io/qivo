@@ -150,6 +150,42 @@ describe('REST', () => {
     expect((await send(BODY_MAX_BYTES)).status).toBe(201)
   })
 
+  it('stops reading an endless chunked body once it passes the cap', async () => {
+    const t = newT()
+    await wireOrg(t)
+    let pulls = 0
+    // 64 KiB of spaces per read, forever, so a reader that waits for the end
+    // never answers
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new Uint8Array(64 * 1024).fill(32))
+      },
+    })
+    const response = await http(t, '/v1/tasks', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' },
+      body: endless,
+      duplex: 'half',
+    })
+    expect(response.status).toBe(413)
+    // 16 reads fill the cap and the 17th passes it, plus what the stream
+    // queued ahead
+    expect(pulls).toBeLessThan(20)
+  })
+
+  it('counts the bytes of a byte-order mark, which the decoded text drops', async () => {
+    const t = newT()
+    const f = await wireOrg(t)
+    const task = { project: f.sub.key, title: 'x' }
+    // U+FEFF is 3 bytes of UTF-8
+    const over = await post(t, '/v1/tasks', `\uFEFF${jsonOfSize(task, BODY_MAX_BYTES)}`)
+    expect(over.status).toBe(413)
+    expect(await issueCount(t)).toBe(0)
+    const atCap = await post(t, '/v1/tasks', `\uFEFF${jsonOfSize(task, BODY_MAX_BYTES - 3)}`)
+    expect(atCap.status).toBe(201)
+  })
+
   it('caps webhook subscription bodies too', async () => {
     const t = newT()
     await wireOrg(t)
