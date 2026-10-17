@@ -17,6 +17,7 @@ import { REAP_PAGES } from '../files'
 import { byId } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import type { EventOwner } from '../lib/taskEvents'
+import { TEXT_MAX } from '../lib/textLimits'
 import { storageIdInUse } from '../model/attachments'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
@@ -36,6 +37,7 @@ import {
 import { estimateDocumentBytes } from '../model/demoMetrics'
 import {
   as,
+  chargeFilteredReads,
   expectRefusal,
   NOW,
   newT,
@@ -78,6 +80,38 @@ declare class Blob {
 }
 
 installTrashTimers()
+
+/** The uuids of `n` subtasks of `parent` in project `projectId`, each with
+ * `description`, planted 100 to a transaction so a large set stays within
+ * the write limits, in the order planted. */
+async function plantChildren(
+  t: T,
+  parent: Doc<'issues'>,
+  projectId: string,
+  n: number,
+  description: string,
+): Promise<string[]> {
+  const ids = Array.from({ length: n }, () => uuid())
+  for (let from = 0; from < n; from += 100)
+    await t.run(async (ctx) => {
+      for (const [i, id] of ids.slice(from, from + 100).entries())
+        await ctx.db.insert('issues', {
+          id,
+          org_id: parent.org_id,
+          project_id: projectId,
+          parent_id: parent.id,
+          num: 10_000 + from + i,
+          title: `Subtask ${from + i + 1}`,
+          description,
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+    })
+  return ids
+}
 
 /** Whether deleted_rows holds the comment `id`. */
 const commentStored = async (t: T, id: string) =>
@@ -590,6 +624,61 @@ describe('moving a project to Deleted items', () => {
       expect(steps).toBeLessThan(60)
     }
     expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 60 } })
+  })
+
+  it('moves a task with 1,000 subtasks of 20,000 characters in its own project within the real limits', async () => {
+    // the subtasks hold about 20 MB, more than one transaction may read, so
+    // the move must find the parent's child outside without reading them
+    const t = newT({ transactionLimits: true })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const description = 'Spec line. '.repeat(2_000).slice(0, TEXT_MAX)
+    const subtasks = await plantChildren(t, parent, f.sub2.id, 1_000, description)
+    // planted last, so a scan of the children in index order reaches it last
+    const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+
+    expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 1_001 } })
+    expect((await liveTask(t, outside.id))?.parent_id).toBeUndefined()
+    expect((await storedIssue(t, subtasks[999]))?.parent_id).toBe(parent.id)
+  }, 300_000)
+
+  it('finds a child outside without reading the children inside, and scans the tasks over steps', async () => {
+    // the old scan read every child inside, 60 of 16 KB and more than the
+    // transaction may read, before it found the one outside
+    const t = newT({ transactionLimits: { bytesRead: 600_000 } })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await plantChildren(t, parent, f.sub2.id, 60, 'Spec line. '.repeat(1_500))
+    const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    TRASH_BUDGET.bytes = 100_000
+
+    // the parent has a child outside, so the user's own delete moves it
+    // first and detaches that child
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    expect(await liveTask(t, parent.id)).toBeNull()
+    expect((await liveTask(t, outside.id))?.parent_id).toBeUndefined()
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'move_edges' })
+
+    // the scan of the other tasks goes on in steps within the byte budget
+    let edgeSteps = 0
+    let steps = 0
+    for (let job = await jobFor(t, item.id); job !== null; job = await jobFor(t, item.id)) {
+      if (job.phase === 'move_edges') edgeSteps++
+      await step(t, item.id)
+      steps++
+      expect(steps).toBeLessThan(60)
+    }
+    expect(edgeSteps).toBeGreaterThan(2)
+    expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 61 } })
+    expect((await storedIssue(t, parent.id))?.parent_id).toBeUndefined()
   })
 
   it('detaches without an actor once the deleter is gone', async () => {
