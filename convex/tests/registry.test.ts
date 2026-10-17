@@ -13,7 +13,7 @@
  * that differ only in a fixed argument (the inbox actions, PUT and DELETE on
  * a task's following, a project's user and team access) each have one. */
 
-import { type FunctionReference, getFunctionName } from 'convex/server'
+import { getFunctionName } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
@@ -43,10 +43,7 @@ function recorder(): { runner: Ctx; calls: Call[] } {
   const calls: Call[] = []
   const record =
     (via: Kind) =>
-    async (
-      ref: FunctionReference<Kind, 'public' | 'internal'>,
-      ...args: unknown[]
-    ): Promise<never> => {
+    async (ref: Parameters<Ctx[keyof Ctx]>[0], ...args: unknown[]): Promise<never> => {
       calls.push({ via, name: getFunctionName(ref), args: args[0] })
       return {} as never
     }
