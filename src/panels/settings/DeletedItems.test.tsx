@@ -36,6 +36,12 @@ type Subscription = {
   fail: (cause: unknown) => void
   live: boolean
 }
+type Search = {
+  text: string
+  next: (rows: DeletedMatch[]) => void
+  fail: (cause: unknown) => void
+  live: boolean
+}
 
 const NOW = new Date(2026, 9, 16, 15, 0)
 const at = (h: number, m: number, s = 0, day = 16) => new Date(2026, 9, day, h, m, s).toISOString()
@@ -47,7 +53,8 @@ let root: Root
 let lists: Subscription[]
 // the server's answers, per call; a call without one never settles
 let answers: Record<string, ((args: Record<string, unknown>) => Promise<Answer>) | undefined>
-let searches: { text: string; resolve: (rows: DeletedMatch[]) => void }[]
+// the page's deletedItems.matches subscriptions, one per searched text
+let searches: Search[]
 
 const DANIEL: Deleter = {
   you: false,
@@ -138,6 +145,13 @@ async function load(role: Role = 'admin') {
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'snapshot:forMe') next(structuredClone(snap))
+    if (name === 'deletedItems:matches') {
+      const subscription: Search = { text: args.text, next, fail, live: true }
+      searches.push(subscription)
+      return () => {
+        subscription.live = false
+      }
+    }
     if (name !== 'deletedItems:list') return () => {}
     const subscription: Subscription = { args, next, fail, live: true }
     lists.push(subscription)
@@ -145,10 +159,7 @@ async function load(role: Role = 'admin') {
       subscription.live = false
     }
   })
-  network.query.mockImplementation((ref, args) => {
-    if (getFunctionName(ref) !== 'deletedItems:matches') return Promise.resolve(null)
-    return new Promise((resolve) => searches.push({ text: args.text, resolve }))
-  })
+  network.query.mockImplementation(() => Promise.resolve(null))
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     if (name === 'identity:claimMySeats') return Promise.resolve(null)
@@ -982,7 +993,7 @@ describe('searching inside deleted projects', () => {
     expect(searches).toEqual([])
     await pause()
     expect(searches.map((s) => s.text)).toEqual(['Book'])
-    await act(async () => searches[0].resolve([hit(), hit({ key: 'QN-99', item_id: 'gone' })]))
+    await act(async () => searches[0].next([hit(), hit({ key: 'QN-99', item_id: 'gone' })]))
     await settle()
     const match = find('[data-deleted-match="QN-12"]')
     expect(text('[data-deleted-match="QN-12"] [data-row-place]')).toBe(
@@ -1012,12 +1023,14 @@ describe('searching inside deleted projects', () => {
     ])
     await search('Boo')
     await pause()
+    // a new text stops following the old one at once
     await search('Book')
+    expect(searches[0].live).toBe(false)
     await pause()
     expect(searches.map((s) => s.text)).toEqual(['Boo', 'Book'])
-    await act(async () => searches[1].resolve([hit({ can_restore: false })]))
-    // the older search answers last, with a hit the newer text no longer finds
-    await act(async () => searches[0].resolve([hit({ key: 'QN-13', title: 'Boots' })]))
+    await act(async () => searches[1].next([hit({ can_restore: false })]))
+    // a late answer for the older text, with a hit the newer text no longer finds
+    await act(async () => searches[0].next([hit({ key: 'QN-13', title: 'Boots' })]))
     await settle()
     expect(has('[data-deleted-match="QN-13"]')).toBe(false)
     expect(find('[data-deleted-match="QN-12"] [data-select]').hasAttribute('disabled')).toBe(true)
@@ -1064,7 +1077,7 @@ describe('searching inside deleted projects', () => {
     )
     await search('Book')
     await pause()
-    await act(async () => searches[0].resolve([hit()]))
+    await act(async () => searches[0].next([hit()]))
     await settle()
     await click(find('[data-deleted-match="QN-12"] [data-restore]'))
     expect(text('[data-project-first]')).toContain(
@@ -1306,7 +1319,7 @@ describe('search hits follow the list', () => {
     await search(value)
     await pause()
     const last = searches[searches.length - 1]
-    await act(async () => last.resolve(matches))
+    await act(async () => last.next(matches))
     await settle()
   }
 
@@ -1318,7 +1331,7 @@ describe('search hits follow the list', () => {
       'Moving to Deleted items…',
     )
     expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(false)
-    // the project item is ready now, which the one-shot search does not know
+    // the list shows the project item ready before the search answers again
     await deliver([trial()])
     expect(has('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe(false)
     expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(true)
@@ -1362,7 +1375,7 @@ describe('search hits follow the list', () => {
     ])
   })
 
-  it('searches again when a deleted project arrives or finishes moving, keeping the hits meanwhile', async () => {
+  it('follows new answers while the text stays, and keeps the hits until one arrives', async () => {
     await open()
     const website = (patch: Partial<DeletedRow> = {}) =>
       trial({
@@ -1375,19 +1388,16 @@ describe('search hits follow the list', () => {
       })
     await deliver([trial({ state: 'moving', can_restore: false })])
     await found('Book', [])
-    // the project finishes moving, so its tasks can be found now
+    // the project finishes moving, and the search answers again with its tasks
     await deliver([trial()])
     await pause()
-    expect(searches.map((s) => s.text)).toEqual(['Book', 'Book'])
-    await act(async () => searches[1].resolve([hit()]))
+    await act(async () => searches[0].next([hit()]))
     await settle()
     expect(has('[data-deleted-match="QN-12"]')).toBe(true)
-    // another project arrives and finishes moving; the hits stay while it searches
+    // another project arrives and finishes moving; the hits stay meanwhile
     await deliver([website({ state: 'moving', can_restore: false }), trial()])
-    await pause()
     await deliver([website(), trial()])
     await pause()
-    expect(searches).toHaveLength(4)
     expect(has('[data-deleted-match="QN-12"]')).toBe(true)
     const photographer = hit({
       item_id: 'item-web',
@@ -1397,16 +1407,47 @@ describe('search hits follow the list', () => {
       deleted_at: at(14, 30),
       deleter: DANIEL,
     })
-    await act(async () => searches[3].resolve([hit(), photographer]))
-    // the older answer arrives last and changes nothing
-    await act(async () => searches[2].resolve([]))
+    await act(async () => searches[0].next([hit(), photographer]))
     await settle()
     expect(has('[data-deleted-match="QN-12"]')).toBe(true)
     expect(has('[data-deleted-match="QN-40"]')).toBe(true)
-    // a delivery that changes no project item cannot change the hits
-    await deliver([website(), trial(), task(1)])
-    await pause()
-    expect(searches).toHaveLength(4)
+    // one subscription answered all of it
+    expect(searches.map((s) => [s.text, s.live])).toEqual([['Book', true]])
+  })
+
+  it('shows a hit outside a capped list as ready once a new answer says so', async () => {
+    await open()
+    // the capped list ends before the project item that the search finds
+    await deliver([task(1)], true)
+    await found('Book', [hit({ state: 'moving', can_restore: false })])
+    expect(text('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe(
+      'Moving to Deleted items…',
+    )
+    expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(false)
+    // the project finishes moving; no list holds it, but the search answers again
+    await act(async () => searches[0].next([hit()]))
+    await settle()
+    expect(has('[data-deleted-match="QN-12"] [data-row-note="state"]')).toBe(false)
+    expect(has('[data-deleted-match="QN-12"] [data-restore]')).toBe(true)
+  })
+
+  it('keeps the hits when the search fails, and stops following it on unmount', async () => {
+    await open()
+    await deliver([trial()])
+    await found('Book', [hit()])
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => searches[0].fail(new Error('offline')))
+    await settle()
+    expect(logged).toHaveBeenCalled()
+    logged.mockRestore()
+    expect(has('[data-deleted-match="QN-12"]')).toBe(true)
+    expect(has('[role="alert"]')).toBe(false)
+    // the page goes on with the list
+    await deliver([trial(), task(1, { title: 'Book a van' })])
+    expect(rowIds()).toEqual(['item-1', 'item-trial:QN-12'])
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    expect(searches.map((s) => s.live)).toEqual([false])
   })
 
   it('drops hits the new text does not hold before its answer, and counts each item once', async () => {
