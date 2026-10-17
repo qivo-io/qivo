@@ -929,13 +929,18 @@ export default defineSchema({
    * (model/deletedItems.ts attachParents). It keeps one row per task rather
    * than a field on deleted_item_jobs, because an item can hold any number
    * of such tasks and every step rewrites its job. The rows outlive the
-   * reveal with the item and its job and go with the item. A move that takes
-   * such a task back stores it with this parent again. */
+   * reveal with the item and its job and go with the item. Any move of such
+   * a task to Deleted items, by this item or another, takes its row by task
+   * and stores the task with this parent while it still waits for it
+   * (takeParent). The row of a task whose project went to Deleted items
+   * again before its turn goes to the item that holds that project. */
   deleted_item_parents: defineTable({
     item_id: v.string(),
     task_id: v.string(), // the task written back without its parent
     parent_id: v.string(), // the parent it had in Deleted items
-  }).index('by_item_task', ['item_id', 'task_id']),
+  })
+    .index('by_item_task', ['item_id', 'task_id'])
+    .index('by_task', ['task_id']),
 
   /* One original document of a deleted item, typed by its table. Only
    * model/deletedItems.ts storeRow inserts here, writing `table` and `row`

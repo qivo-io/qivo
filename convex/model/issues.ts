@@ -56,7 +56,6 @@
  * Both surfaces call the work items tasks and their children subtasks. */
 
 import type { WithoutSystemFields } from 'convex/server'
-import type { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -67,7 +66,7 @@ import {
 } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
-import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
+import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { reviewStamp } from '../lib/review'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
@@ -490,25 +489,7 @@ export async function assertParentChain(
   parentId: string,
   actor: Doc<'profiles'>,
 ): Promise<Doc<'issues'>> {
-  const answer = await parentChain(ctx, issue, parentId, actor)
-  if ('refusal' in answer) throw answer.refusal
-  return answer.parent
-}
-
-/**
- * assertParentChain as an answer instead of a throw: the parent row, or the
- * refusal assertParentChain would throw. Without an `actor` only the
- * hierarchy is checked: the parent exists in the organization, no cycle, at
- * most 20 levels. A restore from Deleted items (model/deletedItems.ts)
- * applies the same rules once per parent, with levelsAbove.
- */
-export async function parentChain(
-  ctx: QueryCtx,
-  issue: { id: string; org_id: string },
-  parentId: string,
-  actor: Doc<'profiles'> | undefined,
-): Promise<{ parent: Doc<'issues'> } | { refusal: ConvexError<Refusal> }> {
-  if (parentId === issue.id) return { refusal: rule('a task cannot be its own parent') }
+  if (parentId === issue.id) throw rule('a task cannot be its own parent')
   const parent = await byId(ctx, 'issues', parentId)
   const parentProject =
     parent === null || parent.org_id !== issue.org_id
@@ -517,15 +498,23 @@ export async function parentChain(
   if (
     parent === null ||
     parentProject === null ||
-    (actor !== undefined && !(await canSeeProject(ctx, actor, parentProject)))
+    !(await canSeeProject(ctx, actor, parentProject))
   ) {
-    return { refusal: notFound('parent task not found') }
+    throw notFound('parent task not found')
   }
-  if (actor !== undefined && !(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) {
-    return { refusal: forbidden('no write access to the parent task') }
+  if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) {
+    throw forbidden('no write access to the parent task')
   }
-  const up = await levelsAbove(ctx, parentId, issue.id)
-  if (typeof up !== 'number') return { refusal: up }
+  // upward walk: bound the chain above the attach point
+  let cur: string | undefined = parentId
+  let up = 0
+  while (cur !== undefined) {
+    up += 1
+    if (up > 20) throw rule('task hierarchy too deep or cyclic')
+    const row: Doc<'issues'> | null = await byId(ctx, 'issues', cur)
+    cur = row?.parent_id
+    if (cur === issue.id) throw rule('task parent cycle detected')
+  }
   // downward measure (0038 fix 1): the height of the subtree hanging under
   // the row, capped at 24 so the walk stays finite over corrupt cycles — a
   // reparent must not merge two legal chains into one deeper than the
@@ -542,28 +531,8 @@ export async function parentChain(
     down += 1
     frontier = next
   }
-  if (up + 1 + down > 20) return { refusal: rule('task hierarchy too deep') }
-  return { parent }
-}
-
-/** The upward walk of parentChain: how many levels the chain from
- * `parentId`, the attach point, to the top holds, or the refusal past 20
- * levels, or when the walk meets `issueId` (the task to attach), a cycle. */
-export async function levelsAbove(
-  ctx: QueryCtx,
-  parentId: string,
-  issueId?: string,
-): Promise<number | ConvexError<Refusal>> {
-  let cur: string | undefined = parentId
-  let up = 0
-  while (cur !== undefined) {
-    up += 1
-    if (up > 20) return rule('task hierarchy too deep or cyclic')
-    const row: Doc<'issues'> | null = await byId(ctx, 'issues', cur)
-    cur = row?.parent_id
-    if (cur !== undefined && cur === issueId) return rule('task parent cycle detected')
-  }
-  return up
+  if (up + 1 + down > 20) throw rule('task hierarchy too deep')
+  return parent
 }
 
 /* issue_archive_parent_guard (0070:65-82): an ACTIVE row under an ARCHIVED
