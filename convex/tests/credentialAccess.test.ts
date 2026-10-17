@@ -436,6 +436,12 @@ function indirectIn(code: string): string[] {
 const DECLARATION =
   /^(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
 
+/* A comment that fills its lines, a `//` line or a block that starts a line
+ * and whose first close ends one. Its words run nothing, and the walk drops
+ * it. A comment after code on the same line stays, which only widens the
+ * walk. */
+const COMMENT_LINES = /^[ \t]*(?:\/\/.*|\/\*(?:(?!\*\/)[\s\S])*\*\/[ \t]*)$/gm
+
 /** Where a name a module uses comes from, a declaration in another module,
  * or null when the walk cannot read it (a default or namespace import, or a
  * module outside the glob). */
@@ -456,13 +462,15 @@ type ModuleCode = {
  * and every `internal.…` reference in the machine sources. Then it follows
  * each action it reaches through the code that action runs, which is its own
  * declaration and every declaration that code names, in its module or
- * imported from another, and so on by name. A query cannot write, and a
- * mutation it reaches is checked itself, so only actions are followed. For
- * the same reason the walk never follows a registered query or mutation by
- * name, because an action can only run one through its `internal.…`
- * reference, which the walk reaches. A reference or an import the walk
- * cannot resolve throws, so a call it cannot follow fails every test that
- * uses the walk instead of dropping out of it.
+ * imported from another, and so on by name. Words in a comment name
+ * nothing the code runs, so the walk skips whole-line comments
+ * (COMMENT_LINES). A query cannot write, and a mutation it reaches is
+ * checked itself, so only actions are followed. For the same reason the
+ * walk never follows a registered query or mutation by name, because an
+ * action can only run one through its `internal.…` reference, which the
+ * walk reaches. A reference or an import the walk cannot resolve throws, so
+ * a call it cannot follow fails every test that uses the walk instead of
+ * dropping out of it.
  */
 function walker(modules: Modules, sources: Sources) {
   const registered = (name: string): Registered | undefined => {
@@ -505,7 +513,8 @@ function walker(modules: Modules, sources: Sources) {
     const starts = [...src.matchAll(DECLARATION)]
     starts.forEach((m, i) => {
       const text = src.slice(m.index, starts[i + 1]?.index ?? src.length)
-      declared.set(m[1], (declared.get(m[1]) ?? '') + text) // overloads add up
+      const code = text.replace(COMMENT_LINES, '')
+      declared.set(m[1], (declared.get(m[1]) ?? '') + code) // overloads add up
     })
     const imported = new Map<string, Binding>()
     const reexported = new Map<string, Binding>()
@@ -731,6 +740,39 @@ describe('every machine write takes the credential access', () => {
       'machine/fake:relay',
       'machine/fake:stamp',
     ])
+  })
+
+  it('does not follow a name that only a comment mentions', () => {
+    const exportArgs = () => `{"type":"object","value":{"access":${ACCESS_ARG}}}`
+    const fakeModules: Modules = {
+      '../machine/fake.ts': { relay: { isAction: true, isInternal: true, exportArgs } },
+      '../lib/log.ts': {},
+    }
+    // log schedules through a reference the walk cannot follow, as an
+    // activity write's trim does
+    const fakeSources = (relay: string): Sources => ({
+      '../machine/fake.ts': [
+        "import { log } from '../lib/log'",
+        'export const relay = internalAction({',
+        relay,
+        '})',
+        '/* The next route records its change with log. */',
+        '// log runs in a mutation, never here',
+        'export const after = 1',
+      ].join('\n'),
+      '../lib/log.ts':
+        'export async function log(ctx) {\n  await ctx.scheduler.runAt(0, trimRef, {})\n}',
+    })
+    const comments =
+      '  /* the mutation calls log */\n  // log cleans up too\n  handler: async () => {},'
+    expect(walker(fakeModules, fakeSources(comments)).guarded()).toEqual(['machine/fake:relay'])
+    // the same name in code is followed, and a comment that ends where code
+    // starts stays, so its line is followed too
+    for (const code of ['  handler: async (ctx) => log(ctx),', '  /* x */ handler: log,']) {
+      expect(() => walker(fakeModules, fakeSources(code)).guarded()).toThrow(
+        'machine/fake:relay runs trimRef, which the walk cannot follow',
+      )
+    }
   })
 
   it('follows an action to the writes it reaches through helpers in any module', () => {
