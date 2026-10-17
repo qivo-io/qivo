@@ -1859,15 +1859,35 @@ try {
     })
     if (!boxed) await fail('Project settings Sub-projects and Project access are not named boxes')
   }
-  // TODO(Deleted items UI): the UI change replaces the Danger zone with the
-  // project settings section that opens "Archive or delete…". Move this
-  // assertion to that section in the same change.
-  const dangerZone = projectSettings.locator('fieldset.settings-danger-zone')
-  if ((await dangerZone.count()) !== 1 || !(await dangerZone.locator('legend').textContent()))
-    await fail('Project settings has no Danger zone box')
-  log(
-    'A: project forms use Name without an icon chooser; Sub-projects, Project access and Danger zone are named boxes',
+  // the section that opens the Archive or delete window replaced the Danger zone
+  const removal = projectSettings.locator('fieldset.settings-section[data-project-removal]')
+  if (
+    (await removal.count()) !== 1 ||
+    (await removal.locator('legend').textContent()) !== 'Archive or delete' ||
+    (await removal.getByRole('button', { name: 'Archive or delete…' }).count()) !== 1
   )
+    await fail('Project settings has no Archive or delete box')
+  log(
+    'A: project forms use Name without an icon chooser; Sub-projects, Project access and Archive or delete are named boxes',
+  )
+
+  // Settings › Projects ends with Deleted items, after Archived projects. Its
+  // page never names how long an item stays there (only the guide does).
+  const projectPages = await pageA
+    .locator('.settings-navigation [data-settings-item^="projects"]')
+    .evaluateAll((items) => items.map((item) => item.getAttribute('data-settings-item')))
+  const archivedAt = projectPages.indexOf('projects-archived')
+  const deletedAt = projectPages.indexOf('projects-deleted')
+  if (archivedAt < 0 || deletedAt !== projectPages.length - 1 || archivedAt > deletedAt)
+    await fail(`Settings › Projects does not end with Deleted items: ${projectPages.join(', ')}`)
+  await pageA.locator('[data-settings-item="projects-deleted"]').click()
+  const deletedPage = pageA.locator('[data-settings-page="projects-deleted"]')
+  await deletedPage.locator('[data-deleted-items]').waitFor({ state: 'visible', timeout: 10000 })
+  if (((await deletedPage.locator('h1').textContent()) || '').trim() !== 'Deleted items')
+    await fail('the Deleted items page has no Deleted items heading')
+  if ((await deletedPage.getByText('30 days').count()) !== 0)
+    await fail('the Deleted items page names the 30 days an item stays')
+  log('A: Settings › Projects lists Deleted items last, and its page names no retention period')
 
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-billing`, {
     waitUntil: 'domcontentloaded',

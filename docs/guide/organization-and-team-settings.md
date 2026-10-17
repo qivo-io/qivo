@@ -65,8 +65,9 @@ The manifest lists record counts and file locations. Format version 2 stores
 tasks in `data/tasks.json`, with `task_links.json`, `task_labels.json` and
 `task_attachments.json` in the same folder. Related records use `task_id`.
 
-The export excludes personal inboxes, subscriptions, preferences, private
-backgrounds, login data, OAuth connections, credentials and Gravatar images.
+The export excludes [Deleted items](./how-work-is-organized.md#deleted-items),
+personal inboxes, subscriptions, preferences, private backgrounds, login
+data, OAuth connections, credentials and Gravatar images.
 Agent-key metadata contains neither the key nor its hash. Billing plans,
 subscriptions, usage and delivery records are also excluded. Review current
 usage in **Billing** and invoices through **Manage billing**.

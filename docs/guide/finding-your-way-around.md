@@ -18,7 +18,8 @@ admins, and for standard users when
 allows it.
 
 **Settings** opens **Your preferences** ([Your preferences](./working-together.md#who-a-person-is)). Its navigation also contains
-Organization settings, **Projects → All projects** and **Archived projects**.
+Organization settings and **Projects**, with **All projects**, **Archived
+projects** and **Deleted items** ([Deleted items](./how-work-is-organized.md#deleted-items)).
 In supported Windows and Linux desktop builds, **Desktop app** appears below
 **Your preferences** for startup, tray and notification settings
 ([Desktop app](./qivo-in-one-minute.md#desktop-app)).
@@ -150,7 +151,8 @@ own paths, `…/board/all` and `…/board/mine`. Opening a task adds
 Copying a task link uses its short permanent address. Opening that link
 keeps a saved My view scope if the task is yours; otherwise, it opens the
 task's project. Recipients still need access. Restore archived tasks from
-Archive before opening their links ([Archiving](./the-task-window.md#archiving)).
+Archive before opening their links ([Archiving](./the-task-window.md#archiving)),
+and deleted ones from Deleted items.
 
 ## Keyboard, in brief
 

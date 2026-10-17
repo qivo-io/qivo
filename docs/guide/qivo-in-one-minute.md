@@ -44,7 +44,10 @@ connection message. This keeps the current login and deadline.
 Sample people are fictional and cannot sign in. Agent connections, API
 credentials and additional workspaces require a regular account. Demo
 attachments and background images have a 5 MiB file limit and share a
-50 MiB storage allowance. Profile pictures have a 2 MiB limit. **Sign up for
+50 MiB storage allowance. Files of deleted tasks count toward it until you
+delete them for good in **Settings → Projects → Deleted items**
+([Deleted items](./how-work-is-organized.md#deleted-items)). Profile pictures
+have a 2 MiB limit. **Sign up for
 Qivo** opens regular signup without transferring the demo's contents.
 
 ## App updates

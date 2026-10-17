@@ -1,0 +1,230 @@
+import { getFunctionName } from 'convex/server'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+
+type Planner = typeof import('./planner')['P']
+type Task = Snapshot['issues'][number]
+
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: {
+    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+  },
+  signOut: vi.fn(),
+}))
+
+const NOW = '2026-09-14T08:00:00.000Z'
+
+/* What the Archive or delete window asks of the store. The signed-in member
+ * edits Work under Plan. The root task in Work has subtasks a (with aa under
+ * it) and b; c is a task of its own. The server's answer to each write is
+ * set per test, and no new delivery arrives, so the snapshot the store holds
+ * stays the one from before the write, as when a write is accepted but its
+ * delivery has not landed yet. */
+describe('archiving and deleting from the Archive or delete window', () => {
+  let P: Planner
+  let requests: { name: string; args: Record<string, unknown> }[]
+  // the server's answer per mutation name; a write without one never settles
+  let answers: Record<string, () => Promise<null>>
+
+  async function load() {
+    vi.resetModules()
+    vi.clearAllMocks()
+    vi.stubGlobal('window', { showToast: vi.fn() })
+    requests = []
+    answers = {}
+    network.query.mockResolvedValue(null)
+    network.mutation.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (name === 'identity:claimMySeats') return Promise.resolve(null)
+      requests.push({ name, args })
+      return answers[name]?.() ?? new Promise(() => {})
+    })
+    const snap: Snapshot = plannerFixture()
+    const org = snap.orgs[0].id
+    const me = snap.profiles[0]
+    me.org_role = 'user'
+    const base = snap.projects[0]
+    snap.projects = [
+      { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: me.id },
+      {
+        ...base,
+        id: 'work',
+        type: 'project',
+        key: 'WORK',
+        num: 2,
+        name: 'Work',
+        parent_id: 'plan',
+      },
+    ]
+    const task = (id: string, num: number, parent_id?: string): Task => ({
+      id,
+      org_id: org,
+      project_id: 'work',
+      parent_id,
+      num,
+      title: id,
+      description: '',
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    snap.issues.push(
+      task('root', 1),
+      task('a', 2, 'root'),
+      task('b', 3, 'root'),
+      task('aa', 4, 'a'),
+      task('c', 5),
+    )
+    network.onUpdate.mockImplementation((ref, _args, next) => {
+      if (getFunctionName(ref) === 'snapshot:forMe') next(structuredClone(snap))
+      return () => {}
+    })
+    const store = await import('./planner')
+    P = store.P
+    await store.initStore()
+  }
+
+  beforeEach(load)
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)
+  const handle = (uuid: string) => vm(uuid)?.id ?? ''
+  const accept = (name: string) => {
+    answers[name] = () => Promise.resolve(null)
+  }
+  const refuse = (name: string, message: string) => {
+    answers[name] = () => Promise.reject(new Error(message))
+  }
+  /* Another write is refused, so the store rolls back to the snapshot it
+     holds, from before the archive. */
+  const rollBack = async () => {
+    refuse('issues:update', 'refused')
+    P.updateIssue(handle('c'), { title: 'renamed' })
+    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
+  }
+
+  it('archives the task alone when its subtasks are kept, and keeps them through a rollback', async () => {
+    accept('issues:archive')
+    const archived = P.archiveIssue(handle('root'), '  Moved to the next release  ', true)
+    expect(vm('root')).toBeDefined() // nothing changes before the server answers
+    expect(await archived).toBe(true)
+    expect(requests).toEqual([
+      {
+        name: 'issues:archive',
+        args: expect.objectContaining({
+          id: 'root',
+          reason: 'Moved to the next release',
+          keep_subtasks: true,
+        }),
+      },
+    ])
+    expect(vm('root')).toBeUndefined()
+    // the direct subtasks become top-level tasks; theirs stay under them
+    expect(vm('a')?.parent).toBeNull()
+    expect(vm('b')?.parent).toBeNull()
+    expect(vm('aa')?.parent).toBe(handle('a'))
+
+    await rollBack()
+    expect(vm('root')).toBeUndefined()
+    expect(vm('a')?.parent).toBeNull()
+    expect(vm('b')).toBeDefined()
+    expect(vm('aa')?.parent).toBe(handle('a'))
+    expect(vm('c')?.title).toBe('c')
+  })
+
+  it('archives the whole subtree otherwise, and keeps it gone through a rollback', async () => {
+    accept('issues:archive')
+    expect(await P.archiveIssue(handle('root'), '')).toBe(true)
+    expect(requests[0].args).not.toHaveProperty('keep_subtasks')
+    expect(requests[0].args).not.toHaveProperty('reason')
+    expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([undefined, undefined, undefined, undefined])
+    await rollBack()
+    expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([undefined, undefined, undefined, undefined])
+    expect(vm('c')).toBeDefined()
+  })
+
+  it('changes nothing when the server refuses the archive, and a rollback brings nothing back', async () => {
+    refuse('issues:archive', 'a subtask is in a project you cannot edit')
+    expect(await P.archiveIssue(handle('root'), 'why', true)).toBe(false)
+    expect(window.showToast).toHaveBeenCalled()
+    expect(vm('root')).toBeDefined()
+    expect(vm('a')?.parent).toBe(handle('root'))
+    await rollBack()
+    expect(vm('root')).toBeDefined()
+    expect(vm('a')?.parent).toBe(handle('root'))
+  })
+
+  it('sends a delete reason trimmed, and none when it is blank', async () => {
+    accept('issues:deleteDeep')
+    expect(await P.deleteIssue(handle('c'), [], true, '  Duplicate  ')).toBe(true)
+    expect(requests[0]).toEqual({
+      name: 'issues:deleteDeep',
+      args: expect.objectContaining({ id: 'c', reason: 'Duplicate' }),
+    })
+    expect(await P.deleteIssue(handle('b'), [], true, '   ')).toBe(true)
+    expect(requests[1].args).not.toHaveProperty('reason')
+  })
+
+  it('waits for the server before a project leaves, and keeps it on a refusal', async () => {
+    refuse('projects:deleteDeep', 'requires the project lead')
+    expect(await P.removeProject('plan', 'Wrapped up')).toBe(false)
+    expect(P.project('plan')).toBeDefined()
+    expect(P.project('work')).toBeDefined()
+    expect(vm('root')).toBeDefined()
+
+    let settle: (value: null) => void = () => {}
+    answers['projects:deleteDeep'] = () => new Promise((resolve) => (settle = resolve))
+    const deleted = P.removeProject('plan', '  Wrapped up  ')
+    expect(requests.at(-1)).toEqual({
+      name: 'projects:deleteDeep',
+      args: expect.objectContaining({ id: 'plan', reason: 'Wrapped up' }),
+    })
+    expect(P.project('plan')).toBeDefined() // still there while the server works
+    settle(null)
+    expect(await deleted).toBe(true)
+    expect(P.project('plan')).toBeUndefined()
+    expect(P.project('work')).toBeUndefined()
+    expect(vm('root')).toBeUndefined()
+  })
+
+  it('keeps an accepted task delete through a rollback, with the subtasks it left behind detached', async () => {
+    accept('issues:deleteDeep')
+    expect(await P.deleteIssue(handle('a'), [], true)).toBe(true)
+    expect(vm('a')).toBeUndefined()
+    expect(vm('aa')?.parent).toBeNull()
+    await rollBack()
+    expect(vm('a')).toBeUndefined()
+    expect(vm('aa')?.parent).toBeNull()
+    expect(vm('root')).toBeDefined()
+    expect(vm('c')?.title).toBe('c')
+  })
+
+  it('keeps an accepted project delete through a rollback', async () => {
+    accept('projects:deleteDeep')
+    expect(await P.removeProject('plan')).toBe(true)
+    // a refused write outside the deleted project rolls the store back
+    refuse('labels:create', 'refused')
+    P.addLabel({ name: 'Firmware' })
+    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
+    expect(P.project('plan')).toBeUndefined()
+    expect(P.project('work')).toBeUndefined()
+    expect(['root', 'a', 'b', 'aa', 'c'].map(vm)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+})

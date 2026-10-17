@@ -25,8 +25,8 @@ import { DEMO_MODE } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
 import { P } from '../../store/planner'
-import { AccessRemovalModal } from '../Modals'
-import { BackLink, ConfirmButton, DemoCapabilityNotice, TextField, Toggle } from './controls'
+import { AccessRemovalModal, ArchiveOrDeleteProjectModal } from '../Modals'
+import { BackLink, DemoCapabilityNotice, TextField, Toggle } from './controls'
 
 // Show home projects first, then foreign organizations. Remember one expanded
 // project for this browser session; access settings determine visibility.
@@ -244,10 +244,38 @@ export function OrgProjectsPage({
 // parent restore together; independently archived children stay archived.
 export function ArchivedProjectsPage() {
   const [busy, setBusy] = useStateS(() => new Set<string>())
+  // the project whose Delete window is open
+  const [deleting, setDeleting] = useStateS<ArchivedProjectVM | null>(null)
+  // the rows on either side of it when the window opened, for focus
+  const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
   const all = P.archivedProjects
   // rows = what a person can act on: every archived project, plus the
   // sub-projects whose own project is still active. The rest are chips.
   const rows = all.filter((r) => !r.parentArchived)
+  const askDelete = (r: ArchivedProjectVM) => {
+    const at = rows.findIndex((row) => row.id === r.id)
+    deleteSides.current = { next: rows[at + 1]?.id, previous: rows[at - 1]?.id }
+    setDeleting(r)
+  }
+  /* Where focus goes when the Delete window closes. That is the row's Delete
+     while the row is there, else the next row's first button, the previous
+     row's, or the page heading, so focus never falls to the page body. */
+  const afterDelete = (id: string) => {
+    const own = document.querySelector<HTMLElement>(`[data-delete-project="${id}"]`)
+    if (own) return own
+    const buttonOf = (row?: string) =>
+      row === undefined
+        ? null
+        : document.querySelector<HTMLElement>(
+            `[data-archived-project="${row}"] button:not(:disabled)`,
+          )
+    const { next, previous } = deleteSides.current
+    return (
+      buttonOf(next) ??
+      buttonOf(previous) ??
+      document.querySelector<HTMLElement>('.settings-page-title h1')
+    )
+  }
   const restore = (r: ArchivedProjectVM) => {
     if (busy.has(r.id)) return
     setBusy((s: Set<string>) => new Set(s).add(r.id))
@@ -260,9 +288,12 @@ export function ArchivedProjectsPage() {
       if (ok) window.showToast?.(`Restored “${r.name}”`)
     })
   }
-  const del = (r: ArchivedProjectVM) => {
-    P.removeProject(r.id)
+  // the window waits for the server, so a refusal leaves it open
+  const del = async (r: ArchivedProjectVM, reason: string) => {
+    if (!(await P.removeProject(r.id, reason))) return false
+    setDeleting(null)
     window.showToast?.(`Deleted “${r.name}”`)
+    return true
   }
   return (
     <>
@@ -315,17 +346,15 @@ export function ArchivedProjectsPage() {
                         <Icon name="rotateCcw" size={16} />
                         {busy.has(r.id) ? 'Restoring…' : 'Restore'}
                       </Button>
-                      <ConfirmButton
-                        label="Delete"
+                      <Button
+                        type="button"
                         data-delete-project={r.id}
-                        confirmLabel={
-                          'Click again — deletes ' +
-                          (r.type === 'meta' ? 'it and its sub-projects' : 'it') +
-                          ' for good'
-                        }
-                        title={`Delete “${r.name}” and everything in it — this cannot be undone`}
-                        onConfirm={() => del(r)}
-                      />
+                        className="text-danger"
+                        onClick={() => askDelete(r)}
+                      >
+                        <Icon name="trash" size={16} />
+                        Delete
+                      </Button>
                     </>
                   ) : (
                     <span className="[font-size:var(--fs-xs)] [color:var(--text-2)] [font-style:italic]">
@@ -370,10 +399,20 @@ export function ArchivedProjectsPage() {
         {rows.length > 0 && (
           <FieldHint>
             Sub-projects archived separately need to be restored separately. Deleting a project
-            permanently deletes its sub-projects and tasks.
+            deletes its sub-projects and tasks.
           </FieldHint>
         )}
       </SettingsSection>
+      {deleting && (
+        <ArchiveOrDeleteProjectModal
+          key={deleting.id}
+          project={deleting}
+          deleteOnly
+          onClose={() => setDeleting(null)}
+          onDelete={(reason) => del(deleting, reason)}
+          focusAfterClose={() => afterDelete(deleting.id)}
+        />
+      )}
     </>
   )
 }
@@ -383,11 +422,16 @@ export function ProjectPage({
   setPage,
   onBackPage = setPage,
   onProjectGone,
+  onLeaving,
 }: {
   projectId: string
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
   onProjectGone?: (parent: string | null) => void
+  /** told the project's id while its delete waits for the server, and null
+      when the server refused it. The delivery that drops the project usually
+      lands before the answer, and this page leaves on its own after it. */
+  onLeaving?: (projectId: string | null) => void
 }) {
   const proj = P.project(projectId)
   const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
@@ -401,7 +445,50 @@ export function ProjectPage({
   const [inviting, setInviting] = useStateS(false)
   useUpdateBlocker(!!inviteEmail || inviting)
   const accessHeading = React.useRef<HTMLDivElement>(null)
-  if (!proj) return null
+  /* The Archive or delete window, from the section at the end of the page.
+     It holds the project as it was when the window opened, so it stays up
+     when a delete it sent drops the project before the server's answer. */
+  const [removing, setRemoving] = useStateS<ProjectVM | null>(null)
+  const removeButton = React.useRef<HTMLButtonElement>(null)
+  const removalWindow = (shown: ProjectVM) => {
+    // Archiving lands on the Archived projects page rather than back on the
+    // list, because the page that can take it back is where you should be
+    // standing when the toast appears.
+    const archive = () => {
+      setRemoving(null)
+      P.archiveProject(shown.id)
+      window.showToast?.(`Archived “${shown.name}”`)
+      onProjectGone?.(shown.parent || null)
+      setPage('projects-archived')
+    }
+    // the window waits for the server, so a refusal leaves it open
+    const del = async (reason: string) => {
+      const parent = shown.parent || null
+      onLeaving?.(shown.id)
+      if (!(await P.removeProject(shown.id, reason))) {
+        onLeaving?.(null)
+        return false
+      }
+      setRemoving(null)
+      window.showToast?.(`Deleted “${shown.name}”`)
+      onProjectGone?.(parent)
+      // a sub-project falls back to its project; a project back to the list it
+      // was opened from (never to some other project the caller may not see)
+      if (parent && P.project(parent)) setPage(`project:${parent}`)
+      else setPage('projects')
+      return true
+    }
+    return (
+      <ArchiveOrDeleteProjectModal
+        project={shown}
+        onClose={() => setRemoving(null)}
+        onArchive={archive}
+        onDelete={del}
+        focusAfterClose={() => removeButton.current}
+      />
+    )
+  }
+  if (!proj) return removing ? removalWindow(removing) : null
   const isMeta = proj.type === 'meta'
   const parentMeta = proj.parent ? P.project(proj.parent) : null
   // what an empty Review time box means: the parent project's effective
@@ -412,9 +499,6 @@ export function ProjectPage({
         .map((id) => P.project(id))
         .filter((child) => !!child && P.canSee(child.id))
     : []
-  const issueCount = (
-    isMeta ? [proj.id, ...visibleChildren.map((child) => child.id)] : [proj.id]
-  ).reduce((s, pid) => s + P.issues.filter((i) => i.project === pid).length, 0)
   // Organization admins already have full access; everyone else can receive
   // a direct grant independently of team membership.
   const grantable = P.usersFor(proj.id).filter((u) => u.orgRole !== 'admin' && !proj.access?.[u.id])
@@ -428,28 +512,6 @@ export function ProjectPage({
   const canInvite =
     canManageUsers && (!inviteTarget || P.canManageProjectUser(proj.id, inviteTarget.id))
   const subCount = visibleChildren.length
-  const del = () => {
-    const parent = proj.parent || null
-    const label = proj.name
-    P.removeProject(proj.id)
-    window.showToast?.(`Deleted “${label}”`)
-    onProjectGone?.(parent)
-    // a sub-project falls back to its project; a project back to the list it
-    // was opened from (never to some other project the caller may not see)
-    if (parent && P.project(parent)) setPage(`project:${parent}`)
-    else setPage('projects')
-  }
-  /* Archiving lands on the Archived projects page rather than back on the
-     list. The two are the same act from here — the project leaves — and the
-     difference is that this one can be taken back, so the page that can take
-     it back is where you should be standing when the toast appears. */
-  const archive = () => {
-    const label = proj.name
-    P.archiveProject(proj.id)
-    window.showToast?.(`Archived “${label}”`)
-    onProjectGone?.(proj.parent || null)
-    setPage('projects-archived')
-  }
   return (
     <>
       {/* A sub-project goes back to the project above it, anything else to the
@@ -727,44 +789,32 @@ export function ProjectPage({
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Danger zone" tone="danger">
-        {/* Archive sits above Delete on purpose: it is the answer to almost
-            every reason someone opens this box, and it is the only one of the
-            two you can take back. */}
-        <div className="[display:flex] [align-items:center] [gap:8px] [margin-bottom:8px]">
-          <div className="[flex:1] [font-size:var(--fs-sm)] [color:var(--text-2)] [line-height:1.5]">
-            {isMeta
-              ? subCount
-                ? `Also archives ${subCount} sub-project${subCount === 1 ? '' : 's'}.`
-                : 'Restore it from Archived projects.'
-              : 'Restore it from Archived projects.'}
-          </div>
-          <ConfirmButton
-            danger={false}
-            icon="archive"
-            data-archive-project={proj.id}
-            label={`Archive ${isMeta ? 'project' : 'sub-project'}`}
-            confirmLabel="Confirm archive"
+      {/* Archive is the answer to almost every reason someone opens this, and
+          the window offers it first; the counts come with the window, because
+          only the lead may read them and the store holds no archived tasks. */}
+      <SettingsSection title="Archive or delete" data-project-removal={proj.id}>
+        <div className="flex items-center gap-4">
+          <p className="min-w-0 flex-1 text-sm leading-normal text-text-2">
+            {isLead && isMeta && subCount
+              ? `Archive hides it and its ${subCount} sub-project${subCount === 1 ? '' : 's'}. Delete moves them and their tasks to Deleted items.`
+              : isMeta && !isLead
+                ? 'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.'
+                : 'Archive hides it. Delete moves it and its tasks to Deleted items.'}
+          </p>
+          <Button
+            ref={removeButton}
+            type="button"
+            data-remove-project={proj.id}
             disabled={!isLead}
-            title={isLead ? `Archive “${proj.name}”` : "Only the project's lead can archive it"}
-            onConfirm={archive}
-          />
-        </div>
-        <div className="[display:flex] [align-items:center] [gap:8px]">
-          <div className="[flex:1] [font-size:var(--fs-sm)] [color:var(--text-2)] [line-height:1.5]">
-            {isMeta
-              ? 'Permanently deletes this project, its sub-projects and their tasks.'
-              : 'Permanently deletes this sub-project and its tasks.'}
-          </div>
-          <ConfirmButton
-            label={`Delete ${isMeta ? 'project' : 'sub-project'}`}
-            confirmLabel={`Click again — deletes ${issueCount} task${issueCount === 1 ? '' : 's'}`}
-            disabled={!isLead}
-            title={isLead ? `Delete “${proj.name}”` : "Only the project's lead can delete it"}
-            onConfirm={del}
-          />
+            title={isLead ? undefined : "Only the project's lead can archive or delete it"}
+            onClick={() => setRemoving(proj)}
+          >
+            <Icon name="archive" size={16} />
+            Archive or delete…
+          </Button>
         </div>
       </SettingsSection>
+      {removing && removalWindow(removing)}
     </>
   )
 }
