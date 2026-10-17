@@ -197,4 +197,34 @@ describe('archiving and deleting from the Archive or delete window', () => {
     expect(P.project('work')).toBeUndefined()
     expect(vm('root')).toBeUndefined()
   })
+
+  it('keeps an accepted task delete through a rollback, with the subtasks it left behind detached', async () => {
+    accept('issues:deleteDeep')
+    expect(await P.deleteIssue(handle('a'), [], true)).toBe(true)
+    expect(vm('a')).toBeUndefined()
+    expect(vm('aa')?.parent).toBeNull()
+    await rollBack()
+    expect(vm('a')).toBeUndefined()
+    expect(vm('aa')?.parent).toBeNull()
+    expect(vm('root')).toBeDefined()
+    expect(vm('c')?.title).toBe('c')
+  })
+
+  it('keeps an accepted project delete through a rollback', async () => {
+    accept('projects:deleteDeep')
+    expect(await P.removeProject('plan')).toBe(true)
+    // a refused write outside the deleted project rolls the store back
+    refuse('labels:create', 'refused')
+    P.addLabel({ name: 'Firmware' })
+    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
+    expect(P.project('plan')).toBeUndefined()
+    expect(P.project('work')).toBeUndefined()
+    expect(['root', 'a', 'b', 'aa', 'c'].map(vm)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
 })
