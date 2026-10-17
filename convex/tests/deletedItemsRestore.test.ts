@@ -2214,4 +2214,37 @@ describe('the storage files bill', () => {
     expect(await billed(t, org_id)).toEqual(before)
     await assertNoDanglingRefs(t, 'after the files of a project came back')
   })
+
+  it('gives the files of a subtask a split hands over after the fill its project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
+    await attach(t, sub, 7)
+    // more tasks in Board rev, so its item's restore_tasks takes steps
+    for (let i = 0; i < 3; i++) await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
+    const taskItem = await itemFor(t, root.id)
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    const projectItem = await itemFor(t, f.sub2.id)
+
+    // Board rev's item stops inside restore_tasks, past its rows
+    TRASH_BUDGET.tasks = 1
+    await restore(t, f.user, [projectItem.id])
+    expect(await jobFor(t, projectItem.id)).toMatchObject({ phase: 'restore_tasks' })
+    // the task's restore hands the subtask and its file to that item
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await restore(t, f.user, [taskItem.id])
+    expect((await storedTasks(t, projectItem.id)).map((x) => x.task_id)).toContain(sub.id)
+
+    // its fill writes the subtask, then its reveal meets the file late
+    TRASH_BUDGET.tasks = 1
+    await stepThrough(t, projectItem.id)
+    expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
+    expect(await filesOf(t, sub.id)).toEqual([[7, f.sub2.id]])
+    expect((await billed(t, org_id)).projects[f.sub2.id]).toBe(7)
+    await assertNoDanglingRefs(t, 'after a split subtask and its file came back')
+  })
 })
