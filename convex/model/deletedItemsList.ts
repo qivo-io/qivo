@@ -13,13 +13,16 @@
  * for a sub-project) and the task items with a subtask in it
  * (deleted_tasks.by_org_cross_project). Every range is read newest first up
  * to LIST.cap items, and a seat lists at most LIST.cap; `capped` says when
- * more may exist. A `deleted_by` filter keeps one person's deletes, judged
- * by the reference predicate, so a seat that reuses the id of someone
- * removed does not take over their deletes. An admin's seat reads that
- * person's range instead of the newest items, so it reaches older ones.
- * Every other seat filters the ranges it reads anyway: a range of someone
- * else's deletes would hold items hidden from the seat, and `capped` would
- * then tell how many there are. */
+ * more may exist. The two ranges of stored rows hold a row per project the
+ * person led and per subtask, so several of their rows can name one item.
+ * They count distinct items and stop after LIST.bytes of rows. A
+ * `deleted_by` filter keeps one person's deletes, judged by the reference
+ * predicate, so a seat that reuses the id of someone removed does not take
+ * over their deletes. An admin's seat reads that person's range instead of
+ * the newest items, so it reaches older ones. Every other seat filters the
+ * ranges it reads anyway: a range of someone else's deletes would hold
+ * items hidden from the seat, and `capped` would then tell how many there
+ * are. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -38,12 +41,14 @@ import {
   sightOf,
   viewOf,
 } from './deletedItems'
+import { estimateDocumentBytes } from './demoMetrics'
 
 type Item = Doc<'deleted_items'>
 
-/** The most items one organization lists. A mutable object, so tests can
- * lower it. */
-export const LIST = { cap: 2000 }
+/** The most items one organization lists, and the most bytes (estimated)
+ * one range of stored rows reads to find its items. A mutable object, so
+ * tests can lower it. */
+export const LIST = { cap: 2000, bytes: 2 * 1024 * 1024 }
 
 /** The most hits one search returns, and the search results it looks at per
  * organization to find them. */
@@ -171,6 +176,25 @@ async function candidatesOf(
     if (read.length > LIST.cap) truncated = true
     return read
   }
+  // A range of stored rows can name one item several times, so it counts
+  // the items it names, and its bytes, since stored rows vary in size.
+  const takeItemIds = async (rows: AsyncIterable<{ item_id: string }>): Promise<Set<string>> => {
+    const ids = new Set<string>()
+    let bytes = 0
+    for await (const row of rows) {
+      if (bytes > LIST.bytes) {
+        truncated = true
+        break
+      }
+      ids.add(row.item_id)
+      bytes += estimateDocumentBytes(row)
+      if (ids.size > LIST.cap) {
+        truncated = true
+        break
+      }
+    }
+    return ids
+  }
   const items = ctx.db.query('deleted_items')
   const add = (rows: Item[]) => {
     for (const item of rows) found.set(item.id, item)
@@ -201,12 +225,14 @@ async function candidatesOf(
         .order('desc'),
     ),
   )
-  const led = await take(
-    ctx.db
-      .query('deleted_rows')
-      .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', me.id)),
+  await addIds(
+    await takeItemIds(
+      ctx.db
+        .query('deleted_rows')
+        .withIndex('by_org_lead', (q) => q.eq('org_id', org).eq('lead_id', me.id))
+        .order('desc'),
+    ),
   )
-  await addIds(led.map((row) => row.item_id))
   const leads = (p: Doc<'projects'> | undefined) => p !== undefined && levels.levelOf(p) === 'lead'
   for (const p of sight.projects.values()) {
     if (p.type === 'meta') {
@@ -230,13 +256,16 @@ async function candidatesOf(
             .order('desc'),
         ),
       )
-    const cross = await take(
-      ctx.db
-        .query('deleted_tasks')
-        .withIndex('by_org_cross_project', (q) => q.eq('org_id', org).eq('cross_project_id', p.id))
-        .order('desc'),
+    await addIds(
+      await takeItemIds(
+        ctx.db
+          .query('deleted_tasks')
+          .withIndex('by_org_cross_project', (q) =>
+            q.eq('org_id', org).eq('cross_project_id', p.id),
+          )
+          .order('desc'),
+      ),
     )
-    await addIds(cross.map((task) => task.item_id))
   }
   return { items: [...found.values()], truncated }
 }
