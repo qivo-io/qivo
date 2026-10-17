@@ -646,7 +646,8 @@ export async function listArchivedIssuesCore(
     : []
 
   /* Whether the filters keep `task`. An archived task is a group while it
-   * has any subtask, which is read only when a filter needs it. Search first
+   * has any subtask, which is read only when a filter still needs it after
+   * the stored fields, such as a status that matches. Search first
    * tries the text without the status line and labels, which needs no read.
    * More text never undoes a match, so a task that matches there matches. */
   const keeps = async (task: ArchivedTask): Promise<boolean> => {
@@ -654,7 +655,7 @@ export async function listArchivedIssuesCore(
     if (o.assignee && task.assignee_id !== o.assignee) return false
     let group: boolean | undefined
     const isGroup = async () => (group ??= (await firstSubtask(ctx, task)) !== null)
-    if (statuses !== null && ((await isGroup()) || !statuses.includes(task.status))) return false
+    if (statuses !== null && (!statuses.includes(task.status) || (await isGroup()))) return false
     if (o.owner && taskOwnerId(task, await isGroup()) !== o.owner) return false
     if (matches === null) return true
     const fields = searchFields(task, names)
