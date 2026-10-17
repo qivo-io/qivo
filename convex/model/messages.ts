@@ -737,7 +737,7 @@ export async function snoozeMessages(
  * stored before, every archive path schedules background steps
  * (scheduleArchivedReads). Those paths are archiveIssueCore and the machine
  * toggle in updateIssueCore with the subtree they stamp, the nightly sweep
- * (jobs.ts archiveDoneIssues) and archiveProjectCore. The marking happens
+ * (jobs.ts archiveOrg) and archiveProjectCore. The marking happens
  * in steps because one task can have many followers with up to
  * ITEM_UNREAD_CAP + 1 rows each, so a big subtree, a project or a nightly
  * leg could pass the archiving transaction's write limit. Each step marks
@@ -1133,7 +1133,7 @@ export async function notifyIssueInsert(
  * descendants (model/issues.ts archiveSubtree), so one archive click is one
  * message, the root's, per subscriber. The flag sits upstream of the
  * fan-out, so it cannot multiply per subscriber. The nightly archive sweep
- * (jobs.ts archiveDoneIssues) does not call this and posts no message.
+ * (jobs.ts archiveOrg) does not call this and posts no message.
  *
  * Ownership (#314): when the task passes to someone else (lib/review.ts's
  * taskOwnerId), the new owner starts following it. A reviewer handed the

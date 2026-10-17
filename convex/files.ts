@@ -362,9 +362,9 @@ export const gatewayAvatar = internalQuery({
  * that checks its file makes one of the two transactions retry. The leg
  * then keeps the file, or the attach finds the bytes gone and refuses. A
  * file that loses its last reference after its leg survives until the next
- * run. As in jobs.ts, a failed leg ends the run without an audit row and
- * earlier legs stay committed, so a missing weekly reap_orphans row in
- * Admin › Audit is the signal. */
+ * run. A failed leg ends the run without an audit row and earlier legs stay
+ * committed, so a missing weekly reap_orphans row in Admin › Audit is the
+ * signal. */
 
 /** The most rows one reapOrphans leg handles in each phase. A stored file
  * older than the floor costs storageIdInUse's index ranges, six today, so a

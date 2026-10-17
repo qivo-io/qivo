@@ -636,11 +636,17 @@ export default defineSchema({
     .index('by_org', ['org_id'])
     // The working snapshot and planning reads do not scan archived task bodies.
     .index('by_org_archived', ['org_id', 'archived_at'])
+    // The nightly archive reads only Done tasks past the shortest threshold.
+    .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
+    // The nightly repair finds active tasks still flagged relations_marked.
+    .index('by_org_archived_marked', ['org_id', 'archived_at', 'relations_marked'])
     .index('by_org_num', ['org_id', 'num'])
     .index('by_project', ['project_id'])
     // An access removal reads only the open tasks of the projects it touches.
     .index('by_project_archived', ['project_id', 'archived_at'])
     .index('by_parent', ['parent_id'])
+    // The nightly leaf guard asks whether a parent has an unarchived child.
+    .index('by_parent_archived', ['parent_id', 'archived_at'])
     // Profile refs for removeProfile's SET NULLs. The removal transaction
     // reads only open tasks (archived_at absent), the background steps the
     // whole range.

@@ -1,10 +1,11 @@
 /* The nightly jobs (jobs.ts) — the archive sweep's SQL semantics (single
  * snapshot, the archived-project drop, the leaf guard), its thresholds (the
  * standard default for teamless projects, a legacy team's saved value where
- * one remains) and its bounded legs, and the read-message retention sweep
- * (per-profile period; absent is Never for a person and the default for an
- * agent) and its bounded legs, plus the counts-only platform_audit_log row
- * each run writes in-transaction.
+ * one remains), its chain per organization and bounded legs, and the
+ * read-message retention sweep (per-profile period; absent is Never for a
+ * person and the default for an agent), its chain per page of profiles and
+ * bounded legs, plus the platform_audit_log row each run's dispatcher writes
+ * and the counts each chain logs.
  * The weekly reap-orphan-files cron targets files.reapOrphans (crons.ts),
  * which runs in bounded legs and audits itself; its sweep is tested here
  * with the others.
@@ -12,7 +13,10 @@
  * The single-snapshot test is the pin against 0106's one-UPDATE reading: a
  * done parent whose done child was archived THIS run waits until tomorrow —
  * the design doc's "iterate to fixpoint" would archive the whole chain in one
- * night, a behavior change. */
+ * night, a behavior change.
+ *
+ * The isolation tests pin the reason for the chains. A leg that fails every
+ * time stops only its own organization or page of profiles. */
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
@@ -20,7 +24,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
-import { ARCHIVE_BATCH, SWEEP_BATCH, SWEEP_PROFILES } from '../jobs'
+import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
 import { ITEM_UNREAD_CAP, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, messageRetentionDays } from '../model/people'
@@ -47,6 +51,13 @@ declare class Blob {
 const DAY = 86_400_000
 const ago = (days: number) => new Date(Date.now() - days * DAY).toISOString()
 
+const DEFAULT_ARCHIVE_LIMITS = { ...ARCHIVE_LIMITS }
+const DEFAULT_SWEEP_LIMITS = { ...SWEEP_LIMITS }
+afterEach(() => {
+  Object.assign(ARCHIVE_LIMITS, DEFAULT_ARCHIVE_LIMITS)
+  Object.assign(SWEEP_LIMITS, DEFAULT_SWEEP_LIMITS)
+})
+
 const issueRow = (t: T, id: string): Promise<Doc<'issues'> | null> =>
   t.run(
     async (ctx) =>
@@ -62,30 +73,66 @@ const auditRows = (t: T, action: string): Promise<Doc<'platform_audit_log'>[]> =
     return rows.filter((r) => r.action === action)
   })
 
-/* One nightly run: the cron's first leg and every leg it schedules. `now`
- * pins the run's clock; without it the first leg reads the current time. */
-async function runLegs(t: T, now?: string): Promise<void> {
+/* The scheduled calls of one function the run made, in schedule order. */
+const scheduled = async (t: T, name: string) =>
+  (await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())).filter((job) =>
+    job.name.includes(name),
+  )
+
+/* Runs `start`, then every call it schedules, on fake timers. Returns the
+ * second argument of every console.info call with `message`, the counts a
+ * chain logs on its last leg. */
+async function runLogged<Counts>(
+  t: T,
+  start: () => Promise<unknown>,
+  message: string,
+): Promise<Counts[]> {
+  const info = vi.spyOn(console, 'info').mockImplementation(() => {})
   vi.useFakeTimers()
   try {
-    await t.mutation(internal.jobs.archiveDoneIssues, now === undefined ? {} : { now })
+    await start()
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    return info.mock.calls.filter(([m]) => m === message).map(([, counts]) => counts as Counts)
   } finally {
     vi.useRealTimers()
+    info.mockRestore()
   }
 }
 
-/* One nightly run that must succeed. Returns the archived count from the
- * run's audit row. */
+type ArchiveCounts = {
+  org_id: string
+  archived: number
+  flagged: number
+  now: string
+}
+
+/* Runs one nightly archive, the cron's first step and everything it
+ * schedules. `now` pins the run's clock, and without it the first step reads
+ * the current time. Returns the counts each organization's chain logged. */
+const runLegs = (t: T, now?: string): Promise<ArchiveCounts[]> =>
+  runLogged(
+    t,
+    () => t.mutation(internal.jobs.archiveDoneIssues, now === undefined ? {} : { now }),
+    'Auto-archive finished',
+  )
+
+/* One nightly run that must write its audit row. Returns how many tasks the
+ * chains archived. */
 async function runArchive(t: T, now?: string): Promise<number> {
-  await runLegs(t, now)
-  const last = (await auditRows(t, 'archive_done_issues')).at(-1)
-  if (last === undefined) throw new Error('the archive run wrote no audit row')
-  return (last.detail as { archived: number }).archived
+  const before = (await auditRows(t, 'archive_done_issues')).length
+  const chains = await runLegs(t, now)
+  if ((await auditRows(t, 'archive_done_issues')).length !== before + 1) {
+    throw new Error('the archive run wrote no audit row')
+  }
+  return chains.reduce((sum, chain) => sum + chain.archived, 0)
 }
 
 /* A test deployment that enforces tighter transaction limits than Convex. */
-const limitedT = (transactionLimits: { documentsRead?: number; documentsWritten?: number }): T =>
-  newT({ transactionLimits })
+const limitedT = (transactionLimits: {
+  documentsRead?: number
+  documentsWritten?: number
+  bytesRead?: number
+}): T => newT({ transactionLimits })
 
 /* Inserts `count` tasks of one shape in a single transaction. */
 let bulkNum = 10_000
@@ -111,6 +158,43 @@ const plantTasks = (
     }
   })
 
+/* An organization row with `id` and one teamless project, for tests that
+ * need several organizations in a known order. */
+async function plantOrg(t: T, id: string): Promise<Doc<'projects'>> {
+  await t.run(async (ctx) => {
+    await ctx.db.insert('organizations', {
+      id,
+      name: 'Sweep',
+      slug: `sweep-${id}`,
+      created_at: NOW,
+      next_issue_num: 1,
+      next_project_num: 1,
+      date_format: 'iso',
+      week_start: 1,
+      week_one_rule: 'first4day',
+      default_plannable_hours: 40,
+      gravatar_avatars: false,
+    })
+  })
+  return await plantProject(t, { org_id: id })
+}
+
+/* Runs `work` with console.error silenced and returns whether a failed
+ * scheduled call reported the document read limit. */
+async function failsOnReads(work: () => Promise<unknown>): Promise<boolean> {
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await work()
+    return logged.mock.calls.some(([, error]) =>
+      String((error as { message?: string } | undefined)?.message).includes(
+        'Scanned too many documents',
+      ),
+    )
+  } finally {
+    logged.mockRestore()
+  }
+}
+
 describe('archiveDoneIssues — the 0106 predicate', () => {
   it('archives Done tasks in a teamless project from the standard threshold on; younger and unstamped ones stay', async () => {
     const t = newT()
@@ -130,7 +214,11 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       done_at: new Date(cutoff + 1).toISOString(),
     })
     // the demo-seed fact: done_at never given ⇒ the sweep never takes it
-    const noStamp = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
+    const noStamp = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+    })
     const open = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -166,7 +254,12 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       await ctx.db.patch(f.sub2._id, { team_id: quick })
     })
     const done = (project_id: string, days: number) =>
-      plantIssue(t, { org_id: f.org.id, project_id, status: 'done', done_at: ago(days) })
+      plantIssue(t, {
+        org_id: f.org.id,
+        project_id,
+        status: 'done',
+        done_at: ago(days),
+      })
     // f.sub has no team of its own, so its root's 90 days apply
     const rootKept = await done(f.sub.id, 40)
     const rootDue = await done(f.sub.id, 91)
@@ -227,7 +320,59 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect((await issueRow(t, done.id))?.archived_at).toBeUndefined()
   })
 
-  it('every run writes one counts-only audit row in the same transaction, zero-count runs included', async () => {
+  it('a done parent waits for an active child in any project, an archived one included', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const archivedSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: ago(1),
+    })
+    const due = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done' as const,
+      done_at: ago(40),
+    }
+    const shelvedParent = await plantIssue(t, due)
+    // its only active child sits in an archived sub-project, which the sweep leaves alone
+    await plantIssue(t, {
+      ...due,
+      project_id: archivedSub.id,
+      parent_id: shelvedParent.id,
+    })
+    const busyParent = await plantIssue(t, due)
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: busyParent.id,
+      status: 'todo',
+    })
+
+    expect(await runArchive(t)).toBe(0)
+    expect(await runArchive(t)).toBe(0)
+    expect((await issueRow(t, shelvedParent.id))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, busyParent.id))?.archived_at).toBeUndefined()
+  })
+
+  it('a task archived before keeps its own stamp', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const earlier = ago(5)
+    const shelved = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(40),
+      archived_at: earlier,
+    })
+
+    expect(await runArchive(t)).toBe(0)
+    expect((await issueRow(t, shelved.id))?.archived_at).toBe(earlier)
+  })
+
+  it('each run writes one audit row with the organizations it scheduled, and each chain logs its own counts', async () => {
     const t = newT()
     const f = await withOrg(t)
     await plantIssue(t, {
@@ -237,98 +382,28 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
       done_at: ago(40),
     })
 
-    await runArchive(t)
-    await runArchive(t)
+    const first = await runLegs(t)
+    // nothing left to do, so no chain logs
+    expect(await runLegs(t)).toEqual([])
 
     const rows = await auditRows(t, 'archive_done_issues')
-    expect(rows).toHaveLength(2)
-    expect(rows.map((r) => r.detail)).toEqual([{ archived: 1 }, { archived: 0 }])
+    expect(first).toEqual([{ org_id: f.org.id, archived: 1, flagged: 0, now: rows[0].ts }])
+    // withOrg plants two organizations
+    expect(rows.map((r) => r.detail)).toEqual([{ organizations: 2 }, { organizations: 2 }])
     for (const r of rows) {
       expect(r.actor_email).toBe('system')
       expect(r.actor_auth_id).toBeUndefined()
       expect(r.ts).toBeDefined()
     }
   })
-})
 
-describe('archiveDoneIssues — bounded legs', () => {
-  it('reads one organization per leg', async () => {
-    // Both organizations' tasks together exceed this read budget; either
-    // organization alone fits.
-    const t = limitedT({ documentsRead: 1000 })
-    const f = await withOrg(t)
-    const otherSub = await plantProject(t, {
-      org_id: f.otherOrg.id,
-      type: 'project',
-      parent_id: f.otherProject.id,
-    })
-    const here = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      status: 'done',
-      done_at: ago(40),
-    })
-    const there = await plantIssue(t, {
-      org_id: f.otherOrg.id,
-      project_id: otherSub.id,
-      status: 'done',
-      done_at: ago(40),
-    })
-    await plantTasks(t, 600, { org_id: f.org.id, project_id: f.sub.id })
-    await plantTasks(t, 600, { org_id: f.otherOrg.id, project_id: otherSub.id })
-
-    expect(await runArchive(t)).toBe(2)
-    expect((await issueRow(t, here.id))?.archived_at).toBeDefined()
-    expect((await issueRow(t, there.id))?.archived_at).toBeDefined()
-  })
-
-  it('drains a larger backlog in the same run, and a parent whose child went in an earlier leg still waits', async () => {
-    // One leg's writes fit this budget; the whole backlog in one transaction would not.
-    const t = limitedT({ documentsWritten: ARCHIVE_BATCH + 10 })
-    const f = await withOrg(t)
-    const due = {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      status: 'done' as const,
-      done_at: ago(40),
-    }
-    const parentId = uuid()
-    // The child is the oldest row, so the first leg archives it.
-    await plantTasks(t, 1, { ...due, parent_id: parentId })
-    await plantTasks(t, ARCHIVE_BATCH, due)
-    await plantTasks(t, ARCHIVE_BATCH - 1, due)
-    await plantTasks(t, 1, { ...due, id: parentId })
-
-    expect(await runArchive(t)).toBe(2 * ARCHIVE_BATCH)
-    expect((await issueRow(t, parentId))?.archived_at).toBeUndefined()
-
-    expect(await runArchive(t)).toBe(1)
-    expect((await issueRow(t, parentId))?.archived_at).toBeDefined()
-  })
-
-  it('a failing leg keeps earlier legs, writes no audit row and stops the organizations after it', async () => {
-    // The middle organization's tasks exceed this read budget on every
-    // attempt; the other two fit.
-    const t = limitedT({ documentsRead: 1000 })
-    const [first, middle, last] = [uuid(), uuid(), uuid()].sort()
+  it('schedules one chain per organization, ARCHIVE_LIMITS.orgs organizations per step', async () => {
+    ARCHIVE_LIMITS.orgs = 2
+    const t = newT()
     const due = new Map<string, string>()
-    for (const org_id of [first, middle, last]) {
-      await t.run(async (ctx) => {
-        await ctx.db.insert('organizations', {
-          id: org_id,
-          name: 'Sweep',
-          slug: `sweep-${org_id}`,
-          created_at: NOW,
-          next_issue_num: 1,
-          next_project_num: 1,
-          date_format: 'iso',
-          week_start: 1,
-          week_one_rule: 'first4day',
-          default_plannable_hours: 40,
-          gravatar_avatars: false,
-        })
-      })
-      const project = await plantProject(t, { org_id })
+    for (let n = 0; n < 5; n++) {
+      const org_id = uuid()
+      const project = await plantOrg(t, org_id)
       const task = await plantIssue(t, {
         org_id,
         project_id: project.id,
@@ -336,41 +411,266 @@ describe('archiveDoneIssues — bounded legs', () => {
         done_at: ago(40),
       })
       due.set(org_id, task.id)
-      if (org_id === middle) await plantTasks(t, 1000, { org_id, project_id: project.id })
     }
 
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      await runLegs(t)
-      expect(logged).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ message: expect.stringContaining('Scanned too many documents') }),
-      )
-    } finally {
-      logged.mockRestore()
-    }
+    const chains = await runLegs(t)
 
-    expect((await issueRow(t, due.get(first) ?? ''))?.archived_at).toBeDefined()
-    expect((await issueRow(t, due.get(middle) ?? ''))?.archived_at).toBeUndefined()
-    // The known limit (jobs.ts header): nothing schedules the later legs.
-    expect((await issueRow(t, due.get(last) ?? ''))?.archived_at).toBeUndefined()
-    expect(await auditRows(t, 'archive_done_issues')).toEqual([])
+    expect(chains.map((c) => c.org_id).sort()).toEqual([...due.keys()].sort())
+    for (const id of due.values()) expect((await issueRow(t, id))?.archived_at).toBeDefined()
+    expect(await scheduled(t, 'archiveDoneIssues')).toHaveLength(2)
+    // nothing is flagged, so each chain ends after its one archive leg
+    const legs = await scheduled(t, 'archiveOrg')
+    expect(legs.map((job) => job.args[0].phase)).toEqual(Array(5).fill('archive'))
+    expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
+      { organizations: 5 },
+    ])
   })
 })
 
-/* One nightly read-message sweep, the cron's first leg and every leg it
- * schedules. Returns the counts from the run's audit row. */
+describe('archiveDoneIssues keeps every leg bounded', () => {
+  it('reads only the due Done tasks, however many open tasks the organization holds', async () => {
+    const t = limitedT({ documentsRead: 200 })
+    const f = await withOrg(t)
+    const due = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done' as const,
+    }
+    const tasks = [
+      await plantIssue(t, { ...due, done_at: ago(40) }),
+      await plantIssue(t, { ...due, done_at: ago(50) }),
+      await plantIssue(t, { ...due, done_at: ago(60) }),
+    ]
+    await plantTasks(t, 5000, { org_id: f.org.id, project_id: f.sub.id })
+
+    expect(await runArchive(t)).toBe(3)
+    for (const task of tasks) expect((await issueRow(t, task.id))?.archived_at).toBeDefined()
+  })
+
+  it('ends a leg at ARCHIVE_LIMITS.bytes, so large descriptions take several legs', async () => {
+    ARCHIVE_LIMITS.bytes = 200_000
+    // One leg reads about 400 KB, its candidates and the rows it patches.
+    // The 40 tasks together are about 800 KB.
+    const t = limitedT({ bytesRead: 600_000 })
+    const f = await withOrg(t)
+    await plantTasks(t, 40, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(40),
+      description: 'x'.repeat(20_000),
+    })
+
+    expect(await runArchive(t)).toBe(40)
+    const legs = await scheduled(t, 'archiveOrg')
+    expect(legs.filter((job) => job.args[0].phase === 'archive').length).toBeGreaterThan(2)
+  })
+
+  it('drains a backlog over several legs of one run, and a parent whose child went in an earlier leg still waits', async () => {
+    ARCHIVE_LIMITS.tasks = 5
+    const t = newT()
+    const f = await withOrg(t)
+    const due = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done' as const,
+    }
+    const parent = await plantIssue(t, { ...due, done_at: ago(40) })
+    // The child is the oldest candidate, so the first leg archives it.
+    const child = await plantIssue(t, {
+      ...due,
+      done_at: ago(50),
+      parent_id: parent.id,
+    })
+    await plantTasks(t, 10, { ...due, done_at: ago(45) })
+
+    expect(await runArchive(t)).toBe(11)
+    expect((await issueRow(t, child.id))?.archived_at).toBeDefined()
+    expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+    const legs = await scheduled(t, 'archiveOrg')
+    const archiveLegs = legs.filter(
+      (job) => job.args[0].org_id === f.org.id && job.args[0].phase === 'archive',
+    )
+    expect(archiveLegs).toHaveLength(3)
+
+    expect(await runArchive(t)).toBe(1)
+    expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
+  })
+
+  it('the leaf guard reads at most two children, however many the parent has archived', async () => {
+    const t = limitedT({ documentsRead: 100 })
+    const f = await withOrg(t)
+    const parent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(40),
+    })
+    await plantTasks(t, 2000, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: parent.id,
+      status: 'done',
+      done_at: ago(400),
+      archived_at: ago(300),
+    })
+
+    expect(await runArchive(t)).toBe(1)
+    expect((await issueRow(t, parent.id))?.archived_at).toBeDefined()
+  })
+
+  it('splits a page whose leaf guard reads too many child bytes, and still archives the leaves after it', async () => {
+    ARCHIVE_LIMITS.bytes = 100_000
+    // The active children are about 400 KB together, more than one leg may read.
+    const t = limitedT({ bytesRead: 300_000 })
+    const f = await withOrg(t)
+    const done = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done' as const,
+    }
+    const parents: Doc<'issues'>[] = []
+    for (let n = 0; n < 20; n++) {
+      const parent = await plantIssue(t, { ...done, done_at: ago(50) })
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        parent_id: parent.id,
+        description: 'x'.repeat(20_000),
+      })
+      parents.push(parent)
+    }
+    // younger, so the same page reads them after the parents
+    await plantTasks(t, 5, { ...done, done_at: ago(40) })
+
+    expect(await runArchive(t)).toBe(5)
+    for (const parent of parents) {
+      expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+    }
+    const legs = await scheduled(t, 'archiveOrg')
+    expect(legs.some((job) => job.args[0].size !== undefined)).toBe(true)
+  })
+
+  it('repairs flagged active tasks in pages of ARCHIVE_LIMITS.marked, each once per run', async () => {
+    ARCHIVE_LIMITS.marked = 2
+    const t = newT()
+    const f = await withOrg(t)
+    const flagged: Doc<'issues'>[] = []
+    for (let n = 0; n < 5; n++) {
+      flagged.push(
+        await plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          relations_marked: true,
+        }),
+      )
+    }
+
+    expect(await runLegs(t, NOW)).toEqual([{ org_id: f.org.id, archived: 0, flagged: 5, now: NOW }])
+
+    for (const task of flagged) {
+      expect((await issueRow(t, task.id))?.relations_marked).toBeUndefined()
+    }
+    const legs = await scheduled(t, 'archiveOrg')
+    const repairs = legs.filter(
+      (job) => job.args[0].org_id === f.org.id && job.args[0].phase === 'repair',
+    )
+    expect(repairs).toHaveLength(3)
+    const clears = await scheduled(t, 'archiveMarks:clearTasks')
+    expect(clears).toHaveLength(3)
+    expect(clears.flatMap((job) => job.args[0].issues).sort()).toEqual(
+      flagged.map((task) => task.id).sort(),
+    )
+  })
+
+  it('an organization deleted after the dispatch ends its chain without an error', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const done = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(40),
+    })
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const chains = await runLogged<ArchiveCounts>(
+        t,
+        async () => {
+          await t.mutation(internal.jobs.archiveDoneIssues, {})
+          await t.run((ctx) => ctx.db.delete(f.org._id))
+        },
+        'Auto-archive finished',
+      )
+      expect(chains).toEqual([])
+      expect(logged).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+    expect((await issueRow(t, done.id))?.archived_at).toBeUndefined()
+    // the deleted organization's chain ended at its first leg
+    const legs = await scheduled(t, 'archiveOrg')
+    expect(legs.filter((job) => job.args[0].org_id === f.org.id)).toHaveLength(1)
+  })
+})
+
+describe('archiveDoneIssues runs one chain per organization', () => {
+  it('a leg that fails every time stops only its own organization', async () => {
+    // The middle organization's candidates exceed this read budget on every
+    // attempt; the other two fit.
+    const t = limitedT({ documentsRead: 200 })
+    const [first, middle, last] = [uuid(), uuid(), uuid()].sort()
+    const due = new Map<string, string>()
+    for (const org_id of [first, middle, last]) {
+      const project = await plantOrg(t, org_id)
+      const done = {
+        org_id,
+        project_id: project.id,
+        status: 'done' as const,
+        done_at: ago(40),
+      }
+      const task = await plantIssue(t, done)
+      due.set(org_id, task.id)
+      if (org_id === middle) await plantTasks(t, 300, done)
+    }
+
+    let chains: ArchiveCounts[] = []
+    expect(
+      await failsOnReads(async () => {
+        chains = await runLegs(t)
+      }),
+    ).toBe(true)
+
+    expect((await issueRow(t, due.get(first) ?? ''))?.archived_at).toBeDefined()
+    expect((await issueRow(t, due.get(middle) ?? ''))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, due.get(last) ?? ''))?.archived_at).toBeDefined()
+    expect(chains.map((c) => c.org_id).sort()).toEqual([first, last])
+    expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
+      { organizations: 3 },
+    ])
+  })
+})
+
+type SweepCounts = { to: string; deleted: number; woken: number }
+
+/* One nightly read-message sweep, the cron's first step and everything it
+ * schedules. Returns the counts the chains logged, summed, and checks the
+ * run wrote its audit row. */
 async function runSweep(t: T): Promise<{ deleted: number; woken: number }> {
-  vi.useFakeTimers()
-  try {
-    await t.mutation(internal.jobs.sweepReadMessages, {})
-    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
-  } finally {
-    vi.useRealTimers()
+  const before = (await auditRows(t, 'sweep_read_messages')).length
+  const pages = await runLogged<SweepCounts>(
+    t,
+    () => t.mutation(internal.jobs.sweepReadMessages, {}),
+    'Read-message sweep finished',
+  )
+  if ((await auditRows(t, 'sweep_read_messages')).length !== before + 1) {
+    throw new Error('the sweep wrote no audit row')
   }
-  const last = (await auditRows(t, 'sweep_read_messages')).at(-1)
-  if (last === undefined) throw new Error('the sweep wrote no audit row')
-  return last.detail as { deleted: number; woken: number }
+  return {
+    deleted: pages.reduce((sum, page) => sum + page.deleted, 0),
+    woken: pages.reduce((sum, page) => sum + page.woken, 0),
+  }
 }
 
 describe('sweepReadMessages — retention follows the person', () => {
@@ -433,7 +733,11 @@ describe('sweepReadMessages — retention follows the person', () => {
       issue_id: uuid(),
       read_at: ago(DEFAULT_MESSAGE_RETENTION_DAYS - 1),
     })
-    const unread = await plantMessage(t, { ...base, issue_id: uuid(), created_at: ago(400) })
+    const unread = await plantMessage(t, {
+      ...base,
+      issue_id: uuid(),
+      created_at: ago(400),
+    })
     // a person without a period chose Never
     const person = await plantMessage(t, {
       org_id: f.org.id,
@@ -464,16 +768,27 @@ describe('sweepReadMessages — retention follows the person', () => {
   it('messageRetentionDays: a stored period decides, else agents get the default and people keep', () => {
     expect(messageRetentionDays({ kind: 'person', message_retention_days: 30 })).toBe(30)
     expect(messageRetentionDays({ kind: 'agent', message_retention_days: 1 })).toBe(1)
-    expect(messageRetentionDays({ kind: 'agent', message_retention_days: undefined })).toBe(
-      DEFAULT_MESSAGE_RETENTION_DAYS,
-    )
-    expect(messageRetentionDays({ kind: 'person', message_retention_days: undefined })).toBeNull()
+    expect(
+      messageRetentionDays({
+        kind: 'agent',
+        message_retention_days: undefined,
+      }),
+    ).toBe(DEFAULT_MESSAGE_RETENTION_DAYS)
+    expect(
+      messageRetentionDays({
+        kind: 'person',
+        message_retention_days: undefined,
+      }),
+    ).toBeNull()
     // an unknown kind keeps its messages rather than losing them
-    const odd = { kind: 'robot', message_retention_days: undefined } as unknown as Doc<'profiles'>
+    const odd = {
+      kind: 'robot',
+      message_retention_days: undefined,
+    } as unknown as Doc<'profiles'>
     expect(messageRetentionDays(odd)).toBeNull()
   })
 
-  it('writes its counts-only audit row as actor system', async () => {
+  it('writes one audit row with the pages it scheduled as actor system', async () => {
     const t = newT()
     const f = await withOrg(t)
     await t.run(async (ctx) => {
@@ -486,12 +801,13 @@ describe('sweepReadMessages — retention follows the person', () => {
       read_at: ago(31),
     })
 
-    await runSweep(t)
+    expect(await runSweep(t)).toEqual({ deleted: 1, woken: 0 })
 
     const rows = await auditRows(t, 'sweep_read_messages')
     expect(rows).toHaveLength(1)
     expect(rows[0].actor_email).toBe('system')
-    expect(rows[0].detail).toEqual({ deleted: 1, woken: 0 })
+    // withOrg's six profiles fit one page
+    expect(rows[0].detail).toEqual({ pages: 1 })
   })
 
   it('a snoozed row is never swept, and one whose instant has passed is woken instead', async () => {
@@ -517,7 +833,11 @@ describe('sweepReadMessages — retention follows the person', () => {
       read_at: ago(30),
       snoozed_until: ago(1),
     })
-    const stale = await plantMessage(t, { ...base, issue_id: uuid(), read_at: ago(8) })
+    const stale = await plantMessage(t, {
+      ...base,
+      issue_id: uuid(),
+      read_at: ago(8),
+    })
 
     expect(await runSweep(t)).toEqual({ deleted: 1, woken: 1 })
 
@@ -530,15 +850,17 @@ describe('sweepReadMessages — retention follows the person', () => {
     expect(woken?.snoozed_until).toBeUndefined()
     expect(woken?.read_at).toBeUndefined()
     expect(woken?.woke_at).toBeDefined()
-    const rows = await auditRows(t, 'sweep_read_messages')
-    expect(rows[0].detail).toEqual({ deleted: 1, woken: 1 })
   })
 
   it('runs in bounded legs: a backlog larger than one leg finishes in one run with one audit row', async () => {
     // One leg's writes fit this budget; the whole backlog in one transaction would not.
-    const t = limitedT({ documentsWritten: SWEEP_BATCH + 10 })
+    const t = limitedT({ documentsWritten: SWEEP_LIMITS.rows + 10 })
     const f = await withOrg(t)
-    const read = { org_id: f.org.id, recipient_id: f.agent.id, read_at: ago(30) }
+    const read = {
+      org_id: f.org.id,
+      recipient_id: f.agent.id,
+      read_at: ago(30),
+    }
     const plantRead = (count: number, over: Partial<WithoutSystemFields<Doc<'messages'>>> = {}) =>
       t.run(async (ctx) => {
         for (let n = 0; n < count; n++) {
@@ -554,39 +876,41 @@ describe('sweepReadMessages — retention follows the person', () => {
           })
         }
       })
-    await plantRead(SWEEP_BATCH)
-    await plantRead(SWEEP_BATCH)
+    await plantRead(SWEEP_LIMITS.rows)
+    await plantRead(SWEEP_LIMITS.rows)
     await plantRead(10)
     // unread rows, however many, are neither swept nor read by the sweep
-    await plantRead(SWEEP_BATCH, { read_at: undefined })
+    await plantRead(SWEEP_LIMITS.rows, { read_at: undefined })
     // overdue snoozes on another profile, past the same budget
     await t.run((ctx) => ctx.db.patch(f.admin._id, { message_retention_days: 7 }))
-    await plantRead(SWEEP_BATCH + 5, {
+    await plantRead(SWEEP_LIMITS.rows + 5, {
       recipient_id: f.admin.id,
       read_at: undefined,
       snoozed_until: ago(1),
     })
 
-    expect(await runSweep(t)).toEqual({ deleted: 2 * SWEEP_BATCH + 10, woken: SWEEP_BATCH + 5 })
+    expect(await runSweep(t)).toEqual({
+      deleted: 2 * SWEEP_LIMITS.rows + 10,
+      woken: SWEEP_LIMITS.rows + 5,
+    })
     const left = await t.run((ctx) => ctx.db.query('messages').collect())
-    expect(left).toHaveLength(2 * SWEEP_BATCH + 5)
+    expect(left).toHaveLength(2 * SWEEP_LIMITS.rows + 5)
     expect(left.filter((m) => m.recipient_id === f.agent.id && m.read_at !== undefined)).toEqual([])
     expect(left.filter((m) => m.snoozed_until !== undefined)).toEqual([])
     expect(await auditRows(t, 'sweep_read_messages')).toHaveLength(1)
   })
 
-  it('visits at most SWEEP_PROFILES profiles per leg and still reaches every one', async () => {
+  it('schedules one chain per page of SWEEP_LIMITS.profiles profiles and still reaches every one', async () => {
+    SWEEP_LIMITS.profiles = 4
     const t = newT()
     const f = await withOrg(t)
-    const agents: string[] = []
-    for (let n = 0; n < SWEEP_PROFILES + 5; n++) {
+    for (let n = 0; n < 5; n++) {
       const agent = await plantSeat(t, {
         org_id: f.org.id,
         kind: 'agent',
         name: `Bot ${n}`,
         plannable_hours: undefined,
       })
-      agents.push(agent.id)
       await plantMessage(t, {
         org_id: f.org.id,
         recipient_id: agent.id,
@@ -594,23 +918,106 @@ describe('sweepReadMessages — retention follows the person', () => {
         read_at: ago(30),
       })
     }
-    vi.useFakeTimers()
-    try {
-      await t.mutation(internal.jobs.sweepReadMessages, {})
-      // the first leg stopped short of the last profiles and scheduled the rest
-      expect(await auditRows(t, 'sweep_read_messages')).toEqual([])
-      await t.finishAllScheduledFunctions(() => vi.runAllTimers())
-    } finally {
-      vi.useRealTimers()
-    }
+
+    const pages = await runLogged<SweepCounts>(
+      t,
+      async () => {
+        await t.mutation(internal.jobs.sweepReadMessages, {})
+        // the first step scheduled one page and the next step, not the row
+        expect(await auditRows(t, 'sweep_read_messages')).toEqual([])
+      },
+      'Read-message sweep finished',
+    )
+
+    expect(pages.reduce((sum, page) => sum + page.deleted, 0)).toBe(5)
+    // withOrg's six profiles and the five agents, in uuid order
+    const ids = (await t.run((ctx) => ctx.db.query('profiles').collect())).map((p) => p.id).sort()
+    expect(ids).toHaveLength(11)
+    const ranges = (await scheduled(t, 'sweepProfiles')).map((job) => [
+      job.args[0].from,
+      job.args[0].to,
+    ])
+    expect(ranges).toEqual([
+      [ids[0], ids[3]],
+      [ids[4], ids[7]],
+      [ids[8], ids[10]],
+    ])
     const rows = await auditRows(t, 'sweep_read_messages')
-    expect(rows.map((r) => r.detail)).toEqual([{ deleted: SWEEP_PROFILES + 5, woken: 0 }])
+    expect(rows.map((r) => r.detail)).toEqual([{ pages: 3 }])
+  })
+
+  it('a page whose leg fails every time stops only its own profiles', async () => {
+    SWEEP_LIMITS.profiles = 2
+    // The middle page's first profile holds more expired rows than this read
+    // budget; every other profile fits.
+    const t = limitedT({ documentsRead: 300 })
+    const org_id = uuid()
+    const ids = Array.from({ length: 6 }, (_, n) => `00000000-0000-4000-8000-00000000000${n}`)
+    const expired = {
+      org_id,
+      issue_id: uuid(),
+      read_at: ago(DEFAULT_MESSAGE_RETENTION_DAYS + 1),
+    }
+    for (const [n, id] of ids.entries()) {
+      await plantSeat(t, {
+        org_id,
+        id,
+        kind: 'agent',
+        name: `Bot ${n}`,
+        plannable_hours: undefined,
+      })
+      await plantMessage(t, { ...expired, recipient_id: id })
+    }
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 400; n++) {
+        await ctx.db.insert('messages', {
+          ...expired,
+          id: uuid(),
+          recipient_id: ids[2],
+          issue_title: 'Bulk',
+          kind: 'change',
+          detail: 'bulk',
+          created_at: NOW,
+        })
+      }
+    })
+
+    let pages: SweepCounts[] = []
+    expect(
+      await failsOnReads(async () => {
+        pages = await runLogged<SweepCounts>(
+          t,
+          () => t.mutation(internal.jobs.sweepReadMessages, {}),
+          'Read-message sweep finished',
+        )
+      }),
+    ).toBe(true)
+
+    // the read limit applies here too, so ask each profile for one row
+    const kept = await t.run(async (ctx) => {
+      const rows = []
+      for (const id of ids) {
+        rows.push(
+          await ctx.db
+            .query('messages')
+            .withIndex('by_recipient_read', (q) => q.eq('recipient_id', id))
+            .first(),
+        )
+      }
+      return rows.map((row) => row !== null)
+    })
+    expect(kept).toEqual([false, false, true, true, false, false])
+    expect(pages.map((page) => page.to).sort()).toEqual([ids[1], ids[5]])
+    expect((await auditRows(t, 'sweep_read_messages')).map((r) => r.detail)).toEqual([{ pages: 3 }])
   })
 
   it('a wake answers how many rows it wrote, each written once, for a live or an archived task', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const live = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const live = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+    })
     const shelved = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -638,7 +1045,10 @@ describe('sweepReadMessages — retention follows the person', () => {
     const wake = (issue_id: string) =>
       t.run(async (ctx) => {
         const written = await wakeSnoozedItem(ctx, { recipient_id: f.admin.id, issue_id }, 'now')
-        return { written, used: (await ctx.meta.getTransactionMetrics()).documentsWritten.used }
+        return {
+          written,
+          used: (await ctx.meta.getTransactionMetrics()).documentsWritten.used,
+        }
       })
     for (const task of [live, shelved]) {
       expect(await wake(task.id)).toEqual({
@@ -663,13 +1073,19 @@ describe('sweepReadMessages — retention follows the person', () => {
 
   it('wakes overdue items in legs within the budget, each once, and still sweeps later profiles', async () => {
     // a leg with its whole budget can always wake one full item
-    expect(SWEEP_BATCH).toBeGreaterThanOrEqual(ITEM_UNREAD_CAP + 1)
-    // a leg's budget plus the run's audit row; waking every item that one
-    // leg's sample of overdue rows touches would write far more
-    const t = limitedT({ documentsWritten: SWEEP_BATCH + 1 })
+    expect(SWEEP_LIMITS.rows).toBeGreaterThanOrEqual(ITEM_UNREAD_CAP + 1)
+    // a leg's budget; waking every item that one leg's sample of overdue
+    // rows touches would write far more
+    const t = limitedT({ documentsWritten: SWEEP_LIMITS.rows })
     const f = await withOrg(t)
     const agent = (id: string, name: string) =>
-      plantSeat(t, { org_id: f.org.id, id, kind: 'agent', name, plannable_hours: undefined })
+      plantSeat(t, {
+        org_id: f.org.id,
+        id,
+        kind: 'agent',
+        name,
+        plannable_hours: undefined,
+      })
     // first in uuid order, so every other profile waits for its legs
     const snoozer = await agent('00000000-0000-4000-8000-000000000000', 'Snoozer')
     // last in uuid order, with a read message past its retention
@@ -711,11 +1127,8 @@ describe('sweepReadMessages — retention follows the person', () => {
     expect(rows[0].woke_at).toBeDefined()
     expect(await messagesFor(t, last.id)).not.toContainEqual(stale)
     // a leg wakes whole items while one more could fit its budget
-    const perLeg = Math.floor(SWEEP_BATCH / (ITEM_UNREAD_CAP + 1))
-    const legs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    expect(legs.filter((job) => job.name.includes('sweepReadMessages'))).toHaveLength(
-      Math.ceil(items.length / perLeg) - 1,
-    )
+    const perLeg = Math.floor(SWEEP_LIMITS.rows / (ITEM_UNREAD_CAP + 1))
+    expect(await scheduled(t, 'sweepProfiles')).toHaveLength(Math.ceil(items.length / perLeg))
   })
 })
 

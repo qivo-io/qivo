@@ -2,32 +2,40 @@
  * internalMutations, scheduled from crons.ts (the weekly reap-orphan-files
  * target lives in files.ts and audits itself).
  *
- * Each run's final act is inserting ONE platform_audit_log row in the SAME
- * transaction as its last writes (actor 'system', counts only). A run that
- * fails writes no record, so the pg_net fire-and-forget failure class dies
- * structurally, and failures surface in the Convex dashboard logs. Duration
- * is deliberately NOT recorded — Convex freezes Date.now() at mutation start,
- * so any in-transaction delta would always read 0. Only counts are recorded.
+ * Both nightly jobs stay inside the Convex transaction caps (~32k documents
+ * scanned, 16 MiB read, 16k documents written and 4,096 index ranges per
+ * transaction) however large the deployment grows:
+ * - The cron calls a dispatcher with no arguments. Each dispatcher step
+ *   reads one page and schedules one chain for every organization in it
+ *   (the archive) or one chain for the page of profiles (the read-message
+ *   sweep), then schedules the next step.
+ * - An archive leg reads the organization's Done candidates past the
+ *   shortest archive threshold it uses, by index, at most
+ *   ARCHIVE_LIMITS.tasks tasks and ARCHIVE_LIMITS.bytes bytes. The leaf guard
+ *   reads at most one child per candidate, by index. The chain's repair
+ *   phase reads the organization's flagged active tasks by index.
+ * - A sweep leg visits the profiles of its page and deletes or writes at most
+ *   SWEEP_LIMITS.rows messages.
  *
- * The archive sweep stays inside the Convex transaction caps (~32k documents
- * scanned, 16 MiB read, 16k documents written per txn) by running in legs
- * that schedule the next one. Each leg reads one organization's unarchived
- * tasks, the same working set the app's snapshot loads, and archives at most
- * ARCHIVE_BATCH of them. Convex drops the calls a failed mutation scheduled,
- * so a failed leg ends the run without an audit row, and earlier legs stay
- * committed. Every run starts again from the first organization, so the next
- * night recovers only from a transient failure. A leg that fails every time
- * stops every organization sorted after it, every night. The likely cause is
- * an organization whose unarchived tasks outgrow one transaction, which also
- * breaks that organization's app snapshot. Isolating organizations needs
- * separately scheduled legs whose counts no longer meet in one audit row, so
- * build it when an organization nears the caps. The read-message sweep runs
- * in legs the same way, by profile and bounded by rows. */
+ * Convex retries a scheduled mutation after a transient error and drops the
+ * calls a failed mutation scheduled. A leg that fails every time therefore
+ * stops only its own chain, one organization or one page of profiles. Its
+ * earlier legs stay committed, every other chain runs on, and the next night
+ * retries it. Failures show in the Convex logs as failed scheduled functions
+ * with their arguments.
+ *
+ * The dispatcher's last step inserts the run's platform_audit_log row
+ * (actor 'system') with the number of organizations or profile pages it
+ * scheduled. The row records that the run started every chain, not that
+ * every chain finished. Each chain logs its own counts with console.info on
+ * its last leg when it changed something. Duration is deliberately NOT
+ * recorded, because Convex freezes Date.now() at mutation start. */
 
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { getDocumentSize, type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
+import { byId } from './lib/db'
 import { scheduleMarkClears } from './model/archiveMarks'
 import { ITEM_UNREAD_CAP, scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
@@ -36,15 +44,47 @@ import { emitTaskEvent } from './model/taskEvents'
 
 const DAY = 86_400_000
 
-/* The most tasks one archive leg patches. A larger backlog in one
- * organization continues in the next leg of the same run. */
-export const ARCHIVE_BATCH = 500
+/** Sizes of one archive step. Tests lower them. */
+export const ARCHIVE_LIMITS = {
+  /** Organizations per dispatcher step, one scheduled chain each. */
+  orgs: 64,
+  /** Done candidates per leg, so at most this many task patches. */
+  tasks: 500,
+  /** Bytes of candidates one leg reads, and again of the children its leaf
+   * guard reads. Patching reads each archived task once more, so a leg reads
+   * about three times this at most, inside the 16 MiB a transaction may
+   * read. */
+  bytes: 4 * 1024 * 1024,
+  /** Flagged active tasks per repair leg. */
+  marked: 1000,
+}
 
-const archiveLegRef = makeFunctionReference<
-  'mutation',
-  { from?: string; archived?: number; now?: string },
-  null
->('jobs:archiveDoneIssues')
+const archiveRunArgs = {
+  cursor: v.optional(v.string()),
+  now: v.optional(v.string()),
+  organizations: v.optional(v.number()),
+}
+
+const archiveOrgArgs = {
+  org_id: v.string(),
+  now: v.string(),
+  phase: v.union(v.literal('archive'), v.literal('repair')),
+  // the candidate range's end, fixed by the first leg, because a cursor is
+  // valid only for the range it came from
+  cutoff: v.optional(v.string()),
+  cursor: v.optional(v.string()),
+  // the page size after a leg split its page, else ARCHIVE_LIMITS.tasks
+  size: v.optional(v.number()),
+  archived: v.number(),
+  flagged: v.number(),
+}
+
+type ArchiveLeg = ObjectType<typeof archiveOrgArgs>
+
+const archiveRunRef = makeFunctionReference<'mutation', ObjectType<typeof archiveRunArgs>, null>(
+  'jobs:archiveDoneIssues',
+)
+const archiveOrgRef = makeFunctionReference<'mutation', ArchiveLeg, null>('jobs:archiveOrg')
 
 /* private.archive_done_issues() (LAST def 0106:218-246), ported field for
  * field. Per issue, all four conditions plus the leaf guard:
@@ -63,150 +103,260 @@ const archiveLegRef = makeFunctionReference<
  *
  * Semantics pin — SINGLE SNAPSHOT, not fixpoint: the SQL is one UPDATE whose
  * child sub-select reads the pre-statement state, so a child archived in THIS
- * run still counts as unarchived and its done parent goes the NEXT night. The
- * candidate set is therefore collected against pre-run state first, then
- * patched. Tasks and projects never cross organizations, so the snapshot is
- * taken per organization. When a backlog spans several legs, the tasks earlier
- * legs archived carry this run's stamp and still count as unarchived children.
- * No activity rows — the SQL wrote none.
+ * run still counts as unarchived and its done parent goes the NEXT night. A
+ * child counts as unarchived when it has no archived_at or carries this
+ * run's stamp, in any project of the organization, archived ones included.
+ * That holds inside one leg and across legs. No activity rows, because the
+ * SQL wrote none.
  *
  * No inbox message either. The sweep never calls notifyIssueUpdate, so
  * followers are not told. Keep it that way, because an Archived notice for
  * every follower of every Done task would only add rows that arrive read.
- * The leg schedules the background steps that mark the messages already
+ * Each leg schedules the background steps that mark the messages already
  * stored about its tasks read, and the tasks' relation rows for the app
  * snapshot (model/messages.ts scheduleArchivedReads), as every archive path
  * does.
  *
- * The leg also schedules the steps that clear archive marks again for every
- * active task still flagged relations_marked (model/archiveMarks.ts). A
- * restore schedules them itself, so this only repairs a step that failed. It
- * reads nothing more, as the leg holds the organization's active tasks
- * already. A later leg in the same organization schedules them again, which
- * is harmless because a step skips a task it finds cleared.
- *
- * `now` is the run's stamp and clock, shared by every leg. Returns how many
- * tasks this leg archived and whether due tasks remain in the organization. */
-async function archiveOrgDoneIssues(
-  ctx: MutationCtx,
-  orgId: string,
+ * After the archive legs, the chain's repair legs schedule the steps that
+ * clear archive marks again for every active task still flagged
+ * relations_marked (model/archiveMarks.ts). A restore schedules them itself,
+ * so this only repairs a step that failed, and a chain whose organization
+ * has no flagged active task skips the phase. Each flagged task is scheduled
+ * once per run, and a step skips a task it finds cleared. */
+
+/* Each live project's cutoff for this run. Its Done tasks with done_at at or
+ * before the cutoff are due. A project that is archived, or whose root no
+ * longer resolves, takes none and is left out. */
+function projectCutoffs(
+  projects: readonly Doc<'projects'>[],
+  teams: readonly Doc<'teams'>[],
   now: string,
-): Promise<{ archived: number; more: boolean }> {
+): Map<string, string> {
   const nowMs = Date.parse(now)
-  // Every read happens before the first patch, so the candidates come from
-  // the snapshot.
-  const live = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
-    .collect()
-  const archivedThisRun = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', now))
-    .collect()
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  const teams = await ctx.db
-    .query('teams')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
   const projectById = new Map(projects.map((p) => [p.id, p]))
   const teamById = new Map(teams.map((t) => [t.id, t]))
-
-  /* The leaf guard's read set: parents holding >= 1 unarchived child AS OF
-   * the snapshot (a sibling patched later this run does not count). */
-  const hasUnarchivedChild = new Set<string>()
-  for (const i of [...live, ...archivedThisRun]) {
-    if (i.parent_id !== undefined) hasUnarchivedChild.add(i.parent_id)
-  }
-
-  const candidates: typeof live = []
-  for (const i of live) {
-    if (i.status !== 'done' || i.done_at === undefined) continue
-    const project = projectById.get(i.project_id)
-    if (project === undefined || project.archived_at !== undefined) continue
+  const cutoffs = new Map<string, string>()
+  for (const project of projects) {
+    if (project.archived_at !== undefined) continue
     const root = project.parent_id !== undefined ? projectById.get(project.parent_id) : project
     if (root === undefined) continue // dangling parent — the SQL inner join drops the row
     // New rows have no team. Old development rows may still keep one on the
     // sub-project or its root, and its saved threshold still applies.
     const legacyTeam = teamById.get(project.team_id ?? root.team_id ?? '')
     const days = legacyTeam?.archive_days ?? DEFAULT_ARCHIVE_DAYS
-    const cutoff = new Date(nowMs - days * DAY).toISOString()
-    if (i.done_at > cutoff) continue // lexicographic <= on ISO strings = time order
-    if (hasUnarchivedChild.has(i.id)) continue
-    candidates.push(i)
+    cutoffs.set(project.id, new Date(nowMs - days * DAY).toISOString())
   }
-
-  const batch = candidates.slice(0, ARCHIVE_BATCH)
-  for (const i of batch) {
-    await ctx.db.patch(i._id, { archived_at: now })
-    await emitTaskEvent(ctx, {
-      name: 'task.updated',
-      issue: { ...i, archived_at: now },
-      before: i,
-      now,
-    })
-  }
-  await scheduleArchivedReads(ctx, { issues: batch.map((i) => i.id) })
-  const archivedNow = new Set(batch.map((i) => i.id))
-  await scheduleMarkClears(
-    ctx,
-    live.filter((i) => !archivedNow.has(i.id)),
-  )
-  return { archived: batch.length, more: candidates.length > batch.length }
+  return cutoffs
 }
 
-/* The nightly archive sweep, one leg per call. The cron starts a run with no
- * arguments. Each leg takes the first organization whose id is not before
- * `from` and schedules the next leg with the running count, staying on the
- * same organization while it has due tasks left. The leg with nothing left to
- * schedule writes the counts-only audit row. */
+/* A child of the task that counts as unarchived for this run, one without
+ * archived_at or one this run archived (`now`), or null. Two index reads of
+ * at most one document each, however many children the task has. */
+async function unarchivedChild(
+  ctx: MutationCtx,
+  parentId: string,
+  now: string,
+): Promise<Doc<'issues'> | null> {
+  for (const archivedAt of [undefined, now]) {
+    const child = await ctx.db
+      .query('issues')
+      .withIndex('by_parent_archived', (q) =>
+        q.eq('parent_id', parentId).eq('archived_at', archivedAt),
+      )
+      .first()
+    if (child !== null) return child
+  }
+  return null
+}
+
+/* Ends an organization's chain and logs its counts when it changed
+ * something. Organizations with nothing to do log nothing, so thousands of
+ * idle ones stay out of the logs. */
+function finishChain(a: ArchiveLeg): null {
+  if (a.archived + a.flagged > 0) {
+    console.info('Auto-archive finished', {
+      org_id: a.org_id,
+      archived: a.archived,
+      flagged: a.flagged,
+      now: a.now,
+    })
+  }
+  return null
+}
+
+/* Returns the chain's step after its last archive leg. That is the first
+ * repair leg when the organization has an active task still flagged
+ * relations_marked, else null, which ends the chain. */
+async function afterArchive(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
+  const flagged = await ctx.db
+    .query('issues')
+    .withIndex('by_org_archived_marked', (q) =>
+      q.eq('org_id', a.org_id).eq('archived_at', undefined).eq('relations_marked', true),
+    )
+    .first()
+  if (flagged === null) return finishChain(a)
+  return { ...a, phase: 'repair', cutoff: undefined, cursor: undefined, size: undefined }
+}
+
+/* One archive leg. It reads one page of the organization's active Done tasks
+ * with done_at at or before the latest project cutoff (the shortest
+ * threshold), keeps those due by their own project's cutoff that pass the
+ * leaf guard, and archives them. Every read happens before the first patch.
+ * Once a leg completes, the candidates the guard kept lie behind the cursor
+ * and are not read again this run, which is right because only this run's
+ * own stamps could change their answer. A child can be as large as its
+ * parent, so when the children the guard read pass ARCHIVE_LIMITS.bytes, the
+ * leg writes nothing and the next leg reads the same page at half the size.
+ * Returns the next leg, or null when the chain is done. */
+async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
+  const projects = await ctx.db
+    .query('projects')
+    .withIndex('by_org', (q) => q.eq('org_id', a.org_id))
+    .collect()
+  const teams = await ctx.db
+    .query('teams')
+    .withIndex('by_org', (q) => q.eq('org_id', a.org_id))
+    .collect()
+  const cutoffs = projectCutoffs(projects, teams, a.now)
+  // lexicographic order on ISO strings is time order
+  const cutoff = a.cutoff ?? [...cutoffs.values()].sort().at(-1)
+  // no live project, so nothing is due
+  if (cutoff === undefined) return await afterArchive(ctx, a)
+
+  const page = await ctx.db
+    .query('issues')
+    .withIndex('by_org_archived_status_done', (q) =>
+      q
+        .eq('org_id', a.org_id)
+        .eq('archived_at', undefined)
+        .eq('status', 'done')
+        // a Done task without done_at is never taken
+        .gt('done_at', undefined)
+        .lte('done_at', cutoff),
+    )
+    .paginate({
+      cursor: a.cursor ?? null,
+      numItems: a.size ?? ARCHIVE_LIMITS.tasks,
+      maximumBytesRead: ARCHIVE_LIMITS.bytes,
+    })
+  const batch: Doc<'issues'>[] = []
+  let childBytes = 0
+  for (const task of page.page) {
+    const due = cutoffs.get(task.project_id)
+    if (due === undefined || task.done_at === undefined || task.done_at > due) continue
+    const child = await unarchivedChild(ctx, task.id, a.now)
+    if (child === null) {
+      batch.push(task)
+      continue
+    }
+    childBytes += getDocumentSize(child)
+    // One candidate and one child always fit, so a page of one never splits.
+    if (childBytes > ARCHIVE_LIMITS.bytes && page.page.length > 1) {
+      return { ...a, cutoff, size: Math.ceil(page.page.length / 2) }
+    }
+  }
+
+  for (const task of batch) {
+    await ctx.db.patch(task._id, { archived_at: a.now })
+    await emitTaskEvent(ctx, {
+      name: 'task.updated',
+      issue: { ...task, archived_at: a.now },
+      before: task,
+      now: a.now,
+    })
+  }
+  await scheduleArchivedReads(ctx, { issues: batch.map((task) => task.id) })
+  const archived = a.archived + batch.length
+  if (page.isDone) return await afterArchive(ctx, { ...a, archived })
+  return { ...a, cutoff, cursor: page.continueCursor, size: undefined, archived }
+}
+
+/* One repair leg. It schedules the clear steps for one page of the
+ * organization's active tasks still flagged relations_marked. Returns the
+ * next leg, or null when the chain is done. */
+async function repairLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
+  const page = await ctx.db
+    .query('issues')
+    .withIndex('by_org_archived_marked', (q) =>
+      q.eq('org_id', a.org_id).eq('archived_at', undefined).eq('relations_marked', true),
+    )
+    .paginate({
+      cursor: a.cursor ?? null,
+      numItems: ARCHIVE_LIMITS.marked,
+      maximumBytesRead: ARCHIVE_LIMITS.bytes,
+    })
+  await scheduleMarkClears(ctx, page.page)
+  const flagged = a.flagged + page.page.length
+  if (page.isDone) return finishChain({ ...a, flagged })
+  return { ...a, cursor: page.continueCursor, flagged }
+}
+
+/** The nightly archive, one dispatcher step per call. The cron starts a run
+ * with no arguments. Each step schedules one archiveOrg chain for every
+ * organization in one page, then the next step with the running count. The
+ * last step writes the run's audit row with the number of organizations.
+ * `now` is the run's stamp and clock, shared by every chain. */
 export const archiveDoneIssues = internalMutation({
-  args: {
-    from: v.optional(v.string()),
-    archived: v.optional(v.number()),
-    now: v.optional(v.string()),
-  },
+  args: archiveRunArgs,
   handler: async (ctx, a): Promise<null> => {
     const now = a.now ?? new Date().toISOString()
-    let archived = a.archived ?? 0
-
-    const org = await ctx.db
+    const orgs = await ctx.db
       .query('organizations')
-      .withIndex('by_uuid', (q) => q.gte('id', a.from ?? ''))
-      .first()
-    if (org !== null) {
-      const leg = await archiveOrgDoneIssues(ctx, org.id, now)
-      archived += leg.archived
-      const next = leg.more
-        ? org
-        : await ctx.db
-            .query('organizations')
-            .withIndex('by_uuid', (q) => q.gt('id', org.id))
-            .first()
-      if (next !== null) {
-        await ctx.scheduler.runAfter(0, archiveLegRef, { from: next.id, archived, now })
-        return null
-      }
+      .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.orgs })
+    for (const org of orgs.page) {
+      await ctx.scheduler.runAfter(0, archiveOrgRef, {
+        org_id: org.id,
+        now,
+        phase: 'archive',
+        archived: 0,
+        flagged: 0,
+      })
+    }
+    const organizations = (a.organizations ?? 0) + orgs.page.length
+    if (!orgs.isDone) {
+      await ctx.scheduler.runAfter(0, archiveRunRef, {
+        cursor: orgs.continueCursor,
+        now,
+        organizations,
+      })
+      return null
     }
 
     await ctx.db.insert('platform_audit_log', {
       ts: now,
       actor_email: 'system',
       action: 'archive_done_issues',
-      detail: { archived },
+      detail: { organizations },
     })
     return null
   },
 })
 
-/* How many messages one sweep leg deletes or writes while waking items at
- * most, and how many profiles it visits at most. A larger backlog continues
- * in the next leg of the same run. SWEEP_BATCH must be at least WAKE_ROWS,
- * or a leg could never wake an item. */
-export const SWEEP_BATCH = 500
-export const SWEEP_PROFILES = 100
+/** One leg of an organization's nightly archive chain. The archive phase
+ * pages through the due candidates, then the repair phase, when needed,
+ * through the flagged active tasks, each leg scheduling the next with the
+ * running counts. The last leg logs them. An organization deleted since the
+ * dispatcher read it ends its chain. */
+export const archiveOrg = internalMutation({
+  args: archiveOrgArgs,
+  handler: async (ctx, a): Promise<null> => {
+    if ((await byId(ctx, 'organizations', a.org_id)) === null) return null
+    const next = a.phase === 'archive' ? await archiveLeg(ctx, a) : await repairLeg(ctx, a)
+    if (next !== null) await ctx.scheduler.runAfter(0, archiveOrgRef, next)
+    return null
+  },
+})
+
+/** Sizes of one read-message sweep step. Tests lower them. */
+export const SWEEP_LIMITS = {
+  /** Profiles per dispatcher page, one chain each, and the most one leg
+   * visits. */
+  profiles: 100,
+  /** Messages one leg deletes, or writes while waking items, at most. A
+   * larger backlog continues in the next leg of the same chain. It must be
+   * at least WAKE_ROWS, or a leg could never wake an item. */
+  rows: 500,
+}
 
 /* The most rows one wake writes (model/messages.ts wakeSnoozedItem), a full
  * item. A leg wakes another item only while this much budget is left. An
@@ -214,11 +364,28 @@ export const SWEEP_PROFILES = 100
  * case decided separately, and the leg then ends over its budget. */
 const WAKE_ROWS = ITEM_UNREAD_CAP + 1
 
-const sweepLegRef = makeFunctionReference<
+const sweepRunArgs = {
+  cursor: v.optional(v.string()),
+  now: v.optional(v.string()),
+  pages: v.optional(v.number()),
+}
+
+const sweepProfilesArgs = {
+  from: v.string(),
+  to: v.string(),
+  now: v.string(),
+  deleted: v.number(),
+  woken: v.number(),
+}
+
+const sweepRunRef = makeFunctionReference<'mutation', ObjectType<typeof sweepRunArgs>, null>(
+  'jobs:sweepReadMessages',
+)
+const sweepProfilesRef = makeFunctionReference<
   'mutation',
-  { from?: string; deleted?: number; woken?: number; now?: string },
+  ObjectType<typeof sweepProfilesArgs>,
   null
->('jobs:sweepReadMessages')
+>('jobs:sweepProfiles')
 
 /* One profile's share of a sweep leg, at most `budget` rows. It deletes
  * READ rows read before the profile's retention period (model/people.ts
@@ -273,44 +440,82 @@ async function sweepProfileMessages(
   return { deleted, woken, used, more: overdue.length > room }
 }
 
-/* private.sweep_read_messages(null) (0110:88-102), one leg per call, so a
- * run stays inside the transaction caps however many profiles and messages
- * there are. The cron starts a run with no arguments. Each leg visits
- * profiles in uuid order from `from`, at most SWEEP_PROFILES of them and
- * SWEEP_BATCH rows, and schedules the next leg with the running counts and
- * the run's `now`, staying on a profile while it has rows left. The leg with
- * nothing left to schedule writes the counts-only audit row. Iterating from
- * profiles is the SQL's join (a message whose recipient row is gone is not
- * swept here; teardown removes those with the profile). The boot-time
+/** private.sweep_read_messages(null) (0110:88-102), one dispatcher step per
+ * call. The cron starts a run with no arguments. Each step reads one page of
+ * SWEEP_LIMITS.profiles profiles in uuid order, schedules one sweepProfiles
+ * chain for the page's id range, then the next step with the running page
+ * count. The last step writes the run's audit row with the number of pages.
+ * `now` is the run's clock, shared by every chain. Iterating from profiles
+ * is the SQL's join (a message whose recipient row is gone is not swept
+ * here; teardown removes those with the profile). The boot-time
  * sweep_my_read_messages twin is CUT; this nightly job is the one
  * implementation. A profile without a retention period keeps its read
  * messages when it is a person (Never) and keeps them for
  * DEFAULT_MESSAGE_RETENTION_DAYS when it is an agent, which has no settings
  * page. */
 export const sweepReadMessages = internalMutation({
-  args: {
-    from: v.optional(v.string()),
-    deleted: v.optional(v.number()),
-    woken: v.optional(v.number()),
-    now: v.optional(v.string()),
-  },
+  args: sweepRunArgs,
   handler: async (ctx, a): Promise<null> => {
     const now = a.now ?? new Date().toISOString()
-    let deleted = a.deleted ?? 0
-    let woken = a.woken ?? 0
-    let budget = SWEEP_BATCH
+    const profiles = await ctx.db
+      .query('profiles')
+      .withIndex('by_uuid')
+      .paginate({ cursor: a.cursor ?? null, numItems: SWEEP_LIMITS.profiles })
+    const first = profiles.page.at(0)
+    const last = profiles.page.at(-1)
+    let pages = a.pages ?? 0
+    if (first !== undefined && last !== undefined) {
+      await ctx.scheduler.runAfter(0, sweepProfilesRef, {
+        from: first.id,
+        to: last.id,
+        now,
+        deleted: 0,
+        woken: 0,
+      })
+      pages += 1
+    }
+    if (!profiles.isDone) {
+      await ctx.scheduler.runAfter(0, sweepRunRef, {
+        cursor: profiles.continueCursor,
+        now,
+        pages,
+      })
+      return null
+    }
+
+    await ctx.db.insert('platform_audit_log', {
+      ts: now,
+      actor_email: 'system',
+      action: 'sweep_read_messages',
+      detail: { pages },
+    })
+    return null
+  },
+})
+
+/** One leg of a page's read-message sweep. It visits the profiles with ids
+ * from `from` through `to`, at most SWEEP_LIMITS.profiles of them and
+ * SWEEP_LIMITS.rows rows, and schedules the next leg with the running counts,
+ * staying on a profile while it has rows left. The last leg logs the counts
+ * when it changed something, with `to`, the page's last profile, naming the
+ * page. */
+export const sweepProfiles = internalMutation({
+  args: sweepProfilesArgs,
+  handler: async (ctx, a): Promise<null> => {
+    let { deleted, woken } = a
+    let budget = SWEEP_LIMITS.rows
     let next: string | undefined
     const profiles = await ctx.db
       .query('profiles')
-      .withIndex('by_uuid', (q) => q.gte('id', a.from ?? ''))
-      .take(SWEEP_PROFILES + 1)
+      .withIndex('by_uuid', (q) => q.gte('id', a.from).lte('id', a.to))
+      .take(SWEEP_LIMITS.profiles + 1)
     for (const [i, p] of profiles.entries()) {
       // below 0 only after an item that outgrew the cap before it existed
-      if (i === SWEEP_PROFILES || budget <= 0) {
+      if (i === SWEEP_LIMITS.profiles || budget <= 0) {
         next = p.id
         break
       }
-      const leg = await sweepProfileMessages(ctx, p, now, budget)
+      const leg = await sweepProfileMessages(ctx, p, a.now, budget)
       deleted += leg.deleted
       woken += leg.woken
       budget -= leg.used
@@ -320,16 +525,17 @@ export const sweepReadMessages = internalMutation({
       }
     }
     if (next !== undefined) {
-      await ctx.scheduler.runAfter(0, sweepLegRef, { from: next, deleted, woken, now })
+      await ctx.scheduler.runAfter(0, sweepProfilesRef, {
+        ...a,
+        from: next,
+        deleted,
+        woken,
+      })
       return null
     }
-
-    await ctx.db.insert('platform_audit_log', {
-      ts: now,
-      actor_email: 'system',
-      action: 'sweep_read_messages',
-      detail: { deleted, woken },
-    })
+    if (deleted + woken > 0) {
+      console.info('Read-message sweep finished', { to: a.to, deleted, woken })
+    }
     return null
   },
 })
