@@ -68,10 +68,6 @@
 }
 
 @media (max-width: 760px) {
-  .planner-toast-host {
-    bottom: calc(76px + env(safe-area-inset-bottom));
-    max-width: calc(100vw - 32px);
-  }
   :root {
     --ctl-xs: 44px;
     --ctl-sm: 44px;
