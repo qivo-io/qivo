@@ -1711,7 +1711,12 @@ function ArchiveOrDeleteProjectModal({
                 <span className="min-w-0 flex-1 truncate text-text-1">{s.name}</span>
                 {s.archived && <span className="shrink-0 text-text-3">Archived</span>}
                 <span className="shrink-0 text-text-2">
-                  {s.more ? `more than ${plural(s.tasks, 'task')}` : plural(s.tasks, 'task')}
+                  {/* a count that stopped before this sub-project read none of it */}
+                  {s.more
+                    ? s.tasks === 0
+                      ? 'Not counted'
+                      : `more than ${plural(s.tasks, 'task')}`
+                    : plural(s.tasks, 'task')}
                 </span>
               </div>
             ))}

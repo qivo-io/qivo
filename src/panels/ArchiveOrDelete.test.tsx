@@ -567,6 +567,28 @@ describe('Archive or delete a project', () => {
     expect(button('Delete project and 48 tasks').disabled).toBe(false)
   })
 
+  it('says a sub-project the count stopped before was not counted', async () => {
+    const [first, second, third] = summary().sub_projects
+    summaries.push(() =>
+      Promise.resolve(
+        summary({
+          tasks: 5000,
+          more: true,
+          sub_projects: [
+            { ...first, tasks: 4999, more: true },
+            { ...second, tasks: 1, more: true },
+            { ...third, tasks: 0, more: true },
+          ],
+        }),
+      ),
+    )
+    await openProject()
+    await choose('delete')
+    expect(text('[data-fate-subproject="s1"]')).toBe('Site preparationmore than 4,999 tasks')
+    expect(text('[data-fate-subproject="s2"]')).toBe('Data collectionmore than 1 task')
+    expect(text('[data-fate-subproject="s3"]')).toBe('Prototype 1ArchivedNot counted')
+  })
+
   it('waits while counting, with both choices disabled', async () => {
     await openProject()
     expect(text('[data-project-fate] [role="status"]')).toBe('Counting tasks…')
