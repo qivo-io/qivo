@@ -434,20 +434,11 @@ export function ProjectPage({
   onLeaving?: (projectId: string | null) => void
 }) {
   const proj = P.project(projectId)
-  const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
-  /* Removing a grant that would leave someone unable to see tasks they work
-     on first asks whether to keep them as Viewers or reassign their tasks. */
-  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  const removeOrAsk = (change: AccessRemoval) => {
-    if (P.startRemoval(change)) setRemoval(change)
-  }
-  const [inviteEmail, setInviteEmail] = useStateS('')
-  const [inviting, setInviting] = useStateS(false)
-  useUpdateBlocker(!!inviteEmail || inviting)
-  const accessHeading = React.useRef<HTMLDivElement>(null)
   /* The Archive or delete window, from the section at the end of the page.
      It holds the project as it was when the window opened, so it stays up
-     when a delete it sent drops the project before the server's answer. */
+     when a delete it sent drops the project before the server's answer. It
+     is the page's last child with or without the project, so React keeps
+     the same window, still deleting, until that answer closes it. */
   const [removing, setRemoving] = useStateS<ProjectVM | null>(null)
   const removeButton = React.useRef<HTMLButtonElement>(null)
   const removalWindow = (shown: ProjectVM) => {
@@ -490,7 +481,49 @@ export function ProjectPage({
       />
     )
   }
-  if (!proj) return removing ? removalWindow(removing) : null
+  return (
+    <>
+      {proj && (
+        <ProjectSettingsFields
+          proj={proj}
+          setPage={setPage}
+          onBackPage={onBackPage}
+          removeButton={removeButton}
+          onRemove={() => setRemoving(proj)}
+        />
+      )}
+      {removing && removalWindow(removing)}
+    </>
+  )
+}
+
+/** A project's settings sections while the project is in the store, for
+    ProjectPage, which owns the Archive or delete window that `onRemove`
+    opens and gives focus back to `removeButton`. */
+function ProjectSettingsFields({
+  proj,
+  setPage,
+  onBackPage,
+  removeButton,
+  onRemove,
+}: {
+  proj: ProjectVM
+  setPage: (page: string) => void
+  onBackPage: (page: string) => void
+  removeButton: React.RefObject<HTMLButtonElement | null>
+  onRemove: () => void
+}) {
+  const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
+  /* Removing a grant that would leave someone unable to see tasks they work
+     on first asks whether to keep them as Viewers or reassign their tasks. */
+  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
+  const removeOrAsk = (change: AccessRemoval) => {
+    if (P.startRemoval(change)) setRemoval(change)
+  }
+  const [inviteEmail, setInviteEmail] = useStateS('')
+  const [inviting, setInviting] = useStateS(false)
+  useUpdateBlocker(!!inviteEmail || inviting)
+  const accessHeading = React.useRef<HTMLDivElement>(null)
   const isMeta = proj.type === 'meta'
   const parentMeta = proj.parent ? P.project(proj.parent) : null
   // what an empty Review time box means: the parent project's effective
@@ -811,14 +844,13 @@ export function ProjectPage({
             data-remove-project={proj.id}
             disabled={!isLead}
             title={isLead ? undefined : "Only the project's lead can archive or delete it"}
-            onClick={() => setRemoving(proj)}
+            onClick={onRemove}
           >
             <Icon name="archive" size={16} />
             Archive or delete…
           </Button>
         </div>
       </SettingsSection>
-      {removing && removalWindow(removing)}
     </>
   )
 }

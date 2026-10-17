@@ -135,9 +135,11 @@ function fixture(role: Role) {
   return next
 }
 
-async function load(role: Role = 'admin') {
+/** Loads the store. `setup` changes the snapshot first, to add people. */
+async function load(role: Role = 'admin', setup?: (snapshot: Snapshot) => void) {
   vi.resetModules()
   snap = fixture(role)
+  setup?.(snap)
   ORG = snap.orgs[0].id
   lists = []
   answers = {}
@@ -206,8 +208,8 @@ const settle = async () => {
   for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
 }
 /** Renders the page as Settings does, re-rendering on store changes. */
-async function open(role: Role = 'admin') {
-  await load(role)
+async function open(role: Role = 'admin', setup?: (snapshot: Snapshot) => void) {
+  await load(role, setup)
   const page = await import('./DeletedItems')
   const version = await import('../../store/usePlannerVersion')
   function Live() {
@@ -817,8 +819,10 @@ describe('Deleted by', () => {
     await open()
     await deliver([task(1, { deleter: CURSOR }), task(2, { deleter: MIRA }), task(3)])
     const select = find<HTMLSelectElement>('[data-deleted-by]')
+    // the admin is in their organization's roster, deletes or not
     expect([...select.options].map((o) => o.text)).toEqual([
       'Deleted by anyone',
+      'You',
       'Daniel Berg',
       'Daniel Berg via Cursor',
       'Mira Holm',
@@ -856,6 +860,73 @@ describe('Deleted by', () => {
     expect(narrowed[0].live).toBe(false)
     // the same time: the newer id first, as the server orders them
     expect(rowIds()).toEqual(['item-2', 'item-1'])
+  })
+
+  it('offers an admin everyone in the organization, and asks for those a capped list leaves out', async () => {
+    const people = (s: Snapshot) => {
+      const me = s.profiles[0]
+      type Profile = Snapshot['profiles'][number]
+      const person = (id: string, name: string, extra: Partial<Profile> = {}): Profile => ({
+        ...me,
+        id,
+        name,
+        org_role: 'user',
+        auth_user_id: `account-${id}`,
+        ...extra,
+      })
+      s.profiles.push(
+        person('daniel', 'Daniel Berg'),
+        person('mira', 'Mira Holm'),
+        // switched off since, and an agent, which deletes with its key
+        person('ines', 'Ines Park', { active: false }),
+        person('triage', 'Triage agent', { kind: 'agent', auth_user_id: undefined }),
+        // invited and never signed in, so they cannot have deleted anything
+        person('noor', 'Noor Ali', { auth_user_id: undefined }),
+      )
+    }
+    const options = () =>
+      [...find<HTMLSelectElement>('[data-deleted-by]').options].map((o) => o.text)
+    const gone: Deleter = { you: false, kind: 'app', who: '|app' }
+    await open('admin', people)
+    // the capped list holds none of the admin's, Ines's or the agent's deletes
+    await deliver(
+      [task(1, { deleter: CURSOR }), task(2, { deleter: MIRA }), task(3, { deleter: gone })],
+      true,
+    )
+    expect(options()).toEqual([
+      'Deleted by anyone',
+      'You',
+      'Daniel Berg',
+      'Ines Park',
+      'Mira Holm',
+      'Triage agent',
+      'Someone',
+    ])
+    await deletedByChoice('Triage agent')
+    expect(lists.filter((l) => l.live && l.args.deleted_by !== undefined)).toHaveLength(1)
+    await deliverNarrowed('triage', [])
+    expect(text('[data-deleted-items]')).toContain('No deleted items match the filter.')
+    expect(find<HTMLSelectElement>('[data-deleted-by]').selectedOptions[0]?.text).toBe(
+      'Triage agent',
+    )
+    const ines: Deleter = {
+      you: false,
+      profile_id: 'ines',
+      name: 'Ines Park',
+      kind: 'app',
+      who: 'ines|app',
+    }
+    await deletedByChoice('Ines Park')
+    await deliverNarrowed('ines', [task(8, { deleter: ines, deleted_at: at(9, 0, 0, 2) })])
+    expect(rowIds()).toEqual(['item-8'])
+
+    // a lead's choices come from the list, since the server reads the same
+    // ranges for a lead with or without one
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await open('lead', people)
+    await deliver([task(1, { deleter: CURSOR }), task(2, { deleter: MIRA })], true)
+    expect(options()).toEqual(['Deleted by anyone', 'Daniel Berg', 'Mira Holm'])
   })
 })
 

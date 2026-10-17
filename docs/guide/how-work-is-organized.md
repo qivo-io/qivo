@@ -192,8 +192,8 @@ Filter the list by kind, by text and, for admins and leads, by **Deleted
 by**. The text filter also finds tasks inside deleted projects by key or
 title. Such a task can only come back with its project. The page shows up
 to the newest 2,000 items, and fewer when the trash is very large. Search
-finds tasks among the rest, and an admin can choose a person in **Deleted
-by** to reach their older deletes.
+finds tasks among the rest. **Deleted by** offers an admin everyone in the
+organization, so choosing a person reaches their older deletes too.
 
 **Restore** on a row brings the item back at once, where it was, with its
 comments, attachments, links and labels. To restore several, select their

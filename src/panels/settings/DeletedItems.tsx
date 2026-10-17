@@ -49,6 +49,7 @@ import {
   placeText,
   plural,
   type RestoreRefusal,
+  type RosterPerson,
   refusalText,
   restoreNoun,
   rowHasText,
@@ -80,6 +81,28 @@ function viewerRole(rows: DeletedRow[]): Role {
   const leads =
     P.projects.some((p) => P.levelOn(p.id) === 'lead') || P.archivedProjects.some((p) => p.manage)
   return leads || rows.some((row) => !row.deleter.you) ? 'lead' : 'user'
+}
+
+/** The people of each organization where this login's seat is an admin, from
+    the store's roster, for Deleted by. That is people and agents, switched
+    off ones too, but no seat nobody has claimed yet, which cannot have
+    deleted anything. Empty for a login that administers none. */
+function adminRoster(): RosterPerson[] {
+  const mine = new Set(P.myProfileIds)
+  const orgs = new Set(
+    P.users.filter((u) => mine.has(u.id) && u.orgRole === 'admin').map((u) => u.org),
+  )
+  if (orgs.size === 0) return []
+  const orgName = new Map(P.orgs.map((org) => [org.id, org.name]))
+  return P.users
+    .filter((u) => orgs.has(u.org) && !u.pending)
+    .map((u) => ({
+      org_id: u.org,
+      org_name: orgName.get(u.org) ?? '',
+      profile_id: u.id,
+      name: u.name,
+      you: mine.has(u.id),
+    }))
 }
 
 /** deletedItems.list, live. It is undefined while loading and null after an error.
@@ -329,11 +352,19 @@ export function DeletedItemsPage() {
     // restore reads the newest state through refs and setters
   }, [byId, allById, main.list, waiting])
 
-  const options = useMemo(
-    () => deletedByOptions(all, new Set(all.map((row) => row.org_id)).size > 1),
-    [all],
-  )
-  // a person whose deletes all left the list leaves the select too
+  /* The Deleted by choices. An admin's seat reads a chosen person's own range
+     on the server, which reaches past a capped list, so an admin may choose
+     anyone in the roster of an organization they administer, and not only
+     the people the list shows. A lead's or standard user's seat reads the
+     same ranges with or without a choice, which only narrows them, so their
+     choices come from the list. */
+  const options = useMemo(() => {
+    const roster = adminRoster()
+    const orgs = new Set([...all.map((row) => row.org_id), ...roster.map((p) => p.org_id)])
+    return deletedByOptions(all, orgs.size > 1, roster)
+  }, [all, P.users, P.orgs, P.myProfileIds])
+  // a choice no longer offered, such as a person whose deletes all left the
+  // list or who left an admin's roster, goes back to anyone
   useEffect(() => {
     if (main.list && by !== ANYONE && !options.some((o) => o.value === by)) setBy(ANYONE)
   }, [main.list, by, options])
@@ -859,8 +890,9 @@ export function DeletedItemsPage() {
         </Button>
       </div>
     )
-  // a capped list with no rows can still have search hits to show
-  else if (rows.length === 0 && lines.length === 0) body = <ListNote>No deleted items.</ListNote>
+  // A capped list with no rows can still have search hits to show. A list
+  // narrowed to one person can be empty while the main one is not.
+  else if (all.length === 0 && lines.length === 0) body = <ListNote>No deleted items.</ListNote>
   else if (lines.length === 0) body = <ListNote>No deleted items match the filter.</ListNote>
   else
     body = groups.map((group) => (

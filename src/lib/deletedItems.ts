@@ -241,12 +241,23 @@ export const ANYONE = 'any'
 /** What a Deleted by choice is about: a row's organization and deleter. */
 type DeletedBy = Pick<DeletedRow, 'org_id' | 'deleter'>
 
+/** Someone in the roster of an organization the viewer administers, whom
+    Deleted by offers whether or not the list holds their deletes. */
+export type RosterPerson = {
+  org_id: string
+  org_name: string
+  profile_id: string
+  name: string
+  /** the viewer's own seat */
+  you: boolean
+}
+
 /* A person choice names the organization and the deleter's profile. Every
    removed deleter of one organization has no profile and is one "Someone"
    choice. A "via" choice names the organization and the opaque `who` key of
    one credential. The organization keeps the "Someone" of two organizations
    apart, and their shared `who` keys too. */
-const personValue = (row: DeletedBy) => `person:${row.org_id}:${row.deleter.profile_id ?? ''}`
+const personValue = (org: string, profile: string | undefined) => `person:${org}:${profile ?? ''}`
 const whoValue = (row: DeletedBy) => `who:${row.org_id}:${row.deleter.who}`
 
 /** A choice's organization and the rest of its value, or null for anyone. */
@@ -274,30 +285,63 @@ export function chosenProfile(value: string, rows: DeletedRow[]): string | undef
  * one "<person> via <credential>" choice per credential they deleted with,
  * when they deleted in more than one way. A credential whose name the viewer
  * may not see is one choice per kind ("Daniel Berg via a personal token"),
- * as its `who` key is. With `orgNames`, a label ends with the person's
+ * as its `who` key is. `roster` adds the people the rows do not name, with
+ * no "via" choices. With `orgNames`, a label ends with the person's
  * organization ("You via Claude, Northstar Labs"), since one login can hold
  * a seat in several.
  */
-export function deletedByOptions(rows: DeletedRow[], orgNames: boolean): ByOption[] {
-  type Person = { row: DeletedRow; ways: Map<string, DeletedRow> }
+export function deletedByOptions(
+  rows: DeletedRow[],
+  orgNames: boolean,
+  roster: readonly RosterPerson[] = [],
+): ByOption[] {
+  type Person = {
+    value: string
+    name: string
+    you: boolean
+    /** a removed deleter, "Someone" */
+    gone: boolean
+    org_name: string
+    ways: Map<string, DeletedRow>
+  }
   const people = new Map<string, Person>()
   for (const row of rows) {
-    const key = personValue(row)
-    const person = people.get(key) ?? { row, ways: new Map() }
-    person.ways.set(row.deleter.who, row)
-    people.set(key, person)
+    const { deleter } = row
+    const value = personValue(row.org_id, deleter.profile_id)
+    const person = people.get(value) ?? {
+      value,
+      name: deleterName(deleter),
+      you: deleter.you,
+      gone: deleter.name === undefined,
+      org_name: row.org_name,
+      ways: new Map(),
+    }
+    person.ways.set(deleter.who, row)
+    people.set(value, person)
   }
-  const label = ({ row }: Person, via = '') =>
-    `${deleterName(row.deleter)}${via}${orgNames ? `, ${row.org_name}` : ''}`
+  for (const p of roster) {
+    const value = personValue(p.org_id, p.profile_id)
+    if (!people.has(value))
+      people.set(value, {
+        value,
+        name: p.you ? 'You' : p.name,
+        you: p.you,
+        gone: false,
+        org_name: p.org_name,
+        ways: new Map(),
+      })
+  }
+  const label = (person: Person, via = '') =>
+    `${person.name}${via}${orgNames ? `, ${person.org_name}` : ''}`
   const sorted = [...people.values()].sort(
     (a, b) =>
-      Number(b.row.deleter.you) - Number(a.row.deleter.you) ||
-      Number(a.row.deleter.name === undefined) - Number(b.row.deleter.name === undefined) ||
+      Number(b.you) - Number(a.you) ||
+      Number(a.gone) - Number(b.gone) ||
       label(a).localeCompare(label(b)),
   )
   const options: ByOption[] = [{ value: ANYONE, label: 'Deleted by anyone' }]
   for (const person of sorted) {
-    options.push({ value: personValue(person.row), label: label(person) })
+    options.push({ value: person.value, label: label(person) })
     if (person.ways.size < 2) continue
     const ways = [...person.ways.values()]
       .filter((way) => way.deleter.kind !== 'app')

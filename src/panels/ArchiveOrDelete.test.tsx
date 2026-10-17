@@ -768,6 +768,46 @@ describe('the Archive or delete section of project settings', () => {
     expect(has('[data-modal-shell]')).toBe(false)
   })
 
+  it('keeps the window waiting when a delivery drops the project before the answer', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    let accept = () => {}
+    answers['projects:deleteDeep'] = () =>
+      new Promise<null>((resolve) => {
+        accept = () => resolve(null)
+      })
+    const { setPage } = await openSettings('plan')
+    await click(open())
+    await settle()
+    await choose('delete')
+    await type('Trial cancelled')
+    await click(button('Delete project and 48 tasks'))
+    await settle()
+    // the delivery without Plan, as the server sends it before it answers
+    snap.projects = snap.projects.filter((p) => p.id !== 'plan' && p.parent_id !== 'plan')
+    snap.issues = snap.issues.filter((it) => it.project_id !== 'work')
+    await act(async () => deliver(snap))
+    await settle()
+    expect(P.project('plan')).toBeUndefined()
+    // the same window, still waiting, with what it was told and counted
+    expect(button('Deleting…').disabled).toBe(true)
+    expect(find<HTMLTextAreaElement>('[data-fate-reason]').value).toBe('Trial cancelled')
+    expect(text('[data-fate-lead]')).toBe(
+      'Plan has 3 sub-projects and 48 tasks, including 9 archived tasks.',
+    )
+    expect(
+      network.query.mock.calls.filter(
+        ([ref]) => getFunctionName(ref) === 'projects:removalSummary',
+      ),
+    ).toHaveLength(1)
+    await click(button('Cancel'))
+    expect(has('[data-modal-shell]')).toBe(true)
+    await act(async () => accept())
+    await settle()
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(setPage).toHaveBeenLastCalledWith('projects')
+    expect(window.showToast).toHaveBeenCalledWith('Deleted “Plan”')
+  })
+
   it('disables it for everyone else, with the reason and without counts', async () => {
     await openSettings('docs')
     expect(section().textContent).toContain(
