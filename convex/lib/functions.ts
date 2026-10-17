@@ -14,7 +14,7 @@ import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { action, mutation, query } from '../_generated/server'
-import { assertBillingWritable } from './billingAccess'
+import { assertOrgWritable, orgRemovalFor } from './billingAccess'
 import {
   assertDemoPayload,
   consumeDemoWrite,
@@ -53,8 +53,12 @@ export function require(cond: unknown, err: ConvexError<Refusal>): asserts cond 
   if (!cond) throw err
 }
 
-/* MutationCtx satisfies this too (writer db/storage extend the readers). */
-async function loadAuthed(ctx: QueryCtx) {
+/** The signed-in login's active profiles, keyed by org_id. An organization
+ * whose deletion has begun is left out and listed in `deleting`, so reads
+ * across organizations, such as the snapshot, stop showing it while its
+ * profiles are deleted. MutationCtx satisfies this too (writer db/storage
+ * extend the readers). */
+async function loadMemberships(ctx: QueryCtx) {
   const identity = await ctx.auth.getUserIdentity()
   if (identity === null) throw forbidden('not signed in')
   const authUserId = identity.subject
@@ -64,19 +68,30 @@ async function loadAuthed(ctx: QueryCtx) {
     .withIndex('by_auth', (q) => q.eq('auth_user_id', authUserId))
     .collect()
   const myProfiles = new Map<string, Doc<'profiles'>>()
+  const deleting = new Set<string>()
   for (const profile of mine) {
-    if (profile.active && (!demo || profile.org_id === demo.org_id))
-      myProfiles.set(profile.org_id, profile)
+    if (!profile.active || (demo && profile.org_id !== demo.org_id)) continue
+    if ((await orgRemovalFor(ctx, profile.org_id))?.phase !== undefined)
+      deleting.add(profile.org_id)
+    else myProfiles.set(profile.org_id, profile)
   }
+  return { authUserId, myProfiles, deleting }
+}
+
+/** The signed-in login and its active profiles outside a deletion. */
+async function loadAuthed(ctx: QueryCtx) {
+  const { authUserId, myProfiles } = await loadMemberships(ctx)
   return { authUserId, myProfiles }
 }
 
-/* private.profile_in's successor for people. */
+/** private.profile_in's successor for people. A member of an organization
+ * whose deletion has begun learns why they are refused. */
 async function loadMember(ctx: QueryCtx, orgId: string) {
-  const authed = await loadAuthed(ctx)
-  const me = authed.myProfiles.get(orgId)
+  const { authUserId, myProfiles, deleting } = await loadMemberships(ctx)
+  if (deleting.has(orgId)) throw forbidden('this organization is being deleted')
+  const me = myProfiles.get(orgId)
   if (!me) throw forbidden('no profile in this organization')
-  return { ...authed, me }
+  return { authUserId, myProfiles, me }
 }
 
 async function loadOperator(ctx: QueryCtx) {
@@ -138,7 +153,7 @@ export const orgMutation = withDemoPayloadLimit(
     args: { org_id: v.string() },
     input: async (ctx, { org_id }) => {
       const member = await loadMember(ctx, org_id)
-      await assertBillingWritable(ctx, org_id)
+      await assertOrgWritable(ctx, org_id)
       await consumeDemoWrite(ctx, member.authUserId)
       return { ctx: { ...member, db: demoWriter(ctx, member.authUserId) }, args: {} }
     },
@@ -151,7 +166,7 @@ export const adminMutation = withDemoPayloadLimit(
     input: async (ctx, { org_id }) => {
       const member = await loadMember(ctx, org_id)
       if (member.me.org_role !== 'admin') throw forbidden('admin only')
-      await assertBillingWritable(ctx, org_id)
+      await assertOrgWritable(ctx, org_id)
       await consumeDemoWrite(ctx, member.authUserId)
       return { ctx: { ...member, db: demoWriter(ctx, member.authUserId) }, args: {} }
     },
@@ -160,20 +175,21 @@ export const adminMutation = withDemoPayloadLimit(
 
 /* orgMutation for the admin actions that only take access away. These are
  * revoking or deleting an agent key, deactivating a seat, removing a seat and
- * removing someone from a team. An organization admin passes the billing gate
- * here, so they can still shut out a leaked key or a departed person while
- * billing has made the organization read-only. Everyone else meets the gate
+ * removing someone from a team. An organization admin passes the read-only
+ * gate here, so they can still shut out a leaked key or a departed person
+ * while billing or a pending deletion has made the organization read-only.
+ * Everyone else meets the gate
  * exactly as in orgMutation. Handlers keep their own admin rule and
  * sentences. Never build a write that only adds seats, access or data on
  * this wrapper. A handler that can also add them must call
- * assertBillingWritable itself before those branches, as teams.removeMember
+ * assertOrgWritable itself before those branches, as teams.removeMember
  * does when it keeps the member as a Viewer or reassigns their tasks. */
 export const accessRemovalMutation = withDemoPayloadLimit(
   customMutation(mutation, {
     args: { org_id: v.string() },
     input: async (ctx, { org_id }) => {
       const member = await loadMember(ctx, org_id)
-      if (member.me.org_role !== 'admin') await assertBillingWritable(ctx, org_id)
+      if (member.me.org_role !== 'admin') await assertOrgWritable(ctx, org_id)
       await consumeDemoWrite(ctx, member.authUserId)
       return { ctx: { ...member, db: demoWriter(ctx, member.authUserId) }, args: {} }
     },

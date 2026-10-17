@@ -646,13 +646,17 @@ function isTaskContentWrite(name: string) {
    read stays undefined and the caller lands on its generic fallback. */
 type ErrData = { code?: string; message?: string; reason?: string }
 const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as ErrData) || {} : {})
+/** Refusals that mean the whole organization is read-only. Their sentences
+   name the reason, and for a pending deletion its date, so they show verbatim. */
+const readOnly = (d: ErrData) =>
+  d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
 
 /* 'rule' sentences are the P0001 successors and show VERBATIM; everything
    else is deliberately generic — the wording says "reverted", never
    "reloading", because rollback is a repaint, not a refetch. */
 function toastWriteError(e: unknown) {
   const d = errData(e)
-  if (d.reason === 'billing_required' && d.message) {
+  if (readOnly(d) && d.message) {
     toast(`${d.message} — reverted`)
     return
   }
@@ -673,7 +677,7 @@ function toastWriteError(e: unknown) {
    sentence is quoted, forbidden reads the fixed permission line. */
 function restoreErrorText(e: unknown): string {
   const d = errData(e)
-  if (d.reason === 'billing_required' && d.message) return d.message
+  if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore — ${String(d.message)}`
   return "Couldn't restore"
@@ -687,7 +691,7 @@ function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
   const m = d.message ? String(d.message) : ''
   const reason = m && m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
-  if ((d.code === 'rule' || d.reason === 'billing_required') && reason) {
+  if ((d.code === 'rule' || readOnly(d)) && reason) {
     toast(`Couldn't create ${label}. ${reason}`)
     return
   }

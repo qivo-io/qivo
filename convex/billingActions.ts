@@ -11,12 +11,14 @@ import {
   createPolarCheckout,
   createPolarPortal,
   getPolarCheckout,
+  LIVE_POLAR_STATUSES,
   listPolarSubscriptions,
   polarConfigured,
   validatePolarProduct,
 } from './lib/polar'
 import { enrollOrganization, isoNow, validatePlan } from './model/billing'
 import { newUuid } from './model/orgs'
+import { revokeLiveSubscriptions } from './orgRemovals'
 
 type PlanInput = Omit<
   Doc<'billing_plans'>,
@@ -247,9 +249,7 @@ export const checkout = orgAction({
       // Recover a successful checkout whose webhook was delayed before allowing
       // another purchase. The external customer ID is the authenticated org UUID.
       const existing = await listPolarSubscriptions(ctx.orgId)
-      require(!existing.some((s) =>
-        ['active', 'trialing', 'past_due', 'incomplete', 'paused', 'unpaid'].includes(s.status),
-      ), rule(
+      require(!existing.some((s) => LIVE_POLAR_STATUSES.includes(s.status)), rule(
         'This organization already has a subscription. Refresh Billing or use Manage billing.',
       ))
       await validateProduct(reservation.plan)
@@ -291,5 +291,25 @@ export const portal = orgAction({
       externalCustomerId: ctx.orgId,
       returnUrl: billingUrl(ctx.org_slug),
     })
+  },
+})
+
+const recordCancellationRef = makeFunctionReference<'mutation', { org_id: string }, string | null>(
+  'orgRemovals:recordCancellation',
+)
+
+/** Ends the organization's paid subscription at once, as the terms say
+ * cancellation does, and returns the deletion date that the read-only
+ * period now counts towards. */
+export const cancelSubscription = orgAction({
+  args: {},
+  handler: async (ctx): Promise<{ delete_after: string | null }> => {
+    require(billingEnabled() && polarConfigured(), rule('Billing is not available yet.'))
+    require((await revokeLiveSubscriptions(ctx, ctx.orgId)) > 0, rule(
+      'This organization has no subscription to cancel.',
+    ))
+    return {
+      delete_after: await ctx.runMutation(recordCancellationRef, { org_id: ctx.orgId }),
+    }
   },
 })

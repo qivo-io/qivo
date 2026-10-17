@@ -1638,6 +1638,7 @@ function App() {
           orgName={P.org.name}
           admin={P.isAdmin()}
           onBilling={() => actions.openSettings('org-billing')}
+          onExport={() => actions.openSettings('org-general')}
         />
         <ViewBoundary
           key={sync ? 'sync' : inboxOpen ? 'inbox' : projectsOpen ? 'projects' : view}

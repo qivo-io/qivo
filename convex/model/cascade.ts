@@ -430,12 +430,14 @@ export async function removeProfile(
   await ctx.db.delete(profile._id)
 }
 
-/* The whole organization, every org-scoped row and byte, then the org row —
- * the fixture teardown (internal/guestOrg) and the operator's one-off org
- * removals. Postgres's reset_demo ran 13 ordered deletes with ON DELETE
- * CASCADE under issues (comments, issue_labels, issue_subscriptions,
- * issue_attachments) and profiles (user_prefs, agent_keys, mcp_tokens,
- * messages via recipient); each is explicit here, right after its parent.
+/** The whole organization, every org-scoped row and byte, then the org row,
+ * in one transaction. The fixture teardown (internal/guestOrg) and the
+ * operator's one-off org removals use it; a customer's deletion runs in
+ * bounded steps instead (model/orgDeletion.ts). Postgres's reset_demo ran 13
+ * ordered deletes with ON DELETE CASCADE under issues (comments,
+ * issue_labels, issue_subscriptions, issue_attachments) and profiles
+ * (user_prefs, agent_keys, mcp_tokens, messages via recipient); each is
+ * explicit here, right after its parent.
  * Deliberately NOT swept, because none of it is org-scoped: Better Auth
  * users (a login may hold seats elsewhere — adminAuth.deleteOrphanLogin is
  * the operator's tool once no profile references it), the appearance tables
@@ -623,5 +625,11 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
   for (const r of await ctx.db.query('marketing_demo').collect()) {
     if (r.org_id === org.id) await ctx.db.delete(r._id)
   }
+  // a scheduled or running deletion (orgRemovals.ts) has nothing left to do
+  for (const removal of await ctx.db
+    .query('org_removals')
+    .withIndex('by_org', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(removal._id)
   await ctx.db.delete(org._id)
 }

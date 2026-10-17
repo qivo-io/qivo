@@ -14,7 +14,9 @@ import { P } from '../store/planner'
 import { BillingOverview } from './BillingOverview'
 import { BillingUsage } from './BillingUsage'
 
-export function BillingSettings() {
+/** The organization's Billing page. `setPage` opens another settings page,
+ * such as the export before cancelling. */
+export function BillingSettings({ setPage }: { setPage: (page: string) => void }) {
   if (DEMO_MODE) {
     return (
       <>
@@ -41,10 +43,17 @@ export function BillingSettings() {
       </>
     )
   }
-  return <LiveBillingSettings key={P.org.id} orgId={P.org.id} />
+  return <LiveBillingSettings key={P.org.id} orgId={P.org.id} setPage={setPage} />
 }
 
-function LiveBillingSettings({ orgId }: { orgId: string }) {
+/** Billing for one organization outside the demo. */
+function LiveBillingSettings({
+  orgId,
+  setPage,
+}: {
+  orgId: string
+  setPage: (page: string) => void
+}) {
   const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [usage, setUsage] = useState<BillingUsageData | null>(null)
   const [summaryError, setSummaryError] = useState('')
@@ -125,6 +134,28 @@ function LiveBillingSettings({ orgId }: { orgId: string }) {
     }
   }
 
+  /** Cancelling ends the subscription at once. The summary then reports the
+   * deletion date that the read-only period counts towards. Answers the
+   * refusal for the dialog to show, or null once the subscription ended. */
+  async function cancelSubscription(): Promise<string | null> {
+    if (actionInFlight.current) return 'Another billing action is still running.'
+    actionInFlight.current = true
+    const release = beginUpdateBlock()
+    setBusy(true)
+    setActionError('')
+    try {
+      await convex.action(api.billingActions.cancelSubscription, { org_id: orgId })
+      window.showToast?.('Subscription cancelled')
+      return null
+    } catch (cause) {
+      return billingError(cause)
+    } finally {
+      actionInFlight.current = false
+      setBusy(false)
+      release()
+    }
+  }
+
   return (
     <>
       <PageTitle
@@ -164,6 +195,8 @@ function LiveBillingSettings({ orgId }: { orgId: string }) {
           busy={busy}
           onCheckout={() => void openPayment('checkout')}
           onManage={() => void openPayment('portal')}
+          onCancel={cancelSubscription}
+          onExport={() => setPage('org-general')}
         />
       )}
       {usageError && (

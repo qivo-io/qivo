@@ -157,6 +157,7 @@ billing:adminContext query internal {"type":"object","value":{"org_id":{"fieldTy
 billing:status query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:summary query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:usage query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+billingActions:cancelSubscription action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:checkout action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:clearEndedCheckout mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"checkout_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:connectPlan action public {"type":"object","value":{"plan_id":{"fieldType":{"type":"string"},"optional":false},"polar_product_id":{"fieldType":{"type":"string"},"optional":false},"api_meter_id":{"fieldType":{"type":"string"},"optional":false},"storage_meter_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -367,6 +368,25 @@ oauthConnections:revoke mutation public {"type":"object","value":{"id":{"fieldTy
 oauthConnections:revokeReplay mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"authorization_code"},{"type":"literal","value":"refresh_token"}]},"optional":false},"credentialHash":{"fieldType":{"type":"string"},"optional":false},"clientId":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:touch mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 orgExport:page query public {"type":"object","value":{"section":{"fieldType":{"type":"union","value":[{"type":"literal","value":"organizations"},{"type":"literal","value":"teams"},{"type":"literal","value":"profiles"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"labels"},{"type":"literal","value":"activity_events"},{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"comments"},{"type":"literal","value":"agent_keys"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:abort mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:begin action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:beginDue query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:keep mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:markDeleting mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:noCheckoutCandidate query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:noticeReady query internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:noticeSent mutation internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:recordCancellation mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:recordExport mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:recordRequest mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:recover mutation internal {"type":"object","value":{}}
+orgRemovals:request action public {"type":"object","value":{"confirm":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:sendNotice action internal {"type":"object","value":{"notice_key":{"fieldType":{"type":"string"},"optional":false},"attempt":{"fieldType":{"type":"number"},"optional":true}}}
+orgRemovals:startNoCheckout mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:state query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:step mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgRemovals:sweep mutation internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"removals"},{"type":"literal","value":"subscriptions"}]},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true}}}
+orgRemovals:verifyNoCheckout action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgs:setSlug mutation public {"type":"object","value":{"slug":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgs:update mutation public {"type":"object","value":{"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"date_format":{"fieldType":{"type":"union","value":[{"type":"literal","value":"YYYY-MM-DD"},{"type":"literal","value":"DD/MM/YYYY"},{"type":"literal","value":"MM/DD/YYYY"},{"type":"literal","value":"DD.MM.YYYY"},{"type":"literal","value":"D MMM YYYY"},{"type":"literal","value":"MMM D, YYYY"}]},"optional":true},"week_start":{"fieldType":{"type":"number"},"optional":true},"week_one_rule":{"fieldType":{"type":"union","value":[{"type":"literal","value":"jan1"},{"type":"literal","value":"first4day"},{"type":"literal","value":"firstfull"}]},"optional":true},"default_plannable_hours":{"fieldType":{"type":"number"},"optional":true},"gravatar_avatars":{"fieldType":{"type":"boolean"},"optional":true},"max_attachment_mb":{"fieldType":{"type":"number"},"optional":true},"project_creators":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admins"},{"type":"literal","value":"users"},{"type":"literal","value":"selected"}]},"optional":true}}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 panoramaCuration:accept mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"expected_image_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"expected_agent_review_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
@@ -512,6 +532,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   billingActions: {
     checkout: 'orgAction',
     portal: 'orgAction',
+    // An admin ends the paid subscription at once; the action's internal
+    // query repeats the admin check, as for checkout and the portal.
+    cancelSubscription: 'orgAction',
     createPlan: 'platformAction',
     connectPlan: 'platformAction',
   },
@@ -640,6 +663,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Paginated ZIP export for org admins. orgQuery authenticates the active
   // seat; the handler positively requires admin on every page.
   orgExport: { page: 'orgQuery' },
+  // Admins delete the organization after its read-only period, stop a
+  // deletion they asked for and record finished exports. keep and
+  // recordExport check the admin seat themselves, because the read-only
+  // gate on orgMutation would refuse them exactly when they matter.
+  orgRemovals: {
+    request: 'orgAction',
+    keep: 'authedMutation',
+    state: 'orgQuery',
+    recordExport: 'authedMutation',
+  },
   orgs: { update: 'adminMutation', setSlug: 'adminMutation' },
   planning: { assigneeLoad: 'authedQuery' },
   // Operator-only management of shared photo curation; org credentials cannot enter.
@@ -724,7 +757,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 148
+const PUBLIC_COUNT = 153
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

@@ -37,18 +37,46 @@ export function subscriptionWritable(sub: Doc<'billing_subscriptions'> | null, n
 export const BILLING_READ_ONLY =
   'This organization is read-only. An organization admin can subscribe or update payment details in Billing.'
 
-/** Whether the organization's billing currently pauses editing. */
-export async function billingReadOnly(ctx: QueryCtx, orgId: string): Promise<boolean> {
-  return billingEnabled() && !subscriptionWritable(await subscriptionFor(ctx, orgId))
+/** The refusal while an organization waits for deletion, with its date. */
+export function deletionReadOnly(deleteAfter: string): string {
+  return `This organization is read-only and will be deleted on ${deleteAfter.slice(0, 10)}. An organization admin can export its data in Settings.`
 }
 
-export async function assertBillingWritable(ctx: QueryCtx, orgId: string): Promise<void> {
-  if (!(await billingReadOnly(ctx, orgId))) return
-  throw new ConvexError({
-    code: 'forbidden',
-    reason: 'billing_required',
-    message: BILLING_READ_ONLY,
-  })
+/** The organization's pending or running deletion (orgRemovals.ts), or null. */
+export async function orgRemovalFor(ctx: QueryCtx, orgId: string) {
+  return await ctx.db
+    .query('org_removals')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .unique()
+}
+
+export type WriteBlock = { reason: 'billing_required' | 'deletion_scheduled'; message: string }
+
+/** Why writes to the organization are refused, or null while they are
+ * allowed. A pending deletion wins over billing: a deletion an admin asked
+ * for stays in force whatever the subscription does. */
+export async function orgWriteBlock(ctx: QueryCtx, orgId: string): Promise<WriteBlock | null> {
+  const removal = await orgRemovalFor(ctx, orgId)
+  if (removal)
+    return { reason: 'deletion_scheduled', message: deletionReadOnly(removal.delete_after) }
+  if (billingEnabled() && !subscriptionWritable(await subscriptionFor(ctx, orgId)))
+    return { reason: 'billing_required', message: BILLING_READ_ONLY }
+  return null
+}
+
+/** Refuses a write while billing or a pending deletion makes the
+ * organization read-only. */
+export async function assertOrgWritable(ctx: QueryCtx, orgId: string): Promise<void> {
+  const block = await orgWriteBlock(ctx, orgId)
+  if (block) throw new ConvexError({ code: 'forbidden', ...block })
+}
+
+/** Refuses every call into an organization whose deletion has begun. Before
+ * that, the organization stays readable so admins can export it. */
+export async function assertOrgAvailable(ctx: QueryCtx, orgId: string): Promise<void> {
+  const removal = await orgRemovalFor(ctx, orgId)
+  if (removal?.phase !== undefined)
+    throw new ConvexError({ code: 'forbidden', message: 'this organization is being deleted' })
 }
 
 export function addCalendarMonths(iso: string, months: number): string {

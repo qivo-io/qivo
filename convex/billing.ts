@@ -1,10 +1,17 @@
 import { v } from 'convex/values'
 import { internalQuery } from './_generated/server'
-import { billingEnabled, subscriptionFor, subscriptionWritable } from './lib/billingAccess'
+import {
+  assertOrgAvailable,
+  billingEnabled,
+  orgRemovalFor,
+  subscriptionFor,
+  subscriptionWritable,
+} from './lib/billingAccess'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { forbidden, orgQuery, require } from './lib/functions'
 import { billingSummary, billingUsage } from './model/billing'
+import { checkoutDeadline } from './model/orgRetention'
 
 // Explicit admin-only query keeps amounts/customer state outside the planner.
 export const summary = orgQuery({
@@ -27,21 +34,27 @@ export const usage = orgQuery({
   },
 })
 
-// Members may see why writes are paused, but never billing terms or IDs.
+/** Why writes are paused and when a read-only organization will be
+ * deleted, for every member. Billing terms and IDs stay admin-only. */
 export const status = orgQuery({
   args: {},
   handler: async (ctx) => {
     const sub = await subscriptionFor(ctx, ctx.me.org_id)
+    const removal = await orgRemovalFor(ctx, ctx.me.org_id)
     return {
       enabled: billingEnabled(),
-      writable: subscriptionWritable(sub),
+      writable: subscriptionWritable(sub) && !removal,
       status: sub?.status ?? 'pending',
       complimentary_until: sub?.complimentary_until ?? null,
       current_period_end: sub?.current_period_end ?? null,
+      checkout_due_at: checkoutDeadline(sub),
+      deletion: removal ? { reason: removal.reason, delete_after: removal.delete_after } : null,
     }
   },
 })
 
+/** The signed-in admin and organization an orgAction acts for. Refuses
+ * anyone else, the demo and an organization whose deletion has begun. */
 export const adminContext = internalQuery({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }) => {
@@ -53,6 +66,7 @@ export const adminContext = internalQuery({
       .withIndex('by_org_auth', (q) => q.eq('org_id', org_id).eq('auth_user_id', identity.subject))
       .unique()
     require(me?.active && me.org_role === 'admin', forbidden('admin only'))
+    await assertOrgAvailable(ctx, org_id)
     const org = await byId(ctx, 'organizations', org_id)
     require(org, forbidden('organization unavailable'))
     return {

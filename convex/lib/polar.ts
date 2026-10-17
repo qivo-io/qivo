@@ -301,6 +301,25 @@ export async function listPolarSubscriptions(
   throw new PolarError('unavailable')
 }
 
+/** Subscriptions that still bill or may bill again, so an organization
+ * holding one must not be deleted. */
+export const LIVE_POLAR_STATUSES: readonly PolarSubscriptionStatus[] = [
+  'active',
+  'trialing',
+  'past_due',
+  'incomplete',
+  'paused',
+  'unpaid',
+]
+
+/** Ends a subscription at once (Polar's revoke). The terms say cancellation
+ * takes effect immediately, so Qivo never cancels at period end. */
+export async function revokePolarSubscription(id: string): Promise<PolarSubscription> {
+  const subscription = parsePolarSubscription(await request(`/subscriptions/${uuid(id)}`, 'DELETE'))
+  if (subscription.id !== id) return invalid()
+  return subscription
+}
+
 export async function updatePolarSeats(id: string, seats: number): Promise<PolarSubscription> {
   const subscription = parsePolarSubscription(
     await request(`/subscriptions/${uuid(id)}`, 'PATCH', {

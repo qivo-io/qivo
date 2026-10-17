@@ -19,6 +19,7 @@ import {
 } from './lib/polar'
 import { audit } from './model/admin'
 import { GB, isoNow, storageUsage } from './model/billing'
+import { syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
 
 type SyncWork = {
@@ -116,6 +117,10 @@ export const release = internalMutation({
   },
 })
 
+/** Applies a Polar subscription, from a webhook or reconciliation, to the
+ * organization's billing row. Stale or out-of-order events are ignored. It
+ * opens the paid period's record when a new period starts, then starts or
+ * stops the read-only period before deletion (model/orgRetention.ts). */
 export const apply = internalMutation({
   args: { payload: v.string(), event_id: v.optional(v.string()) },
   handler: async (ctx, { payload, event_id }) => {
@@ -236,6 +241,9 @@ export const apply = internalMutation({
         target_org_id: sub.org_id,
         detail: { subscription_id: incomingId, status, period_start: start, seats: remote.seats },
       })
+    // An ended subscription starts the read-only period before deletion; a
+    // new one stops a deletion that billing started.
+    await syncOrgRemoval(ctx, sub.org_id)
     return null
   },
 })

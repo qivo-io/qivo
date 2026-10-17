@@ -5,11 +5,13 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
+import { DEMO_MODE } from '../../lib/demoMode'
 import { creatorName, namePhrase, projectCreatorsIn } from '../../lib/projectCreators'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { OrgPatch, OrgVM } from '../../store/planner'
 import { P } from '../../store/planner'
+import { OrganizationDeletion } from '../OrganizationDeletion'
 import { OrganizationExport } from '../OrganizationExport'
 import { TextField, Toggle } from './controls'
 
@@ -343,6 +345,9 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
         </SettingsField>
       </SettingsSection>
       {canManage && <OrganizationExport key={P.org.id} orgId={P.org.id} />}
+      {canManage && !DEMO_MODE && (
+        <OrganizationDeletion key={`deletion:${P.org.id}`} orgId={P.org.id} orgName={P.org.name} />
+      )}
     </>
   )
 }

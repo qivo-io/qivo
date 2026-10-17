@@ -157,6 +157,9 @@ const APP_SHARED = [
   // Keyed by an already deleted label; its own steps delete it, also after
   // the demo organization is gone (labelRemovals.ts).
   'label_removals',
+  // Organization deletion never runs on a demo deployment: an admin's request
+  // refuses demos, and billing, which starts every other removal, is off.
+  'org_removals',
   'panorama_images',
   'panorama_calendar',
   'panorama_curation_keys',

@@ -149,7 +149,7 @@ function SettingsScreen({
     )
   else if (page === 'projects-archived') content = <ArchivedProjectsPage />
   else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
-  else if (page === 'org-billing') content = <BillingSettings />
+  else if (page === 'org-billing') content = <BillingSettings setPage={setPage} />
   else if (page === 'org-api') content = <OrgApiAccessPage />
   else if (page === 'org-users' || page.startsWith('user:'))
     content = (
