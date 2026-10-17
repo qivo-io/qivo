@@ -238,8 +238,9 @@ const issueAttachmentsTable = defineTable({
   // The task's project. attachFileCore and moveIssueCore keep it equal to
   // issues.project_id, so storage totals group by project without reading
   // tasks (model/billing.ts storageUsage). Any new code that changes a
-  // task's project, or writes attachment rows back such as a restore, must
-  // set it too. Rows stored before it existed lack it until
+  // task's project or writes attachment rows back must set it too, as a
+  // restore from Deleted items does (model/deletedItems.ts writeRowBack).
+  // Rows stored before it existed lack it until
   // internal/attachmentScopeBackfill fills them, and readers use the task's
   // project meanwhile.
   project_id: v.optional(v.string()),

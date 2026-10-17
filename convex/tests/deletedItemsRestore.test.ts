@@ -13,6 +13,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
+import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
   HEIGHT_READ,
@@ -512,7 +513,8 @@ describe('restoring a task item', () => {
     const root = await plantIssue(t, { org_id, project_id: f.sub.id })
     const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
     await comment(t, sub)
-    const file = await attach(t, sub)
+    // stored before attachment rows carried their project
+    const file = await attach(t, sub, 5, null)
     const neighbour = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
     const item = await itemFor(t, root.id)
@@ -536,10 +538,13 @@ describe('restoring a task item', () => {
     expect(counted.projects.find((p) => p.id === f.sub2.id)?.tasks).toBe(2)
     expect(await itemById(t, item.id)).toBeNull()
 
-    // the project brings it back under its parent
+    // the project brings it back under its parent, its file in its project
     await restore(t, f.user, [projectItem.id])
     expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
     expect(await blobExists(t, file.storage_id)).toBe(true)
+    expect((await t.run((ctx) => byId(ctx, 'issue_attachments', file.id)))?.project_id).toBe(
+      f.sub2.id,
+    )
     await assertNoDanglingRefs(t, 'after a subtask came back with its project')
 
     // a project purged for good takes the subtask with it
@@ -2104,5 +2109,109 @@ describe('restore calls', () => {
     })
     expect((await restore(t, f.admin, [ids.task])).restored).toEqual([ids.task])
     expect(await liveTask(t, task.id)).not.toBeNull()
+  })
+})
+
+describe('the storage files bill', () => {
+  /** The bytes storageUsage bills the organization for, by project id. */
+  const billed = async (t: T, orgId: string) => {
+    const usage = await t.run((ctx) => storageUsage(ctx, orgId))
+    return {
+      bytes: usage.bytes,
+      projects: Object.fromEntries(usage.projects.map((p) => [p.project_id, p.storage_bytes])),
+    }
+  }
+  /** The size and project (null for none) of each live attachment row of
+   * `taskId`, smallest first. */
+  const filesOf = (t: T, taskId: string) =>
+    t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('issue_attachments')
+          .withIndex('by_issue', (q) => q.eq('issue_id', taskId))
+          .collect()
+      )
+        .map((row) => [row.size_bytes, row.project_id ?? null] as const)
+        .sort(([a], [b]) => a - b),
+    )
+
+  it("bills a task's files again under its project once it comes back, whatever project its rows named", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await attach(t, task, 11)
+    // stored before attachment rows carried their project
+    await attach(t, task, 13, null)
+    // a project gone stale, as the scope backfill finds some
+    await attach(t, task, 17, f.sub2.id)
+    const other = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await attach(t, other, 5)
+    expect(await billed(t, org_id)).toEqual({
+      bytes: 46,
+      projects: { [f.sub.id]: 24, [f.sub2.id]: 22 },
+    })
+
+    await deleteTask(t, f, task.id)
+    expect(await filesOf(t, task.id)).toEqual([])
+    expect(await billed(t, org_id)).toEqual({ bytes: 5, projects: { [f.sub2.id]: 5 } })
+
+    await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    expect(await filesOf(t, task.id)).toEqual([
+      [11, f.sub.id],
+      [13, f.sub.id],
+      [17, f.sub.id],
+    ])
+    expect(await billed(t, org_id)).toEqual({
+      bytes: 46,
+      projects: { [f.sub.id]: 41, [f.sub2.id]: 5 },
+    })
+    await assertNoDanglingRefs(t, 'after the files of a task came back')
+  })
+
+  it("bills a project's files nowhere until its reveal, then under each task's project", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const inSub = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await attach(t, inSub, 11)
+    const inSub2 = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    await attach(t, inSub2, 3)
+    await attach(t, inSub2, 7, null)
+    const elsewhere = await plantIssue(t, { org_id, project_id: f.hidden.id })
+    await attach(t, elsewhere, 5)
+    const before = { bytes: 26, projects: { [f.sub.id]: 11, [f.sub2.id]: 10, [f.hidden.id]: 5 } }
+    expect(await billed(t, org_id)).toEqual(before)
+    const away = { bytes: 5, projects: { [f.hidden.id]: 5 } }
+
+    // the files stop counting with the delete, before the steps move them
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.meta.id)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.state).toBe('moving')
+    expect((await filesOf(t, inSub2.id)).length).toBeGreaterThan(0)
+    expect(await billed(t, org_id)).toEqual(away)
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await runSteps(t)
+    expect((await itemFor(t, f.meta.id)).state).toBe('ready')
+    expect(await billed(t, org_id)).toEqual(away)
+
+    // written back while the projects are absent, they still count nowhere
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 40 })
+    await restore(t, f.user, [item.id])
+    let sawFilesBack = false
+    await stepThrough(t, item.id, async () => {
+      if ((await liveProject(t, f.meta.id)) !== null) return
+      if ((await filesOf(t, inSub2.id)).length > 0) sawFilesBack = true
+      expect(await billed(t, org_id)).toEqual(away)
+    })
+    expect(sawFilesBack).toBe(true)
+    expect(await filesOf(t, inSub.id)).toEqual([[11, f.sub.id]])
+    expect(await filesOf(t, inSub2.id)).toEqual([
+      [3, f.sub2.id],
+      [7, f.sub2.id],
+    ])
+    expect(await billed(t, org_id)).toEqual(before)
+    await assertNoDanglingRefs(t, 'after the files of a project came back')
   })
 })
