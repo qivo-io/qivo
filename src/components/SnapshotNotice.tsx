@@ -7,23 +7,25 @@ import { usePlannerVersion } from '../store/usePlannerVersion'
 import { Icon } from './qivo'
 import { Button } from './ui/button'
 
-/** When the view was last current: the time today, else the date and time
-    ("16 Oct, 14:32"), in the organization's day and month order. */
+/** When the view was last current. Today it is the time, on an earlier day
+    the date and time ("16 Oct, 14:32"), in the organization's day and month
+    order. */
 export function asOfText(asOf: string, now = new Date()): string {
   const at = new Date(asOf)
   const sameDay = at.toDateString() === now.toDateString()
   return sameDay ? fmtTime(at) : `${fmtDateYear(at, now)}, ${fmtTime(at)}`
 }
 
-/** The floating notice shown while the live workspace snapshot is stale: the
-    query failed mid-session, or the sign-in ended. It says when the view was
-    last current, that editing is paused, and offers Try again (or Reload
-    when signed out). It cannot be hidden while editing is paused. Mounted
-    once at the root; the floating column places it (lib/floatStack). */
+/** The floating notice shown while the live workspace snapshot is stale,
+    because the query failed mid-session or the sign-in ended. It says when
+    the view was last current and that editing is paused, and offers Try
+    again (or Reload when signed out). It cannot be hidden while editing is
+    paused. Mounted once at the root, and the floating column places it
+    (lib/floatStack). */
 export function SnapshotNotice() {
   usePlannerVersion('health')
   const trouble = P.snapshotTrouble()
-  // Details belong to one failure: a later one starts with them closed.
+  // Details belong to one failure, so a later one starts with them closed.
   const [detailsFor, setDetailsFor] = useState<number | null>(null)
   const details = trouble !== null && detailsFor === trouble.since
   const detailsId = useId()
@@ -45,8 +47,8 @@ export function SnapshotNotice() {
         <div
           data-snapshot-notice={trouble.kind}
           data-floating-surface
-          // Outside modal DOM: a press here must not close the dialog or
-          // window that holds the person's draft.
+          // The notice is outside any modal's DOM. A press here must not close
+          // the dialog or window that holds the person's draft.
           onPointerDown={(event) => event.stopPropagation()}
           className="pointer-events-auto flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-xl"
         >
@@ -59,13 +61,19 @@ export function SnapshotNotice() {
             {details && !signedOut && (
               <div
                 id={detailsId}
-                className="mt-2 max-h-40 overflow-y-auto rounded-sm bg-surface-3 px-2 py-1.5 font-mono text-xs leading-normal whitespace-pre-wrap text-text-2 [overflow-wrap:anywhere]"
+                className="mt-2 max-h-[min(160px,25dvh)] overflow-y-auto rounded-sm bg-surface-3 px-2 py-1.5 font-mono text-xs leading-normal whitespace-pre-wrap text-text-2 [overflow-wrap:anywhere]"
               >
                 {trouble.detail}
               </div>
             )}
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div
+            className="ml-auto flex items-center gap-2"
+            // A focused button outside an open dialog makes the dialog take
+            // focus back and select its field's text, which the next key
+            // would replace. The Details text stays selectable.
+            onMouseDown={(event) => event.preventDefault()}
+          >
             {signedOut ? (
               <Button variant="outline" onClick={() => window.location.reload()}>
                 Reload

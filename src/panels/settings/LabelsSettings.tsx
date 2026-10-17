@@ -32,7 +32,9 @@ function LabelRow({
   // an empty, unchanged or refused name puts the stored one back
   const commit = () => {
     const v = name.trim()
-    if (!v || v === label.name || !P.updateLabel(label.id, { name: v })) setName(label.name)
+    if (!v || v === label.name) setName(label.name)
+    // a paused rename keeps the typed name
+    else if (!P.refusePausedEdit() && !P.updateLabel(label.id, { name: v })) setName(label.name)
   }
   return (
     <div className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]">
@@ -130,6 +132,7 @@ function LabelRow({
           }
           onClick={() =>
             onPress(() => {
+              if (P.refusePausedEdit()) return
               P.removeLabel(label.id)
               window.showToast?.(`Label “${label.name}” deleted`)
             })
@@ -156,6 +159,8 @@ export function OrgLabelsPage() {
   const addLabel = () => {
     const v = newLabel.trim()
     if (!v || dup) return
+    // a paused create keeps the typed name
+    if (P.refusePausedEdit()) return
     P.addLabel({ name: v })
     window.showToast?.(`Label “${v}” created`)
     setNewLabel('')

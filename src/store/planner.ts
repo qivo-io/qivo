@@ -652,15 +652,22 @@ const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
 
 /* --- snapshot health ---------------------------------------------------------
-   The live snapshot (snapshot.forMe) can stop loading mid-session: a size
-   limit as an organization grows, a lost sign-in, or a faulty deploy. The
-   last good snapshot stays on screen and the snapshot notice says so. While
-   it is stale, write() refuses edits to shared data before they reach the
-   server: an edit made from stale data can overwrite newer work, and run()'s
-   rollback would re-adopt the stale snapshot over edits that did save.
-   Personal state (read marks, preferences, appearance, following) still
-   saves. Convex reruns a failed query when the data it read changes, so a
-   later delivery ends the trouble without a reload. */
+   The live snapshot (snapshot.forMe) can stop loading mid-session, after a
+   size limit as an organization grows, a lost sign-in or a faulty deploy.
+   The last good snapshot stays on screen and the snapshot notice says so.
+   While it is stale, edits to shared data pause. An edit made from stale
+   data can overwrite newer work, and run()'s rollback would re-adopt the
+   stale snapshot over edits that did save, read marks included. So every
+   optimistic mutator calls refusePausedEdit() before its paint, and the
+   refusal never reaches that rollback. write() refuses any other shared
+   write before it is sent, the backstop for a mutator that does not check
+   first. Personal state (read marks, preferences, appearance, following)
+   still saves, and so does revoking or deleting a credential, which only
+   takes access away. Panels that call Convex directly (organization
+   deletion and its export record, billing) act on their own live queries,
+   not on the snapshot, so they do not pause. Convex reruns a failed query
+   when the data it read changes, so a later delivery ends the trouble
+   without a reload. */
 
 /** The sentence every paused edit shows. */
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
@@ -678,26 +685,47 @@ export type SnapshotTrouble = {
 }
 let snapshotTrouble: SnapshotTrouble | null = null
 
-/* Mutations that change only the signed-in person's own state, plus the OAuth
-   consent page's read of its request. Every other mutation pauses while the
-   snapshot is stale, including ones added later. */
-const PERSONAL_WRITES = new Set([
+/* The writes that go on while the snapshot is stale, each named. They change
+   only the signed-in person's own state, read the OAuth consent page's
+   request, or take a credential's access away. A leaked key must stay
+   revocable during an outage, because REST and MCP do not read the snapshot
+   and keep working. Every other mutation pauses, including ones added later. */
+const UNPAUSED_WRITES = new Set([
   'prefs:save',
   'issues:subscribe',
   'issues:unsubscribe',
   'issues:setSubscriber',
   'profiles:setMessageRetention',
   'oauthConnections:getContext',
+  'oauthConnections:revoke',
+  'tokens:revokeAgentKey',
+  'tokens:deleteAgentKey',
+  'tokens:revokeMcpToken',
+  'tokens:deleteMcpToken',
+  'apiAccess:revoke',
 ])
-const isPersonalWrite = (name: string) =>
-  /^(messages|appearance):/.test(name) || PERSONAL_WRITES.has(name)
+const isUnpausedWrite = (name: string) =>
+  /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
 
-/** Toasts the pause and answers true while shared edits are paused. Actions
-    that take typed text call it before they clear or close anything, so a
-    paused save keeps the text in its field. */
+/* One action can reach several mutators. The pause toast shows once for it. */
+const PAUSED_TOAST_GAP_MS = 1000
+let pausedToastAt = Number.NEGATIVE_INFINITY
+
+/** Toasts the pause, at most once per PAUSED_TOAST_GAP_MS. */
+function toastPaused() {
+  const now = Date.now()
+  if (now - pausedToastAt < PAUSED_TOAST_GAP_MS) return
+  pausedToastAt = now
+  toast(PAUSED_TEXT)
+}
+
+/** Toasts the pause and answers true while shared edits are paused. Every
+    optimistic mutator calls it before its paint. Actions that take typed
+    text, close a window or announce success call it before they do, so a
+    paused save keeps the text in its field and claims nothing. */
 function refusePausedEdit(): boolean {
   if (!snapshotTrouble) return false
-  toast(PAUSED_TEXT)
+  toastPaused()
   return true
 }
 
@@ -708,7 +736,7 @@ function refusePausedEdit(): boolean {
 function toastWriteError(e: unknown) {
   const d = errData(e)
   if (d.code === 'paused') {
-    toast(PAUSED_TEXT)
+    toastPaused()
     return
   }
   if (readOnly(d) && d.message) {
@@ -746,7 +774,7 @@ function restoreErrorText(e: unknown): string {
 function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
   if (d.code === 'paused') {
-    toast(PAUSED_TEXT)
+    toastPaused()
     return
   }
   const m = d.message ? String(d.message) : ''
@@ -807,7 +835,7 @@ const write: typeof convex.mutation = (mutation, args, options) => {
   if (DEMO_MODE && demoDisposed)
     return Promise.reject(new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' }))
   const name = getFunctionName(mutation)
-  if (snapshotTrouble && !isPersonalWrite(name))
+  if (snapshotTrouble && !isUnpausedWrite(name))
     return Promise.reject(new ConvexError({ code: 'paused', message: PAUSED_TEXT }))
   const releaseUpdate = beginUpdateBlock()
   const visit = roadmapVisit
@@ -2136,6 +2164,7 @@ export const PLANNER = {
     expireRoadmapHistory()
     const visit = roadmapVisit
     if (!visit || visit.disabled || visit.pending || inFlight || !visit.count) return
+    if (refusePausedEdit()) return
     visit.pending++
     run(
       write(api.roadmap.undo, { session_id: visit.id, all })
@@ -2157,13 +2186,11 @@ export const PLANNER = {
       },
       (error) => {
         const { code, message: detail } = errData(error)
-        toast(
-          code === 'paused'
-            ? PAUSED_TEXT
-            : detail
-              ? `Couldn't undo: ${detail}. No changes reverted.`
-              : "Couldn't undo. Try again.",
-        )
+        if (code === 'paused') toastPaused()
+        else
+          toast(
+            detail ? `Couldn't undo: ${detail}. No changes reverted.` : "Couldn't undo. Try again.",
+          )
       },
     )
     emit()
@@ -2753,6 +2780,7 @@ export const PLANNER = {
     choice: { keep: true } | { to: string | null },
     items: Holder[],
   ): Promise<boolean> => {
+    if (refusePausedEdit()) return false
     const team = 'teamId' in change ? PLANNER.teams.find((t) => t.id === change.teamId) : null
     const named = teamNoun(team?.name)
     const person = 'userId' in change ? PLANNER.user(change.userId)?.name || 'This person' : ''
@@ -3209,7 +3237,7 @@ export const PLANNER = {
     // Numbering, org and reporter all follow the TARGET project's organization
     // (0081): creating in a foreign project is attributed to my guest profile
     const orgRow = proj ? rows.orgs.get(proj.org_id) : null
-    if (proj?.type !== 'project' || !orgRow) return null
+    if (proj?.type !== 'project' || !orgRow || refusePausedEdit()) return null
     const uuid = crypto.randomUUID()
     const now = new Date().toISOString()
     const previewNum = (orgRow.next_issue_num || 0) + 1
@@ -3309,6 +3337,7 @@ export const PLANNER = {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
+    if (refusePausedEdit()) return Promise.resolve(false)
     // text over the server's cap is refused before the paint, so a draft is
     // never lost to a rollback; a task saved before the cap may send its
     // stored text back unchanged, as the server allows
@@ -3484,7 +3513,8 @@ export const PLANNER = {
       !it ||
       !target ||
       target.type !== 'project' ||
-      row.project_id === projectId
+      row.project_id === projectId ||
+      refusePausedEdit()
     )
       return null
     const { leavesParent, carried } = PLANNER.moveFamily(it, projectId)
@@ -3551,7 +3581,7 @@ export const PLANNER = {
   deleteIssue: (id: string, subtasks: string[] = [], wait = false): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid) return Promise.resolve(false)
+    if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
     const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
     const gone = new Set([uuid, ...subtaskIds])
     // local mirror of the delete; the server moves the rows to Deleted items
@@ -3602,7 +3632,7 @@ export const PLANNER = {
   archiveIssue: (id: string, reason?: string) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid) return null
+    if (!row || !uuid || refusePausedEdit()) return null
     // the visible subtree, root included (cycle-safe: membership only grows)
     const subtree = issueSubtree(uuid)
     pendingArchiveIssueIds.add(uuid)
@@ -3689,7 +3719,7 @@ export const PLANNER = {
     const already = [...rows.links.values()].some(
       (l) => (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a),
     )
-    if (already) return
+    if (already || refusePausedEdit()) return
     const src = rows.issues.get(a)
     if (!src) return
     // canonical storage stays client-side: blocks is directed source→target,
@@ -3738,7 +3768,7 @@ export const PLANNER = {
     const b = keyToUuid.get(bId)
     if (!a || !b) return
     const src = rows.issues.get(a) || rows.issues.get(b)
-    if (!src) return
+    if (!src || refusePausedEdit()) return
     ;[...rows.links.values()].forEach((l) => {
       if ((l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a))
         rows.links.delete(l.id)
@@ -3781,7 +3811,7 @@ export const PLANNER = {
       // INSERT renumbering that reassigns the derived key mid-flight
       const uuid = keyToUuid.get(issueKey) || (rows.issues.has(issueKey) ? issueKey : undefined)
       let row = uuid ? rows.issues.get(uuid) : undefined
-      if (!row || !uuid) return null
+      if (!row || !uuid || refusePausedEdit()) return null
       // Shrink BEFORE the cap is applied: a 12 MB screenshot that re-encodes to
       // 600 KB should attach, not bounce. This is the choke point every caller
       // reaches, so the guard lives here rather than in each of the three
@@ -3847,7 +3877,7 @@ export const PLANNER = {
       attachment on an issue they can write. */
   removeAttachment: (attId: string) => {
     const rec = rows.attachments.get(attId)
-    if (!rec) return
+    if (!rec || refusePausedEdit()) return
     const issueRow = rows.issues.get(rec.issue_id)
     rows.attachments.delete(attId)
     minted.delete(`att:${attId}`)
@@ -3989,6 +4019,8 @@ export const PLANNER = {
     if (!row) return
     const me = actorIn(row.org_id)
     if (!(me?.active && (me.orgRole === 'admin' || me.orgRole === 'user'))) return
+    // the stamp follows an edit, which already said that editing is paused
+    if (snapshotTrouble) return
     const prev = syncStampOf(row)
     const now = Date.now()
     const first_since =
@@ -4053,6 +4085,7 @@ export const PLANNER = {
       toast(TEXT_TOO_LONG.comment)
       return
     }
+    if (refusePausedEdit()) return
     const issue = rows.issues.get(rec.issue_id)
     const org = issue ? issue.org_id : HOME_ORG
     rec.body = text
@@ -4067,7 +4100,7 @@ export const PLANNER = {
 
   deleteComment: (id: string) => {
     const rec = rows.comments.get(id)
-    if (!rec) return
+    if (!rec || refusePausedEdit()) return
     const issue = rows.issues.get(rec.issue_id)
     rows.comments.delete(id)
     rebuildComments()
@@ -4323,7 +4356,7 @@ export const PLANNER = {
       sentence = await write(api.profiles.setDisplayName, { name: next })
     } catch (e) {
       console.error('[qivo] rename failed:', e)
-      return 'That name could not be saved'
+      return errData(e).code === 'paused' ? PAUSED_TEXT : 'That name could not be saved'
     }
     if (sentence) return sentence.charAt(0).toUpperCase() + sentence.slice(1)
     return null
@@ -4518,7 +4551,7 @@ export const PLANNER = {
   addProject: (p: NewProjectInput, onSaved?: () => void, onRefused?: () => void) => {
     const parentOrg = p.parent ? orgOfProject(p.parent) : ''
     const orgRow = rows.orgs.get(parentOrg || HOME_ORG)
-    if (!orgRow) return
+    if (!orgRow || refusePausedEdit()) return
     const uuid = crypto.randomUUID()
     const siblings = p.parent
       ? [...rows.projects.values()].filter((x) => x.parent_id === p.parent)
@@ -4604,7 +4637,7 @@ export const PLANNER = {
      refused by the server (toasted). removeAccess waits on it. */
   updateProject: (id: string, patch: ProjectPatch): Promise<boolean> => {
     const row = rows.projects.get(id)
-    if (!row) return Promise.resolve(false)
+    if (!row || refusePausedEdit()) return Promise.resolve(false)
     if ('teamAccess' in patch) {
       rows.teamAccess = rows.teamAccess.filter((a) => a.project_id !== id)
       Object.entries(patch.teamAccess || {}).forEach(([teamId, level]) => {
@@ -4670,7 +4703,7 @@ export const PLANNER = {
      snapshot and the delivery agree about which of them came along. */
   archiveProject: (id: string) => {
     const row = rows.projects.get(id)
-    if (!row || row.archived_at) return
+    if (!row || row.archived_at || refusePausedEdit()) return
     const stamp = new Date().toISOString()
     const ids =
       row.type === 'meta'
@@ -4733,7 +4766,7 @@ export const PLANNER = {
 
   removeProject: (id: string) => {
     const row = rows.projects.get(id)
-    if (!row) return
+    if (!row || refusePausedEdit()) return
     // local cascade mirror; the server's deleteProjectDeep owns the FK edges
     const ids =
       row.type === 'meta'
@@ -4765,7 +4798,7 @@ export const PLANNER = {
      stored before it is). Narrates nothing, name included. */
   setOrg: (patch: OrgPatch) => {
     const org = homeRow()
-    if (!org) return
+    if (!org || refusePausedEdit()) return
     const wire: FunctionArgs<typeof api.orgs.update>['patch'] = {}
     if ('name' in patch) {
       org.name = patch.name
@@ -4856,7 +4889,7 @@ export const PLANNER = {
 
   addTeam: (name: string) => {
     const org = homeRow()
-    if (!org || !String(name || '').trim()) return
+    if (!org || !String(name || '').trim() || refusePausedEdit()) return
     const uuid = crypto.randomUUID()
     rows.teams.set(uuid, {
       id: uuid,
@@ -4875,7 +4908,7 @@ export const PLANNER = {
 
   updateTeam: (id: string, patch: TeamPatch) => {
     const row = rows.teams.get(id)
-    if (!row) return
+    if (!row || refusePausedEdit()) return
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
     if ('name' in patch) {
       row.name = patch.name
@@ -4915,6 +4948,7 @@ export const PLANNER = {
   addTeamMember: (teamId: string, uid: string, _isLeader = false) => {
     const team = rows.teams.get(teamId)
     if (!team || rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid)) return
+    if (refusePausedEdit()) return
     // the server always inserts a plain member; leadership is its own verb
     rows.teamMembers.push({ team_id: teamId, profile_id: uid, is_leader: false })
     rebuild()
@@ -4931,7 +4965,7 @@ export const PLANNER = {
   setTeamLeader: (teamId: string, uid: string, isLeader: boolean) => {
     const team = rows.teams.get(teamId)
     const row = rows.teamMembers.find((m) => m.team_id === teamId && m.profile_id === uid)
-    if (!team || !row || row.is_leader === isLeader) return
+    if (!team || !row || row.is_leader === isLeader || refusePausedEdit()) return
     row.is_leader = isLeader
     rebuild()
     emit()
@@ -4950,7 +4984,7 @@ export const PLANNER = {
   removeTeam: (id: string): Promise<boolean> => {
     if (!PLANNER.canDeleteTeam(id)) return Promise.resolve(false)
     const team = rows.teams.get(id)
-    if (!team) return Promise.resolve(false)
+    if (!team || refusePausedEdit()) return Promise.resolve(false)
     // Projects are independent of teams. Deleting a team removes only its
     // memberships and permission grants; project rows and their work remain.
     // labels are org-wide since 0078 — deleting a team leaves them alone
@@ -4972,7 +5006,7 @@ export const PLANNER = {
 
   addUser: (rec: NewUserInput) => {
     const org = homeRow()
-    if (!org) return
+    if (!org || refusePausedEdit()) return
     // A person's address is REQUIRED (0104) — it is what their login is
     // matched against when they claim the seat. An agent's is always null;
     // its login is a key. Refusing here is only so the caller hears WHY.
@@ -5045,7 +5079,7 @@ export const PLANNER = {
       put the stored value back. */
   updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
-    if (!row) return false
+    if (!row || refusePausedEdit()) return false
     /* The client-predicted refusals stay audible first (the server states
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
@@ -5274,7 +5308,7 @@ export const PLANNER = {
     const target = rows.profiles.get(id)
     if (!target) return
     const admins = [...rows.profiles.values()].filter((u) => u.org_role === 'admin')
-    if (target.org_role === 'admin' && admins.length <= 1) return
+    if ((target.org_role === 'admin' && admins.length <= 1) || refusePausedEdit()) return
     ;[...rows.issues.values()].forEach((i) => {
       if (
         i.assignee_id !== id &&
@@ -5350,7 +5384,7 @@ export const PLANNER = {
      project; a sub-project id is folded up to it. */
   addMilestone: (m: { project: string; name: string; week: number }) => {
     const meta = PLANNER.metaOf(m.project)
-    if (!meta) return null
+    if (!meta || refusePausedEdit()) return null
     const uuid = crypto.randomUUID()
     const week = weekToISO(m.week)
     rows.milestones.set(uuid, {
@@ -5389,7 +5423,7 @@ export const PLANNER = {
     const db: FunctionArgs<typeof api.projects.updateMilestone>['patch'] = {}
     if ('name' in patch) db.name = patch.name
     if (patch.week != null) db.week = weekToISO(patch.week)
-    if (!Object.keys(db).length) return
+    if (!Object.keys(db).length || refusePausedEdit()) return
     Object.assign(row, db)
     rebuild()
     emit()
@@ -5406,7 +5440,7 @@ export const PLANNER = {
 
   removeMilestone: (id: string) => {
     const row = rows.milestones.get(id)
-    if (!row) return
+    if (!row || refusePausedEdit()) return
     const org = orgOfProject(row.project_id)
     rows.milestones.delete(id)
     rebuild()
@@ -5426,6 +5460,7 @@ export const PLANNER = {
       (l) => l.org_id === org.id && l.name.toLowerCase() === name.toLowerCase(),
     )
     if (dup) return dup.id
+    if (refusePausedEdit()) return null
     // the shared palette picks the color unless rec.color overrides it
     const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length].color
     const uuid = crypto.randomUUID()
@@ -5448,7 +5483,7 @@ export const PLANNER = {
       can put the stored name back. */
   updateLabel: (id: string, patch: { name?: string; color?: string }): boolean => {
     const row = rows.labels.get(id)
-    if (!row) return false
+    if (!row || refusePausedEdit()) return false
     const wire: FunctionArgs<typeof api.labels.update>['patch'] = {}
     if ('name' in patch) {
       const name = (patch.name || '').trim().slice(0, 40)
@@ -5482,7 +5517,7 @@ export const PLANNER = {
 
   removeLabel: (id: string) => {
     const row = rows.labels.get(id)
-    if (!row) return
+    if (!row || refusePausedEdit()) return
     // the attach rows go with the label server-side — mirror the sweep
     rows.issueLabels = rows.issueLabels.filter((il) => il.label_id !== id)
     rows.labels.delete(id)
@@ -5494,7 +5529,7 @@ export const PLANNER = {
   toggleIssueLabel: (issueId: string, labelId: string) => {
     const uuid = keyToUuid.get(issueId)
     const issue = uuid ? rows.issues.get(uuid) : null
-    if (!uuid || !issue || !rows.labels.get(labelId)) return
+    if (!uuid || !issue || !rows.labels.get(labelId) || refusePausedEdit()) return
     // the server toggles on ITS state, so a replay nets out either way
     const attached = rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
     if (attached)
@@ -5601,7 +5636,7 @@ export const PLANNER = {
    gate). Its error callback fires when the query itself fails, not for
    network drops, which only delay results until Convex reconnects and
    resubscribes. A failure after the first result is snapshot trouble (see
-   snapshot health): the last snapshot stays on screen and shared edits pause
+   snapshot health). The last snapshot stays on screen and shared edits pause
    until a later result succeeds. */
 
 /* The last snapshot the server delivered — run()'s rollback anchor
@@ -5659,17 +5694,21 @@ function snapshotRecovered() {
 
 /** Subscribes to the live snapshot. With `first`, the subscription's first
     result settles it (boot); without, every result updates the store (a
-    retry's fresh subscription). */
+    retry's fresh subscription). A boot that fails before its first result
+    ignores everything after. initStore drops that subscription, and a later
+    error must not report trouble behind the load-failed screen, where the
+    pause would refuse the next boot's seat claim. */
 function subscribeSnapshot(
   stillCurrent: () => boolean,
   first?: { resolve: (snap: Snapshot | null) => void; reject: (err: unknown) => void },
 ) {
   let settled = !first
+  let bootFailed = false
   return convex.onUpdate(
     api.snapshot.forMe,
     {},
     (snap) => {
-      if (!stillCurrent()) return
+      if (!stillCurrent() || bootFailed) return
       serverSnap = snap
       if (!settled) {
         settled = true
@@ -5696,24 +5735,25 @@ function subscribeSnapshot(
       emit()
     },
     (err) => {
-      if (!stillCurrent()) return
+      if (!stillCurrent() || bootFailed) return
       const demoEnded = DEMO_MODE && isDemoLifecycleRefusal(err)
       if (demoEnded) notifyDemoEnded()
       if (!settled) {
         settled = true
+        bootFailed = true
         first?.reject(err)
         return
       }
       // The query failed mid-session. Convex keeps the subscription and
-      // reruns the query when the data it read changes; a later result ends
-      // the trouble. The demo's own ending is handled above.
+      // reruns the query when the data it read changes, and a later result
+      // ends the trouble. The demo's own ending is handled above.
       console.error('[qivo] snapshot query failed:', err)
       if (!demoEnded) snapshotFailed(err)
     },
   )
 }
 
-/** Try again: a fresh subscription runs the failed query again (Convex never
+/** Try again. A fresh subscription runs the failed query again (Convex never
     caches a failed run). Does nothing unless the snapshot failed, and at most
     once per RETRY_GAP_MS; it cannot cure a limit the data itself exceeds. */
 function retrySnapshot() {
@@ -5962,9 +6002,17 @@ export async function initStore(
     resetSnapshotTrouble()
     emit('health')
   }
+  let bootSub: (() => void) | null = null
   const first = await new Promise<Snapshot | null>((resolve, reject) => {
     if (DEMO_MODE) cancelDemoBoot = () => resolve(null)
-    snapUnsub = subscribeSnapshot(stillCurrent, { resolve, reject })
+    snapUnsub = bootSub = subscribeSnapshot(stillCurrent, { resolve, reject })
+  }).catch((err: unknown) => {
+    // a failed boot keeps no subscription (see subscribeSnapshot)
+    if (snapUnsub === bootSub) {
+      snapUnsub?.()
+      snapUnsub = null
+    }
+    throw err
   })
   if (epoch === storeEpoch) cancelDemoBoot = null
   if (!stillCurrent()) return null

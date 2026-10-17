@@ -3,9 +3,10 @@ import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
-/* Snapshot trouble: the live snapshot query failing after the first delivery
-   (plan item 8). The network double captures each snapshot subscription's
-   two callbacks; every other mutation stays pending until a test settles it. */
+/* Snapshot trouble is the live snapshot query failing after the first
+   delivery (plan item 8). The network double captures each snapshot
+   subscription's two callbacks, and every other mutation stays pending until
+   a test settles it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const demo = vi.hoisted(() => ({ on: false, ended: vi.fn() }))
@@ -161,6 +162,60 @@ describe('snapshot trouble', () => {
     expect(sentNames()).toEqual(['messages:markRead', 'prefs:save'])
   })
 
+  it('refuses paused edits before their paint, so saved personal state stays on screen', async () => {
+    await boot()
+    const { P } = store
+    live().fail(new Error(QUERY_FAILURE))
+    P.markMessagesRead(['message-a'])
+    sent[0].resolve(null)
+    await settle()
+    const read = () => P.messages.find((message) => message.id === 'message-a')?.read
+    expect(read()).toBe(true)
+    const [task] = P.issues
+    const project = snapshot.projects[0].id
+    const teams = P.teams.length
+    P.updateIssue(task.id, { status: 'progress' })
+    P.archiveIssue(task.id)
+    P.addLabel({ name: 'Bench' })
+    P.setOrg({ name: 'Renamed Labs' })
+    P.addTeam('Field crew')
+    P.updateProject(project, { name: 'Renamed project' })
+    P.removeProject(project)
+    await settle()
+    // nothing was painted, so no rollback took the saved read mark away
+    expect(read()).toBe(true)
+    expect(sentNames()).toEqual(['messages:markRead'])
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(P.labels).toHaveLength(0)
+    expect(P.org.name).toBe('Testbed Labs')
+    expect(P.teams).toHaveLength(teams)
+    expect(P.project(project)?.name).toBe('Task creation fixture')
+    // one action can reach several mutators, so the pause toasts once
+    expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
+  })
+
+  it('still revokes credentials while other edits pause', async () => {
+    await boot()
+    const { P } = store
+    live().fail(new Error(QUERY_FAILURE))
+    void P.revokeAgentKey('key-a')
+    void P.deleteAgentKey('key-b')
+    void P.revokeMcpToken('token-a')
+    void P.deleteMcpToken('token-b')
+    void P.revokeApiCredential('oauth_connections', 'connection-a')
+    void P.revokeOAuthConnection('connection-b')
+    await expect(P.createMcpToken('Laptop', { access: 'read' })).resolves.toBeNull()
+    await settle()
+    expect(sentNames()).toEqual([
+      'tokens:revokeAgentKey',
+      'tokens:deleteAgentKey',
+      'tokens:revokeMcpToken',
+      'tokens:deleteMcpToken',
+      'apiAccess:revoke',
+      'oauthConnections:revoke',
+    ])
+  })
+
   it('keeps a paused comment out of the thread so its composer keeps the text', async () => {
     await boot()
     const { P } = store
@@ -183,7 +238,7 @@ describe('snapshot trouble', () => {
     expect(subscriptions).toHaveLength(2)
     expect(getFunctionName(network.onUpdate.mock.lastCall?.[0])).toBe('snapshot:forMe')
     expect(P.snapshotTrouble()?.retrying).toBe(true)
-    // the fresh run fails again: the button stays on "Trying again…"
+    // the fresh run fails again, and the button stays on "Trying again…"
     live().fail(new Error(QUERY_FAILURE))
     P.retrySnapshot()
     expect(subscriptions).toHaveLength(2)
@@ -218,11 +273,26 @@ describe('snapshot trouble', () => {
     expect(P.issueById[task.id].status).toBe('progress')
   })
 
-  it('leaves the boot failure to the sign-in gate', async () => {
+  it('leaves the boot failure to the sign-in gate, which can boot again', async () => {
     firstDelivery = 'fail'
     store = await import('./planner')
     await expect(store.initStore()).rejects.toThrow('Server Error')
     expect(store.P.snapshotTrouble()).toBeNull()
+    const failed = live()
+    expect(failed.unsubscribe).toHaveBeenCalledTimes(1)
+    // a late error of the failed boot is not trouble, so the next boot's seat
+    // claim is sent rather than paused
+    failed.fail(new Error(QUERY_FAILURE))
+    expect(store.P.snapshotTrouble()).toBeNull()
+    const booting = store.initStore()
+    await settle()
+    expect(subscriptions).toHaveLength(2)
+    live().deliver(structuredClone(snapshot))
+    await expect(booting).resolves.not.toBeNull()
+    const claims = network.mutation.mock.calls.filter(
+      ([ref]) => getFunctionName(ref) === 'identity:claimMySeats',
+    )
+    expect(claims).toHaveLength(2)
   })
 
   it('keeps the last view without trouble when every seat is gone', async () => {

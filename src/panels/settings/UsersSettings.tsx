@@ -45,7 +45,8 @@ function AgentKeyPanel({
   useUpdateBlocker(!!name || !!fresh || busy)
   const mine = (keys || []).filter((k) => k.agentId === agent.id)
   const mint = async () => {
-    if (busy) return
+    // a paused create keeps the typed name and says why
+    if (busy || P.refusePausedEdit()) return
     setBusy(true)
     const res = await P.createAgentKey(agent.id, name.trim() || 'Key')
     setBusy(false)
@@ -403,6 +404,7 @@ export function OrgUsersPage({
                     onClick={() => {
                       if (blocked) return
                       confirm.press(`u:${u.id}`, () => {
+                        if (P.refusePausedEdit()) return
                         P.removeUser(u.id)
                         window.showToast?.(`${u.name} removed from the organization`)
                       })

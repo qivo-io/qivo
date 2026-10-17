@@ -82,6 +82,13 @@ const button = (label: string) =>
 async function failWith(error: Error) {
   await act(async () => fail(error))
 }
+/** Presses the mouse on `target` and answers whether the notice kept focus
+    where it was (the default action prevented). */
+function pressKeepsFocus(target: Element | null | undefined) {
+  const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  target?.dispatchEvent(press)
+  return press.defaultPrevented
+}
 
 describe('SnapshotNotice', () => {
   it('renders nothing while the snapshot is current', () => {
@@ -104,6 +111,12 @@ describe('SnapshotNotice', () => {
       '[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c] Server Error',
     )
     expect(button('Hide details')?.getAttribute('aria-expanded')).toBe('true')
+    // the error text stays selectable for copying
+    expect(
+      pressKeepsFocus(
+        document.getElementById(button('Hide details')?.getAttribute('aria-controls') ?? ''),
+      ),
+    ).toBe(false)
   })
 
   it('offers a reload, not a retry, after the sign-in ended', async () => {
@@ -120,6 +133,8 @@ describe('SnapshotNotice', () => {
   it('tries again through the store and holds the button while it runs', async () => {
     await failWith(new Error('Server Error'))
     const retry = vi.spyOn(store.P, 'retrySnapshot')
+    // pressing it leaves focus in an open dialog, whose field keeps its text
+    expect(pressKeepsFocus(button('Try again'))).toBe(true)
     await act(async () => button('Try again')?.click())
     expect(retry).toHaveBeenCalledTimes(1)
     expect(subscribed).toBe(2)

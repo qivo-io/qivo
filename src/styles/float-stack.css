@@ -1,24 +1,37 @@
-/* The floating column (src/lib/floatStack.ts): the toasts, the app update
-   notice and the snapshot notice, stacked so none covers another.
+/* The floating column (src/lib/floatStack.ts) holds the toasts, the app
+   update notice and the snapshot notice, stacked so none covers another.
 
    Beside a workspace it spans the space right of the sidebar column, so its
    center is the content column's center, the axis of the page header pill.
    That holds on every workspace page because the shell is centered and its
    first column is --sidebar-w wide on the planner, Settings and the Archive
-   (workspace.css). Without a workspace, such as on the sign-in screens and
-   in the operator console, and on phones, it spans the window. */
+   (workspace.css). Without a workspace, such as on the sign-in screens and in
+   the operator console, over the landscape phone Roadmap and on phones, it
+   spans the window.
+
+   Members taller than the window scroll instead of leaving it. The column
+   lets presses through to the page, so wheel and touch over a member scroll
+   it, and it shows no scrollbar that could not be dragged. */
 .float-stack {
   position: fixed;
-  inset: 16px;
+  inset: 0;
   z-index: 10000;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   align-items: center;
+  padding: 16px;
+  overflow-y: auto;
+  scrollbar-width: none;
   pointer-events: none;
 }
 .float-stack > [data-float-slot] {
   width: 100%;
+}
+/* The free space goes above the toasts, which puts the members at the bottom.
+   Unlike flex-end alignment, the auto margin gives way when the members
+   overflow, so the column starts at its top and scrolls down. */
+.float-stack > [data-float-slot="toasts"] {
+  margin-top: auto;
 }
 /* Every member keeps 8px above it. Empty slots add no space, and the
    topmost member's margin is empty room. */
@@ -39,20 +52,21 @@
   max-width: 512px;
   margin: 8px auto 0;
 }
+/* The landscape phone Roadmap covers the window while the workspace stays
+   mounted behind it, so the column keeps the window's axis there. */
 @media (min-width: 761px) {
-  html:has(.workspace-shell) .float-stack {
-    left: calc(var(--sidebar-w) + 16px);
+  html:has(.workspace-shell):not(:has([data-roadmap-landscape])) .float-stack {
+    left: var(--sidebar-w);
   }
 }
 /* Phones put the notices at the top, over the page header, and keep the
    toasts above the bottom navigation, at the window's full width. */
 @media (max-width: 760px) {
   .float-stack {
-    bottom: calc(76px + env(safe-area-inset-bottom));
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
   }
   .float-stack > [data-float-slot="toasts"] {
     order: 1;
-    margin-top: auto;
   }
   .float-stack .planner-toast-host > * {
     max-width: 100%;

@@ -1343,7 +1343,7 @@ function Roadmap({
     canWrite: (it) => P.canWrite(it.project),
   })
   const autoArrange = () => {
-    if (!pendingMoves.length) return
+    if (!pendingMoves.length || P.refusePausedEdit()) return
     P.batchRoadmapChanges(() => {
       pendingMoves.forEach((m) => {
         P.updateIssue(m.id, { start: m.start, end: m.end })
