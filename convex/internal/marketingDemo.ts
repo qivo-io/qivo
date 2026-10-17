@@ -11,6 +11,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { byId } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
+import type { StoredTable } from '../lib/enums'
 import { badRequest, conflict, require, rule } from '../lib/functions'
 import { deleteProjectDeep } from '../model/cascade'
 import { SAMPLE_AVATARS, type SampleAvatar, writeNorthstarWork } from '../model/demoSeed'
@@ -39,6 +40,27 @@ function site(expected: string): string {
 
 const isSampleAvatar = (key: string): key is SampleAvatar =>
   (SAMPLE_AVATARS as readonly string[]).includes(key)
+
+/* The refusal while the demo organization has Deleted items. */
+const TRASH_LEFT = 'marketing demo: Deleted items must be empty; run the same command again'
+
+/** Whether organization `orgId` keeps anything in Deleted items: an item,
+ * or the stored rows a purge that stopped halfway left. */
+async function holdsTrash(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  const item = await ctx.db
+    .query('deleted_items')
+    .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
+    .first()
+  const task = await ctx.db
+    .query('deleted_tasks')
+    .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
+    .first()
+  const row = await ctx.db
+    .query('deleted_rows')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .first()
+  return item !== null || task !== null || row !== null
+}
 
 async function receipt(ctx: QueryCtx) {
   return await ctx.db
@@ -342,7 +364,9 @@ async function clearWork(ctx: MutationCtx, org: Doc<'organizations'>, profiles: 
  * reset by running 'wipe' and then 'seed' (scripts/marketing-demo.mjs,
  * the explicit fixture CLI). The demo is empty between the two calls, a failed
  * seed leaves it as the wipe left it, and repeating the reset is safe (a seed
- * alone refuses work added after a wipe). Refusals still say "reset" because
+ * alone refuses work added after a wipe, Deleted items included). A wipe
+ * refuses while the organization holds Deleted items, which the CLI empties
+ * first through deletedItems:purgeOrg. Refusals still say "reset" because
  * that is the CLI command an operator runs. */
 export const apply = internalMutation({
   args: {
@@ -360,17 +384,33 @@ export const apply = internalMutation({
     const { record, org, profiles } = await owned(ctx)
     // All app UUIDs are globally unique. A matching key in another tenant
     // must fail before any cascade or insertion, including on a wipe, so a
-    // reset refuses before its wipe deletes anything.
+    // reset refuses before its wipe deletes anything. A uuid that another
+    // organization's Deleted items keep stays reserved too (lib/db.ts
+    // insertUnique), so it collides like a live row; only an absent row
+    // needs that look.
+    const trashedElsewhere = async (table: StoredTable, rowId: string) => {
+      const row = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', table).eq('row_id', rowId))
+        .first()
+      return row !== null && row.org_id !== org.id
+    }
     for (const project of MARKETING_DEMO.projects) {
-      const existing = await byId(ctx, 'projects', await id(`project:${project.key}`))
-      require(existing === null || existing.org_id === org.id, conflict(
+      const projectId = await id(`project:${project.key}`)
+      const existing = await byId(ctx, 'projects', projectId)
+      require(existing === null
+        ? !(await trashedElsewhere('projects', projectId))
+        : existing.org_id === org.id, conflict(
         'marketing demo: reserved project id belongs to another organization',
         'demo_id_collision',
       ))
     }
     for (const issue of MARKETING_DEMO.issues) {
-      const existing = await byId(ctx, 'issues', await id(`issue:${issue.key}`))
-      require(existing === null || existing.org_id === org.id, conflict(
+      const issueId = await id(`issue:${issue.key}`)
+      const existing = await byId(ctx, 'issues', issueId)
+      require(existing === null
+        ? !(await trashedElsewhere('issues', issueId))
+        : existing.org_id === org.id, conflict(
         'marketing demo: reserved task id belongs to another organization',
         'demo_id_collision',
       ))
@@ -390,31 +430,35 @@ export const apply = internalMutation({
       ))
     }
     for (const comment of MARKETING_DEMO.comments) {
-      const existing = await byId(ctx, 'comments', await id(`comment:${comment.key}`))
+      const commentId = await id(`comment:${comment.key}`)
+      const existing = await byId(ctx, 'comments', commentId)
       const issue = existing ? await byId(ctx, 'issues', existing.issue_id) : null
-      require(existing === null || issue?.org_id === org.id, conflict(
+      require(existing === null
+        ? !(await trashedElsewhere('comments', commentId))
+        : issue?.org_id === org.id, conflict(
         'marketing demo: reserved comment id belongs to another organization',
         'demo_id_collision',
       ))
     }
     for (const milestone of MARKETING_DEMO.milestones) {
-      const existing = await byId(ctx, 'milestones', await id(`milestone:${milestone.key}`))
+      const milestoneId = await id(`milestone:${milestone.key}`)
+      const existing = await byId(ctx, 'milestones', milestoneId)
       const project = existing ? await byId(ctx, 'projects', existing.project_id) : null
-      require(existing === null || project?.org_id === org.id, conflict(
+      require(existing === null
+        ? !(await trashedElsewhere('milestones', milestoneId))
+        : project?.org_id === org.id, conflict(
         'marketing demo: reserved milestone id belongs to another organization',
         'demo_id_collision',
       ))
     }
     for (const link of MARKETING_DEMO.links) {
-      const existing = await byId(
-        ctx,
-        'issue_links',
-        await id(`link:${link.source}:${link.target}`),
-      )
+      const linkId = await id(`link:${link.source}:${link.target}`)
+      const existing = await byId(ctx, 'issue_links', linkId)
       const source = existing ? await byId(ctx, 'issues', existing.source_id) : null
       const target = existing ? await byId(ctx, 'issues', existing.target_id) : null
-      require(existing === null ||
-        (source?.org_id === org.id && target?.org_id === org.id), conflict(
+      require(existing === null
+        ? !(await trashedElsewhere('issue_links', linkId))
+        : source?.org_id === org.id && target?.org_id === org.id, conflict(
         'marketing demo: reserved link id belongs to another organization',
         'demo_id_collision',
       ))
@@ -443,7 +487,11 @@ export const apply = internalMutation({
         .query('labels')
         .withIndex('by_org', (q) => q.eq('org_id', org.id))
         .first()
-      require(projects === null && issues === null && teams === null && labels === null, rule(
+      require(projects === null &&
+        issues === null &&
+        teams === null &&
+        labels === null &&
+        !(await holdsTrash(ctx, org.id)), rule(
         'marketing demo: work was added after wipe; use reset to replace it',
       ))
     }
@@ -453,6 +501,11 @@ export const apply = internalMutation({
       ))
       return await inspectCore(ctx, args.expected_site_url)
     }
+    // A wipe deletes only live work and rewinds the counters, so it refuses
+    // while Deleted items hold anything: their tasks keep numbers the seed
+    // hands out again, and an item still moving keeps tasks under projects
+    // the wipe cannot reach. The CLI empties them first (deletedItems:purgeOrg).
+    if (args.mode === 'wipe') require(!(await holdsTrash(ctx, org.id)), rule(TRASH_LEFT))
     // A seed reaches here only on an empty demo, and still clears: it sweeps
     // leftover activity, messages and view preferences and rewinds the task
     // counters so the rebuilt task numbers match the dataset order.

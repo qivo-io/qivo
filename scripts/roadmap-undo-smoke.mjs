@@ -8,7 +8,12 @@ import { mkdirSync } from 'node:fs'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { chromium } from 'playwright'
-import { inspectBrowserDemo, loadBrowserDemo, signInDemo } from './browser-demo.mjs'
+import {
+  inspectBrowserDemo,
+  loadBrowserDemo,
+  purgeDeletedTasks,
+  signInDemo,
+} from './browser-demo.mjs'
 
 const demo = loadBrowserDemo(process.argv[2] ?? 'http://localhost:5199')
 const before = await inspectBrowserDemo(demo)
@@ -151,6 +156,11 @@ async function cleanup() {
         }
       },
       { ids: tasks.map(({ id }) => id), prefix, orgSlug: demo.orgSlug, initialUI },
+    )
+    // deleting moved the tasks to Deleted items; delete them for good there
+    await purgeDeletedTasks(
+      demo,
+      tasks.map(({ id }) => id),
     )
     await cleanupPage.evaluate(() => window.PLANNER?.signOut()).catch(() => {})
   } finally {

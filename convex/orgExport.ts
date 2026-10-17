@@ -1,8 +1,12 @@
 /* One-shot, admin-only organization export. Each request performs one bounded
  * indexed read and rechecks membership; an export spanning pages is a live
  * traversal, not an atomic database backup. Archived rows and the entire
- * retained activity history are included. No signed URLs are persisted here:
- * clients mint existing file-gateway URLs immediately before fetching bytes. */
+ * retained activity history are included. Deleted items are not: their rows
+ * left the live tables, and a task still in issues under a project that is
+ * moving to or back from Deleted items (model/deletedItems.ts) is skipped,
+ * with its comments, labels, links and attachments. No signed URLs are
+ * persisted here: clients mint existing file-gateway URLs immediately before
+ * fetching bytes. */
 
 import type { PaginationResult } from 'convex/server'
 import { v } from 'convex/values'
@@ -202,11 +206,23 @@ export const page = orgQuery({
     if (!isAdmin) throw forbidden('only organization admins can export organization data')
     const orgId = ctx.me.org_id
     const parentTable = ORG_EXPORT_SECTIONS[section]
+    // Whether a project is live, read once per page.
+    const live = new Map<string, Promise<boolean>>()
+    const liveProject = (id: string) => {
+      let known = live.get(id)
+      if (known === undefined) {
+        known = byId(ctx, 'projects', id).then((project) => project !== null)
+        live.set(id, known)
+      }
+      return known
+    }
     let scope = orgId
     if (parentTable !== null) {
       if (parent_id === undefined) throw badRequest('this export section requires a parent')
       const parent = await byId(ctx, parentTable, parent_id)
       if (parent === null || parent.org_id !== orgId) throw notFound('export parent not found')
+      if ('project_id' in parent && !(await liveProject(parent.project_id)))
+        throw notFound('export parent not found')
       scope = parent.id
       // The client traverses the whole roster; people have no agent keys.
       if (section === 'agent_keys' && (!('kind' in parent) || parent.kind !== 'agent')) {
@@ -226,6 +242,9 @@ export const page = orgQuery({
     const result = await readPage(ctx, section, scope, cursor)
     const rows: OrgExportRow[] = []
     for (const doc of result.page) {
+      // a task under a project in Deleted items stays out, like the project
+      const projectId = section === 'issues' && 'project_id' in doc ? doc.project_id : undefined
+      if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
       if (await hasOwnedEndpoint(ctx, section, row, orgId)) rows.push(row)
     }

@@ -1,5 +1,9 @@
 /* Shared Northstar setup for local browser drives. Credentials stay in the
- * importer's private deployment-bound file; a smoke never seeds or resets. */
+ * importer's private deployment-bound file; a smoke never seeds or resets.
+ * Deleting a task moves it to Deleted items for 30 days, so a drive that
+ * deletes its temporary tasks also deletes them for good there
+ * (purgeDeletedTasks), through a seam the development deployment allows and
+ * production refuses. */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -59,6 +63,26 @@ function devClient(demo) {
   return client
 }
 
+const PURGE_AT_ONCE = 25
+
+/** Deletes for good the Deleted items of temporary tasks a drive created and
+ * deleted (deletedItems:purgeTasks), by the tasks' uuids, so they do not
+ * wait 30 days in Northstar's Deleted items. */
+export async function purgeDeletedTasks(demo, taskIds) {
+  const ids = [...new Set(taskIds.filter(Boolean))]
+  for (let at = 0; at < ids.length; at += PURGE_AT_ONCE) {
+    let result
+    try {
+      result = await devClient(demo).mutation(makeFunctionReference('deletedItems:purgeTasks'), {
+        task_ids: ids.slice(at, at + PURGE_AT_ONCE),
+      })
+    } catch {
+      throw new Error('Could not delete the temporary tasks from Deleted items.')
+    }
+    if (result.waiting > 0) throw new Error('A temporary task is still moving to Deleted items.')
+  }
+}
+
 export async function inspectBrowserDemo(demo) {
   let state
   try {
@@ -99,12 +123,15 @@ export async function signInDemo(page, demo, key = 'nora') {
   if (slug !== demo.orgSlug) throw new Error('Browser did not sign in to Northstar Labs.')
 }
 
+/** Removes what a drive left in Northstar: its tasks titled `issueTitle`, a
+ * temporary agent, agent key and member, then deletes for good the Deleted
+ * items of those tasks and of `taskIds`, the tasks the drive deleted itself. */
 export async function cleanupDemoArtifacts(browser, demo, artifacts) {
   const context = await browser.newContext()
   try {
     const page = await context.newPage()
     await signInDemo(page, demo)
-    await page.evaluate(
+    const deleted = await page.evaluate(
       async ({ issueTitle, agentKeyName, agentName, memberEmail, orgSlug }) => {
         // Use the dev app's authenticated singleton so cleanup awaits backend
         // completion, including after a failed optimistic browser operation.
@@ -112,11 +139,13 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
         const snapshot = await convex.query('snapshot:forMe', {})
         const org = snapshot.orgs.find((candidate) => candidate.slug === orgSlug)
         if (!org) throw new Error('Cleanup organization is unavailable')
+        const deleted = []
         if (issueTitle) {
           for (const issue of snapshot.issues.filter(
             (it) => it.org_id === org.id && it.title === issueTitle,
           )) {
             await convex.mutation('issues:deleteDeep', { org_id: org.id, id: issue.id })
+            deleted.push(issue.id)
           }
         }
         // after its tasks: a temporary agent profile, by its run-unique name
@@ -146,9 +175,12 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
             await convex.mutation('profiles:remove', { org_id: org.id, id: profile.id })
           }
         }
+        return deleted
       },
       { ...artifacts, orgSlug: demo.orgSlug },
     )
+    // the tasks it deleted, and those the drive deleted itself (taskIds)
+    await purgeDeletedTasks(demo, [...(artifacts.taskIds ?? []), ...deleted])
     if (artifacts.memberEmail) {
       try {
         await devClient(demo).mutation(makeFunctionReference('adminAuth:deleteOrphanLogin'), {

@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import { createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
-import { DEMO_INSERTS_TOTAL, DEMO_TTL_MS, DEMO_WRITES_PER_MINUTE } from '../lib/demo'
+import { byId } from '../lib/db'
+import {
+  DEMO_INSERTS_TOTAL,
+  DEMO_MAX_PAYLOAD_BYTES,
+  DEMO_TTL_MS,
+  DEMO_WRITES_PER_MINUTE,
+} from '../lib/demo'
 import { expectRefusal, newT, type T, uuid } from './helpers.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
@@ -432,5 +438,68 @@ describe('demo lifetime and capabilities', () => {
       'forbidden',
       /too large/,
     )
+  })
+
+  it('moves work to Deleted items and back without spending the record limit on moved rows', async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    // a seeded task with its conversation and a comment just under the
+    // payload limit, whose stored copy would pass it
+    const task = await t.run(async (ctx) => {
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect()
+      const leaf = tasks.find(
+        (row) => row.archived_at === undefined && !tasks.some((kid) => kid.parent_id === row.id),
+      )!
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: leaf.id,
+        author: a.profile.id,
+        body: 'x'.repeat(DEMO_MAX_PAYLOAD_BYTES - 1000),
+        created_at: new Date().toISOString(),
+      })
+      return leaf
+    })
+    /* The receipt's counters, and the ids of the records a delete or a
+     * restore adds besides the rows it moves: items, activity rows and
+     * notices. */
+    const counters = () =>
+      t.run(async (ctx) => {
+        const receipt = (await ctx.db.get(a.receipt._id))!
+        const ids: string[] = []
+        for (const table of ['deleted_items', 'activity_events', 'messages'] as const)
+          for (const row of await ctx.db.query(table).collect())
+            if (row.org_id === org_id) ids.push(row._id)
+        return { inserts: receipt.insert_count ?? 0, writes: receipt.write_count ?? 0, ids }
+      })
+    const added = (before: { ids: string[] }, after: { ids: string[] }) =>
+      after.ids.filter((id) => !before.ids.includes(id)).length
+    // near the limit, so a move that counted its rows would be refused
+    await t.run((ctx) => ctx.db.patch(a.receipt._id, { insert_count: DEMO_INSERTS_TOTAL - 10 }))
+    const before = await counters()
+    await a.as.mutation(api.issues.deleteDeep, { org_id, id: task.id })
+    const deleted = await counters()
+    expect(await t.run((ctx) => byId(ctx, 'issues', task.id))).toBeNull()
+    expect(deleted.writes).toBe(before.writes + 1)
+    // the item and the 'deleted' activity row
+    expect(deleted.inserts - before.inserts).toBe(added(before, deleted))
+    expect(added(before, deleted)).toBe(2)
+
+    const item = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', task.id))
+        .unique(),
+    )
+    const result = await a.as.mutation(api.deletedItems.restore, { org_id, ids: [item!.id] })
+    expect(result.restored).toEqual([item!.id])
+    const restored = await counters()
+    expect(await t.run((ctx) => byId(ctx, 'issues', task.id))).not.toBeNull()
+    expect(restored.writes).toBe(deleted.writes + 1)
+    // the 'restored' activity row and the notices to the task's followers
+    expect(restored.inserts - deleted.inserts).toBe(added(deleted, restored))
+    expect(restored.inserts).toBeLessThanOrEqual(DEMO_INSERTS_TOTAL)
   })
 })

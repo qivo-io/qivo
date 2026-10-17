@@ -820,7 +820,7 @@ describe('task events over stateless MCP', () => {
     expect(listing.headers.get('mcp-session-id')).toBeNull()
     expect(
       (await listing.json()).result.events.map((event: { name: string }) => event.name),
-    ).toEqual(['task.created', 'task.updated', 'task.deleted', 'comment.created'])
+    ).toEqual(['task.created', 'task.updated', 'task.deleted', 'task.restored', 'comment.created'])
     const refused = await send('events/subscribe', {
       name: 'task.updated',
       arguments: {},

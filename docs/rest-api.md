@@ -811,7 +811,8 @@ POST   /v1/tasks                           requires write on the target
 PATCH  /v1/tasks/{ref}                     requires write; also moves the
                                            task, sets its parent and adds or
                                            removes labels
-DELETE /v1/tasks/{ref}                     requires write
+DELETE /v1/tasks/{ref}                     requires write; moves the task
+                                           to Deleted items (below)
 ```
 
 Search is case-insensitive: every whitespace-separated fragment must match the
@@ -1176,7 +1177,16 @@ and stops at a subtask the caller cannot read. `is_group` still reports
 subtasks the caller cannot read, without identifying them. Their dates do not
 count toward the group's `start_week` and `end_week`.
 
-`DELETE` returns `{ "deleted": true, "id": "…", "key": "QN-3" }`.
+`DELETE` moves the task to **Deleted items**, as deleting it in the app does,
+and returns `{ "deleted": true, "id": "…", "key": "QN-3" }`. Its comments,
+attachments, links, labels and follows go with it, its inbox messages are
+deleted, and its subtasks stay as top-level tasks. From then on the task
+answers `404` like an unknown one, while its number, uuid and files stay
+reserved. A person can restore it in the app under **Settings → Projects →
+Deleted items**, and the API has no restore. A nightly job deletes it for
+good 30 days after the delete. Deleted items records the credential the
+request came with (see [Side effects and audit
+trail](#side-effects-and-audit-trail)).
 
 ### Links
 
@@ -1270,7 +1280,8 @@ always authored by the person posting it`). You are only ever yourself. `POST` r
 the created comment; a blank `body` is a `400`. A comment body is at most
 20,000 characters after trimming, counted like a description, on `POST` and
 `PATCH`; a longer one is a `400` (`a comment must be at most 20,000
-characters`). Comments are deleted with their task.
+characters`). Comments go to Deleted items with their task and come back
+with it.
 
 A task holds at most 400 comments. `POST` on a task that has 400 is a `400`
 (`this task has 400 comments, the most a task can have; start a new task to
@@ -1414,7 +1425,8 @@ brings back the items still stored, with their messages read. A restore
 that comes before the marking leaves the messages as they were. Other
 followers of a restored task also receive an unread `Restored` message,
 which replaces the item's read messages as any new message does. Deleting a
-task or a project deletes the messages about its tasks.
+task or a project deletes the messages about its tasks, and restoring it
+from Deleted items does not bring them back.
 
 One request lists up to 500 of the caller's unread messages (newest first)
 and up to 500 read ones (most recently read first). It looks at no more than
@@ -1744,7 +1756,10 @@ token name, as MCP's read `via MCP`. The person is the actor, and the feed
 reaches members who cannot see that person's tokens, so the row leaves the
 name out. Only the person and organization admins can see a person's tokens.
 An admin's revocation of a token or connected app is a feed row that only
-organization admins receive. An update's feed
+organization admins receive. A `DELETE` also records its credential in
+Deleted items. Everyone who sees the item there sees an agent key's name,
+while a personal token's name shows only to organization admins and to the
+person who deleted. An update's feed
 row names both sides of every changed field before the provenance suffix —
 e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
 (<key name>)`; description edits quote both sides as ~80-char excerpts
@@ -2103,8 +2118,9 @@ routes let administrators inspect and remove subscriptions that consume shared
 quota, including callbacks owned by inactive users. They do not expose signing
 keys or transfer subscription ownership.
 
-Event names are `task.created`, `task.updated`, `task.deleted` and
-`comment.created`. Filters take task and exact sub-project UUIDs. Parent
+Event names are `task.created`, `task.updated`, `task.deleted`,
+`task.restored` and `comment.created`. `task.deleted` means the task moved to
+Deleted items, and `task.restored` that a person restored it there. Filters take task and exact sub-project UUIDs. Parent
 meta-project filters are refused because they cannot contain tasks. The shared
 [MCP Events delivery contract](mcp.md#task-events-and-webhook-delivery) describes
 payloads, access checks, retry limits, expiration, exclusions and lack of replay.

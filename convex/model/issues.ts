@@ -73,7 +73,6 @@ import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { issueChanges, logActivity, machineDetail } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
-import { deleteIssueDeep } from './cascade'
 import {
   type NotifyPreload,
   notifyIssueInsert,
@@ -878,7 +877,8 @@ export async function browserVerbDetail(
  *           tasks a row names through namedTaskNums, which knows only the
  *           browser wording
  *   move    detail = the browser's destination sentence plus the provenance
- *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail
+ *   delete  model/deletedItems.ts moveTasksToTrash's `provenance` is the
+ *           'deleted' row's detail
  *   move's and update's `later` name the people a later write of the same
  *           machine update sets (LaterPeople) */
 export type MachineNarration = { provenance: string }
@@ -1619,35 +1619,4 @@ export async function unarchiveIssueCore(
   }
   await logActivity(ctx, event)
   return rootAfter
-}
-
-/* ----------------------------------------------------------- delete core
- * One task deleted for good with its 'deleted' activity row, for the REST
- * and MCP deletes. The app's delete moves tasks to Deleted items instead
- * (model/deletedItems.ts moveTasksToTrash), which the machine deletes are
- * meant to call too, with their credential as `via`.
- * model/cascade.ts deleteIssueDeep does the deleting. It detaches, touches
- * and notifies the direct subtasks and removes the task's links, labels,
- * follows, comments, messages and attachments. Activity rows stay. The
- * row's detail is the machine provenance. deleteIssueDeep itself stays
- * ungated, because a project delete runs it for every task after checking
- * the project. */
-export async function deleteIssueCore(
-  ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string; provenance?: string },
-): Promise<void> {
-  const { me, issue, now } = a
-  await assertCanEdit(ctx, me, issue.project_id)
-  await deleteIssueDeep(ctx, { issue, actor: me, now })
-  await logActivity(ctx, {
-    org_id: issue.org_id,
-    actor_id: me.id,
-    verb: 'deleted',
-    target_type: 'issue',
-    target_id: issue.id,
-    label: issue.title,
-    detail: a.provenance,
-    project_id: issue.project_id,
-    ts: now,
-  })
 }
