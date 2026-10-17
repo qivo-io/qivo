@@ -4,7 +4,8 @@
  * retained activity history are included. Deleted items are not: their rows
  * left the live tables, and a task still in issues under a project that is
  * moving to or back from Deleted items (model/deletedItems.ts) is skipped,
- * with its comments, labels, links and attachments. No signed URLs are
+ * with its comments, labels, links and attachments, and a live task's
+ * reference to it as a parent is left out. No signed URLs are
  * persisted here: clients mint existing file-gateway URLs immediately before
  * fetching bytes. */
 
@@ -255,6 +256,13 @@ export const page = orgQuery({
       const projectId = section === 'issues' && 'project_id' in doc ? doc.project_id : undefined
       if (projectId !== undefined && !(await liveProject(projectId))) continue
       const row = exportRow(doc, section)
+      // A task under a parent whose project is moving to Deleted items keeps
+      // that parent until the move detaches it. The export leaves out the
+      // parent task, so it leaves out the reference too.
+      if (section === 'issues' && typeof row.parent_id === 'string') {
+        const parent = await byId(ctx, 'issues', row.parent_id)
+        if (parent === null || !(await liveProject(parent.project_id))) delete row.parent_id
+      }
       if (await hasOwnedEndpoint(ctx, section, row, orgId, liveProject)) rows.push(row)
     }
     return { rows, continueCursor: result.continueCursor, isDone: result.isDone }

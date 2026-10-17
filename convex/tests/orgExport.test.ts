@@ -388,11 +388,19 @@ describe('organization export', () => {
     await comment(stranded.id)
     // a kept task's link to the stranded task stays out with that task
     await link(kept.id, stranded.id)
+    // so does a live task's reference to it as a parent, until the move
+    // detaches that task
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: stranded.id,
+    })
     await t.run((ctx) => ctx.db.delete(moving._id))
 
     const caller = as(t, f.admin)
     const tasks = await readAll(caller, f.org.id, 'issues')
-    expect(tasks.map((row) => row.id)).toEqual([kept.id, blocked.id])
+    expect(tasks.map((row) => row.id)).toEqual([kept.id, blocked.id, child.id])
+    expect(tasks.find((row) => row.id === child.id)).not.toHaveProperty('parent_id')
     expect(await readAll(caller, f.org.id, 'comments', kept.id)).toHaveLength(1)
     expect((await readAll(caller, f.org.id, 'issue_links', kept.id)).map((row) => row.id)).toEqual([
       liveLink,
