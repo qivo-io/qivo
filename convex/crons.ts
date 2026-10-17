@@ -76,6 +76,9 @@ crons.interval(
 // Restarts profile removal cleanup whose step stopped (profileRemovals.ts).
 crons.interval('profile removal recovery', { minutes: 1 }, internal.profileRemovals.recover)
 
+// Restarts label deletion cleanup whose step stopped (labelRemovals.ts).
+crons.interval('label removal recovery', { minutes: 10 }, internal.labelRemovals.recover)
+
 crons.interval(
   'webhook event recovery',
   { minutes: 1 },

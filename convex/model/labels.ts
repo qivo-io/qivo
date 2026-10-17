@@ -3,8 +3,11 @@
  * change labels and what a stored name or color may be. The writes the app,
  * REST and MCP share live here too: creating and editing a label, and
  * putting one on a task or taking it off. Each caller resolves what it names
- * and refuses with its own sentences first. */
+ * and refuses with its own sentences first. Deleting a label is app only
+ * (labels.remove), and its bounded cascade, deleteLabelCore, lives here with
+ * the other writes. */
 
+import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
@@ -116,7 +119,9 @@ export async function createLabelCore(
   await assertLabelCreator(ctx, me)
   const name = labelName(a.name)
   const color = labelColor(a.color)
-  if ((await byId(ctx, 'labels', id)) !== null) {
+  // A deleted label's id stays taken until its assignments are gone, or the
+  // new label would inherit them. The sentence is the same either way.
+  if ((await byId(ctx, 'labels', id)) !== null || (await pendingLabelRemoval(ctx, id)) !== null) {
     throw badRequest('a label with this id already exists')
   }
   const docId = await insertUnique(
@@ -174,6 +179,77 @@ export async function updateLabelCore(
   }
   if (Object.keys(fields).length > 0) await ctx.db.patch(label._id, fields)
   return (await ctx.db.get(label._id)) as Doc<'labels'>
+}
+
+/** The task assignments a label delete removes in its own transaction, and
+ * the most one background step removes (labelRemovals.ts). Convex reads a
+ * row by id before deleting it, so each deleted row uses one of the 4,096
+ * index ranges a transaction may read. A full step measured 2,048 ranges on
+ * a local backend, half the limit. convex-test does not count these reads.
+ * Tests lower both values. */
+export const LABEL_REMOVAL = { inline: 1000, step: 2000 }
+
+const removalStepRef = makeFunctionReference<'mutation', { label_id: string }, null>(
+  'labelRemovals:step',
+)
+
+/** The unfinished background removal of the deleted label `labelId`, or
+ * null. While it exists, the id stays reserved (createLabelCore). */
+export function pendingLabelRemoval(ctx: QueryCtx, labelId: string) {
+  return ctx.db
+    .query('label_removals')
+    .withIndex('by_label', (q) => q.eq('label_id', labelId))
+    .unique()
+}
+
+/** Deletes up to `n` task assignments of `labelId`, archived tasks included,
+ * and answers whether any are left. */
+export async function deleteLabelAssignments(
+  ctx: MutationCtx,
+  labelId: string,
+  n: number,
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query('issue_labels')
+    .withIndex('by_label', (q) => q.eq('label_id', labelId))
+    .take(n + 1)
+  for (const row of rows.slice(0, n)) await ctx.db.delete(row._id)
+  return rows.length > n
+}
+
+/**
+ * Deletes `label` for an organization admin and writes its 'deleted label'
+ * activity row. Up to LABEL_REMOVAL.inline of its task assignments go in the
+ * same transaction. A label on more tasks gets a label_removals row, which
+ * reserves the id, and background steps remove the rest (labelRemovals.ts).
+ * Every reader skips an assignment whose label is gone, so the label leaves
+ * every task at once either way.
+ */
+export async function deleteLabelCore(
+  ctx: MutationCtx,
+  a: { me: Doc<'profiles'>; label: Doc<'labels'>; now: string },
+): Promise<void> {
+  const { me, label, now } = a
+  assertLabelManager(me)
+  const more = await deleteLabelAssignments(ctx, label.id, LABEL_REMOVAL.inline)
+  await ctx.db.delete(label._id)
+  await logActivity(ctx, {
+    org_id: me.org_id,
+    actor_id: me.id,
+    verb: 'deleted label',
+    target_type: 'org',
+    target_id: label.id,
+    label: label.name,
+    ts: now,
+  })
+  if (!more) return
+  const scheduled_id = await ctx.scheduler.runAfter(0, removalStepRef, { label_id: label.id })
+  const job = { label_id: label.id, removed_at: now, progress_at: now, scheduled_id }
+  // A row is left only when a fixture planted a label with a reserved id.
+  // Its assignments cannot be told apart from these, so one job takes both.
+  const earlier = await pendingLabelRemoval(ctx, label.id)
+  if (earlier) await ctx.db.replace(earlier._id, job)
+  else await ctx.db.insert('label_removals', job)
 }
 
 /**

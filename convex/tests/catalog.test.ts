@@ -1004,16 +1004,19 @@ describe('labels — vocabulary + toggle', () => {
     )
   })
 
-  it('remove cascades issue_labels and narrates the deletion', async () => {
+  it('remove cascades issue_labels in its own transaction and narrates the deletion', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const label = await plantLabel(t, f.org.id, 'Bug')
-    await as(t, f.user).mutation(api.labels.toggle, {
-      org_id: f.org.id,
-      issue_id: issue.id,
-      label_id: label.id,
-    })
+    const archived = { status: 'done', done_at: NOW, archived_at: NOW } as const
+    for (const over of [{}, {}, archived]) {
+      const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...over })
+      await as(t, f.user).mutation(api.labels.toggle, {
+        org_id: f.org.id,
+        issue_id: issue.id,
+        label_id: label.id,
+      })
+    }
     await drainActivity(t)
     await as(t, f.admin).mutation(api.labels.remove, { org_id: f.org.id, id: label.id })
     expect(
@@ -1024,6 +1027,14 @@ describe('labels — vocabulary + toggle', () => {
           .collect(),
       ),
     ).toEqual([])
+    // a small label needs no background removal (labelRemovals.test.ts)
+    const background = await t.run(async (ctx) => ({
+      jobs: await ctx.db.query('label_removals').collect(),
+      steps: (await ctx.db.system.query('_scheduled_functions').collect()).filter((job) =>
+        job.name.startsWith('labelRemovals'),
+      ),
+    }))
+    expect(background).toEqual({ jobs: [], steps: [] })
     const events = await activityFor(t, f.org.id)
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({ verb: 'deleted label', target_type: 'org', label: 'Bug' })

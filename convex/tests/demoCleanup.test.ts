@@ -154,6 +154,9 @@ const APP_SHARED = [
   // Keyed by an already removed profile; its own steps delete it, also after
   // the demo organization is gone (profileRemovals.ts).
   'profile_removals',
+  // Keyed by an already deleted label; its own steps delete it, also after
+  // the demo organization is gone (labelRemovals.ts).
+  'label_removals',
   'panorama_images',
   'panorama_calendar',
   'panorama_curation_keys',

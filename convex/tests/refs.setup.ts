@@ -149,6 +149,10 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // background cleanup deletes the row (profileRemovals.ts).
   'profile_removals.profile_id',
   'profile_removals.scheduled_id',
+  // A pending removal names the label that is already gone, until its
+  // background cleanup deletes the row (labelRemovals.ts).
+  'label_removals.label_id',
+  'label_removals.scheduled_id',
   // Binds a private local credentials file; not the id of a database row.
   'marketing_demo.credential_set_id',
   // dangles by design: the feed renders dead issue targets as plain text (0026)
