@@ -4,7 +4,7 @@
  *
  * forMe reads every seat in one transaction, so the sum must stay within
  * Convex's limits of 4,096 index ranges, 32,000 documents and 16 MiB. Besides
- * one range for the caller's seats, each seat reads 12 ranges plus:
+ * one range for the caller's seats, each seat reads 13 ranges plus:
  * - one per team (its members), and two per team the seat belongs to
  *   (lib/access.ts projectLevelsForOrg);
  * - up to three per visible project, archived ones included (grants, team
@@ -17,10 +17,10 @@
  *   carry archive marks (model/archiveMarks.ts), its own relation reads and
  *   follow. Background steps clear the marks moments after the restore;
  * - one per task an activity row is about, or names by number, that is not
- *   among the active tasks. The organization keeps 500 rows
- *   (model/activity.ts), so that is at most 500 for an admin, who reads the
- *   task each row is about, and at most 1,000 for a member, who reads up to
- *   two numbered tasks a row names.
+ *   among the active tasks. The snapshot reads the organization's newest 500
+ *   rows (model/activity.ts ACTIVITY_CAP), so that is at most 500 for an
+ *   admin, who reads the task each row is about, and at most 1,000 for a
+ *   member, who reads up to two numbered tasks a row names.
  * A seat whose relation tables stay in bulk therefore reads at most about
  * 1,020 ranges plus three per team and per visible project, and a person's
  * seats add up. Teams and projects are few beside tasks. A view read task by
@@ -29,7 +29,9 @@
  * active tasks and their unmarked relation rows (model/archiveMarks.ts marks
  * the rows of archived tasks), the organization's people, projects, teams and
  * labels, at most 500 activity rows, and at most 3,002 messages per seat
- * (lib/inbox.ts). */
+ * (lib/inbox.ts). A read that uses half of any of these limits is logged
+ * (the end of forMe), so a growing organization shows in the deployment logs
+ * before its members' app stops loading. */
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import { canSeeProject } from './lib/access'
@@ -40,8 +42,10 @@ import { INBOX_LIMIT, loadInbox } from './lib/inbox'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
+import { ACTIVITY_CAP } from './model/activity'
 import { COMMENT_PAGE_MAX, newestComments } from './model/comments'
 import { shownLabelColor } from './model/labels'
+import { countersOf, type OrgCounters } from './model/orgs'
 import { shownAvatarColor } from './model/people'
 import { type OrgLoadRow, orgLoadRows } from './planning'
 
@@ -72,14 +76,27 @@ function attachmentRow(doc: Doc<'issue_attachments'>) {
   return row
 }
 
-// Billing is admin-only; application counters and settings are shared.
-type OrgRow = Omit<AppRow<'organizations'>, 'billing' | 'activity_count'> & {
-  billing?: Doc<'organizations'>['billing']
-}
+// Billing is admin-only; application counters and settings are shared. The
+// counters come from org_counters (model/orgs.ts countersOf), never from the
+// legacy fields an older organization row may still hold.
+type OrgRow = Omit<
+  AppRow<'organizations'>,
+  'billing' | 'activity_count' | 'next_issue_num' | 'next_project_num'
+> &
+  OrgCounters & { billing?: Doc<'organizations'>['billing'] }
 
-const orgRowFor = (doc: Doc<'organizations'>, isAdmin: boolean): OrgRow => {
-  const { _id, _creationTime, billing, activity_count: _activityCount, ...rest } = doc
-  return isAdmin && billing !== undefined ? { ...rest, billing } : rest
+const orgRowFor = (doc: Doc<'organizations'>, counters: OrgCounters, isAdmin: boolean): OrgRow => {
+  const {
+    _id,
+    _creationTime,
+    billing,
+    activity_count: _activityCount,
+    next_issue_num: _issueNum,
+    next_project_num: _projectNum,
+    ...rest
+  } = doc
+  const row = { ...rest, ...counters }
+  return isAdmin && billing !== undefined ? { ...row, billing } : row
 }
 
 /* Newest first by created_at, the id breaking a tie, the total order the
@@ -167,7 +184,7 @@ export const forMe = authedQuery({
       if (org === null) continue // a seat in a vanished org contributes nothing
       const isAdmin = me.org_role === 'admin'
 
-      orgs.push(orgRowFor(org, isAdmin))
+      orgs.push(orgRowFor(org, await countersOf(ctx, org), isAdmin))
 
       // All org members see teams and their membership.
       const orgTeams = await ctx.db
@@ -329,12 +346,15 @@ export const forMe = authedQuery({
 
       // Activity: org admins receive every row except those about archived
       // tasks or tasks in archived projects; other members receive only the
-      // rows memberSeesActivity allows. Walked ts-desc; the global cap makes
-      // >CAP kept rows here unreachable, so stop early.
-      const orgActivity = ctx.db
+      // rows memberSeesActivity allows. Only the newest ACTIVITY_CAP rows
+      // count; older ones wait for the background trim (model/activity.ts).
+      // Walked ts-desc; the global cap makes >CAP kept rows here
+      // unreachable, so stop early.
+      const orgActivity = await ctx.db
         .query('activity_events')
         .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
         .order('desc')
+        .take(ACTIVITY_CAP)
       // Task numbers resolve to projects from the active set, else one cached
       // indexed read (archived or deleted tasks).
       const taskProjects = new Map<number, Promise<string | undefined>>(
@@ -353,7 +373,7 @@ export const forMe = authedQuery({
         return result
       }
       let kept = 0
-      for await (const ev of orgActivity) {
+      for (const ev of orgActivity) {
         if (
           !isAdmin &&
           !(await memberSeesActivity(ev, {
@@ -416,6 +436,23 @@ export const forMe = authedQuery({
     // rows it drops are in readMessageCount already.
     if (unreadDocs.slice(CAP).some((message) => message.snoozed_until === undefined)) {
       unreadTruncated = true
+    }
+
+    // Logs a read that used half of any per-transaction read limit, so an
+    // organization approaching Convex's limits shows in the deployment logs
+    // before its members' app stops loading. Organization ids and counts
+    // only, never names or content.
+    const metrics = await ctx.meta.getTransactionMetrics()
+    const reads = [metrics.bytesRead, metrics.documentsRead, metrics.databaseQueries]
+    if (reads.some((m) => m.used >= m.remaining)) {
+      console.warn('Snapshot read near Convex limits', {
+        org_ids: orgs.map((o) => o.id),
+        seats: ctx.myProfiles.size,
+        tasks: issues.length,
+        bytes_read: metrics.bytesRead.used,
+        documents_read: metrics.documentsRead.used,
+        index_ranges: metrics.databaseQueries.used,
+      })
     }
 
     return {

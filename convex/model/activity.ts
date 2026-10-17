@@ -1,16 +1,98 @@
+import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { newUuid } from './orgs'
 
-// The feed displays 30 rows; snapshot and retention allow 500.
-const ACTIVITY_CAP = 500
+/* ----------------------------------------------------------------- retention
+ * Every reader takes an organization's newest ACTIVITY_CAP rows by the
+ * by_org_ts index order (ts, then creation time). Writers only insert. A
+ * background trim (activityRetention.ts) deletes the older rows a few minutes
+ * later, so concurrent writers in one organization never conflict over
+ * deleting the oldest row, and storage holds the cap plus at most the rows
+ * written since the last trim. The organization's activity_retention row
+ * records a pending trim, so writes schedule at most one at a time. */
 
-// Activity and retention commit with the mutation they describe. The counter
-// avoids reading the retained feed on every write; imported rows bootstrap it.
+/** The newest rows of an organization's activity that every reader shows.
+ * The feed displays 30 of them. */
+export const ACTIVITY_CAP = 500
+/** How long an organization's activity may run past the cap before a trim. */
+export const ACTIVITY_TRIM_DELAY_MS = 5 * 60_000
+/** A pending trim this far past due is assumed lost and scheduled again. */
+export const ACTIVITY_TRIM_STALE_MS = 60 * 60_000
+/** Rows newer than this stay for the next trim, so a trim does not read the
+ * range that writes in flight insert into. */
+const TRIM_SETTLE_MS = 10_000
+/** Rows one trim step deletes before it schedules the next. Tests lower it. */
+export const ACTIVITY_TRIM_BUDGET = { rows: 1_000 }
+
+/** The trim step (activityRetention.ts), by name, since that module imports
+ * this one. */
+export const activityTrimRef = makeFunctionReference<'mutation', { org_id: string }, null>(
+  'activityRetention:trim',
+)
+
+/** The organization's activity_retention row, or null before its first
+ * activity write or after the organization is deleted. */
+export const retentionRow = (ctx: QueryCtx, orgId: string) =>
+  ctx.db
+    .query('activity_retention')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .unique()
+
+/** Creates the organization's activity_retention row with no trim pending,
+ * when it has none. Returns whether it did. */
+export async function ensureActivityRetention(ctx: MutationCtx, orgId: string): Promise<boolean> {
+  if ((await retentionRow(ctx, orgId)) !== null) return false
+  await ctx.db.insert('activity_retention', { org_id: orgId })
+  return true
+}
+
+/** Schedules a trim of the organization's activity unless one is pending.
+ * While one is, a write only reads the state row, so concurrent writers do
+ * not conflict, and the several writes of one mutation schedule one trim.
+ * Code that inserts activity rows directly calls it once afterwards. */
+export async function requestActivityTrim(ctx: MutationCtx, orgId: string): Promise<void> {
+  const state = await retentionRow(ctx, orgId)
+  const now = Date.now()
+  if (state?.trim_due_at !== undefined && state.trim_due_at > now - ACTIVITY_TRIM_STALE_MS) return
+  const due = now + ACTIVITY_TRIM_DELAY_MS
+  await ctx.scheduler.runAt(due, activityTrimRef, { org_id: orgId })
+  if (state === null) await ctx.db.insert('activity_retention', { org_id: orgId, trim_due_at: due })
+  else await ctx.db.patch(state._id, { trim_due_at: due })
+}
+
+/** One trim step. Deletes, oldest first and at most ACTIVITY_TRIM_BUDGET.rows,
+ * the rows beyond the newest ACTIVITY_CAP among those older than the settle
+ * time. Readers order rows the same way, so the kept rows are exactly the
+ * newest ones. Returns 'more' when such rows remain. */
+export async function trimActivity(ctx: MutationCtx, orgId: string): Promise<'done' | 'more'> {
+  const cutoff = new Date(Date.now() - TRIM_SETTLE_MS).toISOString()
+  const kept = await ctx.db
+    .query('activity_events')
+    .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lt('ts', cutoff))
+    .order('desc')
+    .take(ACTIVITY_CAP)
+  if (kept.length < ACTIVITY_CAP) return 'done'
+  const oldestKept = kept[kept.length - 1]
+  let deleted = 0
+  for await (const row of ctx.db
+    .query('activity_events')
+    .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lte('ts', oldestKept.ts))
+    .order('asc')) {
+    if (row._id === oldestKept._id) return 'done'
+    if (deleted === ACTIVITY_TRIM_BUDGET.rows) return 'more'
+    await ctx.db.delete(row._id)
+    deleted++
+  }
+  return 'done'
+}
+
+// Activity commits with the mutation it describes. Retention runs later in
+// the background (requestActivityTrim), so a write never reads the feed.
 export async function logActivity(
   ctx: MutationCtx,
   e: {
@@ -41,35 +123,11 @@ export async function logActivity(
     related_project_id: e.related_project_id,
     team_id: e.team_id,
   })
+  // A read only. The organization row changes rarely (settings, the slug,
+  // an export record), so this check seldom makes a write retry.
   const org = await byId(ctx, 'organizations', e.org_id)
   if (org === null) throw notFound('organization not found')
-  if (org.activity_count === undefined) {
-    // One complete pass also repairs a bulk import larger than the cap.
-    let kept = 0
-    for await (const row of ctx.db
-      .query('activity_events')
-      .withIndex('by_org_ts', (q) => q.eq('org_id', e.org_id))
-      .order('desc')) {
-      if (++kept > ACTIVITY_CAP) await ctx.db.delete(row._id)
-    }
-    await ctx.db.patch(org._id, { activity_count: Math.min(kept, ACTIVITY_CAP) })
-    return
-  }
-  const count = org.activity_count + 1
-  if (count > ACTIVITY_CAP) {
-    // Ascending order is the exact reverse of retention's descending index,
-    // including equal timestamps and a newly inserted backdated event.
-    const expired = await ctx.db
-      .query('activity_events')
-      .withIndex('by_org_ts', (q) => q.eq('org_id', e.org_id))
-      .order('asc')
-      .take(count - ACTIVITY_CAP)
-    for (const row of expired) await ctx.db.delete(row._id)
-    if (org.activity_count !== ACTIVITY_CAP)
-      await ctx.db.patch(org._id, { activity_count: ACTIVITY_CAP })
-  } else {
-    await ctx.db.patch(org._id, { activity_count: count })
-  }
+  await requestActivityTrim(ctx, e.org_id)
 }
 
 /* Task rows that name other tasks by key: a parent change written by

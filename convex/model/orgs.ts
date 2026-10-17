@@ -5,7 +5,9 @@
  *   cleanOrgName     the organization name's length cap
  *   slug machinery   the generator, the shape check and the reserved-word
  *                    list (the reserved word is `qivo`)
- *   counters         the per-org issue number and project number
+ *   counters         the per-org issue and project numbers (org_counters),
+ *                    and the helpers that insert and delete an organization
+ *                    with its org_counters and activity_retention rows
  *   column defaults  including the organization-wide 20 MiB upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
@@ -17,13 +19,14 @@
  * refusal posture. The guards throw `rule` refusals themselves; internal
  * seed/reset mutations simply do not call them. */
 
-import type { Doc } from '../_generated/dataModel'
+import type { WithoutSystemFields } from 'convex/server'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
-import { logActivity } from './activity'
+import { ensureActivityRetention, logActivity, retentionRow } from './activity'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -172,21 +175,78 @@ export async function narrateSlugChange(
 }
 
 /* ------------------------------------------------------------------ counters
- * issues_before_insert / projects_assign_num (0050/0100): bump the org-row
+ * issues_before_insert / projects_assign_num (0050/0100): bump the org's
  * counter and use the result as the row's num, inside the one mutation.
  * Convex serializes conflicting mutations (the row lock's successor), so
  * numbers are dense per org at assignment, never reused, and nothing else may
- * write these fields. The doc is re-read by _id so two bumps inside one
- * mutation chain instead of reusing a stale value. */
+ * write the counters. They live in the org's org_counters row, not on the
+ * organization row, so task and project creation do not conflict with the
+ * many reads of the organization's settings. An organization created before
+ * that table holds them on its own row until its first number moves them
+ * (ensureCounters) or internal/orgCountersBackfill does. */
+
+export type OrgCounters = Pick<Doc<'org_counters'>, 'next_issue_num' | 'next_project_num'>
+
+/** The organization's org_counters row, or null before its counters moved. */
+export const countersRow = (ctx: QueryCtx, orgId: string) =>
+  ctx.db
+    .query('org_counters')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .unique()
+
+/** The organization's counters from its org_counters row, else the values
+ * an organization created before that table still holds on its own row. */
+export async function countersOf(ctx: QueryCtx, org: Doc<'organizations'>): Promise<OrgCounters> {
+  const row = await countersRow(ctx, org.id)
+  return row === null
+    ? { next_issue_num: org.next_issue_num ?? 0, next_project_num: org.next_project_num ?? 0 }
+    : { next_issue_num: row.next_issue_num, next_project_num: row.next_project_num }
+}
+
+/** Whether the organization row still holds a field that moved off it, the
+ * legacy counters or the activity_count retention used before
+ * model/activity.ts trimmed in the background. */
+export const hasLegacyFields = (org: Doc<'organizations'>): boolean =>
+  org.next_issue_num !== undefined ||
+  org.next_project_num !== undefined ||
+  org.activity_count !== undefined
+
+/** The organization's org_counters row, created from the legacy fields on
+ * first use. The same transaction removes those fields, so exactly one place
+ * holds the counters at any time and no number can be handed out twice. A
+ * refused mutation rolls the move back with everything else. */
+export async function ensureCounters(
+  ctx: MutationCtx,
+  org: Doc<'organizations'>,
+): Promise<Doc<'org_counters'>> {
+  const existing = await countersRow(ctx, org.id)
+  if (existing !== null) return existing
+  // The caller's doc may be stale; the live row holds the legacy values.
+  const live = await ctx.db.get(org._id)
+  require(live !== null, notFound('organization not found'))
+  const id = await ctx.db.insert('org_counters', {
+    org_id: org.id,
+    next_issue_num: live.next_issue_num ?? 0,
+    next_project_num: live.next_project_num ?? 0,
+  })
+  if (live.next_issue_num !== undefined || live.next_project_num !== undefined) {
+    await ctx.db.patch(org._id, { next_issue_num: undefined, next_project_num: undefined })
+  }
+  const row = await ctx.db.get(id)
+  require(row !== null, notFound('organization counters not found'))
+  return row
+}
+
+/* The counters row is re-read through ensureCounters, so two bumps inside
+ * one mutation chain instead of reusing a stale value. */
 async function bump(
   ctx: MutationCtx,
   org: Doc<'organizations'>,
-  field: 'next_issue_num' | 'next_project_num',
+  field: keyof OrgCounters,
 ): Promise<number> {
-  const live = await ctx.db.get(org._id)
-  require(live !== null, notFound('organization not found'))
-  const used = live[field] + 1
-  await ctx.db.patch(org._id, { [field]: used })
+  const row = await ensureCounters(ctx, org)
+  const used = row[field] + 1
+  await ctx.db.patch(row._id, { [field]: used })
   return used
 }
 
@@ -196,13 +256,50 @@ export const nextIssueNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promi
 export const nextProjectNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promise<number> =>
   bump(ctx, org, 'next_project_num')
 
+/** Sets the counters, for the demo seed and the Northstar wipe only, and
+ * removes the legacy copies from the organization row. */
+export async function setCounters(
+  ctx: MutationCtx,
+  org: Doc<'organizations'>,
+  counters: OrgCounters,
+): Promise<void> {
+  const row = await ensureCounters(ctx, org)
+  await ctx.db.patch(row._id, counters)
+}
+
+/** Inserts an organization with its org_counters and activity_retention
+ * rows. Every path that creates an organization uses it; `counters` lets a
+ * fixture start numbering past rows it plants. */
+export async function insertOrgRows(
+  ctx: MutationCtx,
+  row: Omit<
+    WithoutSystemFields<Doc<'organizations'>>,
+    'next_issue_num' | 'next_project_num' | 'activity_count'
+  >,
+  counters: OrgCounters = { next_issue_num: 0, next_project_num: 0 },
+): Promise<Id<'organizations'>> {
+  const id = await ctx.db.insert('organizations', row)
+  await ctx.db.insert('org_counters', { org_id: row.id, ...counters })
+  await ensureActivityRetention(ctx, row.id)
+  return id
+}
+
+/** Deletes the organization's org_counters and activity_retention rows.
+ * Every organization delete (model/cascade.ts deleteOrgDeep, the last step of
+ * model/orgDeletion.ts, the demo purge) calls it before it deletes the
+ * organization row. */
+export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
+  const counters = await countersRow(ctx, orgId)
+  if (counters !== null) await ctx.db.delete(counters._id)
+  const retention = await retentionRow(ctx, orgId)
+  if (retention !== null) await ctx.db.delete(retention._id)
+}
+
 /* ------------------------------------------------------------------ defaults
- * The organizations column defaults (0020/0039/0050/0095/0096). */
+ * The organizations column defaults (0020/0039/0050/0095/0096). The counters
+ * start in org_counters (insertOrgRows). */
 export const newOrgDefaults = (now: string) => ({
   created_at: now,
-  next_issue_num: 0,
-  activity_count: 0,
-  next_project_num: 0,
   date_format: 'YYYY-MM-DD',
   week_start: 1,
   week_one_rule: 'first4day',

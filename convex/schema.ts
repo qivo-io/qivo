@@ -402,9 +402,14 @@ export default defineSchema({
     name: v.string(),
     slug: v.string(), // lowercase; shape + reserved list checked in model/orgs
     created_at: v.string(),
-    activity_count: v.optional(v.number()), // retained activity rows; bootstrapped for imports
-    next_issue_num: v.number(), // org-scoped counters; only model/orgs touches them
-    next_project_num: v.number(),
+    // Legacy. The activity row count retention kept before the background
+    // trim (model/activity.ts). Only the backfill reads it, to clear it.
+    activity_count: v.optional(v.number()),
+    // Legacy. Moved to org_counters by the organization's first task or
+    // project number, or by internal/orgCountersBackfill. Only model/orgs
+    // and the backfill read them.
+    next_issue_num: v.optional(v.number()),
+    next_project_num: v.optional(v.number()),
     date_format: v.string(),
     week_start: v.number(),
     week_one_rule: v.string(), // jan1 | first4day | firstfull
@@ -436,9 +441,9 @@ export default defineSchema({
 
   // An organization that is read-only before its deletion, or being deleted
   // (orgRemovals.ts). Every org-scoped call reads this row through by_org.
-  // It changes rarely, unlike the organization row's activity_count, so the
-  // read does not re-run queries on every write. `phase` is set once deletion
-  // begins; until then admins can still export and the deletion can stop.
+  // It changes rarely, so the read does not re-run queries on every write.
+  // `phase` is set once deletion begins; until then admins can still export
+  // and the deletion can stop.
   org_removals: defineTable({
     org_id: v.string(),
     reason: vOrgRemovalReason,
@@ -452,6 +457,24 @@ export default defineSchema({
   })
     .index('by_org', ['org_id'])
     .index('by_progress', ['progress_at']),
+
+  // Per-organization number counters (model/orgs.ts). Task and project
+  // creation write this row instead of the organization row, which every
+  // settings read and every member's snapshot depend on. Only model/orgs.ts
+  // writes it; numbers are dense at assignment and never reused.
+  org_counters: defineTable({
+    org_id: v.string(),
+    next_issue_num: v.number(),
+    next_project_num: v.number(),
+  }).index('by_org', ['org_id']),
+
+  // Activity retention (model/activity.ts). The row holds trim_due_at while a
+  // trim of the organization's activity is scheduled. Writers then only read
+  // the row, so concurrent activity writes do not conflict.
+  activity_retention: defineTable({
+    org_id: v.string(),
+    trim_due_at: v.optional(v.number()), // epoch ms; absent = no trim pending
+  }).index('by_org', ['org_id']),
 
   teams: defineTable({
     id: v.string(),

@@ -14,7 +14,7 @@ import { refuseProduction } from '../lib/deployment'
 import { badRequest, conflict, require, rule } from '../lib/functions'
 import { deleteProjectDeep } from '../model/cascade'
 import { SAMPLE_AVATARS, type SampleAvatar, writeNorthstarWork } from '../model/demoSeed'
-import { assertSlugAvailable, newOrgDefaults } from '../model/orgs'
+import { assertSlugAvailable, insertOrgRows, newOrgDefaults, setCounters } from '../model/orgs'
 import {
   assertMarketingAnchor,
   MARKETING_DEMO,
@@ -235,7 +235,7 @@ export const provision = internalMutation({
       })
       authIds[p.key] = user._id
     }
-    await ctx.db.insert('organizations', {
+    await insertOrgRows(ctx, {
       id: orgId,
       name: MARKETING_DEMO.organization.name,
       slug: KEY,
@@ -333,7 +333,8 @@ async function clearWork(ctx: MutationCtx, org: Doc<'organizations'>, profiles: 
       .collect())
       await ctx.db.delete(row._id)
   }
-  await ctx.db.patch(org._id, { next_issue_num: 0, next_project_num: 0, activity_count: 0 })
+  await setCounters(ctx, org, { next_issue_num: 0, next_project_num: 0 })
+  await ctx.db.patch(org._id, { activity_count: undefined })
 }
 
 /* Seeds or wipes the owned demo's work, each call one transaction. There is

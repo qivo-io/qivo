@@ -24,6 +24,7 @@ import { hasPendingCheckout } from './billing'
 import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
 import { notifyIssueUpdate } from './messages'
+import { deleteOrgBookkeeping } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
 async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Promise<void> {
@@ -315,7 +316,7 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
  * revokes the OAuth connections as 'deleted', so the person's own list
  * hides them at once. Every session, credential and OAuth path requires the
  * profile row, so access fails closed here. It also clears the profile from
- * project leads, the activity feed (logActivity caps it at 500 rows per
+ * project leads, the activity feed (trimmed to about 500 rows per
  * organization) and as many open tasks as REMOVAL_BUDGET allows, assignee
  * and reviewer fields first. That is every open task unless the profile
  * holds hundreds. Then it inserts the profile_removals row and schedules
@@ -634,5 +635,6 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
     .collect())
     await ctx.db.delete(removal._id)
+  await deleteOrgBookkeeping(ctx, org.id)
   await ctx.db.delete(org._id)
 }

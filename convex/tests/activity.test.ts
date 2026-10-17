@@ -4,7 +4,9 @@
  * - issueChanges: the machine from→to narration, verbatim (core.ts grammar —
  *   clean() strips the diff grammar's own marks so a crafted value cannot
  *   forge phantom clauses);
- * - logActivity: newest-500 per-org retention, trimmed in one call;
+ * - activity retention: every reader shows an organization's newest 500
+ *   rows, and a background trim deletes older ones without making writers
+ *   conflict;
  * - the browser verbs/details ported from the old client — the feed icon
  *   substring-matches the verb (IssueDetail.tsx evIcon), so every byte of
  *   every verb string is load-bearing.
@@ -13,20 +15,31 @@
 /// <reference types="vite/client" />
 
 import type { FunctionArgs } from 'convex/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { issueChanges, logActivity, namedTaskNums } from '../model/activity'
+import { taskActivity } from '../lib/activityVisibility'
+import {
+  ACTIVITY_TRIM_BUDGET,
+  ACTIVITY_TRIM_DELAY_MS,
+  ACTIVITY_TRIM_STALE_MS,
+  issueChanges,
+  logActivity,
+  namedTaskNums,
+  trimActivity,
+} from '../model/activity'
 import {
   activityFor,
   allMessages,
   as,
+  countersFor,
   drainActivity,
   expectRefusal,
   NOW,
   newT,
   plantIssue,
   plantProject,
+  type T,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -129,61 +142,77 @@ describe('issueChanges — machine narration, verbatim', () => {
   })
 })
 
-describe('logActivity — newest-500 per-org retention', () => {
-  it('uses the exact index tie order and drops backdated inserts with bounded reads', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await t.run(async (ctx) => {
-      await ctx.db.patch(f.org._id, { activity_count: 500 })
-      for (let i = 0; i < 500; i++)
+describe('activity retention, newest 500 shown and older rows trimmed in the background', () => {
+  // Fake time keeps the settle cutoff and the trim delay deterministic.
+  const START = Date.parse('2026-05-04T10:00:00.000Z')
+  const at = (ms: number) => new Date(ms).toISOString()
+  const DEFAULT_BUDGET = { ...ACTIVITY_TRIM_BUDGET }
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(START)
+  })
+  afterEach(() => {
+    Object.assign(ACTIVITY_TRIM_BUDGET, DEFAULT_BUDGET)
+    vi.useRealTimers()
+  })
+
+  const write = (t: T, orgId: string, ts: string, target = 'new') =>
+    t.run(async (ctx) => {
+      await logActivity(ctx, {
+        org_id: orgId,
+        actor_id: undefined,
+        verb: 'created',
+        target_type: 'issue',
+        target_id: target,
+        label: 'x',
+        ts,
+      })
+      return ctx.meta.getTransactionMetrics()
+    })
+
+  /* `count` rows of `orgId`, one second apart from `from`, inserted raw. */
+  const plantRows = (t: T, orgId: string, count: number, from: number, prefix = 'seed') =>
+    t.run(async (ctx) => {
+      for (let i = 0; i < count; i++)
         await ctx.db.insert('activity_events', {
-          id: `tied-${i}`,
-          org_id: f.org.id,
-          ts: NOW,
+          id: `${prefix}-${i}`,
+          org_id: orgId,
+          ts: at(from + i * 1000),
           verb: 'seeded',
           target_type: 'issue',
-          target_id: `task-${i}`,
+          target_id: `${prefix}-${i}`,
           label: 'x',
         })
     })
-    const ordered = () =>
-      t.run(async (ctx) =>
-        ctx.db
-          .query('activity_events')
-          .withIndex('by_org_ts', (q) => q.eq('org_id', f.org.id))
-          .order('desc')
-          .collect(),
-      )
-    const before = await ordered()
-    const write = (ts: string) =>
-      t.run(async (ctx) => {
-        await logActivity(ctx, {
-          org_id: f.org.id,
-          actor_id: f.admin.id,
-          verb: 'created',
-          target_type: 'issue',
-          target_id: 'new',
-          label: 'x',
-          ts,
-        })
-        return ctx.meta.getTransactionMetrics()
-      })
-    const metrics = await write(NOW)
-    const tied = await ordered()
-    expect(tied).toHaveLength(500)
-    expect(tied[0].target_id).toBe('new')
-    expect(tied.slice(1).map((row) => row.id)).toEqual(before.slice(0, 499).map((row) => row.id))
-    expect(metrics.documentsRead.used).toBeLessThan(10)
-    expect(metrics.documentsWritten.used).toBe(2) // insert + delete; no org invalidation at cap
-    await write('2025-01-01T00:00:00.000Z')
-    expect((await ordered()).map((row) => row.id)).toEqual(tied.map((row) => row.id))
-  })
 
-  it('counts successive writes in one transaction from fresh state', async () => {
+  const newestFirst = (t: T, orgId: string) =>
+    t.run((ctx) =>
+      ctx.db
+        .query('activity_events')
+        .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
+        .order('desc')
+        .collect(),
+    )
+
+  const trims = (t: T) =>
+    t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+        (job) => job.name === 'activityRetention:trim',
+      ),
+    )
+
+  const stateOf = (t: T, orgId: string) =>
+    t.run((ctx) =>
+      ctx.db
+        .query('activity_retention')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .unique(),
+    )
+
+  it('the first write records a pending trim and schedules one, even for several rows', async () => {
     const t = newT()
     const f = await withOrg(t)
     await t.run(async (ctx) => {
-      await ctx.db.patch(f.org._id, { activity_count: 0 })
       for (let i = 0; i < 3; i++)
         await logActivity(ctx, {
           org_id: f.org.id,
@@ -192,62 +221,153 @@ describe('logActivity — newest-500 per-org retention', () => {
           target_type: 'issue',
           target_id: `new-${i}`,
           label: 'x',
-          ts: NOW,
+          ts: at(START),
         })
     })
     expect(await activityFor(t, f.org.id)).toHaveLength(3)
-    expect((await t.run((ctx) => ctx.db.get(f.org._id)))!.activity_count).toBe(3)
+    const pending = await trims(t)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({
+      args: [{ org_id: f.org.id }],
+      scheduledTime: START + ACTIVITY_TRIM_DELAY_MS,
+      state: { kind: 'pending' },
+    })
+    expect(await stateOf(t, f.org.id)).toMatchObject({
+      trim_due_at: START + ACTIVITY_TRIM_DELAY_MS,
+    })
+    // the organization row is only read
+    expect(await t.run((ctx) => ctx.db.get(f.org._id))).toEqual(f.org)
   })
 
-  it('a bulk backlog is trimmed in ONE call, per org, keeping the newest 500 by ts', async () => {
+  it('while a trim is pending, a write stores only its own row', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const base = Date.parse('2026-02-01T00:00:00.000Z')
-    const ts = (i: number) => new Date(base + i * 1000).toISOString()
+    await write(t, f.org.id, at(START))
+    const metrics = await write(t, f.org.id, at(START))
+    expect(metrics.documentsWritten.used).toBe(1)
+    expect(metrics.functionsScheduled.used).toBe(0)
+    expect(await trims(t)).toHaveLength(1)
+  })
+
+  it('a pending trim lost for over an hour is scheduled again; a late one is not', async () => {
+    const t = newT()
+    const f = await withOrg(t)
     await t.run(async (ctx) => {
-      for (let i = 0; i < 510; i++) {
+      await ctx.db.insert('activity_retention', {
+        org_id: f.org.id,
+        trim_due_at: START - ACTIVITY_TRIM_STALE_MS + 60_000,
+      })
+      await ctx.db.insert('activity_retention', {
+        org_id: f.otherOrg.id,
+        trim_due_at: START - ACTIVITY_TRIM_STALE_MS - 1,
+      })
+    })
+    await write(t, f.org.id, at(START))
+    await write(t, f.otherOrg.id, at(START))
+    expect((await trims(t)).map((job) => job.args[0])).toEqual([{ org_id: f.otherOrg.id }])
+    expect(await stateOf(t, f.otherOrg.id)).toMatchObject({
+      trim_due_at: START + ACTIVITY_TRIM_DELAY_MS,
+    })
+  })
+
+  it('a trim keeps the newest 500 in the exact index order, ties and backdated rows included', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const old = at(START - 60_000)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 500; i++)
         await ctx.db.insert('activity_events', {
-          id: uuid(),
+          id: `tied-${i}`,
           org_id: f.org.id,
-          ts: ts(i),
+          ts: old,
           verb: 'seeded',
           target_type: 'issue',
-          target_id: `seed-${i}`,
+          target_id: `task-${i}`,
           label: 'x',
         })
-      }
-      for (let i = 0; i < 3; i++) {
+    })
+    const before = await newestFirst(t, f.org.id)
+    await write(t, f.org.id, old)
+    expect(await newestFirst(t, f.org.id)).toHaveLength(501) // nothing deleted yet
+    expect(await t.run((ctx) => trimActivity(ctx, f.org.id))).toBe('done')
+    const tied = await newestFirst(t, f.org.id)
+    expect(tied).toHaveLength(500)
+    expect(tied[0].target_id).toBe('new')
+    expect(tied.slice(1).map((row) => row.id)).toEqual(before.slice(0, 499).map((row) => row.id))
+    await write(t, f.org.id, '2025-01-01T00:00:00.000Z', 'backdated')
+    expect(await t.run((ctx) => trimActivity(ctx, f.org.id))).toBe('done')
+    expect((await newestFirst(t, f.org.id)).map((row) => row.id)).toEqual(tied.map((row) => row.id))
+  })
+
+  it('a trim leaves rows newer than the settle time and other organizations alone', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantRows(t, f.org.id, 510, START - 3_600_000)
+    await plantRows(t, f.org.id, 5, START - 2_000, 'recent')
+    await plantRows(t, f.otherOrg.id, 3, START - 3_600_000, 'other')
+    expect(await t.run((ctx) => trimActivity(ctx, f.org.id))).toBe('done')
+    const kept = await newestFirst(t, f.org.id)
+    expect(kept).toHaveLength(505)
+    expect(kept.slice(0, 5).map((row) => row.id)).toEqual([
+      'recent-4',
+      'recent-3',
+      'recent-2',
+      'recent-1',
+      'recent-0',
+    ])
+    expect(kept.at(-1)?.id).toBe('seed-10') // seeds 0..9 were the overflow
+    expect(await activityFor(t, f.otherOrg.id)).toHaveLength(3)
+  })
+
+  it('a backlog larger than one step is trimmed over several steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    ACTIVITY_TRIM_BUDGET.rows = 4
+    await plantRows(t, f.org.id, 510, START - 3_600_000)
+    await write(t, f.org.id, at(START))
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const kept = await newestFirst(t, f.org.id)
+    expect(kept).toHaveLength(500)
+    expect(kept[0].target_id).toBe('new')
+    expect(kept.at(-1)?.id).toBe('seed-11')
+    // 11 rows over the cap at 4 a step
+    expect((await trims(t)).map((job) => job.state.kind)).toEqual(['success', 'success', 'success'])
+    expect((await stateOf(t, f.org.id))?.trim_due_at).toBeUndefined()
+    // the next write schedules a trim again
+    await write(t, f.org.id, at(Date.now()))
+    expect((await trims(t)).filter((job) => job.state.kind === 'pending')).toHaveLength(1)
+  })
+
+  it('readers show only the newest 500 rows before the trim runs', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // The guest cannot see Skunkworks, so 100 of the newest 500 rows hide
+    // from it while 100 older rows about `task` would fill their place.
+    const secret = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 600; i++) {
+        const about = i < 500 ? task : secret
         await ctx.db.insert('activity_events', {
-          id: uuid(),
-          org_id: f.otherOrg.id,
-          ts: ts(i),
-          verb: 'seeded',
+          id: `row-${i}`,
+          org_id: f.org.id,
+          ts: at(START - 3_600_000 + i * 1000),
+          verb: 'updated',
           target_type: 'issue',
-          target_id: `other-${i}`,
-          label: 'x',
+          target_id: about.id,
+          label: about.title,
+          project_id: about.project_id,
         })
       }
     })
-
-    await t.run(async (ctx) =>
-      logActivity(ctx, {
-        org_id: f.org.id,
-        actor_id: f.admin.id,
-        verb: 'created',
-        target_type: 'issue',
-        target_id: 'the-new-one',
-        label: 'newest',
-        ts: ts(600),
-      }),
-    )
-
-    const events = await activityFor(t, f.org.id)
-    expect(events).toHaveLength(500) // 511 present, everything past the cap died
-    const sorted = events.map((e) => e.ts).sort()
-    expect(sorted[0]).toBe(ts(11)) // seeds 0..10 were the overflow tail
-    expect(events.some((e) => e.target_id === 'the-new-one')).toBe(true)
-    expect(await activityFor(t, f.otherOrg.id)).toHaveLength(3) // untouched
-    expect((await t.run((ctx) => ctx.db.get(f.org._id)))!.activity_count).toBe(500)
+    const ids = (from: number, to: number) =>
+      Array.from({ length: from - to + 1 }, (_, i) => `row-${from - i}`)
+    const history = await t.run((ctx) => taskActivity(ctx, f.admin, task))
+    expect(history.map((row) => row.id)).toEqual(ids(499, 100).reverse())
+    const admin = await as(t, f.admin).query(api.snapshot.forMe, {})
+    expect(admin?.activity.map((row) => row.id)).toEqual(ids(599, 100))
+    const guest = await as(t, f.guest).query(api.snapshot.forMe, {})
+    expect(guest?.activity.map((row) => row.id)).toEqual(ids(499, 100))
   })
 })
 
@@ -292,8 +412,8 @@ describe('atomicity — a refused write leaves zero rows', () => {
       'bad_request',
       /blank/,
     )
-    const org = await t.run(async (ctx) => (await ctx.db.get(f.org._id)) as Doc<'organizations'>)
-    expect(org.next_issue_num).toBe(1) // bumped before the title guard, rolled back with it
+    // bumped before the title guard, rolled back with it
+    expect(await countersFor(t, f.org.id)).toEqual({ next_issue_num: 1, next_project_num: 5 })
     expect(await t.run(async (ctx) => (await ctx.db.query('issues').collect()).length)).toBe(0)
     expect(await activityFor(t, f.org.id)).toHaveLength(0)
     expect(await allMessages(t)).toHaveLength(0)

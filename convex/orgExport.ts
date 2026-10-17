@@ -16,6 +16,7 @@ import {
   type OrgExportRow,
   type OrgExportSection,
 } from './lib/orgExport'
+import { countersOf } from './model/orgs'
 
 const PAGE_SIZE = 100
 const PAGE_BYTES = 1024 * 1024
@@ -220,7 +221,9 @@ export const page = orgQuery({
       if (cursor !== null) throw badRequest('the organization has a single export page')
       const org = await byId(ctx, 'organizations', orgId)
       if (org === null) throw notFound('organization not found')
-      return { rows: [exportRow(org, section)], continueCursor: '', isDone: true }
+      // The counters live in org_counters; they win over legacy copies.
+      const row = { ...exportRow(org, section), ...(await countersOf(ctx, org)) }
+      return { rows: [row], continueCursor: '', isDone: true }
     }
 
     const result = await readPage(ctx, section, scope, cursor)

@@ -5,7 +5,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { namedTaskNums } from '../model/activity'
+import { ACTIVITY_CAP, namedTaskNums } from '../model/activity'
 import { canLeadTeams } from './access'
 import type { ActivityTarget } from './enums'
 import { type OrgProjectView, orgProjectView } from './visibility'
@@ -109,22 +109,22 @@ export async function memberSeesActivity(
  * task being shown, as every machine read counts the tasks it can read,
  * archived ones included. Organization admins receive every row; other
  * members get the rows memberSeesActivity allows, without legacy subtask
- * counts. The organization keeps its newest 500 rows (model/activity.ts), so
- * the walk is bounded.
+ * counts. It reads the organization's newest ACTIVITY_CAP rows, the ones
+ * every reader shows (model/activity.ts), so the read is bounded.
  */
 export async function taskActivity(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
 ): Promise<Doc<'activity_events'>[]> {
-  const rows: Doc<'activity_events'>[] = []
-  const feed = ctx.db
+  const feed = await ctx.db
     .query('activity_events')
     .withIndex('by_org_ts', (q) => q.eq('org_id', issue.org_id))
-    .order('asc')
-  for await (const ev of feed) {
-    if (ev.target_type === 'issue' && ev.target_id === issue.id) rows.push(ev)
-  }
+    .order('desc')
+    .take(ACTIVITY_CAP)
+  const rows = feed
+    .reverse()
+    .filter((ev) => ev.target_type === 'issue' && ev.target_id === issue.id)
   if (me.org_role === 'admin') return rows
   const view = await orgProjectView(ctx, me)
   const projects = new Map<number, Promise<string | undefined>>()

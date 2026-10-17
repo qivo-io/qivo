@@ -37,7 +37,7 @@ import { byId } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
 import { deleteOrgDeep } from '../model/cascade'
-import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
+import { insertOrgRows, newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import { projectDescription } from '../model/projects'
 
 /* The seat's login: `<key>@demo.qivo.io` is the Northstar roster's address
@@ -96,15 +96,17 @@ export const zzGuestOrg = internalMutation({
      * projects — the NEXT insert takes 4/5. Billing exists so "the host
      * organization's billing stays invisible" is a real miss rather than an
      * assertion passing against an empty table. */
-    await ctx.db.insert('organizations', {
-      id: ZZ.org,
-      name: 'ZZ Guest Org',
-      slug: 'zz-guest-org',
-      ...newOrgDefaults(now),
-      next_issue_num: 3,
-      next_project_num: 4,
-      billing: { plan: 'Team', seats: 5, renewal_date: isoDate(nowMs + 90 * DAY) },
-    })
+    await insertOrgRows(
+      ctx,
+      {
+        id: ZZ.org,
+        name: 'ZZ Guest Org',
+        slug: 'zz-guest-org',
+        ...newOrgDefaults(now),
+        billing: { plan: 'Team', seats: 5, renewal_date: isoDate(nowMs + 90 * DAY) },
+      },
+      { next_issue_num: 3, next_project_num: 4 },
+    )
 
     await ctx.db.insert('teams', {
       id: ZZ.team,

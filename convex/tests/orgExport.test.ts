@@ -1,5 +1,6 @@
 import { makeFunctionReference } from 'convex/server'
 import { describe, expect, it } from 'vitest'
+import { api } from '../_generated/api'
 import {
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
@@ -92,6 +93,10 @@ const EXCLUDED_TABLES = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // Internal counters, exported on the organization row (next_issue_num).
+  'org_counters',
+  // Background trim bookkeeping for activity retention.
+  'activity_retention',
 ] as const
 
 async function readAll(
@@ -142,6 +147,27 @@ describe('organization export', () => {
     expect((await caller.query(page, args)).rows.length).toBeGreaterThan(0)
     await t.run(async (ctx) => await ctx.db.patch(f.admin._id, { active: false }))
     await expectRefusal(caller.query(page, args), 'forbidden', /no profile/)
+  })
+
+  it('exports the counters wherever they are stored, never activity_count', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const caller = as(t, f.admin)
+    const organization = async () =>
+      (await caller.query(page, { org_id: f.org.id, section: 'organizations', cursor: null }))
+        .rows[0]
+    await t.run((ctx) => ctx.db.patch(f.org._id, { activity_count: 500 }))
+    // an organization whose counters are still on its row
+    expect(await organization()).toMatchObject({ next_issue_num: 1, next_project_num: 5 })
+    expect(await organization()).not.toHaveProperty('activity_count')
+    // the first task number moves them to org_counters
+    await caller.mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      project_id: f.sub.id,
+      title: 'Counted',
+    })
+    expect(await organization()).toMatchObject({ next_issue_num: 2, next_project_num: 5 })
   })
 
   it('exports every org-owned section including archived work, files, and safe key metadata', async () => {
@@ -276,6 +302,7 @@ describe('organization export', () => {
     }
     expect(exported.organizations).toHaveLength(1)
     expect(exported.organizations[0]).toMatchObject({ id: f.org.id, billing: f.org.billing })
+    expect(exported.organizations[0]).not.toHaveProperty('activity_count')
     expect(exported.projects.find((row) => row.id === f.sub.id)).toMatchObject({ archived_at: NOW })
     expect(exported.issues.find((row) => row.id === task.id)).toMatchObject({
       archived_at: NOW,

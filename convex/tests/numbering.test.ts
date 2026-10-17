@@ -10,6 +10,7 @@ import type { Doc } from '../_generated/dataModel'
 import { type CreateIssueArgs, NUM_IMMUTABLE_SENTENCE } from '../model/issues'
 import {
   as,
+  countersFor,
   expectRefusal,
   newT,
   type OrgFixture,
@@ -56,6 +57,33 @@ describe('issue numbering', () => {
     expect(dup.data.message).toBe('a task with this id already exists')
     const c = await createAs(t, f)
     expect(c.num).toBe(b.num + 1) // the refused attempt's counter bump rolled back
+  })
+
+  it('numbering stays dense across the move of the counters off the organization row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // an organization created before org_counters, 41 tasks in
+    await t.run((ctx) => ctx.db.patch(f.org._id, { next_issue_num: 41 }))
+    const sharedId = uuid()
+    expect((await createAs(t, f, { id: sharedId })).num).toBe(42)
+    const moved = await t.run(async (ctx) => (await ctx.db.get(f.org._id)) as Doc<'organizations'>)
+    expect(moved.next_issue_num).toBeUndefined()
+    expect(moved.next_project_num).toBeUndefined()
+    expect(await countersFor(t, f.org.id)).toEqual({ next_issue_num: 42, next_project_num: 5 })
+
+    await expectRefusal(createAs(t, f, { id: sharedId, title: 'Impostor' }), 'bad_request')
+    expect((await createAs(t, f)).num).toBe(43) // the refusal consumed nothing
+    const project = await as(t, f.admin).mutation(api.projects.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      type: 'meta',
+      key: 'NUM',
+      name: 'Numbered project',
+      sort_order: 9,
+    })
+    expect(project.num).toBe(6)
+    // later numbers no longer write the organization row
+    expect(await t.run((ctx) => ctx.db.get(f.org._id))).toEqual(moved)
   })
 
   it('num is immutable: no public patch carries it, edits keep it, and the sentence is pinned', async () => {

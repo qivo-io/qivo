@@ -11,6 +11,7 @@ import { requireDemoDeployment } from '../lib/demo'
 import { require, rule } from '../lib/functions'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
+import { deleteOrgBookkeeping } from '../model/orgs'
 import { marketingId } from './marketingDemoData'
 
 const BATCH = 64
@@ -528,6 +529,7 @@ export const purge = internalMutation({
               .query(table)
               .withIndex('by_org', (q) => q.eq('org_id', orgId))
               .first()) === null, rule('Demo cleanup left organization data'))
+          await deleteOrgBookkeeping(ctx, orgId)
           const org = await byId(ctx, 'organizations', orgId)
           if (org) await ctx.db.delete(org._id)
         }

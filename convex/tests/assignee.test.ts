@@ -7,6 +7,7 @@ import {
   activityFor,
   allMessages,
   as,
+  countersFor,
   expectRefusal,
   newT,
   plantIssue,
@@ -46,7 +47,7 @@ describe('assignee project permission', () => {
         'rule',
         ASSIGNEE_SENTENCE,
       )
-      expect((await t.run((ctx) => ctx.db.get(f.org._id)))?.next_issue_num).toBe(1)
+      expect((await countersFor(t, f.org.id)).next_issue_num).toBe(1)
       expect(await t.run((ctx) => ctx.db.query('issues').collect())).toEqual([])
 
       const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

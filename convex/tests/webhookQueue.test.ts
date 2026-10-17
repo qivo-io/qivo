@@ -181,7 +181,9 @@ describe('bounded durable webhook dispatch', () => {
     })
     expect(await f.rows()).toHaveLength(0)
     expect(await f.t.run((ctx) => ctx.db.query('webhook_events').collect())).toHaveLength(51)
-    const jobs = await f.t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    const jobs = (
+      await f.t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    ).filter((job) => job.name !== 'activityRetention:trim')
     // the archive also schedules the steps that mark the subtree's messages
     // read and its relation rows for the snapshot
     expect(jobs.map((job) => ({ name: job.name, delay: job.scheduledTime - Date.now() }))).toEqual([
