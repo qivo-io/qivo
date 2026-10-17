@@ -1630,8 +1630,10 @@ so it signs its own work. The key is still named beside it, because an agent
 may hold several and "which key did this" is the question you ask when one has
 to be rotated. A personal token's writes read `via the REST API` with no
 token name, as MCP's read `via MCP`. The person is the actor, and the feed
-reaches members who cannot see that person's tokens. Only the person and
-organization admins can. An update's feed
+reaches members who cannot see that person's tokens, so the row leaves the
+name out. Only the person and organization admins can see a person's tokens.
+An admin's revocation of a token or connected app is a feed row that only
+organization admins receive. An update's feed
 row names both sides of every changed field before the provenance suffix —
 e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
 (<key name>)`; description edits quote both sides as ~80-char excerpts
