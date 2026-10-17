@@ -118,8 +118,9 @@ the description. Lead access is required to change **Review time**. An empty
 sub-project value follows its parent project ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
 Its last section, **Archive or delete**, archives the project or moves it to
 Deleted items ([Deleting a project](./how-work-is-organized.md#deleting-a-project)).
-**Settings → Projects → Deleted items** lists deleted tasks and projects for
-every role, and organization admins see all of them
+Every role has **Settings → Projects → Deleted items**. It lists what you
+deleted, a lead also sees what was deleted in projects they lead, and
+organization admins see everything deleted in the organization
 ([Deleted items](./how-work-is-organized.md#deleted-items)).
 
 Choose **Create an account** on the pricing or sign-in page to sign up. Email
