@@ -48,6 +48,7 @@ import {
   type OrgFixture,
   plantIssue,
   plantProject,
+  restTasks,
   type T,
   uuid,
   withOrg,
@@ -128,7 +129,7 @@ const restPatch = (fx: Fx, ref: string, body: unknown) =>
   })
 
 const restList = (fx: Fx, q: Record<string, string>) =>
-  fx.t.query(internal.machine.rest.listIssues, { callerId: fx.agent.id, access: 'read', ...q })
+  restTasks(fx.t, { callerId: fx.agent.id, access: 'read', ...q })
 
 const mcp = async <T = Record<string, unknown>>(
   fx: Fx,

@@ -1169,6 +1169,7 @@ describe('read tools', () => {
 
   test('list_tasks: scope expansion, filters, uniform refusal, projection', async () => {
     const fx = await machineOrg()
+    // created last, so creation order differs from project key order
     const i1 = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
@@ -1176,6 +1177,7 @@ describe('read tools', () => {
       assignee_id: fx.user.id,
       reporter_id: fx.viewer.id,
       created_by: fx.agent.id,
+      created_at: '2026-01-03T00:00:00.000Z',
     })
     const i2 = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1187,6 +1189,7 @@ describe('read tools', () => {
       org_id: fx.org.id,
       project_id: fx.hidden.id,
       title: 'Sneaky task',
+      created_at: '2026-01-02T00:00:00.000Z',
     })
     const i4 = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1198,23 +1201,31 @@ describe('read tools', () => {
       JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, { callerId, access: 'read', ...args }),
       ) as Record<string, unknown>[]
-    // no scope: everything readable, active only — order by project key then num
+    // no scope: everything readable, active only, oldest first by creation
+    // as on REST, not by project key
     expect((await list(fx.admin.id)).map((i) => i.title)).toEqual([
-      'Alpha widget',
       'Beta gadget',
       'Sneaky task',
+      'Alpha widget',
     ])
-    expect((await list(fx.guest.id)).map((i) => i.title)).toEqual(['Alpha widget', 'Beta gadget'])
+    expect((await list(fx.guest.id)).map((i) => i.title)).toEqual(['Beta gadget', 'Alpha widget'])
     // meta scope expands to its subs — by key, num or uuid ref
     for (const ref of [fx.meta.key, String(fx.meta.num), fx.meta.id, fx.meta.id.toUpperCase()]) {
-      expect((await list(fx.guest.id, { project: ref })).map((i) => i.id)).toEqual([i1.id, i2.id])
+      expect((await list(fx.guest.id, { project: ref })).map((i) => i.id)).toEqual([i2.id, i1.id])
     }
     // sub scope stays put
     expect((await list(fx.guest.id, { project: 'FW' })).map((i) => i.id)).toEqual([i1.id])
-    // archived axis
-    expect((await list(fx.guest.id, { project: 'FW', archived: true })).map((i) => i.id)).toEqual([
-      i4.id,
-    ])
+    // archived axis: one project's archived tasks, as a page
+    const archived = JSON.parse(
+      await fx.t.query(internal.machine.mcp.listIssues, {
+        callerId: fx.guest.id,
+        access: 'read',
+        project: 'FW',
+        archived: true,
+      }),
+    ) as { next_cursor: string | null; tasks: { id: string }[] }
+    expect(Object.keys(archived)).toEqual(['next_cursor', 'tasks'])
+    expect(archived).toMatchObject({ next_cursor: null, tasks: [{ id: i4.id }] })
     // filters
     expect((await list(fx.guest.id, { status: 'done' })).map((i) => i.id)).toEqual([i2.id])
     expect((await list(fx.guest.id, { assignee_id: fx.user.id })).map((i) => i.id)).toEqual([i1.id])
@@ -1223,7 +1234,7 @@ describe('read tools', () => {
     ).toEqual([i1.id])
     expect((await list(fx.guest.id, { search: 'alpha' })).map((i) => i.id)).toEqual([i1.id])
     expect(await list(fx.guest.id, { search: '*' })).toEqual([]) // no wildcard on MCP
-    expect((await list(fx.guest.id, { limit: 1 })).map((i) => i.id)).toEqual([i1.id])
+    expect((await list(fx.guest.id, { limit: 1 })).map((i) => i.id)).toEqual([i2.id])
     // the uniform refusal: nonexistent, invisible, foreign — one sentence shape
     for (const [caller, ref] of [
       [fx.admin.id, 'NOPE'],

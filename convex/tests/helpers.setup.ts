@@ -12,6 +12,7 @@
 
 import {
   type DataModelFromSchemaDefinition,
+  type FunctionArgs,
   type GenericMutationCtx,
   makeFunctionReference,
   type WithoutSystemFields,
@@ -23,6 +24,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
+import type { RestIssueJson } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import schema from '../schema'
@@ -633,4 +635,26 @@ export async function expectRefusal(
     throw new Error(`refusal message "${data.message}" does not match ${String(msgRe)}`)
   }
   return caught as ConvexError<Refusal>
+}
+
+/* REST GET /v1/tasks answers an array for active tasks and a page for
+ * archived ones (machine/rest.ts listIssues). These call it and require the
+ * shape they expect. */
+type RestTaskListArgs = FunctionArgs<typeof internal.machine.rest.listIssues>
+
+/** The active task list REST answers for `args`. */
+export async function restTasks(t: T, args: RestTaskListArgs): Promise<RestIssueJson[]> {
+  const out = await t.query(internal.machine.rest.listIssues, args)
+  if (!Array.isArray(out)) throw new Error(`expected an array, got ${JSON.stringify(out)}`)
+  return out
+}
+
+/** The page of archived tasks REST answers for `args`. */
+export async function restArchivedPage(
+  t: T,
+  args: Omit<RestTaskListArgs, 'archived'>,
+): Promise<{ next_cursor: string | null; tasks: RestIssueJson[] }> {
+  const out = await t.query(internal.machine.rest.listIssues, { ...args, archived: 'true' })
+  if (Array.isArray(out)) throw new Error(`expected a page, got ${JSON.stringify(out)}`)
+  return out
 }

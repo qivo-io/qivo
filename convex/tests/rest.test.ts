@@ -34,6 +34,8 @@ import {
   plantProject,
   plantSeat,
   plantSubscription,
+  restArchivedPage,
+  restTasks,
   type T,
   tick,
   uuid,
@@ -566,7 +568,7 @@ describe('GET /v1/tasks', () => {
       archived_at: NOW,
     })
     await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id, title: 'invisible' })
-    const rows = await t.query(internal.machine.rest.listIssues, {
+    const rows = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
     })
@@ -575,15 +577,17 @@ describe('GET /v1/tasks', () => {
       reporter_id: f.user.id,
       reporter_name: 'user',
     })
-    const archived = await t.query(internal.machine.rest.listIssues, {
+    // archived tasks are listed one project at a time, as a page
+    const archived = await restArchivedPage(t, {
       callerId: f.agent.id,
       access: 'read',
-      archived: 'true',
+      project: 'TBED',
     })
-    expect(archived.map((i) => i.id)).toEqual([gone.id])
-    expect(archived[0].archived).toBe(true)
+    expect(archived.tasks.map((i) => i.id)).toEqual([gone.id])
+    expect(archived.tasks[0].archived).toBe(true)
+    expect(archived.next_cursor).toBeNull()
     await refused(
-      t.query(internal.machine.rest.listIssues, {
+      restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         archived: 'maybe',
@@ -603,20 +607,20 @@ describe('GET /v1/tasks', () => {
       title: 'in archived project',
     })
     await archiveProject(t, f.sub2)
-    const dflt = await t.query(internal.machine.rest.listIssues, {
+    const dflt = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
     })
     expect(dflt.map((i) => i.id)).toEqual([inSub.id])
     // a live meta offers itself as it stands — the archived sub stays out
-    const viaMeta = await t.query(internal.machine.rest.listIssues, {
+    const viaMeta = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       project: 'TBED',
     })
     expect(viaMeta.map((i) => i.id)).toEqual([inSub.id])
     // naming the archived sub directly puts its tasks back
-    const direct = await t.query(internal.machine.rest.listIssues, {
+    const direct = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       project: 'PCB',
@@ -624,7 +628,7 @@ describe('GET /v1/tasks', () => {
     expect(direct.map((i) => i.id)).toEqual([inSub2.id])
     // an archived meta is asked for as it was put away — every kid comes
     await archiveProject(t, f.meta)
-    const viaArchivedMeta = await t.query(internal.machine.rest.listIssues, {
+    const viaArchivedMeta = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       project: 'TBED',
@@ -636,7 +640,7 @@ describe('GET /v1/tasks', () => {
     const t = newT()
     const f = await machineOrg(t)
     await refused(
-      t.query(internal.machine.rest.listIssues, {
+      restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         project: 'NOPE',
@@ -645,7 +649,7 @@ describe('GET /v1/tasks', () => {
       'project not found',
     )
     await refused(
-      t.query(internal.machine.rest.listIssues, {
+      restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         project: 'SKNK',
@@ -667,26 +671,26 @@ describe('GET /v1/tasks', () => {
       assignee_id: f.user.id,
     })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'cold' })
-    const byStatus = await t.query(internal.machine.rest.listIssues, {
+    const byStatus = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       status: 'review',
     })
     expect(byStatus.map((i) => i.id)).toEqual([hot.id])
-    const byPriority = await t.query(internal.machine.rest.listIssues, {
+    const byPriority = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       priority: 'urgent',
     })
     expect(byPriority.map((i) => i.id)).toEqual([hot.id])
-    const byAssignee = await t.query(internal.machine.rest.listIssues, {
+    const byAssignee = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       assignee: f.user.id.toUpperCase(),
     })
     expect(byAssignee.map((i) => i.id)).toEqual([hot.id])
     await refused(
-      t.query(internal.machine.rest.listIssues, {
+      restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         status: 'closed',
@@ -695,7 +699,7 @@ describe('GET /v1/tasks', () => {
       'status must be one of backlog, todo, progress, review, done',
     )
     await refused(
-      t.query(internal.machine.rest.listIssues, {
+      restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         priority: 'top',
@@ -704,7 +708,7 @@ describe('GET /v1/tasks', () => {
       'priority must be one of urgent, high, medium, low',
     )
     await refused(
-      t.query(internal.machine.rest.listIssues, {
+      restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         assignee: 'not-a-uuid',
@@ -734,25 +738,25 @@ describe('GET /v1/tasks', () => {
       title: 'plain',
       description: 'the ALPHA lives here',
     })
-    const starred = await t.query(internal.machine.rest.listIssues, {
+    const starred = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       search: 'API*alpha',
     })
     expect(starred.map((i) => i.id)).toEqual([alpha.id])
-    const commas = await t.query(internal.machine.rest.listIssues, {
+    const commas = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       search: 'other, th',
     })
     expect(commas.map((i) => i.id)).toEqual([comma.id])
-    const ci = await t.query(internal.machine.rest.listIssues, {
+    const ci = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       search: 'alpha',
     })
     expect(ci.map((i) => i.id)).toEqual([alpha.id, inDesc.id]) // title OR description
-    const none = await t.query(internal.machine.rest.listIssues, {
+    const none = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       search: 'zzz',
@@ -785,7 +789,7 @@ describe('GET /v1/tasks', () => {
       'recovery firm',
       'roll*back sign',
     ]) {
-      const rows = await t.query(internal.machine.rest.listIssues, {
+      const rows = await restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
         search,
@@ -795,7 +799,7 @@ describe('GET /v1/tasks', () => {
         search,
       ).toEqual([task.id])
     }
-    const missing = await t.query(internal.machine.rest.listIssues, {
+    const missing = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       search: 'signed mobile',
@@ -842,7 +846,7 @@ describe('GET /v1/tasks', () => {
     })
     const ids = async (search: string) =>
       (
-        await t.query(internal.machine.rest.listIssues, {
+        await restTasks(t, {
           callerId: f.agent.id,
           access: 'read',
           search,
@@ -866,7 +870,7 @@ describe('GET /v1/tasks', () => {
     const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'second' })
     const c = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'third' })
     const call = (params: { limit?: string; offset?: string }) =>
-      t.query(internal.machine.rest.listIssues, { callerId: f.agent.id, access: 'read', ...params })
+      restTasks(t, { callerId: f.agent.id, access: 'read', ...params })
     expect((await call({ limit: '1' })).map((i) => i.id)).toEqual([a.id])
     expect((await call({ limit: '1', offset: '1' })).map((i) => i.id)).toEqual([b.id])
     expect((await call({ limit: 'abc' })).map((i) => i.id)).toEqual([a.id, b.id, c.id]) // NaN → 100
@@ -1044,9 +1048,7 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       'reporter_id must be a profile uuid',
     )
-    expect(
-      await t.query(internal.machine.rest.listIssues, { callerId: f.agent.id, access: 'read' }),
-    ).toEqual([])
+    expect(await restTasks(t, { callerId: f.agent.id, access: 'read' })).toEqual([])
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
 
@@ -1141,7 +1143,7 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       'parent_id cannot be written; send parent, or null to detach',
     )
-    const rows = await t.query(internal.machine.rest.listIssues, {
+    const rows = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
     })
@@ -1401,9 +1403,7 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       /needs Edit permission or higher on this project to review work$/,
     )
-    expect(
-      await t.query(internal.machine.rest.listIssues, { callerId: f.agent.id, access: 'read' }),
-    ).toHaveLength(1)
+    expect(await restTasks(t, { callerId: f.agent.id, access: 'read' })).toHaveLength(1)
   })
 
   it('unknown fields are ignored; remaining_hours rounds to one decimal and stamps', async () => {
@@ -1879,7 +1879,7 @@ describe("a group's dates on REST", () => {
     const read = async () => {
       const get = (ref: string) =>
         t.query(internal.machine.rest.getIssue, { callerId: f.agent.id, access: 'read', ref })
-      const listed = await t.query(internal.machine.rest.listIssues, {
+      const listed = await restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
       })
@@ -2014,7 +2014,7 @@ describe("a group's dates on REST", () => {
         }
       }
     })
-    const listed = await t.query(internal.machine.rest.listIssues, {
+    const listed = await restTasks(t, {
       callerId: f.agent.id,
       access: 'read',
       limit: '200',
@@ -2395,9 +2395,9 @@ describe('a navigation-only parent hides its other sub-projects', () => {
     const get = (callerId: string, ref: string) =>
       t.query(internal.machine.rest.getIssue, { callerId, access: 'read', ref })
     const one = await get(subOnly.id, child.id)
-    const listed = (
-      await t.query(internal.machine.rest.listIssues, { callerId: subOnly.id, access: 'read' })
-    ).find((i) => i.id === child.id)
+    const listed = (await restTasks(t, { callerId: subOnly.id, access: 'read' })).find(
+      (i) => i.id === child.id,
+    )
     const patched = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: subOnly.id,
       access: 'write',

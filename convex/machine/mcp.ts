@@ -48,6 +48,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { httpAction, internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
+import { archiveCursorText } from '../lib/archivedTasks'
 import {
   accessFlags,
   applyTaskUpdate,
@@ -63,15 +64,16 @@ import {
   findIssue,
   findProjectRef,
   issueKey,
-  issueOut,
+  listActiveIssuesCore,
+  listArchivedIssuesCore,
   listCommentsCore,
-  listIssuesCore,
   listProjectsCore,
   listProjectUsersCore,
   listUsersCore,
   loadCatalogue,
   meCore,
   projectJson,
+  taskListRequest,
   taskOut,
   userJson,
 } from '../lib/core'
@@ -341,7 +343,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_tasks',
       title: 'List tasks',
       description:
-        "Tasks you can see, optionally filtered. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default; `archived: true` lists the archived ones instead. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
+        "Tasks you can see, optionally filtered, oldest first by creation. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default. `archived: true` lists archived tasks instead and needs `project`, which then includes all its sub-projects, archived ones too; to cover them all, name each top-level project that `list_projects` returns with and without `archived: true`. That answer is `{next_cursor, tasks}`, most recently archived first; pass `next_cursor` back as `cursor` until it is null, because a page may hold fewer than `limit` tasks, even none. Tasks in an ARCHIVED PROJECT are left out altogether unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -394,6 +396,10 @@ export const TOOLS: McpTool[] = [
             type: 'integer',
             minimum: 0,
           },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
         },
       },
     },
@@ -411,6 +417,7 @@ export const TOOLS: McpTool[] = [
           archived?: boolean
           limit?: number
           offset?: number
+          cursor?: string
         }),
       }),
   },
@@ -1575,6 +1582,9 @@ export const updateUser = internalMutation({
   },
 })
 
+/* list_tasks: active tasks as an array paged with `offset`, or with
+ * `archived: true` one project's archived tasks as `{next_cursor, tasks}`,
+ * paged with `cursor` (lib/core.ts listArchivedIssuesCore). */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
@@ -1588,64 +1598,60 @@ export const listIssues = internalQuery({
     archived: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     offset: v.optional(v.number()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const { cat, readable } = await catalogueFlags(ctx, me, a.access)
-    let scope: string[] | null = null
+    let project: Doc<'projects'> | undefined
     if (a.project !== undefined && a.project !== '') {
-      const p = findProjectRef(cat, a.project)
-      if (p === undefined || !readable(p.id)) {
+      project = findProjectRef(cat, a.project)
+      if (project === undefined || !readable(project.id)) {
         throw notFound(`project "${a.project}" not found (or not visible to you)`)
       }
-      // naming a LIVE meta asks for the project as it stands, so a
-      // sub-project archived out of it stays out; naming an archived one
-      // asks for it as it was put away, and everything under it comes (0106)
-      const kids =
-        p.type === 'meta'
-          ? await childProjectsCore(ctx, p.id, {
-              includeArchived: p.archived_at !== undefined,
-              readable,
-            })
-          : []
-      scope = [p.id, ...kids.map((k) => k.id)]
     }
-    const { page: rows, children } = await listIssuesCore(
-      ctx,
-      me,
-      {
-        scope,
-        archived: a.archived === true,
-        statuses: typeof a.status === 'string' ? [a.status] : a.status,
-        priority: a.priority,
-        assignee: a.assignee_id?.toLowerCase(),
-        owner: a.owner_id?.toLowerCase(),
-        search: a.search,
-        stars: false, // MCP has no wildcard — a literal `*` must not widen
-        limit: Math.min(a.limit ?? 50, 200),
-        offset: a.offset ?? 0,
-        order: 'key',
-      },
-      cat,
-      readable,
-    )
-    const names = await orgNames(ctx, me)
-    const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
-    const out = []
-    for (const row of rows) {
-      out.push(
-        await issueOut(ctx, row, {
-          surface: 'mcp',
+    const filters = {
+      statuses: typeof a.status === 'string' ? [a.status] : a.status,
+      priority: a.priority,
+      assignee: a.assignee_id?.toLowerCase(),
+      owner: a.owner_id?.toLowerCase(),
+      search: a.search,
+      stars: false, // MCP has no wildcard, so a literal `*` must not widen
+      limit: Math.min(a.limit ?? 50, 200),
+    }
+    const view = { surface: 'mcp', cat, readable } as const
+    // naming a LIVE meta asks for its active tasks as it stands, so a
+    // sub-project archived out of it stays out; naming an archived one asks
+    // for it as it was put away, and everything under it comes (0106).
+    // Archived tasks come one project at a time (taskListScope).
+    const req = taskListRequest(view, {
+      flag: 'archived: true',
+      archived: a.archived === true,
+      project,
+      offset: a.offset ?? 0,
+      cursor: a.cursor,
+    })
+    if (!req.archived) {
+      return pretty(
+        await listActiveIssuesCore(
+          ctx,
           me,
-          readable,
-          project: cat.byUuid.get(row.project_id),
-          names,
-          children,
-          orgSlug,
-        }),
+          { ...filters, scope: req.scope, offset: req.offset },
+          view,
+        ),
       )
     }
-    return pretty(out)
+    const page = await listArchivedIssuesCore(
+      ctx,
+      me,
+      { ...filters, scope: req.scope, cursor: req.cursor },
+      view,
+    )
+    // the cursor first, so a truncated tool result still shows it
+    return pretty({
+      next_cursor: page.next === null ? null : archiveCursorText(page.next),
+      tasks: page.rows,
+    })
   },
 })
 

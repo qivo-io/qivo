@@ -72,8 +72,9 @@ export type TaskSearchFields = {
  * The text a task search matches, one field per line: task ID, title,
  * description, status name (not for a task with subtasks), priority name,
  * assignee name and label names. The app's task filter (src/store/planner.ts
- * matchesSearch) and REST and MCP task search (lib/core.ts listIssuesCore)
- * both build it here, so a word that finds a task in one finds it in all.
+ * matchesSearch) and REST and MCP task search (lib/core.ts
+ * listActiveIssuesCore and listArchivedIssuesCore) both build it here, so a
+ * word that finds a task in one finds it in all.
  */
 export function taskSearchText(task: TaskSearchFields): string {
   return [

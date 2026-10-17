@@ -88,6 +88,14 @@ refuses a longer name with the schema message. A project, milestone or team
 named before the limit keeps its longer name while the call leaves `name`
 out.
 
+In October 2026 `list_tasks` changed in two ways. It returns active tasks in
+creation order, oldest first, like REST, instead of by project key and task
+number, so restart any paging with `offset` after this change. With
+`archived: true` it now needs `project` and answers
+`{next_cursor, tasks}`, paged with the new `cursor` argument (see
+[Task results](#task-results)). A client holding the older catalogue does
+not see `cursor` until it refreshes its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -749,7 +757,7 @@ answers `internal error` there instead, and outside a tool call it is an HTTP
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
-| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default; `archived: true` lists the archived ones instead (0070). Tasks in an ARCHIVED PROJECT are left out entirely unless `project` names that project (0106). That is a different axis, and the one without a flag. Rows are ordered by project key, then task number, so `offset` pages through them |
+| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
 | `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`, plus `ignored_arguments` when you sent arguments the tool does not know, such as `archive_reason`, which only tasks take |
@@ -1044,6 +1052,45 @@ subtasks at any depth that you can read, or `null` when none has hours. Like
 the group's dates, it counts only active subtasks of an active group, leaves
 out subtasks in archived projects while the group's project is active, and
 stops at a subtask you cannot read.
+
+`list_tasks` returns active tasks as an array, oldest first by creation,
+with tasks created at the same moment ordered by number, so `offset` pages
+through them until a page holds fewer tasks than `limit`.
+
+With `archived: true` it lists archived tasks one project at a time and
+needs `project`. Naming a project lists its archived tasks and those of all
+its sub-projects you can read, archived sub-projects included, like the app's
+Archive page. Tasks come most recently archived first, and tasks archived at
+the same moment keep one fixed order across pages. The answer is an object,
+cursor first, with the same rows as an active list:
+
+```json
+{
+  "next_cursor": "1~1760583600000.123~2026-10-16T03:00:00.000Z",
+  "tasks": [{ "id": "…uuid…", "key": "QN-3", "archived_at": "…", "…": "…" }]
+}
+```
+
+Pass `next_cursor` unchanged as `cursor` for the next page and stop when it
+is `null`. A page can hold fewer than `limit` tasks, or none, while
+`next_cursor` is set, because each page reads a bounded amount however large
+the archive is. Tasks archived after you start paging appear at the start of
+the list, so start again to see them.
+
+To find every archived task you can read, take two steps. First call
+`list_projects`, once without arguments and once with `archived: true`.
+Archived tasks can sit in active projects as well as archived ones, and both
+lists include sub-projects. Then page `list_tasks` with `archived: true` for
+each top-level project, the rows whose `parent_id` is `null`. Each covers all
+its sub-projects you can read, even when you can read only some of them. To
+read one sub-project's archive alone, name that sub-project.
+
+These calls are refused: `archived: true` without `project` (`archived:
+true needs project, because archived tasks are listed one project at a
+time`), `cursor` without `archived: true` (`cursor works only with archived:
+true`), an `offset` other than `0` with `archived: true` (`offset does not
+apply to archived tasks; pass next_cursor as cursor`) and a `cursor` that is
+not a `next_cursor` (`cursor must be the next_cursor of an earlier page`).
 
 ### Moving, parents and labels
 
@@ -1420,7 +1467,8 @@ time. Leaving `review` keeps whatever is left, and a call that stays in
 `updated` for this; read the task back to see it.
 
 Archived tasks (0070) are a separate axis from `status`: they leave the
-default `list_tasks` result, stop counting as workload, and in the app live
+default `list_tasks` result (`archived: true` with `project` pages them, see
+[Task results](#task-results)), stop counting as workload, and in the app live
 on the Archive page. A nightly sweep archives tasks that have been `done`
 for 30 days, or for a legacy team archive setting's number of days where an
 older project kept one. Restoring a still-`done` task restarts its

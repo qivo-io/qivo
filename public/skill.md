@@ -57,7 +57,9 @@ own comments need only read access to the task.
   archive/restore. The endpoint is
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
-  allows at most 200; page with `offset` until a shorter page arrives. If
+  allows at most 200; page active lists with `offset` until a shorter page
+  arrives. Archived tasks need `project` and page with `cursor`; pass back
+  `next_cursor` until it is null. If
   `create_task`, `update_task` or `update_project` answers with
   `ignored_arguments`, those arguments did nothing. Refresh the tool list and
   retry with current names.
@@ -69,6 +71,8 @@ own comments need only read access to the task.
   not these task and project routes.
   `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
   array; increment `offset` by the page size until a shorter page arrives.
+  `archived=true` needs `project` and returns `{next_cursor, tasks}`; pass
+  `next_cursor` back as `cursor` until it is null, even after an empty page.
 - **Browser:** Use it for images inside descriptions, guest invitations,
   deleting a project, and other actions absent from the machine interfaces.
   Upload file attachments through REST. Enter at `https://qivo.io/app` and
@@ -463,9 +467,17 @@ cannot remove a callback.
 ## Archives, access, and browser links
 
 Archived tasks keep their status. Default task lists omit them;
-`archived: true` lists archived tasks instead. Archiving a task carries its
-subtasks; restoring it also restores its parent chain. `get_task` resolves
-archived tasks without restoring them.
+`archived: true` with `project` lists that project's archived tasks, its
+sub-projects' included, most recently archived first, a page at a time.
+Archiving a task carries its subtasks; restoring it also restores its parent
+chain. `get_task` resolves archived tasks without restoring them.
+
+To find archived tasks anywhere, call `list_projects` once without arguments
+and once with `archived: true` (REST `GET /v1/projects` and
+`GET /v1/projects?archived=true`), because archived tasks can sit in active
+and archived projects. Then list the archived tasks of each top-level
+project, the rows whose `parent_id` is `null`. Each covers the sub-projects
+you can read.
 
 Archived projects are separate: use `list_projects` with `archived: true` to
 find them, then explicitly name one in the task query. They refuse new tasks;

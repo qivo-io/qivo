@@ -44,6 +44,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { httpAction, internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
+import { archiveCursorText } from '../lib/archivedTasks'
 import {
   type AccessFlag,
   accessFlags,
@@ -59,9 +60,9 @@ import {
   findIssue,
   findProjectRef,
   issueKey,
-  issueOut,
+  listActiveIssuesCore,
+  listArchivedIssuesCore,
   listCommentsCore,
-  listIssuesCore,
   listProjectsCore,
   listProjectUsersCore,
   listUsersCore,
@@ -74,12 +75,12 @@ import {
   type TaskAttachmentsJson,
   type TaskDetailJson,
   type TaskRefJson,
+  taskListRequest,
   taskOut,
   taskRefOf,
   UUID,
   userJson,
 } from '../lib/core'
-import { byId } from '../lib/db'
 import {
   type CredentialAccess,
   ISSUE_PRIORITIES,
@@ -154,6 +155,8 @@ type RestProjectDetailJson = Awaited<ReturnType<typeof projectDetailJson>>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
+/** A page of archived tasks; `next_cursor` is null on the last one. */
+type RestArchivedPage = { next_cursor: string | null; tasks: RestIssueJson[] }
 type RestLabelJson = ReturnType<typeof labelJson>
 
 /** The 403 for a readable project the caller cannot write. */
@@ -487,7 +490,10 @@ export const updateUser = internalMutation({
 
 /* GET /v1/tasks — filters + scope expansion (rest:368-403). Query params
  * arrive as raw strings so the parsing quirks stay byte-faithful: limit 0/NaN
- * → 100, limit -5 → 1, offset NaN → 0, `archived=maybe` → 400. */
+ * → 100, limit -5 → 1, offset NaN → 0, `archived=maybe` → 400. Active tasks
+ * answer an array paged with `offset`. Archived tasks need `project` and
+ * answer `{next_cursor, tasks}`, paged with `cursor` (lib/core.ts
+ * listArchivedIssuesCore). */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
@@ -501,30 +507,13 @@ export const listIssues = internalQuery({
     archived: v.optional(v.string()),
     limit: v.optional(v.string()),
     offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
   },
-  handler: async (ctx, a): Promise<RestIssueJson[]> => {
+  handler: async (ctx, a): Promise<RestIssueJson[] | RestArchivedPage> => {
     const { me, cat, readable } = await withAccess(ctx, a.callerId, a.access)
-    /* Naming a LIVE meta asks for the project as it stands, so a sub-project
-     * archived out of it stays out; naming an ARCHIVED one asks for it as it
-     * was put away, and everything under it comes (rest:374-386). */
-    let scope: string[] | null = null
-    if (a.project) {
-      const p = findProjectRef(cat, a.project)
-      if (p === undefined || !readable(p.id)) throw notFound('project not found')
-      scope =
-        p.type === 'meta'
-          ? [
-              p.id,
-              ...cat.projects
-                .filter(
-                  (c) =>
-                    c.parent_id === p.id &&
-                    readable(c.id) &&
-                    (p.archived_at !== undefined || c.archived_at === undefined),
-                )
-                .map((c) => c.id),
-            ]
-          : [p.id]
+    const project = a.project ? findProjectRef(cat, a.project) : undefined
+    if (a.project && (project === undefined || !readable(project.id))) {
+      throw notFound('project not found')
     }
     if (a.archived !== undefined && a.archived !== 'true' && a.archived !== 'false') {
       throw badRequest('archived must be true or false')
@@ -541,40 +530,47 @@ export const listIssues = internalQuery({
     if (a.owner && !UUID.test(a.owner)) throw badRequest('owner must be a profile uuid')
     const limit = Math.min(Math.max(Number(a.limit ?? 100) || 100, 1), 200)
     const offset = Math.max(Number(a.offset ?? 0) || 0, 0)
-    const { page, children } = await listIssuesCore(
+    const filters = {
+      statuses: statuses as IssueStatus[],
+      priority: a.priority ? (a.priority as IssuePriority) : undefined,
+      assignee: a.assignee ? a.assignee.toLowerCase() : undefined,
+      owner: a.owner ? a.owner.toLowerCase() : undefined,
+      search: a.search ? a.search : undefined,
+      stars: true, // REST's `*` wildcard, REST only
+      limit,
+    }
+    const view = { surface: 'rest', cat, readable } as const
+    /* Naming a LIVE meta asks for its active tasks as it stands, so a
+     * sub-project archived out of it stays out; naming an ARCHIVED one asks
+     * for it as it was put away, and everything under it comes
+     * (rest:374-386). Archived tasks come one project at a time
+     * (taskListScope). */
+    const req = taskListRequest(view, {
+      flag: 'archived=true',
+      archived: a.archived === 'true',
+      project,
+      offset,
+      // an empty cursor, like any empty filter, counts as absent
+      cursor: a.cursor ? a.cursor : undefined,
+    })
+    if (!req.archived) {
+      return await listActiveIssuesCore(
+        ctx,
+        me,
+        { ...filters, scope: req.scope, offset: req.offset },
+        view,
+      )
+    }
+    const page = await listArchivedIssuesCore(
       ctx,
       me,
-      {
-        scope,
-        archived: a.archived === 'true',
-        statuses: statuses as IssueStatus[],
-        priority: a.priority ? (a.priority as IssuePriority) : undefined,
-        assignee: a.assignee ? a.assignee.toLowerCase() : undefined,
-        owner: a.owner ? a.owner.toLowerCase() : undefined,
-        search: a.search ? a.search : undefined,
-        stars: true, // REST's `*` wildcard — REST-only
-        limit,
-        offset,
-        order: 'created',
-      },
-      cat,
-      readable,
+      { ...filters, scope: req.scope, cursor: req.cursor },
+      view,
     )
-    const names = await orgNames(ctx, me.org_id)
-    const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
-    return await Promise.all(
-      page.map((i) =>
-        issueOut(ctx, i, {
-          surface: 'rest',
-          me,
-          readable,
-          project: cat.byUuid.get(i.project_id),
-          names,
-          children,
-          orgSlug,
-        }),
-      ),
-    )
+    return {
+      next_cursor: page.next === null ? null : archiveCursorText(page.next),
+      tasks: page.rows,
+    }
   },
 })
 
@@ -1131,6 +1127,7 @@ export const ROUTES: RestRoute[] = [
         archived: query('archived'),
         limit: query('limit'),
         offset: query('offset'),
+        cursor: query('cursor'),
       }),
   }),
   route({

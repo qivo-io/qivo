@@ -89,8 +89,8 @@ key name for an agent key; comments use them as their author.
 
 Project listings show active projects by default. Request `?archived=true`
 for archived projects. Task listings omit their tasks unless you name the project;
-archived tasks also need an explicit request. Restore a project before
-creating tasks in it.
+archived tasks also need an explicit request, one project at a time. Restore a
+project before creating tasks in it.
 
 ## Automatic task events
 
