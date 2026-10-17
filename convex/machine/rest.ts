@@ -553,7 +553,7 @@ export const listIssues = internalQuery({
       // an empty cursor, like any empty filter, counts as absent
       cursor: a.cursor ? a.cursor : undefined,
     })
-    if (!req.archived) {
+    if (req.archived === false) {
       return await listActiveIssuesCore(
         ctx,
         me,

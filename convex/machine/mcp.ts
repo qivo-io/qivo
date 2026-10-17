@@ -1631,7 +1631,7 @@ export const listIssues = internalQuery({
       offset: a.offset ?? 0,
       cursor: a.cursor,
     })
-    if (!req.archived) {
+    if (req.archived === false) {
       return pretty(
         await listActiveIssuesCore(
           ctx,
