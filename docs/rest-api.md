@@ -102,7 +102,9 @@ A request without a recognizable credential cannot be told apart, so it keeps
 the agent key's sentence. A `qvo_` OAuth token on these routes gets that
 sentence too. `403` means the credential is valid but the user lacks the
 required role, the credential can only read, or organization editing is
-paused for billing. Unreadable objects come back as `404`.
+paused for billing. Unreadable objects come back as `404`. A failure that is
+not a refusal, such as a server limit, is a `500` with `{"error": "internal
+error"}`, and Qivo keeps its details in its own logs.
 
 An agent may hold several keys at once, and a person several tokens, which is
 how one is rotated without going dark: mint the new one, move the client over,

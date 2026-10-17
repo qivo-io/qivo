@@ -134,7 +134,13 @@ import { DISCUSSION_TOOLS } from './discussion'
 import { PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
 import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
-import { MCP_NO_WRITE, MCP_PROVENANCE as PROVENANCE, pretty, withIgnored } from './shared'
+import {
+  internalError,
+  MCP_NO_WRITE,
+  MCP_PROVENANCE as PROVENANCE,
+  pretty,
+  withIgnored,
+} from './shared'
 import { TEAM_TOOLS } from './teams'
 
 /* --------------------------------------------------------------- the tools
@@ -1151,8 +1157,12 @@ async function callTool(
         result: { content: [{ type: 'text', text: data.message }], isError: true },
       }
     }
-    const text = e instanceof Error ? e.message : String(e)
-    return { kind: 'result', result: { content: [{ type: 'text', text }], isError: true } }
+    // a failure that is no refusal, such as a Convex limit, whose own text
+    // can hold a stack trace
+    return {
+      kind: 'result',
+      result: { content: [{ type: 'text', text: internalError(e) }], isError: true },
+    }
   }
 }
 
@@ -2219,7 +2229,7 @@ const mcpPost = httpAction(async (ctx, request) => {
         [CALLER_GONE, CALLER_DEACTIVATED].includes((error.data as Refusal).reason || '')
       )
         return unauthorized('OAuth connection is invalid, expired or disconnected')
-      return jsonRes(500, { error: String(error) })
+      return jsonRes(500, { error: internalError(error) })
     }
   }
   const res = await authenticateSecret(ctx, secret)
@@ -2269,7 +2279,7 @@ const mcpPost = httpAction(async (ctx, request) => {
         return unauthorized(cred.isAgent ? MCP_AUTH_401.agent : MCP_AUTH_401.person)
       }
     }
-    return jsonRes(500, { error: String(e) })
+    return jsonRes(500, { error: internalError(e) })
   }
 })
 

@@ -722,6 +722,11 @@ and `set_team` and `set_team_member` for teams. This pre-launch rename
 replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
+A refused tool call answers its refusal sentence as the tool's error result
+(`isError: true`). A failure that is not a refusal, such as a server limit,
+answers `internal error` there instead, and outside a tool call it is an HTTP
+`500` with the same error. Qivo keeps its details in its own logs.
+
 | Tool | What it does |
 |---|---|
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |

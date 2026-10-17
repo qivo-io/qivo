@@ -33,7 +33,9 @@
  * Refusal mapping: ConvexError e.data.code → {not_found:404, forbidden:403,
  * bad_request:400, rule:400}, body {"error": message}; the CALLER_GONE /
  * CALLER_DEACTIVATED race reasons map back to the caller's own 401 sentences
- * BEFORE the code map; anything else → 500 {"error": String(e)}. */
+ * BEFORE the code map; anything else → 500 {"error": "internal error"},
+ * with the error itself only in the deployment's log (shared.ts
+ * internalError). */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
@@ -138,6 +140,7 @@ import { RECORD_ROUTES } from './records'
 import { type MachineEntry, type Principal, runEntry } from './registry'
 import {
   REST_CALLER as CALLER,
+  internalError,
   needJson,
   restProvenance as provenanceOf,
   vKeyName,
@@ -1292,7 +1295,7 @@ const STATUS_OF: Partial<Record<string, number>> = {
 /* The REST response for an error a route threw. A caller gone or
  * deactivated since auth gets its own 401 sentence, a refusal whose code
  * STATUS_OF maps gets that status and its message, and anything else is a
- * 500 with its text. */
+ * 500 with INTERNAL_ERROR, because its own text can hold a stack trace. */
 function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>
@@ -1303,7 +1306,7 @@ function refusalResponse(e: unknown, kind: ProfileKind): Response {
     const status = data.code !== undefined ? STATUS_OF[data.code] : undefined
     if (status !== undefined && data.message !== undefined) return err(data.message, status)
   }
-  return err(String(e), 500)
+  return err(internalError(e), 500)
 }
 
 /** Webhook lifecycle and inspection, the only REST routes that also accept

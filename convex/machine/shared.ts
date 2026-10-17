@@ -43,6 +43,18 @@ export const REST_CALLER = {
   { gone: string; deactivated: string; noWrite: string; commentAuthor: string }
 >
 
+/** The error REST and MCP answer for a failure that is no refusal, such as
+ * a Convex read limit. Such a failure's own text can name source files and
+ * hold a stack trace, so only the deployment's log keeps it. */
+export const INTERNAL_ERROR = 'internal error'
+
+/** Logs `e`, a failure that is no refusal, and returns INTERNAL_ERROR for
+ * the answer. */
+export function internalError(e: unknown): string {
+  console.error(e)
+  return INTERNAL_ERROR
+}
+
 /** The provenance an MCP write's activity row carries. */
 export const MCP_PROVENANCE = 'via MCP'
 
