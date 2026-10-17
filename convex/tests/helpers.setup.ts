@@ -336,6 +336,36 @@ export async function withOrg(t: T) {
 
 export type OrgFixture = Awaited<ReturnType<typeof withOrg>>
 
+/* A third sub-project of TBED that `profile` cannot see. Their grant on TBED
+ * moves onto FW and PCB, which it reached before. A subtask stays in its
+ * parent's top-level project, so a parent hidden from someone who sees its
+ * subtask sits in a sibling sub-project like this one. */
+export async function plantHiddenSibling(
+  t: T,
+  f: OrgFixture,
+  profile: Doc<'profiles'>,
+): Promise<Doc<'projects'>> {
+  const sibling = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+  await t.run(async (ctx) => {
+    const onMeta = await ctx.db
+      .query('project_access')
+      .withIndex('by_project_profile', (q) =>
+        q.eq('project_id', f.meta.id).eq('profile_id', profile.id),
+      )
+      .unique()
+    if (onMeta === null) throw new Error('the profile holds no grant on TBED')
+    await ctx.db.delete(onMeta._id)
+    for (const project_id of [f.sub.id, f.sub2.id]) {
+      await ctx.db.insert('project_access', {
+        project_id,
+        profile_id: profile.id,
+        level: onMeta.level,
+      })
+    }
+  })
+  return sibling
+}
+
 /** A mutation context over the Better Auth component's own tables. */
 type AuthComponentCtx = GenericMutationCtx<DataModelFromSchemaDefinition<typeof authSchema>>
 

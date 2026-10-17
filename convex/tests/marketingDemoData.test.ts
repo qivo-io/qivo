@@ -149,6 +149,19 @@ describe('the versioned Northstar marketing scenario', () => {
     // the stronger `user` level when the demo is seeded.
   })
 
+  it("keeps every subtask in its parent task's top-level project", () => {
+    const topOf = (projectKey: string) => {
+      const project = projects.find((candidate) => candidate.key === projectKey)!
+      return project.parent ?? project.key
+    }
+    const subtasks = issues.filter((issue) => issue.parent !== undefined)
+    expect(subtasks.length).toBeGreaterThan(0)
+    for (const issue of subtasks) {
+      const parent = issues.find((candidate) => candidate.key === issue.parent)!
+      expect(topOf(issue.project), issue.key).toBe(topOf(parent.project))
+    }
+  })
+
   it('archives exactly two completed leaf tasks in each main project', () => {
     const archived = issues.filter((issue) => issue.archived)
     expect(archived).toHaveLength(6)

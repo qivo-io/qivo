@@ -10,7 +10,8 @@
  *   guards      resolve project (not_found) → meta guard → archived-project
  *               arrival → num assign + org pin (0057: the org MUST be pinned
  *               from the project before the parent same-org check can run) →
- *               parent chain guard incl. same-org → archive-parent guard →
+ *               parent chain guard incl. same-org and same top-level
+ *               project → archive-parent guard →
  *               assignee guard (only when changed) → reviewer guard (only
  *               when changed; refused on a task with subtasks) → remaining
  *               guard (0072: the guard raises BEFORE the stamp) → status
@@ -472,23 +473,52 @@ export const PAUSE_RULE = 'a Done or Backlog task cannot be paused'
 export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause its subtasks instead'
 
 /* -------------------------------------------------- the parent link fence
- * issues_check_parent (0057:38-85, final). Caller must pass the row's PINNED
- * org (0057:27-30: org from the project first, THEN this check). A parent the
- * actor cannot see (missing, in another organization or in a hidden project)
- * answers 'parent task not found' before any other guard describes it.
- * Attaching changes the parent (it becomes a group and loses its own hours),
- * so it also needs Edit on the parent's project, like any other change to it.
- * Returns the parent row for the follow-up guards. */
-export async function assertParentChain(
+ * issues_check_parent (0057:38-85, final), plus the subtask family rule. The
+ * caller must pass the row's PINNED org (0057:27-30: org from the project
+ * first, THEN this check). A parent the actor cannot see (missing, in another
+ * organization or in a hidden project) answers 'parent task not found' before
+ * any other guard describes it. Attaching changes the parent (it becomes a
+ * group and loses its own hours), so it also needs Edit on the parent's
+ * project, like any other change to it. A subtask stays in its parent's
+ * top-level project, in any of its sub-projects. */
+
+/** The top-level project a project belongs to, which is its parent or itself. */
+export const topLevelOf = (project: Pick<Doc<'projects'>, 'id' | 'parent_id'>): string =>
+  project.parent_id ?? project.id
+
+/* Refused by assertParentChain for a parent in another top-level project. */
+export const SUBTASK_PROJECT_RULE =
+  'a subtask must be in the same project as its parent task, in any of its sub-projects'
+
+/** Why parentChainCheck refuses a parent, in the order it checks. `cycle`
+ * means the parent is below the child; `deep_or_cyclic` that the chain above
+ * the parent is longer than 20 tasks or loops on itself; `too_deep` that the
+ * joined chain would be deeper than 20 tasks. */
+export type ParentProblem =
+  | 'self'
+  | 'not_found'
+  | 'no_write'
+  | 'other_project'
+  | 'cycle'
+  | 'deep_or_cyclic'
+  | 'too_deep'
+
+/** Checks a proposed parent link without throwing, for writers that adapt
+ * instead of refusing (a restore clears a parent that no longer qualifies).
+ * `child.project_id` is the project the child will be in after the write.
+ * Checks the cheapest facts first, and a parent the actor cannot see is
+ * `not_found` before anything else describes it. */
+export async function parentChainCheck(
   ctx: QueryCtx,
-  issue: { id: string; org_id: string },
+  child: { id: string; org_id: string; project_id: string },
   parentId: string,
   actor: Doc<'profiles'>,
-): Promise<Doc<'issues'>> {
-  if (parentId === issue.id) throw rule('a task cannot be its own parent')
+): Promise<{ ok: true; parent: Doc<'issues'> } | { ok: false; problem: ParentProblem }> {
+  const no = (problem: ParentProblem) => ({ ok: false, problem }) as const
+  if (parentId === child.id) return no('self')
   const parent = await byId(ctx, 'issues', parentId)
   const parentProject =
-    parent === null || parent.org_id !== issue.org_id
+    parent === null || parent.org_id !== child.org_id
       ? null
       : await byId(ctx, 'projects', parent.project_id)
   if (
@@ -496,27 +526,29 @@ export async function assertParentChain(
     parentProject === null ||
     !(await canSeeProject(ctx, actor, parentProject))
   ) {
-    throw notFound('parent task not found')
+    return no('not_found')
   }
-  if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) {
-    throw forbidden('no write access to the parent task')
+  if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) return no('no_write')
+  const childProject = await byId(ctx, 'projects', child.project_id)
+  if (childProject === null || topLevelOf(childProject) !== topLevelOf(parentProject)) {
+    return no('other_project')
   }
   // upward walk: bound the chain above the attach point
   let cur: string | undefined = parentId
   let up = 0
   while (cur !== undefined) {
     up += 1
-    if (up > 20) throw rule('task hierarchy too deep or cyclic')
+    if (up > 20) return no('deep_or_cyclic')
     const row: Doc<'issues'> | null = await byId(ctx, 'issues', cur)
     cur = row?.parent_id
-    if (cur === issue.id) throw rule('task parent cycle detected')
+    if (cur === child.id) return no('cycle')
   }
   // downward measure (0038 fix 1): the height of the subtree hanging under
   // the row, capped at 24 so the walk stays finite over corrupt cycles — a
   // reparent must not merge two legal chains into one deeper than the
   // cascade budget
   let down = 0
-  let frontier = [issue.id]
+  let frontier = [child.id]
   while (frontier.length > 0 && down < 24) {
     const next: string[] = []
     for (const id of frontier) {
@@ -527,8 +559,34 @@ export async function assertParentChain(
     down += 1
     frontier = next
   }
-  if (up + 1 + down > 20) throw rule('task hierarchy too deep')
-  return parent
+  if (up + 1 + down > 20) return no('too_deep')
+  return { ok: true, parent }
+}
+
+/* The refusal for each problem: `rule` sentences for the chain's shape,
+ * the uniform not-found answer and the parent's write refusal. */
+const PARENT_REFUSALS: Record<ParentProblem, () => ReturnType<typeof rule>> = {
+  self: () => rule('a task cannot be its own parent'),
+  not_found: () => notFound('parent task not found'),
+  no_write: () => forbidden('no write access to the parent task'),
+  other_project: () => rule(SUBTASK_PROJECT_RULE),
+  cycle: () => rule('task parent cycle detected'),
+  deep_or_cyclic: () => rule('task hierarchy too deep or cyclic'),
+  too_deep: () => rule('task hierarchy too deep'),
+}
+
+/** parentChainCheck as a guard. It refuses a parent that does not qualify
+ * and returns the parent row for the follow-up guards. */
+export async function assertParentChain(
+  ctx: QueryCtx,
+  child: { id: string; org_id: string; project_id: string },
+  parentId: string,
+  actor: Doc<'profiles'>,
+): Promise<Doc<'issues'>> {
+  const check = await parentChainCheck(ctx, child, parentId, actor)
+  // compared, not tested for truth, because the app's loose tsconfig narrows only so
+  if (check.ok === false) throw PARENT_REFUSALS[check.problem]()
+  return check.parent
 }
 
 /* issue_archive_parent_guard (0070:65-82): an ACTIVE row under an ARCHIVED
@@ -835,14 +893,17 @@ export async function browserVerbDetail(
  *   move    detail = the browser's destination sentence plus the provenance
  *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail
  *   move's and update's `later` name the people a later write of the same
- *           machine update sets (LaterPeople) */
+ *           machine update sets (LaterPeople)
+ *   move's `laterParent` is the parent the same machine update sets after
+ *           the move (a task id, or null to detach); absent when the update
+ *           leaves the parent alone */
 export type MachineNarration = { provenance: string }
 export type MachineUpdate = MachineNarration & {
   archive?: boolean
   appGrammar?: boolean
   later?: LaterPeople
 }
-export type MachineMove = MachineNarration & { later?: LaterPeople }
+export type MachineMove = MachineNarration & { later?: LaterPeople; laterParent?: string | null }
 
 /**
  * The assignee and reviewer that a later write of the same machine update
@@ -912,7 +973,8 @@ export async function createIssueCore(
   const description = cleanDescription(args.description)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
-    const parent = await assertParentChain(ctx, { id: args.id, org_id }, parent_id, me)
+    const child = { id: args.id, org_id, project_id: project.id }
+    const parent = await assertParentChain(ctx, child, parent_id, me)
     assertParentActive(parent, undefined) // a fresh row is active
   }
   const assignee_id = args.assignee_id ?? undefined
@@ -1271,19 +1333,177 @@ export async function updateIssueCore(
 /* ------------------------------------------------------------- move core
  * issues_move_guard (0078:127-145) + the arrival guard (0106), in trigger
  * order: not-found → meta ("live", not "created" — a different sentence from
- * the insert guard) → cross-org → archived target → destination eligibility
- * for the assignee and the reviewer. A group's reviewer is dormant and hidden
- * in the app, so it never refuses a move: one the destination would refuse
- * is cleared in the move's patch instead (adapt, don't reject, as
- * clearParentRemaining does). num is org-scoped and immutable: the key
- * survives the move; labels survive too (org vocabulary). The activity row is
- * keyed to the SOURCE project and records the destination as its related
- * project. issues.move and the machine moves check Edit on BOTH ends before
- * calling this, and the write gate here checks them again before any guard,
- * so these guards only ever describe a destination the caller can write. A
- * machine update that also sets the assignee or reviewer (MachineMove.later)
- * is checked with the people the task ends up with. The task's attachment
- * rows take the new project too. */
+ * the insert guard) → cross-org → archived target → the subtask family rule
+ * → destination eligibility for the assignee and the reviewer → the carried
+ * subtasks → sight for the people on the subtasks. A group's reviewer is
+ * dormant and hidden in the app, so it never refuses a move: one the
+ * destination would refuse is cleared in the move's patch instead (adapt,
+ * don't reject, as clearParentRemaining does). num is org-scoped and
+ * immutable: the key survives the move; labels survive too (org vocabulary).
+ * The activity row is keyed to the SOURCE project and records the
+ * destination as its related project. issues.move and the machine moves
+ * check Edit on BOTH ends before calling this, and the write gate here
+ * checks them again before any guard, so these guards only ever describe a
+ * destination the caller can write. A machine update that also sets the
+ * assignee or reviewer (MachineMove.later) is checked with the people the
+ * task ends up with. The task's attachment rows take the new project too.
+ *
+ * A subtask stays in its parent's top-level project. A move within the
+ * task's top-level project changes nothing else. A move to another one
+ * carries every subtask outside the destination's top-level project along,
+ * archived ones included, and a subtask must land in its parent's top-level
+ * project or leave its parent in the same change, through the app's
+ * `detachParent` or a machine update's later parent
+ * (MachineMove.laterParent). The carried
+ * subtasks are touched, take their attachment rows along and send a
+ * task.updated event each. They get no message or activity row of their
+ * own, because the task's one message and row tell the move, as the archive
+ * cascade does. */
+
+export const MOVE_SUBTASK_RULE =
+  "a subtask stays in its parent task's project; to move it to another project, detach it from its parent in the same change"
+export const MOVE_SUBTREE_EDIT_RULE =
+  'moving this task would move a subtask in a project you cannot edit; an organization admin can move it'
+export const MOVE_SUBTREE_HOLDER_RULE =
+  'someone assigned to or reviewing a subtask of this task cannot edit that sub-project'
+/* The most subtasks, at any depth and archived ones included, that a task
+ * moving to another top-level project may have. The move reads them all,
+ * including any already in the destination's top-level project. */
+export const MOVE_SUBTREE_MAX = 200
+export const MOVE_SUBTREE_TOO_LARGE = `this task has more than ${MOVE_SUBTREE_MAX} subtasks; detach some of them first, or move it within its project`
+
+/* Attachment rows carry their task's project for the storage totals
+ * (model/billing.ts storageUsage), so they move with the task and with each
+ * subtask a move carries. */
+async function moveAttachmentRows(
+  ctx: MutationCtx,
+  issueId: string,
+  projectId: string,
+): Promise<void> {
+  const files = await ctx.db
+    .query('issue_attachments')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .collect()
+  for (const file of files) await ctx.db.patch(file._id, { project_id: projectId })
+}
+
+/* Per-call cache from a project id to its top-level project id, null for a
+ * missing project. */
+function topLevelCache(ctx: QueryCtx): (projectId: string) => Promise<string | null> {
+  const seen = new Map<string, Promise<string | null>>()
+  return (projectId) => {
+    let top = seen.get(projectId)
+    if (top === undefined) {
+      top = byId(ctx, 'projects', projectId).then((p) => (p === null ? null : topLevelOf(p)))
+      seen.set(projectId, top)
+    }
+    return top
+  }
+}
+
+/* The subtasks of the task `rootId` at any depth, active or archived,
+ * breadth first, each with its level below the task (1 for a child). A task
+ * met twice, which only a corrupt cycle causes, is skipped. Callers bound
+ * the walk and may stop it early. */
+async function* subtasksOf(
+  ctx: QueryCtx,
+  rootId: string,
+): AsyncGenerator<{ row: Doc<'issues'>; level: number }> {
+  const seen = new Set<string>([rootId])
+  let frontier = [rootId]
+  for (let level = 1; frontier.length > 0; level++) {
+    const next: string[] = []
+    for (const pid of frontier) {
+      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', pid))
+      for await (const row of kids) {
+        if (seen.has(row.id)) continue
+        seen.add(row.id)
+        next.push(row.id)
+        yield { row, level }
+      }
+    }
+    frontier = next
+  }
+}
+
+/** Whether moving `issue` to `target` would carry subtasks along, for the
+ * app's Move window, whose view holds no archived subtasks. A move within
+ * the task's top-level project carries none. The walk stops at the first
+ * subtask that would move. Past the bounds moveIssueCore refuses at, it
+ * answers false, because such a move carries nothing. */
+export async function subtasksWouldMove(
+  ctx: QueryCtx,
+  issue: Doc<'issues'>,
+  target: Doc<'projects'>,
+): Promise<boolean> {
+  const source = await byId(ctx, 'projects', issue.project_id)
+  const dst = topLevelOf(target)
+  if (source === null || topLevelOf(source) === dst) return false
+  const topOf = topLevelCache(ctx)
+  let read = 0
+  for await (const { row, level } of subtasksOf(ctx, issue.id)) {
+    read += 1
+    if (level >= 20 || read > MOVE_SUBTREE_MAX) return false
+    if ((await topOf(row.project_id)) !== dst) return true
+  }
+  return false
+}
+
+/* The subtasks a move to `target` carries, which are the descendants of
+ * `root`, at any depth and active or archived, whose project is outside the
+ * target's top-level project. Before anything is written, each needs Edit
+ * on its project, and an active one needs an assignee and a leaf reviewer
+ * who can hold it at the target. A group's dormant reviewer who cannot is cleared
+ * (`clearReviewer`), as for the moved task. Archived subtasks keep their
+ * people unchecked, as an archived task's people are. The walk reads every
+ * descendant and refuses past MOVE_SUBTREE_MAX of them or 20 levels. */
+async function subtreeToCarry(
+  ctx: QueryCtx,
+  a: {
+    root: Doc<'issues'>
+    target: Doc<'projects'>
+    actor: Doc<'profiles'>
+    topOf: (projectId: string) => Promise<string | null>
+  },
+): Promise<{ row: Doc<'issues'>; clearReviewer: boolean }[]> {
+  const below: Doc<'issues'>[] = []
+  for await (const { row, level } of subtasksOf(ctx, a.root.id)) {
+    if (level >= 20) throw rule('task hierarchy too deep to move')
+    if (below.length >= MOVE_SUBTREE_MAX) throw rule(MOVE_SUBTREE_TOO_LARGE)
+    below.push(row)
+  }
+  // the walk read every subtask, so a group is one with an active subtask among them
+  const groups = new Set(below.filter((c) => c.archived_at === undefined).map((c) => c.parent_id))
+  const dst = topLevelOf(a.target)
+  const editable = editableBy(ctx, a.actor)
+  const holds = new Map<string, Promise<boolean>>()
+  const canHold = (profileId: string): Promise<boolean> => {
+    let result = holds.get(profileId)
+    if (result === undefined) {
+      result = canHoldTaskIn(ctx, a.target, profileId)
+      holds.set(profileId, result)
+    }
+    return result
+  }
+  const carried: { row: Doc<'issues'>; clearReviewer: boolean }[] = []
+  for (const c of below) {
+    if ((await a.topOf(c.project_id)) === dst) continue
+    if (!(await editable(c.project_id))) throw rule(MOVE_SUBTREE_EDIT_RULE)
+    let clearReviewer = false
+    if (c.archived_at === undefined) {
+      if (c.assignee_id !== undefined && !(await canHold(c.assignee_id))) {
+        throw rule(MOVE_SUBTREE_HOLDER_RULE)
+      }
+      if (c.reviewer_id !== undefined && !(await canHold(c.reviewer_id))) {
+        if (!groups.has(c.id)) throw rule(MOVE_SUBTREE_HOLDER_RULE)
+        clearReviewer = true
+      }
+    }
+    carried.push({ row: c, clearReviewer })
+  }
+  return carried
+}
+
 export async function moveIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1291,6 +1511,8 @@ export async function moveIssueCore(
     issue: Doc<'issues'>
     project_id: string
     now: string
+    /* the app's detach_parent, with which the task also leaves its parent */
+    detachParent?: boolean
     machine?: MachineMove
   },
 ): Promise<Doc<'issues'>> {
@@ -1305,6 +1527,26 @@ export async function moveIssueCore(
   }
   if (target.org_id !== issue.org_id) throw rule('tasks cannot move between organizations')
   assertProjectArrival(target)
+  const topOf = topLevelCache(ctx)
+  const dst = topLevelOf(target)
+  const source = await byId(ctx, 'projects', issue.project_id)
+  const crosses = source !== null && topLevelOf(source) !== dst
+  // A subtask moving to another top-level project must land in its parent's
+  // or leave the parent in the same change. A later parent in the
+  // destination's top-level project is checked in full by the write that
+  // sets it. An older subtask already outside its parent's top-level project
+  // stays movable within its own and into its parent's.
+  const detach = a.detachParent === true && issue.parent_id !== undefined
+  if (crosses && issue.parent_id !== undefined && !detach) {
+    const parent = await byId(ctx, 'issues', issue.parent_id)
+    if (parent !== null && (await topOf(parent.project_id)) !== dst) {
+      const laterParent = a.machine?.laterParent
+      const next = laterParent ? await byId(ctx, 'issues', laterParent) : null
+      const leaves =
+        laterParent === null || (next !== null && (await topOf(next.project_id)) === dst)
+      if (!leaves) throw rule(MOVE_SUBTASK_RULE)
+    }
+  }
   // The assignee and a leaf's reviewer must be eligible in the destination;
   // a group's dormant reviewer who is not is cleared instead. Someone a later
   // write of the same machine update replaces is left to that write, which
@@ -1315,6 +1557,7 @@ export async function moveIssueCore(
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
   const w: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
+  if (detach) w.parent_id = undefined // ctx.db.patch unsets it
   // only a reviewer can change hands in a move, so without one the group
   // flag is never needed
   let isGroup = false
@@ -1328,6 +1571,10 @@ export async function moveIssueCore(
       w.reviewer_id = undefined // ctx.db.patch unsets it
     }
   }
+  // to another top-level project, the subtasks outside it come along
+  const carried = crosses
+    ? await subtreeToCarry(ctx, { root: issue, target, actor: me, topOf })
+    : []
   // whoever works on a subtask must still see this task once it moves, so
   // every active assignee or reviewer below it needs access to the
   // destination (the sentence names no one: some subtasks may be hidden)
@@ -1336,21 +1583,24 @@ export async function moveIssueCore(
     if (!profile?.active) continue
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
   }
-  const source = await byId(ctx, 'projects', issue.project_id)
   const before = { ...issue }
   await ctx.db.patch(issue._id, w)
-  // Attachment rows carry their task's project for the storage totals
-  // (model/billing.ts storageUsage), so they move with the task.
-  for (const file of await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-    .collect())
-    await ctx.db.patch(file._id, { project_id })
+  await moveAttachmentRows(ctx, issue.id, project_id)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
+  for (const { row, clearReviewer } of carried) {
+    const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
+    if (clearReviewer) patch.reviewer_id = undefined
+    await ctx.db.patch(row._id, patch)
+    await moveAttachmentRows(ctx, row.id, project_id)
+    const landed = (await ctx.db.get(row._id)) as Doc<'issues'>
+    await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })
+  }
   // a group stays with its assignee: clearing its reviewer hands nothing over
   await notifyIssueUpdate(ctx, { before, after, actor: me, now, isGroup })
   // snapshot.ts isUnrecordedProjectMove recognizes older rows by this wording
-  const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}`
+  const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}${
+    carried.length > 0 ? ' with its subtasks' : ''
+  }`
   const event = {
     org_id: issue.org_id,
     actor_id: me.id,
@@ -1364,6 +1614,22 @@ export async function moveIssueCore(
     ts: now,
   }
   await logActivity(ctx, event)
+  // leaving the parent gets the row a detach writes, as a machine update's
+  // later parent step does
+  if (detach) {
+    const detached = await browserVerbDetail(ctx, { before, after, patch: { parent_id: null } })
+    await logActivity(ctx, {
+      org_id: issue.org_id,
+      actor_id: me.id,
+      verb: detached.verb,
+      target_type: 'issue',
+      target_id: issue.id,
+      label: after.title,
+      detail: detached.detail,
+      project_id: after.project_id,
+      ts: now,
+    })
+  }
   return after
 }
 

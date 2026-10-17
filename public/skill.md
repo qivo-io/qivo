@@ -202,7 +202,8 @@ Useful field rules:
 
 - **Subtask:** create the task with `parent` set to the parent's task
   reference. You need User or Lead access on the parent's project, because the
-  parent becomes a group and loses its own remaining hours. Change the parent
+  parent becomes a group and loses its own remaining hours. A subtask stays in
+  its parent's top-level project, in any of its sub-projects. Change the parent
   later with `parent` on `update_task` or PATCH, or detach it with
   `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list `subtasks`; a
   `parent_id` of `null` with `has_hidden_parent: true` means the parent
@@ -211,7 +212,11 @@ Useful field rules:
   meta-project, on `update_task` or PATCH. You need User or Lead access on
   both sub-projects, and the task's assignee and reviewer must be able to work
   in the destination. If they cannot, send a new `assignee_id` or
-  `reviewer_id`, or `null`, in the same request. The task keeps its key.
+  `reviewer_id`, or `null`, in the same request. The task keeps its key. A
+  move to another top-level project carries the task's subtasks along, so a
+  task with more than 200 subtasks cannot make it. A subtask moved there must
+  leave its parent in the same request, with `parent: null` or a new parent
+  in that project.
 - **Link:** `set_task_link` with `ref`, `other`, `kind` (`blocks`,
   `blocked_by` or `relates`, as seen from `ref`) and `linked`, or the REST
   links routes. Two tasks share at most one link; remove a link before

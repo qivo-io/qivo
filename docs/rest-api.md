@@ -917,8 +917,10 @@ access on the parent's project, because the parent becomes a group and
 loses its own remaining hours. A parent the caller cannot read answers `400` with `parent
 task not found`; one it can read but not edit answers `403` with `no write
 access to the parent task`. The new task's project still comes from
-`project` and `sub_project`, so a subtask may live in another sub-project
-than its parent. A chain of subtasks is at most 20 tasks deep.
+`project` and `sub_project`. A subtask may live in another sub-project than
+its parent, but not in another top-level project. Such a parent answers
+`400` with `a subtask must be in the same project as its parent task, in any
+of its sub-projects`. A chain of subtasks is at most 20 tasks deep.
 
 Tasks have Reporter, Assignee and Reviewer. The reporter identifies the Qivo
 user who reported the work and is fixed when the task is created. Omitting
@@ -977,12 +979,34 @@ must be able to see it; otherwise the PATCH is a `400` and nothing changes. A
 group's own reviewer who cannot work there is cleared. An `assignee_id` or
 `reviewer_id` in the same PATCH, `null` included, takes the place of the
 current one in this check, and a new one is checked against the destination.
-A moved task keeps its number, its labels, its links and its subtasks, which
-stay in their own sub-projects. Naming the current sub-project changes
-nothing.
+A moved task keeps its number, its labels, its links and its subtasks.
+Naming the current sub-project changes nothing.
+
+A move within the task's top-level project moves only the task. A move to a
+sub-project of another top-level project also moves every subtask, at any
+depth and archived ones included, that is not already in that top-level
+project. The caller needs Edit access on each of their projects (otherwise
+`400`, `moving this task would move a subtask in a project you cannot edit;
+an organization admin can move it`), and the assignee and the reviewer of
+each active subtask without subtasks of its own must be able to work in the
+destination (otherwise `400`, `someone assigned to or reviewing a subtask of
+this task cannot edit that sub-project`); a group's own reviewer who cannot
+is cleared. A task with more than 200 subtasks, counting every depth and
+archived ones, cannot move to another top-level project (otherwise `400`,
+`this task has more than 200 subtasks; detach some of them first, or move it
+within its project`). Each moved subtask sends `task.updated`, but only
+the task itself gets an activity row and an inbox message. A subtask moved to
+another top-level project must leave its parent in the same request, with
+`parent: null` or a new parent in the destination's top-level project;
+otherwise the PATCH is a `400` with `a subtask stays in its parent task's
+project; to move it to another project, detach it from its parent in the
+same change`. A subtask created before this rule in another top-level
+project than its parent can still move within its own top-level project and
+into its parent's.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
-and `null` detaches it. The rules are those of `parent` on POST. Setting the
+and `null` detaches it. The rules are those of `parent` on POST, against
+the task's project after any move in the same PATCH. Setting the
 parent to the task itself or to one of its own subtasks is a `400`, and so
 is a parent that is archived while the task is active. A new parent must be
 visible to the task's assignee and reviewer and to everyone working on its

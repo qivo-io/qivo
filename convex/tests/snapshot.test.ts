@@ -1282,10 +1282,20 @@ describe('activity', () => {
 
   it('a row that names another task reaches only people who can access that task where it is now', async () => {
     const subOnly = await seatOn(f.sub.id)
+    // a subtask stays in its parent's top-level project, so the parent the
+    // seats cannot see is in a third sub-project of Testbed
+    const bothSubs = await seatOn(f.sub.id)
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.sub2.id,
+        profile_id: bothSubs.id,
+        level: 'user',
+      }),
+    )
     const hiddenSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
-      parent_id: f.hidden.id,
+      parent_id: f.meta.id,
     })
     const task = (project_id: string) => plantIssue(t, { org_id: f.org.id, project_id })
     const child = await task(f.sub.id)
@@ -1294,7 +1304,7 @@ describe('activity', () => {
     const hiddenParent = await task(hiddenSub.id)
     const linkSame = await task(f.sub.id)
     const linkSibling = await task(f.sub2.id)
-    const writer = as(t, f.user) // leads f.meta and f.hidden
+    const writer = as(t, f.user) // leads f.meta
     const reparent = (parent_id: string | null) =>
       writer.mutation(api.issues.update, { org_id: f.org.id, id: child.id, patch: { parent_id } })
     const link = (target_id: string) =>
@@ -1338,7 +1348,7 @@ describe('activity', () => {
     }
     const all = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
     for (const p of [f.admin, f.user]) expect(await seenRows(p)).toEqual(all)
-    expect(await seenRows(f.guest)).toEqual(['A', 'B', 'E', 'F'])
+    expect(await seenRows(bothSubs)).toEqual(['A', 'B', 'E', 'F'])
     expect(await seenRows(subOnly)).toEqual(['A', 'E'])
     // the named task's CURRENT project decides
     await writer.mutation(api.issues.move, {
@@ -1349,7 +1359,7 @@ describe('activity', () => {
     expect(await seenRows(subOnly)).toEqual(['A', 'E', 'F'])
     // a deleted named task, or wording no writer produces, reaches admins only
     await writer.mutation(api.issues.deleteDeep, { org_id: f.org.id, id: sameParent.id })
-    expect(await seenRows(f.guest)).toEqual(['E', 'F'])
+    expect(await seenRows(bothSubs)).toEqual(['E', 'F'])
     expect(await seenRows(f.admin)).toEqual(all)
   })
 

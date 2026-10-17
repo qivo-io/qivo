@@ -1614,8 +1614,10 @@ export function destinationOf(
  * own rules and write gate, so a refusal at any step undoes the whole
  * update. The move and the parent are checked with the assignee and
  * reviewer the task ends up with, so the ones `patch` sets or clears take
- * the place of the current ones (model/issues.ts LaterPeople). Answers the
- * task as written.
+ * the place of the current ones (model/issues.ts LaterPeople). A subtask
+ * moved to another top-level project must leave its parent in the same
+ * update, so the move is told the `parent` that follows it
+ * (MachineMove.laterParent). Answers the task as written.
  */
 export async function applyTaskUpdate(
   ctx: MutationCtx,
@@ -1646,7 +1648,9 @@ export async function applyTaskUpdate(
       issue: task,
       project_id: a.destination.id,
       now,
-      machine: { provenance, later },
+      // a subtask may leave its parent's top-level project only when this
+      // update also gives it another parent, or none
+      machine: { provenance, later, laterParent: a.parent },
     })
   }
   if (a.parent !== undefined && (a.parent ?? undefined) !== task.parent_id) {
