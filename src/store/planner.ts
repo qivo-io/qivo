@@ -296,6 +296,10 @@ const pendingRestoreIssueIds = new Set<string>()
    with whether its subtasks were kept, so that rollback from the stale server
    snapshot cannot briefly resurrect the archived working set. */
 const pendingArchiveIssueIds = new Map<string, { keepSubtasks: boolean }>()
+/* Accepted deletes, kept for the same reason as archives: the tasks a task
+   delete removed, by root, and the projects a project delete removed. */
+const pendingTaskDeletes = new Map<string, Set<string>>()
+const pendingProjectDeletes = new Set<string>()
 
 function issueSubtree(rootId: string): Set<string> {
   const subtree = new Set<string>([rootId])
@@ -364,8 +368,16 @@ function mirrorArchive(rootId: string, keepSubtasks: boolean) {
    project and its sub-projects in one transaction and moves their tasks to
    Deleted items in steps, so the next delivery already lacks all of them. */
 function mirrorProjectDelete(id: string) {
+  if (!dropProjectRows(id)) return
+  rebuild()
+  emit()
+}
+
+/* The rows part of mirrorProjectDelete. Answers whether the project was
+   still here. */
+function dropProjectRows(id: string): boolean {
   const row = rows.projects.get(id)
-  if (!row) return
+  if (!row) return false
   const ids =
     row.type === 'meta'
       ? [id, ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id)]
@@ -386,13 +398,35 @@ function mirrorProjectDelete(id: string) {
   ids.forEach((pid) => {
     rows.projects.delete(pid)
   })
-  rebuild()
-  emit()
+  return true
 }
 
-function reapplyPendingArchives() {
+/* The rows part of a task delete: the tasks in `gone` leave, and their
+   subtasks outside it become top-level tasks, as the server detaches them. */
+function dropDeletedTasks(gone: Set<string>) {
+  rows.issues.forEach((r) => {
+    // the SET NULL cascade fires the touch server-side — mirror both
+    if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
+      r.parent_id = undefined
+      r.updated_at = new Date().toISOString()
+    }
+  })
+  // the rows, and everything hung on them: links, labels, attachments,
+  // inbox messages, load and the watched comment thread
+  purgeIssueRows(gone)
+}
+
+/* Applies every accepted archive and delete again after a rollback to a
+   server snapshot that predates them. */
+function reapplyAcceptedRemovals() {
   pendingArchiveIssueIds.forEach(({ keepSubtasks }, rootId) => {
     mirrorArchive(rootId, keepSubtasks)
+  })
+  pendingTaskDeletes.forEach((gone) => {
+    dropDeletedTasks(gone)
+  })
+  pendingProjectDeletes.forEach((id) => {
+    dropProjectRows(id)
   })
 }
 
@@ -1065,9 +1099,9 @@ function run<T>(
         snapDirty = false
         commentsDirty = false
         if (serverSnap) adopt(serverSnap)
-        /* A successful archive may still be awaiting its reactive delivery;
-           preserve that optimistic boundary if another write refuses first. */
-        reapplyPendingArchives()
+        /* A successful archive or delete may still be awaiting its reactive
+           delivery; preserve that boundary if another write refuses first. */
+        reapplyAcceptedRemovals()
         adoptComments()
         rebuild()
         emit()
@@ -3746,18 +3780,15 @@ export const PLANNER = {
     // local mirror of the delete; the server moves the rows to Deleted items
     // (convex/model/deletedItems.ts) and keeps the attachment bytes there
     const mirror = () => {
-      rows.issues.forEach((r) => {
-        // the SET NULL cascade fires the touch server-side — mirror both
-        if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
-          r.parent_id = undefined
-          r.updated_at = new Date().toISOString()
-        }
-      })
-      // the rows, and everything hung on them: links, labels, attachments,
-      // inbox messages, load and the watched comment thread
-      purgeIssueRows(gone)
+      dropDeletedTasks(gone)
       rebuild()
       emit()
+    }
+    const epoch = storeEpoch
+    // kept until a delivery no longer holds them (adopt), so a rollback after
+    // another refused write cannot bring them back meanwhile
+    const accepted = () => {
+      if (epoch === storeEpoch) pendingTaskDeletes.set(uuid, gone)
     }
     const text = (reason || '').trim()
     const sent = write(api.issues.deleteDeep, {
@@ -3768,13 +3799,16 @@ export const PLANNER = {
     })
     if (!wait) {
       mirror()
+      sent.then(accepted, () => {})
       return runSaved(sent)
     }
-    const epoch = storeEpoch
     return sent.then(
       () => {
         // the delivery may already hold the result; the mirror finds nothing then
-        if (epoch === storeEpoch) mirror()
+        if (epoch === storeEpoch) {
+          accepted()
+          mirror()
+        }
         return true
       },
       (error) => {
@@ -4997,8 +5031,12 @@ export const PLANNER = {
       ...(text ? { reason: text } : {}),
     }).then(
       () => {
-        // the delivery may already hold the result; the mirror finds nothing then
-        if (epoch === storeEpoch) mirrorProjectDelete(id)
+        // the delivery may already hold the result; the mirror finds nothing
+        // then. Kept for a rollback, as task deletes are.
+        if (epoch === storeEpoch) {
+          if (rows.projects.has(id)) pendingProjectDeletes.add(id)
+          mirrorProjectDelete(id)
+        }
         return true
       },
       (error) => {
@@ -6052,6 +6090,8 @@ export function disposeDemoStore() {
   announcedMessages = null
   lastDeliveryAt = null
   pendingArchiveIssueIds.clear()
+  pendingTaskDeletes.clear()
+  pendingProjectDeletes.clear()
   roadmapVisit = null
   roadmapBatch = null
   roadmapDetailOpen = false
@@ -6074,6 +6114,14 @@ function adopt(source: Snapshot) {
   const snap = structuredClone(source)
   for (const rootId of pendingArchiveIssueIds.keys()) {
     if (!snap.issues.some((issue) => issue.id === rootId)) pendingArchiveIssueIds.delete(rootId)
+  }
+  // a delete is done once the server's snapshot holds none of what it removed
+  const snapIssues = new Set(snap.issues.map((issue) => issue.id))
+  pendingTaskDeletes.forEach((gone, rootId) => {
+    if (![...gone].some((id) => snapIssues.has(id))) pendingTaskDeletes.delete(rootId)
+  })
+  for (const id of pendingProjectDeletes) {
+    if (!snap.projects.some((project) => project.id === id)) pendingProjectDeletes.delete(id)
   }
   const priorIssueIds = new Set(rows.issues.keys())
   const newlyVisibleIssueIds = new Set(
