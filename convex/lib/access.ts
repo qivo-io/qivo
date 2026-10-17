@@ -50,12 +50,16 @@ export async function rootMetaOf(
   return current
 }
 
+/* The project fields that decide levels: the hierarchy and the leads. */
+type LevelProject = Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>
+
 /* Access lives on a top-level meta and its direct sub-projects, where `root`
  * is the project itself or the top-level project above it. A row outside
  * that tree, such as a top-level project that is not a meta or a sub-project
  * of a sub-project, carries no access for anyone, so the per-project
- * predicates and projectLevelsForOrg hide it alike. */
-function inMetaTree(project: Doc<'projects'>, root: Doc<'projects'>): boolean {
+ * predicates and levelsFrom (behind projectLevelsForOrg and the levels of a
+ * project item in Deleted items) hide it alike. */
+function inMetaTree(project: LevelProject, root: LevelProject): boolean {
   return (
     root.parent_id === undefined &&
     root.type === 'meta' &&
@@ -122,9 +126,6 @@ async function leadsTeam(
  * still requires organization staff. */
 export const canLeadProjects = (me: Pick<Doc<'profiles'>, 'org_role'>): boolean =>
   me.org_role === 'admin' || me.org_role === 'user' || me.org_role === 'guest'
-
-/* The project fields that decide levels: the hierarchy and the leads. */
-type LevelProject = Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>
 
 /* A named lead controls its project. A parent lead has Edit on children
  * with a different lead; legacy children without a lead use their parent's.

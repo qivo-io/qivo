@@ -187,7 +187,7 @@ describe('restoring a task item', () => {
       deferred: [],
     })
 
-    const { _id, _creationTime, updated_at, ...same } = task
+    const { _id, _creationTime, ...same } = task
     expect(await liveTask(t, task.id)).toMatchObject({ ...same, updated_at: iso(START + HOUR) })
     expect(await liveRowsOf(t, task.id)).toEqual(byTable(planted.rows))
     expect(await blobExists(t, planted.attachment.storage_id)).toBe(true)
@@ -406,7 +406,7 @@ describe('restoring a task item', () => {
         const row = await byId(ctx, table, id)
         if (row !== null) await ctx.db.delete(row._id)
       }
-      const { _id: p1, _creationTime: c1, ...parentRow } = parent
+      const { _id: _parentRow, _creationTime: _parentTime, ...parentRow } = parent
       await ctx.db.insert('issues', { ...parentRow, created_at: LATER })
       await ctx.db.insert('labels', {
         id: labelId,
@@ -416,7 +416,7 @@ describe('restoring a task item', () => {
         color: '#00ccff',
         created_at: LATER,
       })
-      const { _id: p2, _creationTime: c2, ...personRow } = person
+      const { _id: _personRow, _creationTime: _personTime, ...personRow } = person
       await ctx.db.insert('profiles', { ...personRow, created_at: LATER })
     })
     await restore(t, f.user, [(await itemFor(t, task.id)).id])

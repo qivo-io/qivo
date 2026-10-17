@@ -239,8 +239,9 @@ export const unarchive = orgMutation({
  * one item (model/deletedItems.ts moveProjectToTrash): this transaction
  * hides the projects, and bounded steps move the tasks. Deleting an ARCHIVED
  * project is allowed (0106 deliberately left the delete policies alone).
- * `reason` is shown in Deleted items: trimmed, at most 500 characters. The
- * 'deleted' event is written AFTER the move and hangs on the parent (for a
+ * `reason` is shown in Deleted items, trimmed and refused past
+ * DELETE_REASON_MAX (lib/textLimits.ts, 500 characters). The 'deleted'
+ * event is written AFTER the move and hangs on the parent (for a
  * sub) or the team (for a meta) — the project it names is gone, which is
  * exactly why (bc022c2:2952-2958). Members receive a sub's event only with
  * access to the parent beyond navigation, and a meta's reaches org admins

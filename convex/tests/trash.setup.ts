@@ -102,8 +102,8 @@ export const blobExists = (t: T, id: Id<'_storage'>) =>
   t.run(async (ctx) => (await ctx.storage.get(id)) !== null)
 export const deleteTask = (t: T, f: OrgFixture, id: string, extra: object = {}) =>
   as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id, ...extra })
-export const deleteProject = (t: T, f: OrgFixture, id: string) =>
-  as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id })
+export const deleteProject = (t: T, f: OrgFixture, id: string, extra: object = {}) =>
+  as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id, ...extra })
 
 /** A credential of `table` for `profile`, named `name` (an OAuth
  * connection's app), named as the HTTP action hands the one a request came

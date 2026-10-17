@@ -95,6 +95,7 @@ import {
   type TrashPhase,
 } from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
+import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { logActivity } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, levelsAbove } from './issues'
@@ -125,9 +126,6 @@ export const EXPIRY = { batch: 64 }
  * document at 1 MiB. A row whose stored document would pass this is deleted
  * instead, as today's hard delete would have deleted it. */
 export const STORED_ROW_MAX_BYTES = 1_000_000
-
-/** The longest reason the app's delete window may send, in characters. */
-export const REASON_MAX = 500
 
 const RECOVER_BATCH = 32
 /* The most stalled jobs one recovery looks at, oldest progress first (the
@@ -2881,13 +2879,17 @@ export async function clearOrgTrash(
 
 /* ------------------------------------------------------------- deleting */
 
+/* Counts the trimmed text, which is what is stored, in UTF-16 code units
+ * like the other text caps (lib/textLimits.ts). A `rule` refusal, so the app
+ * shows the sentence. */
+export const DELETE_REASON_TOO_LONG = `a delete reason must be at most ${DELETE_REASON_MAX} characters`
+
 /** The reason a delete window sent: trimmed, absent when blank, refused
- * past REASON_MAX characters. */
+ * past DELETE_REASON_MAX characters. */
 export function cleanReason(raw: string | undefined): string | undefined {
   const reason = raw?.trim()
   if (reason === undefined || reason === '') return undefined
-  if ([...reason].length > REASON_MAX)
-    throw rule(`a reason can be at most ${REASON_MAX} characters`)
+  if (reason.length > DELETE_REASON_MAX) throw rule(DELETE_REASON_TOO_LONG)
   return reason
 }
 
