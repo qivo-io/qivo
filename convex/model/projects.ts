@@ -33,6 +33,7 @@ import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
+import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleArchivedReads } from './messages'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
 
@@ -727,12 +728,17 @@ export async function unarchiveProjectCore(
   return true
 }
 
-/** The most tasks a removal summary counts in one project tree. A mutable
- * object, so tests can lower it. */
-export const REMOVAL_COUNT = { cap: 5000 }
+/** What a removal summary reads of one project tree: at most `cap` tasks
+ * and `bytes` of task documents (estimated), whichever comes first. The
+ * bytes stay at half of Convex's 16 MiB read limit, which leaves room for
+ * the query's other reads and the one task read past either limit. A
+ * mutable object, so tests can lower it. */
+export const REMOVAL_COUNT = { cap: 5000, bytes: 8 * 1024 * 1024 }
 
-/** Tasks counted in a project or a tree. `more`: the count stopped at the
- * cap, so there are at least this many. */
+/** Tasks counted in a project or a tree. `more`: the count stopped at a
+ * limit before it read all of them. Where it stopped it read one more task
+ * than it counted, so there are more than `tasks`; it counts nothing in the
+ * projects after that one. */
 export type RemovalCount = { tasks: number; archived_tasks: number; more: boolean }
 
 /**
@@ -740,27 +746,35 @@ export type RemovalCount = { tasks: number; archived_tasks: number; more: boolea
  * or delete window (projects.removalSummary): every sub-project, archived
  * ones included, and the tasks of the whole tree, archived ones included,
  * which the client cannot count from what its snapshot holds. Convex has no
- * count, so the tasks are read; the tree reads at most REMOVAL_COUNT.cap + 1
- * of them in all, which keeps a very large tree within a query's limits,
- * and a count cut short says `more` ("more than 5,000 tasks").
+ * count, so the tasks are read within REMOVAL_COUNT for the whole tree,
+ * which keeps a very large tree, or one of long descriptions, within a
+ * query's limits. A count cut short says `more` ("more than 5,000 tasks").
  */
 export async function removalSummaryOf(
   ctx: QueryCtx,
   project: Doc<'projects'>,
 ): Promise<RemovalCount & { sub_projects: (RemovalCount & SubProjectName)[] }> {
-  let left = REMOVAL_COUNT.cap + 1
+  let tasksLeft = REMOVAL_COUNT.cap
+  let bytesLeft = REMOVAL_COUNT.bytes
+  let stopped = false
   const count = async (id: string): Promise<RemovalCount> => {
-    const room = left
-    const tasks =
-      room === 0
-        ? []
-        : await ctx.db
-            .query('issues')
-            .withIndex('by_project', (q) => q.eq('project_id', id))
-            .take(room)
-    left -= tasks.length
-    const archived_tasks = tasks.filter((task) => task.archived_at !== undefined).length
-    return { tasks: tasks.length, archived_tasks, more: tasks.length === room }
+    let tasks = 0
+    let archived_tasks = 0
+    if (stopped) return { tasks, archived_tasks, more: true }
+    const range = ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', id))
+    for await (const task of range) {
+      const bytes = estimateDocumentBytes(task)
+      // the task past a limit is read but not counted, and shows that more remain
+      if (tasksLeft === 0 || bytes > bytesLeft) {
+        stopped = true
+        return { tasks, archived_tasks, more: true }
+      }
+      tasksLeft -= 1
+      bytesLeft -= bytes
+      tasks += 1
+      if (task.archived_at !== undefined) archived_tasks += 1
+    }
+    return { tasks, archived_tasks, more: false }
   }
   const own = await count(project.id)
   const subs = await ctx.db
@@ -777,14 +791,10 @@ export async function removalSummaryOf(
       ...(await count(sub.id)),
     })
   const counted = [own, ...sub_projects]
-  const more = left === 0
   return {
-    tasks: Math.min(
-      REMOVAL_COUNT.cap,
-      counted.reduce((n, c) => n + c.tasks, 0),
-    ),
+    tasks: counted.reduce((n, c) => n + c.tasks, 0),
     archived_tasks: counted.reduce((n, c) => n + c.archived_tasks, 0),
-    more,
+    more: stopped,
     sub_projects,
   }
 }

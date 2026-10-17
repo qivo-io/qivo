@@ -274,9 +274,10 @@ export const deleteDeep = orgMutation({
  * What the Archive or delete window shows before either: the sub-projects,
  * archived ones included, and how many tasks the tree holds, archived ones
  * included (model/projects.ts removalSummaryOf, which stops counting past
- * 5,000 and says so). The same gate as deleteDeep, because it names
- * sub-projects and counts work a member who only navigates to the project
- * cannot see; a top-level project's lead can see every sub-project. */
+ * 5,000 tasks or 8 MiB of them and says so). The same gate as deleteDeep,
+ * because it names sub-projects and counts work a member who only navigates
+ * to the project cannot see; a top-level project's lead can see every
+ * sub-project. */
 export const removalSummary = orgQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
