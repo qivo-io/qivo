@@ -478,3 +478,36 @@ export function destinations(rows: DeletedRow[]): Destination[] {
     }))
   return [...projects, ...tasks]
 }
+
+/* ------------------------------------------------------------ Delete now */
+
+/**
+ * How many other items Delete now on `item` deletes with it. Deleting a
+ * project item for good also deletes the ready and stuck items that wait for
+ * one of its projects, and those that wait for them in turn (the server's
+ * purgeDependents in convex/model/deletedItems.ts). A ready row names the
+ * item it waits for, but a stuck row does not, so `exact` holds only while
+ * `rows` is the whole uncapped list, as an admin's is, and no other row of
+ * the item's organization is stuck. A task item takes nothing else along.
+ */
+export function deletedAlong(
+  item: DeletedRow,
+  rows: DeletedRow[],
+  capped: boolean,
+): { count: number; exact: boolean } {
+  if (item.kind === 'task') return { count: 0, exact: true }
+  const along = new Set([item.id])
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const row of rows) {
+      const holder = row.blocked?.item_id
+      if (holder === undefined || !along.has(holder) || along.has(row.id)) continue
+      along.add(row.id)
+      grew = true
+    }
+  }
+  const unsure = rows.some(
+    (row) => row.org_id === item.org_id && row.state === 'stuck' && !along.has(row.id),
+  )
+  return { count: along.size - 1, exact: !capped && !unsure }
+}
