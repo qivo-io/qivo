@@ -58,7 +58,12 @@
  * whose permission it checks again; without them it sends the item back.
  * The attach after a reveal keeps no parent that needs their Edit once
  * they are gone. A step returns without work when its item or job is gone,
- * or while its demo organization is being deleted.
+ * or once its organization is being deleted: a demo organization whose
+ * cleanup has begun, or any organization whose deletion has begun
+ * (orgRemovals.ts). Recovery and the expiry leave such an organization's
+ * items and jobs alone too. Before its deletion begins, while the
+ * organization is read-only, restores are refused as other writes are
+ * (orgReadOnly), but steps, recovery and the expiry go on.
  *
  * In a public demo, the rows a move or restore carries between the live
  * tables and Deleted items, with the bookkeeping rows that go with them,
@@ -67,9 +72,10 @@
  * item row, activity rows and notices count as any write does, and each user
  * transaction counts as one demo change.
  *
- * Teardowns that delete an organization's work outright (deleteOrgDeep, the
- * public demo's cleanup, the Northstar wipe) empty its Deleted items with
- * clearOrgTrash, whatever state the items are in. */
+ * Teardowns that delete an organization's work outright (deleteOrgDeep, an
+ * organization's deletion in steps, the public demo's cleanup, the
+ * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
+ * state the items are in. */
 
 import {
   type FilterBuilder,
@@ -89,7 +95,7 @@ import {
   projectLevel,
   projectLevelsForOrg,
 } from '../lib/access'
-import { billingReadOnly } from '../lib/billingAccess'
+import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
 import { byId, LARGE_ROWS_PER_READ } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
@@ -103,6 +109,7 @@ import {
 import { notFound, rule } from '../lib/functions'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { logActivity } from './activity'
+import { storageIdInUse } from './attachments'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild } from './issues'
 import { type NotifyPreload, postMessage, scheduleArchivedReads } from './messages'
@@ -551,7 +558,7 @@ export type Memo = {
   teamsOf: Map<string, Promise<Set<string>>>
   /** a person's live grant and team shares on a live parent, keyed `parent:profile` */
   parentAccess: Map<string, Promise<LevelGrants>>
-  /** whether billing pauses editing, by organization */
+  /** whether the organization is read-only, by organization (orgReadOnly) */
   readOnly: Map<string, Promise<boolean>>
   /** the item holding a stored project, by project */
   heldBy: Map<string, Promise<string | undefined>>
@@ -1155,7 +1162,8 @@ export const RESTORE_MAX = 25
 const REVEAL_RANGES_PER_TASK = 16
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
- * it is not ready; read_only while billing pauses editing; then the blocked
+ * it is not ready; read_only while billing or a pending deletion makes the
+ * organization read-only (orgReadOnly); then the blocked
  * reasons of the design's table. no_access: the person has no level on the
  * project the item goes back to (the list's redacted row). conflict: a live
  * row holds a uuid or key the item needs, which the reservations
@@ -1395,18 +1403,21 @@ function keepsHolder(s: Scope, id: string, projectId: string): Promise<boolean> 
 const keptHolder = async (s: Scope, id: string | undefined, projectId: string) =>
   id !== undefined && (await keepsHolder(s, id, projectId)) ? id : undefined
 
-/** Whether billing pauses editing in organization `orgId`, read once per
- * memo. The restore and Delete now wrappers refuse then (lib/functions.ts
- * orgMutation, adminMutation), so the list offers neither. */
-export const billingPaused = (ctx: QueryCtx, memo: Memo, orgId: string): Promise<boolean> =>
-  memoRead(memo.readOnly, orgId, () => billingReadOnly(ctx, orgId))
+/** Whether organization `orgId` is read-only, because billing pauses
+ * editing or the organization waits for its deletion (lib/billingAccess.ts
+ * orgWriteBlock), read once per memo. The restore and Delete now wrappers
+ * refuse then (lib/functions.ts orgMutation, adminMutation), so the list
+ * offers neither, and a reveal sends its item back. The expiry and the
+ * steps go on: items keep expiring while the organization is read-only. */
+export const orgReadOnly = (ctx: QueryCtx, memo: Memo, orgId: string): Promise<boolean> =>
+  memoRead(memo.readOnly, orgId, async () => (await orgWriteBlock(ctx, orgId)) !== null)
 
 /** Why `me` cannot restore `item` now, else null (design 5.3). Callers
  * check the item's state; the reveal asks again for the restorer. */
 async function blockOf(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
   const { org_id } = s.item
   if (me.org_id !== org_id) return 'no_access'
-  if (await billingPaused(s.ctx, s.memo, org_id)) return 'read_only'
+  if (await orgReadOnly(s.ctx, s.memo, org_id)) return 'read_only'
   return s.item.kind === 'task' ? await taskItemBlock(s, me) : await projectItemBlock(s, me)
 }
 
@@ -2842,8 +2853,10 @@ async function saveJob(
 
 /** One step of an item's job (deletedItems.step). Safe to run twice or
  * after the item is gone: a missing item or job ends it, a job left by a
- * deleted item is deleted, and a demo organization being deleted gets no
- * further work (its cleanup deletes the items). */
+ * deleted item is deleted, and an organization being deleted gets no
+ * further work. That is a demo organization whose cleanup has begun
+ * (internal/demoCleanup.ts) or any organization whose deletion has begun
+ * (orgRemovals.ts); each deletes the items with their jobs. */
 export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
   const job = await jobOf(ctx, itemId)
   const item = await byId(ctx, 'deleted_items', itemId)
@@ -2853,6 +2866,7 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
   }
   if (job === null) return
   if (isDemoDeployment() && (await demoForOrg(ctx, item.org_id))?.status === 'deleting') return
+  if (await deletionBegun(ctx, item.org_id)) return
   const budget = budgetFor(job.budget_scale)
   const txn = newTxn()
   const next = await work(metered(ctx, budget), budget, item, job, txn)
@@ -2872,7 +2886,10 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * reveal its projects are live, so neither applies. An attach that fails
  * that often goes on as restore_detach, which leaves the tasks still
  * waiting without their parent and deletes the item. restore_detach only
- * deletes the item's own small rows, so it is retried until it finishes. */
+ * deletes the item's own small rows, so it is retried until it finishes.
+ * A job of an organization whose deletion has begun stays as it is: its
+ * steps stand down (runStep), and the deletion deletes the job with its
+ * item (model/orgDeletion.ts). */
 export async function recoverJobs(ctx: MutationCtx): Promise<void> {
   const now = Date.now()
   const halvings = Math.round(Math.log2(1 / RETRY.floor))
@@ -2880,13 +2897,19 @@ export async function recoverJobs(ctx: MutationCtx): Promise<void> {
     .query('deleted_item_jobs')
     .withIndex('by_progress', (q) => q.lt('progress_at', new Date(now - STALLED_MS).toISOString()))
     .take(RECOVER_SCAN)
+  const deleting = new Map<string, Promise<boolean>>()
   let restarted = 0
   for (const job of stalled) {
     if (restarted === RECOVER_BATCH) break
     const next = job.scheduled_id === undefined ? null : await ctx.db.system.get(job.scheduled_id)
     if (next?.state.kind === 'pending' || next?.state.kind === 'inProgress') continue
-    restarted += 1
     const item = await byId(ctx, 'deleted_items', job.item_id)
+    if (
+      item !== null &&
+      (await memoRead(deleting, item.org_id, () => deletionBegun(ctx, item.org_id)))
+    )
+      continue
+    restarted += 1
     if (item === null) {
       await ctx.db.delete(job._id)
       continue
@@ -2956,15 +2979,26 @@ export async function recoverJobs(ctx: MutationCtx): Promise<void> {
   }
 }
 
-/** Starts purging the ready items whose time is over, at most EXPIRY.batch
- * of them. Returns whether more may be due. */
-export async function expireItems(ctx: MutationCtx): Promise<boolean> {
+/** One page of an expiry run: where it starts (none for the first) and
+ * the run's start, epoch milliseconds, which every page reads up to. */
+export type ExpiryPage = { cursor?: string; now: number }
+
+/** Starts purging the ready items whose time was over at `page.now`, one
+ * page of at most EXPIRY.batch of them. It also runs while an organization
+ * is read-only before its deletion, so items keep expiring then. Once the
+ * deletion has begun (orgRemovals.ts), the organization's items stay as
+ * they are for that deletion to delete, and the page passes over them.
+ * Returns the cursor of the next page, or null when the run is done. */
+export async function expireItems(ctx: MutationCtx, page: ExpiryPage): Promise<string | null> {
   const due = await ctx.db
     .query('deleted_items')
-    .withIndex('by_state_purge', (q) => q.eq('state', 'ready').lte('purge_after', Date.now()))
-    .take(EXPIRY.batch)
-  for (const item of due) await startPurge(ctx, item)
-  return due.length === EXPIRY.batch
+    .withIndex('by_state_purge', (q) => q.eq('state', 'ready').lte('purge_after', page.now))
+    .paginate({ cursor: page.cursor ?? null, numItems: EXPIRY.batch })
+  const deleting = new Map<string, Promise<boolean>>()
+  for (const item of due.page)
+    if (!(await memoRead(deleting, item.org_id, () => deletionBegun(ctx, item.org_id))))
+      await startPurge(ctx, item)
+  return due.isDone ? null : due.continueCursor
 }
 
 /** Starts deleting `item` for good. It leaves Deleted items at once, because
@@ -3050,16 +3084,24 @@ async function startJob(
 
 /* --------------------------------------------------------------- teardown */
 
-/** What one teardown transaction may still delete, one per row. */
-export type Teardown = { left: number }
+/** What one teardown transaction may still delete: `left` rows and, when
+ * given, `bytes` of them, estimated from each deleted document as
+ * model/cascade.ts sweep does. A bounded step needs the bytes, because a
+ * stored row can hold a document of almost 1 MB. */
+export type Teardown = { left: number; bytes?: number }
 
 /* The most rows a teardown reads at once. */
 const TEARDOWN_PAGE = 256
 
+/** Whether `budget` has run out of rows or of bytes. */
+const teardownSpent = (budget: Teardown): boolean =>
+  budget.left <= 0 || (budget.bytes !== undefined && budget.bytes <= 0)
+
 /** Removes the rows `read` returns (up to `n`, from the start of the range),
  * page by page, until the range is empty (true) or `budget` is spent
- * (false). `remove` must take its row out of the range, and answers false
- * when the budget ran out before it could. */
+ * (false). A budget not yet spent removes at least one row. `remove` must
+ * take its row out of the range, and answers false when the budget ran out
+ * before it could. */
 async function clearPages<Row>(
   budget: Teardown,
   read: (n: number) => Promise<Row[]>,
@@ -3067,26 +3109,36 @@ async function clearPages<Row>(
   perRead = TEARDOWN_PAGE,
 ): Promise<boolean> {
   for (;;) {
-    if (budget.left <= 0) return false
+    if (teardownSpent(budget)) return false
     const n = Math.min(budget.left, perRead, TEARDOWN_PAGE)
     const rows = await read(n)
     for (const row of rows) {
-      if (budget.left <= 0 || !(await remove(row))) return false
+      if (teardownSpent(budget) || !(await remove(row))) return false
       budget.left -= 1
+      if (budget.bytes !== undefined) budget.bytes -= estimateDocumentBytes(row)
     }
     if (rows.length < n) return true
   }
 }
 
+/** Deletes the bytes of `storageId` unless a row still names them
+ * (model/attachments.ts storageIdInUse), for a teardown that has just
+ * deleted the row it read them from. Bytes already gone stay gone. */
+async function releaseFile(ctx: MutationCtx, storageId: Id<'_storage'>): Promise<void> {
+  if (await storageIdInUse(ctx, storageId)) return
+  if ((await ctx.db.system.get(storageId)) !== null) await ctx.storage.delete(storageId)
+}
+
 /** Deletes the rows task `taskId` still has in the live tables, attachment
- * bytes with their row, then its messages. */
+ * bytes with their row unless another row names them, then its messages. */
 async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     const cleared = await clearPages(
       budget,
       (n) => relation.read(ctx, taskId, n),
       async (row) => {
-        await discard(ctx, row)
+        await ctx.db.delete(row.doc._id)
+        if (row.table === 'issue_attachments') await releaseFile(ctx, row.doc.storage_id)
         return true
       },
       relation.perRead,
@@ -3110,16 +3162,20 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
 /**
  * Deletes everything organization `orgId` keeps in Deleted items for good,
  * whatever state its items are in, for the teardowns that delete the
- * organization's work outright: model/cascade.ts deleteOrgDeep, the public
+ * organization's work outright: model/cascade.ts deleteOrgDeep, an
+ * organization's deletion in steps (model/orgDeletion.ts), the public
  * demo's cleanup (internal/demoCleanup.ts) and the Northstar wipe's
  * deletedItems:purgeOrg. Items go first with their jobs and the parents
  * their restores wait to attach, so a step still scheduled finds nothing to
  * do. Then each stored task goes with the rows a move or restore left of it
- * in the live tables, and each stored row, an attachment with its bytes, a
- * project after the tasks still live under it.
+ * in the live tables, and each stored row, a project after the tasks still
+ * live under it. An attachment's bytes go with its row unless another row,
+ * live or stored, still names them (releaseFile).
  * Nothing is narrated or detached, because the caller deletes the rest of
- * the organization's work too. Makes at most `budget.left` deletions and
- * returns true once nothing is left.
+ * the organization's work too. Spends at most what `budget` holds, give or
+ * take the last row, and returns true once nothing is left. Each call reads
+ * every range from its start, so a caller that stops on the budget calls
+ * again and loses nothing.
  */
 export async function clearOrgTrash(
   ctx: MutationCtx,
@@ -3193,7 +3249,8 @@ export async function clearOrgTrash(
         )
         if (!stranded) return false
       }
-      await dropStored(ctx, row)
+      await ctx.db.delete(row._id)
+      if (row.storage_id !== undefined) await releaseFile(ctx, row.storage_id)
       return true
     },
     LARGE_ROWS_PER_READ,

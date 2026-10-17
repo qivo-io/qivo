@@ -658,6 +658,9 @@ export default defineSchema({
   // It changes rarely, unlike the organization row's activity_count, so the
   // read does not re-run queries on every write. `phase` is set once deletion
   // begins; until then admins can still export and the deletion can stop.
+  // Deleted items background work (deletedItems.ts) also reads it: items
+  // keep expiring while the organization is read-only, and nothing touches
+  // its items once `phase` is set.
   org_removals: defineTable({
     org_id: v.string(),
     reason: vOrgRemovalReason,
@@ -893,7 +896,9 @@ export default defineSchema({
   /* The background steps of one moving, restoring or purging item. Kept off
    * deleted_items, so a step never invalidates an open Deleted items page.
    * recover (deletedItems.ts) restarts a row whose last step committed more
-   * than a minute ago with no step waiting, at half the budget each time. */
+   * than a minute ago with no step waiting, at half the budget each time.
+   * Once its organization's deletion has begun, its steps stand down and
+   * recover leaves it for that deletion to delete (model/orgDeletion.ts). */
   deleted_item_jobs: defineTable({
     item_id: v.string(),
     phase: vTrashPhase,
