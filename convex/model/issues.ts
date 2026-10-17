@@ -491,6 +491,15 @@ export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause it
 export const topLevelOf = (project: Pick<Doc<'projects'>, 'id' | 'parent_id'>): string =>
   project.parent_id ?? project.id
 
+/** Whether projects `child` and `parent` are in the same top-level project,
+ * so that a task in `child` may be a subtask of a task in `parent`.
+ * parentChainCheck and the restore from Deleted items (model/deletedItems.ts
+ * keptParent) share it. */
+export const sameTopLevel = (
+  child: Pick<Doc<'projects'>, 'id' | 'parent_id'>,
+  parent: Pick<Doc<'projects'>, 'id' | 'parent_id'>,
+): boolean => topLevelOf(child) === topLevelOf(parent)
+
 /* Refused by assertParentChain for a parent in another top-level project. */
 export const SUBTASK_PROJECT_RULE =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
@@ -509,10 +518,10 @@ export type ParentProblem =
   | 'too_deep'
 
 /** Checks a proposed parent link without throwing, for writers that adapt
- * instead of refusing (a restore clears a parent that no longer qualifies).
- * `child.project_id` is the project the child will be in after the write.
- * Checks the cheapest facts first, and a parent the actor cannot see is
- * `not_found` before anything else describes it. */
+ * instead of refusing; assertParentChain throws from it. `child.project_id`
+ * is the project the child will be in after the write. Checks the cheapest
+ * facts first, and a parent the actor cannot see is `not_found` before
+ * anything else describes it. */
 export async function parentChainCheck(
   ctx: QueryCtx,
   child: { id: string; org_id: string; project_id: string },
@@ -535,7 +544,7 @@ export async function parentChainCheck(
   }
   if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) return no('no_write')
   const childProject = await byId(ctx, 'projects', child.project_id)
-  if (childProject === null || topLevelOf(childProject) !== topLevelOf(parentProject)) {
+  if (childProject === null || !sameTopLevel(childProject, parentProject)) {
     return no('other_project')
   }
   // upward walk: bound the chain above the attach point

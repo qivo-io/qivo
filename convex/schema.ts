@@ -1035,7 +1035,9 @@ export default defineSchema({
     project_id: v.string(),
     archived: v.boolean(),
     // a task item's subtask in another project than the item's root: that
-    // project, so its lead finds the item (model/deletedItemsList.ts)
+    // project, so its lead finds the item (model/deletedItemsList.ts). It is
+    // a sibling sub-project of the root's, or, for a subtask from before the
+    // subtask rule (model/issues.ts sameTopLevel), any other project.
     cross_project_id: v.optional(v.string()),
   })
     .index('by_task', ['task_id'])

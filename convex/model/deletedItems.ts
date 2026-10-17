@@ -29,9 +29,11 @@
  * that holds that project. References that no longer name what the item stored
  * are dropped (sameReference). A parent outside the item stays only by the
  * parent table (keptParent), which also asks, as a reparent does, that
- * everyone working on the task or its subtasks can see that parent. A
- * reveal whose checks fail sends the item back to moving, and the move
- * takes the rows back.
+ * everyone working on the task or its subtasks can see that parent. No
+ * restore leaves a subtask under a parent in another top-level project
+ * (model/issues.ts sameTopLevel), inside the item or outside it. A reveal
+ * whose checks fail sends the item back to moving, and the move takes the
+ * rows back.
  *
  * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
  * seat sees of an item, restoreBlock why that seat cannot restore it, and
@@ -127,7 +129,7 @@ import { logActivity } from './activity'
 import { storageIdInUse } from './attachments'
 import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
-import { assertCanEdit, clearParentRemaining, detachChild } from './issues'
+import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import { type NotifyPreload, postMessage, scheduleArchivedReads } from './messages'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
@@ -2126,6 +2128,9 @@ async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
 
 type StoredTask = { row: Doc<'deleted_rows'>; doc: Stored<'issues'> }
 
+/** A task item's stored task with the live project it goes back to. */
+type HomedTask = StoredTask & { home: Doc<'projects'> }
+
 /* A project item's tasks, written back under its projects, which stay
  * absent until the reveal (design 5.1), so these tasks stay hidden. A task
  * whose parent is in the item keeps it. A task whose parent is outside the
@@ -2267,11 +2272,13 @@ async function reveal(run: Run): Promise<JobState | null> {
   if (block !== null) return await sendBack(run, block)
   let written: Id<'issues'>[] = []
   if (run.item.kind === 'task') {
-    const tasks = (await storedOf(run, 'issues')).map((row) => ({ row, doc: docOf(row, 'issues') }))
-    for (const { doc } of tasks) {
+    const tasks: HomedTask[] = []
+    for (const row of await storedOf(run, 'issues')) {
+      const doc = docOf(row, 'issues')
       if ((await byId(run.ctx, 'issues', doc.id)) !== null) return await sendBack(run, 'conflict')
-      if ((await namedProject(run, doc.project_id, 'project')) === null)
-        return { ...run.state, phase: 'restore_split', cursor: undefined }
+      const home = await namedProject(run, doc.project_id, 'project')
+      if (home === null) return { ...run.state, phase: 'restore_split', cursor: undefined }
+      tasks.push({ row, doc, home })
     }
     const back = await revealTasks(run, tasks, restorer)
     // a parent check ran out of reads before any task was written
@@ -2341,28 +2348,36 @@ async function revealProjects(run: Run): Promise<void> {
 }
 
 /** Writes a task item's stored tasks `tasks` back, parents before
- * children. A task keeps a parent inside the item. A parent outside the
- * item is kept or cleared by the parent table (design 5.2), from what the
- * reveal reads once per parent (outsideParent) and the task's subtasks
- * among `tasks`, with the people they come back with, and each parent the
- * restore makes a group loses its own hours once. Every parent is decided
- * before the first task is written, and no decision reads a task the
- * reveal writes. Returns the ids of the tasks written, or null, with
- * nothing written, when a check runs out of the reads the transaction has
- * left ('later'). The reveal then waits for a step of its own, where no
- * check waits. */
+ * children. A task keeps a parent inside the item when both are in the same
+ * top-level project (model/issues.ts sameTopLevel), and comes back without
+ * it otherwise, which only a subtask stored before that rule meets. A
+ * parent outside the item is kept or cleared by the parent table (design
+ * 5.2), from what the reveal reads once per parent (outsideParent) and the
+ * task's subtasks among `tasks`, with the people they come back with, and
+ * each parent the restore makes a group loses its own hours once. Every
+ * parent is decided before the first task is written, and no decision
+ * reads a task the reveal writes. Returns the ids of the tasks written, or
+ * null, with nothing written, when a check runs out of the reads the
+ * transaction has left ('later'). The reveal then waits for a step of its
+ * own, where no check waits. */
 async function revealTasks(
   run: Run,
-  tasks: StoredTask[],
+  tasks: HomedTask[],
   restorer: Doc<'profiles'>,
 ): Promise<Id<'issues'>[] | null> {
   const byTask = new Map(tasks.map((t) => [t.doc.id, t]))
+  // the parent inside the item that `t` keeps
+  const keptInside = (t: HomedTask): HomedTask | undefined => {
+    const parent = t.doc.parent_id === undefined ? undefined : byTask.get(t.doc.parent_id)
+    return parent !== undefined && sameTopLevel(t.home, parent.home) ? parent : undefined
+  }
   const children: StoredChildren = new Map()
-  for (const { doc } of tasks) {
-    if (doc.parent_id === undefined) continue
-    const siblings = children.get(doc.parent_id)
-    if (siblings === undefined) children.set(doc.parent_id, [doc])
-    else siblings.push(doc)
+  for (const t of tasks) {
+    const parent = keptInside(t)
+    if (parent === undefined) continue
+    const siblings = children.get(parent.doc.id)
+    if (siblings === undefined) children.set(parent.doc.id, [t.doc])
+    else siblings.push(t.doc)
   }
   const depthOf = (t: StoredTask): number => {
     let depth = 0
@@ -2373,23 +2388,27 @@ async function revealTasks(
   const ordered = [...tasks].sort((a, b) => depthOf(a) - depthOf(b))
   const reads = newParentReads()
   const grouped = new Set<string>()
-  // the parent each task with a parent outside the item comes back with
-  const outsideKept = new Map<string, string | undefined>()
+  // the parent each task comes back with where it is not the stored one
+  const decided = new Map<string, string | undefined>()
   for (const t of ordered) {
     const parentId = t.doc.parent_id
-    if (parentId === undefined || byTask.has(parentId)) continue
+    if (parentId === undefined) continue
+    if (byTask.has(parentId)) {
+      if (keptInside(t) === undefined) decided.set(t.doc.id, undefined)
+      continue
+    }
     const outside = await memoRead(reads.parents, parentId, () =>
       outsideParent(run, parentId, restorer, reads),
     )
     const task = { ...t.doc, ...(await restoredHolders(run, t.doc)) }
-    const kept = await keptParent(run, task, outside, children, reads)
+    const kept = await keptParent(run, task, t.home, outside, children, reads)
     if (kept === 'later') return null
     if (kept?.grouped) grouped.add(parentId)
-    outsideKept.set(t.doc.id, kept?.id)
+    decided.set(t.doc.id, kept?.id)
   }
   const written: Id<'issues'>[] = []
   for (const t of ordered) {
-    const kept = outsideKept.has(t.doc.id) ? outsideKept.get(t.doc.id) : t.doc.parent_id
+    const kept = decided.has(t.doc.id) ? decided.get(t.doc.id) : t.doc.parent_id
     written.push(await writeTask(run, t, kept, true))
   }
   for (const parentId of grouped)
@@ -2472,12 +2491,17 @@ function seenBy(run: Run, reads: ParentReads, id: string): Promise<Seen> {
 
 /** A live task outside the item that tasks of the item name as their
  * parent, as a reveal or an attach step reads it once for all of them: the
- * task, whether the restorer may change it (sight and Edit on its project,
- * as assertParentChain asks) and whether it holds hours of its own that a
- * new child takes away. No task the step gives a parent is such a parent,
- * because the item stored only parents outside it, so this holds for the
- * whole step. */
-type OutsideParent = { parent: Doc<'issues'>; edits: boolean; clears: boolean }
+ * task, its project, whether the restorer may change it (sight and Edit on
+ * its project, as assertParentChain asks) and whether it holds hours of its
+ * own that a new child takes away. No task the step gives a parent is such
+ * a parent, because the item stored only parents outside it, so this holds
+ * for the whole step. */
+type OutsideParent = {
+  parent: Doc<'issues'>
+  project: Doc<'projects'>
+  edits: boolean
+  clears: boolean
+}
 
 /** The OutsideParent for `parentId`, or null when no task of the item can
  * keep it: it is not live, or it is not the task the item stored (the
@@ -2498,6 +2522,7 @@ async function outsideParent(
   const levels = restorer === undefined ? null : (await seenBy(run, reads, restorer.id)).levels
   return {
     parent,
+    project,
     edits: levelRank(levels?.levelOf(project) ?? null) >= LEVEL_RANK.user,
     clears: parent.remaining_hours !== undefined || parent.review_at !== undefined,
   }
@@ -2516,16 +2541,26 @@ type StoredChildren = Map<string, Stored<'issues'>[]>
  * ran out of the step's reads (allSee) and must run again in the next step. */
 type Kept = { id: string; grouped: boolean } | undefined | 'later'
 
-/** The parent `task` of the item keeps from outside it, by the parent
- * table (design 5.2), or undefined to clear it. Only a live parent that is
- * the task the item stored can stay. An active one stays when the restorer
- * may change it, within 20 levels; an archived one only for an archived
- * task, within the same depth. `grouped`: the attach makes the parent a
- * group (an active task under an active parent, any task under an archived
- * one), so the parent loses its own remaining hours as on a reparent
- * (model/issues.ts clearParentRemaining). An archived parent that holds
- * hours of its own therefore needs the restorer's Edit too, so a restore
- * never changes a task in a project the restorer cannot edit.
+/** The parent `task` of the item keeps from outside it, by the parent table
+ * (design 5.2), or undefined to clear it. Only a live parent that is the
+ * task the item stored can stay, and only in the top-level project of
+ * `home`, the live project the task comes back in, by the subtask rule
+ * (model/issues.ts sameTopLevel). A parent that moved to another top-level
+ * project since the delete fails it, as can a subtask stored before the
+ * rule. An active parent stays when the restorer may change it, within 20
+ * levels; an archived one only for an archived task, within the same depth.
+ * `grouped`: the attach makes the parent a group (an active task under an
+ * active parent, any task under an archived one), so the parent loses its
+ * own remaining hours as on a reparent (model/issues.ts
+ * clearParentRemaining). An archived parent that holds hours of its own
+ * therefore needs the restorer's Edit too, so a restore never changes a
+ * task in a project the restorer cannot edit.
+ *
+ * This applies the checks of model/issues.ts parentChainCheck without
+ * calling it. Its depth walk reads the subtree under the task in issues
+ * without a bound, and a task item's subtasks are not there yet. It also
+ * needs a restorer, and their Edit even on an archived parent. This table
+ * reads the same chain within the step's budget instead.
  *
  * Whoever works on the task or on the open subtasks that come back under
  * it must also see the parent and every task above it, the rule a
@@ -2539,11 +2574,12 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
 async function keptParent(
   run: Run,
   task: Worker,
+  home: Doc<'projects'>,
   outside: OutsideParent | null,
   children: StoredChildren,
   reads: ParentReads,
 ): Promise<Kept> {
-  if (outside === null) return undefined
+  if (outside === null || !sameTopLevel(home, outside.project)) return undefined
   const active = outside.parent.archived_at === undefined
   const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
@@ -2833,9 +2869,10 @@ const waitingParents = (run: Run, n: number) =>
 
 /** What one attach step reads once, which is what any parent check reads
  * (ParentReads), with the live tasks as its own attaches leave them, and
- * whether a project is live. It also keeps the parents it made a group. */
+ * each project its tasks are in, by id, null for one that is not live. It
+ * also keeps the parents it made a group. */
 type Attach = ParentReads & {
-  live: Map<string, Promise<boolean>>
+  live: Map<string, Promise<Doc<'projects'> | null>>
   grouped: Set<string>
 }
 
@@ -2893,16 +2930,14 @@ async function attachParent(
   if (task === null) return await settle()
   run.budget.tasks -= 1
   if (!waitsFor(run.item, task)) return await settle()
-  const live = await memoRead(
-    step.live,
-    task.project_id,
-    async () => (await byId(run.ctx, 'projects', task.project_id)) !== null,
+  const home = await memoRead(step.live, task.project_id, () =>
+    byId(run.ctx, 'projects', task.project_id),
   )
-  if (!live) return await settle(await holderOf(run, task.project_id))
+  if (home === null) return await settle(await holderOf(run, task.project_id))
   const outside = await memoRead(step.parents, row.parent_id, () =>
     outsideParent(run, row.parent_id, run.actor, step),
   )
-  const kept = await keptParent(run, task, outside, new Map(), step)
+  const kept = await keptParent(run, task, home, outside, new Map(), step)
   if (kept === 'later') return false
   if (kept !== undefined) {
     const fields = { parent_id: kept.id, updated_at: run.now }
