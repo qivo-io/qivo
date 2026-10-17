@@ -104,6 +104,18 @@ the same call. A client holding the older catalogue keeps working, and the
 server refuses such a call with the rule's sentence, but its model does not
 learn the rule until the client refreshes its tool list.
 
+File uploads added `start_attachment_upload`, `confirm_attachment_upload`
+and `attach_text_file` (see [Attachments](#attachments)). A client holding
+an older catalogue does not see them until it refreshes its tool list. At
+the same time every tool began to refuse a string argument, or a string
+inside an object argument such as `on_held_tasks`, holding an unpaired
+surrogate, such as a lone `\ud83c` escape, with the schema message
+`Invalid string: has an unpaired surrogate, which UTF-8 cannot encode`.
+Such a call answered `internal error` before. A request body that is not
+UTF-8 is now refused with a parse error (see
+[Request limits and billing](#request-limits-and-billing)). Before, Qivo
+replaced each invalid byte sequence with U+FFFD and ran the call.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -283,6 +295,12 @@ checks the size after authentication and answers a longer body with HTTP
 Request: the request body is too large"}, "id": null}`. Such a request still
 counts as a call.
 
+MCP messages must be UTF-8. A body holding bytes that are not UTF-8, such as
+text a client encoded as Latin-1 or Windows-1252, is answered with HTTP
+`400` and `{"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse
+error: the request body is not UTF-8"}, "id": null}` before any tool runs,
+so it cannot store garbled text. Such a request still counts as a call.
+
 When enabled organization billing has expired or needs payment, writing tools
 return a readable billing refusal while reading keeps its normal access rules.
 The same happens while an organization is read-only before its deletion, and
@@ -373,7 +391,8 @@ and project permissions. `offline_access` requests automatic renewal and is
 an authorization-server scope. Read-only grants receive HTTP 403 with
 `insufficient_scope` when attempting a writing tool, on either MCP protocol
 leg. OAuth tokens also support REST webhook management. They are refused by
-other REST routes and background curation.
+other REST routes and background curation, so an OAuth connection attaches
+files with the MCP upload tools (see [Attachments](#attachments)).
 
 Each approval has an immutable user, profile, organization, client and
 resource binding. Revocation, inactive or removed membership, and the
@@ -746,8 +765,9 @@ The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
 operations, `set_task_link` for links between tasks, `list_labels` and
-`set_label` for the organization's labels, `delete_attachment` and
-`list_task_activity` for a task's files and history, `get_workload` for
+`set_label` for the organization's labels, `start_attachment_upload`,
+`confirm_attachment_upload`, `attach_text_file` and `delete_attachment` for
+a task's files, `list_task_activity` for its history, `get_workload` for
 planned hours per person, `update_comment` and `delete_comment` for comments,
 `list_inbox` and `update_inbox` for your inbox, `set_following` to follow a
 task, `get_project`, `create_project`, `update_project`,
@@ -787,6 +807,9 @@ answers `internal error` there instead, and outside a tool call it is an HTTP
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
 | `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
+| `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, a one-time `upload_url` and `expires_at`, an hour on. Send the file's bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
+| `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Answers the attachment as `get_task` lists it |
+| `attach_text_file` | Attach text you write yourself, such as notes, a CSV table or a log, to the task `ref` as a file called `name`, with an optional `content_type` (`text/plain; charset=utf-8` by default). Qivo stores `text` as UTF-8, at most 256 KiB and within the organization's per-file limit. It needs Edit access to the task's project and answers the attachment as `get_task` lists it |
 | `list_task_activity` | The task's history, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. See [Task activity](#task-activity) |
 | `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`. See [Workload](#workload) |
 | `update_comment` | Replace a comment's `body` (at most 20,000 characters); `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. See [Comments, inbox and following](#comments-inbox-and-following) |
@@ -1190,15 +1213,61 @@ it expires. Images open in the browser and other types download.
 `delete_attachment` deletes one file and writes a `removed an attachment
 from` activity row signed `via MCP`. Anyone with Edit access to the
 project may delete any file, not only their own. An id that is not a file of
-that task reads `attachment "<id>" not found on QN-<n>`. MCP does not
-upload files; scripts upload through the REST API. Description images stay
-with the app, so `delete_attachment` refuses one with `this image belongs to
-the task description; remove it by editing the description in the app`.
+that task reads `attachment "<id>" not found on QN-<n>`. Description images
+stay with the app, so `delete_attachment` refuses one with `this image
+belongs to the task description; remove it by editing the description in
+the app`, and neither upload tool adds one.
 When `update_task` rewrites a description, keep every `![alt](att:<id>)`
 reference whose image should stay. An image the description no longer names
 stays until someone next saves that task's description in the app. That
 save deletes the image at once if it was uploaded more than a day ago, so
 put a dropped reference back before then.
+
+Uploading a file takes three steps, the same as on REST:
+
+1. `start_attachment_upload` with the task `ref`, the file's `name` (1 to
+   255 characters after trimming), its exact `size` in bytes and optionally
+   its `content_type`. It needs Edit access to the task's project, and a
+   `size` over the organization's per-file limit (`max_attachment_mb` in
+   `get_me`) is refused with `attachment exceeds the organization limit of
+   20 MiB`. It answers `{ "ticket": "…uuid…", "upload_url": "…",
+   "expires_at": "…" }`.
+2. `POST` the file's bytes to `upload_url`, with the file's type as
+   `Content-Type` and no Authorization header, for example
+   `curl -X POST -H "Content-Type: application/pdf" --data-binary @wiring.pdf "<upload_url>"`.
+   It answers `{ "storageId": "…" }`.
+3. `confirm_attachment_upload` with the `ref`, the `ticket` and that
+   `storageId` as `storage_id`. It answers the attachment and writes an
+   `attached a file to` activity row signed `via MCP`.
+
+The file goes straight to storage, so it never passes through an MCP call or
+the model's context, and the upload URL needs no credential. The ticket and
+its upload URL expire after an hour. Only the user that started the upload
+can confirm it, only for the same task, and only once. A ticket belongs to
+the user, not the credential, so a ticket started over MCP can be confirmed
+over REST by the same user, and the reverse. The confirm follows REST's
+rules. Another ticket, including an expired one, answers `upload not found
+or expired; start a new upload`, and a `storage_id` that is not a file
+stored after the upload started answers `storage_id must be the storageId
+the upload answered`. A file of another size than declared is refused and
+kept, and the ticket stays usable. If the organization lowered its per-file
+limit after the upload started and the file now exceeds it, Qivo deletes the
+file, refuses the confirm and spends the ticket. Bytes uploaded but never
+confirmed are deleted by the weekly storage sweep.
+
+Uploading needs a client that can send an HTTP request with the file, such
+as a coding agent with a shell. Chat assistants that cannot make HTTP
+requests cannot upload files, but they can still attach text they write
+with `attach_text_file`. It takes the task `ref`, a file `name`, the `text`
+and an optional `content_type` (`text/plain; charset=utf-8` by default) and
+stores the text as a UTF-8 file in one call. The text may hold at most 256
+KiB once encoded, and the organization's per-file limit applies too. Longer
+text is refused with `text must be at most 256 KiB (262144 bytes) as UTF-8`.
+A request that is not valid UTF-8 is refused before anything is stored, as
+[Request limits and billing](#request-limits-and-billing) describes.
+It needs Edit access to the task's project like the upload, answers the
+attachment and writes the same activity row. A refused call keeps no
+file.
 
 ### Task activity
 

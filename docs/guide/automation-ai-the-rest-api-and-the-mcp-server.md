@@ -4,14 +4,23 @@ a regular account; the private demo is browser-only.
 
 MCP offers `list_tasks`, `get_task`, `create_task`, `update_task`,
 `delete_task`, `set_task_link`, `list_labels`, `set_label`,
+`start_attachment_upload`, `confirm_attachment_upload`, `attach_text_file`,
 `delete_attachment`, `list_task_activity` and `get_workload`. REST uses
 `/v1/tasks`, `/v1/tasks/{ref}`, `/v1/tasks/{ref}/links`,
 `/v1/tasks/{ref}/attachments`, `/v1/tasks/{ref}/activity`, `/v1/labels` and
 `/v1/workload`. Both work with the same tasks and permanent `QN-<number>`
 IDs, and both can create subtasks, move tasks between sub-projects, link
-tasks, add or remove labels, list and delete attachments, read a task's
-history and read planned hours per person by the same rules as the app.
-Uploading attachments uses REST. Images inside descriptions stay in the app.
+tasks, add or remove labels, upload, list and delete attachments, read a
+task's history and read planned hours per person by the same rules as the
+app. Images inside descriptions stay in the app.
+
+Uploading a file takes three steps on either interface. The first answers a
+one-time upload link, the client sends the file there, and the last attaches
+it to the task. The file goes straight to storage, never through the
+assistant's conversation. This needs a client that can send an HTTP
+request, such as a coding agent with a shell. Chat assistants that cannot
+make HTTP requests can still attach text they write with `attach_text_file`,
+such as meeting notes or a CSV table of up to 256 KiB.
 
 Both can also edit and delete comments, follow tasks and work through the
 inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
@@ -176,8 +185,8 @@ MCP tools say who the connection acts as and whether it can make changes;
 list teams, projects, users, project users and tasks; read and change tasks
 and projects, their sharing and milestones; manage teams and their members;
 read, add, edit and delete comments; follow tasks; read and clear your inbox;
-delete attachments; read a task's history and the planned hours per person;
-and set plannable weekly hours. Request
+upload, attach text and delete attachments; read a task's history and the
+planned hours per person; and set plannable weekly hours. Request
 `archived: true` to list archived projects. Name an archived project to list
 its tasks, and restore it before creating new ones.
 

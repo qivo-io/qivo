@@ -953,6 +953,15 @@ const TOO_LARGE = {
   id: null,
 }
 
+/* The 400 body for a request whose bytes are not UTF-8, which MCP requires
+ * of every JSON-RPC message. Without it, readBody's replacement characters
+ * would reach the tools, and attach_text_file would store them. */
+const NOT_UTF8 = {
+  jsonrpc: '2.0',
+  error: { code: -32700, message: 'Parse error: the request body is not UTF-8' },
+  id: null,
+}
+
 /* The captured -32603 body for a params-less legacy initialize: a
  * pretty-printed zod issue array AS the message string. */
 const LEGACY_INIT_NO_PARAMS = JSON.stringify(
@@ -976,7 +985,9 @@ const LEGACY_INIT_NO_PARAMS = JSON.stringify(
  * other messages follow zod v4's grammar as closely as hand-rolling allows.
  * Unknown keys are stripped (zod object() default), except immutable reporter
  * updates are refused explicitly. Null satisfies only the
- * anyOf-nullable properties. */
+ * anyOf-nullable properties. Unlike zod, a string with an unpaired surrogate
+ * is refused, inside an object argument too, because Convex cannot pass it
+ * on to the tool's function. */
 
 const typeName = (x: unknown): string => {
   if (x === null) return 'null'
@@ -1008,6 +1019,28 @@ function hasType(p: SchemaProp, x: unknown): boolean {
  * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
+/* The issue for a string holding an unpaired surrogate, which is not text.
+ * In a /u pattern a whole pair reads as one code point, so only half a pair
+ * matches the Surrogate category. */
+const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
+const LONE_SURROGATE = /\p{Surrogate}/u
+
+/* Whether a string anywhere in `x` holds an unpaired surrogate. It walks
+ * with its own stack, so a deeply nested value cannot overflow the call
+ * stack. */
+function hasLoneSurrogate(x: unknown): boolean {
+  const stack = [x]
+  while (stack.length > 0) {
+    const item = stack.pop()
+    if (typeof item === 'string') {
+      if (LONE_SURROGATE.test(item)) return true
+    } else if (typeof item === 'object' && item !== null) {
+      for (const value of Object.values(item)) stack.push(value)
+    }
+  }
+  return false
+}
+
 /* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
 function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {
   if (p.anyOf !== undefined) {
@@ -1018,6 +1051,9 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
   switch (p.type) {
     case 'string': {
       if (typeof x !== 'string') return `Invalid input: expected string, received ${typeName(x)}`
+      // a JSON escape such as \ud800 can leave half a surrogate pair, which
+      // Convex cannot pass to a function, so the call would fail later
+      if (LONE_SURROGATE.test(x)) return UNPAIRED_SURROGATE
       if (p.enum !== undefined && !p.enum.includes(x)) {
         return `Invalid option: expected one of ${p.enum.map((e) => `"${e}"`).join('|')}`
       }
@@ -1073,7 +1109,9 @@ function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | nul
       return null
     }
     default:
-      return null
+      // the tool reads an object argument's fields itself, but a string in
+      // it would fail at the function boundary like a top-level one
+      return hasLoneSurrogate(x) ? UNPAIRED_SURROGATE : null
   }
 }
 
@@ -2199,14 +2237,15 @@ const mcpPost = httpAction(async (ctx, request) => {
       }))
     )
       return rateLimited()
-    const bodyText = await readBody(request)
-    if (bodyText === null) return jsonRes(413, TOO_LARGE)
-    const challenge = scopeChallenge(bodyText, credential.scopes)
+    const body = await readBody(request)
+    if (body === null) return jsonRes(413, TOO_LARGE)
+    if (!body.utf8) return jsonRes(400, NOT_UTF8)
+    const challenge = scopeChallenge(body.text, credential.scopes)
     if (challenge) return challenge
     try {
       return await dispatchMcp({
         headers: request.headers,
-        bodyText,
+        bodyText: body.text,
         runEvent: async (method, params) => {
           const live = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
             tokenHash,
@@ -2273,8 +2312,9 @@ const mcpPost = httpAction(async (ctx, request) => {
   })
   if (allowed === null) return unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
-  const bodyText = await readBody(request)
-  if (bodyText === null) return jsonRes(413, TOO_LARGE)
+  const body = await readBody(request)
+  if (body === null) return jsonRes(413, TOO_LARGE)
+  if (!body.utf8) return jsonRes(400, NOT_UTF8)
   // the exact credential row this request runs as, for get_me and events/*
   const owner: EventOwner = {
     profile_id: cred.profileId,
@@ -2285,7 +2325,7 @@ const mcpPost = httpAction(async (ctx, request) => {
   try {
     return await dispatchMcp({
       headers: request.headers,
-      bodyText,
+      bodyText: body.text,
       runTool: (name, args, ignored) =>
         runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args, ignored),
       runEvent: (method, params) =>

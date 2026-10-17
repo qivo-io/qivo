@@ -21,7 +21,7 @@
  * in tests/webhookApi.test.ts, where the callback receiver is mocked. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
@@ -47,6 +47,14 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+
+/* edge-runtime provides Blob's constructor and TextEncoder; convex/env.d.ts
+ * declares Blob without its constructor, and convex/tsconfig's ESNext-only
+ * lib lacks TextEncoder. */
+declare const Blob: { new (parts: Uint8Array[]): Blob }
+declare class TextEncoder {
+  encode(input: string): Uint8Array
+}
 
 /* The two read-only refusal sentences, pinned byte for byte here rather than
  * imported, so an edit to the source constants fails the HTTP sweep. */
@@ -428,6 +436,12 @@ function indirectIn(code: string): string[] {
 const DECLARATION =
   /^(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
 
+/* A comment that fills its lines, a `//` line or a block that starts a line
+ * and whose first close ends one. Its words run nothing, and the walk drops
+ * it. A comment after code on the same line stays, which only widens the
+ * walk. */
+const COMMENT_LINES = /^[ \t]*(?:\/\/.*|\/\*(?:(?!\*\/)[\s\S])*\*\/[ \t]*)$/gm
+
 /** Where a name a module uses comes from, a declaration in another module,
  * or null when the walk cannot read it (a default or namespace import, or a
  * module outside the glob). */
@@ -448,10 +462,15 @@ type ModuleCode = {
  * and every `internal.…` reference in the machine sources. Then it follows
  * each action it reaches through the code that action runs, which is its own
  * declaration and every declaration that code names, in its module or
- * imported from another, and so on by name. A query cannot write, and a
- * mutation it reaches is checked itself, so only actions are followed. A
- * reference or an import the walk cannot resolve throws, so a call it cannot
- * follow fails every test that uses the walk instead of dropping out of it.
+ * imported from another, and so on by name. Words in a comment name
+ * nothing the code runs, so the walk skips whole-line comments
+ * (COMMENT_LINES). A query cannot write, and a mutation it reaches is
+ * checked itself, so only actions are followed. For the same reason the
+ * walk never follows a registered query or mutation by name, because an
+ * action can only run one through its `internal.…` reference, which the
+ * walk reaches. A reference or an import the walk cannot resolve throws, so
+ * a call it cannot follow fails every test that uses the walk instead of
+ * dropping out of it.
  */
 function walker(modules: Modules, sources: Sources) {
   const registered = (name: string): Registered | undefined => {
@@ -461,6 +480,12 @@ function walker(modules: Modules, sources: Sources) {
   }
   const writes = (fn: Registered | undefined): boolean =>
     fn?.isInternal === true && (fn.isMutation === true || fn.isAction === true)
+  /* Whether the declaration `name` of the module at `path` is a registered
+   * query or mutation, whose code the walk does not follow by name. */
+  const runsOnItsOwn = (path: string, name: string): boolean => {
+    const fn = modules[path]?.[name] as Registered | undefined
+    return fn?.exportArgs !== undefined && fn.isAction !== true
+  }
   const machineSources = Object.fromEntries(
     Object.entries(sources).filter(([path]) => /^\.\.\/machine\/[^/]+\.ts$/.test(path)),
   )
@@ -488,7 +513,8 @@ function walker(modules: Modules, sources: Sources) {
     const starts = [...src.matchAll(DECLARATION)]
     starts.forEach((m, i) => {
       const text = src.slice(m.index, starts[i + 1]?.index ?? src.length)
-      declared.set(m[1], (declared.get(m[1]) ?? '') + text) // overloads add up
+      const code = text.replace(COMMENT_LINES, '')
+      declared.set(m[1], (declared.get(m[1]) ?? '') + code) // overloads add up
     })
     const imported = new Map<string, Binding>()
     const reexported = new Map<string, Binding>()
@@ -548,10 +574,14 @@ function walker(modules: Modules, sources: Sources) {
       if (text === undefined) throw new Error(`the walk cannot find ${key}`)
       out.push(text)
       for (const [word] of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
-        if (code.declared.has(word)) queue.push({ path: at.path, name: word })
+        if (code.declared.has(word) && !runsOnItsOwn(at.path, word)) {
+          queue.push({ path: at.path, name: word })
+        }
         const via = code.imported.get(word)
         if (via === null) throw new Error(`${key} uses ${word}, which the walk cannot follow`)
-        if (via !== undefined) queue.push(declarationOf(via.path, via.name))
+        if (via === undefined) continue
+        const declaration = declarationOf(via.path, via.name)
+        if (!runsOnItsOwn(declaration.path, declaration.name)) queue.push(declaration)
       }
     }
     return out
@@ -682,6 +712,69 @@ describe('every machine write takes the credential access', () => {
     }
   })
 
+  it("reaches a mutation of the action's own module by its reference, not by following its code", () => {
+    const exportArgs = () => `{"type":"object","value":{"access":${ACCESS_ARG}}}`
+    const fakeModules: Modules = {
+      '../machine/fake.ts': {
+        relay: { isAction: true, isInternal: true, exportArgs },
+        stamp: { isMutation: true, isInternal: true, exportArgs },
+      },
+    }
+    const fakeSources: Sources = {
+      '../machine/fake.ts': [
+        "import { components, internal } from '../_generated/api'",
+        'export const relay = internalAction({',
+        '  handler: async (ctx) => {',
+        '    await ctx.runMutation(internal.machine.fake.stamp, {})',
+        '  },',
+        '})',
+        // a mutation may run a component's query, which the walk cannot read
+        'export const stamp = internalMutation({',
+        '  handler: async (ctx) => {',
+        '    await ctx.runQuery(components.auth.find, {})',
+        '  },',
+        '})',
+      ].join('\n'),
+    }
+    expect(walker(fakeModules, fakeSources).guarded()).toEqual([
+      'machine/fake:relay',
+      'machine/fake:stamp',
+    ])
+  })
+
+  it('does not follow a name that only a comment mentions', () => {
+    const exportArgs = () => `{"type":"object","value":{"access":${ACCESS_ARG}}}`
+    const fakeModules: Modules = {
+      '../machine/fake.ts': { relay: { isAction: true, isInternal: true, exportArgs } },
+      '../lib/log.ts': {},
+    }
+    // log schedules through a reference the walk cannot follow, as an
+    // activity write's trim does
+    const fakeSources = (relay: string): Sources => ({
+      '../machine/fake.ts': [
+        "import { log } from '../lib/log'",
+        'export const relay = internalAction({',
+        relay,
+        '})',
+        '/* The next route records its change with log. */',
+        '// log runs in a mutation, never here',
+        'export const after = 1',
+      ].join('\n'),
+      '../lib/log.ts':
+        'export async function log(ctx) {\n  await ctx.scheduler.runAt(0, trimRef, {})\n}',
+    })
+    const comments =
+      '  /* the mutation calls log */\n  // log cleans up too\n  handler: async () => {},'
+    expect(walker(fakeModules, fakeSources(comments)).guarded()).toEqual(['machine/fake:relay'])
+    // the same name in code is followed, and a comment that ends where code
+    // starts stays, so its line is followed too
+    for (const code of ['  handler: async (ctx) => log(ctx),', '  /* x */ handler: log,']) {
+      expect(() => walker(fakeModules, fakeSources(code)).guarded()).toThrow(
+        'machine/fake:relay runs trimRef, which the walk cannot follow',
+      )
+    }
+  })
+
   it('follows an action to the writes it reaches through helpers in any module', () => {
     const args = (access: boolean) => () =>
       `{"type":"object","value":{${access ? `"access":${ACCESS_ARG}` : ''}}}`
@@ -753,7 +846,7 @@ describe('every machine write takes the credential access', () => {
 
 /* ---------------------------------------------------------- 4. over HTTP */
 
-type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
+type FetchInit = { method?: string; headers?: Record<string, string>; body?: string | Uint8Array }
 type Res = { status: number; text: string; header: (name: string) => string | null }
 
 async function fetchAs(t: T, path: string, init: FetchInit): Promise<Res> {
@@ -1144,6 +1237,77 @@ describe('read-only credentials over HTTP', () => {
       expect(rest.status).toBe(201)
     }
     expect((await c.counts()).issues).toBe(before.issues + 5)
+  })
+
+  it('an OAuth grant attaches files over MCP, and REST still refuses its token', async () => {
+    vi.stubEnv('BETTER_AUTH_SECRET', 'credential-access-files-secret')
+    onTestFinished(() => {
+      vi.unstubAllEnvs()
+    })
+    const c = await credentials()
+    const { token } = await c.oauth(['qivo:read', 'qivo:write'])
+    const created = await callTool(c.t, token, 'create_task', {
+      project: c.f.sub.key,
+      title: 'Wiring',
+    })
+    const { key } = JSON.parse(toolText(created.body).text) as { key: string }
+    const started = await callTool(c.t, token, 'start_attachment_upload', {
+      ref: key,
+      name: 'wiring.pdf',
+      size: 5,
+    })
+    const { ticket } = JSON.parse(toolText(started.body).text) as { ticket: string }
+    // convex-test's upload URL is no endpoint, so the bytes are stored directly
+    const storage_id = await c.t.run((ctx) =>
+      ctx.storage.store(new Blob([new Uint8Array([1, 2, 3, 4, 5])])),
+    )
+    const confirmed = await callTool(c.t, token, 'confirm_attachment_upload', {
+      ref: key,
+      ticket,
+      storage_id,
+    })
+    const text = await callTool(c.t, token, 'attach_text_file', {
+      ref: key,
+      name: 'notes.md',
+      text: '# Wiring notes',
+    })
+    for (const res of [confirmed, text]) {
+      expect(res.status).toBe(200)
+      const out = toolText(res.body)
+      expect(out.isError, out.text).toBe(false)
+      expect(JSON.parse(out.text)).toMatchObject({ uploaded_by_id: c.f.user.id })
+    }
+    // a body that is not UTF-8 is no JSON-RPC message, so no tool runs
+    const encoder = new TextEncoder()
+    const latin1 = Uint8Array.from([
+      ...encoder.encode(
+        `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"attach_text_file","arguments":{"ref":"${key}","name":"t.txt","text":"3,5 `,
+      ),
+      0xb0,
+      ...encoder.encode('C"}}}'),
+    ])
+    const notUtf8 = await fetchAs(c.t, '/mcp', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: latin1,
+    })
+    expect(notUtf8.status).toBe(400)
+    expect(JSON.parse(notUtf8.text)).toMatchObject({ error: { code: -32700 } })
+    const rows = await c.t.run((ctx) => ctx.db.query('issue_attachments').collect())
+    expect(rows.map((row) => [row.name, row.size_bytes])).toEqual([
+      ['wiring.pdf', 5],
+      ['notes.md', 14],
+    ])
+    // the token stays bound to /mcp
+    const rest = await restCall(c.t, token, 'POST', `/v1/tasks/${key}/attachments`, {
+      name: 'wiring.pdf',
+      size: 5,
+    })
+    expect(rest.status).toBe(401)
   })
 
   it('an OAuth grant narrowed to read looks up as read and is challenged before dispatch', async () => {

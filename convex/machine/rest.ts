@@ -1386,7 +1386,7 @@ async function webhookResponse(
     const reply = await ctx.runAction(internal.webhookActions.manage, {
       owner,
       method: 'events/subscribe',
-      params_json: params,
+      params_json: params.text,
     })
     if ('error' in reply) {
       const status =
@@ -1451,9 +1451,10 @@ const restHandler = httpAction(async (ctx, req) => {
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
     // every method but GET may carry a body; DELETE's is optional. One over
-    // BODY_MAX_BYTES answers 413 here, after the call was counted
-    const body = req.method === 'GET' ? '' : await readBody(req)
-    if (body === null) return tooLarge()
+    // BODY_MAX_BYTES answers 413 here, after the call was counted. Bytes that
+    // are not UTF-8 read as U+FFFD, as request.text() reads them
+    const read = req.method === 'GET' ? { text: '' } : await readBody(req)
+    if (read === null) return tooLarge()
     // other methods on a known path (PATCH …/comments, PUT on a task) fall
     // to the unknown-route 404, as deployed
     const found = findRoute(req.method, seg.slice(1))
@@ -1470,7 +1471,7 @@ const restHandler = httpAction(async (ctx, req) => {
       keyName,
       param: (name) => found.params[name],
       query: (name) => url.searchParams.get(name) ?? undefined,
-      body,
+      body: read.text,
     })
     return json(result, found.route.status)
   } catch (e) {

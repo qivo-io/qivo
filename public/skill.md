@@ -53,7 +53,7 @@ own comments need only read access to the task.
 ## Choose the interface
 
 - **Connected MCP:** Prefer it for routine task discovery, edits, moves,
-  subtasks, links, labels, comments, the inbox, following and
+  subtasks, links, labels, attachments, comments, the inbox, following and
   archive/restore. The endpoint is
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
@@ -75,7 +75,7 @@ own comments need only read access to the task.
   `next_cursor` back as `cursor` until it is null, even after an empty page.
 - **Browser:** Use it for images inside descriptions, guest invitations,
   deleting a project, and other actions absent from the machine interfaces.
-  Upload file attachments through REST. Enter at `https://qivo.io/app` and
+  Attach files through MCP or REST instead. Enter at `https://qivo.io/app` and
   use the user's signed-in session. Follow an explicitly requested interface
   when it supports the work.
 
@@ -93,7 +93,8 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | List labels | `list_labels` | `GET /v1/labels` |
 | Create or edit a label | `set_label` | `POST /v1/labels`, `PATCH /v1/labels/{id}` |
 | List a task's files | `get_task` (`attachments`) | `GET /v1/tasks/{ref}/attachments` |
-| Attach a file | (REST only) | `POST /v1/tasks/{ref}/attachments`, then the upload and the confirm |
+| Attach a file | `start_attachment_upload`, then the upload and `confirm_attachment_upload` | `POST /v1/tasks/{ref}/attachments`, then the upload and the confirm |
+| Attach text you write | `attach_text_file` | (MCP only) |
 | Delete a file | `delete_attachment` | `DELETE /v1/tasks/{ref}/attachments/{id}` |
 | Read a task's history | `list_task_activity` | `GET /v1/tasks/{ref}/activity` |
 | Planned hours per person and week | `get_workload` | `GET /v1/workload` |
@@ -235,13 +236,22 @@ Useful field rules:
   each with a download `url` that works for 10 minutes
   (`url_expires_at`). Read the task again for a fresh link. `inline: true`
   marks an image inside the description.
-- **Attach a file (REST):** `POST /v1/tasks/{ref}/attachments` with `name`,
-  optional `content_type` and the exact byte `size`; then POST the bytes to
-  the returned `upload_url` with the file's `Content-Type`; then
+- **Attach a file:** `start_attachment_upload` or
+  `POST /v1/tasks/{ref}/attachments` with `name`, optional `content_type`
+  and the exact byte `size`; then POST the bytes to the returned
+  `upload_url` with the file's `Content-Type` and no Authorization header;
+  then `confirm_attachment_upload` or
   `POST /v1/tasks/{ref}/attachments/{ticket}` with the `storage_id` the
-  upload answered. Only the same credential's user can confirm, within an
-  hour. The organization's per-file limit is `max_attachment_mb` in
+  upload answered. Only the same user can confirm, within an hour, on
+  either interface. The file never passes through the MCP call. An OAuth
+  connection uses the MCP tools, since its token does not reach these REST
+  routes. The organization's per-file limit is `max_attachment_mb` in
   `get_me`.
+- **Attach text you write:** `attach_text_file` with `name`, `text` and an
+  optional `content_type` stores notes, a CSV table or a log as a UTF-8
+  file of at most 256 KiB in one call. Chat assistants that cannot make
+  HTTP requests can still attach text they write this way. Send MCP
+  requests as UTF-8, because Qivo refuses a body with other bytes.
 - **Delete a file:** `delete_attachment` or
   `DELETE /v1/tasks/{ref}/attachments/{id}`, with User or Lead access to the
   project. Description images are left to the app. When you rewrite a
