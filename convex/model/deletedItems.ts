@@ -2087,13 +2087,16 @@ const restoreLinks = (run: Run): Promise<boolean> =>
     ALL,
   )
 
-/** Where stored link `row` goes (design 5.2). Both ends live in the
- * organization, by the reference predicate, or tasks of this item: written
- * back unless a link already holds its pair. A task of this item is absent
- * until the reveal, so nobody sees the link before then, and a failed
- * reveal's move takes it back with the task. An end in another item that is
- * ready, moving or restoring: the link moves to that item, owned by that
- * end. Otherwise it is dropped. */
+/** Where stored link `row` goes (design 5.2). Each end, by the reference
+ * predicate, is live in the organization, a task of this item, or a task of
+ * another item that is restoring: the link is written back unless a link
+ * already holds its pair. A task of an item that restores is absent until
+ * its reveal, so nobody sees the link before then, and a restore that fails
+ * takes it back with its task (move_drain). An end in another item that is
+ * ready or moving: the link moves to that item, owned by that end.
+ * Otherwise it is dropped. A link never moves to an item that restores,
+ * because that item's own restore_links would hand it straight back, and
+ * two items restoring together would trade their links for ever. */
 async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const link = docOf(row, 'issue_links')
   let away: { item: Item; end: string } | null = null
@@ -2109,7 +2112,12 @@ async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
             where.item.state === 'moving' ||
             where.item.state === 'restoring')
     if (!kept) return await run.ctx.db.delete(row._id)
-    if (where.where === 'trash' && where.item.id !== run.item.id) away ??= { item: where.item, end }
+    if (
+      where.where === 'trash' &&
+      where.item.id !== run.item.id &&
+      where.item.state !== 'restoring'
+    )
+      away ??= { item: where.item, end }
   }
   if (away !== null)
     return await run.ctx.db.patch(row._id, { item_id: away.item.id, owner_id: away.end })

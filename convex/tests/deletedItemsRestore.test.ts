@@ -864,6 +864,91 @@ describe('restoring a task item', () => {
     await assertNoDanglingRefs(t, 'after links came back')
   })
 
+  /** Task `a` in Firmware with a link to `b` and to `b`'s subtask, which
+   * travel with `a`, deleted first, and `b` deleted with its subtask. */
+  async function linkedItems() {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const a = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const b = await plantIssue(t, { org_id, project_id: f.sub2.id })
+    const below = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: b.id })
+    const links: Doc<'issue_links'>[] = []
+    for (const end of [b, below])
+      links.push(
+        await t.run(async (ctx) => {
+          const _id = await ctx.db.insert('issue_links', {
+            org_id,
+            id: uuid(),
+            source_id: a.id,
+            target_id: end.id,
+            type: 'blocks',
+            pair_key: [a.id, end.id].sort().join(':'),
+            created_at: NOW,
+          })
+          return (await ctx.db.get(_id)) as Doc<'issue_links'>
+        }),
+      )
+    await deleteTask(t, f, a.id)
+    await deleteTask(t, f, b.id, { subtask_ids: [below.id] })
+    const items = [await itemFor(t, a.id), await itemFor(t, b.id)]
+    const strip = ({ _id, _creationTime, ...doc }: Doc<'issue_links'>) => doc
+    const byLinkId = (x: { id: string }, y: { id: string }) => (x.id < y.id ? -1 : 1)
+    return { t, f, a, b, items, links: links.map(strip).sort(byLinkId), byLinkId }
+  }
+
+  it('restores two items whose tasks link to each other, in steps that take turns', async () => {
+    // one link a step stands for TRASH_BUDGET.rows of them: two items with
+    // that many links between them, restored together, traded them for ever
+    const { t, f, a, items, links, byLinkId } = await linkedItems()
+    TRASH_BUDGET.rows = 1
+    const result = await restore(
+      t,
+      f.user,
+      items.map((item) => item.id),
+    )
+    expect(result.restored).toEqual(items.map((item) => item.id))
+    // the steps of the two items take turns, as steps scheduled at once do
+    let turns = 0
+    for (;;) {
+      const left = []
+      for (const item of items) if ((await jobFor(t, item.id)) !== null) left.push(item)
+      if (left.length === 0) break
+      for (const item of left) await step(t, item.id)
+      expect(++turns).toBeLessThan(30)
+    }
+    for (const item of items) expect(await itemById(t, item.id)).toBeNull()
+    expect((await liveRowsOf(t, a.id)).issue_links.sort(byLinkId)).toEqual(links)
+    await assertNoDanglingRefs(t, 'after two linked items came back')
+  })
+
+  it('takes back the links another restore wrote for it when its own restore fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { t, f, a, b, items, links, byLinkId } = await linkedItems()
+    const [aItem, bItem] = items
+    // b's restore stops in its fill, and a's comes back whole meanwhile
+    TRASH_BUDGET.rows = 1
+    await restore(t, f.user, [bItem.id])
+    expect((await itemById(t, bItem.id))?.state).toBe('restoring')
+    TRASH_BUDGET.rows = DEFAULT_BUDGET.rows
+    await restore(t, f.user, [aItem.id])
+    expect(await itemById(t, aItem.id)).toBeNull()
+    expect((await liveRowsOf(t, a.id)).issue_links.sort(byLinkId)).toEqual(links)
+    // b's project is archived before b's reveal, which sends b back
+    await patch(t, 'projects', f.sub2.id, { archived_at: NOW })
+    await stepThrough(t, bItem.id)
+    expect(await itemById(t, bItem.id)).toMatchObject({ state: 'ready' })
+    expect(await liveTask(t, b.id)).toBeNull()
+    expect((await liveRowsOf(t, a.id)).issue_links).toEqual([])
+    expect(
+      (await storedRows(t, bItem.id))
+        .filter((r) => r.table === 'issue_links')
+        .map((r) => r.row_id)
+        .sort(),
+    ).toEqual(links.map((l) => l.id).sort())
+    await assertNoDanglingRefs(t, 'after a failed restore took its links back')
+  })
+
   it('moves a subtask whose project was deleted to that project item, or deletes it when that is gone', async () => {
     const t = newT()
     const f = await withOrg(t)
