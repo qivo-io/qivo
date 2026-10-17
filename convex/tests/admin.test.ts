@@ -288,23 +288,16 @@ describe('listUsers — the cross-org account search', () => {
     const f = await withOrg(t)
     const op = await withOperator(t)
 
-    /* Give the viewer a REAL Better Auth login: banned with an expiry, and
+    /* Ban the viewer's real Better Auth login with an expiry and give it
      * one session — the two approximated auth.users columns. */
     const now = Date.now()
     const banExpires = now + DAY
     const sessionCreated = now - 1000
-    const baUser = await t.mutation(components.betterAuth.adapter.create, {
+    await t.mutation(components.betterAuth.adapter.updateOne, {
       input: {
         model: 'user',
-        data: {
-          name: 'viewer',
-          email: 'viewer@testbed.test',
-          emailVerified: true,
-          createdAt: now,
-          updatedAt: now,
-          banned: true,
-          banExpires,
-        },
+        where: [{ field: '_id', value: f.viewer.auth_user_id! }],
+        update: { banned: true, banExpires },
       },
     })
     await t.mutation(components.betterAuth.adapter.create, {
@@ -312,19 +305,12 @@ describe('listUsers — the cross-org account search', () => {
         model: 'session',
         data: {
           token: uuid(),
-          userId: baUser._id as string,
+          userId: f.viewer.auth_user_id!,
           expiresAt: now + 60 * 60 * 1000,
           createdAt: sessionCreated,
           updatedAt: sessionCreated,
         },
       },
-    })
-    await t.run(async (ctx) => {
-      const viewer = await ctx.db
-        .query('profiles')
-        .withIndex('by_uuid', (q) => q.eq('id', f.viewer.id))
-        .unique()
-      await ctx.db.patch(viewer!._id, { auth_user_id: baUser._id as string })
     })
 
     const rows = await op.asOp.query(api.admin.listUsers, { search: '' })

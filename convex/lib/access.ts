@@ -1,9 +1,10 @@
 // Indexed permission predicates over an already-resolved profile, plus the
-// credential access rule and live credential check the machine surfaces
-// share (end of file).
+// credential access rule, live credential check and login ban rule the
+// machine surfaces share (end of file).
 // Identity and active-seat checks belong to lib/functions.ts.
 
 import type { ConvexError } from 'convex/values'
+import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from './db'
@@ -480,6 +481,33 @@ export async function liveCredentialRow(
   )
     return null
   return row
+}
+
+/** The ban columns Better Auth's admin plugin keeps on its user row. */
+export type LoginBan = { banned?: boolean | null; banExpires?: number | null }
+
+/**
+ * Whether a platform ban on a login is in force at `now` (epoch
+ * milliseconds). A ban without `banExpires` never ends. Once `banExpires`
+ * has passed the ban no longer counts, even though Better Auth clears the
+ * flag only at the login's next sign-in. Personal tokens, OAuth grants,
+ * webhook ownership and account appearance all decide with this rule.
+ */
+export function loginBanned(user: LoginBan, now: number): boolean {
+  return user.banned === true && (user.banExpires == null || user.banExpires > now)
+}
+
+/**
+ * The Better Auth user row behind a login, or null when Better Auth no
+ * longer has it. Each call is a query into the Better Auth component, one
+ * more read than the app's own tables, so callers make it after their
+ * cheaper checks pass.
+ */
+export async function findAuthUser(ctx: QueryCtx, authUserId: string): Promise<LoginBan | null> {
+  return (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+    model: 'user',
+    where: [{ field: '_id', value: authUserId }],
+  })) as LoginBan | null
 }
 
 export const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'

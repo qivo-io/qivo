@@ -107,6 +107,14 @@ const callerGone = (): ConvexError<Refusal> =>
  * can only read, before any ref resolves, so a read-only caller learns
  * nothing about what exists. An agent's access follows its live role, which
  * can change between auth and dispatch. Then the billing pause applies.
+ *
+ * It does not read the caller's login for a platform ban. Each request
+ * dispatches one call, and its credential lookup already refused a banned
+ * or missing login (machine/auth.ts lookupCredential for personal tokens,
+ * oauthConnections.lookupAccess for OAuth before every call). Rereading it
+ * here would add a Better Auth query to every call, so a ban that lands
+ * mid-request lets that request finish, like a revocation does. Agent keys
+ * belong to no login.
  */
 export async function asMachineCaller(
   ctx: QueryCtx,

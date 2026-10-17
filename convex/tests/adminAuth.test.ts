@@ -252,8 +252,8 @@ describe('deleteOrphanLogin', () => {
       'not_found',
       /no auth account with that email/,
     )
-    // login whose email a seat carries (home or guest alike) — not an orphan
-    await plantLogin(t, f.guest.email as string)
+    // the fixture's guest login, whose email a seat carries (home or guest
+    // alike), is not an orphan
     await expectRefusal(
       t.mutation(internal.adminAuth.deleteOrphanLogin, { email: f.guest.email as string }),
       'conflict',

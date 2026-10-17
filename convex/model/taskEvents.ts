@@ -1,7 +1,13 @@
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { credentialAccess, liveCredentialRow, profileCanSeeProject } from '../lib/access'
+import {
+  credentialAccess,
+  findAuthUser,
+  liveCredentialRow,
+  loginBanned,
+  profileCanSeeProject,
+} from '../lib/access'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import type { CredentialAccess } from '../lib/enums'
@@ -15,8 +21,9 @@ import { expandWebhookEventsRef } from './webhookQueue'
  * Bind subscriptions to the exact credential record and its live
  * authorization. Answers the owner's profile and what the credential may do
  * (lib/access.ts credentialAccess), or null once the credential stops
- * authorizing anything because it was revoked, expired or replaced, or its
- * account is gone.
+ * authorizing anything because it was revoked, expired or replaced, its
+ * account is gone or deactivated, or its person's login is banned or no
+ * longer exists in Better Auth.
  */
 export async function eventOwner(
   ctx: QueryCtx,
@@ -47,23 +54,32 @@ export async function eventOwner(
       model: 'oauthClient',
       where: [{ field: 'clientId', value: credential.client_id }],
     })) as { disabled?: boolean } | null
-    const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: 'user',
-      where: [{ field: '_id', value: credential.auth_user_id }],
-    })) as { banned?: boolean } | null
-    if (!client || client.disabled || !user || user.banned) return null
+    const user = await findAuthUser(ctx, credential.auth_user_id)
+    if (!client || client.disabled || !user || loginBanned(user, now)) return null
     return {
       profile,
       access: credentialAccess({ table: 'oauth_connections', scopes: credential.scopes }, profile),
     }
   }
-  return {
-    profile,
-    access:
-      'token_hash' in credential
-        ? credentialAccess({ table: 'mcp_tokens', token: credential, now }, profile)
-        : credentialAccess({ table: 'agent_keys' }, profile),
+  if ('token_hash' in credential) {
+    // A personal token acts as its person's login, so a platform ban, or a
+    // login Better Auth no longer has, stops its subscriptions like a
+    // deactivation, as for OAuth owners. They get no events, their queued
+    // deliveries fail, and the rows stay for when the ban lifts. Each check
+    // of a token owner costs one Better Auth user read, as OAuth owners
+    // already do. Fan-out pays it once per credential and mutation
+    // (readableEventProject caches the owner). The checks above guarantee
+    // auth_user_id; this only narrows its type.
+    const user = profile.auth_user_id ? await findAuthUser(ctx, profile.auth_user_id) : null
+    if (user === null || loginBanned(user, now)) return null
+    return {
+      profile,
+      access: credentialAccess({ table: 'mcp_tokens', token: credential, now }, profile),
+    }
   }
+  // Agent keys belong to no login, so a platform ban cannot reach them and
+  // they skip the read. The agent's active flag stops them.
+  return { profile, access: credentialAccess({ table: 'agent_keys' }, profile) }
 }
 
 /** The owner's profile alone, for callers that only check visibility. */

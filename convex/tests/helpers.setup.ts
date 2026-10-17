@@ -10,11 +10,17 @@
  * mutation guards, the same trust position as internal mutations. */
 /// <reference types="vite/client" />
 
-import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
+import {
+  type DataModelFromSchemaDefinition,
+  type GenericMutationCtx,
+  makeFunctionReference,
+  type WithoutSystemFields,
+} from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
 import { onTestFinished, TestRunner } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import authSchema from '../betterAuth/schema'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import schema from '../schema'
@@ -28,7 +34,14 @@ export type T = TestConvex<typeof schema>
  * Suites build every convex-test instance here. One created in a test or a
  * beforeEach is settled (settleScheduled) when that test finishes. One
  * created in a beforeAll is shared by several tests, so its suite settles it
- * after each of them. */
+ * after each of them.
+ *
+ * Every instance has the Better Auth component, as every deployment has it.
+ * Personal token lookup and webhook ownership read the owner's login and
+ * refuse one that is banned or that Better Auth no longer has, so withOrg
+ * gives each of its people a real Better Auth user (plantLogins). A suite
+ * that registers the component again must do so before withOrg, or it drops
+ * those users. */
 export const newT = (
   options: Pick<Parameters<typeof convexTest>[0], 'transactionLimits'> = {},
 ): T => {
@@ -37,6 +50,7 @@ export const newT = (
     modules: import.meta.glob('../**/*.*s'),
     ...options,
   })
+  t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   if (TestRunner.getCurrentTest() !== undefined) onTestFinished(() => settleScheduled(t))
   return t
 }
@@ -115,8 +129,20 @@ export const uuid = () => crypto.randomUUID()
  *   second teamless meta, also led by `user`, that guest/viewer hold no
  *   grant on (the control every containment test reads against)
  * - grants: guest→meta 'user', viewer→meta 'user' (the ceiling test's input)
- * - a second org ("other") with one admin + one project for cross-org fences */
+ * - a second org ("other") with one admin + one project for cross-org fences
+ * - every person has a real Better Auth user with the profile's name and
+ *   email, and its id is the profile's auth_user_id. A second withOrg on the
+ *   same instance plants a second set of users with the same emails. */
 export async function withOrg(t: T) {
+  const people = ['admin', 'user', 'viewer', 'guest', 'otherAdmin'] as const
+  const ids = await plantLogins(
+    t,
+    people.map((name) => ({ name, email: `${name}@testbed.test` })),
+  )
+  const login = Object.fromEntries(people.map((name, i) => [name, ids[i]])) as Record<
+    (typeof people)[number],
+    string
+  >
   return await t.run(async (ctx) => {
     const orgId = uuid()
     const load = async <Table extends 'organizations' | 'teams' | 'profiles' | 'projects'>(
@@ -155,9 +181,14 @@ export async function withOrg(t: T) {
       created_at: NOW,
     })
 
-    const person = (name: string, initials: string, org_role: OrgRole, org = orgId) => ({
+    const person = (
+      name: (typeof people)[number],
+      initials: string,
+      org_role: OrgRole,
+      org = orgId,
+    ) => ({
       id: uuid(),
-      auth_user_id: `auth_${name}_${org}`,
+      auth_user_id: login[name],
       org_id: org,
       email: `${name}@testbed.test`,
       name,
@@ -278,9 +309,69 @@ export async function withOrg(t: T) {
 
 export type OrgFixture = Awaited<ReturnType<typeof withOrg>>
 
+/** A mutation context over the Better Auth component's own tables. */
+type AuthComponentCtx = GenericMutationCtx<DataModelFromSchemaDefinition<typeof authSchema>>
+
+/**
+ * Creates one Better Auth user per person, in one transaction, and answers
+ * their ids in the same order. It writes the component's `user` table
+ * directly. components.betterAuth.adapter.create would first load Better
+ * Auth's adapter module, which takes seconds per test file, in every suite
+ * that builds a fixture. convex-test 0.0.58 provides runInComponent at
+ * runtime but does not declare it.
+ */
+export async function plantLogins(
+  t: T,
+  people: readonly { name: string; email: string }[],
+): Promise<string[]> {
+  const raw = t as unknown as {
+    runInComponent?: (
+      path: string,
+      handler: (ctx: AuthComponentCtx) => Promise<string[]>,
+    ) => Promise<string[]>
+  }
+  if (raw.runInComponent === undefined)
+    throw new Error(
+      'convex-test no longer provides runInComponent; plant logins with components.betterAuth.adapter.create',
+    )
+  const at = Date.parse(NOW)
+  return await raw.runInComponent('betterAuth', async (ctx) => {
+    const ids: string[] = []
+    for (const { name, email } of people)
+      ids.push(
+        await ctx.db.insert('user', {
+          name,
+          email,
+          emailVerified: true,
+          createdAt: at,
+          updatedAt: at,
+        }),
+      )
+    return ids
+  })
+}
+
+/**
+ * Gives a planted seat a real Better Auth login, replacing whatever
+ * auth_user_id it had, and answers the updated profile. A seat needs one
+ * before its personal tokens or the webhook subscriptions they own
+ * authorize anything.
+ */
+export async function plantLogin(t: T, profile: Doc<'profiles'>): Promise<Doc<'profiles'>> {
+  const [login] = await plantLogins(t, [
+    { name: profile.name, email: profile.email ?? `${profile.id}@testbed.test` },
+  ])
+  return await t.run(async (ctx) => {
+    await ctx.db.patch(profile._id, { auth_user_id: login })
+    return (await ctx.db.get(profile._id)) as Doc<'profiles'>
+  })
+}
+
 /* An invitation-shaped seat row — unclaimed unless auth_user_id is given.
  * The identity suite plants these beside withOrg; created_at drives the claim
- * loop's order, so callers planting several pass distinct instants. */
+ * loop's order, so callers planting several pass distinct instants. The
+ * auth_user_id is kept as given and has no Better Auth user behind it; use
+ * plantLogin for a seat whose personal tokens must authorize. */
 export async function plantSeat(
   t: T,
   seat: { org_id: string } & Partial<WithoutSystemFields<Doc<'profiles'>>>,

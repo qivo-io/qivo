@@ -917,19 +917,8 @@ async function credentials() {
       })
     })
   }
-  const authUser = await t.mutation(components.betterAuth.adapter.create, {
-    input: {
-      model: 'user',
-      data: {
-        name: f.user.name,
-        email: f.user.email!,
-        emailVerified: true,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-    },
-  })
-  await t.run((ctx) => ctx.db.patch(f.user._id, { auth_user_id: authUser._id as string }))
+  // the fixture's real Better Auth login for the user
+  const authUserId = f.user.auth_user_id!
   /* An approved OAuth connection with these scopes and one live access token. */
   const oauth = async (scopes: string[]) => {
     const clientId = uuid()
@@ -945,7 +934,7 @@ async function credentials() {
         id: connectionId,
         profile_id: f.user.id,
         org_id: f.org.id,
-        auth_user_id: authUser._id as string,
+        auth_user_id: authUserId,
         client_id: clientId,
         client_name: 'Access tests',
         resource: mcpResource(),
@@ -965,7 +954,7 @@ async function credentials() {
         data: {
           token: tokenHash,
           clientId,
-          userId: authUser._id as string,
+          userId: authUserId,
           referenceId: connectionId,
           scopes,
           expiresAt: Date.now() + 60_000,

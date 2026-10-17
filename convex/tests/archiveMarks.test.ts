@@ -8,14 +8,12 @@
  * before and after them. */
 /// <reference types="vite/client" />
 
-import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { RELATION_READ } from '../lib/snapshotRelations'
 import { ARCHIVE_MARKS, clearMarkedTasks, markArchivedTasks } from '../model/archiveMarks'
 import { scheduleArchivedReads } from '../model/messages'
-import schema from '../schema'
 import {
   as,
   messagesFor,
@@ -356,11 +354,7 @@ describe('a restore', () => {
 
   it('of a task with more relation rows than one transaction may write succeeds, and its marks clear in bounded steps', async () => {
     Object.assign(ARCHIVE_MARKS, { rows: 40 })
-    const t = convexTest({
-      schema,
-      modules: import.meta.glob('../**/*.*s'),
-      transactionLimits: { documentsWritten: 100 },
-    })
+    const t = newT({ transactionLimits: { documentsWritten: 100 } })
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     for (let from = 0; from < 240; from += 80) {
