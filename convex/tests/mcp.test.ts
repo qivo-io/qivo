@@ -131,8 +131,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'a4d7e7ca02c4d4874263b263dee3558bd4cc318259eb8d5bc550bd78c15be415'
-const SHA_TOOLS_MODERN = 'bc997cba44c78b6ed7ee5f929bb3e6c9dc2c292e51618c91c2377fa0b6b0565d'
+const SHA_TOOLS_LEGACY = '8f487a9fcd4ba7e9573f4dc7256c6dc44f3777b4c7006510632458a558e5287e'
+const SHA_TOOLS_MODERN = '26a6b453a365f8c8f8c9da57e62f8c08cf3cccf3b34a030a156ae3f85aa31ffd'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -478,6 +478,9 @@ describe('body shape and leg selection', () => {
       'list_labels',
       'set_label',
       'delete_attachment',
+      'start_attachment_upload',
+      'confirm_attachment_upload',
+      'attach_text_file',
       'list_task_activity',
       'get_workload',
       'update_comment',
@@ -736,6 +739,23 @@ describe('body shape and leg selection', () => {
     expect(await bodyOf(r20)).toBe(
       frame(
         '{"result":{"content":[{"type":"text","text":"Input validation error: Invalid arguments for tool list_tasks: limit: Invalid input: expected number, received string"}],"isError":true},"jsonrpc":"2.0","id":7}',
+      ),
+    )
+    // half a surrogate pair cannot reach a tool's function, so the schema
+    // refuses it in any string argument before the task is looked up
+    const half = await post(
+      fx.t,
+      QVT,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name: 'add_comment', arguments: { ref: 'QN-999999', body: 'half \ud83c' } },
+        id: 8,
+      }),
+    )
+    expect(await bodyOf(half)).toBe(
+      frame(
+        '{"result":{"content":[{"type":"text","text":"Input validation error: Invalid arguments for tool add_comment: body: Invalid string: has an unpaired surrogate, which UTF-8 cannot encode"}],"isError":true},"jsonrpc":"2.0","id":8}',
       ),
     )
     // 17: app refusal is the BARE sentence (legacy)

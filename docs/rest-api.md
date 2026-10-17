@@ -1572,6 +1572,12 @@ Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
 Attaching writes an `attached a file to` activity row with the file name and
 the provenance.
 
+MCP offers the same upload through `start_attachment_upload` and
+`confirm_attachment_upload`, which is how an OAuth connection attaches files
+([MCP attachments](mcp.md#attachments)). A ticket belongs to the user, not
+the credential, so the same user can confirm a ticket started over MCP here,
+and the reverse.
+
 `DELETE` needs Edit access to the task's project, as in the app, where
 anyone with Edit may remove any file, not only their own. It deletes the
 file and answers `{ "deleted": true, "id": "…", "name": "wiring.pdf", "key":

@@ -9,19 +9,25 @@
  *   3. The REST upload: the ticket the start records, and a confirm that
  *      must match the caller, the task, the expiry, a file stored after the
  *      ticket and the declared size, with the organization's cap measured
- *      from the stored file; expired tickets are reaped.
+ *      from the stored file; expired tickets are reaped. The MCP upload
+ *      tools run the same rules over a personal token, and a ticket confirms
+ *      on either surface. attach_text_file stores text as UTF-8 within 256
+ *      KiB and the cap, refuses before it stores anything, and deletes what
+ *      it stored when the attach refuses.
  *   4. Task activity: the app's visibility rule for members, every row for
  *      organization admins.
  *   5. Workload: the app's spread rule, the anonymized hidden hours, a
  *      project limit, the week grid and the input checks. */
 
-import { describe, expect, it } from 'vitest'
+import { ConvexError } from 'convex/values'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
+import { storeThenAttach } from '../machine/records'
 import { UPLOAD_STORAGE_ID, UPLOAD_TICKET_MISSING } from '../model/attachments'
 import {
   activityFor,
@@ -38,10 +44,14 @@ import {
   withOrg,
 } from './helpers.setup'
 
-/* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
- * declare it. */
+/* edge-runtime provides Blob and TextEncoder; convex/tsconfig's ESNext-only
+ * lib does not declare them. */
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
+  arrayBuffer(): Promise<ArrayBuffer>
+}
+declare class TextEncoder {
+  encode(input: string): Uint8Array
 }
 
 /* fileTokens reads these lazily (attachments.test.ts plants the same). */
@@ -167,6 +177,83 @@ const rest = (fx: Fx, method: string, path: string, body?: unknown) =>
     headers: { Authorization: `Bearer ${fx.agentKey}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+
+/* A personal token of `profile` with `access`, for the MCP requests. */
+async function personalToken(
+  t: T,
+  profile: Doc<'profiles'>,
+  access: 'read' | 'write',
+): Promise<string> {
+  const secret = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
+  const token_hash = await sha256hex(secret)
+  await t.run((ctx) =>
+    ctx.db.insert('mcp_tokens', {
+      id: uuid(),
+      profile_id: profile.id,
+      name: `${access} token`,
+      token_prefix: secret.slice(0, 11),
+      token_hash,
+      access,
+      created_at: NOW,
+    }),
+  )
+  return secret
+}
+
+/* One MCP tools/call with `secret` on the modern leg: the tool's text and
+ * whether it is an error result. */
+async function mcpTool(
+  t: T,
+  secret: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean }> {
+  const res = await fetchPath(t, '/mcp', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      'Content-Type': 'application/json',
+      'Mcp-Method': 'tools/call',
+      'Mcp-Name': name,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name,
+        arguments: args,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    }),
+  })
+  expect(res.status, res.text).toBe(200)
+  const { result } = JSON.parse(res.text) as {
+    result: { content: { text: string }[]; isError?: boolean }
+  }
+  return { text: result.content[0].text, isError: result.isError === true }
+}
+
+/* The bytes the /files gateway serves for an attachment's download link. */
+async function download(t: T, link: string): Promise<Uint8Array> {
+  const url = new URL(link)
+  const res = await (
+    t as unknown as {
+      fetch(path: string): Promise<{ status: number; arrayBuffer(): Promise<ArrayBuffer> }>
+    }
+  ).fetch(`${url.pathname}${url.search}`)
+  expect(res.status).toBe(200)
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+/* How many files storage holds. */
+const storedFiles = (t: T) =>
+  t.run(async (ctx) => (await ctx.db.system.query('_storage').collect()).length)
+
+const attachmentRows = (t: T) => t.run((ctx) => ctx.db.query('issue_attachments').collect())
 
 /* ------------------------------------------------------ 1. attachments */
 
@@ -692,6 +779,380 @@ describe('the REST upload', () => {
     const left = await tickets(fx.t)
     expect(left.map((r) => r.name).sort()).toEqual(['admin.txt', 'new.txt'])
     expect(left.some((r) => r.id === ticket)).toBe(false)
+  })
+})
+
+/* -------------------------------------------------------- 3b. MCP uploads */
+
+describe('the MCP upload', () => {
+  const start = (
+    fx: Fx,
+    ref: string,
+    args: { name: string; size: number },
+    callerId = fx.agent.id,
+  ) =>
+    fx.t.mutation(internal.machine.records.mcpStartUpload, {
+      callerId,
+      access: 'write',
+      ref,
+      ...args,
+    })
+  const confirm = (
+    fx: Fx,
+    ref: string,
+    ticket: string,
+    storage_id: string,
+    callerId = fx.agent.id,
+  ) =>
+    fx.t.mutation(internal.machine.records.mcpConfirmUpload, {
+      callerId,
+      access: 'write',
+      ref,
+      ticket,
+      storage_id,
+    })
+  const ticketOf = (text: string) => (JSON.parse(text) as { ticket: string }).ticket
+
+  it('starts and confirms over HTTP with a personal token, and the file downloads', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const token = await personalToken(fx.t, fx.user, 'write')
+    const ref = `QN-${issue.num}`
+    const before = Date.now()
+    const started = await mcpTool(fx.t, token, 'start_attachment_upload', {
+      ref,
+      name: ' wiring.pdf ',
+      size: 256,
+      content_type: 'application/pdf',
+    })
+    expect(started.isError).toBe(false)
+    const out = JSON.parse(started.text) as {
+      ticket: string
+      upload_url: string
+      expires_at: string
+    }
+    expect(Object.keys(out)).toEqual(['ticket', 'upload_url', 'expires_at'])
+    expect(out.upload_url).toMatch(/^https:\/\//)
+    expect(Date.parse(out.expires_at) - before).toBeGreaterThanOrEqual(60 * 60 * 1000)
+    const [ticket] = await tickets(fx.t)
+    expect(ticket).toMatchObject({ id: out.ticket, profile_id: fx.user.id, name: 'wiring.pdf' })
+    // convex-test's upload URL is no endpoint, so the bytes are stored directly
+    const bytes = Uint8Array.from({ length: 256 }, (_, i) => i)
+    const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob([bytes]) as never))
+    const confirmed = await mcpTool(fx.t, token, 'confirm_attachment_upload', {
+      ref,
+      ticket: out.ticket,
+      storage_id: stored,
+    })
+    expect(confirmed.isError).toBe(false)
+    const attachment = JSON.parse(confirmed.text) as { id: string; url: string }
+    expect(attachment).toMatchObject({
+      name: 'wiring.pdf',
+      size_bytes: 256,
+      content_type: 'application/pdf',
+      inline: false,
+      uploaded_by_id: fx.user.id,
+      uploaded_by_name: 'user',
+    })
+    expect(await download(fx.t, attachment.url)).toEqual(bytes)
+    expect(await attachmentRow(fx.t, attachment.id)).toMatchObject({
+      storage_id: stored,
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+    })
+    expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
+      actor_id: fx.user.id,
+      verb: 'attached a file to',
+      detail: 'wiring.pdf — via MCP',
+    })
+    expect(await tickets(fx.t)).toEqual([])
+  })
+
+  it('confirms a ticket started on the other surface, for the same user only', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const viaMcp = ticketOf(await start(fx, issue.id, { name: 'mcp.txt', size: 3 }))
+    const restOut = await fx.t.mutation(internal.machine.records.restConfirmUpload, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'CI key',
+      ref: issue.id,
+      ticket: viaMcp,
+      body: JSON.stringify({ storage_id: await storeFile(fx.t, 3) }),
+    })
+    expect(restOut).toMatchObject({ attachment: { name: 'mcp.txt', size_bytes: 3 } })
+    const viaRest = await fx.t.mutation(internal.machine.records.restStartUpload, {
+      callerId: fx.agent.id,
+      access: 'write',
+      ref: issue.id,
+      body: JSON.stringify({ name: 'rest.txt', size: 4 }),
+    })
+    const stored = await storeFile(fx.t, 4)
+    // the admin can edit the task too, but the ticket is the agent's
+    await refused(
+      confirm(fx, issue.id, viaRest.ticket, stored, fx.admin.id),
+      'not_found',
+      UPLOAD_TICKET_MISSING,
+    )
+    const mcpOut = await confirm(fx, issue.id, viaRest.ticket, stored)
+    if (!('text' in mcpOut)) throw new Error('expected an attachment')
+    expect(JSON.parse(mcpOut.text)).toMatchObject({ name: 'rest.txt', uploaded_by_id: fx.agent.id })
+    expect((await activityFor(fx.t, fx.org.id)).map((row) => row.detail)).toEqual([
+      'mcp.txt — via the REST API (CI key)',
+      'rest.txt — via MCP',
+    ])
+  })
+
+  it('checks sight, Edit and the fields before minting a ticket', async () => {
+    const fx = await setup()
+    const hidden = await task(fx, { project_id: fx.hiddenSub.id })
+    await refused(
+      start(fx, `QN-${hidden.num}`, { name: 'a', size: 1 }),
+      'not_found',
+      `task "QN-${hidden.num}" not found (or not visible to you)`,
+    )
+    const issue = await task(fx)
+    await refused(
+      start(fx, issue.id, { name: 'a', size: 1 }, fx.viewer.id),
+      'forbidden',
+      PERSON_NO_WRITE,
+    )
+    await refused(
+      start(fx, issue.id, { name: '   ', size: 1 }),
+      'bad_request',
+      'name must be a file name of 1 to 255 characters',
+    )
+    await refused(
+      start(fx, issue.id, { name: 'big.bin', size: 10 * MiB + 1 }),
+      'bad_request',
+      'attachment exceeds the organization limit of 10 MiB',
+    )
+    expect(await tickets(fx.t)).toEqual([])
+  })
+
+  it('refuses tickets and files by the REST rules, and deletes a file over a lowered cap', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const other = await task(fx)
+    const me = fx.user.id
+    const earlier = await storeFile(fx.t, 6 * MiB)
+    const ticket = ticketOf(await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB }, me))
+    const six = await storeFile(fx.t, 6 * MiB)
+    await refused(confirm(fx, other.id, ticket, six, me), 'not_found', UPLOAD_TICKET_MISSING)
+    await refused(confirm(fx, issue.id, uuid(), six, me), 'not_found', UPLOAD_TICKET_MISSING)
+    await refused(confirm(fx, issue.id, ticket, earlier, me), 'bad_request', UPLOAD_STORAGE_ID)
+    // a file of another size is refused and kept, and the ticket stays usable
+    const wrong = await storeFile(fx.t, 6 * MiB - 1)
+    await refused(
+      confirm(fx, issue.id, ticket, wrong, me),
+      'bad_request',
+      `the uploaded file has ${6 * MiB - 1} bytes, not the ${6 * MiB} declared`,
+    )
+    expect(await storageExists(fx.t, wrong)).toBe(true)
+    expect(await tickets(fx.t)).toHaveLength(1)
+    // a cap lowered since the start is an error result whose byte delete has
+    // committed, and it spends the ticket
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
+    const token = await personalToken(fx.t, fx.user, 'write')
+    expect(
+      await mcpTool(fx.t, token, 'confirm_attachment_upload', {
+        ref: issue.id,
+        ticket,
+        storage_id: six,
+      }),
+    ).toEqual({ text: 'attachment exceeds the organization limit of 5 MiB', isError: true })
+    expect(await storageExists(fx.t, six)).toBe(false)
+    expect(await storageExists(fx.t, earlier)).toBe(true)
+    expect(await tickets(fx.t)).toEqual([])
+    // an expired ticket answers like an unknown one
+    const late = ticketOf(await start(fx, issue.id, { name: 'late.txt', size: 1 }, me))
+    await fx.t.run(async (ctx) => {
+      const [row] = await ctx.db.query('attachment_uploads').collect()
+      await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
+    })
+    await refused(
+      confirm(fx, issue.id, late, await storeFile(fx.t, 1), me),
+      'not_found',
+      UPLOAD_TICKET_MISSING,
+    )
+    expect(await attachmentRows(fx.t)).toEqual([])
+  })
+})
+
+describe('attach_text_file', () => {
+  const attachText = (
+    fx: Fx,
+    args: { ref: string; name: string; text: string; content_type?: string },
+    callerId = fx.agent.id,
+  ) =>
+    fx.t.action(internal.machine.records.mcpAttachTextFile, { callerId, access: 'write', ...args })
+  const fileText = (t: T, id: Id<'_storage'>) =>
+    t.run(async (ctx) => {
+      const blob = (await ctx.storage.get(id)) as { text(): Promise<string> } | null
+      return await blob?.text()
+    })
+
+  it('stores the text as UTF-8 and attaches it, signed via MCP', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const token = await personalToken(fx.t, fx.user, 'write')
+    const text = 'Kalibrering 3,5 °C ±0,2 ✓\nNästa steg: byt sensor 🌡️\n'
+    const done = await mcpTool(fx.t, token, 'attach_text_file', {
+      ref: `QN-${issue.num}`,
+      name: ' notes.txt ',
+      text,
+    })
+    expect(done.isError).toBe(false)
+    const attachment = JSON.parse(done.text) as { id: string; url: string }
+    const bytes = new TextEncoder().encode(text)
+    expect(attachment).toMatchObject({
+      name: 'notes.txt',
+      size_bytes: bytes.length,
+      content_type: 'text/plain; charset=utf-8',
+      inline: false,
+      uploaded_by_id: fx.user.id,
+    })
+    expect(bytes.length).toBeGreaterThan(text.length)
+    expect(await download(fx.t, attachment.url)).toEqual(bytes)
+    const row = await attachmentRow(fx.t, attachment.id)
+    expect(row).toMatchObject({
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      size_bytes: bytes.length,
+    })
+    expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
+      actor_id: fx.user.id,
+      verb: 'attached a file to',
+      detail: 'notes.txt — via MCP',
+    })
+    // a given type is kept, and exactly 256 KiB of UTF-8 fits
+    const csv = JSON.parse(
+      await attachText(fx, {
+        ref: issue.id,
+        name: 'readings.csv',
+        text: 'é'.repeat(128 * 1024),
+        content_type: 'text/csv',
+      }),
+    ) as { id: string; size_bytes: number; content_type: string }
+    expect(csv).toMatchObject({ size_bytes: 256 * 1024, content_type: 'text/csv' })
+    const stored = await attachmentRow(fx.t, csv.id)
+    if (stored === null) throw new Error('expected the attachment row')
+    expect(await fileText(fx.t, stored.storage_id)).toBe('é'.repeat(128 * 1024))
+  })
+
+  it('refuses before it stores anything', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const hidden = await task(fx, { project_id: fx.hiddenSub.id })
+    const viewerAgent = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Ledger',
+      kind: 'agent',
+      org_role: 'viewer',
+    })
+    await fx.t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: fx.meta.id,
+        profile_id: viewerAgent.id,
+        level: 'user',
+      }),
+    )
+    const before = await storedFiles(fx.t)
+    // convex-test reads every blob it stores, so no read means nothing stored
+    const stores = vi.spyOn(Blob.prototype, 'arrayBuffer')
+    onTestFinished(() => stores.mockRestore())
+    const readToken = await personalToken(fx.t, fx.user, 'read')
+    const args = { ref: issue.id, name: 'notes.txt', text: 'hello' }
+    expect(await mcpTool(fx.t, readToken, 'attach_text_file', args)).toEqual({
+      text: 'this credential can only read',
+      isError: true,
+    })
+    await refused(
+      attachText(fx, args, viewerAgent.id),
+      'forbidden',
+      'this agent is a Viewer and can only read',
+    )
+    await refused(attachText(fx, args, fx.viewer.id), 'forbidden', PERSON_NO_WRITE)
+    await refused(
+      attachText(fx, { ...args, ref: hidden.id }),
+      'not_found',
+      `task "${hidden.id}" not found (or not visible to you)`,
+    )
+    await refused(
+      attachText(fx, { ...args, name: '   ' }),
+      'bad_request',
+      'name must be a file name of 1 to 255 characters',
+    )
+    await refused(
+      attachText(fx, { ...args, content_type: 'csv' }),
+      'bad_request',
+      'content_type must be a media type such as application/pdf',
+    )
+    // 256 KiB counts UTF-8 bytes, not characters
+    await refused(
+      attachText(fx, { ...args, text: `${'é'.repeat(128 * 1024)}a` }),
+      'bad_request',
+      'text must be at most 256 KiB (262144 bytes) as UTF-8',
+    )
+    // an unpaired surrogate cannot reach a function, so the schema refuses it
+    const token = await personalToken(fx.t, fx.user, 'write')
+    expect(
+      await mcpTool(fx.t, token, 'attach_text_file', { ...args, text: 'half \ud83c of a pair' }),
+    ).toEqual({
+      text: 'Input validation error: Invalid arguments for tool attach_text_file: text: Invalid string: has an unpaired surrogate, which UTF-8 cannot encode',
+      isError: true,
+    })
+    expect(stores).not.toHaveBeenCalled()
+    expect(await storedFiles(fx.t)).toBe(before)
+    expect(await attachmentRows(fx.t)).toEqual([])
+  })
+
+  it('deletes the stored text when the organization limit refuses it', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 0.1 }))
+    const before = await storedFiles(fx.t)
+    await refused(
+      attachText(fx, { ref: issue.id, name: 'log.txt', text: 'x'.repeat(200 * 1024) }),
+      'bad_request',
+      'attachment exceeds the organization limit of 0.1 MiB',
+    )
+    expect(await storedFiles(fx.t)).toBe(before)
+    expect(await attachmentRows(fx.t)).toEqual([])
+    // within the limit it attaches
+    await attachText(fx, { ref: issue.id, name: 'log.txt', text: 'x'.repeat(100 * 1024) })
+    expect(await attachmentRows(fx.t)).toHaveLength(1)
+  })
+
+  it('deletes the stored file when the attach refuses, and keeps it on any other failure', async () => {
+    const stored: string[] = []
+    const deleted: string[] = []
+    const storage = {
+      store: async () => {
+        stored.push(`file${stored.length}`)
+        return stored.at(-1) as Id<'_storage'>
+      },
+      delete: async (id: Id<'_storage'>) => {
+        deleted.push(id)
+      },
+    }
+    const file = {} as Parameters<typeof storeThenAttach>[1]
+    const forbiddenRefusal = new ConvexError({ code: 'forbidden', message: 'no' })
+    expect(await storeThenAttach(storage, file, async (id) => `attached ${id}`)).toBe(
+      'attached file0',
+    )
+    await expect(
+      storeThenAttach(storage, file, async () => {
+        throw forbiddenRefusal
+      }),
+    ).rejects.toBe(forbiddenRefusal)
+    await expect(
+      storeThenAttach(storage, file, async () => {
+        throw new Error('Too many reads')
+      }),
+    ).rejects.toThrow('Too many reads')
+    expect(stored).toEqual(['file0', 'file1', 'file2'])
+    expect(deleted).toEqual(['file1'])
   })
 })
 
