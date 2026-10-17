@@ -594,7 +594,8 @@ describe('the Archive or delete section of project settings', () => {
     expect(section().textContent).toContain(
       'Archive hides it and its 1 sub-project. Delete moves them and their tasks to Deleted items.',
     )
-    expect(has('fieldset.settings-danger-zone')).toBe(false)
+    // the section replaced the Danger zone, the page's only danger-toned box
+    expect(has('fieldset.settings-section legend.text-danger')).toBe(false)
     expect(open().disabled).toBe(false)
     await click(open())
     await settle()

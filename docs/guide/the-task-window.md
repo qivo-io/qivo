@@ -1,9 +1,9 @@
 Open a task to read its discussion and details. The breadcrumb links to its
 project and sub-project Boards. Click the title to edit it. The header also
 contains the subscription control ([Following tasks](./working-together.md#your-inbox)), permanent ID, **Close**, and an
-**…** menu with **Copy task ID**, **Copy link**, **Move to sub-project…**,
-**Archive** and **Delete**. Delete requires a second click to confirm, or
-opens a window for a task with subtasks ([Deleting](#deleting)).
+**…** menu with **Copy task ID**, **Copy link**, **Move to sub-project…** and
+**Archive or delete…**. With edit access, **Archive or delete…** opens one
+window for [archiving](#archiving) and [deleting](#deleting) the task.
 
 Desktop shows discussion and details side by side when space allows, or
 stacked in a narrower window. On phones, **Activity / Details** tabs sit below
@@ -142,14 +142,20 @@ subtasks are gone, its saved status applies again. A saved Done task can
 archive on a later sweep when its original Done age meets the threshold;
 a saved To Do task returns to To Do.
 
-**Manual archiving** is available in the task's **…** menu with edit access.
-It includes the whole subtask tree, including subtasks in other sub-projects. If
-an active subtask is in a project you cannot edit, Qivo refuses the archive,
-and an organization admin can archive it instead. If all descendant work is
-Done, it archives
-immediately. Otherwise, the dialog lists the affected tasks and requires a
-reason, which becomes a task comment. REST and MCP archiving accept the same
-optional reason, which also becomes a comment, but do not require one
+**Manual archiving** uses **Archive or delete…** in the task's **…** menu,
+which needs edit access. **Archive** is selected first. For a task with
+subtasks, the window lists them, and a box such as **Also archive the 3
+subtasks**, selected first, archives the whole subtask tree, including
+subtasks in other sub-projects. Qivo refuses that when one of them is in a
+project you cannot edit, and an organization admin can archive the whole tree
+instead. Clear the box to archive only the task. Its subtasks stay in their
+projects, those directly under it become top-level tasks, and restoring the
+task later does not bring them back under it.
+
+Archiving unfinished work requires a reason, which becomes a task comment. A
+Done task with no unfinished work going with it needs none. REST and MCP
+archiving always include the subtasks. They accept the same optional reason,
+which also becomes a comment, but do not require one
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 
 Open **Archived tasks** from a project or sub-project's **…** menu. The Archive
@@ -165,18 +171,26 @@ restoration.
 
 ## Deleting
 
-**Delete** in the task's **…** menu removes the task permanently, with its
-comments, attachments and links. It needs edit access to the task's project.
-A task without subtasks asks for a second click.
+Choose **Archive or delete…** in the task's **…** menu, then **Delete**. It
+moves the task to [Deleted items](./how-work-is-organized.md#deleted-items)
+with its comments, attachments, links and labels, and you can restore it from
+there. It needs edit access to the task's project. An optional reason is
+shown in Deleted items. The button names what goes, such as **Delete QN-142**
+or **Delete 4 tasks**.
 
-For a task with subtasks, a window lists them first. **Also delete subtasks**,
-selected first, deletes the listed subtasks you can edit, at any depth.
-Subtasks marked **View only**, in projects where you can read but not edit,
-are not deleted. Neither are subtasks in projects you cannot open, because
-you have no access or the project is archived, nor archived subtasks.
-**Keep the subtasks** deletes only the task. A subtask whose parent is
-deleted, and that is not deleted itself, stays in its project, becomes a
-top-level task and keeps its own subtasks. People following it are told its
-parent was removed. If the subtasks change while the window is open, it shows
-the new list and asks again. REST and MCP deletes keep the subtasks
+For a task with subtasks, the window lists them first. A box such as **Also
+delete the 3 subtasks**, selected first, deletes the listed subtasks you can
+edit, at any depth. Subtasks marked **View only**, in projects where you can read but not
+edit, are not deleted. Neither are subtasks in projects you cannot open,
+because you have no access or the project is archived, nor archived subtasks.
+Clear the box to delete only the task. A subtask whose parent is deleted, and
+that is not deleted itself, stays in its project, becomes a top-level task and
+keeps its own subtasks. Restoring the parent does not bring it back under it.
+People following it are told its parent was removed.
+
+If the subtasks change while the window is open, it shows the new list and
+asks again. The window stays open until Qivo has saved the archive or delete,
+and a refusal leaves it open. Deleting a task removes its
+inbox messages ([Your inbox](./working-together.md#your-inbox)). REST and MCP
+deletes also go to Deleted items and keep the subtasks
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).

@@ -1987,8 +1987,6 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
     onClose()
   }
   // Two-click arm-then-confirm with the app-wide timing (lib/useConfirmArm).
-  // It does not use the Settings ConfirmButton, because Settings already
-  // imports from this module and the row keeps its ghost style.
   const deletion = useConfirmArm<'delete'>()
   const armDel = deletion.armed !== null
   const remove = () =>
