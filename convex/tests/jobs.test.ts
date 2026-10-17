@@ -15,7 +15,7 @@
  * the design doc's "iterate to fixpoint" would archive the whole chain in one
  * night, a behavior change.
  *
- * The isolation tests pin the reason for the chains: a leg that fails every
+ * The isolation tests pin the reason for the chains. A leg that fails every
  * time stops only its own organization or page of profiles. */
 /// <reference types="vite/client" />
 
@@ -106,9 +106,9 @@ type ArchiveCounts = {
   now: string
 }
 
-/* One nightly run: the cron's first step and everything it schedules. `now`
- * pins the run's clock; without it the first step reads the current time.
- * Returns the counts each organization's chain logged. */
+/* Runs one nightly archive, the cron's first step and everything it
+ * schedules. `now` pins the run's clock, and without it the first step reads
+ * the current time. Returns the counts each organization's chain logged. */
 const runLegs = (t: T, now?: string): Promise<ArchiveCounts[]> =>
   runLogged(
     t,

@@ -124,9 +124,9 @@ const archiveOrgRef = makeFunctionReference<'mutation', ArchiveLeg, null>('jobs:
  * has no flagged active task skips the phase. Each flagged task is scheduled
  * once per run, and a step skips a task it finds cleared. */
 
-/* Each live project's cutoff for this run: its Done tasks with done_at at or
- * before it are due. A project that is archived, or whose root no longer
- * resolves, takes none and is left out. */
+/* Each live project's cutoff for this run. Its Done tasks with done_at at or
+ * before the cutoff are due. A project that is archived, or whose root no
+ * longer resolves, takes none and is left out. */
 function projectCutoffs(
   projects: readonly Doc<'projects'>[],
   teams: readonly Doc<'teams'>[],
@@ -184,9 +184,9 @@ function finishChain(a: ArchiveLeg): null {
   return null
 }
 
-/* The chain's step after its last archive leg: the first repair leg when the
- * organization has an active task still flagged relations_marked, else the
- * end of the chain. */
+/* Returns the chain's step after its last archive leg. That is the first
+ * repair leg when the organization has an active task still flagged
+ * relations_marked, else null, which ends the chain. */
 async function afterArchive(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
   const flagged = await ctx.db
     .query('issues')
@@ -230,7 +230,7 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
         .eq('org_id', a.org_id)
         .eq('archived_at', undefined)
         .eq('status', 'done')
-        // the demo-seed fact: Done without done_at is never taken
+        // a Done task without done_at is never taken
         .gt('done_at', undefined)
         .lte('done_at', cutoff),
     )
