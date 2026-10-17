@@ -884,6 +884,10 @@ export type CreateIssueArgs = {
   paused?: boolean | null
 }
 
+/** Creates the task `args` describes as `me`, who needs Edit on its
+ * sub-project, and answers the stored row. The app, REST and MCP all create
+ * through it, so every shared field rule runs here, including the title cap
+ * and the TEXT_MAX description cap. */
 export async function createIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; args: CreateIssueArgs; now: string; machine?: MachineNarration },
@@ -1018,6 +1022,11 @@ export type IssuePatch = {
   paused?: boolean
 }
 
+/** Applies `patch` to `issue` as `me`, who needs Edit on its project, and
+ * answers the stored row. A key present in the patch sets that field and null
+ * clears it. A description over TEXT_MAX is refused unless it equals the
+ * stored text. `machine` carries a REST or MCP caller's provenance and
+ * archive toggle (MachineUpdate). */
 export async function updateIssueCore(
   ctx: MutationCtx,
   a: {
