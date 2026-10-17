@@ -6,9 +6,10 @@
  * and jobs, so a step still scheduled does nothing (steps also stand still
  * while the receipt is deleting), then the rows a move or restore left in
  * the live tables, the stored rows and their bytes, before the uploads
- * phase, whose byte fence would otherwise keep trashed files. The tasks phase
- * then sweeps every task of the organization, those a moving project left
- * under its absent projects included. */
+ * phase, whose byte fence would otherwise keep trashed files. The trash
+ * phase also stops on TRASH_BYTES, because stored rows can be large. The tasks
+ * phase then sweeps every task of the organization, those a moving project
+ * left under its absent projects included. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { components } from '../_generated/api'
@@ -34,6 +35,13 @@ const expireRef = makeFunctionReference<'mutation', { id: string }, null>('demo:
 
 type Budget = { left: number }
 
+/* What the trash phase may delete in one batch besides its rows: about
+ * 4 MiB of documents, the margin an organization's deletion in steps leaves
+ * under Convex's 16 MiB read limit (model/cascade.ts REMOVAL_BUDGET). A
+ * stored row can hold a document of almost 1 MiB, so BATCH of them could
+ * read past that limit. */
+const TRASH_BYTES = 4 * 1024 * 1024
+
 /** A full batch is repeated from the same indexed prefix next time. No
  * cursor can skip a row that was deleted while the earlier batch ran. */
 async function drain<Row extends { _id: Id<TableNames> }>(
@@ -55,6 +63,15 @@ async function drain<Row extends { _id: Id<TableNames> }>(
 
 async function removeFile(ctx: MutationCtx, id: Id<'_storage'> | undefined) {
   if (id !== undefined && (await ctx.db.system.get(id))) await ctx.storage.delete(id)
+}
+
+/** Deleted items, within the batch's rows and TRASH_BYTES. Only this phase
+ * counts bytes; the others count rows alone. */
+async function trashRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  const teardown = { left: budget.left, bytes: TRASH_BYTES }
+  const done = await clearOrgTrash(ctx, orgId, teardown)
+  budget.left = teardown.left
+  return done
 }
 
 async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
@@ -478,7 +495,7 @@ export const purge = internalMutation({
         })) as { count: number; isDone: boolean }
         budget.left -= result.count
         done = result.isDone
-      } else if (phase === 'trash') done = !orgId || (await clearOrgTrash(ctx, orgId, budget))
+      } else if (phase === 'trash') done = !orgId || (await trashRows(ctx, orgId, budget))
       else if (phase === 'tasks') done = !orgId || (await taskRows(ctx, orgId, budget))
       else if (phase === 'projects') done = !orgId || (await projectRows(ctx, orgId, budget))
       else if (phase === 'teams') done = !orgId || (await teamRows(ctx, orgId, budget))

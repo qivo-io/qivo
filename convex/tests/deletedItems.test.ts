@@ -1323,6 +1323,35 @@ describe('organization teardown', () => {
     expect(await blobExists(t, elsewhere.file)).toBe(true)
   })
 
+  it('purgeOrg stops on bytes, so stored rows of about 900 KB go in several calls within the real limits', async () => {
+    vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+    vi.stubEnv('SITE_URL', 'https://preview.qivo.io')
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 24 comments of about 900 KB, over 20 MiB together: a batch of 256
+    // rows would read them all
+    const body = 'Field note. '.repeat(75_000)
+    for (let i = 0; i < 24; i++) await comment(t, task, body)
+    await deleteTask(t, f, task.id)
+    await runSteps(t)
+    // every comment is stored, none dropped as too large (reading them back
+    // here would pass the read limit too)
+    const item = await itemFor(t, task.id)
+    expect(item.state).toBe('ready')
+    expect(item.dropped_rows).toBeUndefined()
+
+    let calls = 0
+    for (;;) {
+      calls++
+      expect(calls).toBeLessThan(20)
+      const { done } = await t.mutation(internal.deletedItems.purgeOrg, { org_id: f.org.id })
+      if (done) break
+    }
+    expect(calls).toBeGreaterThan(3)
+    expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
+  }, 60_000)
+
   it("purgeTasks deletes a drive's own tasks for good, and nothing else", async () => {
     vi.stubEnv('QIVO_ENVIRONMENT', 'development')
     vi.stubEnv('SITE_URL', 'https://dev.qivo.test')
