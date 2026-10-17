@@ -9,7 +9,8 @@
  *      without an organization count in their task's organization. Past
  *      UNSCOPED_READ, those are found through the organization's own tasks,
  *      so other organizations' rows cannot take its read past the limits.
- *   3. Every move of a task (the app, REST and MCP) moves its rows' project.
+ *   3. Every move of a task (the app, REST and MCP) moves its rows' project,
+ *      and so do the subtasks a move to another top-level project carries.
  *
  * The fixtures insert rows directly, in the shape attachFileCore stores, or
  * without the fields older rows lack. */
@@ -316,6 +317,44 @@ describe('moving a task', () => {
       bytes: 116,
       projects: [PCB(f, 111), FW(f, 5)],
       ranges: 3,
+    })
+  })
+
+  it('moves the rows of the subtasks a move to another top-level project carries', async () => {
+    const { t, f, sid, active, quiet } = await fixture()
+    const cloud = await plantProject(t, { org_id: f.org.id, key: 'CLD', name: 'Cloud' })
+    const backend = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: cloud.id,
+      key: 'BE',
+      name: 'Backend',
+    })
+    const inFw = { org_id: f.org.id, project_id: f.sub.id }
+    const child = await plantIssue(t, { ...inFw, parent_id: active.id })
+    const done = await plantIssue(t, { ...inFw, parent_id: child.id, archived_at: NOW })
+    await plantFile(t, sid, active, 100)
+    await plantFile(t, sid, child, 20)
+    await plantFile(t, sid, done, 3, { task_archived: true })
+    await plantFile(t, sid, quiet, 5)
+
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: active.id,
+      project_id: backend.id,
+    })
+    const rows = await t.run((ctx) => ctx.db.query('issue_attachments').collect())
+    expect(rows.map((row) => [row.issue_id, row.project_id]).sort()).toEqual(
+      [
+        [active.id, backend.id],
+        [child.id, backend.id],
+        [done.id, backend.id],
+        [quiet.id, f.sub.id],
+      ].sort(),
+    )
+    expect(await usage(t, f.org.id)).toMatchObject({
+      bytes: 128,
+      projects: [{ project_id: backend.id, name: 'Backend', storage_bytes: 123 }, FW(f, 5)],
     })
   })
 })

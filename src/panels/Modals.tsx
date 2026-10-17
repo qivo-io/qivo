@@ -725,15 +725,47 @@ function MoveIssueModal({
     .filter((g) => g.subs.length > 0)
   const hasCurrent = !!it && groups.some((g) => g.subs.some((sp) => sp.id === it.project))
   const [target, setTarget] = useStateM(hasCurrent ? it.project : '')
+  // A move to another top-level project carries the subtasks, archived ones
+  // included. Archived tasks are not in this view, so the server answers
+  // whether any would move to the chosen sub-project.
+  const [asked, setAsked] = useStateM<{ target: string; carries: boolean } | null>(null)
+  const crossing =
+    !!it &&
+    !!P.project(target) &&
+    target !== it.project &&
+    P.topLevelOf(target) !== P.topLevelOf(it.project)
+  useEffectM(() => {
+    if (!crossing) return
+    let live = true
+    P.moveCarriesSubtasks(issueId, target).then((carries) => {
+      if (live && carries !== null) setAsked({ target, carries })
+    })
+    return () => {
+      live = false
+    }
+  }, [crossing, issueId, target])
   if (!it) return null
   // targetValid: a concurrently deleted target vanishes from the options but
   // would linger in state — the blank select must not leave Move enabled
   const targetValid = groups.some((g) => g.subs.some((sp) => sp.id === target))
+  const moving = targetValid && target !== it.project
   // whoever works on the task or its subtasks must keep access after the
   // move; the dialog names them (subtasks outside this view are left to the
   // server, whose refusal names no one)
-  const blockers = targetValid && target !== it.project ? P.moveBlockers(it, target) : []
-  const canMove = !!target && target !== it.project && targetValid && !blockers.length
+  const blockers = moving ? P.moveBlockers(it, target) : []
+  const canMove = !!target && moving && !blockers.length
+  // a subtask stays in its parent's project, so a move to another project
+  // leaves the parent and carries the subtasks along; the dialog says so
+  const family = moving ? P.moveFamily(it, target) : null
+  const carries = !!family?.carriesSubtasks || (asked?.target === target && asked.carries)
+  const parentKey = it.parent ? P.issueById[it.parent]?.key : undefined
+  const notes = [
+    family?.leavesParent &&
+      (parentKey
+        ? `${it.key} will no longer be a subtask of ${parentKey}.`
+        : `${it.key} will no longer be a subtask.`),
+    moving && carries && 'Its subtasks move with it, archived ones included.',
+  ].filter((note): note is string => !!note)
   // no dirty-draft guard any more: the issue's key is org-scoped and
   // immutable (0050), so a move no longer remounts the editor — an open
   // description draft survives the move untouched
@@ -778,11 +810,16 @@ function MoveIssueModal({
           ))}
         </NativeSelect>
       </MField>
-      {blockers.length > 0 && (
+      {notes.length + blockers.length > 0 && (
         <div
           data-move-blockers
           className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5] [margin-top:12px] flex flex-col gap-2"
         >
+          {notes.map((note) => (
+            <p key={note} data-move-note>
+              {note}
+            </p>
+          ))}
           {blockers.slice(0, 3).map((b) => (
             <p key={`${b.task.id}:${b.role}`}>{P.blockerText(b)}</p>
           ))}

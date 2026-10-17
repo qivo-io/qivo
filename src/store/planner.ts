@@ -2217,6 +2217,13 @@ export const PLANNER = {
     if (!p) return null
     return p.type === 'meta' ? p : PLANNER.project(p.parent) || null
   },
+  /* The id of the top-level project a project belongs to, as the server
+     reads it (its parent, or itself), or undefined for one outside this
+     view. A subtask stays in its parent's top-level project. */
+  topLevelOf: (pid: string | null | undefined): string | undefined => {
+    const p = PLANNER.project(pid)
+    return p ? p.parent || p.id : undefined
+  },
   isAdmin: (uid?: string) => {
     const u = PLANNER.user(uid || CURRENT_USER)
     return !!(u && u.orgRole === 'admin')
@@ -2520,23 +2527,61 @@ export const PLANNER = {
   },
   holdersSeeParent: (it: IssueVM, parentKey: string): boolean =>
     PLANNER.parentBlockers(it, parentKey).length === 0,
-  /* Who would lose access if `it` moved to `projectId`: its own assignee and
-     reviewer need edit access there, and the people on its subtasks need
-     sight of it, the same checks the server makes. */
+  /* What moving `it` to `projectId` does to its family, as the server does
+     it. A move within the task's top-level project changes nothing else. A
+     subtask moving to another one leaves its parent (`leavesParent`) unless
+     it lands in the parent's top-level project. A hidden parent counts as
+     being in the task's own top-level project, where every new link is. A
+     move to another top-level project carries the subtasks outside it
+     along. `carried` lists the visible ones, and `carriesSubtasks` also
+     counts active ones hidden from this view. Archived subtasks are not in
+     the view, so the Move window asks the server too
+     (moveCarriesSubtasks). */
+  moveFamily: (
+    it: IssueVM,
+    projectId: string,
+  ): { leavesParent: boolean; carriesSubtasks: boolean; carried: IssueVM[] } => {
+    const dst = PLANNER.topLevelOf(projectId)
+    const crosses = PLANNER.topLevelOf(it.project) !== dst
+    const parent = it.parent ? PLANNER.issueById[it.parent] : undefined
+    const parentTop = PLANNER.topLevelOf(parent ? parent.project : it.project)
+    const leavesParent = crosses && (!!it.parent || it.hasHiddenParent) && parentTop !== dst
+    const carried: IssueVM[] = []
+    if (crosses) {
+      eachDescendant(it, (child) => {
+        if (PLANNER.topLevelOf(child.project) !== dst) carried.push(child)
+      })
+    }
+    return {
+      leavesParent,
+      carriesSubtasks: crosses && (carried.length > 0 || it.hasHiddenSubtasks),
+      carried,
+    }
+  },
+  /* Who would lose access if `it` moved to `projectId`. The assignee and
+     leaf reviewer of the task and of each subtask it carries need edit
+     access there, and the people on its other subtasks need sight of it, the
+     same checks the server makes. */
   moveBlockers: (it: IssueVM, projectId: string): AccessBlocker[] => {
     const project = PLANNER.project(projectId)
     if (!project) return []
-    // the task's own assignee and leaf reviewer must be able to hold it there,
-    // switched off or not; people on its subtasks only need to see it
+    // the tasks that move must be held there by their assignee and leaf
+    // reviewer, switched off or not; people on the subtasks that stay only
+    // need to see the task
+    const movers = [it, ...PLANNER.moveFamily(it, projectId).carried]
+    const moving = new Set(movers.map((task) => task.id))
     const own: Holder[] = []
-    if (it.assignee) own.push({ uid: it.assignee, task: it, role: 'assignee' })
-    if (it.reviewer && !PLANNER.isGroup(it))
-      own.push({ uid: it.reviewer, task: it, role: 'reviewer' })
+    for (const task of movers) {
+      if (task.assignee) own.push({ uid: task.assignee, task, role: 'assignee' })
+      if (task.reviewer && !PLANNER.isGroup(task))
+        own.push({ uid: task.reviewer, task, role: 'reviewer' })
+    }
     return [
       ...own
         .map((h) => ({ ...h, project, edit: true }))
         .filter((b) => !PLANNER.canWrite(projectId, b.uid)),
       ...PLANNER.holdersOf(it, false)
+        .filter((h) => !moving.has(h.task.id))
         .map((h) => ({ ...h, project, edit: false }))
         .filter((b) => !PLANNER.canSee(projectId, b.uid)),
     ]
@@ -3325,21 +3370,67 @@ export const PLANNER = {
     }))
   },
 
+  /** Whether the server would carry subtasks along if the task `id` moved
+      to `projectId` (api.issues.moveCarriesSubtasks), archived ones
+      included. The snapshot holds no archived tasks, so moveFamily cannot
+      tell. Null on transport error or for a task outside this view. */
+  moveCarriesSubtasks: async (id: string, projectId: string): Promise<boolean | null> => {
+    const it = PLANNER.issueById[id]
+    if (!it) return null
+    try {
+      return await convex.query(api.issues.moveCarriesSubtasks, {
+        org_id: it.org,
+        id: it.uuid,
+        project_id: projectId,
+      })
+    } catch (e) {
+      console.error('[qivo] move preview failed:', e)
+      return null
+    }
+  },
+
   /** Move an issue to another sub-project. Issue numbers are org-scoped and
       immutable, so the key survives the move unchanged — nothing to
-      renumber. Returns the (unchanged) key, or null for a no-op or an
-      invalid target. */
+      renumber. A move to another top-level project detaches the task from a
+      parent that stays behind and carries its subtasks along (moveFamily),
+      as the server does. Returns the (unchanged) key, or null for a no-op or
+      an invalid target. */
   moveIssue: (id: string, projectId: string) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     const target = rows.projects.get(projectId)
-    if (!row || !uuid || !target || target.type !== 'project' || row.project_id === projectId)
+    const it = PLANNER.issueById[id]
+    if (
+      !row ||
+      !uuid ||
+      !it ||
+      !target ||
+      target.type !== 'project' ||
+      row.project_id === projectId
+    )
       return null
-    row.project_id = projectId
-    row.updated_at = new Date().toISOString() // the server's move fires the touch
+    const { leavesParent, carried } = PLANNER.moveFamily(it, projectId)
+    const now = new Date().toISOString() // the server's move fires the touch
+    for (const task of [it, ...carried]) {
+      const moved = rows.issues.get(task.uuid)
+      if (!moved) continue
+      moved.project_id = projectId
+      moved.updated_at = now
+    }
+    if (leavesParent) {
+      row.parent_id = undefined
+      rows.hiddenParentTasks.delete(uuid)
+    }
     rebuild()
     emit()
-    run(write(api.issues.move, { org_id: row.org_id, id: uuid, project_id: projectId }))
+    run(
+      write(api.issues.move, {
+        org_id: row.org_id,
+        id: uuid,
+        project_id: projectId,
+        ...(leavesParent ? { detach_parent: true } : {}),
+      }),
+    )
     return id
   },
 

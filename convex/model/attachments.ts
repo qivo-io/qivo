@@ -17,7 +17,8 @@
  * Each row carries its task's organization and project. The app snapshot
  * reads the organization's rows by index, and the storage totals group
  * them by project without reading tasks (model/billing.ts storageUsage).
- * moveIssueCore moves the project with the task. A file name has 1 to 255
+ * moveIssueCore moves the project with the task, and with each subtask a
+ * move to another top-level project carries. A file name has 1 to 255
  * characters and a media type at most 255. That keeps every row small, and
  * storageUsage reads all of an organization's rows in one transaction.
  *

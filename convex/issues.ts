@@ -1,6 +1,6 @@
-/* The issue domain's public surface (phase 4): the archived-list read plus
- * the browser client's issue writes — thin wrappers over model/issues,
- * model/messages and model/cascade. Pattern:
+/* The issue domain's public surface (phase 4): the archived-list read and
+ * the Move window's question, plus the browser client's issue writes — thin
+ * wrappers over model/issues, model/messages and model/cascade. Pattern:
  * orgMutation wrapper → resolve by uuid → access check → compose model
  * functions with ONE `now` → return what the optimistic client reconciles
  * against.
@@ -52,6 +52,7 @@ import {
   deleteIssueCore,
   hasSubtasks,
   moveIssueCore,
+  subtasksWouldMove,
   unarchiveIssueCore,
   updateIssueCore,
 } from './model/issues'
@@ -237,16 +238,43 @@ export const update = orgMutation({
  * 'member' on BOTH ends, checked before moveIssueCore's guards as create
  * checks its project. A destination the caller cannot write answers 'no
  * write access to this project' whether it is missing, hidden, read-only or
- * in another organization, so no guard describes it. */
+ * in another organization, so no guard describes it. `detach_parent` also
+ * clears the task's parent, which a subtask moving to another top-level
+ * project needs (the Move window says so); a move to another top-level
+ * project carries the task's subtasks along. */
 export const move = orgMutation({
-  args: { id: v.string(), project_id: v.string() },
-  handler: async (ctx, { id, project_id }) => {
+  args: { id: v.string(), project_id: v.string(), detach_parent: v.optional(v.boolean()) },
+  handler: async (ctx, { id, project_id, detach_parent }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     if (project_id !== issue.project_id) await assertWritable(ctx, project_id)
-    const after = await moveIssueCore(ctx, { me: ctx.me, issue, project_id, now })
+    const after = await moveIssueCore(ctx, {
+      me: ctx.me,
+      issue,
+      project_id,
+      now,
+      detachParent: detach_parent,
+    })
     return await pubFor(ctx, ctx.me, after)
+  },
+})
+
+/* P.moveCarriesSubtasks asks, for the Move window, whether moving the task
+ * to `project_id` would carry subtasks along. Archived subtasks are not in
+ * the app's snapshot, so the dialog cannot tell on its own. It answers false
+ * unless the caller could make the move (Edit on both ends, as move
+ * checks), so it says nothing about a task or project the caller cannot
+ * write. */
+export const moveCarriesSubtasks = orgQuery({
+  args: { id: v.string(), project_id: v.string() },
+  handler: async (ctx, { id, project_id }) => {
+    const issue = await myIssue(ctx, id)
+    if (!(await hasProjectLevel(ctx, ctx.me, issue.project_id, 'user'))) return false
+    if (!(await hasProjectLevel(ctx, ctx.me, project_id, 'user'))) return false
+    const target = await byId(ctx, 'projects', project_id)
+    if (target === null || target.org_id !== issue.org_id) return false
+    return await subtasksWouldMove(ctx, issue, target)
   },
 })
 

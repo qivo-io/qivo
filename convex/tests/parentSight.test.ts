@@ -1,6 +1,8 @@
 /* Whoever works on a subtask must see every task above it: the parent holds
- * the subtask's context. f.guest can edit f.sub but holds nothing on
- * f.hidden; f.user leads both, so sees every task. */
+ * the subtask's context. A subtask stays in its parent's top-level project,
+ * so the scene hides a sibling sub-project of TBED from the guest. f.guest
+ * can edit f.sub and f.sub2 but holds nothing on hiddenSub; f.user leads
+ * TBED, so sees every task. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -19,8 +21,8 @@ import {
   expectRefusal,
   newT,
   type OrgFixture,
+  plantHiddenSibling,
   plantIssue,
-  plantProject,
   type T,
   uuid,
   withOrg,
@@ -39,11 +41,7 @@ const issueRow = (t: T, id: string): Promise<Doc<'issues'>> =>
 
 async function scene(t: T) {
   const f = await withOrg(t)
-  const hiddenSub = await plantProject(t, {
-    org_id: f.org.id,
-    type: 'project',
-    parent_id: f.hidden.id,
-  })
+  const hiddenSub = await plantHiddenSibling(t, f, f.guest)
   const base = { org_id: f.org.id, project_id: f.sub.id }
   // an epic the guest cannot see, a visible feature under it, a task below
   const epic = await plantIssue(t, { ...base, project_id: hiddenSub.id, title: 'Epic' })

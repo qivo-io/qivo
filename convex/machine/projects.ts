@@ -569,6 +569,10 @@ async function restProject(ctx: QueryCtx, me: Caller, ref: string): Promise<Doc<
   return project
 }
 
+/* A project's parent never changes. A subtask stays in its parent task's
+ * top-level project (model/issues.ts parentChainCheck), so allowing a
+ * sub-project to change parent would have to carry that rule along, because
+ * its tasks' families can span its siblings. */
 const PARENT_AT_CREATION = "a project's parent is set when it is created, with parent"
 
 /* Projects have no comment thread, so archiving one takes no reason. */

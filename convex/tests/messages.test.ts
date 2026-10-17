@@ -35,6 +35,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantHiddenSibling,
   plantIssue,
   plantMessage,
   plantProject,
@@ -183,11 +184,7 @@ describe('recipient-relative narration', () => {
   it('ATTACH_SLOT resolves per recipient: the key for those who may see, the fixed fallback for those who may not', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const hiddenSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
+    const hiddenSub = await plantHiddenSibling(t, f, f.guest)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
     const child = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await subscribe(t, f.admin, child.id) // admin sees hidden (org admin)

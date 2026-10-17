@@ -46,6 +46,7 @@ import {
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
 import { restoreFocus } from '../lib/focusVisibility'
+import { parentCandidatesFor, subtaskCandidatesFor } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
@@ -1515,58 +1516,18 @@ function IssueDetail({
     )
   }
 
-  // ancestor chain (parent -> ... -> root)
-  const chain = []
-  if (it) {
-    let p = it.parent
-    let guard = 0
-    while (p && P.issueById[p] && guard++ < 12) {
-      chain.unshift(p)
-      p = P.issueById[p].parent
-    }
-  }
-
-  // picker candidates (cycle-safe), same sub-project first; only while open.
-  // Every relation is same-ORGANIZATION by DB guard (parents 0057, links
-  // 0078), so the blended snapshot is narrowed before it is offered. Setting
-  // a parent changes both tasks, so the server needs edit access to each, and
-  // only tasks in editable projects are offered as parents or subtasks.
+  // picker candidates, only while open, are tasks of the same top-level
+  // project that the person can edit, without cycles (lib/relationCandidates.ts)
   const sameOrg = (x) => x.org === it.org
   const sameProjFirst = (a, b) =>
     Number(b.project === it.project) - Number(a.project === it.project)
-  let subCandidates = []
-  if (it && subAnchor) {
-    // anything except the issue itself and its ancestors (would form a cycle);
-    // current children show a check and toggle off
-    const chainSet = new Set(chain)
-    subCandidates = P.issues
-      .filter((x) => sameOrg(x) && x.id !== it.id && !chainSet.has(x.id) && P.canWrite(x.project))
-      .sort(sameProjFirst)
+  const relationView = {
+    byId: P.issueById,
+    topLevelOf: P.topLevelOf,
+    canWrite: (pid: string) => P.canWrite(pid),
   }
-  let parentCandidates = []
-  if (it && parentAnchor) {
-    // anything except the issue itself and its descendants (would form a cycle)
-    const desc = new Set()
-    const stack = [...(it.children || [])]
-    while (stack.length) {
-      const c = stack.pop()
-      if (desc.has(c)) continue
-      desc.add(c)
-      ;(P.issueById[c]?.children || []).forEach((k) => {
-        stack.push(k)
-      })
-    }
-    // the current parent stays listed so it can be cleared
-    parentCandidates = P.issues
-      .filter(
-        (x) =>
-          sameOrg(x) &&
-          x.id !== it.id &&
-          !desc.has(x.id) &&
-          (x.id === it.parent || P.canWrite(x.project)),
-      )
-      .sort(sameProjFirst)
-  }
+  const subCandidates = it && subAnchor ? subtaskCandidatesFor(it, P.issues, relationView) : []
+  const parentCandidates = it && parentAnchor ? parentCandidatesFor(it, P.issues, relationView) : []
   // Adding or removing a link needs edit access to either task, so a
   // read-only task can still be linked to one the person can edit.
   const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
