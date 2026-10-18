@@ -506,9 +506,10 @@ export async function removeAndSettle(
     for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
     // The size of the handover is at fault, not one of its tasks, so these
     // refusals carry no HELD_TASKS_REFUSED, and a refusal after some tasks
-    // were reassigned rolls them back with the removal.
-    const tooLarge = async () => rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
-    if (byTask.size > REASSIGN_MAX) throw await tooLarge()
+    // were reassigned rolls them back with the removal. The advice is worked
+    // out first, because a refusal from the guard leaves little room to read.
+    const tooLarge = rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
+    if (byTask.size > REASSIGN_MAX) throw tooLarge
     const full = async () => {
       if (await removalIsFull(ctx)) throw new RemovalFull()
     }
@@ -534,7 +535,7 @@ export async function removeAndSettle(
         })
       }
     } catch (e) {
-      throw e instanceof RemovalFull ? await tooLarge() : e
+      throw e instanceof RemovalFull ? tooLarge : e
     }
     result.stranded = []
     result.reassigned = stranded
