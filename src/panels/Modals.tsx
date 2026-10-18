@@ -1235,6 +1235,16 @@ function FateList({
 
 const fateRow = 'flex items-baseline gap-2 px-2.5 py-[5px] text-sm leading-[1.4]'
 
+/** `sent`, with a rejection logged and read as a refusal. The callers run
+    their own code after the store answers (closing the task window, a toast,
+    a page change), and a window that waits on them must never stay saving
+    because that code threw. */
+const refusedOnThrow = (sent: Promise<boolean>) =>
+  sent.catch((error: unknown) => {
+    console.error('[qivo] archive or delete failed:', error)
+    return false
+  })
+
 /** Whether a delete reason is longer than Deleted items stores, counted as
     the server counts it, after trimming. A reason typed for an archive,
     which may be far longer, stays when the person switches to Delete. */
@@ -1421,7 +1431,7 @@ function ArchiveOrDeleteTaskModal({
   }
   const finish = (sent: Promise<boolean>) => {
     setSaving(true)
-    void sent.then((done) => {
+    void refusedOnThrow(sent).then((done) => {
       if (done) return // the caller closes the window
       setSaving(false)
       const now = readPlans(issueId)
@@ -1673,7 +1683,7 @@ function ArchiveOrDeleteProjectModal({
       return
     }
     setSaving(true)
-    void onDelete(reason.trim()).then((done) => {
+    void refusedOnThrow(onDelete(reason.trim())).then((done) => {
       if (!done) setSaving(false) // the caller closes the window when it did
     })
   }

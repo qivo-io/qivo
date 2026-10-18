@@ -332,6 +332,30 @@ describe('Archive or delete a task', () => {
     ])
   })
 
+  it('recovers when the caller fails after the answer, instead of staying saving', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onClose = vi.fn()
+    const failed = () => Promise.reject(new Error('the follow-up threw'))
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <dialogs.ArchiveOrDeleteTaskModal
+            issueId={handle('finished')}
+            onClose={onClose}
+            onArchive={failed}
+            onDelete={failed}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+    await click(button('Archive'))
+    await settle()
+    expect(button('Archive').disabled).toBe(false)
+    await click(button('Cancel'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
   it('labels the delete by what it takes along', async () => {
     await openTask('root')
     await choose('delete')
@@ -541,7 +565,10 @@ const summary = (over: Partial<ProjectRemovalSummary> = {}): ProjectRemovalSumma
 })
 
 /* Opens the project window on Plan, wired to the store as project settings is. */
-async function openProject(deleteOnly = false) {
+async function openProject(
+  deleteOnly = false,
+  onDelete = (reason: string) => P.removeProject('plan', reason),
+) {
   const onClose = vi.fn()
   const onArchive = vi.fn()
   const plan = P.project('plan')
@@ -554,7 +581,7 @@ async function openProject(deleteOnly = false) {
           deleteOnly={deleteOnly}
           onClose={onClose}
           onArchive={onArchive}
-          onDelete={(reason) => P.removeProject('plan', reason)}
+          onDelete={onDelete}
         />
       </TooltipProvider>,
     ),
@@ -648,6 +675,20 @@ describe('Archive or delete a project', () => {
     await click(button('Delete project and 48 tasks'))
     await settle()
     expect(P.project('plan')).toBeUndefined()
+  })
+
+  it('recovers when the caller fails after the answer, instead of staying deleting', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    summaries.push(() => Promise.resolve(summary()))
+    const { onClose } = await openProject(false, () =>
+      Promise.reject(new Error('the follow-up threw')),
+    )
+    await choose('delete')
+    await click(button('Delete project and 48 tasks'))
+    await settle()
+    expect(button('Delete project and 48 tasks').disabled).toBe(false)
+    await click(button('Cancel'))
+    expect(onClose).toHaveBeenCalled()
   })
 
   it('waits for the server while deleting, and refuses to close meanwhile', async () => {
