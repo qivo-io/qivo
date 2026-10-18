@@ -67,6 +67,7 @@ import type * as lib_billingAccess from "../lib/billingAccess.js";
 import type * as lib_billingTypes from "../lib/billingTypes.js";
 import type * as lib_core from "../lib/core.js";
 import type * as lib_db from "../lib/db.js";
+import type * as lib_delay from "../lib/delay.js";
 import type * as lib_demo from "../lib/demo.js";
 import type * as lib_demoMetricsReport from "../lib/demoMetricsReport.js";
 import type * as lib_demoReporting from "../lib/demoReporting.js";
@@ -234,6 +235,7 @@ declare const fullApi: ApiFromModules<{
   "lib/billingTypes": typeof lib_billingTypes;
   "lib/core": typeof lib_core;
   "lib/db": typeof lib_db;
+  "lib/delay": typeof lib_delay;
   "lib/demo": typeof lib_demo;
   "lib/demoMetricsReport": typeof lib_demoMetricsReport;
   "lib/demoReporting": typeof lib_demoReporting;

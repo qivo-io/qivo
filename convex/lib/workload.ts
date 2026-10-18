@@ -1,7 +1,9 @@
-/* How a task's remaining hours spread over the weeks, the one rule the app's
- * capacity views (src/lib/workload.ts re-exports these) and the REST and MCP
- * workload read (convex/planning.ts workloadCore) share. Weeks are integer
- * indexes on one grid; weekGrid maps a deployment's dates onto it. */
+/* How a task's remaining hours spread over the weeks and when an owner's
+ * free capacity finishes them, the rules the app's capacity views and delay
+ * projection (src/lib/workload.ts re-exports these) share with the REST and
+ * MCP workload read (convex/planning.ts workloadCore) and delay verdicts
+ * (lib/delay.ts, lib/machineDelay.ts). Weeks are integer indexes on one grid;
+ * weekGrid maps a deployment's dates onto it. */
 
 /** The slice of a load item the capacity math reads, which is also the
  * shape of a plan_org_load row once its dates are week indexes. */
@@ -68,6 +70,129 @@ export function committedByWeek(
     for (let w = first; w <= last; w++) m.set(w, (m.get(w) || 0) + per)
   }
   return m
+}
+
+/** Capacity when the person is missing; must match the organization default. */
+export const DEFAULT_PLANNABLE_HOURS = 32
+
+/** Agents have unlimited capacity; missing or legacy person values use the default. */
+export function plannableHoursOf(
+  user?: { plannableHours?: number | null; kind?: string | null; isAgent?: boolean } | null,
+): number {
+  if (user && (user.isAgent || user.kind === 'agent')) return Infinity
+  const h = user?.plannableHours
+  return h && h > 0 ? Number(h) : DEFAULT_PLANNABLE_HOURS
+}
+
+/** The week by which the owner's free capacity covers `remaining` hours,
+    starting at `start`. Free capacity in week w = max(0, capacity - committed[w]);
+    fully-booked weeks add nothing and push the end further out. Returns `start`
+    when there's no remaining time, and is bounded so a fully-saturated owner
+    (or zero capacity) can't loop forever. */
+export function fitEndWeek(
+  start: number,
+  remaining: number,
+  capacity: number,
+  committed: Pick<ReadonlyMap<number, number>, 'get'>,
+  maxWeeks = 520,
+): number {
+  if (!(remaining > 0)) return start
+  const cap = Math.max(0, capacity)
+  let left = remaining
+  for (let w = start; w < start + maxWeeks; w++) {
+    const free = Math.max(0, cap - (committed.get(w) || 0))
+    left -= free
+    if (left <= 1e-9) return w
+  }
+  return start + maxWeeks - 1
+}
+
+/** fitEndWeek against an owner's load. Only the weeks the fit can read,
+    `maxWeeks` of them from `start`, are added up, so a plan that runs to the
+    year 9999 costs no more than they do. */
+export function fitEndWeekAgainst(
+  load: LoadSpan[],
+  excludeUuid: string | null | undefined,
+  start: number,
+  remaining: number,
+  capacity: number,
+  maxWeeks = 520,
+): number {
+  const committed = committedByWeek(load, excludeUuid, { from: start, to: start + maxWeeks - 1 })
+  return fitEndWeek(start, remaining, capacity, committed, maxWeeks)
+}
+
+/** How many weeks of an owner's totals prepareLoadProjection adds up at once. */
+const TOTALS_BLOCK = 64
+
+/** Reuse one owner's weekly totals across projections. Each total is added
+ * up on first use, TOTALS_BLOCK weeks at a time, so a plan that runs to the
+ * year 9999 costs only the weeks the projections read. Near a completion
+ * boundary, repeat the original ordered sum: subtracting self from a total
+ * can lose small commitments to rounding and change the finish week. */
+export function prepareLoadProjection(items: LoadSpan[]) {
+  const blocks = new Map<number, Map<number, number>>()
+  const totals = {
+    get(week: number): number {
+      const block = Math.floor(week / TOTALS_BLOCK)
+      let byWeek = blocks.get(block)
+      if (!byWeek) {
+        const from = block * TOTALS_BLOCK
+        byWeek = committedByWeek(items, null, { from, to: from + TOTALS_BLOCK - 1 })
+        blocks.set(block, byWeek)
+      }
+      return byWeek.get(week) || 0
+    },
+  }
+  const own = new Map<string, { start: number; end: number; per: number }[]>()
+  // each week's total adds some of these hours in the same order, so no
+  // total can exceed their sum, and all are finite when it is
+  let sum = 0
+  for (const it of items) {
+    const win = spreadWindow(it.start, it.end, it.remainingSet)
+    const span = win.end - win.start + 1
+    const per = (it.remaining || 0) / span
+    if (span <= 0 || per <= 0) continue
+    sum += per
+    if (!it.issueUuid) continue
+    const spans = own.get(it.issueUuid) || []
+    spans.push({ ...win, per })
+    own.set(it.issueUuid, spans)
+  }
+  const finite = Number.isFinite(sum)
+  return (
+    start: number,
+    remaining: number,
+    capacity: number,
+    excludeUuid?: string | null,
+    maxWeeks = 520,
+  ): number => {
+    const exact = () => fitEndWeekAgainst(items, excludeUuid, start, remaining, capacity, maxWeeks)
+    if (!(remaining > 0)) return start
+    if (!finite || !Number.isFinite(remaining) || !Number.isFinite(capacity)) return exact()
+    const self = excludeUuid ? own.get(excludeUuid) : undefined
+    if (!self) return fitEndWeek(start, remaining, capacity, totals, maxWeeks)
+    const cap = Math.max(0, capacity)
+    let left = remaining
+    let uncertainty = 0
+    for (let w = start; w < start + maxWeeks; w++) {
+      const total = totals.get(w)
+      let excluded = 0
+      for (const span of self) if (w >= span.start && w <= span.end) excluded += span.per
+      const committed = Math.max(0, total - excluded)
+      // Positive sums bound error by their total and addition count. Include
+      // both summation orders, self subtraction, and accumulated solver error.
+      uncertainty =
+        (uncertainty +
+          Number.EPSILON * 4 * (total * (items.length + 2) + Math.abs(left) + cap + committed) +
+          Number.MIN_VALUE * items.length) *
+        (1 + Number.EPSILON)
+      left -= Math.max(0, cap - committed)
+      if (Math.abs(left - 1e-9) <= uncertainty) return exact()
+      if (left <= 1e-9) return w
+    }
+    return start + maxWeeks - 1
+  }
 }
 
 const DAY = 86_400_000
