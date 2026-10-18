@@ -238,6 +238,7 @@ internal/demoMetrics:snapshot query internal {"type":"object","value":{}}
 internal/demoTest:expireOwned mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"delay_ms":{"fieldType":{"type":"number"},"optional":false}}}
 internal/demoTest:inspect query internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":true},"expected_site_url":{"fieldType":{"type":"string"},"optional":false}}}
 internal/guestOrg:zzGuestOrg mutation internal {"type":"object","value":{}}
+internal/guestTeams:check query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"limit":{"fieldType":{"type":"number"},"optional":true}}}
 internal/guestTeams:page mutation internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 internal/guestTeams:repair action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false}}}
 internal/marketingDemo:adoptAvatar mutation internal {"type":"object","value":{"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"person":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
