@@ -319,13 +319,13 @@ export async function commentAnchor(
 }
 
 /**
- * One page of the task `issueId`'s thread for the app's task window: the
- * newest COMMENT_PAGE_MAX comments, or with `before` the newest ones the
- * thread holds before it (newestComments, so long comments make the page
- * shorter), oldest first in thread order. `earlier` says whether the thread
- * holds a comment before the page's first one. It reads one comment on top
- * of the page, the thread's first, so a long thread costs nothing more to
- * ask. An empty page has no earlier comments.
+ * One page of the task `issueId`'s thread for the app's task window. It
+ * holds the newest COMMENT_PAGE_MAX comments, or with `before` the newest
+ * ones the thread holds before it (newestComments, so long comments make the
+ * page shorter), oldest first in thread order. `earlier` says whether the
+ * thread holds a comment before the page's first one. It reads one comment
+ * on top of the page, the thread's first, so a long thread costs nothing
+ * more to ask. An empty page has no earlier comments.
  */
 export async function threadPage(
   ctx: QueryCtx,

@@ -510,10 +510,11 @@ async function threadTask(
   return issue
 }
 
-/* The task window's live thread: its newest COMMENT_PAGE_MAX comments, and
- * fewer when they are long, oldest first in thread order, and whether the
- * thread holds earlier ones (model/comments.ts threadPage). The window
- * reads further back with commentsBefore. */
+/* The task window's live thread. It holds the thread's newest
+ * COMMENT_PAGE_MAX comments, and fewer when they are long, oldest first in
+ * thread order, and says whether the thread holds earlier ones
+ * (model/comments.ts threadPage). The window reads further back with
+ * commentsBefore. */
 export const commentThread = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -523,11 +524,11 @@ export const commentThread = orgQuery({
   },
 })
 
-/* "Show earlier comments": the newest COMMENT_PAGE_MAX comments the thread
- * holds before the comment `before`, in commentThread's shape. The app reads
- * it once rather than subscribing. A `before` that is not a comment on this
- * task, deleted ones included, refuses with BEFORE_NOT_A_COMMENT as a
- * bad_request. */
+/* The page "Show earlier comments" loads. It holds the newest
+ * COMMENT_PAGE_MAX comments the thread holds before the comment `before`, in
+ * commentThread's shape. The app reads it once rather than subscribing. A
+ * `before` that is not a comment on this task, deleted ones included,
+ * refuses with BEFORE_NOT_A_COMMENT as a bad_request. */
 export const commentsBefore = orgQuery({
   args: { issue_id: v.string(), before: v.string() },
   handler: async (ctx, { issue_id, before }) => {
@@ -538,8 +539,8 @@ export const commentsBefore = orgQuery({
   },
 })
 
-/* The thread as browser tabs loaded before commentThread subscribe to it:
- * the newest COMMENT_PAGE_MAX comments, sorted by created_at with ties by
+/* The thread as browser tabs loaded before commentThread subscribe to it,
+ * the newest COMMENT_PAGE_MAX comments sorted by created_at with ties by
  * id. Remove it in the release after commentThread ships. */
 export const commentsForIssue = orgQuery({
   args: { issue_id: v.string() },

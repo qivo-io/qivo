@@ -37,12 +37,14 @@ shorten it. Older text over this limit can be read but not edited.
 attachments. The composer sits below the newest message, or below the scrolling
 Activity feed on phones. Comments and activity run oldest to newest. A long
 discussion opens at its newest 50 comments, and fewer when they are very long.
-**Show earlier comments** above the oldest one loads the 50 before it and
-keeps your place in the thread. It disappears once the first comment is
-loaded. If loading fails, **Retry** asks again. Comments that arrive while
-the task is open add to the end, and the earlier ones you loaded stay. A
-task holds at most 400 comments. Once it has 400, Qivo refuses new ones, so
-start a new task to continue. An archive reason is still posted.
+**Show earlier comments** above the oldest one loads up to 50 more and keeps
+your place in the thread. It disappears once the first comment is loaded. If
+loading fails, **Retry** asks again. Comments that arrive while the task is
+open add to the end, and the earlier ones stay loaded. Edits and deletions
+that other people, or your other tabs, make to comments older than the newest
+50 show the next time you open the task. A task holds at most 400 comments.
+Once it has 400, Qivo refuses new ones, so start a new task to continue. An
+archive reason is still posted.
 **Comments** is the default filter; **All** adds changes such as assignments,
 status moves, dates, labels and attachments. Until the first comment is
 loaded, **All** shows only the changes since the oldest loaded comment.
