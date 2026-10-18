@@ -249,7 +249,7 @@ describe('issues.archivedPage', () => {
       archived_at: day(3),
       num: 9_000,
     })
-    // created later with a lower number: creation decides a tie, not num
+    // created later with a lower number, as creation decides a tie, not num
     const tieNew = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub2.id,
@@ -281,7 +281,8 @@ describe('issues.archivedPage', () => {
     // the third page knows it is the last one, so no empty fourth is asked for
     expect(all.sizes).toEqual([100, 100, 30])
     expect(all.scanned).toBe(230)
-    // a family of exactly two pages ends on the second
+    // a family whose size is a multiple of the limit ends on its last full
+    // page, with no empty page after it
     const exact = await everyPage(t, f.admin, { project_id: f.meta.id, limit: 46 })
     expect(exact.sizes).toEqual([46, 46, 46, 46, 46])
   })

@@ -3962,9 +3962,9 @@ export const PLANNER = {
     )
   },
 
-  /** Restore from Archived tasks. Awaited, never optimistic: the row is
-      not in the snapshot, and the snapshot pulls the restored rows back in
-      reactively — no refetch. Resolves false on refusal (toasted). */
+  /** Restore from Archived tasks. Awaited, never optimistic, because the
+      row is not in the snapshot. The snapshot pulls the restored rows back
+      in reactively, with no refetch. Resolves false on refusal (toasted). */
   unarchiveIssue: async (
     issueUuid: string,
     _title?: string,
