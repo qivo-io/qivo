@@ -353,7 +353,7 @@ export type ArchivedTaskMatcher = (task: ArchivedTask, facts: TaskFacts) => Prom
 /**
  * The task search rule for archived tasks of the organization `orgId`, the
  * one the app's filter and REST and MCP search share (lib/search.ts
- * taskSearchText): each fragment of `search` must occur in the task ID,
+ * taskSearchText). Each fragment of `search` must occur in the task ID,
  * title, description, status name (not on a task with subtasks), priority
  * name, assignee name or label names, in any order. With `stars`, as REST
  * reads it, `*` stands for any run of text.
@@ -515,9 +515,6 @@ export async function archivedTasksPage<Row>(
  * it answers unless asked for fewer. */
 export const ARCHIVED_PAGE_ROWS = 100
 
-/** The longest search the Archived tasks page takes, in characters. */
-export const ARCHIVED_SEARCH_MAX = 200
-
 /**
  * The projects whose archived tasks the app's Archived tasks page lists for
  * `project`, as `me` sees them. A sub-project is itself. A top-level project
@@ -525,7 +522,7 @@ export const ARCHIVED_SEARCH_MAX = 200
  * as the app's project tree shows them (src/store/viewModels.ts shapeProject
  * `children`). Its own id stays in, though tasks live only in sub-projects,
  * which costs one empty range. So an active project leaves out a sub-project
- * archived on its own: restoring a task there would hide it everywhere.
+ * archived on its own, where a restored task would stay hidden everywhere.
  * REST and MCP archived lists include such sub-projects (lib/core.ts
  * taskListScope). The caller has already checked that `me` sees `project`.
  */

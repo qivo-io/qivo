@@ -43,7 +43,6 @@ import type { QueryCtx } from './_generated/server'
 import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
 import {
   ARCHIVED_PAGE_ROWS,
-  ARCHIVED_SEARCH_MAX,
   type ArchivedPageRow,
   archiveCursorText,
   archivedPageCore,
@@ -60,6 +59,7 @@ import {
   orgQuery,
   rule,
 } from './lib/functions'
+import { ARCHIVED_SEARCH_MAX } from './lib/textLimits'
 import { postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import {

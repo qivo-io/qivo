@@ -845,6 +845,11 @@ function App() {
   // the project an "Archived tasks" entry asked for; null = derive from the
   // current scope (Settings' own Archived tasks item, deep links)
   const [archiveProject, setArchiveProject] = useState<string | null>(null)
+  // it holds only while Archived tasks stays open, so leaving the page by
+  // any way, Settings' own items and history included, forgets it
+  useEffect(() => {
+    if (settingsPage !== ARCHIVED_TASKS_PAGE) setArchiveProject(null)
+  }, [settingsPage])
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
@@ -1226,7 +1231,7 @@ function App() {
     newProject: openNewProject,
     newMilestone: openNewMilestone,
     editMilestone: (id) => setModal({ kind: 'milestone', init: { id } }),
-    // settings and the inbox each own the screen — one at a time
+    // settings and the inbox each own the screen, one at a time
     openSettings: (page) => openSettingsOn(page || (mobile ? 'menu' : 'account'), null),
     // Settings › Archived tasks on one project (the project menus' entry)
     openArchivedTasks: (projectId?: string) =>
@@ -1425,7 +1430,7 @@ function App() {
   }
 
   if (settingsPage) {
-    // null from either sentinel scope, deliberately: Archived tasks shows ONE
+    // null from either sentinel scope, on purpose. Archived tasks shows ONE
     // project at a time, so it opens on its own picker rather than being
     // pre-scoped to an arbitrary one (P.project() is undefined for both)
     const scopeMeta = (() => {

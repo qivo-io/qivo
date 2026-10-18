@@ -232,6 +232,8 @@ describe('Archived tasks', () => {
     await open()
     expect(calls.map((c) => c.args)).toEqual([{ project_id: META, limit: 100 }])
     expect(document.activeElement).toBe(find('[data-archive-search]'))
+    // the box holds no more than the server searches
+    expect(find<HTMLInputElement>('[data-archive-search]').maxLength).toBe(200)
     // search comes first in the filters
     expect(
       find('.archived-filters').firstElementChild?.hasAttribute('data-archive-search-box'),
@@ -300,6 +302,42 @@ describe('Archived tasks', () => {
     expect(text('[data-archived-tasks]')).toContain('No archived tasks match “barometer”.')
   })
 
+  it('keeps focus on the step button while a search step runs and after it finds nothing', async () => {
+    await open()
+    await last().answer([])
+    await type('barometer')
+    await last().answer([], '1~6~k2~y', 1000)
+    const more = find('[data-archive-more]')
+    more.focus()
+    await click(more)
+    // the button stays, with the step's text, so focus stays on it
+    expect(find('[data-archive-more]')).toBe(more)
+    expect(document.activeElement).toBe(more)
+    expect(more.getAttribute('aria-disabled')).toBe('true')
+    expect(text('[data-archive-fold]')).toBe(
+      'No matches in the newest 1,000 archived tasks.Searching older tasks…',
+    )
+    // pressing it again while the step runs asks for nothing
+    const asked = calls.length
+    await click(more)
+    expect(calls.length).toBe(asked)
+    await last().answer([], '1~7~k3~z', 1000)
+    expect(document.activeElement).toBe(more)
+    expect(text('[data-archive-fold]')).toBe(
+      'No matches in the newest 2,000 archived tasks.Search older tasks',
+    )
+    // a step pressed without taking focus, as a tap may, hands focus to the
+    // button when it finds nothing, and to the search once the archive ends
+    more.blur()
+    await click(more)
+    await last().answer([], '1~8~k4~w', 1000)
+    expect(document.activeElement).toBe(find('[data-archive-more]'))
+    more.blur()
+    await click(more)
+    await last().answer([], null, 12)
+    expect(document.activeElement).toBe(find('[data-archive-search]'))
+  })
+
   it('drops an answer for a project or search the page has left', async () => {
     await open()
     const first = last()
@@ -321,14 +359,21 @@ describe('Archived tasks', () => {
   it('keeps the rows when a later page fails, and tries it again', async () => {
     await open()
     await last().answer(many(1, 100), '1~5~k1~x')
-    await click(button('Show 100 older tasks'))
+    const more = button('Show 100 older tasks')
+    more.focus()
+    await click(more)
     await last().fail()
     expect(rowIds()).toHaveLength(100)
     expect(text('[data-archived-tasks]')).toContain("Couldn't load older tasks.")
+    // the button left with the failed step, so focus moves to Retry
+    expect(document.activeElement).toBe(button('Retry'))
     await click(button('Retry'))
     expect(last().args.cursor).toBe('1~5~k1~x')
+    // and Retry leaves too, so focus moves to the step's button
+    expect(document.activeElement).toBe(find('[data-archive-more]'))
     await last().answer([task(200, 40)])
     expect(rowIds()).toHaveLength(101)
+    expect(document.activeElement).toBe(find('[data-archive-row="archived-200"]'))
   })
 
   it('shows a failed first page with Retry', async () => {
@@ -388,6 +433,22 @@ describe('Archived tasks', () => {
     // a task someone else restores leaves too
     await restored(4)
     expect(rowIds()).toEqual(['archived-1'])
+  })
+
+  it('still says how far a search looked once every match it found is restored', async () => {
+    await open()
+    await last().answer([])
+    await type('drift')
+    await last().answer([task(7, 3)], '1~6~k2~y', 1000)
+    await click(find('[data-archive-row="archived-7"] [data-restore]'))
+    await restored(7)
+    await act(async () => restores[0](null))
+    await settle()
+    expect(rowIds()).toEqual([])
+    expect(has('[data-archive-count]')).toBe(false)
+    expect(text('[data-archive-fold]')).toBe(
+      'Searched the newest 1,000 archived tasks.Search older tasks',
+    )
   })
 
   it('searches on a phone too, without taking focus', async () => {
