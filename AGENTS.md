@@ -84,7 +84,9 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
 4. Fix the valid findings and commit.
 5. The CodeRabbit and Greptile CLIs, side by side, with
    `cr review --agent --committed --base-commit BASE` and
-   `greptile review -b BASE --json`.
+   `greptile review -b BASE --json`. When the change touches `AGENTS.md`, add
+   `--include AGENTS.md` to the Greptile command. Without it Greptile leaves
+   that file's changes out and reviews an empty diff.
 6. Fix the valid findings and commit.
 7. Push and open the pull request. Merge it once its `quality`, `secrets`
    and `Vercel – qivo` checks pass on the head commit, if the task says to
