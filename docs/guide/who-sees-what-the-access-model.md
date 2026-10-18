@@ -49,8 +49,9 @@ archiving, deleting or changing project settings also requires Lead access,
 which organization admins have.
 
 [Deleted items](./how-work-is-organized.md#deleted-items) follows project
-access too. Organization admins see every deleted task and project. A project
-lead sees what they deleted and what was deleted in projects they lead.
+access too. Organization admins see every deleted task and project, except
+one that is being deleted for good. A project lead sees what they deleted and
+what was deleted in projects they lead.
 Everyone else sees what they deleted. Except for admins, an item stays in
 view only while you can still open the project it was in. Restoring needs
 edit access where the work goes back, or Lead access for a project. Only
