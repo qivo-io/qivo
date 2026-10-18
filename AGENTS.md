@@ -64,6 +64,98 @@ leaves it out. Only `demo.qivo.io` redirects `/` to `/app`. Run
 Changes to application access control must fail closed.
 Do not create or modify GitHub issues; Qivo work items are tasks.
 
+## Pull requests: reviews first, then CI
+
+Every pull request into main finishes its automated reviews before full CI runs.
+Opening a pull request, pushing to it, rebasing it or marking it ready for review
+starts CodeRabbit, Greptile, secret scanning and the Vercel branch preview, never
+full CI. Start CI (`.github/workflows/reviewed-ci.yml`) builds a commit only after
+its reviews are finished and publishes the `reviewed-ci` status. Branch
+protection on main requires `reviewed-ci`, `secrets` and `Greptile Review` on the
+head commit, a branch that is up to date with main and resolved conversations.
+
+**Transition.** Start CI is being rolled out. Until a change removes the pull
+request triggers from `ci.yml`, pull requests still run full CI on every push,
+and branch protection still requires `quality` instead of `reviewed-ci`. Follow
+the steps below anyway.
+
+**Reviewers.** CodeRabbit and Greptile are both required on every pull request.
+`.coderabbit.yaml` and `.greptile/config.json` make them review every push and
+rebase. Do not edit those files to skip or narrow a review. No formal approval
+is required: branch protection asks for no approving reviews and neither bot
+approves. A review that requests changes blocks Start CI until it is dismissed
+or replaced.
+
+**1. Finish the reviews of the head commit.** A review is finished only when the
+reviewer reports it for the current head commit. A score, a green bot status or
+an earlier commit's review does not count.
+
+- CodeRabbit: its summary comment must state that a review covers the head. It
+  posts "Review completed" even when it skipped a commit, for example after a
+  rebase that changed nothing reviewable. After a skip, comment
+  `@coderabbitai full review`. When it paused or was rate limited, comment
+  `@coderabbitai review` once it can review again.
+- Greptile: its "Greptile Review" check on the head must say it reviewed the
+  pull request, and its summary must name the head as the last reviewed commit.
+  A neutral "Review was cancelled" check or none at all is not a review. Comment
+  `@greptileai` to start one.
+
+Read every review body, summary comment and inline thread for the head,
+including findings that could not be posted inline: CodeRabbit's "Outside diff
+range" and nitpick sections and Greptile's comment about code outside the diff.
+Check each finding against the source. Fix the valid ones. Reply with the reason
+before resolving one you reject. Each push starts new reviews of the new head,
+so finish them again before CI. Push fixes in few commits: CodeRabbit reviews a
+limited number of pushes per hour for each pull request author.
+
+**2. Check readiness.** `node scripts/reviewed-ci.mjs check PR` runs Start CI's
+checks locally and read-only, with your `gh` login, and prints the dispatch
+command when the pull request is ready. It reports missing or unrecognized
+review evidence as not ready; never work around that.
+
+**3. Start CI** for the exact head you reviewed:
+
+```sh
+gh workflow run reviewed-ci.yml --ref main -f pr=PR -f sha=HEAD_SHA
+```
+
+Dispatching attests that you assessed every finding, including those that need
+judgment. Start CI refuses a caller without write access, a draft, a pull
+request into another branch, a stale SHA, a branch behind main, unfinished
+reviews, unresolved threads and requested changes, and a refusal writes no
+status. It then builds the commit in the `Build and test / quality` job, which
+runs the same checks as main CI with a read-only token, no secrets and
+read-only cache access. Only when that job succeeded and every check still
+holds does it set `reviewed-ci` to success on the commit. Watch that status, not
+the dispatch run. Start CI runs one request per commit at a time: a second
+request waits for the first to finish, then starts nothing if it passed and
+builds again if it failed.
+
+**4. Retry and new commits.** A push to the pull request cancels the build of
+the replaced commit, and a new commit has no `reviewed-ci` status until its own
+reviews are finished and Start CI passes. To retry after a failure, fix the
+cause or wait out the infrastructure problem, then dispatch Start CI again.
+Re-running a Start CI run in the Actions interface is refused.
+
+**5. Merge** only when your task says to. Successful CI permits merging; it does
+not authorize it. Recheck the reviews of the head first.
+
+**Changing CI.** Start CI runs main's workflow files and controller, so a pull
+request that changes `.github/workflows/`, `scripts/reviewed-ci.mjs` or
+`scripts/review-evidence.mjs` is built by the old version. Passing the old
+workflow or a YAML check does not show that the new one works. Before merging,
+rehearse the branch's version on the pull request:
+
+```sh
+gh workflow run reviewed-ci.yml --ref BRANCH -f pr=PR -f sha=HEAD_SHA
+```
+
+A rehearsal publishes `reviewed-ci (rehearsal)`, which branch protection
+ignores, and is never cancelled by pushes. `gh workflow run ci.yml --ref BRANCH`
+runs the branch's main CI. When a reviewer changes its comment or status format,
+Start CI refuses until `scripts/review-evidence.mjs` and its tests learn the new
+format from real pull request data.
+
 ## Deployment and version control
 
 Work on implementation branches.

@@ -1,0 +1,27 @@
+name: Cancel obsolete Start CI
+
+# A push, close or return to draft makes a Start CI run for the pull request's previous
+# head obsolete. This job joins that run's concurrency group, which cancels it, and Start
+# CI's report job then marks the old commit's reviewed-ci status as an error. Runs for the
+# new head are in another group and keep running.
+#
+# pull_request_target also runs when a push leaves the pull request in conflict with
+# main, which pull_request skips, and its workflow file always comes from main. The job
+# checks out nothing, runs no repository code and its token has no permissions.
+on:
+  pull_request_target:
+    types: [synchronize, closed, converted_to_draft]
+
+permissions: {}
+
+jobs:
+  cancel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    # Must equal the group in reviewed-ci.yml for runs dispatched from main. A push names
+    # the replaced head in `before`; the other events keep the head.
+    concurrency:
+      group: reviewed-ci-refs/heads/main-${{ github.event.before || github.event.pull_request.head.sha }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "Cancelled any Start CI run for the commit this event replaced."
