@@ -1,5 +1,5 @@
 /* Home-organization teams and the memberships their leaders can manage. */
-import { useState as useStateS } from 'react'
+import { useEffect, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -36,6 +36,9 @@ export function TeamPage({
   /* Removing a member who would lose sight of tasks they work on first asks
      whether to keep them as Viewers or reassign their tasks. */
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
+  // a read-only organization's admin removes members without the window
+  const teamOrg = P.teamById(teamId)?.org
+  useEffect(() => P.watchWriteBlock(teamOrg), [teamOrg])
   const [addUid, setAddUid] = useStateS('')
   useUpdateBlocker(!!addUid)
   // Team membership belongs to the home organization; guests cannot join.

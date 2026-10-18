@@ -4,7 +4,7 @@
  *
  * forMe reads every seat in one transaction, so the sum must stay within
  * Convex's limits of 4,096 index ranges, 32,000 documents and 16 MiB. Besides
- * one range for the caller's seats, each seat reads up to 14 ranges plus:
+ * one range for the caller's seats, each seat reads 12 ranges plus:
  * - one per active project of the organization, its active tasks
  *   (lib/liveTasks.ts liveTasksOf), so the tasks of archived projects are
  *   never read;
@@ -41,7 +41,6 @@ import type { Doc, TableNames } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
 import { memberSeesActivity, withoutLegacySubtaskCount } from './lib/activityVisibility'
-import { orgWriteBlock } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { INBOX_LIMIT, loadInbox } from './lib/inbox'
@@ -85,22 +84,14 @@ function attachmentRow(doc: Doc<'issue_attachments'>) {
 
 // Billing is admin-only; application counters and settings are shared. The
 // counters come from org_counters (model/orgs.ts countersOf), never from the
-// legacy fields an older organization row may still hold. `read_only` rides
-// for every member while billing or a pending deletion refuses the
-// organization's writes (lib/billingAccess.ts orgWriteBlock), as billing.status
-// tells every member too, so the app can offer only what the server allows.
+// legacy fields an older organization row may still hold.
 type OrgRow = Omit<
   AppRow<'organizations'>,
   'billing' | 'activity_count' | 'next_issue_num' | 'next_project_num'
 > &
-  OrgCounters & { billing?: Doc<'organizations'>['billing']; read_only?: true }
+  OrgCounters & { billing?: Doc<'organizations'>['billing'] }
 
-const orgRowFor = (
-  doc: Doc<'organizations'>,
-  counters: OrgCounters,
-  isAdmin: boolean,
-  readOnly: boolean,
-): OrgRow => {
+const orgRowFor = (doc: Doc<'organizations'>, counters: OrgCounters, isAdmin: boolean): OrgRow => {
   const {
     _id,
     _creationTime,
@@ -110,7 +101,7 @@ const orgRowFor = (
     next_project_num: _projectNum,
     ...rest
   } = doc
-  const row: OrgRow = { ...rest, ...counters, ...(readOnly ? { read_only: true as const } : {}) }
+  const row = { ...rest, ...counters }
   return isAdmin && billing !== undefined ? { ...row, billing } : row
 }
 
@@ -199,14 +190,7 @@ export const forMe = authedQuery({
       if (org === null) continue // a seat in a vanished org contributes nothing
       const isAdmin = me.org_role === 'admin'
 
-      orgs.push(
-        orgRowFor(
-          org,
-          await countersOf(ctx, org),
-          isAdmin,
-          (await orgWriteBlock(ctx, orgId)) !== null,
-        ),
-      )
+      orgs.push(orgRowFor(org, await countersOf(ctx, org), isAdmin))
 
       // All org members see teams and their membership.
       const orgTeams = await ctx.db

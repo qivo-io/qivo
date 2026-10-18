@@ -859,7 +859,9 @@ function MoveIssueModal({
    again. It stays open, and keeps the settings behind it out of reach, until
    the server has accepted the removal. If a write is refused the access
    stays and so does the window, listing the tasks that remain. If someone
-   else removed the access meanwhile, it closes and says so. */
+   else removed the access meanwhile, it closes and says so. If the
+   organization turns read-only for its admin meanwhile, the window closes
+   and the removal goes ahead, leaving the tasks (P.removalLeavesTasks). */
 const NOBODY = '__nobody__'
 function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClose: () => void }) {
   const read = () => {
@@ -926,9 +928,18 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
       : deleting
         ? `Keep as Viewer${people.length === 1 ? '' : 's'} and delete`
         : 'Change to Viewer'
+  // the organization turned read-only for its admin: the removal can only
+  // leave the tasks, so it goes ahead without the window (P.startRemoval)
+  const handOver = () => {
+    if (!P.removalLeavesTasks(change)) return false
+    onClose()
+    P.startRemoval(change)
+    return true
+  }
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
     void removal.then((removed) => {
+      if (!removed && handOver()) return
       const left = removed ? null : read()
       if (!left || (!left.items.length && !P.removalPending(change))) return onClose()
       setSaving(false)
@@ -937,7 +948,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
     })
   }
   const submit = () => {
-    if (saving || Date.now() - askedAt.current < 1000) return
+    if (saving || Date.now() - askedAt.current < 1000 || handOver()) return
     const now = read()
     // a task that moved, or a grant that now lands elsewhere, asks again
     const key = (list: Holder[], where: string[]) =>
