@@ -77,7 +77,8 @@ export const list = authedQuery({
  * roots and subtasks of task items and the tasks inside deleted projects,
  * at most 50, fewer once the call spent the same read budget. Each comes
  * back with its item, whose kind `item_kind` names, so a capped list still
- * finds older items. */
+ * finds older items, and a subtask of a task item with its root's key and
+ * title unless the match is redacted. */
 export const matches = authedQuery({
   args: { text: v.string() },
   handler: async (ctx, { text }) => await matchesFor(ctx, ctx.myProfiles.values(), text),
@@ -87,10 +88,13 @@ export const matches = authedQuery({
  * Restores up to 25 items (model/deletedItems.ts restoreItems). Each id is
  * restored (an item too large for this call goes on in steps, and its row
  * shows Restoring), refused with its reason, deferred until a project item
- * in the same call has come back, or not_found. */
+ * in the same call has come back, or not_found. `bulk` marks a call as one
+ * of a restore of several items, which the client splits per organization
+ * and 25 ids at a time, so that a call holding one task item sends no
+ * Restored notice (design 5.4). */
 export const restore = orgMutation({
-  args: { ids: v.array(v.string()) },
-  handler: async (ctx, { ids }) => {
+  args: { ids: v.array(v.string()), bulk: v.optional(v.boolean()) },
+  handler: async (ctx, { ids, bulk }) => {
     if (ids.length > RESTORE_MAX)
       throw rule(`at most ${RESTORE_MAX} items can be restored at a time`)
     const { items, missing } = await loadItems(ctx, ctx.me, ids)
@@ -98,6 +102,7 @@ export const restore = orgMutation({
       me: ctx.me,
       items,
       now: new Date().toISOString(),
+      bulk,
     })
     return { ...result, refused: [...missing, ...result.refused] }
   },

@@ -201,7 +201,7 @@ deletedItems:purge mutation public {"type":"object","value":{"ids":{"fieldType":
 deletedItems:purgeOrg mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:purgeTasks mutation internal {"type":"object","value":{"task_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 deletedItems:recover mutation internal {"type":"object","value":{}}
-deletedItems:restore mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+deletedItems:restore mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"bulk":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:step mutation internal {"type":"object","value":{"item_id":{"fieldType":{"type":"string"},"optional":false}}}
 demo:configuration query public {"type":"object","value":{}}
 demo:current query public {"type":"object","value":{}}

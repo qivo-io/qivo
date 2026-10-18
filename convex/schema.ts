@@ -961,8 +961,8 @@ export default defineSchema({
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
     attempts: v.number(), // restarts since the last committed step
     budget_scale: v.number(), // 1, halved by each restart down to 1/16
-    // a restore whose call held this task item alone: its reveal sends the
-    // Restored notice (model/deletedItems.ts)
+    // a restore whose call held this task item alone and was not part of a
+    // bulk restore: its reveal sends the Restored notice (model/deletedItems.ts)
     alone: v.optional(v.boolean()),
   })
     .index('by_item', ['item_id'])

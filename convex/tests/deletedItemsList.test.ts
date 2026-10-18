@@ -1255,6 +1255,65 @@ describe('searching for deleted tasks', () => {
     expect(theirs[0]).not.toHaveProperty('redacted')
   })
 
+  it('names the root of a task item for a hit on its subtask, unless the hit is redacted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const omar = await person(t, f.org.id, 'Omar')
+    const dana = await person(t, f.org.id, 'Dana')
+    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
+    const infra = ops.subs[0]
+    await grant(t, f.meta.id, dana.id, 'user')
+    await grant(t, ops.top.id, dana.id, 'user')
+    const root = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Contoso acquisition due diligence',
+    })
+    const near = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Draft the room checklist',
+      parent_id: root.id,
+    })
+    const far = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: infra.id,
+      title: 'Provision the data room',
+      parent_id: root.id,
+    })
+    await deleteTask(t, dana, root.id, { subtask_ids: [near.id, far.id] })
+    const named = (m: { key: string; root_key?: string; root_title?: string }) => [
+      m.key,
+      m.root_key,
+      m.root_title,
+    ]
+
+    // the deleter sees the root's project, and each subtask hit names the root
+    const theirs = await matches(t, dana, 'room')
+    expect(theirs.map(named).sort()).toEqual(
+      [
+        [`QN-${near.num}`, `QN-${root.num}`, 'Contoso acquisition due diligence'],
+        [`QN-${far.num}`, `QN-${root.num}`, 'Contoso acquisition due diligence'],
+      ].sort(),
+    )
+    // as it does for an admin, and a hit on the root names nothing more
+    expect((await matches(t, f.admin, 'checklist')).map(named)).toEqual([
+      [`QN-${near.num}`, `QN-${root.num}`, 'Contoso acquisition due diligence'],
+    ])
+    const roots = await matches(t, dana, 'contoso')
+    expect(roots.map(named)).toEqual([[`QN-${root.num}`, undefined, undefined]])
+    expect(roots[0]).not.toHaveProperty('root_key')
+    // Omar leads Infra and cannot see Firmware, so his hit is redacted and
+    // names neither the root's key nor its title
+    const his = await matches(t, omar, 'room')
+    expect(his).toEqual([
+      expect.objectContaining({ key: `QN-${far.num}`, redacted: true, path: [] }),
+    ])
+    expect(his[0]).not.toHaveProperty('root_key')
+    expect(his[0]).not.toHaveProperty('root_title')
+    expect(JSON.stringify(his)).not.toMatch(/Contoso/)
+  })
+
   it('answers instead of failing when many project items it cannot show match in many seats', async () => {
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
