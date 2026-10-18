@@ -11,21 +11,24 @@
  * write, and a key that may only run internal queries can run it. It counts
  * the rows guests hold in one page of team_members. Pass the returned
  * `cursor` back until `done` is true. `memberships` and `leaderships` add up
- * across pages, while `guests` counts the distinct guests of one page. If no
- * page reports `memberships`, the deployment has nothing to repair.
- *
- * Where the check finds rows, and only with the user's approval, run the
- * repair once, reading its dry run first, and then check again. On
- * production, take and verify a backup first (docs/deployment.md). Record
- * each check and run in qivo-internal docs/verification.md.
+ * across pages, while `guests` counts the distinct guests of one page. If
+ * every page reports zero `memberships`, the deployment has nothing to
+ * repair.
  *
  * Name the deployment with the private helper, which refuses to run without
  * the target's key, because without a key the CLI runs against the
- * deployment in .env.local. For example, for staging:
+ * deployment in .env.local. For example, to check staging:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/guestTeams:check '{"cursor": null}'
+ *
+ * Where the check finds rows, and only with the user's approval, repair the
+ * deployment once. On production, take and verify a backup first
+ * (docs/deployment.md). Read the dry run, which writes nothing:
  *   "$H" staging npx convex run internal/guestTeams:repair '{"dry_run": true}'
+ * Then run the repair, which deletes the rows, and check again:
  *   "$H" staging npx convex run internal/guestTeams:repair '{"dry_run": false}'
+ * Record each check and run in qivo-internal docs/verification.md.
+ *
  * The results hold counts only. Re-running the repair is safe, and a clean
  * deployment reports zeros. Like leaveAllTeams it writes no activity. A team
  * whose only leader was a guest is left without one; its organization's
