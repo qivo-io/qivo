@@ -150,6 +150,19 @@ Later in October 2026 every `list_tasks` and `get_task` result gained
 older catalogue reads it too, but its model does not learn what it means
 until the client refreshes its tool list.
 
+The label limit added `maxLength` 40 to `name` on `set_label`, counted in
+code points like the other names. A client holding the older catalogue keeps
+working, and the server refuses a longer name with `a label name is at most
+40 characters`. The schema checks the name as sent, so a name of at most 40
+characters padded with spaces past 40 is now refused before the server trims
+it.
+
+Single-use upload URLs changed the `start_attachment_upload` description,
+which now says to send exactly `size` bytes in one POST. The tool takes the
+same arguments and answers the same way. Its `upload_url` now points at
+Qivo and stores one file, where before it was a Convex URL that stored a
+file for every POST until it expired (see [Attachments](#attachments)).
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -897,9 +910,9 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks stay as top-level tasks and its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
-| `set_label` | Without `label`, create a label from `name` and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
+| `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page. Returns the label with `created` |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
-| `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, a one-time `upload_url` and `expires_at`, an hour on. Send the file's bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
+| `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, an `upload_url` that stores one file and `expires_at`, an hour on. Send exactly `size` bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
 | `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Answers the attachment as `get_task` lists it |
 | `attach_text_file` | Attach text you write yourself, such as notes, a CSV table or a log, to the task `ref` as a file called `name`, with an optional `content_type` (`text/plain; charset=utf-8` by default). Qivo stores `text` as UTF-8, at most 256 KiB and within the organization's per-file limit. It needs Edit access to the task's project and answers the attachment as `get_task` lists it |
 | `list_task_activity` | The task's history, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. See [Task activity](#task-activity) |
@@ -1423,8 +1436,8 @@ Uploading a file takes three steps, the same as on REST:
    `get_me`) is refused with `attachment exceeds the organization limit of
    20 MiB`. It answers `{ "ticket": "…uuid…", "upload_url": "…",
    "expires_at": "…" }`.
-2. `POST` the file's bytes to `upload_url`, with the file's type as
-   `Content-Type` and no Authorization header, for example
+2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
+   the file's type as `Content-Type` and no Authorization header, for example
    `curl -X POST -H "Content-Type: application/pdf" --data-binary @wiring.pdf "<upload_url>"`.
    It answers `{ "storageId": "…" }`.
 3. `confirm_attachment_upload` with the `ref`, the `ticket` and that
@@ -1433,15 +1446,19 @@ Uploading a file takes three steps, the same as on REST:
 
 The file goes straight to storage, so it never passes through an MCP call or
 the model's context, and the upload URL needs no credential. The ticket and
-its upload URL expire after an hour. Only the user that started the upload
-can confirm it, only for the same task, and only once. A ticket belongs to
-the user, not the credential, so a ticket started over MCP can be confirmed
-over REST by the same user, and the reverse. The confirm follows REST's
-rules. Another ticket, including an expired one, answers `upload not found
-or expired; start a new upload`, and a `storage_id` that is not a file
-stored after the upload started answers `storage_id must be the storageId
-the upload answered`. A file of another size than declared is refused and
-kept, and the ticket stays usable. If the organization lowered its per-file
+its upload URL expire after an hour. The upload URL stores one file. A
+second `POST` answers `409` with `this upload URL has already been used;
+start a new upload` and stores nothing, and a body of another size than
+declared answers `400` with `the upload must be exactly the 48213 bytes
+declared`, after which the URL can be tried again (see
+[REST attachments](rest-api.md#attachments)). Only the user that started
+the upload can confirm it, only for the same task, and only once. A ticket
+belongs to the user, not the credential, so a ticket started over MCP can be
+confirmed over REST by the same user, and the reverse. The confirm follows
+REST's rules. Another ticket, including an expired one, answers `upload not
+found or expired; start a new upload`, and a `storage_id` that is not the
+`storageId` the upload URL answered is refused with `storage_id must be the
+storageId the upload answered`. If the organization lowered its per-file
 limit after the upload started and the file now exceeds it, Qivo deletes the
 file, refuses the confirm and spends the ticket. Bytes uploaded but never
 confirmed are deleted by the weekly storage sweep.
@@ -1505,7 +1522,9 @@ Roadmap's Team strip and the planning panel count them:
 
 - `from_week` is any day of the first week (`YYYY-MM-DD`), by default the
   current week. Weeks begin on the organization's `week_start` from
-  `get_me`. `weeks` is 1 to 52, 8 by default.
+  `get_me`. `weeks` is 1 to 52, 8 by default. A window with a week that
+  starts before 0000-01-01 or after 9999-12-31 is refused with `the workload
+  window must fall within the years 0000 to 9999`.
 - `project` (number, key or uuid) limits the hours to that project and its
   sub-projects; `project` names it in the result.
 - `hours[i]` is the week starting `week_starts[i]`, rounded to a tenth. A
@@ -1753,7 +1772,9 @@ count for a task in an active project). `update_task` with a non-null
 task with subtasks — it is the sum of their remaining time`, also when you
 cannot read the subtasks. `null` passes as a no-op. The hours live on the
 subtasks, and the app shows the parent's value as the sum over its unfinished
-subtasks; such tasks read back `remaining_hours: null`.
+subtasks; such tasks read back `remaining_hours: null` and
+`remaining_set_at: null`, also while they still store hours of their own
+from before their subtasks counted.
 
 Tasks also read back `remaining_set_at` (0072) — the server-stamped moment
 `remaining_hours` was last saved. A remaining time is a measurement, and the

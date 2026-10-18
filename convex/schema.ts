@@ -92,7 +92,9 @@ const projectsTable = defineTable({
   description: v.string(), // PROJECT_DESCRIPTION_MAX UTF-16 units, enforced by model/projects
   sort_order: v.number(),
   num: v.number(), // org-scoped, assigned by counter, immutable
-  icon: v.optional(v.string()), // sub-projects carry no icon (0069)
+  // Legacy icon and its color: nothing writes or shows them now. Optional
+  // so rows written before remain valid.
+  icon: v.optional(v.string()),
   icon_color: v.optional(v.string()),
   track_delay: v.boolean(),
   // remaining time a task gets on entering Review; absent = the parent
@@ -722,6 +724,7 @@ export default defineSchema({
     id: v.string(),
     org_id: v.string(),
     name: v.string(),
+    // Legacy icon and its color, as on projects.
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
     // Ignored legacy column: optional so existing demo rows remain valid.
@@ -861,6 +864,11 @@ export default defineSchema({
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
     expires_at: v.number(), // epoch milliseconds
+    // epoch milliseconds when the upload URL's one POST began, absent while
+    // the URL is unused (model/attachments.ts beginTicketUpload)
+    upload_started_at: v.optional(v.number()),
+    // the one file the upload URL stored, which confirm must name
+    storage_id: v.optional(v.id('_storage')),
   })
     .index('by_uuid', ['id'])
     .index('by_profile_expiry', ['profile_id', 'expires_at'])

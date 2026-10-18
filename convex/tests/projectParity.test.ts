@@ -1184,6 +1184,28 @@ describe('project access, one user or team at a time', () => {
       status: 400,
       body: { error: 'unknown field "level"; this request takes on_held_tasks' },
     })
+    // both routes check the body before the path, so a bad body and an
+    // unknown project or user answer the body's 400 on either
+    const unknown = `/v1/projects/NOPE/access/users/${uuid()}`
+    expect(await call('PUT', unknown, { levle: 'user' })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "levle"; this request takes level' },
+    })
+    expect(await call('PUT', unknown, { level: 'lead' })).toEqual({
+      status: 400,
+      body: { error: 'level must be user or viewer; DELETE removes access' },
+    })
+    expect(await call('DELETE', unknown, { on_held_task: 'leave' })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "on_held_task"; this request takes on_held_tasks' },
+    })
+    // an array is no body, so it is no field list either
+    for (const method of ['PUT', 'DELETE']) {
+      expect(await call(method, path, ['x'])).toEqual({
+        status: 400,
+        body: { error: 'request body must be JSON' },
+      })
+    }
     expect(await grants(fx.t, fx.sub.id)).toEqual({ [fx.pia.id]: 'user' })
     expect(await activityFor(fx.t, fx.org.id)).toEqual([])
     // the field each route takes still passes, and an empty object is no field

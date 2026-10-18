@@ -90,10 +90,39 @@ export const restProvenance = (keyName: string | null): string =>
  * token. */
 export const vKeyName = v.union(v.string(), v.null())
 
+/** In a /u pattern a whole surrogate pair reads as one code point, so only
+ * half a pair matches the Surrogate category. */
+export const LONE_SURROGATE = /\p{Surrogate}/u
+
+/** Whether a string anywhere in `x`, an object key included, holds an
+ * unpaired surrogate. A JSON escape such as \ud800 can leave one, and Convex
+ * cannot pass it to a function or store it. It walks with its own stack, so
+ * a deeply nested value cannot overflow the call stack. */
+export function hasLoneSurrogate(x: unknown): boolean {
+  const stack = [x]
+  while (stack.length > 0) {
+    const item = stack.pop()
+    if (typeof item === 'string') {
+      if (LONE_SURROGATE.test(item)) return true
+    } else if (typeof item === 'object' && item !== null) {
+      for (const [key, value] of Object.entries(item)) {
+        if (LONE_SURROGATE.test(key)) return true
+        stack.push(value)
+      }
+    }
+  }
+  return false
+}
+
+/** REST's refusal for a body that holds an unpaired surrogate. */
+export const REST_UNPAIRED_SURROGATE =
+  'request body holds an unpaired surrogate, which UTF-8 cannot encode'
+
 /**
  * A REST request body as an object. Body tolerance (rest:196-198, 323-326)
- * means no Content-Type check. Invalid JSON and non-objects get this 400,
- * and arrays pass as objects and fail field by field.
+ * means no Content-Type check. Invalid JSON, an array and any other value
+ * that is not an object get this 400. A body holding an unpaired surrogate
+ * gets its own 400, because the write would fail later.
  */
 export function needJson(raw: string): Record<string, unknown> {
   let body: unknown = null
@@ -102,7 +131,10 @@ export function needJson(raw: string): Record<string, unknown> {
   } catch {
     body = null
   }
-  if (body === null || typeof body !== 'object') throw badRequest('request body must be JSON')
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw badRequest('request body must be JSON')
+  }
+  if (hasLoneSurrogate(body)) throw badRequest(REST_UNPAIRED_SURROGATE)
   return body as Record<string, unknown>
 }
 

@@ -93,7 +93,7 @@ import {
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
-import { TEXT_MAX } from '../lib/textLimits'
+import { LABEL_NAME_MAX, TEXT_MAX } from '../lib/textLimits'
 import { COMMENT_MAX } from '../model/commentCounts'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
@@ -144,7 +144,9 @@ import {
   runEntry,
 } from './registry'
 import {
+  hasLoneSurrogate,
   internalError,
+  LONE_SURROGATE,
   MCP_NO_WRITE,
   MCP_PROVENANCE as PROVENANCE,
   pretty,
@@ -881,6 +883,7 @@ export const TOOLS: McpTool[] = [
           },
           name: {
             type: 'string',
+            maxLength: LABEL_NAME_MAX,
           },
           color: {
             type: 'string',
@@ -1035,27 +1038,9 @@ function hasType(p: SchemaProp, x: unknown): boolean {
  * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
-/* The issue for a string holding an unpaired surrogate, which is not text.
- * In a /u pattern a whole pair reads as one code point, so only half a pair
- * matches the Surrogate category. */
+/* The issue for a string holding an unpaired surrogate, which is not text
+ * (shared.ts LONE_SURROGATE). */
 const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
-const LONE_SURROGATE = /\p{Surrogate}/u
-
-/* Whether a string anywhere in `x` holds an unpaired surrogate. It walks
- * with its own stack, so a deeply nested value cannot overflow the call
- * stack. */
-function hasLoneSurrogate(x: unknown): boolean {
-  const stack = [x]
-  while (stack.length > 0) {
-    const item = stack.pop()
-    if (typeof item === 'string') {
-      if (LONE_SURROGATE.test(item)) return true
-    } else if (typeof item === 'object' && item !== null) {
-      for (const value of Object.values(item)) stack.push(value)
-    }
-  }
-  return false
-}
 
 /* `codePoints` says how a string's length counts (CODE_POINT_ARGS). */
 function checkValue(p: SchemaProp, x: unknown, codePoints = false): string | null {

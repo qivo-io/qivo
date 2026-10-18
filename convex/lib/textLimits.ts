@@ -35,6 +35,10 @@ export const nameTooLong = (name: string): boolean => [...name].length > NAME_MA
 export const nameOverCap = (name: string, current?: string): boolean =>
   name !== current?.trim() && nameTooLong(name)
 
+/** The longest label name, in code points once trimmed (model/labels.ts
+ * labelName). The app's label inputs and MCP's set_label schema use it. */
+export const LABEL_NAME_MAX = 40
+
 /** `name` cut to its first NAME_MAX code points followed by "…" when it is
  * longer, for display text copied from a name nobody here chose, such as an
  * OAuth client's or one stored before NAME_MAX. Cutting the result again

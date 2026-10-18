@@ -119,6 +119,7 @@ import type * as machine_rest from "../machine/rest.js";
 import type * as machine_shared from "../machine/shared.js";
 import type * as machine_teams from "../machine/teams.js";
 import type * as machine_testing from "../machine/testing.js";
+import type * as machine_uploads from "../machine/uploads.js";
 import type * as mail from "../mail.js";
 import type * as messages from "../messages.js";
 import type * as model_activity from "../model/activity.js";
@@ -294,6 +295,7 @@ declare const fullApi: ApiFromModules<{
   "machine/shared": typeof machine_shared;
   "machine/teams": typeof machine_teams;
   "machine/testing": typeof machine_testing;
+  "machine/uploads": typeof machine_uploads;
   mail: typeof mail;
   messages: typeof messages;
   "model/activity": typeof model_activity;

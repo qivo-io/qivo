@@ -466,6 +466,23 @@ describe('MCP', () => {
     ])
   })
 
+  it('caps set_label names at 40 code points in the schema, as the server does', async () => {
+    const t = newT()
+    await wireOrg(t)
+    const { tools } = (await mcp(t, 'tools/list', {})) as {
+      tools: { name: string; inputSchema: { properties: Record<string, { maxLength?: number }> } }[]
+    }
+    const label = tools.find((x) => x.name === 'set_label')?.inputSchema.properties.name
+    expect(label?.maxLength).toBe(40)
+    const color = '#123ABC'
+    expect(await tool(t, 'set_label', { name: '🚀'.repeat(41), color })).toMatchObject(
+      tooBig('set_label', 'name', 40),
+    )
+    const made = await tool(t, 'set_label', { name: '🚀'.repeat(40), color })
+    expect(made.isError).toBeUndefined()
+    expect(JSON.parse(made.content[0].text)).toMatchObject({ name: '🚀'.repeat(40) })
+  })
+
   it('counts code points for titles and names, as the server does', async () => {
     const t = newT()
     const f = await wireOrg(t)

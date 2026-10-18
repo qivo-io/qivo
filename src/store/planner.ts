@@ -2552,8 +2552,6 @@ export type NewProjectInput = {
   parent?: string
   key: string
   name: string
-  icon?: string | null
-  iconColor?: string | null
   lead?: string | null
   description?: string
   /** Individual grants. null names no grant, which for the creator also
@@ -2567,8 +2565,6 @@ export type NewProjectInput = {
 export type ProjectPlace = { project: ProjectVM; owner: ProjectVM | null }
 export type ProjectPatch = Partial<{
   name: string
-  icon: string | null
-  iconColor: string | null
   lead: string | null
   description: string | null
   key: string
@@ -2592,8 +2588,6 @@ export type OrgPatch = Partial<{
 }>
 export type TeamPatch = Partial<{
   name: string
-  icon: string | null
-  iconColor: string | null
   staleDays: number | string
   archiveDays: number | string
   trackDelayDefault: boolean
@@ -5252,8 +5246,6 @@ export const PLANNER = {
       key: p.key,
       num: previewNum,
       name: p.name,
-      icon: p.type === 'meta' ? p.icon || undefined : undefined,
-      icon_color: p.type === 'meta' ? p.iconColor || undefined : undefined,
       lead_id: p.lead || profileIn(orgRow.id),
       description: p.description || '',
       sort_order: siblings.length,
@@ -5282,8 +5274,6 @@ export const PLANNER = {
         parent_id: p.type === 'meta' ? null : p.parent,
         key: p.key,
         name: p.name,
-        icon: p.type === 'meta' ? p.icon || undefined : undefined,
-        icon_color: p.type === 'meta' ? p.iconColor || undefined : undefined,
         lead_id: row.lead_id,
         description: p.description || '',
         sort_order: row.sort_order,
@@ -5357,8 +5347,6 @@ export const PLANNER = {
     }
     const db: Partial<Row<'projects'>> = {}
     if ('name' in patch) db.name = patch.name
-    if ('icon' in patch) db.icon = patch.icon || undefined
-    if ('iconColor' in patch) db.icon_color = patch.iconColor || undefined
     if ('lead' in patch) db.lead_id = patch.lead || undefined
     if ('description' in patch) db.description = patch.description || ''
     if ('key' in patch) db.key = patch.key
@@ -5369,8 +5357,6 @@ export const PLANNER = {
     emit()
     const wire: FunctionArgs<typeof api.projects.update>['patch'] = {}
     if ('name' in patch) wire.name = patch.name
-    if ('icon' in patch) wire.icon = patch.icon || null
-    if ('iconColor' in patch) wire.icon_color = patch.iconColor || null
     if ('lead' in patch) wire.lead_id = patch.lead || null
     if ('description' in patch) wire.description = patch.description || ''
     if ('key' in patch) wire.key = patch.key
@@ -5656,14 +5642,6 @@ export const PLANNER = {
     if ('name' in patch) {
       row.name = patch.name
       wire.name = patch.name
-    }
-    if ('icon' in patch) {
-      row.icon = patch.icon || undefined
-      wire.icon = patch.icon || null
-    }
-    if ('iconColor' in patch) {
-      row.icon_color = patch.iconColor || undefined
-      wire.icon_color = patch.iconColor || null
     }
     if ('staleDays' in patch) {
       // whole days, within the server check [1, 3650]

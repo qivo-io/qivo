@@ -80,15 +80,6 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set(RESERVED_WORDS.split(
 export const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 export const SLUG_MAX = 40
 
-/* icon_color (teams AND projects) is stored user data that reaches the browser
- * as SVG paint, so it is allowlisted at the WRITE rather than escaped at the
- * read: a 6-digit hex — the only thing the picker's swatches and its HSV
- * custom field can produce — or the legacy 'rainbow' gradient that predates
- * the picker and is still rendered though no longer offered. A length cap is
- * NOT a substitute: a 19-character value is long enough to close the `fill="`
- * attribute the glyph draws it into and open an event handler. */
-export const ICON_COLOR_SHAPE = /^(?:#[0-9a-fA-F]{6}|rainbow)$/
-
 const trimHyphens = (s: string) => s.replace(/^-+|-+$/g, '')
 
 const slugHolder = (ctx: QueryCtx, slug: string) =>

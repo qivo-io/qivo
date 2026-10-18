@@ -29,7 +29,7 @@ import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
-import { ICON_COLOR_SHAPE, newTeamDefaults } from './orgs'
+import { newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
   type HeldTasks,
@@ -167,11 +167,9 @@ export async function createTeamCore(
   return team
 }
 
-/** The team settings a change may carry. Null or '' clears an icon. */
+/** The team settings a change may carry. */
 export type TeamPatch = {
   name?: string
-  icon?: string | null
-  icon_color?: string | null
   stale_days?: number
   archive_days?: number
   track_delay_default?: boolean
@@ -184,9 +182,8 @@ const clamp = (n: number, lo: number, hi: number) =>
 /**
  * Renames a team or changes its settings, for an organization admin or a
  * leader of the team. Same-value fields are dropped, so an unchanged patch
- * writes nothing. Day counts clamp to 1..3650 like the old client's; a long
- * icon or an icon color that is not #rrggbb is refused. Returns the team as
- * stored.
+ * writes nothing. Day counts clamp to 1..3650 like the old client's. Returns
+ * the team as stored.
  */
 export async function updateTeamCore(
   ctx: MutationCtx,
@@ -198,20 +195,6 @@ export async function updateTeamCore(
   if (patch.name !== undefined) {
     const name = cleanTeamName(patch.name, team.name)
     if (name !== team.name) upd.name = name
-  }
-  if (patch.icon !== undefined) {
-    const icon = patch.icon === null || patch.icon === '' ? undefined : patch.icon
-    if (icon !== undefined && [...icon].length > 40)
-      throw badRequest('an icon is at most 40 characters')
-    if (icon !== team.icon) upd.icon = icon
-  }
-  if (patch.icon_color !== undefined) {
-    const color =
-      patch.icon_color === null || patch.icon_color === '' ? undefined : patch.icon_color
-    if (color !== undefined && !ICON_COLOR_SHAPE.test(color)) {
-      throw badRequest('an icon color must be a #rrggbb hex')
-    }
-    if (color !== team.icon_color) upd.icon_color = color
   }
   if (patch.stale_days !== undefined) {
     const d = clamp(patch.stale_days, 1, 3650)

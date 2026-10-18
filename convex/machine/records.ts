@@ -26,13 +26,13 @@
  *
  * Both surfaces upload a file in the same three steps, through the same
  * ticket (model/attachments.ts startAttachmentUpload and
- * confirmAttachmentUpload). The start answers a one-time upload URL that
- * takes no credential, the client sends the bytes there, and the confirm
- * attaches them. So the file never passes through an MCP or REST request,
- * and an OAuth token never leaves /mcp. A ticket belongs to the user, not the
- * credential, so either surface may confirm it. MCP's attach_text_file
- * stores text the assistant writes itself, for a client that cannot send
- * the bytes anywhere. Its action stores the text and a mutation attaches
+ * confirmAttachmentUpload). The start answers an upload URL that takes no
+ * credential and stores one file (machine/uploads.ts), the client sends the
+ * bytes there, and the confirm attaches them. So the file never passes
+ * through an MCP or REST request, and an OAuth token never leaves /mcp. A
+ * ticket belongs to the user, not the credential, so either surface may
+ * confirm it. MCP's attach_text_file stores text the assistant writes
+ * itself, for a client that cannot send the bytes anywhere. Its action stores the text and a mutation attaches
  * it, both behind the same checks as every other MCP write. */
 
 import { ConvexError, type ObjectType, v } from 'convex/values'
@@ -651,7 +651,7 @@ export const RECORD_TOOLS: McpTool[] = [
       name: 'start_attachment_upload',
       title: 'Start attachment upload',
       description:
-        "Start attaching a file to the task `ref`. Give the file `name`, its exact `size` in bytes and optionally its `content_type`. Answers a one-time `upload_url` and a `ticket`, valid for an hour. Send the file's bytes to `upload_url` in an HTTP POST with the file's type as Content-Type and no Authorization header, for example `curl -X POST -H 'Content-Type: application/pdf' --data-binary @wiring.pdf '<upload_url>'`. Then call confirm_attachment_upload with the `storageId` it answers. Needs Edit access to the task's project.",
+        "Start attaching a file to the task `ref`. Give the file `name`, its exact `size` in bytes and optionally its `content_type`. Answers an `upload_url` and a `ticket`, valid for an hour. Send exactly `size` bytes, the file's, to `upload_url` in one HTTP POST with the file's type as Content-Type and no Authorization header, for example `curl -X POST -H 'Content-Type: application/pdf' --data-binary @wiring.pdf '<upload_url>'`. Then call confirm_attachment_upload with the `storageId` it answers. Needs Edit access to the task's project.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

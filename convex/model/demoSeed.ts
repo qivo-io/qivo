@@ -103,8 +103,6 @@ export async function writeNorthstarWork(
       id: teamIds[team.key],
       org_id: org.id,
       name: cleanTeamName(team.name),
-      icon: team.icon,
-      icon_color: team.color,
       ...teamDefaults,
     })
     for (const member of team.members)
@@ -144,7 +142,7 @@ export async function writeNorthstarWork(
       id: projectIds[p.key],
       org_id: org.id,
       type: p.parent ? 'project' : 'meta',
-      ...(p.parent ? { parent_id: projectIds[p.parent] } : { icon: p.icon, icon_color: p.color }),
+      parent_id: p.parent ? projectIds[p.parent] : undefined,
       key: p.code,
       name: cleanProjectName(p.name),
       description: projectDescription(p.description),

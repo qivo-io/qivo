@@ -740,7 +740,8 @@ export const restUpdateProject = internalMutation({
  * from the path, and the body ({level} on PUT, an optional {on_held_tasks}
  * on DELETE). A body field the route does not take is refused
  * (refuseUnknownFields), so a misspelled one never falls back to a
- * default. */
+ * default. Both routes check the body before they resolve the path, so a
+ * bad body answers 400 whatever the path names. */
 const vRestAccessArgs = {
   callerId: v.string(),
   access: vCredentialAccess,
@@ -757,11 +758,11 @@ type RestAccessArgs = ObjectType<typeof vRestAccessArgs>
  * one function. */
 async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
   const me = await asMachineCaller(ctx, a.callerId, a.access)
-  const project = await restProject(ctx, me, a.ref)
-  const subject = await restSubject(ctx, me, kind, a.subject)
   const b = needJson(a.body)
   refuseUnknownFields(b, ['level'])
   const level = restLevel(b)
+  const project = await restProject(ctx, me, a.ref)
+  const subject = await restSubject(ctx, me, kind, a.subject)
   const { changed } = await setProjectGrantCore(ctx, {
     me,
     project,

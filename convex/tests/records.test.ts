@@ -6,10 +6,11 @@
  *      and stops serving once the reader loses the project) and hidden tasks.
  *   2. Removing an attachment: the app's Edit rule, an attachment of another
  *      task, description images left to the app, the activity row.
- *   3. The REST upload: the ticket the start records, and a confirm that
- *      must match the caller, the task, the expiry, a file stored after the
- *      ticket and the declared size, with the organization's cap measured
- *      from the stored file; expired tickets are reaped. The MCP upload
+ *   3. The REST upload: the ticket the start records, an upload URL that
+ *      stores one file of the declared size, and a confirm that must match
+ *      the caller, the task, the expiry and the file that URL stored, with
+ *      the organization's cap measured from the stored file; expired
+ *      tickets are reaped. The MCP upload
  *      tools run the same rules over a personal token, and a ticket confirms
  *      on either surface. attach_text_file stores text as UTF-8 within 256
  *      KiB and the cap, refuses before it stores anything, and deletes what
@@ -28,7 +29,12 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
-import { UPLOAD_STORAGE_ID, UPLOAD_TICKET_MISSING } from '../model/attachments'
+import {
+  UPLOAD_STORAGE_ID,
+  UPLOAD_TICKET_MISSING,
+  UPLOAD_URL_USED,
+  uploadSizeWrong,
+} from '../model/attachments'
 import {
   activityFor,
   expectRefusal,
@@ -177,6 +183,32 @@ const rest = (fx: Fx, method: string, path: string, body?: unknown) =>
     headers: { Authorization: `Bearer ${fx.agentKey}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+
+/* POSTs `size` bytes, or `body`, to the upload URL `uploadUrl`, as a client
+ * would. Answers the status and the parsed answer. */
+async function send(
+  t: T,
+  uploadUrl: string,
+  size: number,
+  o: { type?: string; body?: Uint8Array; headers?: Record<string, string> } = {},
+): Promise<{ status: number; json: { storageId?: Id<'_storage'>; error?: string } }> {
+  const url = new URL(uploadUrl)
+  const res = await fetchPath(t, `${url.pathname}${url.search}`, {
+    method: 'POST',
+    headers: { 'Content-Type': o.type ?? 'application/octet-stream', ...o.headers },
+    body: o.body ?? new Uint8Array(size),
+  })
+  return { status: res.status, json: JSON.parse(res.text) }
+}
+
+/* The file the upload URL `uploadUrl` stores from `size` bytes. */
+async function upload(t: T, uploadUrl: string, size: number, type?: string) {
+  const res = await send(t, uploadUrl, size, { type })
+  if (res.json.storageId === undefined) throw new Error(`upload failed: ${res.json.error}`)
+  return res.json.storageId
+}
+
+const storageRows = (t: T) => t.run((ctx) => ctx.db.system.query('_storage').collect())
 
 /* A personal token of `profile` with `access`, for the MCP requests. */
 async function personalToken(
@@ -492,7 +524,7 @@ describe('the REST upload', () => {
       body: JSON.stringify(body),
     })
 
-  it('records a ticket for the caller and task, then attaches the stored file once', async () => {
+  it('records a ticket for the caller and task, then attaches the uploaded file once', async () => {
     const fx = await setup()
     const issue = await task(fx, { title: 'Wire the harness' })
     const before = Date.now()
@@ -501,7 +533,9 @@ describe('the REST upload', () => {
       content_type: 'application/pdf',
       size: 2048,
     })
-    expect(started.upload_url).toMatch(/^https:\/\//)
+    expect(started.upload_url).toMatch(
+      new RegExp(`^https://[^/]+/attachment-uploads/${started.ticket}\\?e=\\d+&m=`),
+    )
     const [ticket] = await tickets(fx.t)
     expect(ticket).toMatchObject({
       id: started.ticket,
@@ -514,7 +548,7 @@ describe('the REST upload', () => {
     })
     expect(ticket.expires_at - before).toBeGreaterThanOrEqual(60 * 60 * 1000)
     expect(started.expires_at).toBe(new Date(ticket.expires_at).toISOString())
-    const stored = await storeFile(fx.t, 2048, 'application/octet-stream')
+    const stored = await upload(fx.t, started.upload_url, 2048)
     const out = await confirm(fx, issue.id, started.ticket, { storage_id: stored })
     if (!('attachment' in out)) throw new Error('expected an attachment')
     expect(out.attachment).toMatchObject({
@@ -539,20 +573,25 @@ describe('the REST upload', () => {
       verb: 'attached a file to',
       detail: 'wiring.pdf — via the REST API (CI key)',
     })
-    // the ticket is spent
+    // the ticket is spent, and so is its upload URL
     await refused(
-      confirm(fx, issue.id, started.ticket, { storage_id: await storeFile(fx.t, 2048) }),
+      confirm(fx, issue.id, started.ticket, { storage_id: stored }),
       'not_found',
       UPLOAD_TICKET_MISSING,
     )
+    expect(await send(fx.t, started.upload_url, 2048)).toEqual({
+      status: 404,
+      json: { error: UPLOAD_TICKET_MISSING },
+    })
+    expect(await storageRows(fx.t)).toHaveLength(1)
   })
 
   it('refuses a ticket of another caller, another task or past its expiry alike', async () => {
     const fx = await setup()
     const issue = await task(fx)
     const other = await task(fx)
-    const { ticket } = await start(fx, issue.id, { name: 'a.txt', size: 4 })
-    const stored = await storeFile(fx.t, 4)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.txt', size: 4 })
+    const stored = await upload(fx.t, upload_url, 4)
     // the admin can edit the task too, but the ticket is the agent's
     await refused(
       confirm(fx, issue.id, ticket, { storage_id: stored }, fx.admin.id),
@@ -582,7 +621,62 @@ describe('the REST upload', () => {
     expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
   })
 
-  it('checks the declared size against the cap and the stored file', async () => {
+  it('stores one file per upload URL however often it is sent to', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.txt', size: 5 })
+    const first = await send(fx.t, upload_url, 5, { type: 'text/plain' })
+    expect(first.status).toBe(200)
+    for (let i = 0; i < 4; i++) {
+      expect(await send(fx.t, upload_url, 5)).toEqual({
+        status: 409,
+        json: { error: UPLOAD_URL_USED },
+      })
+    }
+    // two at once: one claims the URL, the other is refused before it stores
+    const second = await start(fx, issue.id, { name: 'b.txt', size: 5 })
+    const both = await Promise.all([
+      send(fx.t, second.upload_url, 5),
+      send(fx.t, second.upload_url, 5),
+    ])
+    expect(both.map((r) => r.status).sort()).toEqual([200, 409])
+    const files = await storageRows(fx.t)
+    expect(files.map((f) => f._id).sort()).toEqual(
+      [first.json.storageId, both.find((r) => r.status === 200)?.json.storageId].sort(),
+    )
+    const out = await confirm(fx, issue.id, ticket, { storage_id: first.json.storageId })
+    expect(out).toMatchObject({ attachment: { name: 'a.txt', size_bytes: 5 } })
+  })
+
+  it('refuses a forged, altered or expired upload URL before it reads anything', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { upload_url } = await start(fx, issue.id, { name: 'a.txt', size: 4 })
+    const other = await start(fx, issue.id, { name: 'b.txt', size: 4 })
+    const missing = { status: 404, json: { error: UPLOAD_TICKET_MISSING } }
+    const exp = Number(/[?&]e=(\d+)/.exec(upload_url)?.[1])
+    for (const forged of [
+      upload_url.replace(/([?&]t=)[^&]+/, `$1${'A'.repeat(43)}`),
+      upload_url.replace(/([?&]m=)[^&]+/, `$1${fx.admin.id}`),
+      upload_url.replace(/([?&]e=)\d+/, `$1${exp + 60}`),
+      // another ticket's token does not open this one
+      upload_url.replace(/attachment-uploads\/[^?]+/, `attachment-uploads/${other.ticket}`),
+      upload_url.replace(/&t=[^&]+/, ''),
+    ]) {
+      expect(forged).not.toBe(upload_url)
+      expect(await send(fx.t, forged, 4)).toEqual(missing)
+    }
+    await fx.t.run(async (ctx) => {
+      for (const row of await ctx.db.query('attachment_uploads').collect()) {
+        await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
+      }
+    })
+    expect(await send(fx.t, upload_url, 4)).toEqual(missing)
+    expect(await storageRows(fx.t)).toEqual([])
+    expect((await tickets(fx.t)).every((r) => r.upload_started_at === undefined)).toBe(true)
+  })
+
+  it('stores only the declared number of bytes, and a refused POST leaves the URL usable', async () => {
     const fx = await setup()
     const issue = await task(fx)
     // the organization allows 10 MiB
@@ -592,43 +686,40 @@ describe('the REST upload', () => {
       'attachment exceeds the organization limit of 10 MiB',
     )
     expect(await tickets(fx.t)).toEqual([])
-    // a stored file of another size is refused and kept, the ticket too
-    const { ticket } = await start(fx, issue.id, { name: 'a.bin', size: 100 })
-    const wrong = await storeFile(fx.t, 99)
-    await refused(
-      confirm(fx, issue.id, ticket, { storage_id: wrong }),
-      'bad_request',
-      'the uploaded file has 99 bytes, not the 100 declared',
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.bin', size: 100 })
+    const wrong = { status: 400, json: { error: uploadSizeWrong(100) } }
+    expect(await send(fx.t, upload_url, 99)).toEqual(wrong)
+    expect(await send(fx.t, upload_url, 101)).toEqual(wrong)
+    expect(await send(fx.t, upload_url, 10 * MiB + 1)).toEqual(wrong)
+    // a declared length that differs is refused before the body is read
+    expect(await send(fx.t, upload_url, 100, { headers: { 'Content-Length': '99' } })).toEqual(
+      wrong,
     )
-    expect(await storageExists(fx.t, wrong)).toBe(true)
-    expect(await tickets(fx.t)).toHaveLength(1)
-    // so is one over the cap: only a file of the declared size is ever
-    // deleted, and the weekly sweep reaps the rest
-    const huge = await storeFile(fx.t, 10 * MiB + 1)
-    await refused(
-      confirm(fx, issue.id, ticket, { storage_id: huge }),
-      'bad_request',
-      `the uploaded file has ${10 * MiB + 1} bytes, not the 100 declared`,
-    )
-    expect(await storageExists(fx.t, huge)).toBe(true)
-    expect(await tickets(fx.t)).toHaveLength(1)
+    expect(await storageRows(fx.t)).toEqual([])
+    const [row] = await tickets(fx.t)
+    expect(row.upload_started_at).toBeUndefined()
     // without a declared type the upload's own becomes the attachment's,
-    // and it has the same length limit
-    const typed = await storeFile(fx.t, 100, `application/${'x'.repeat(244)}`)
+    // and it has the same length limit; convex-test's storage records no
+    // type, so the test sets the one Convex would
+    const typed = await upload(fx.t, upload_url, 100)
+    await fx.t.run((ctx) =>
+      ctx.db.patch(typed as never, { contentType: `application/${'x'.repeat(244)}` } as never),
+    )
     await refused(
       confirm(fx, issue.id, ticket, { storage_id: typed }),
       'bad_request',
       "the file's media type must be at most 255 characters",
     )
     expect(await storageExists(fx.t, typed)).toBe(true)
+    expect(await tickets(fx.t)).toHaveLength(1)
     expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
   })
 
   it('deletes a file of the declared size over a cap lowered since the start, and spends the ticket', async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const { ticket } = await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB })
-    const six = await storeFile(fx.t, 6 * MiB)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB })
+    const six = await upload(fx.t, upload_url, 6 * MiB)
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
     expect(await confirm(fx, issue.id, ticket, { storage_id: six })).toEqual({
       refused: 'attachment exceeds the organization limit of 5 MiB',
@@ -638,59 +729,73 @@ describe('the REST upload', () => {
     expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
   })
 
-  it('accepts only a file stored after the ticket, and never deletes an earlier one', async () => {
+  it('accepts only the file its upload URL stored, and never deletes another', async () => {
     const fx = await setup()
     const issue = await task(fx)
-    // another caller's pending upload, stored before this ticket started,
-    // of the size this ticket declares and over the cap once it is lowered
-    const earlier = await storeFile(fx.t, 6 * MiB)
-    const { ticket } = await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB })
-    await refused(
-      confirm(fx, issue.id, ticket, { storage_id: earlier }),
-      'bad_request',
-      UPLOAD_STORAGE_ID,
-    )
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB })
+    // a file stored after the ticket, of its size, but not through its URL
+    const elsewhere = await storeFile(fx.t, 6 * MiB)
+    const sibling = await start(fx, issue.id, { name: 'other.bin', size: 6 * MiB })
+    const siblings = await upload(fx.t, sibling.upload_url, 6 * MiB)
+    // before the upload has stored anything
+    for (const storage_id of [elsewhere, siblings]) {
+      await refused(confirm(fx, issue.id, ticket, { storage_id }), 'bad_request', UPLOAD_STORAGE_ID)
+    }
+    const mine = await upload(fx.t, upload_url, 6 * MiB)
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
-    await refused(
-      confirm(fx, issue.id, ticket, { storage_id: earlier }),
-      'bad_request',
-      UPLOAD_STORAGE_ID,
-    )
-    expect(await storageExists(fx.t, earlier)).toBe(true)
-    // a storage id whose file is gone answers the same
-    const gone = await storeFile(fx.t, 6 * MiB)
-    await fx.t.run((ctx) => ctx.storage.delete(gone))
-    await refused(
-      confirm(fx, issue.id, ticket, { storage_id: gone }),
-      'bad_request',
-      UPLOAD_STORAGE_ID,
-    )
-    expect(await fx.t.run((ctx) => ctx.db.query('issue_attachments').collect())).toEqual([])
+    for (const storage_id of [elsewhere, siblings, 'not-an-id']) {
+      await refused(confirm(fx, issue.id, ticket, { storage_id }), 'bad_request', UPLOAD_STORAGE_ID)
+    }
+    await refused(confirm(fx, issue.id, ticket, {}), 'bad_request', UPLOAD_STORAGE_ID)
+    expect(await storageExists(fx.t, elsewhere)).toBe(true)
+    expect(await storageExists(fx.t, siblings)).toBe(true)
     // the ticket is still usable for the file its upload stored
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 10 }))
-    const mine = await storeFile(fx.t, 6 * MiB)
     const out = await confirm(fx, issue.id, ticket, { storage_id: mine })
     expect(out).toMatchObject({ attachment: { name: 'six.bin', size_bytes: 6 * MiB } })
-    expect(await storageExists(fx.t, earlier)).toBe(true)
   })
 
-  it('refuses a file another row holds and an id that is not a storage id', async () => {
+  it('deletes a file whose ticket went while it was stored, and frees a URL whose POST failed', async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const { ticket } = await start(fx, issue.id, { name: 'a.bin', size: 12 })
-    // stored after the ticket started, then attached by someone else
-    const held = await plantAttachment(fx, issue, { size_bytes: 12 })
+    const { ticket } = await start(fx, issue.id, { name: 'a.bin', size: 3 })
+    const minter = fx.agent.id
+    await fx.t.mutation(internal.machine.uploads.begin, { ticket, minter })
     await refused(
-      confirm(fx, issue.id, ticket, { storage_id: held.storage_id }),
-      'bad_request',
-      'this file is already attached',
+      fx.t.mutation(internal.machine.uploads.begin, { ticket, minter }),
+      'conflict',
+      UPLOAD_URL_USED,
     )
-    await refused(
-      confirm(fx, issue.id, ticket, { storage_id: 'not-an-id' }),
-      'bad_request',
-      UPLOAD_STORAGE_ID,
-    )
-    await refused(confirm(fx, issue.id, ticket, {}), 'bad_request', UPLOAD_STORAGE_ID)
+    // the POST failed after it stored a file: the file goes, the URL frees
+    const failed = await storeFile(fx.t, 3)
+    await fx.t.mutation(internal.machine.uploads.abandon, { ticket, minter, storage_id: failed })
+    expect(await storageExists(fx.t, failed)).toBe(false)
+    expect((await tickets(fx.t))[0].upload_started_at).toBeUndefined()
+    // the ticket expired while the file was stored
+    await fx.t.mutation(internal.machine.uploads.begin, { ticket, minter })
+    await fx.t.run(async (ctx) => {
+      const [row] = await ctx.db.query('attachment_uploads').collect()
+      await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
+    })
+    const late = await storeFile(fx.t, 3)
+    expect(
+      await fx.t.mutation(internal.machine.uploads.finish, { ticket, minter, storage_id: late }),
+    ).toBe(false)
+    expect(await storageExists(fx.t, late)).toBe(false)
+    // a file another row holds is never deleted
+    const held = await plantAttachment(fx, issue, { size_bytes: 3 })
+    expect(
+      await fx.t.mutation(internal.machine.uploads.finish, {
+        ticket,
+        minter,
+        storage_id: held.storage_id,
+      }),
+    ).toBe(false)
+    await fx.t.mutation(internal.machine.uploads.abandon, {
+      ticket,
+      minter,
+      storage_id: held.storage_id,
+    })
     expect(await storageExists(fx.t, held.storage_id)).toBe(true)
   })
 
@@ -730,8 +835,8 @@ describe('the REST upload', () => {
       size: 3,
     })
     expect(res.status).toBe(201)
-    const { ticket } = JSON.parse(res.text) as { ticket: string }
-    const stored = await storeFile(fx.t, 3)
+    const { ticket, upload_url } = JSON.parse(res.text) as { ticket: string; upload_url: string }
+    const stored = await upload(fx.t, upload_url, 3)
     const done = await rest(fx, 'POST', `/v1/tasks/QN-${issue.num}/attachments/${ticket}`, {
       storage_id: stored,
     })
@@ -745,13 +850,13 @@ describe('the REST upload', () => {
           size: 6 * MiB,
         })
       ).text,
-    ) as { ticket: string }
+    ) as { ticket: string; upload_url: string }
     const path = `/v1/tasks/QN-${issue.num}/attachments/${big.ticket}`
     expect(await rest(fx, 'POST', path, { storage_id: earlier })).toEqual({
       status: 400,
       text: JSON.stringify({ error: UPLOAD_STORAGE_ID }),
     })
-    const six = await storeFile(fx.t, 6 * MiB)
+    const six = await upload(fx.t, big.upload_url, 6 * MiB)
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
     expect(await rest(fx, 'POST', path, { storage_id: six })).toEqual({
       status: 400,
@@ -821,7 +926,6 @@ describe('the MCP upload', () => {
       ticket,
       storage_id,
     })
-  const ticketOf = (text: string) => (JSON.parse(text) as { ticket: string }).ticket
 
   it('starts and confirms over HTTP with a personal token, and the file downloads', async () => {
     const fx = await setup()
@@ -842,13 +946,18 @@ describe('the MCP upload', () => {
       expires_at: string
     }
     expect(Object.keys(out)).toEqual(['ticket', 'upload_url', 'expires_at'])
-    expect(out.upload_url).toMatch(/^https:\/\//)
+    expect(out.upload_url).toMatch(/^https:\/\/[^/]+\/attachment-uploads\//)
     expect(Date.parse(out.expires_at) - before).toBeGreaterThanOrEqual(60 * 60 * 1000)
     const [ticket] = await tickets(fx.t)
     expect(ticket).toMatchObject({ id: out.ticket, profile_id: fx.user.id, name: 'wiring.pdf' })
-    // convex-test's upload URL is no endpoint, so the bytes are stored directly
     const bytes = Uint8Array.from({ length: 256 }, (_, i) => i)
-    const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob([bytes]) as never))
+    const sent = await send(fx.t, out.upload_url, 256, { body: bytes })
+    expect(sent.status).toBe(200)
+    const stored = sent.json.storageId as Id<'_storage'>
+    expect(await send(fx.t, out.upload_url, 256, { body: bytes })).toEqual({
+      status: 409,
+      json: { error: UPLOAD_URL_USED },
+    })
     const confirmed = await mcpTool(fx.t, token, 'confirm_attachment_upload', {
       ref,
       ticket: out.ticket,
@@ -881,14 +990,17 @@ describe('the MCP upload', () => {
   it('confirms a ticket started on the other surface, for the same user only', async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const viaMcp = ticketOf(await start(fx, issue.id, { name: 'mcp.txt', size: 3 }))
+    const viaMcp = JSON.parse(await start(fx, issue.id, { name: 'mcp.txt', size: 3 })) as {
+      ticket: string
+      upload_url: string
+    }
     const restOut = await fx.t.mutation(internal.machine.records.restConfirmUpload, {
       callerId: fx.agent.id,
       access: 'write',
       keyName: 'CI key',
       ref: issue.id,
-      ticket: viaMcp,
-      body: JSON.stringify({ storage_id: await storeFile(fx.t, 3) }),
+      ticket: viaMcp.ticket,
+      body: JSON.stringify({ storage_id: await upload(fx.t, viaMcp.upload_url, 3) }),
     })
     expect(restOut).toMatchObject({ attachment: { name: 'mcp.txt', size_bytes: 3 } })
     const viaRest = await fx.t.mutation(internal.machine.records.restStartUpload, {
@@ -897,7 +1009,7 @@ describe('the MCP upload', () => {
       ref: issue.id,
       body: JSON.stringify({ name: 'rest.txt', size: 4 }),
     })
-    const stored = await storeFile(fx.t, 4)
+    const stored = await upload(fx.t, viaRest.upload_url, 4)
     // the admin can edit the task too, but the ticket is the agent's
     await refused(
       confirm(fx, issue.id, viaRest.ticket, stored, fx.admin.id),
@@ -946,19 +1058,19 @@ describe('the MCP upload', () => {
     const other = await task(fx)
     const me = fx.user.id
     const earlier = await storeFile(fx.t, 6 * MiB)
-    const ticket = ticketOf(await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB }, me))
-    const six = await storeFile(fx.t, 6 * MiB)
+    const started = JSON.parse(
+      await start(fx, issue.id, { name: 'six.bin', size: 6 * MiB }, me),
+    ) as { ticket: string; upload_url: string }
+    const ticket = started.ticket
+    // a body of another size stores nothing, and the URL stays usable
+    expect(await send(fx.t, started.upload_url, 6 * MiB - 1)).toEqual({
+      status: 400,
+      json: { error: uploadSizeWrong(6 * MiB) },
+    })
+    const six = await upload(fx.t, started.upload_url, 6 * MiB)
     await refused(confirm(fx, other.id, ticket, six, me), 'not_found', UPLOAD_TICKET_MISSING)
     await refused(confirm(fx, issue.id, uuid(), six, me), 'not_found', UPLOAD_TICKET_MISSING)
     await refused(confirm(fx, issue.id, ticket, earlier, me), 'bad_request', UPLOAD_STORAGE_ID)
-    // a file of another size is refused and kept, and the ticket stays usable
-    const wrong = await storeFile(fx.t, 6 * MiB - 1)
-    await refused(
-      confirm(fx, issue.id, ticket, wrong, me),
-      'bad_request',
-      `the uploaded file has ${6 * MiB - 1} bytes, not the ${6 * MiB} declared`,
-    )
-    expect(await storageExists(fx.t, wrong)).toBe(true)
     expect(await tickets(fx.t)).toHaveLength(1)
     // a cap lowered since the start is an error result whose byte delete has
     // committed, and it spends the ticket
@@ -975,13 +1087,17 @@ describe('the MCP upload', () => {
     expect(await storageExists(fx.t, earlier)).toBe(true)
     expect(await tickets(fx.t)).toEqual([])
     // an expired ticket answers like an unknown one
-    const late = ticketOf(await start(fx, issue.id, { name: 'late.txt', size: 1 }, me))
+    const late = JSON.parse(await start(fx, issue.id, { name: 'late.txt', size: 1 }, me)) as {
+      ticket: string
+      upload_url: string
+    }
+    const lateFile = await upload(fx.t, late.upload_url, 1)
     await fx.t.run(async (ctx) => {
       const [row] = await ctx.db.query('attachment_uploads').collect()
       await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
     })
     await refused(
-      confirm(fx, issue.id, late, await storeFile(fx.t, 1), me),
+      confirm(fx, issue.id, late.ticket, lateFile, me),
       'not_found',
       UPLOAD_TICKET_MISSING,
     )
@@ -1501,6 +1617,23 @@ describe('workload', () => {
       'from_week must be YYYY-MM-DD',
     )
     expect((await rest(fx, 'GET', '/v1/workload?weeks=2')).status).toBe(200)
+  })
+
+  it('keeps every week inside the years 0000 to 9999', async () => {
+    const fx = await setup()
+    const years = 'the workload window must fall within the years 0000 to 9999'
+    // the second week would start in year 10000
+    await refused(restLoad(fx, { from_week: '9999-12-31', weeks: '2' }), 'bad_request', years)
+    await refused(mcpLoad(fx, { from_week: '9999-06-01', weeks: 52 }), 'bad_request', years)
+    // the week holding 0000-01-01 starts on a Monday in year -1
+    await refused(restLoad(fx, { from_week: '0000-01-01', weeks: '1' }), 'bad_request', years)
+    expect((await restLoad(fx, { from_week: '9999-12-20', weeks: '2' })).week_starts).toEqual([
+      '9999-12-20',
+      '9999-12-27',
+    ])
+    expect((await restLoad(fx, { from_week: '0000-01-03', weeks: '1' })).week_starts).toEqual([
+      '0000-01-03',
+    ])
   })
 })
 

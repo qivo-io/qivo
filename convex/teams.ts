@@ -23,8 +23,7 @@
  * Settings clamps mirror the old client's write path (bc022c2:3098-3126).
  * The SQL CHECKs behind them (0011/0018/0044/0070) raised bare 23514s — no
  * verbatim sentences exist in this family; out-of-range numbers clamp like
- * the client's, malformed icon strings read badRequest. Team names are
- * trimmed and may not be blank. */
+ * the client's. Team names are trimmed and may not be blank. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -72,8 +71,6 @@ export const update = orgMutation({
     id: v.string(),
     patch: v.object({
       name: v.optional(v.string()),
-      icon: v.optional(v.union(v.string(), v.null())),
-      icon_color: v.optional(v.union(v.string(), v.null())),
       stale_days: v.optional(v.number()),
       archive_days: v.optional(v.number()),
       track_delay_default: v.optional(v.boolean()),

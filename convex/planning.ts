@@ -26,7 +26,7 @@ import type { QueryCtx } from './_generated/server'
 import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
-import { authedQuery } from './lib/functions'
+import { authedQuery, badRequest } from './lib/functions'
 import { groupTest, liveIn, liveTasksOf, ownedOpenTasks } from './lib/liveTasks'
 import { taskOwnerId } from './lib/review'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
@@ -201,6 +201,12 @@ export type WorkloadJson = {
   people: PersonWorkloadJson[]
 }
 
+/** The refusal of a workload window with a week outside the years 0000 to
+ * 9999. */
+export const WORKLOAD_YEARS = 'the workload window must fall within the years 0000 to 9999'
+
+const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/
+
 /**
  * Each person's planned hours for `weeks` weeks from the week holding
  * `fromDay` (YYYY-MM-DD), as `me` may see them. The rows are orgLoadRows for
@@ -227,6 +233,15 @@ export async function workloadCore(
 ): Promise<WorkloadJson> {
   const org = await byId(ctx, 'organizations', me.org_id)
   const grid = weekGrid(org?.week_start ?? 1)
+  const first = grid.ofDay(o.fromDay)
+  // the week holding 0000-01-01 starts in year -1, and a late 9999 window
+  // runs past year 9999, where week_starts would not be YYYY-MM-DD
+  if (
+    !DAY_SHAPE.test(grid.firstDay(first)) ||
+    !DAY_SHAPE.test(grid.firstDay(first + o.weeks - 1))
+  ) {
+    throw badRequest(WORKLOAD_YEARS)
+  }
   const profiles = await ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
@@ -261,7 +276,6 @@ export async function workloadCore(
     if (row.issue_id === null) own.hidden.push(span)
     spans.set(row.owner_id, own)
   }
-  const first = grid.ofDay(o.fromDay)
   const window = Array.from({ length: o.weeks }, (_, i) => first + i)
   // only the asked weeks are added up, however far a plan runs
   const asked = { from: first, to: first + o.weeks - 1 }

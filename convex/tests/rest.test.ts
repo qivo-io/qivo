@@ -172,6 +172,30 @@ describe('REST task routes', () => {
     const comments = await request('GET', `${path}/comments`)
     expect(comments.status).toBe(200)
     expect(await jsonBody(comments)).toEqual([comment])
+    // Text cut in the middle of an emoji holds half a surrogate pair, which
+    // cannot be stored. It is a 400 that changes nothing, where it was a 500.
+    const surrogate = {
+      error: 'request body holds an unpaired surrogate, which UTF-8 cannot encode',
+    }
+    for (const bad of [
+      { body: 'half \ud83c' },
+      { body: 'fine', '\ud800': 1 },
+      { body: 'fine', nested: { deep: ['\udfff'] } },
+    ]) {
+      const res = await request('POST', `${path}/comments`, bad)
+      expect(res.status).toBe(400)
+      expect(await jsonBody(res)).toEqual(surrogate)
+    }
+    // an array is no body
+    const array = await request('POST', `${path}/comments`, [{ body: 'x' }])
+    expect([array.status, await jsonBody(array)]).toEqual([
+      400,
+      { error: 'request body must be JSON' },
+    ])
+    expect(await jsonBody(await request('GET', `${path}/comments`))).toEqual([comment])
+    // a whole pair is text
+    const party = await request('POST', `${path}/comments`, { body: 'done \ud83c\udf89' })
+    expect(await jsonBody(party)).toMatchObject({ body: 'done 🎉' })
 
     for (const [method, oldPath, body] of [
       ['GET', '/v1/issues'],
