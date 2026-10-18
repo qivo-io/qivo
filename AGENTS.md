@@ -101,8 +101,24 @@ gets steps 1 to 6 on its head before it merges.
 has the exact steps, the reviewer prompt and how to record each step. Read it
 before step 1. A reviewer gets the prompt and the committed branch, never how
 the change was written. Check every finding against the code before you fix
-or reject it. Record every step, because choosing and paying for these
-reviewers depends on what each one finds.
+or reject it.
+
+Save the review statistics in qivo-internal, because choosing and paying for
+these reviewers depends on what each one finds. Every branch gets one record
+in qivo-internal's `evaluations/pr-reviews/pre-pr/records/` with:
+
+- The branch name and the pull request number.
+- Every step, including one that failed, timed out or was skipped, and every
+  follow-up review.
+- Each reviewer's findings, with your verdict on each one and your severity
+  for each correct one.
+- Each Greptile finding that reports the same problem as a CodeRabbit
+  finding, so the findings that only one of them reported can be counted.
+
+Check the record with qivo-internal's
+`evaluations/pr-reviews/pre-pr/check_records.py` and commit it there once the
+pull request merges or the branch is dropped. The README above has the record
+format and the commands.
 
 ## Deployment and version control
 
