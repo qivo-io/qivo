@@ -776,10 +776,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     setDisplayName: 'authedMutation',
     setMessageRetention: 'authedMutation',
   },
+  // Removing a person's or team's access stays open to org admins during a
+  // billing pause; giving or changing access does not.
   projects: {
     create: 'orgMutation',
     update: 'orgMutation',
-    removeAccess: 'orgMutation',
+    removeAccess: 'accessRemovalMutation',
     archive: 'orgMutation',
     unarchive: 'orgMutation',
     deleteDeep: 'orgMutation',

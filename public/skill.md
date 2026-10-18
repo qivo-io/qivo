@@ -40,8 +40,10 @@ whether billing has paused changes, and what this credential may do:
   credential. A person chooses a personal token's access and optional expiry
   when creating it, and neither can change. If the work needs changes, ask
   for a new token created with **Allow changes**.
-- `billing.read_only: true` means every change is refused until an
-  organization admin restores billing; `billing.reason` says so.
+- `billing.read_only: true` means changes are refused until an
+  organization admin restores billing, or while the organization waits for
+  its deletion; `billing.reason` says which. An organization admin can still
+  remove someone's project or team access with `on_held_tasks: "leave"`.
 - `organization.week_start` is the first day of every planning week, `0`
   (Sunday) through `6` (Saturday). `organization.slug` is the organization's
   part of browser links.

@@ -44,6 +44,7 @@ import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { vGrantLevel, vProjectType } from './lib/enums'
 import {
+  accessRemovalMutation,
   badRequest,
   forbidden,
   notFound,
@@ -173,8 +174,13 @@ export const update = orgMutation({
  * team's grant leaves the project, and the open tasks that would leave
  * someone's sight are kept as Viewer, reassigned or left, all at once
  * (model/projectAccess.ts removeProjectGrantCore, which REST and MCP use
- * too). A person or team outside the organization reads as not found. */
-export const removeAccess = orgMutation({
+ * too). A person or team outside the organization reads as not found.
+ * Leaving the tasks only takes access away, so an organization admin can
+ * still do it while billing has made the organization read-only
+ * (accessRemovalMutation). Keeping people as Viewers or reassigning their
+ * tasks writes more, so the core meets the billing gate for it
+ * (removeAndSettle), and the wrapper does for a lead who is not an admin. */
+export const removeAccess = accessRemovalMutation({
   args: {
     id: v.string(),
     user_id: v.optional(v.string()),

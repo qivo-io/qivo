@@ -361,9 +361,11 @@ async function viewerProjectFor(
  * (model/projectAccess.ts removeAndSettle). 'keep_as_viewer' gives them a
  * Viewer grant on each project the team shared that showed those tasks, which
  * needs the right to manage that project's users. `reassign_to` hands the
- * tasks over by the task update rules, which needs Edit access on them. A
- * refusal anywhere leaves everything as it was. A missing membership changes
- * nothing.
+ * tasks over by the task update rules, which needs Edit access on them.
+ * Either of those two writes more than a removal, so it needs an
+ * organization that allows changes, even for an organization admin
+ * (removeAndSettle). A refusal anywhere leaves everything as it was. A
+ * missing membership changes nothing.
  */
 export async function removeTeamMemberCore(
   ctx: MutationCtx,

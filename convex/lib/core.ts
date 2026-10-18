@@ -58,6 +58,7 @@ import { followersOf } from '../model/messages'
 import { attachmentLimitMb } from '../model/orgs'
 import {
   canAccessProject,
+  canChangeAccess,
   canSeeProject,
   levelRank,
   liveCredentialRow,
@@ -128,7 +129,15 @@ const callerGone = (): ConvexError<Refusal> =>
  * The live caller profile. In a mutation it also refuses a credential that
  * can only read, before any ref resolves, so a read-only caller learns
  * nothing about what exists. An agent's access follows its live role, which
- * can change between auth and dispatch. Then the billing pause applies.
+ * can change between auth and dispatch. Then the read-only gate of a billing
+ * pause or a pending deletion applies.
+ *
+ * `write: 'access_removal'` mirrors the app's accessRemovalMutation: an
+ * organization admin passes that gate, and the removal core meets it for
+ * anything a removal also writes (model/projectAccess.ts removeAndSettle).
+ * Pass it only from a handler whose only write is an access removal. Only a
+ * person changes access (lib/access.ts canChangeAccess), so the exception is
+ * a person's.
  *
  * It does not read the caller's login for a platform ban. Each request
  * dispatches one call, and its credential lookup already refused a banned
@@ -142,6 +151,7 @@ export async function asMachineCaller(
   ctx: QueryCtx,
   callerId: string,
   access: CredentialAccess,
+  write: 'change' | 'access_removal' = 'change',
 ): Promise<Caller> {
   refuseDemoFeature()
   const me = await byId(ctx, 'profiles', callerId)
@@ -156,7 +166,9 @@ export async function asMachineCaller(
   await assertOrgAvailable(ctx, me.org_id)
   if ('insert' in ctx.db) {
     if (machineAccess(me, access) !== 'write') throw readOnlyRefusal(me)
-    await assertOrgWritable(ctx, me.org_id)
+    const adminRemoval =
+      write === 'access_removal' && me.org_role === 'admin' && canChangeAccess(me)
+    if (!adminRemoval) await assertOrgWritable(ctx, me.org_id)
   }
   return me
 }

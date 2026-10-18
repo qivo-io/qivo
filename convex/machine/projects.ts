@@ -469,7 +469,9 @@ export const mcpUpdateProject = internalMutation({
   },
 })
 
-/* set_project_access: one user's or one team's access, or its removal. */
+/* set_project_access: one user's or one team's access, or its removal. A
+ * removal is an access removal for the read-only gate (asMachineCaller), as
+ * in the app. */
 export const mcpSetProjectAccess = internalMutation({
   args: {
     callerId: v.string(),
@@ -481,7 +483,8 @@ export const mcpSetProjectAccess = internalMutation({
     on_held_tasks: v.optional(vHeldTasks),
   },
   handler: async (ctx, a): Promise<string> => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const write = a.level === null ? 'access_removal' : 'change'
+    const me = await asMachineCaller(ctx, a.callerId, a.access, write)
     if (a.level !== null && a.on_held_tasks !== undefined) {
       throw badRequest('on_held_tasks applies only when level is null')
     }
@@ -771,9 +774,11 @@ async function restSetAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' 
 }
 
 /* DELETE /v1/projects/{ref}/access/{users|teams}/{id}, with an optional
- * body {on_held_tasks}, which each kind's own internal function below runs. */
+ * body {on_held_tasks}, which each kind's own internal function below runs.
+ * An access removal for the read-only gate (asMachineCaller), as in the
+ * app. */
 async function restRemoveAccess(ctx: MutationCtx, a: RestAccessArgs, kind: 'users' | 'teams') {
-  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const me = await asMachineCaller(ctx, a.callerId, a.access, 'access_removal')
   const b = optionalJson(a.body)
   refuseUnknownFields(b, ['on_held_tasks'])
   const held: HeldTasks = parseHeldTasks(b.on_held_tasks)
