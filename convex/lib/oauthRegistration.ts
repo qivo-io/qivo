@@ -21,9 +21,9 @@ export const OAUTH_REGISTRATION_WINDOW_MS = 60 * 60_000
 
 /** Registrations one source address may make in a window. A well-behaved
  * client registers once per installation or connector. The busiest real
- * source is a shared address: an office behind one NAT, or an assistant
- * service registering for many people from its own servers. Neither adds 60
- * connections in one hour. */
+ * source is a shared address, such as an office behind one NAT or an
+ * assistant service registering for many people from its own servers. Neither
+ * adds 60 connections in one hour. */
 export const OAUTH_REGISTRATIONS_PER_SOURCE = 60
 
 /** Registrations one IPv6 /48 network may make in a window, over all of its

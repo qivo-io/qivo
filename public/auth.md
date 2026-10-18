@@ -51,11 +51,12 @@ discovery and dynamic client registration. Qivo does not implement Client ID
 Metadata Documents, device-code approval or WorkOS `auth.md` registration
 endpoints. OAuth client registration creates no Qivo user or project access;
 a signed-in person must approve access. Register once and keep the client ID.
-Registration is limited per source address and per hour, and returns HTTP
-`429` with `Retry-After` past the limit. A client nobody approves within three
-days is deleted within a day after that and must register again. OAuth access tokens are bound to the
-MCP server, so on REST they reach only webhook management; REST task, project
-and user routes take personal tokens and agent keys.
+Registration is limited per hour for each source address and for the whole
+server, and returns HTTP `429` with `Retry-After` past a limit. A client
+nobody approves within three days is deleted within a day after that and must
+register again. OAuth access tokens are bound to the MCP server, so on REST
+they reach only webhook management; REST task, project and user routes take
+personal tokens and agent keys.
 The MCP endpoint's initial HTTP 401 challenge advertises
 `qivo:read qivo:write offline_access`; clients can request a smaller scope set.
 

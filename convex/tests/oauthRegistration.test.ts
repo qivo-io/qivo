@@ -2,9 +2,9 @@
  * Auth hook in lib/oauthProvider.ts), the client management endpoints Qivo
  * does not serve (auth.ts disabledPaths) and the cleanup of clients and
  * counters nobody uses (sweepClients, sweepCounters). Registration runs
- * through the real HTTP handler and Better Auth provider. convex-test reports
- * no client address, so every HTTP registration here shares the unknown
- * source. */
+ * through the real HTTP handler and Better Auth provider. convex-test 0.0.58
+ * reports no client address, so an HTTP registration here counts against the
+ * unknown source unless the test reports one (reportRequestMetadata). */
 /// <reference types="vite/client" />
 import { hashPassword } from 'better-auth/crypto'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -96,8 +96,8 @@ const setCounter = (t: T, key: string, count: number, windowStart = WINDOW) =>
 const admit = (t: T, address: string | null) =>
   t.mutation(internal.oauthRegistrations.admit, { address })
 
-/** The key of a source counter for `address`: its /64 or IPv4 counter, or
- * with `index` 1 its /48 counter. */
+/** The key of the /64 or IPv4 counter for `address`, or with `index` 1 the
+ * key of its /48 counter. */
 const sourceKey = async (address: string | null, index = 0) =>
   (await registrationSourceCounters(address, SECRET))[index].key
 
