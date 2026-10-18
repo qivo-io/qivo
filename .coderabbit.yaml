@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Start CI needs a finished CodeRabbit review of every pull request head (AGENTS.md), so
+# CodeRabbit reviews every push and rebase and never pauses after a number of commits.
+# scripts/review-evidence.mjs reads the legacy commit status, which this file keeps as
+# the progress signal. Everything else uses CodeRabbit's defaults.
+reviews:
+  review_progress: false
+  commit_status: true
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
