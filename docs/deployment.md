@@ -156,7 +156,12 @@ pauses editing need a pause. Staging runs without billing, so they report
 `QIVO_LOCAL_ADMIN_KEY` turns billing on in that backend for those checks,
 which pauses the fixture organization because it has no subscription, and
 turns it off again. `--require billing-pause-leave` makes the `SKIP` a
-failure.
+failure. The run marks its pause with the backend variable
+`STGCHK_BILLING_PAUSE`. If it is killed before it lifts the pause, the
+organization stays read-only and the sweep cannot remove its records. The
+next local run or `--cleanup` given the key lifts a marked pause first.
+Without the key, remove `BILLING_ENABLED` and `STGCHK_BILLING_PAUSE` with
+`npx convex env remove` against the local backend, then run `--cleanup`.
 
 ## Production release
 

@@ -23,8 +23,9 @@
  * The billing pause checks need an organization whose billing pauses
  * editing. Staging runs without billing, so they report SKIP there. A local
  * run given its backend's admin key in QIVO_LOCAL_ADMIN_KEY pauses billing
- * for those checks and lifts the pause again. --require turns that SKIP into
- * a FAIL. --invert flips the expectation of a refusal group, so its checks
+ * for those checks and lifts the pause again. It marks the pause in the
+ * backend, so a later keyed local run or --cleanup lifts a pause that a
+ * killed run left. --require turns that SKIP into a FAIL. --invert flips the expectation of a refusal group, so its checks
  * must fail; that proves they can catch a wrong permission.
  *
  * Secrets (passwords, tokens, keys, OAuth codes, upload and download links,
@@ -3381,7 +3382,7 @@ async function factsFixture() {
       run.created.push(t)
       return t
     }
-    const f = { week, past }
+    const f = { week, past, weekStart: me.organization.week_start }
     // a group with a Done and an open subtask here and an open one in N2
     f.g = await make(N1, 'facts group', { remaining_hours: 5 })
     f.c1 = await make(N1, 'facts done subtask', { parent: f.g.key, status: 'done', due_date: past })
@@ -3537,9 +3538,16 @@ async function delayChecks(f) {
   const w = run.creds.writeToken
   const { N1 } = run.projects
   const end = addDays(f.week, 35)
-  const cases = [
+  // A task planned in the past is projected to finish in the week the server
+  // judges in. That week is worked out again before each comparison, so a
+  // run that crosses into a new planning week still expects the right one.
+  const behind = () => ({
+    status: 'behind',
+    projected_end_week: weekOf(todayUtc(), f.weekStart),
+  })
+  const cases = () => [
     [f.late, { status: 'late', projected_end_week: null }],
-    [f.behind, { status: 'behind', projected_end_week: f.week }],
+    [f.behind, behind()],
     [f.ok, { status: 'ok', projected_end_week: end }],
     [f.lateAhead, { status: 'late', projected_end_week: end }],
     [f.c1, null],
@@ -3547,7 +3555,7 @@ async function delayChecks(f) {
   ]
   await check('task-delay/verdicts', async () => {
     eq((await restOk(w, 'GET', `/projects/${N1.id}`)).track_delay, true, 'delay tracking')
-    for (const [task, want] of cases) await sameEverywhere(w, task, N1, 'delay', want)
+    for (const [task, want] of cases()) await sameEverywhere(w, task, N1, 'delay', want)
     return 'late without a projection, behind, on track and late with one; null when Done or with nothing to judge'
   })
   await check('task-delay/track-delay-off', async () => {
@@ -3557,7 +3565,7 @@ async function delayChecks(f) {
       'delay tracking off',
     )
     const rows = await rowsOf(w, N1)
-    for (const [task] of cases) {
+    for (const [task] of cases()) {
       eq(rows(task).rest.delay, null, `${task.key} in the REST list`)
       eq(rows(task).mcp.delay, null, `${task.key} in list_tasks`)
     }
@@ -3569,7 +3577,7 @@ async function delayChecks(f) {
     )
     same(
       (await restOk(w, 'GET', `/tasks/${f.late.key}`)).delay,
-      cases[0][1],
+      cases()[0][1],
       'the verdict once tracking is back',
     )
   })
@@ -3577,7 +3585,7 @@ async function delayChecks(f) {
     await restOk(w, 'PATCH', `/tasks/${f.behind.key}`, { archived: true })
     eq((await restOk(w, 'GET', `/tasks/${f.behind.key}`)).delay, null, 'an archived task')
     await restOk(w, 'PATCH', `/tasks/${f.behind.key}`, { archived: false })
-    same((await restOk(w, 'GET', `/tasks/${f.behind.key}`)).delay, cases[1][1], 'restored')
+    same((await restOk(w, 'GET', `/tasks/${f.behind.key}`)).delay, behind(), 'restored')
   })
 }
 
@@ -3696,22 +3704,28 @@ async function localAdmin(path, body) {
   return parseJson(text)
 }
 
-/** The local backend's BILLING_ENABLED, or null when it is not set. */
-async function localBilling() {
+/** The local backend variable that marks a billing pause this script made.
+ *  Its value holds the run tag and the BILLING_ENABLED value to restore, so
+ *  a later local run, or --cleanup, can lift a pause that a killed run left.
+ *  Without the mark, BILLING_ENABLED belongs to whoever runs the backend. */
+const PAUSE_MARK = 'STGCHK_BILLING_PAUSE'
+
+/** A local backend environment variable, or null when it is not set. */
+async function localEnv(name) {
   const r = await localAdmin('/api/query', {
     path: '_system/cli/queryEnvironmentVariables:get',
-    args: { name: 'BILLING_ENABLED' },
+    args: { name },
     format: 'json',
   })
-  expect(r?.status === 'success', 'the local backend did not say whether billing is on')
+  expect(r?.status === 'success', `the local backend did not say whether ${name} is set`)
   return r.value?.value ?? null
 }
 
-/** Sets the local backend's BILLING_ENABLED, or removes it with null, as
- *  `npx convex env set` does. */
-const setLocalBilling = (value) =>
+/** Sets local backend environment variables in one change, as
+ *  `npx convex env set` does. A null value removes the variable. */
+const setLocalEnv = (values) =>
   localAdmin('/api/update_environment_variables', {
-    changes: [{ name: 'BILLING_ENABLED', value }],
+    changes: Object.entries(values).map(([name, value]) => ({ name, value })),
   })
 
 /** Whether `/me` says billing pauses editing. */
@@ -3719,21 +3733,62 @@ const paused = async () =>
   (await restOk(run.creds.writeToken, 'GET', '/me')).billing.read_only === true
 
 /** Pauses editing in the local organization the way the backend tests do:
- *  billing on, and no subscription. */
+ *  billing on, and no subscription. Marks the pause as this run's. */
 async function pauseBilling() {
-  run.billingBefore = await localBilling()
-  expect(run.billingBefore !== 'true', 'billing is already on in the local backend')
+  const before = await localEnv('BILLING_ENABLED')
+  expect(
+    before !== 'true',
+    'billing is already on in the local backend, and not by this script; remove BILLING_ENABLED to run these checks',
+  )
+  run.billingBefore = before
   run.billingPaused = true
-  await setLocalBilling('true')
+  await setLocalEnv({
+    BILLING_ENABLED: 'true',
+    [PAUSE_MARK]: JSON.stringify({ run: run.tag, before }),
+  })
+  say(
+    'NOTE',
+    'billing-pause',
+    `billing is on in the local backend until this run lifts it. If the run is killed first, --cleanup with QIVO_LOCAL_ADMIN_KEY lifts it, or remove BILLING_ENABLED and ${PAUSE_MARK} with npx convex env remove`,
+  )
   expect(await until(paused, 30_000), 'the organization did not become read-only')
 }
 
 /** Lifts a pause this run made, and waits until writes are allowed. */
 async function liftBillingPause() {
   if (!run.billingPaused) return
-  await setLocalBilling(run.billingBefore ?? null)
+  await setLocalEnv({ BILLING_ENABLED: run.billingBefore ?? null, [PAUSE_MARK]: null })
   expect(await until(async () => !(await paused()), 30_000), 'the organization stayed read-only')
   run.billingPaused = false
+}
+
+/** Names the way out when the sweep met the billing sentence on a local
+ *  backend, where a billing pause left by a killed run is the likely cause. */
+function billingPauseHint(problems) {
+  if (cfg.target.target !== 'local' || !problems.some((p) => p.includes(BILLING_READ_ONLY))) return
+  say(
+    'NOTE',
+    'billing-pause',
+    `the local organization is read-only, likely from a billing pause a killed run left. Run --cleanup with QIVO_LOCAL_ADMIN_KEY, or remove BILLING_ENABLED and ${PAUSE_MARK} with npx convex env remove and run --cleanup again`,
+  )
+}
+
+/** Lifts a billing pause that an earlier local run made and never lifted,
+ *  because it was killed, so this run's writes and sweep can work. Acts
+ *  only on a pause with this script's mark. Answers the earlier run's tag,
+ *  or null when no pause was left. */
+async function liftLeftPause() {
+  const mark = await localEnv(PAUSE_MARK)
+  if (mark === null) return null
+  let left = {}
+  try {
+    left = JSON.parse(mark) ?? {}
+  } catch {}
+  await setLocalEnv({
+    BILLING_ENABLED: typeof left.before === 'string' ? left.before : null,
+    [PAUSE_MARK]: null,
+  })
+  return TAG_ANY.test(`${left.run} `) ? left.run : 'an earlier run'
 }
 
 /** While billing pauses editing, an organization admin can still remove
@@ -3763,20 +3818,23 @@ async function billingPauseChecks() {
   const members = async () =>
     team ? (await restOk(w, 'GET', `/teams/${team.id}`)).members.map((m) => m.id).sort() : []
   let before = null
-  await check(`${name}/setup`, async () => {
-    for (const id of [viewer.id, std.id])
-      await restOk(w, 'PUT', `/projects/${N1.id}/access/users/${id}`, { level: 'viewer' })
-    if (team)
-      for (const id of [viewer.id, std.id])
-        await restOk(w, 'PUT', `/teams/${team.id}/members/${id}`, {})
-    before = { grants: await grants(), members: await members() }
-    await pauseBilling()
-    return team
-      ? 'two grants and two team members, then billing paused'
-      : 'two grants, then billing paused'
-  })
-  if (!before) return
   try {
+    await check(`${name}/setup`, async () => {
+      for (const id of [viewer.id, std.id])
+        await restOk(w, 'PUT', `/projects/${N1.id}/access/users/${id}`, { level: 'viewer' })
+      if (team)
+        for (const id of [viewer.id, std.id])
+          await restOk(w, 'PUT', `/teams/${team.id}/members/${id}`, {})
+      const snapshot = { grants: await grants(), members: await members() }
+      await pauseBilling()
+      // Set only once the pause holds. Without it the checks below would
+      // make the writes they expect to be refused.
+      before = snapshot
+      return team
+        ? 'two grants and two team members, then billing paused'
+        : 'two grants, then billing paused'
+    })
+    if (!before) return
     const refusedRest = (r, what) =>
       expect(
         r.status === 403 && r.json?.error === BILLING_READ_ONLY,
@@ -3893,10 +3951,12 @@ async function billingPauseChecks() {
       )
     })
   } finally {
-    await check(`${name}/lift`, async () => {
-      await liftBillingPause()
-      eq((await restOk(w, 'GET', '/me')).billing.read_only, false, 'read_only after the pause')
-    })
+    // also after a pause that never took hold
+    if (run.billingPaused)
+      await check(`${name}/lift`, async () => {
+        await liftBillingPause()
+        eq((await restOk(w, 'GET', '/me')).billing.read_only, false, 'read_only after the pause')
+      })
   }
 }
 
@@ -4409,6 +4469,17 @@ async function start() {
     // Only now may a credential go to the API origin, the sweep's included.
     // Nothing was created before this point.
     verified = true
+    // A local run killed while billing was paused left the organization
+    // read-only, which would refuse this run's writes and its sweep.
+    if (cfg.localAdminKey)
+      try {
+        const left = await liftLeftPause()
+        if (left)
+          say('NOTE', 'billing-pause', `lifted the billing pause ${left} left on the local backend`)
+      } catch (error) {
+        results.fail.push('billing-pause/left')
+        say('FAIL', 'billing-pause/left', describe(error))
+      }
     if (cfg.cleanup) {
       const tag = cfg.run ? `${TAG_PREFIX}${cfg.run}` : TAG_ANY
       const { removed, problems } = await sweep(tag, 'cleanup')
@@ -4419,6 +4490,7 @@ async function start() {
           'cleanup/sweep',
           `removed ${removed} record(s), but ${problems.length} problem(s) remain: ${problems.join('; ')}`,
         )
+        billingPauseHint(problems)
       } else {
         results.pass++
         say('PASS', 'cleanup/sweep', `removed ${removed} record(s); nothing with the tag is left`)
@@ -4465,6 +4537,7 @@ async function start() {
           'cleanup/sweep',
           `removed ${removed} record(s), but ${problems.length} problem(s) remain: ${problems.join('; ')}. Run --cleanup --run ${run.tag.slice(TAG_PREFIX.length)}`,
         )
+        billingPauseHint(problems)
       } else if (!run.completed)
         say('NOTE', 'cleanup/swept', `removed ${removed} record(s) the stopped run left`)
       else if (removed) {
