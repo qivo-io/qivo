@@ -1,8 +1,8 @@
 /* The app's projected delay (lib/delay.ts) on REST and MCP task rows. Each
  * verdict's inputs come from stored rows the way the app's store builds them
- * from its snapshot (src/store/planner.ts rebuild): the task's plan, due date
- * and remaining hours, its owner's plannable hours, and its owner's other
- * scheduled work as the reader may see it (planning.ts orgLoadRows, the
+ * from its snapshot (src/store/planner.ts rebuild). They are the task's plan,
+ * due date and remaining hours, its owner's plannable hours, and its owner's
+ * other scheduled work as the reader may see it (planning.ts orgLoadRows, the
  * snapshot's own rule). A group's plan weeks and completion are its group
  * facts (lib/core.ts groupFacts), the app's groupSpan and isIssueDone.
  *
@@ -20,6 +20,7 @@ import { orgLoadRows } from '../planning'
 import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
 import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf, delayProjector } from './delay'
+import { ISSUE_STATUSES } from './enums'
 import { taskOwnerId } from './review'
 import { type OrgProjectView, orgProjectView } from './visibility'
 import {
@@ -30,9 +31,9 @@ import {
   weekGrid,
 } from './workload'
 
-/** A delay verdict as REST and MCP send it: the app's status, and the first
- * day of the week the work is projected to finish, null when `late` rests on
- * a passed due date alone. */
+/** A delay verdict as REST and MCP send it, with the app's status and the
+ * first day of the week the work is projected to finish, null when `late`
+ * rests on a passed due date alone. */
 export type DelayJson = { status: DelayStatus; projected_end_week: string | null }
 
 /** The day every verdict of one read is judged on, and the organization's
@@ -60,14 +61,14 @@ export type Forecaster = (
 /** The forecaster of rows that never carry a verdict, such as archived ones. */
 export const noForecast: Forecaster = async () => null
 
-/* Whether the app paints the task's delay: an active task in an active
- * project whose Delay tracking is on (src/store/planner.ts tracksDelay over
- * the working set). */
+/* Whether the app paints the task's delay, which it does for an active task
+ * in an active project whose Delay tracking is on (src/store/planner.ts
+ * tracksDelay over the working set). */
 const tracked = (issue: Doc<'issues'>, project: Doc<'projects'>): boolean =>
   issue.archived_at === undefined && project.archived_at === undefined && project.track_delay
 
-/* The owner's plannable hours, as the app reads them from its roster: the
- * organization's profile, or the default for one it does not hold. */
+/* The owner's plannable hours, as the app reads them from its roster. That
+ * is the organization's profile, or the default for one it does not hold. */
 const capacityOf = (profile: Doc<'profiles'> | null | undefined, orgId: string): number =>
   profile?.org_id === orgId
     ? plannableHoursOf({ plannableHours: profile.plannable_hours, kind: profile.kind })
@@ -143,8 +144,8 @@ function spansByOwner(rows: ReturnType<typeof orgLoadRows>, grid: WeekGrid) {
   return out
 }
 
-/** The projects a reader's load rows are judged by: every project of the
- * organization by id, and whether the reader can read each one. */
+/** The projects a reader's load rows are judged by, which are every project
+ * of the organization by id and whether the reader can read each one. */
 export type LoadView = Pick<OrgProjectView, 'byUuid' | 'visible'>
 
 /**
@@ -179,10 +180,11 @@ export function listForecaster(o: {
 
 /**
  * Verdicts for single-task reads, for `me`. A verdict reads the owner's
- * profile, and only when the owner's other work can change it, that is, for
- * a task without subtasks that is not Done, whose owner has a finite
- * plannable week and remaining hours above zero, the owner's load
- * (ownerLoadSpans) over the organization's projects as `me` sees them.
+ * profile. It reads the owner's load (ownerLoadSpans) over the
+ * organization's projects as `me` sees them only when that load can change
+ * the verdict, that is, for a task without subtasks that is not Done, has a
+ * planned end or a due date to be judged against, has remaining hours above
+ * zero and an owner with a finite plannable week.
  */
 export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Forecaster {
   let view: Promise<LoadView> | undefined
@@ -192,12 +194,15 @@ export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Fo
     const profile = owner === undefined ? null : await byId(ctx, 'profiles', owner)
     const capacity = capacityOf(profile, issue.org_id)
     const it = delayIssue(issue, facts, clock, capacity)
-    // a group, a Done task, an agent and zero hours never fit hours
-    // against the owner's other work (lib/delay.ts, fitEndWeek)
+    // a group, a Done task, an agent and zero hours never fit hours against
+    // the owner's other work (lib/delay.ts, fitEndWeek), and a projected
+    // finish with neither a planned end nor a due date has nothing to be
+    // judged against, so its verdict is null whatever the load
     const needsLoad =
       profile !== null &&
       facts === null &&
       issue.status !== 'done' &&
+      (it.end !== null || it.dueWeek !== null) &&
       (issue.remaining_hours ?? 0) > 0 &&
       Number.isFinite(capacity) &&
       capacity > 0
@@ -210,14 +215,18 @@ export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Fo
   }
 }
 
+/* The statuses of tasks that can carry load, as orgLoadRows skips Done ones. */
+const LOAD_STATUSES = ISSUE_STATUSES.filter((status) => status !== 'done')
+
 /**
  * The load rows of `owner`'s work as `me` may see them, as delay walks
- * them: orgLoadRows' rows owned by `owner`, read through the owner's own
- * active tasks (as assignee and as reviewer) rather than the organization's.
- * A task with an active subtask is a group, which carries no load, so each
- * candidate that orgLoadRows would keep is checked for one. Empty for an
- * owner outside `me`'s organization, as orgLoadRows gives such an owner no
- * rows.
+ * them. These are orgLoadRows' rows owned by `owner`, read through the
+ * owner's own open tasks (those assigned to them that are not Done, and
+ * those In Review that they review) rather than the organization's active
+ * ones. A task with an active subtask is a group, which carries no load, so
+ * each candidate that orgLoadRows would keep is checked for one. Empty for
+ * an owner outside `me`'s organization, as orgLoadRows gives such an owner
+ * no rows.
  */
 export async function ownerLoadSpans(
   ctx: QueryCtx,
@@ -227,19 +236,23 @@ export async function ownerLoadSpans(
   view: LoadView,
 ): Promise<LoadSpan[]> {
   if (owner.org_id !== me.org_id) return []
+  const held = [
+    ...LOAD_STATUSES.map((status) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_assignee_archived_status', (q) =>
+          q.eq('assignee_id', owner.id).eq('archived_at', undefined).eq('status', status),
+        ),
+    ),
+    // a reviewer owns a task only while it is in review (lib/review.ts)
+    ctx.db
+      .query('issues')
+      .withIndex('by_reviewer_archived_status', (q) =>
+        q.eq('reviewer_id', owner.id).eq('archived_at', undefined).eq('status', 'review'),
+      ),
+  ]
   const tasks = new Map<string, Doc<'issues'>>()
-  const assigned = ctx.db
-    .query('issues')
-    .withIndex('by_assignee_archived', (q) =>
-      q.eq('assignee_id', owner.id).eq('archived_at', undefined),
-    )
-  for await (const task of assigned) tasks.set(task.id, task)
-  const reviewing = ctx.db
-    .query('issues')
-    .withIndex('by_reviewer_archived', (q) =>
-      q.eq('reviewer_id', owner.id).eq('archived_at', undefined),
-    )
-  for await (const task of reviewing) tasks.set(task.id, task)
+  for (const range of held) for await (const task of range) tasks.set(task.id, task)
   const leaves: Doc<'issues'>[] = []
   for (const task of tasks.values()) {
     // what orgLoadRows drops anyway needs no subtask read
@@ -254,5 +267,9 @@ export async function ownerLoadSpans(
       .first()
     if (kid === null) leaves.push(task)
   }
+  // in the organization's active order (by_org_archived), which the list's
+  // load and the app's follow, so each week's hours add up in the same
+  // order and round the same way
+  leaves.sort((a, b) => a._creationTime - b._creationTime)
   return spansByOwner(orgLoadRows(me, view, new Set([owner.id]), leaves), grid).get(owner.id) ?? []
 }

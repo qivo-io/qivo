@@ -48,7 +48,7 @@ import {
 /* A Wednesday at noon UTC, the same day in every likely time zone. */
 const NOW = '2026-10-14T12:00:00.000Z'
 
-/* The first days of the weeks around NOW, Monday weeks: W[0] holds NOW. */
+/* The first days of the Monday weeks around NOW. W(0) holds NOW. */
 const W = (offset: number) =>
   new Date(Date.parse('2026-10-12T00:00:00.000Z') + offset * 7 * 86_400_000)
     .toISOString()
@@ -161,8 +161,8 @@ async function cases(fx: Fx) {
   }
 }
 
-/* What the app shows `person` as delay, by task id: the snapshot it serves
- * them, shaped and projected the way the store's rebuild does
+/* What the app shows `person` as delay, by task id. That is the snapshot it
+ * serves them, shaped and projected the way the store's rebuild does
  * (src/store/viewModels.ts shapeIssue, src/store/planner.ts rebuild), with
  * the app's grid anchored at NOW. A project that does not track delay
  * paints nothing (planner.ts tracksDelay). */
@@ -239,8 +239,8 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
 
 type Row = { id: string; title: string; delay: DelayJson | null }
 
-/* Every read of `ids` as `callerId`, which must agree: REST and MCP list
- * rows and single reads. */
+/* Every read of `ids` as `callerId`, REST and MCP list rows and single
+ * reads, which must agree. */
 async function everyRead(fx: Fx, callerId: string, ids: readonly string[], now = NOW) {
   const read = { callerId, access: 'read', now } as const
   const rest = await restTasks(fx.t, { ...read, limit: '200' })
@@ -409,11 +409,9 @@ describe('a single read’s load is the list’s load', () => {
                   remainingSet:
                     r.remaining_set_at === null ? null : grid.ofInstant(r.remaining_set_at),
                 }))
+              // in the same order too, as each week's hours add up in order
               const fromOwner = await ownerLoadSpans(ctx, me, owner, grid, view)
-              const key = (s: LoadSpan) => JSON.stringify(s)
-              expect(fromOwner.map(key).sort(), `${owner.name} for ${me.name}`).toEqual(
-                fromList.map(key).sort(),
-              )
+              expect(fromOwner, `${owner.name} for ${me.name}`).toEqual(fromList)
             }
           })
         }
@@ -445,8 +443,9 @@ describe('today is the request’s UTC day', () => {
 })
 
 describe('a verdict reads the owner’s other work only when it can change it', () => {
-  /* 300 scheduled open tasks of `owner` in PCB, more than a read may take. */
-  const busy = async (fx: Fx, owner: Doc<'profiles'>) => {
+  /* 300 scheduled active tasks of `owner` in PCB, more than a read may
+   * take, To Do unless `status` says otherwise. */
+  const busy = async (fx: Fx, owner: Doc<'profiles'>, status: Doc<'issues'>['status'] = 'todo') => {
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
         await ctx.db.insert('issues', {
@@ -456,7 +455,7 @@ describe('a verdict reads the owner’s other work only when it can change it', 
           num: 70_000 + i,
           title: `Load ${i}`,
           description: '',
-          status: 'todo',
+          status,
           priority: 'low',
           assignee_id: owner.id,
           start_week: W(0),
@@ -511,6 +510,33 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       remaining_set_at: NOW,
     })
     await expect(single(fx, estimated.id)).rejects.toThrow()
+  })
+
+  it('reads none for a task with neither a planned end nor a due date', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 250 } }))
+    await busy(fx, fx.user)
+    const unplanned = await task(fx, {
+      assignee_id: fx.user.id,
+      remaining_hours: 10,
+      remaining_set_at: NOW,
+    })
+    expect((await single(fx, unplanned.id)).delay).toBeNull()
+  })
+
+  it('reads the owner’s open tasks, not their Done ones', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 250 } }))
+    await busy(fx, fx.user, 'done')
+    const estimated = await task(fx, {
+      assignee_id: fx.user.id,
+      start_week: W(0),
+      end_week: W(0),
+      remaining_hours: 10,
+      remaining_set_at: NOW,
+    })
+    expect((await single(fx, estimated.id)).delay).toEqual({
+      status: 'ok',
+      projected_end_week: W(0),
+    })
   })
 })
 
