@@ -95,10 +95,8 @@ activityRetention:trim mutation internal {"type":"object","value":{"org_id":{"fi
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
-admin:listOrgs query public {"type":"object","value":{}}
 admin:listUsers query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
 admin:orgDetail query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-admin:platformStats query public {"type":"object","value":{}}
 admin:promoteOrgAdmin mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:removeOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:banUser action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
@@ -131,6 +129,14 @@ adminOrgs:resendInvite action public {"type":"object","value":{"profile_id":{"fi
 adminOrgs:setMemberRole mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}
 adminOrgs:suggestAddress query public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 adminOrgs:updateInvite mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+adminStats:childPage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminStats:listOrgs action public {"type":"object","value":{}}
+adminStats:orgHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+adminStats:orgNames action public {"type":"object","value":{}}
+adminStats:orgPage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminStats:orgPart query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"part":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"activity"},{"type":"literal","value":"deleted"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminStats:platformStats action public {"type":"object","value":{}}
+adminStats:tablePage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"organizations"},{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"activity_events"},{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"milestones"},{"type":"literal","value":"org_counters"},{"type":"literal","value":"deleted_rows"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"window":{"fieldType":{"type":"object","value":{"cutoff30":{"fieldType":{"type":"string"},"optional":false},"cutoff84":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}
 apiAccess:list query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 apiAccess:revoke mutation public {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:beginDemoUploadWork mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false}}}
@@ -605,12 +611,18 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // bare on purpose — the AdminGate's fail-OPEN probe answers false, never
     // throws (admin.ts documents it); every real admin door below re-checks.
     isOperator: 'query',
-    listOrgs: 'platformQuery',
     orgDetail: 'platformQuery',
     listUsers: 'platformQuery',
     promoteOrgAdmin: 'platformMutation',
-    platformStats: 'platformQuery',
     auditLog: 'platformQuery',
+  },
+  // The organization table, platform totals and organization names page
+  // through the data in actions, each page a bounded internal query
+  // (adminStats.ts).
+  adminStats: {
+    listOrgs: 'platformAction',
+    orgNames: 'platformAction',
+    platformStats: 'platformAction',
   },
   adminAuth: {
     recoveryLink: 'platformAction',
@@ -796,7 +808,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 159
+const PUBLIC_COUNT = 160
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

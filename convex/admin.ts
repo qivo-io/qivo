@@ -21,9 +21,8 @@
  * null/'' when the login row is unreachable — the SQL's LEFT JOIN said the
  * same thing.
  *
- * org_approx_bytes/pg_database_size have no Convex analogue: the honest cheap
- * port sums JSON.stringify(doc).length over the same table set the SQL
- * measured — "index/TOAST overhead excluded" already made it approximate. */
+ * The organization table, the platform totals and the organization names
+ * page through the data in actions, so they live in adminStats.ts. */
 
 import { v } from 'convex/values'
 import { components } from './_generated/api'
@@ -47,8 +46,6 @@ import { allWordsMatcher } from './lib/search'
 import { audit, operatorEmail } from './model/admin'
 import { leaveAllTeams } from './model/orgs'
 import { adminElsewhere, homeElsewhere } from './model/people'
-
-const DAY = 86_400_000
 
 /* banned with no banExpires — "the ban will never expire" (BA admin plugin).
  * Far-future so isBanned()'s `> Date.now()` reads it as banned forever. */
@@ -112,8 +109,6 @@ async function authColumnsMap(
   return map
 }
 
-const sizeOf = (doc: unknown): number => JSON.stringify(doc).length
-
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
 /* ------------------------------------------------------------------ the gate */
@@ -133,123 +128,6 @@ export const isOperator = query({
       .withIndex('by_auth_user', (q) => q.eq('auth_user_id', identity.subject))
       .first()
     return operator !== null
-  },
-})
-
-/* ------------------------------------------------------------------ listOrgs */
-
-export type AdminOrgRow = {
-  id: string
-  name: string
-  created_at: string
-  plan: string | null
-  seats: number | null
-  renewal_date: string | null
-  member_count: number
-  guest_count: number
-  login_count: number
-  team_count: number
-  project_count: number
-  issue_count: number
-  last_activity: string | null
-  approx_bytes: number
-}
-
-/* One org's fleet-table row + its approximate footprint, over the same table
- * set private.org_approx_bytes summed (0015:62-83): the org doc (billing
- * merged in), profiles, teams, team_members, projects, project_access,
- * issues, issue_links (counted once via their source issue), milestones,
- * activity_events. The activity collect doubles as the last_activity read
- * (by_org_ts is ascending, so the final row holds max ts). */
-async function orgRow(ctx: QueryCtx, org: Doc<'organizations'>): Promise<AdminOrgRow> {
-  const subscription = await subscriptionFor(ctx, org.id)
-  const plan = subscription ? await byId(ctx, 'billing_plans', subscription.plan_id) : null
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
-  const teams = await ctx.db
-    .query('teams')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
-  const issues = await ctx.db
-    .query('issues')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
-  const activity = await ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', org.id))
-    .collect()
-
-  let bytes = sizeOf(org)
-  for (const rows of [profiles, teams, projects, issues, activity]) {
-    for (const row of rows) bytes += sizeOf(row)
-  }
-  for (const team of teams) {
-    const members = await ctx.db
-      .query('team_members')
-      .withIndex('by_team', (q) => q.eq('team_id', team.id))
-      .collect()
-    for (const row of members) bytes += sizeOf(row)
-  }
-  for (const project of projects) {
-    const grants = await ctx.db
-      .query('project_access')
-      .withIndex('by_project', (q) => q.eq('project_id', project.id))
-      .collect()
-    const milestones = await ctx.db
-      .query('milestones')
-      .withIndex('by_project', (q) => q.eq('project_id', project.id))
-      .collect()
-    for (const row of grants) bytes += sizeOf(row)
-    const teamGrants = await ctx.db
-      .query('project_team_access')
-      .withIndex('by_project', (q) => q.eq('project_id', project.id))
-      .collect()
-    for (const row of teamGrants) bytes += sizeOf(row)
-    for (const row of milestones) bytes += sizeOf(row)
-  }
-  for (const issue of issues) {
-    const links = await ctx.db
-      .query('issue_links')
-      .withIndex('by_source', (q) => q.eq('source_id', issue.id))
-      .collect()
-    for (const row of links) bytes += sizeOf(row)
-  }
-
-  return {
-    id: org.id,
-    name: org.name,
-    created_at: org.created_at,
-    plan: plan?.name ?? org.billing?.plan ?? null,
-    seats: subscription?.billed_seats ?? org.billing?.seats ?? null,
-    renewal_date:
-      subscription?.current_period_end?.slice(0, 10) ?? org.billing?.renewal_date ?? null,
-    /* the 0086 split: guests hold a profile but no seat — counted apart */
-    member_count: profiles.filter((p) => p.org_role !== 'guest').length,
-    guest_count: profiles.filter((p) => p.org_role === 'guest').length,
-    login_count: profiles.filter((p) => p.auth_user_id !== undefined).length,
-    team_count: teams.length,
-    project_count: projects.length,
-    issue_count: issues.length,
-    last_activity: activity.length > 0 ? activity[activity.length - 1].ts : null,
-    approx_bytes: bytes,
-  }
-}
-
-/* admin_list_orgs (LAST def 0086:11-48), ordered by created_at. */
-export const listOrgs = platformQuery({
-  args: {},
-  handler: async (ctx): Promise<AdminOrgRow[]> => {
-    const orgs = await ctx.db.query('organizations').withIndex('by_uuid').collect()
-    orgs.sort((a, b) => cmp(a.created_at, b.created_at))
-    const rows: AdminOrgRow[] = []
-    for (const org of orgs) rows.push(await orgRow(ctx, org))
-    return rows
   },
 })
 
@@ -476,115 +354,6 @@ export const promoteOrgAdmin = platformMutation({
       target_profile_id: profile.id,
     })
     return null
-  },
-})
-
-/* ------------------------------------------------------------- platformStats */
-
-export type AdminPlatformStats = {
-  totals: {
-    orgs: number
-    members: number
-    logins: number
-    teams: number
-    projects: number
-    issues: number
-    activity_30d: number
-    db_total_bytes: number
-  }
-  weekly: Array<{ week: string; new_members: number; activity: number }>
-}
-
-/* Monday of the ISO week holding `iso`, as YYYY-MM-DD (UTC) — the SQL's
- * date_trunc('week', …)::date. */
-const weekMonday = (iso: string): string => {
-  const d = new Date(iso)
-  const monday = Date.UTC(
-    d.getUTCFullYear(),
-    d.getUTCMonth(),
-    d.getUTCDate() - ((d.getUTCDay() + 6) % 7),
-  )
-  return new Date(monday).toISOString().slice(0, 10)
-}
-
-/* admin_platform_stats (LAST def 0078:583-614). totals.members counts EVERY
- * profile (guests and agents included — the SQL did); weekly merges profile
- * created_at counts with activity counts over the last 84 days into sparse
- * week-Monday buckets, ascending (the SQL aggregated actual rows, so a week
- * with neither members nor activity is absent, exactly as before).
- * db_total_bytes was pg_database_size(current_database()); the port sums the
- * JSON footprint of every row in the ported tables — the dashboard tile's
- * "whole project" note becomes approximate. */
-export const platformStats = platformQuery({
-  args: {},
-  handler: async (ctx): Promise<AdminPlatformStats> => {
-    const nowMs = Date.now()
-    const orgs = await ctx.db.query('organizations').withIndex('by_uuid').collect()
-    const profiles = await ctx.db.query('profiles').withIndex('by_uuid').collect()
-    const teams = await ctx.db.query('teams').withIndex('by_uuid').collect()
-    const projects = await ctx.db.query('projects').withIndex('by_uuid').collect()
-    const issues = await ctx.db.query('issues').withIndex('by_uuid').collect()
-    const activity = await ctx.db.query('activity_events').withIndex('by_uuid').collect()
-    const teamMembers = await ctx.db.query('team_members').withIndex('by_team').collect()
-    const grants = await ctx.db.query('project_access').withIndex('by_project').collect()
-    const teamGrants = await ctx.db.query('project_team_access').withIndex('by_project').collect()
-    const links = await ctx.db.query('issue_links').withIndex('by_uuid').collect()
-    const milestones = await ctx.db.query('milestones').withIndex('by_uuid').collect()
-
-    let bytes = 0
-    for (const rows of [
-      orgs,
-      profiles,
-      teams,
-      projects,
-      issues,
-      activity,
-      teamMembers,
-      grants,
-      teamGrants,
-      links,
-      milestones,
-    ]) {
-      for (const row of rows) bytes += sizeOf(row)
-    }
-
-    const cutoff30 = new Date(nowMs - 30 * DAY).toISOString()
-    const cutoff84 = new Date(nowMs - 84 * DAY).toISOString()
-
-    const buckets = new Map<string, { new_members: number; activity: number }>()
-    const bucket = (week: string) => {
-      let b = buckets.get(week)
-      if (b === undefined) {
-        b = { new_members: 0, activity: 0 }
-        buckets.set(week, b)
-      }
-      return b
-    }
-    for (const p of profiles) {
-      if (p.created_at > cutoff84) bucket(weekMonday(p.created_at)).new_members += 1
-    }
-    let activity30 = 0
-    for (const a of activity) {
-      if (a.ts > cutoff30) activity30 += 1
-      if (a.ts > cutoff84) bucket(weekMonday(a.ts)).activity += 1
-    }
-    const weekly = [...buckets.entries()]
-      .sort(([a], [b]) => cmp(a, b))
-      .map(([week, counts]) => ({ week, ...counts }))
-
-    return {
-      totals: {
-        orgs: orgs.length,
-        members: profiles.length,
-        logins: profiles.filter((p) => p.auth_user_id !== undefined).length,
-        teams: teams.length,
-        projects: projects.length,
-        issues: issues.length,
-        activity_30d: activity30,
-        db_total_bytes: bytes,
-      },
-      weekly,
-    }
   },
 })
 
