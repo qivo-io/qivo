@@ -887,11 +887,12 @@ function restoreErrorText(e: unknown): string {
 }
 
 /* A Deleted items call the server refused whole, in the restore refusal voice
-   above: billing's sentence as it is, the fixed permission line, a rule's own
-   sentence after what failed. Anything else (offline, a server fault) asks
-   for another try. */
+   above: the pause sentence while edits pause, billing's sentence as it is,
+   the fixed permission line, a rule's own sentence after what failed.
+   Anything else (offline, a server fault) asks for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
   const d = errData(e)
+  if (d.code === 'paused') return PAUSED_TEXT
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that."

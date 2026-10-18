@@ -194,6 +194,18 @@ describe('snapshot trouble', () => {
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
   })
 
+  it('pauses Deleted items restores and deletes, and says so on the page', async () => {
+    await boot()
+    const { P } = store
+    live().fail(new Error(QUERY_FAILURE))
+    const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
+    const restored = await P.restoreDeletedItems(items)
+    const purged = await P.purgeDeletedItems(items)
+    expect(sentNames()).toEqual([])
+    for (const outcome of [restored, purged])
+      expect(outcome).toMatchObject({ done: [], failed: ['item-a'], error: store.PAUSED_TEXT })
+  })
+
   it('still takes access away while other edits pause', async () => {
     const [org] = snapshot.orgs
     for (const id of ['seat-a', 'seat-b'])
