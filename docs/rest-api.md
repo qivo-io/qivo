@@ -1192,7 +1192,7 @@ Task shape of a list row from `GET /v1/tasks`:
   "owner_id": "…uuid or null",
   "reporter_id": "…uuid or null", "reporter_name": "Nora Berg",
   "parent_id": null, "has_hidden_parent": false,
-  "start_week": null, "end_week": null, "due_date": null,
+  "start_week": null, "end_week": null, "due_date": null, "delay": null,
   "remaining_hours": 8, "remaining_set_at": "…timestamp or null…",
   "paused": false, "progress": null,
   "archived": false, "archived_at": null,
@@ -1257,6 +1257,29 @@ It counts the same subtasks as the group's dates, scheduled or not, and
 the caller, such as a subtask it cannot read or, while the group's project
 is active, one in an archived project, so the true completion is unknown.
 The app then says "Completion unknown".
+
+`delay` is the app's projected delay, the verdict its Roadmap and task
+window show:
+
+```json
+{ "delay": { "status": "behind", "projected_end_week": "2026-10-26" } }
+```
+
+`status` is `ok`, `behind` or `late`, the app's **On track**, **Currently
+delayed** and **Delayed**. `projected_end_week` is the first day of the week
+the work is projected to finish. It is `null` when `late` rests only on a
+passed due date, and for a finish after the year 9999. `delay` itself is
+`null` when the task's project does not track delay, when the task or its
+project is archived, and when the app shows no verdict, such as for a Done
+task or one with neither a plan nor a due date. The projection uses the
+owner's plannable hours and their other scheduled work, counted as the app
+counts it for the caller. For organization admins and users that includes
+work in projects they cannot read, without naming it. For viewers and
+guests it includes only work they can read or own, so two callers can get
+different verdicts for one task. A group with subtasks the caller cannot
+read can only be `late`, as in the app. The server judges today's date in
+UTC, so near midnight or a week boundary it can differ from the app, which
+uses the browser's time zone.
 
 `last_comment_at` is when the newest comment on the task was posted, or
 `null` when it has none. Editing a comment does not change it, and deleting
