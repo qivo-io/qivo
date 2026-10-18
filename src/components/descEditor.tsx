@@ -773,7 +773,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       void cm.onCommit(text).then((saved) => {
         sendingRef.current = false
         setSending(false)
-        if (ed.isDestroyed) return
+        if (ed.isDestroyed) {
+          // closed while it was sent: the unmount held back its discard
+          // toast in case the save went through
+          if (!saved) toast('Unsaved comment discarded')
+          return
+        }
         ed.setEditable(true, false)
         // back to the text unless the reader has moved on meanwhile
         const at = document.activeElement
@@ -1028,7 +1033,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // comment mode has no upload plumbing, but the same unmount contract: a
   // dirty draft (typed composer, half-edited comment) dies with the editor
   // (modal closed, comment deleted remotely), so say so. A draft still being
-  // sent may yet be saved, and a refusal toasts on its own.
+  // sent may yet be saved, so commit says so only after a refusal.
   useEffect(() => {
     if (!isComment) return
     return () => {

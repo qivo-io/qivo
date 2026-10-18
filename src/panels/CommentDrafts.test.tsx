@@ -46,7 +46,8 @@ let subscriptions: number
 let writes: { name: string; answer: Answer }[]
 // The failure the client still holds for the thread. ConvexClient keeps a
 // query's last result until the server answers the next subscription to it,
-// and hands it to a new listener on a 0 ms timer.
+// and hands it to a new listener on a 0 ms timer unless the server answered
+// that listener first.
 let held: unknown
 
 const comment = (n: number): Row<'comments'> => ({
@@ -87,18 +88,21 @@ async function load() {
     else if (name === 'snapshot:commentThread') {
       subscriptions++
       let closed = false
+      let answered = false
       deliver = (page) => {
         held = null
+        answered = true
         next(page)
       }
       fail = (e) => {
         held = e
+        answered = true
         onError(e)
       }
       const cached = held
       if (cached !== null)
         setTimeout(() => {
-          if (!closed) onError(cached)
+          if (!closed && !answered) onError(cached)
         }, 0)
       return () => {
         closed = true
@@ -264,6 +268,32 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     expect(composer.getText()).toBe('')
     expect(toolbar.every((b) => b instanceof HTMLButtonElement && !b.disabled)).toBe(true)
     expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3', 'Soak run finished'])
+  })
+
+  it('says a comment is discarded when its window closed before the server refused it', async () => {
+    await load()
+    await open()
+    await act(async () => deliver({ comments: range(1, 4), earlier: false }))
+    const send = async (text: string) => {
+      const composer = await editorOf('Leave a comment')
+      await act(async () => composer.commands.insertContent(text))
+      await click('Comment')
+      await act(async () => root.render(null))
+    }
+    await send('The 401st comment')
+    // it may yet be saved, so closing says nothing
+    expect(window.showToast).not.toHaveBeenCalled()
+    await act(async () => writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP })))
+    expect(window.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('This task has 400 comments'),
+      'error',
+    )
+    expect(window.showToast).toHaveBeenLastCalledWith('Unsaved comment discarded', 'error')
+    vi.mocked(window.showToast).mockClear()
+    await open()
+    await send('Soak run finished')
+    await act(async () => writes[1].answer.resolve(null))
+    expect(window.showToast).not.toHaveBeenCalled()
   })
 
   it('keeps an edit open with its text when the server refuses it', async () => {

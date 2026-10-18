@@ -262,6 +262,9 @@ let commentsWatchEpoch = 0
 /* Counts thread subscriptions, so a replaced one (P.retryComments) is
    ignored even if it calls back once more. */
 let threadSubscription = 0
+/* How long a failure skipped as held (subscribeThread) waits for the
+   server's answer before it shows anyway. */
+const HELD_FAILURE_MS = 5000
 /* The last thread the comments subscription delivered — the rollback anchor
    for optimistic comment rows (rows.comments is outside serverSnap). null =
    nothing delivered yet for the watched issue. It is the thread's live
@@ -285,7 +288,7 @@ export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
 
 /** Whether the watched thread's subscription failed (P.commentsFailure):
     'failed' until a later delivery or Retry, 'retrying' from Retry until the
-    server answers the new subscription, else 'none'. */
+    server answers the new subscription (subscribeThread), else 'none'. */
 export type CommentsFailure = 'none' | 'failed' | 'retrying'
 
 /* Re-adopt the watched thread from its last delivery and the comments loaded
@@ -354,15 +357,39 @@ function subscribeThread(issueUuid: string, orgId: string) {
   /* ConvexClient holds a query's last result until the server answers the
      next subscription to it, and hands a held result to a new listener on a
      0 ms timer that onUpdate queues. This store's one listener to the thread
-     was just dropped, so an error before the timer queued below runs is the
-     dropped run's, never the server's answer to this subscription. It is
-     skipped, so Retry, or a task opened again at once, waits for the rerun. */
+     was just dropped, so an error before the timer queued below runs is
+     taken for the dropped run's and skipped, and Retry, or a task opened
+     again at once, waits for the rerun. Should the server's own answer have
+     come that early instead, the client replays nothing after it, so a
+     skipped failure shows once HELD_FAILURE_MS passes with no other answer. */
   let held = true
+  let skipped: { err: unknown } | null = null
+  const failed = (err: unknown) => {
+    console.error('[qivo] comments subscription failed:', err)
+    const code = errData(err).code
+    PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
+    if (code !== 'not_found' && code !== 'forbidden') {
+      // nothing to adopt. What is on screen stays, with the failure under it.
+      emit('comments')
+      return
+    }
+    commentsSnap = []
+    olderComments = []
+    threadStart = true
+    if (inFlight > 0) {
+      commentsDirty = true
+      return
+    }
+    adoptComments()
+    rebuildComments()
+    emit('comments')
+  }
   commentsUnsub = convex.onUpdate(
     api.snapshot.commentThread,
     { org_id: orgId, issue_id: issueUuid },
     (page) => {
       if (!current()) return
+      skipped = null
       PLANNER.commentsFailure = 'none'
       // gate the paint, never the data: while our own writes are in flight
       // (an optimistic comment among them) the delivery is recorded and the
@@ -377,30 +404,24 @@ function subscribeThread(issueUuid: string, orgId: string) {
       emit('comments')
     },
     (err) => {
-      if (!current() || held) return
-      console.error('[qivo] comments subscription failed:', err)
-      const code = errData(err).code
-      PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
-      if (code !== 'not_found' && code !== 'forbidden') {
-        // nothing to adopt. What is on screen stays, with the failure under it.
-        emit('comments')
+      if (!current()) return
+      if (held) {
+        skipped = { err }
         return
       }
-      commentsSnap = []
-      olderComments = []
-      threadStart = true
-      if (inFlight > 0) {
-        commentsDirty = true
-        return
-      }
-      adoptComments()
-      rebuildComments()
-      emit('comments')
+      skipped = null
+      failed(err)
     },
   )
   setTimeout(() => {
     held = false
   }, 0)
+  setTimeout(() => {
+    if (!current() || !skipped) return
+    const { err } = skipped
+    skipped = null
+    failed(err)
+  }, HELD_FAILURE_MS)
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -4338,8 +4359,9 @@ export const PLANNER = {
 
   /** Retry. A fresh subscription makes the server run the watched thread's
       failed query again (it never caches a failed run), and 'retrying'
-      lasts until the server answers it. The comments on screen stay
-      meanwhile. Does nothing unless the thread failed. */
+      lasts until the server answers it, or HELD_FAILURE_MS without an
+      answer. The comments on screen stay meanwhile. Does nothing unless the
+      thread failed. */
   retryComments: () => {
     const row = watchedComments ? rows.issues.get(watchedComments) : undefined
     if (!watchedComments || !row || PLANNER.commentsFailure !== 'failed') return

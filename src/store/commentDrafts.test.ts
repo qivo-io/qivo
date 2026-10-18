@@ -36,7 +36,8 @@ describe('comment drafts and a failed thread in the store', () => {
   let toast: ReturnType<typeof vi.fn>
   // The failure the client still holds for the thread. ConvexClient keeps a
   // query's last result until the server answers the next subscription to
-  // it, and hands it to a new listener on a 0 ms timer.
+  // it, and hands it to a new listener on a 0 ms timer unless the server
+  // answered that listener first.
   let held: unknown
 
   const comment = (n: number): Row<'comments'> => ({
@@ -94,13 +95,16 @@ describe('comment drafts and a failed thread in the store', () => {
     network.onUpdate.mockImplementation((ref, _args, receive, onError) => {
       if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
       else if (getFunctionName(ref) === 'snapshot:commentThread') {
+        let answered = false
         const thread: Thread = {
           deliver: (page) => {
             held = null
+            answered = true
             receive(page)
           },
           fail: (e) => {
             held = e
+            answered = true
             onError(e)
           },
           closed: false,
@@ -109,7 +113,7 @@ describe('comment drafts and a failed thread in the store', () => {
         const cached = held
         if (cached !== null)
           setTimeout(() => {
-            if (!thread.closed) onError(cached)
+            if (!thread.closed && !answered) onError(cached)
           }, 0)
         return () => {
           thread.closed = true
@@ -124,6 +128,7 @@ describe('comment drafts and a failed thread in the store', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -252,6 +257,39 @@ describe('comment drafts and a failed thread in the store', () => {
       live().deliver({ comments: range(1, 5), earlier: false })
       expect(P.commentsFailure).toBe('none')
       expect(bodies()).toEqual(['#1', '#2', '#3', '#4'])
+    })
+
+    it('shows a failure the server sent before the old one could be replayed', () => {
+      vi.useFakeTimers()
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      live().fail(new Error('Server Error'))
+      P.retryComments()
+      // the server answers the rerun before the store's own timer runs, so
+      // the client replays nothing after it, and the answer is skipped
+      live().fail(new Error('Server Error'))
+      vi.advanceTimersByTime(0)
+      expect(P.commentsFailure).toBe('retrying')
+      vi.advanceTimersByTime(4999)
+      expect(P.commentsFailure).toBe('retrying')
+      vi.advanceTimersByTime(1)
+      expect(P.commentsFailure).toBe('failed')
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
+    })
+
+    it('shows the old failure again when the server does not answer a retry', () => {
+      vi.useFakeTimers()
+      const { P } = store
+      live().fail(new Error('Server Error'))
+      P.retryComments()
+      vi.advanceTimersByTime(4999)
+      expect(P.commentsFailure).toBe('retrying')
+      vi.advanceTimersByTime(1)
+      expect(P.commentsFailure).toBe('failed')
+      // the server's later answer still ends it
+      live().deliver({ comments: range(1, 3), earlier: false })
+      expect(P.commentsFailure).toBe('none')
+      expect(bodies()).toEqual(['#1', '#2'])
     })
 
     it('retries only a failed thread, and ignores the subscription it replaced', () => {
