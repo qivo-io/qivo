@@ -28,6 +28,11 @@ import {
   withOrg,
 } from './helpers.setup'
 
+/* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
+ * (lib/archiveCursorSeal.ts), so every page with a next cursor needs one. */
+const g = globalThis as unknown as { process: { env: Record<string, string | undefined> } }
+g.process.env.BETTER_AUTH_SECRET ??= 'archived-test-secret-not-a-deployment-key'
+
 describe('issues.archivedFor', () => {
   it('returns only archived issues of the named projects, newest-archived first, num desc tiebreak', async () => {
     const t = newT()
@@ -555,6 +560,63 @@ describe('issues.archivedPage', () => {
     expect((await pageOf(t, f.otherAdmin, { project_id: f.otherProject.id })).rows).toHaveLength(1)
   })
 
+  it('never shows a hidden task in the cursor of a page that reads the whole archive', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a top-level project the guest cannot see, archived most recently
+    const secret = await plantProject(t, { org_id: f.org.id, type: 'meta', key: 'SEC' })
+    const hidden: Doc<'issues'>[] = []
+    for (let d = 20; d <= 23; d++) {
+      hidden.push(
+        await plantIssue(t, { org_id: f.org.id, project_id: secret.id, archived_at: day(d) }),
+      )
+    }
+    for (let d = 1; d <= 3; d++) {
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(d) })
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(d) })
+    }
+    // no share for opening projects one by one, so the family's pages read
+    // the organization's archive and look at two tasks each
+    ARCHIVE_PAGE.opening = 0
+    ARCHIVE_PAGE.tasks = 2
+    const first = await pageOf(t, f.guest, { project_id: f.meta.id })
+    expect(first.rows).toEqual([])
+    expect(first.next_cursor).toMatch(/^2~[0-9a-f]+$/)
+    for (const task of hidden) {
+      for (const part of [
+        task._id,
+        String(Math.trunc(task._creationTime)),
+        task.archived_at ?? '',
+      ]) {
+        expect(first.next_cursor).not.toContain(part)
+      }
+    }
+    // the pages still move past the hidden tasks and list the family's once each
+    const all = await everyPage(t, f.guest, { project_id: f.meta.id })
+    expect(all.ids).toEqual(
+      (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id),
+    )
+  })
+
+  it('refuses a cursor from another project’s list', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let d = 1; d <= 3; d++) {
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(d) })
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(d) })
+    }
+    const first = await pageOf(t, f.admin, { project_id: f.sub.id, limit: 1 })
+    const cursor = first.next_cursor ?? ''
+    expect(cursor).toMatch(/^2~/)
+    await badRequest(
+      pageOf(t, f.admin, { project_id: f.sub2.id, cursor }),
+      'cursor must be the next_cursor of an earlier page',
+    )
+    expect(
+      (await pageOf(t, f.admin, { project_id: f.sub.id, cursor, limit: 1 })).rows,
+    ).toHaveLength(1)
+  })
+
   it('lists only the sub-projects a guest can see under the top-level project', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -615,7 +677,8 @@ describe('issues.archivedPage', () => {
     const t = newT()
     const f = await withOrg(t)
     const project_id = f.meta.id
-    for (const cursor of ['abc', '2~1~k1~x', '1~-1~k1~x', '']) {
+    // a plain position is refused too, so a caller cannot choose where a page starts
+    for (const cursor of ['abc', '2~1~k1~x', '1~-1~k1~x', '', '1~5~k1~2026-03-01T09:00:00.000Z']) {
       await badRequest(
         pageOf(t, f.admin, { project_id, cursor }),
         'cursor must be the next_cursor of an earlier page',

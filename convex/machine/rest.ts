@@ -562,7 +562,7 @@ export const listIssues = internalQuery({
      * for it as it was put away, and everything under it comes
      * (rest:374-386). Archived tasks come one project at a time
      * (taskListScope). */
-    const req = taskListRequest(view, {
+    const req = await taskListRequest(view, {
       flag: 'archived=true',
       archived,
       project,
@@ -585,7 +585,7 @@ export const listIssues = internalQuery({
       view,
     )
     return {
-      next_cursor: page.next === null ? null : archiveCursorText(page.next),
+      next_cursor: page.next === null ? null : await archiveCursorText(page.next, req.project),
       tasks: page.rows,
     }
   },
