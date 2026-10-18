@@ -2072,6 +2072,9 @@ async function uploadChecks() {
     const att = await restOk(w, 'POST', `/tasks/${task.key}/attachments/${start.ticket}`, {
       storage_id,
     })
+    // kept for uploads/delete until its own delete below succeeds
+    const entry = { att, cred: w, surface: 'rest' }
+    made.push(entry)
     try {
       await sameBytes(att, bytes, type)
     } finally {
@@ -2080,6 +2083,7 @@ async function uploadChecks() {
         true,
         'deleted',
       )
+      made.splice(made.indexOf(entry), 1)
     }
     return `${bytes.length} bytes (${mb} MiB) uploaded in ${seconds} s, confirmed, downloaded and deleted`
   })
