@@ -52,8 +52,8 @@ const OPEN_STATUSES = ['todo', 'progress', 'review'] as const satisfies readonly
  * reads stop once tasks and comments together reach `bytes`. Each passes its
  * budget by one document at most, so a call reads at most 13 MiB beside the
  * caller's project view, under Convex's 16 MiB read limit. A task document
- * takes at least about 400 bytes, so the task budget also keeps the
- * documents read far below Convex's 32,000. Tests lower them. */
+ * takes at least about 400 bytes, so the task budget also bounds the scan to
+ * about 16,000 documents, half of Convex's 32,000. Tests lower them. */
 export const LAST_COMMENTS = {
   owners: SYNC_OWNERS_MAX,
   tasks: 1000,
