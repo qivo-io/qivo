@@ -85,7 +85,16 @@ export const INVERT_GROUPS = [
 
 class UsageError extends Error {}
 
-/** Parses the command line. Secrets are never accepted as arguments. */
+/** The usage error for an argument the script does not take. It names a
+ *  plain option, but never repeats any other value, which could be a secret
+ *  pasted by mistake. */
+const unknownArgument = (arg) =>
+  new UsageError(
+    `${/^--[a-z][a-z-]{0,30}$/.test(arg) ? `Unknown argument ${arg}.` : 'Unknown argument (not shown, in case it is a secret).'} Secrets belong in the environment.`,
+  )
+
+/** Parses the command line. Secrets are never accepted as arguments, and a
+ *  usage error never repeats a value. */
 export function parseArgs(argv) {
   const o = {
     require: new Set(),
@@ -120,14 +129,15 @@ export function parseArgs(argv) {
         const known = arg === '--invert' ? INVERT_GROUPS : FEATURES
         const names = value === 'all' ? known : value.split(',')
         for (const name of names) {
-          if (!known.includes(name)) throw new UsageError(`${arg} does not know ${name}.`)
+          if (!known.includes(name))
+            throw new UsageError(`${arg} takes all or a list of ${known.join(', ')}.`)
           o[arg.slice(2)].add(name)
         }
       } else if (arg === '--run') {
         if (!/^[0-9a-f]{6}$/.test(value)) throw new UsageError('--run takes six hex digits.')
         o.run = value
       } else o[arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value
-    } else throw new UsageError(`Unknown argument ${arg}. Secrets belong in the environment.`)
+    } else throw unknownArgument(arg)
   }
   if (!o.target) throw new UsageError('Choose --staging or --local.')
   if (o.run && !o.cleanup) throw new UsageError('--run is for --cleanup.')
@@ -276,8 +286,8 @@ function describe(error) {
   return `${error?.name ?? 'Error'}: ${first.slice(0, 200)}`
 }
 
-/** Set by the first Ctrl-C or SIGTERM: the run stops before its next check
- *  and goes on to cleanup. A second signal exits at once. */
+/** Set by the first Ctrl-C, SIGTERM or SIGHUP: the run stops before its
+ *  next check and goes on to cleanup. A second signal exits at once. */
 let interrupted = false
 
 /** Runs one check and records PASS or FAIL. The run continues either way. */
@@ -364,28 +374,53 @@ const READ_TOOLS = new Set([
   'list_users',
 ])
 
-/** One authenticated request. A 429 waits for Retry-After once, which only
+/** A request that never follows a redirect. Request bodies carry OAuth codes,
+ *  verifiers and refresh tokens, and Node's fetch drops the Authorization
+ *  header on a cross-origin redirect but still sends the body, so every
+ *  request refuses a redirect instead. The error names no URL. */
+export async function request(url, init = {}) {
+  try {
+    return await fetch(url, { ...init, redirect: 'error' })
+  } catch (error) {
+    if (/redirect/i.test(String(error?.cause?.message ?? error?.message)))
+      fail('a request was answered with a redirect, which this check never follows')
+    const code = error?.cause?.code
+    throw new Error(`network error${code ? ` ${code}` : ''}`, { cause: error })
+  }
+}
+
+/** One authenticated request. A 429 waits 61 seconds once, which only
  *  happens when something else uses the same profile at the same time. A
- *  read that answers a server error (5xx) is sent once more after two
- *  seconds, with a NOTE, because a read changes nothing; a write's server
- *  error is reported as it is. */
+ *  read that answers a server error (5xx) or fails on the network is sent
+ *  once more after two seconds, with a NOTE, because a read changes
+ *  nothing. A write's server error is reported as it is. */
 async function send(profile, url, init, { read = false } = {}) {
   let retried = false
+  const again = async (why) => {
+    retried = true
+    results.retried++
+    say('NOTE', 'server-error', `a read ${why}; sending it once more`)
+    await sleep(2000)
+  }
   for (let attempt = 0; ; attempt++) {
     await pace(profile)
-    const response = await fetch(url, init)
+    let response
+    try {
+      response = await request(url, init)
+    } catch (error) {
+      if (!read || retried || error instanceof CheckError) throw error
+      await again(`hit a ${error.message}`)
+      continue
+    }
     if (response.status === 429 && attempt === 0) {
-      say('NOTE', 'rate-limit', `${profile} hit the request limit; waiting 60 seconds`)
+      say('NOTE', 'rate-limit', `${profile} hit the request limit; waiting 61 seconds`)
       await response.arrayBuffer().catch(() => {})
       await sleep(61_000)
       continue
     }
     if (response.status >= 500 && read && !retried) {
-      retried = true
-      results.retried++
-      say('NOTE', 'server-error', `a read answered HTTP ${response.status}; sending it once more`)
       await response.arrayBuffer().catch(() => {})
-      await sleep(2000)
+      await again(`answered HTTP ${response.status}`)
       continue
     }
     return response
@@ -612,7 +647,7 @@ function onApi(value) {
  *  resource URL becomes the API origin, because file links and token
  *  audiences use that spelling. */
 async function discoverOAuth() {
-  const challenge = await fetch(cfg.mcpUrl, { method: 'POST' })
+  const challenge = await request(cfg.mcpUrl, { method: 'POST' })
   eq(challenge.status, 401, 'unauthenticated MCP status')
   const header = challenge.headers.get('www-authenticate') ?? ''
   const metadataUrl = header.match(/resource_metadata="([^"]+)"/)?.[1]
@@ -623,7 +658,7 @@ async function discoverOAuth() {
     'challenge scope',
   )
   expect(onApi(metadataUrl), 'metadata is on another origin')
-  const resource = await (await fetch(metadataUrl)).json()
+  const resource = await (await request(metadataUrl)).json()
   expect(
     onApi(resource.resource) && new URL(resource.resource).pathname === '/mcp',
     `the protected resource ${short(resource.resource)} is not this deployment's MCP`,
@@ -636,7 +671,7 @@ async function discoverOAuth() {
   const issuer = new URL(resource.authorization_servers[0])
   expect(onApi(issuer.href), 'the issuer is on another origin')
   const meta = await (
-    await fetch(
+    await request(
       `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname.replace(/\/$/, '')}`,
     )
   ).json()
@@ -646,7 +681,7 @@ async function discoverOAuth() {
 }
 
 async function registerClient(name, redirectUri) {
-  const response = await fetch(oauth.meta.registration_endpoint, {
+  const response = await request(oauth.meta.registration_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -668,7 +703,7 @@ async function registerClient(name, redirectUri) {
 }
 
 async function tokenRequest(clientId, fields) {
-  const response = await fetch(oauth.meta.token_endpoint, {
+  const response = await request(oauth.meta.token_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: clientId, resource: oauth.resource, ...fields }),
@@ -711,6 +746,26 @@ async function startCallback() {
   redirectUri = `http://127.0.0.1:${callbackServer.address().port}/callback`
 }
 
+/** The environment variables Chromium gets. Without an explicit list,
+ *  Playwright hands the browser this whole process environment, which the
+ *  staging helper fills with the deploy key and the other staging values. */
+const BROWSER_ENV = [
+  'HOME',
+  'PATH',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+  'DISPLAY',
+  'WAYLAND_DISPLAY',
+  'XDG_RUNTIME_DIR',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_DATA_HOME',
+  'FONTCONFIG_PATH',
+  'FONTCONFIG_FILE',
+]
+
 async function openBrowser() {
   const { chromium } = await import('playwright')
   // Playwright's own signal handlers would close the browser and exit at
@@ -722,6 +777,12 @@ async function openBrowser() {
     handleSIGINT: false,
     handleSIGTERM: false,
     handleSIGHUP: false,
+    env: Object.fromEntries(
+      BROWSER_ENV.filter((name) => process.env[name] !== undefined).map((name) => [
+        name,
+        process.env[name],
+      ]),
+    ),
   })
   context = await browser.newContext({ viewport: { width: 1360, height: 900 } })
   if (cfg.bypass) {
@@ -771,6 +832,9 @@ async function signIn(account) {
   })
   if (response && response.status() === 401)
     fail('the app answered 401; set QIVO_STAGING_PROTECTION_BYPASS for Vercel protection')
+  // the password goes only into the app's own sign-in form
+  await app.waitForSelector('input[type="email"]', { timeout: 45_000 })
+  eq(new URL(app.url()).origin, cfg.appOrigin, 'the sign-in page origin')
   await signInBrowser(app, account)
   await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
   eq(await app.evaluate(() => window.PLANNER.org?.slug), ORG_SLUG, 'signed-in organization')
@@ -1080,115 +1144,254 @@ async function appMessages(call, arg) {
 /* --------------------------------------------------------------- cleanup */
 
 /** Finds and removes everything whose name carries `tag` (a run's tag, or
- *  TAG_ANY for every run): projects (with their tasks, comments, files,
- *  grants and milestones), tasks elsewhere, teams, personal tokens, agents
- *  with their keys and OAuth connections. It uses the signed-in browser
- *  session and a temporary token for REST reads. OAuth client registrations
- *  cannot be deleted and stay. Returns the number of records it removed. */
+ *  TAG_ANY for every run), in phases that each run whatever an earlier one
+ *  did:
+ *
+ *  1. OAuth connections, personal tokens and agent keys, which need only
+ *     the signed-in app, so no credential of a run outlives a REST outage;
+ *  2. with a temporary token for REST reads, projects (with their tasks,
+ *     comments, files, grants and milestones), tasks elsewhere and teams;
+ *  3. the agents, each confirmed gone;
+ *  4. the temporary token, then a fresh read of every list to prove that
+ *     nothing with the tag is left.
+ *
+ *  OAuth client registrations cannot be deleted and stay. Answers how many
+ *  records it removed and the problems it met, each one line that is safe
+ *  to print. No phase stops another. */
 async function sweep(tag, label) {
   const matches = (name) =>
     typeof name === 'string' &&
     (tag instanceof RegExp ? tag.test(name) : name.startsWith(`${tag} `))
   let removed = 0
+  const problems = []
   const note = (what) => {
     removed++
     say('NOTE', `${label}/removed`, what)
   }
-  const tokenName = `${typeof tag === 'string' ? tag : `${TAG_PREFIX}000000`} cleanup token`
-  // A temporary token for REST reads and deletes, minted in the browser like
-  // the New token dialog does. It is removed last.
-  const minted = await app.evaluate(
-    async (name) => window.PLANNER.createMcpToken(name, { access: 'write' }),
-    tokenName,
-  )
-  expect(minted?.secret, 'could not create the temporary cleanup token')
-  const cleaner = { secret: keep(minted.secret), profile: 'nora', label: 'cleanup token' }
-  try {
-    // projects: archive, then delete in the app, which takes their tasks
-    const projects = [
-      ...(await readList(cleaner, '/projects')),
-      ...(await readList(cleaner, '/projects?archived=true')),
-    ].filter((p) => matches(p.name))
-    const roots = projects.filter((p) => !projects.some((q) => q.id === p.parent_id))
-    for (const p of roots) {
-      await deleteProjectInApp(cleaner, p)
-      note(`project ${p.name}`)
+  /** Runs one step; its failure is recorded and the sweep goes on. */
+  const step = async (what, fn) => {
+    try {
+      await fn()
+    } catch (error) {
+      problems.push(`${what}: ${describe(error)}`)
+      say('NOTE', `${label}/problem`, `${what}: ${describe(error)}`)
     }
-    // tasks outside those projects, active and archived
-    for (const task of await findTasks(cleaner, tag)) {
-      const r = await rest(cleaner, 'DELETE', `/tasks/${task.id}`)
-      expect(r.status === 200 || r.status === 404, `could not delete task ${task.key}`)
-      note(`task ${task.key} ${task.title}`)
-    }
-    // teams, which only the app deletes
-    const teams = (await readList(cleaner, '/teams')).filter((t) => matches(t.name))
-    for (const team of teams) {
-      await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), team.id, {
-        timeout: 30_000,
-      })
-      expect(
-        await app.evaluate((id) => window.PLANNER.removeTeam(id), team.id),
-        `could not delete team ${team.name}`,
-      )
-      note(`team ${team.name}`)
-    }
-    // OAuth connections
-    const connections = (await app.evaluate(() => window.PLANNER.listOAuthConnections())) ?? []
-    for (const c of connections.filter((c) => matches(c.clientName))) {
-      expect(
-        await app.evaluate((id) => window.PLANNER.revokeOAuthConnection(id), c.id),
-        'could not delete an OAuth connection',
-      )
-      note(`OAuth connection ${c.clientName}`)
-    }
-    // agents and their keys
-    const keys = (await app.evaluate(() => window.PLANNER.listAgentKeys())) ?? []
-    const agents = await app.evaluate(() =>
-      window.PLANNER.users.filter((u) => u.isAgent).map((u) => ({ id: u.id, name: u.name })),
-    )
-    for (const agent of agents.filter((a) => matches(a.name))) {
-      for (const key of keys.filter((k) => k.agentId === agent.id)) {
-        await app.evaluate(
-          async ({ id, revoked }) =>
-            (revoked || (await window.PLANNER.revokeAgentKey(id))) &&
-            (await window.PLANNER.deleteAgentKey(id)),
-          { id: key.id, revoked: !!key.revokedAt },
-        )
-      }
-      await app.evaluate((id) => window.PLANNER.removeUser(id), agent.id)
-      await settled()
-      await until(async () => !(await readList(cleaner, '/users')).some((u) => u.id === agent.id))
-      note(`agent ${agent.name}`)
-    }
-    // personal tokens, the temporary one last
-    const tokens = (await app.evaluate(() => window.PLANNER.listMcpTokens())) ?? []
-    for (const t of tokens.filter((t) => matches(t.name) && t.id !== minted.id)) {
-      const ok = await app.evaluate(
-        async ({ id, revoked }) =>
-          (revoked || (await window.PLANNER.revokeMcpToken(id))) &&
-          (await window.PLANNER.deleteMcpToken(id)),
-        { id: t.id, revoked: !!t.revokedAt },
-      )
-      expect(ok, `could not delete token ${t.name}`)
-      note(`personal token ${t.name}`)
-    }
-    // A deployment with Deleted items keeps deleted projects and tasks there,
-    // where only an admin's Delete now in the app removes them early.
-    const catalogue = await mcp(cleaner, 'tools/list', {})
-    const deleteTask = catalogue.json?.result?.tools?.find((t) => t.name === 'delete_task')
-    if (deleteTask?.description?.includes('Deleted items'))
-      say(
-        'NOTE',
-        `${label}/deleted-items`,
-        `this deployment keeps the deleted projects and tasks in Deleted items for 30 days; an admin can delete the ones named ${tag instanceof RegExp ? `${TAG_PREFIX}…` : tag} for good there`,
-      )
-  } finally {
-    await app.evaluate(
-      async (id) => (await window.PLANNER.revokeMcpToken(id)) && window.PLANNER.deleteMcpToken(id),
-      minted.id,
-    )
   }
-  return removed
+  /** A list the app reads on demand; null (a failed read) is a failure. */
+  const appList = async (what, call) => {
+    const rows = await app.evaluate(call)
+    expect(Array.isArray(rows), `the app could not list ${what}`)
+    return rows
+  }
+  const taggedAgents = async () =>
+    (
+      await app.evaluate(() =>
+        window.PLANNER.users.filter((u) => u.isAgent).map((u) => ({ id: u.id, name: u.name })),
+      )
+    ).filter((a) => matches(a.name))
+
+  // 1. credentials, through the app alone
+  await step('OAuth connections', async () => {
+    const rows = await appList('OAuth connections', () => window.PLANNER.listOAuthConnections())
+    for (const c of rows.filter((c) => matches(c.clientName)))
+      await step(`OAuth connection ${c.clientName}`, async () => {
+        expect(
+          await app.evaluate((id) => window.PLANNER.revokeOAuthConnection(id), c.id),
+          'the app could not delete it',
+        )
+        note(`OAuth connection ${c.clientName}`)
+      })
+  })
+  await step('personal tokens', async () => {
+    const rows = await appList('personal tokens', () => window.PLANNER.listMcpTokens())
+    for (const t of rows.filter((t) => matches(t.name)))
+      await step(`personal token ${t.name}`, async () => {
+        expect(
+          await removeTokenInApp(t.id, !!t.revokedAt),
+          'the app could not revoke and delete it',
+        )
+        note(`personal token ${t.name}`)
+      })
+  })
+  const agentIds = new Set()
+  await step('agent keys', async () => {
+    const agents = await taggedAgents()
+    for (const a of agents) agentIds.add(a.id)
+    if (!agents.length) return
+    const keys = await appList('agent keys', () => window.PLANNER.listAgentKeys())
+    for (const key of keys.filter((k) => agentIds.has(k.agentId))) {
+      const agent = agents.find((a) => a.id === key.agentId)
+      await step(`agent key ${key.name} of ${agent.name}`, async () => {
+        expect(
+          await app.evaluate(
+            async ({ id, revoked }) =>
+              (revoked || (await window.PLANNER.revokeAgentKey(id))) &&
+              (await window.PLANNER.deleteAgentKey(id)),
+            { id: key.id, revoked: !!key.revokedAt },
+          ),
+          'the app could not revoke and delete it',
+        )
+        note(`agent key ${key.name} of ${agent.name}`)
+      })
+    }
+  })
+
+  // 2. records found over REST, with a temporary token minted in the app
+  // like the New token dialog does
+  const tokenName = `${typeof tag === 'string' ? tag : `${TAG_PREFIX}000000`} cleanup token`
+  let minted = null
+  let cleaner = null
+  await step('creating the temporary cleanup token', async () => {
+    minted = await app.evaluate(
+      async (name) => window.PLANNER.createMcpToken(name, { access: 'write' }),
+      tokenName,
+    )
+    expect(minted?.secret, 'the app could not create it')
+    cleaner = {
+      secret: keep(minted.secret),
+      profile: 'nora',
+      label: 'cleanup token',
+    }
+  })
+  try {
+    if (cleaner) {
+      await step('projects', async () => {
+        const projects = [
+          ...(await readList(cleaner, '/projects')),
+          ...(await readList(cleaner, '/projects?archived=true')),
+        ].filter((p) => matches(p.name))
+        // the app deletes a top-level project with its sub-projects
+        for (const p of projects.filter((p) => !projects.some((q) => q.id === p.parent_id)))
+          await step(`project ${p.name}`, async () => {
+            await deleteProjectInApp(cleaner, p)
+            note(`project ${p.name}`)
+          })
+      })
+      await step('tasks', async () => {
+        for (const task of await findTasks(cleaner, tag))
+          await step(`task ${task.key}`, async () => {
+            const r = await rest(cleaner, 'DELETE', `/tasks/${task.id}`)
+            expect(r.status === 200 || r.status === 404, `DELETE answered HTTP ${r.status}`)
+            note(`task ${task.key} ${task.title}`)
+          })
+      })
+      await step('teams', async () => {
+        for (const team of (await readList(cleaner, '/teams')).filter((t) => matches(t.name)))
+          await step(`team ${team.name}`, async () => {
+            await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), team.id, {
+              timeout: 30_000,
+            })
+            expect(
+              await app.evaluate((id) => window.PLANNER.removeTeam(id), team.id),
+              'the app could not delete it',
+            )
+            note(`team ${team.name}`)
+          })
+      })
+    }
+
+    // 3. the agents, whose keys went in phase 1. The app removes an agent
+    // in the background, so each removal is confirmed on the server.
+    await step('agents', async () => {
+      for (const agent of await taggedAgents()) {
+        agentIds.add(agent.id)
+        await step(`agent ${agent.name}`, async () => {
+          await app.evaluate((id) => window.PLANNER.removeUser(id), agent.id)
+          await settled()
+          expect(
+            await until(async () =>
+              cleaner
+                ? !(await readList(cleaner, '/users')).some((u) => u.id === agent.id)
+                : !(await agentListedAfterReload(agent.id)),
+            ),
+            'it is still in the organization',
+          )
+          note(`agent ${agent.name}`)
+        })
+      }
+    })
+
+    // what REST can see must be gone before the token goes
+    if (cleaner)
+      await step('the check for leftovers over REST', async () => {
+        const projects = [
+          ...(await readList(cleaner, '/projects')),
+          ...(await readList(cleaner, '/projects?archived=true')),
+        ].filter((p) => matches(p.name))
+        const tasks = await findTasks(cleaner, tag)
+        const teams = (await readList(cleaner, '/teams')).filter((t) => matches(t.name))
+        const users = (await readList(cleaner, '/users')).filter(
+          (u) => u.kind === 'agent' && matches(u.name),
+        )
+        const left = [
+          [projects.length, 'project'],
+          [tasks.length, 'task'],
+          [teams.length, 'team'],
+          [users.length, 'agent'],
+        ].filter(([n]) => n > 0)
+        expect(
+          !left.length,
+          `still there: ${left.map(([n, what]) => `${n} ${what}(s)`).join(', ')}`,
+        )
+      })
+    if (cleaner) {
+      // A deployment with Deleted items keeps deleted projects and tasks
+      // there, where only an admin's Delete now in the app removes them early.
+      const catalogue = await mcp(cleaner, 'tools/list', {}).catch(() => null)
+      const deleteTask = catalogue?.json?.result?.tools?.find((t) => t.name === 'delete_task')
+      if (deleteTask?.description?.includes('Deleted items'))
+        say(
+          'NOTE',
+          `${label}/deleted-items`,
+          `this deployment keeps the deleted projects and tasks in Deleted items for 30 days; an admin can delete the ones named ${tag instanceof RegExp ? `${TAG_PREFIX}…` : tag} for good there`,
+        )
+    }
+  } finally {
+    // 4. the temporary token, then a fresh look at every app list
+    if (minted?.id)
+      await step('removing the temporary cleanup token', async () => {
+        expect(await removeTokenInApp(minted.id, false), 'the app could not revoke and delete it')
+      })
+  }
+  await step('the check for leftovers in the app', async () => {
+    // a cold reload, so no list comes from what this page painted
+    await openUsers()
+    const tokens = (await appList('personal tokens', () => window.PLANNER.listMcpTokens())).filter(
+      (t) => matches(t.name),
+    )
+    const connections = (
+      await appList('OAuth connections', () => window.PLANNER.listOAuthConnections())
+    ).filter((c) => matches(c.clientName))
+    const agents = await taggedAgents()
+    const keys = (await appList('agent keys', () => window.PLANNER.listAgentKeys())).filter((k) =>
+      agentIds.has(k.agentId),
+    )
+    const left = [
+      [tokens.length, 'personal token'],
+      [connections.length, 'OAuth connection'],
+      [agents.length, 'agent'],
+      [keys.length, 'agent key'],
+    ].filter(([n]) => n > 0)
+    expect(!left.length, `still there: ${left.map(([n, what]) => `${n} ${what}(s)`).join(', ')}`)
+  })
+  return { removed, problems }
+}
+
+/** Revokes (unless it already is) and deletes one of Nora's personal
+ *  tokens through the app's store. Answers whether both were accepted. */
+async function removeTokenInApp(id, revoked) {
+  return await app.evaluate(
+    async ({ id, revoked }) =>
+      (revoked || (await window.PLANNER.revokeMcpToken(id))) &&
+      (await window.PLANNER.deleteMcpToken(id)),
+    { id, revoked },
+  )
+}
+
+/** Whether the Users page lists an agent after a cold reload. */
+async function agentListedAfterReload(id) {
+  await openUsers()
+  return await app.evaluate((agent) => window.PLANNER.users.some((u) => u.id === agent), id)
 }
 
 /** Tasks whose title carries the tag, active and archived. Archived tasks
@@ -1237,6 +1440,7 @@ const TOO_MANY_COMMENTS = `this task has ${COMMENT_MAX} comments, the most a tas
 const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
+const UNKNOWN_PROJECT = 'project must name a project by uuid, number or key'
 
 /** The state the checks share. */
 const run = {}
@@ -1632,7 +1836,7 @@ function checkUploadUrl(value) {
 /** Sends the bytes to a ticket's upload URL and answers the storage id. */
 async function putBytes(uploadUrl, bytes, type) {
   checkUploadUrl(uploadUrl)
-  const r = await fetch(uploadUrl, {
+  const r = await request(uploadUrl, {
     method: 'POST',
     headers: { 'Content-Type': type },
     body: bytes,
@@ -1648,7 +1852,7 @@ async function download(url) {
   keep(url)
   const u = new URL(url)
   expect(onApi(url) && u.pathname.startsWith('/files/'), 'a file link is not on this API origin')
-  const r = await fetch(url)
+  const r = await request(url)
   return { status: r.status, bytes: Buffer.from(await r.arrayBuffer()) }
 }
 
@@ -2268,15 +2472,18 @@ async function bodyCapChecks() {
     const over = await rest(w, 'POST', '/tasks', sized(BODY_MAX + 1, restBody), { raw: true })
     eq(over.status, 413, 'a body one byte over the cap')
     eq(over.json?.error, 'request body is too large', 'the 413 sentence')
-    const at = await rest(w, 'POST', '/tasks', sized(BODY_MAX, restBody), { raw: true })
+    // at the cap the route reads the body and refuses the unknown project
+    const at = await rest(w, 'POST', '/tasks', sized(BODY_MAX, restBody), {
+      raw: true,
+    })
     expect(
-      at.status >= 400 && at.status < 500 && at.status !== 413,
-      `a body at the cap reaches the route: got ${at.status}`,
+      at.status === 400 && at.json?.error === UNKNOWN_PROJECT,
+      `a body at the cap: wanted 400 ${short(UNKNOWN_PROJECT)}, got ${at.status} ${short(at.json?.error)}`,
     )
     // chunked, without a Content-Length
     const bytes = Buffer.from(sized(BODY_MAX + 1000, restBody))
     await pace(w.profile)
-    const chunked = await fetch(`${cfg.apiOrigin}/v1/tasks`, {
+    const chunked = await request(`${cfg.apiOrigin}/v1/tasks`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${w.secret}`, 'Content-Type': 'application/json' },
       body: new ReadableStream({
@@ -2289,7 +2496,7 @@ async function bodyCapChecks() {
       duplex: 'half',
     })
     eq(chunked.status, 413, 'a chunked body over the cap')
-    const anonymous = await fetch(`${cfg.apiOrigin}/v1/tasks`, {
+    const anonymous = await request(`${cfg.apiOrigin}/v1/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: sized(BODY_MAX + 1, restBody),
@@ -2323,7 +2530,7 @@ async function bodyCapChecks() {
     )
     eq(at.status, 200, 'a body at the cap')
     expect(at.json?.result && !at.json.result.isError, 'get_me at the cap was refused')
-    const anonymous = await fetch(cfg.mcpUrl, {
+    const anonymous = await request(cfg.mcpUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: sized(BODY_MAX + 1, mcpBody),
@@ -2754,8 +2961,17 @@ async function archiveChecks() {
     })
   }
   await check('archived-projects/no-new-tasks', async () => {
-    const r = await rest(w, 'POST', '/tasks', { project: A.id, title: `${run.tag} into archived` })
-    eq(r.status, 400, 'creating a task in an archived project')
+    // the server's own sentence, which names the project to restore
+    await restRefusal(
+      w,
+      'POST',
+      '/tasks',
+      { project: A.id, title: `${run.tag} into archived` },
+      400,
+      `${A.key} is archived — restore it in the app before adding tasks to it`,
+    )
+    const tasks = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
+    expect(!tasks.some((t) => t.title === `${run.tag} into archived`), 'the task was created')
   })
 }
 
@@ -2767,41 +2983,71 @@ async function archiveChecks() {
 async function commentCapChecks() {
   const w = run.creds.writeToken
   const s = run.creds.stdKey
-  const task = await must('comment-cap/task', () =>
-    restOk(w, 'POST', '/tasks', { project: run.projects.A.id, title: `${run.tag} comment cap` }),
-  )
-  run.created.push(task)
+  let task
+  await check('comment-cap/task', async () => {
+    task = await restOk(w, 'POST', '/tasks', {
+      project: run.projects.A.id,
+      title: `${run.tag} comment cap`,
+    })
+    run.created.push(task)
+  })
+  if (!task) {
+    skip('comment-cap', 'the task for the comment cap could not be created')
+    return
+  }
   const started = Date.now()
   const posted = []
   let next = 0
   let failure = null
   let retried = 0
-  // One post, over REST for Nora and over MCP for the agent. A server
-  // failure (500 internal error, which stores nothing) is tried once more.
+  const bodyOf = (n) => `${run.tag} cap ${n}`
+  /** The id of comment `n` if the task already holds it. A gateway error
+   *  can come after the post was stored, and the newest 50 always hold it,
+   *  because two workers post far fewer than 50 in the two seconds before
+   *  this read. */
+  const stored = async (n) =>
+    (await readOk(w, `/tasks/${task.key}/comments`)).find((c) => c.body === bodyOf(n))?.id
+  // One post, over REST for Nora and over MCP for the agent. An internal
+  // error (500, which stores nothing), a gateway error (502 to 504) or a
+  // network failure is tried once more, after a check that the first try
+  // did not store the comment after all.
   const post = async (cred, n) => {
-    const body = `${run.tag} cap ${n}`
+    const body = bodyOf(n)
     for (let attempt = 0; ; attempt++) {
-      const r =
-        cred === w
-          ? await rest(w, 'POST', `/tasks/${task.key}/comments`, { body })
-          : await tool(s, 'add_comment', { ref: task.key, body })
+      let r
+      try {
+        r =
+          cred === w
+            ? await rest(w, 'POST', `/tasks/${task.key}/comments`, { body })
+            : await tool(s, 'add_comment', { ref: task.key, body })
+      } catch (error) {
+        if (error instanceof CheckError || attempt > 0) throw error
+        r = { status: 0, error: describe(error) }
+      }
       if (cred === w && r.status === 201) return r.json.id
       if (cred !== w && r.status === 200 && r.data?.id) return r.data.id
-      const internal =
-        r.status === 500 ||
+      const transient =
+        r.status === 0 ||
+        (r.status >= 500 && r.status <= 504) ||
         (r.isError && r.text === 'internal error') ||
         r.json?.error === 'internal error'
-      if (!internal || attempt > 0)
-        fail(`HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`)
+      if (!transient || attempt > 0)
+        fail(r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`)
       retried++
-      say('NOTE', 'comment-cap', `comment ${n} answered internal error; trying it once more`)
+      say(
+        'NOTE',
+        'comment-cap',
+        `comment ${n} answered ${r.status === 0 ? 'a network error' : r.isError ? short(r.text) : `HTTP ${r.status}`}; trying it once more`,
+      )
       await sleep(2000)
+      const id = await stored(n)
+      if (id) return id
     }
   }
   // each profile has its own request window, so two workers each post at
-  // most RATE_BUDGET a minute
+  // most RATE_BUDGET a minute; a signal stops both before their next post
   const worker = async (cred) => {
-    while (!failure && next < COMMENT_MAX) {
+    while (!failure && !interrupted && next < COMMENT_MAX) {
       const n = ++next
       try {
         posted.push(await post(cred, n))
@@ -2817,16 +3063,32 @@ async function commentCapChecks() {
         )
     }
   }
-  await must(
-    'comment-cap/fill',
-    async () => {
-      await Promise.all([worker(w), worker(s)])
-      if (failure) fail(failure)
-      eq(posted.length, COMMENT_MAX, 'comments posted')
-    },
-    () =>
-      `${COMMENT_MAX} comments in ${Math.round((Date.now() - started) / 1000)} s${retried ? `, ${retried} tried twice after an internal error` : ''}`,
-  )
+  // A failed fill fails its check, skips the checks that need a full task
+  // and still deletes the task, so the rest of the run goes on.
+  const full = await check('comment-cap/fill', async () => {
+    await Promise.all([worker(w), worker(s)])
+    if (interrupted) fail('interrupted by a signal')
+    if (failure) fail(failure)
+    eq(posted.length, COMMENT_MAX, 'comments posted')
+    return `${COMMENT_MAX} comments in ${Math.round((Date.now() - started) / 1000)} s${retried ? `, ${retried} tried twice after a server or network error` : ''}`
+  })
+  if (full) await commentCapFullChecks(task, posted)
+  else
+    for (const id of ['refused', 'pages', 'delete-makes-room', 'archive-reason-past-cap'])
+      skip(`comment-cap/${id}`, 'the task could not be filled to its cap')
+  await check('comment-cap/delete-task', async () => {
+    eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
+    eq((await rest(w, 'GET', `/tasks/${task.key}`)).status, 404, 'the task after its delete')
+    return `${Math.round((Date.now() - started) / 1000)} s in all`
+  })
+}
+
+/** The checks of a task that holds its 400 comments: the next post is
+ *  refused, every page of the thread, the room a delete makes and the
+ *  archive reason past the cap. `posted` are the ids of the 400 comments. */
+async function commentCapFullChecks(task, posted) {
+  const w = run.creds.writeToken
+  const s = run.creds.stdKey
   await check('comment-cap/refused', async () => {
     await restRefusal(
       w,
@@ -2926,11 +3188,6 @@ async function commentCapChecks() {
       'archived',
     )
     eq((await restRead(1))[0]?.body, reason, 'the reason, posted past the cap')
-  })
-  await check('comment-cap/delete-task', async () => {
-    eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
-    eq((await rest(w, 'GET', `/tasks/${task.key}`)).status, 404, 'the task after its delete')
-    return `${Math.round((Date.now() - started) / 1000)} s in all`
   })
 }
 
@@ -3568,16 +3825,27 @@ async function start() {
     cfg.nora = credentials.value.accounts.find((a) => a.key === 'nora')
     keep(cfg.bypass)
     keep(process.env.CONVEX_DEPLOY_KEY)
+    // The deploy key only proved which deployment this is; the run never
+    // calls Convex with it. Neither it nor the bypass value stays anywhere
+    // a child process or a later step could pick it up.
+    delete cfg.target.key
+    delete process.env.CONVEX_DEPLOY_KEY
+    delete process.env.QIVO_STAGING_PROTECTION_BYPASS
   } catch (error) {
     // The fixture CLI's own refusals are written to be safe to print.
     const safe = error instanceof UsageError || error?.constructor?.name === 'DemoCliError'
     console.error(
-      `staging-check: ${safe ? error.message : 'could not start; raw errors are withheld to keep secrets out of logs.'}`,
+      redact(
+        `staging-check: ${safe ? error.message : 'could not start; raw errors are withheld to keep secrets out of logs.'}`,
+      ),
     )
     process.exitCode = 2
     return
   }
-  for (const signal of ['SIGINT', 'SIGTERM'])
+  // A closed terminal or pipe must not stop the cleanup: its write errors
+  // are dropped, and SIGHUP counts as a first interrupt like Ctrl-C.
+  for (const stream of [process.stdout, process.stderr]) stream.on('error', () => {})
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
     process.on(signal, () => {
       if (interrupted) process.exit(130)
       interrupted = true
@@ -3605,7 +3873,6 @@ async function start() {
       `expectations inverted for ${[...cfg.invert].join(', ')}; those checks must fail`,
     )
   const began = Date.now()
-  let leftovers = 0
   let verified = false
   try {
     await openBrowser()
@@ -3616,8 +3883,18 @@ async function start() {
     verified = true
     if (cfg.cleanup) {
       const tag = cfg.run ? `${TAG_PREFIX}${cfg.run}` : TAG_ANY
-      leftovers = await sweep(tag, 'cleanup')
-      say('NOTE', 'cleanup', `removed ${leftovers} record(s)`)
+      const { removed, problems } = await sweep(tag, 'cleanup')
+      if (problems.length) {
+        results.fail.push('cleanup/sweep')
+        say(
+          'FAIL',
+          'cleanup/sweep',
+          `removed ${removed} record(s), but ${problems.length} problem(s) remain: ${problems.join('; ')}`,
+        )
+      } else {
+        results.pass++
+        say('PASS', 'cleanup/sweep', `removed ${removed} record(s); nothing with the tag is left`)
+      }
       return
     }
     await startCallback()
@@ -3637,26 +3914,33 @@ async function start() {
     await shot(consent, 'failure-consent')
   } finally {
     if (!cfg.cleanup && verified) {
+      let swept = { removed: 0, problems: [] }
       try {
-        leftovers = await sweep(run.tag, 'cleanup')
-        if (!run.completed)
-          say('NOTE', 'cleanup/swept', `removed ${leftovers} record(s) the stopped run left`)
-        else if (leftovers) {
-          // the run's own steps should have removed everything
-          results.fail.push('cleanup/leftovers')
-          say(
-            'FAIL',
-            'cleanup/leftovers',
-            `the sweep had to remove ${leftovers} record(s) the run left behind`,
-          )
-        } else say('PASS', 'cleanup/leftovers', 'nothing with this run tag is left')
+        swept = await sweep(run.tag, 'cleanup')
       } catch (error) {
+        swept.problems.push(describe(error))
+      }
+      const { removed, problems } = swept
+      if (problems.length) {
         results.fail.push('cleanup/sweep')
         say(
           'FAIL',
           'cleanup/sweep',
-          `${describe(error)}; run --cleanup --run ${run.tag.slice(TAG_PREFIX.length)}`,
+          `removed ${removed} record(s), but ${problems.length} problem(s) remain: ${problems.join('; ')}. Run --cleanup --run ${run.tag.slice(TAG_PREFIX.length)}`,
         )
+      } else if (!run.completed)
+        say('NOTE', 'cleanup/swept', `removed ${removed} record(s) the stopped run left`)
+      else if (removed) {
+        // the run's own steps should have removed everything
+        results.fail.push('cleanup/leftovers')
+        say(
+          'FAIL',
+          'cleanup/leftovers',
+          `the sweep had to remove ${removed} record(s) the run left behind`,
+        )
+      } else {
+        results.pass++
+        say('PASS', 'cleanup/leftovers', 'nothing with this run tag is left')
       }
       for (const name of run.clients)
         say(

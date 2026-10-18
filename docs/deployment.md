@@ -113,16 +113,37 @@ the deployment, the fixture credentials and the protection bypass:
   node scripts/staging-check.mjs --staging --comment-cap
 ```
 
-`--comment-cap` also fills one task to its 400 comments, which adds about
-two minutes. With `--staging` the script refuses any environment but staging,
+`--comment-cap` also fills one task to its 400 comments. The script keeps
+each person and agent under 200 requests a minute, so a run with
+`--comment-cap` takes 4 to 8 minutes against a local backend and an
+estimated 8 to 15 minutes on staging. A tool that stops a foreground command
+after a few minutes would end the run before its cleanup, so start it in its
+own session with its output in a log file, which holds no secrets, and wait
+at least 30 minutes before treating it as stuck:
+
+```sh
+setsid "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
+  node scripts/staging-check.mjs --staging --comment-cap \
+  > "${TMPDIR:-/tmp}/staging-check.log" 2>&1 < /dev/null &
+```
+
+The run is over when the log has a `DONE` line with the number of passed,
+failed and skipped checks; the exit code is 0 only when nothing failed.
+Ctrl-C, `SIGTERM` and `SIGHUP` stop a run after its current step and clean
+up; a second signal exits at once without cleanup. `nohup` alone does not
+help, because the script handles `SIGHUP` itself.
+
+With `--staging` the script refuses any environment but staging,
 any app other than `preview.qivo.io` and any backend other than the one that
 app uses. `--local` runs it against a disposable local backend instead, with
 loopback addresses only. It prints status lines only, never a secret. If a
 run is killed before it cleans up, `--cleanup --run <hex>` with the six digits
 of its tag removes what it left, and `--cleanup` alone removes every run's
-leftovers. Checks for features that have not merged yet report `SKIP`. Run it
-once per release candidate, not in a loop, because each run writes to
-staging.
+leftovers. Cleanup removes the run's tokens, agent keys and OAuth connections
+first, through the app alone, so they go even when the REST API fails, and it
+reports `FAIL cleanup/sweep` with what is left whenever anything remains.
+Checks for features that have not merged yet report `SKIP`. Run it once per
+release candidate, not in a loop, because each run writes to staging.
 
 ## Production release
 

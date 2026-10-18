@@ -1,5 +1,6 @@
+import { createServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import { parseArgs, redact, resolveConfig } from './staging-check.mjs'
+import { parseArgs, redact, request, resolveConfig } from './staging-check.mjs'
 
 describe('staging check arguments', () => {
   it('takes the target, the comment cap and the cleanup options', () => {
@@ -19,6 +20,20 @@ describe('staging check arguments', () => {
       ['--staging', '--invert', 'everything'],
     ])
       expect(() => parseArgs(argv)).toThrow()
+  })
+  it('never repeats a value it refuses, which could be a secret', () => {
+    const secret = 'qvt_1111111111111111111111111'
+    for (const argv of [
+      ['--staging', secret],
+      ['--staging', '--require', secret],
+      ['--staging', '--invert', `read-token,${secret}`],
+    ])
+      expect(() => parseArgs(argv)).toThrow(
+        expect.objectContaining({
+          message: expect.not.stringContaining('0123456789abcdef'),
+        }),
+      )
+    expect(() => parseArgs(['--staging', '--tokn'])).toThrow('Unknown argument --tokn.')
   })
 })
 
@@ -108,5 +123,43 @@ describe('staging check output', () => {
   it('leaves ordinary status text alone', () => {
     const text = 'PASS uploads/delete  7 files deleted in 12 s'
     expect(redact(text, new Set())).toBe(text)
+  })
+})
+
+describe('staging check requests', () => {
+  /** A loopback server; `handle` answers each request after its body arrived. */
+  const serve = async (handle) => {
+    const server = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => {
+        body += chunk
+      })
+      req.on('end', () => handle(req, res, body))
+    })
+    await new Promise((done) => server.listen(0, '127.0.0.1', done))
+    return { server, origin: `http://127.0.0.1:${server.address().port}` }
+  }
+
+  it('refuses a redirect, so a body never reaches another origin', async () => {
+    const seen = []
+    const other = await serve((_req, res, body) => {
+      seen.push(body)
+      res.end('{}')
+    })
+    const first = await serve((_req, res) => {
+      res.writeHead(307, { Location: `${other.origin}/token` }).end()
+    })
+    try {
+      await expect(
+        request(`${first.origin}/token`, { method: 'POST', body: 'refresh_token=secret-value' }),
+      ).rejects.toThrow('a request was answered with a redirect, which this check never follows')
+      expect(seen).toEqual([])
+      const direct = await request(`${other.origin}/token`, { method: 'POST', body: 'ok' })
+      expect(direct.status).toBe(200)
+      expect(seen).toEqual(['ok'])
+    } finally {
+      first.server.close()
+      other.server.close()
+    }
   })
 })
