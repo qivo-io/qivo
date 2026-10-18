@@ -416,8 +416,9 @@ sign-in, consent and operator routes retain the app-origin restrictions.
 
 Dynamic client registration needs no credentials, so Qivo limits it. Each
 source address may send **60 registration requests per hour**, and the whole
-server accepts **600 per hour**. An IPv6 address counts as its /64 network.
-Both limits use fixed hourly windows. Past either limit, registration
+server accepts **600 per hour**. An IPv6 address counts as its /64 network,
+and each IPv6 /48 network may send at most **120 per hour** over all of its
+/64 networks. All limits use fixed hourly windows. Past any limit, registration
 returns HTTP `429` with `Retry-After` set to the seconds left in the hour.
 When Qivo cannot check the limits, it refuses the registration with HTTP
 `503` and `Retry-After: 60`. Client metadata may be at most 8 KiB of JSON;

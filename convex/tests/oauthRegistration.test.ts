@@ -7,16 +7,18 @@
  * source. */
 /// <reference types="vite/client" />
 import { hashPassword } from 'better-auth/crypto'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { components, internal } from '../_generated/api'
 import {
-  addressBucket,
+  addressBuckets,
   OAUTH_CLIENT_METADATA_MAX_BYTES,
   OAUTH_REGISTRATION_TOTAL_KEY,
   OAUTH_REGISTRATION_WINDOW_MS,
+  OAUTH_REGISTRATIONS_PER_NETWORK,
   OAUTH_REGISTRATIONS_PER_SOURCE,
   OAUTH_REGISTRATIONS_TOTAL,
   OAUTH_UNUSED_CLIENT_TTL_MS,
+  registrationSourceCounters,
   registrationSourceKey,
 } from '../lib/oauthRegistration'
 import { newT, type T } from './helpers.setup'
@@ -94,29 +96,86 @@ const setCounter = (t: T, key: string, count: number, windowStart = WINDOW) =>
 const admit = (t: T, address: string | null) =>
   t.mutation(internal.oauthRegistrations.admit, { address })
 
+/** The key of a source counter for `address`: its /64 or IPv4 counter, or
+ * with `index` 1 its /48 counter. */
+const sourceKey = async (address: string | null, index = 0) =>
+  (await registrationSourceCounters(address, SECRET))[index].key
+
+type Syscalls = {
+  syscall: (op: string, json: string) => string
+  asyncSyscall: (op: string, json: string) => Promise<string>
+  jsSyscall: (op: string, args: Record<string, unknown>) => unknown
+}
+
+/** Makes the backend report request metadata for each HTTP request until the
+ * test ends, which convex-test 0.0.58 cannot do. The returned function sets
+ * the fields to report; leaving out `ip` imitates a backend that omits it. */
+function reportRequestMetadata(): (fields: Json) => void {
+  const global = globalThis as unknown as { Convex: Syscalls }
+  const real = global.Convex
+  let fields: Json = {}
+  global.Convex = {
+    get syscall() {
+      return real.syscall
+    },
+    get asyncSyscall() {
+      const call = real.asyncSyscall
+      return (op: string, json: string) =>
+        op === '1.0/getRequestMetadata'
+          ? Promise.resolve(
+              JSON.stringify({
+                userAgent: null,
+                requestId: 'request-metadata-check',
+                scheduledFunctionId: null,
+                authToken: null,
+                ...fields,
+              }),
+            )
+          : call(op, json)
+    },
+    get jsSyscall() {
+      return real.jsSyscall
+    },
+  }
+  onTestFinished(() => {
+    global.Convex = real
+  })
+  return (next) => {
+    fields = next
+  }
+}
+
 describe('source address buckets', () => {
-  it('counts an IPv6 address as its /64 network', () => {
+  const buckets = (address: string) => addressBuckets(address).map(({ bucket }) => bucket)
+
+  it('counts an IPv6 address as its /64 network and as its /48 network', () => {
     for (const address of [
       '2001:db8:1:2::1',
       '2001:DB8:1:2:ffff:ffff:ffff:ffff',
       '[2001:db8:1:2::5]',
       '2001:0db8:0001:0002:0:0:0:9',
     ])
-      expect(addressBucket(address), address).toBe('2001:db8:1:2::/64')
-    expect(addressBucket('2001:db8:1:3::1')).toBe('2001:db8:1:3::/64')
-    expect(addressBucket('fe80::1%eth0')).toBe('fe80:0:0:0::/64')
-    expect(addressBucket('::')).toBe('0:0:0:0::/64')
+      expect(buckets(address), address).toEqual(['2001:db8:1:2::/64', '2001:db8:1::/48'])
+    expect(buckets('2001:db8:1:3::1')).toEqual(['2001:db8:1:3::/64', '2001:db8:1::/48'])
+    expect(buckets('fe80::1%eth0')).toEqual(['fe80:0:0:0::/64', 'fe80:0:0::/48'])
+    expect(buckets('::')).toEqual(['0:0:0:0::/64', '0:0:0::/48'])
+    expect(addressBuckets('2001:db8:1:2::1').map(({ limit }) => limit)).toEqual([
+      OAUTH_REGISTRATIONS_PER_SOURCE,
+      OAUTH_REGISTRATIONS_PER_NETWORK,
+    ])
   })
 
   it('counts an IPv4 address as written, also when mapped into IPv6', () => {
-    expect(addressBucket('203.0.113.7')).toBe('203.0.113.7')
-    expect(addressBucket('::ffff:203.0.113.7')).toBe('203.0.113.7')
-    expect(addressBucket('203.0.113.8')).not.toBe(addressBucket('203.0.113.7'))
+    expect(addressBuckets('203.0.113.7')).toEqual([
+      { bucket: '203.0.113.7', limit: OAUTH_REGISTRATIONS_PER_SOURCE },
+    ])
+    expect(buckets('::ffff:203.0.113.7')).toEqual(['203.0.113.7'])
+    expect(buckets('203.0.113.8')).not.toEqual(buckets('203.0.113.7'))
   })
 
   it('keeps any other value as a bucket of its own', () => {
-    expect(addressBucket('not an address')).toBe('not an address')
-    expect(addressBucket('x'.repeat(100))).toBe('x'.repeat(64))
+    expect(buckets('not an address')).toEqual(['not an address'])
+    expect(buckets('x'.repeat(100))).toEqual(['x'.repeat(64)])
   })
 })
 
@@ -140,13 +199,39 @@ describe('registration limits', () => {
 
   it('shares one source counter across an IPv6 /64 network', async () => {
     const t = newT()
-    await setCounter(
-      t,
-      await registrationSourceKey('2001:db8:1:2::1', SECRET),
-      OAUTH_REGISTRATIONS_PER_SOURCE,
-    )
+    await setCounter(t, await sourceKey('2001:db8:1:2::1'), OAUTH_REGISTRATIONS_PER_SOURCE)
     expect((await admit(t, '2001:db8:1:2:ffff::9')).admitted).toBe(false)
     expect((await admit(t, '2001:db8:1:3::1')).admitted).toBe(true)
+  })
+
+  it('limits an IPv6 /48 network across all of its /64 networks', async () => {
+    const t = newT()
+    expect((await admit(t, '2001:db8:1:2::1')).admitted).toBe(true)
+    // the /64, the /48 and the deployment counter
+    expect(await counters(t)).toHaveLength(3)
+    await setCounter(t, await sourceKey('2001:db8:1:2::1', 1), OAUTH_REGISTRATIONS_PER_NETWORK)
+    expect(await admit(t, '2001:db8:1:7::1')).toEqual({ admitted: false, retryAfter: 1800 })
+    expect((await admit(t, '2001:db8:2:7::1')).admitted).toBe(true)
+  })
+
+  it('logs once when a counter reaches its limit, without the address', async () => {
+    const t = newT()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => warn.mockRestore())
+    await setCounter(t, await sourceKey('203.0.113.7'), OAUTH_REGISTRATIONS_PER_SOURCE - 2)
+    expect((await admit(t, '203.0.113.7')).admitted).toBe(true)
+    expect(warn).not.toHaveBeenCalled()
+    expect((await admit(t, '203.0.113.7')).admitted).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain(`limit of ${OAUTH_REGISTRATIONS_PER_SOURCE}`)
+    expect((await admit(t, '203.0.113.7')).admitted).toBe(false)
+    await setCounter(t, OAUTH_REGISTRATION_TOTAL_KEY, OAUTH_REGISTRATIONS_TOTAL - 1)
+    expect((await admit(t, '203.0.113.8')).admitted).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(String(warn.mock.calls[1][0])).toContain('deployment limit')
+    expect((await admit(t, '203.0.113.9')).admitted).toBe(false)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls.flat().some((line) => String(line).includes('203.0.113'))).toBe(false)
   })
 
   it('refuses every source once the deployment limit is full and writes nothing', async () => {
@@ -193,7 +278,7 @@ describe('client registration over HTTP', () => {
     const accepted = await register(t)
     expect(accepted.status).toBe(200)
     expect((await json(accepted)).client_id).toBeTypeOf('string')
-    const unknown = await registrationSourceKey(null, SECRET)
+    const unknown = await sourceKey(null)
     expect(await counters(t)).toEqual(
       expect.arrayContaining([
         { key: unknown, window_start: WINDOW, count: 1 },
@@ -208,6 +293,42 @@ describe('client registration over HTTP', () => {
     expect(refused.headers.get('Access-Control-Expose-Headers')).toContain('Retry-After')
     expect(await json(refused)).toMatchObject({ error: 'too_many_requests' })
     expect(await clients(t)).toHaveLength(1)
+  })
+
+  it('counts each registration against the address the backend reports', async () => {
+    const t = newT()
+    const report = reportRequestMetadata()
+    report({ ip: '2001:db8:1:2::5' })
+    expect((await register(t)).status).toBe(200)
+    expect(await counters(t)).toEqual(
+      expect.arrayContaining([
+        { key: await sourceKey('2001:db8:1:2::5'), window_start: WINDOW, count: 1 },
+        { key: await sourceKey('2001:db8:1:2::5', 1), window_start: WINDOW, count: 1 },
+        { key: OAUTH_REGISTRATION_TOTAL_KEY, window_start: WINDOW, count: 1 },
+      ]),
+    )
+    await setCounter(t, await sourceKey('2001:db8:1:2::5'), OAUTH_REGISTRATIONS_PER_SOURCE)
+    expect((await register(t)).status).toBe(429)
+    // another /64 in the same /48 still registers until the /48 is full
+    report({ ip: '2001:db8:1:3::5' })
+    expect((await register(t)).status).toBe(200)
+    await setCounter(t, await sourceKey('2001:db8:1:3::5', 1), OAUTH_REGISTRATIONS_PER_NETWORK)
+    report({ ip: '2001:db8:1:4::5' })
+    expect((await register(t)).status).toBe(429)
+    report({ ip: '2001:db8:2:1::5' })
+    expect((await register(t)).status).toBe(200)
+    report({ ip: '203.0.113.7' })
+    expect((await register(t)).status).toBe(200)
+    expect(await clients(t)).toHaveLength(4)
+  })
+
+  it('counts a request whose metadata omits the address against the unknown source', async () => {
+    const t = newT()
+    reportRequestMetadata()({})
+    expect((await register(t)).status).toBe(200)
+    expect(await counters(t)).toEqual(
+      expect.arrayContaining([{ key: await sourceKey(null), window_start: WINDOW, count: 1 }]),
+    )
   })
 
   it('refuses oversized client metadata without counting it', async () => {
@@ -474,8 +595,8 @@ describe('unused client cleanup', () => {
 describe('registration counter cleanup', () => {
   it('deletes source counters from earlier hours and keeps everything else', async () => {
     const t = newT()
-    const stale = await registrationSourceKey('203.0.113.7', SECRET)
-    const current = await registrationSourceKey('203.0.113.8', SECRET)
+    const stale = await sourceKey('203.0.113.7')
+    const current = await sourceKey('203.0.113.8')
     const earlier = WINDOW - OAUTH_REGISTRATION_WINDOW_MS
     await setCounter(t, stale, 3, earlier)
     await setCounter(t, current, 2)

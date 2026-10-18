@@ -10,17 +10,18 @@ import {
   OAUTH_REGISTRATION_SOURCE_PREFIX,
   OAUTH_REGISTRATION_TOTAL_KEY,
   OAUTH_REGISTRATION_WINDOW_MS,
-  OAUTH_REGISTRATIONS_PER_SOURCE,
   OAUTH_REGISTRATIONS_TOTAL,
   OAUTH_UNUSED_CLIENT_TTL_MS,
-  registrationSourceKey,
+  registrationSourceCounters,
 } from './lib/oauthRegistration'
 
 /** Counts one client registration from `address` (null when the backend did
- * not report it) against the source's and the deployment's hourly limits.
- * When either limit is full it writes nothing and returns the seconds until
- * the window ends. Both counters move together, so a refused registration
- * uses no capacity and leaves no counter row behind. Throws when the
+ * not report it) against its source counters and the deployment's counter,
+ * each with an hourly limit. When any limit is full it writes nothing and
+ * returns the seconds until the window ends. All counters move together, so
+ * a refused registration uses no capacity and leaves no counter row behind.
+ * It logs once when a counter reaches its limit, without the address, so an
+ * operator sees that registrations are being refused. Throws when the
  * counters cannot be read; the caller then refuses the registration. */
 export const admit = internalMutation({
   args: { address: v.union(v.string(), v.null()) },
@@ -31,7 +32,7 @@ export const admit = internalMutation({
     const windowStart =
       Math.floor(now / OAUTH_REGISTRATION_WINDOW_MS) * OAUTH_REGISTRATION_WINDOW_MS
     const counters = [
-      { key: await registrationSourceKey(address, secret), limit: OAUTH_REGISTRATIONS_PER_SOURCE },
+      ...(await registrationSourceCounters(address, secret)),
       { key: OAUTH_REGISTRATION_TOTAL_KEY, limit: OAUTH_REGISTRATIONS_TOTAL },
     ]
     const rows = await Promise.all(
@@ -48,10 +49,16 @@ export const admit = internalMutation({
         admitted: false,
         retryAfter: Math.ceil((windowStart + OAUTH_REGISTRATION_WINDOW_MS - now) / 1000),
       }
-    for (const [i, { key }] of counters.entries()) {
+    for (const [i, { key, limit }] of counters.entries()) {
       const row = rows[i]
       if (row) await ctx.db.patch(row._id, { window_start: windowStart, count: counts[i] + 1 })
       else await ctx.db.insert('machine_rate_limits', { key, window_start: windowStart, count: 1 })
+      if (counts[i] + 1 === limit)
+        console.warn(
+          key === OAUTH_REGISTRATION_TOTAL_KEY
+            ? `OAuth client registrations reached the deployment limit of ${limit} for this hour. New registrations are refused until the hour ends.`
+            : `One source reached its OAuth client registration limit of ${limit} for this hour.`,
+        )
     }
     return { admitted: true, retryAfter: 0 }
   },
