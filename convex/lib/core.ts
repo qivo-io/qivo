@@ -488,8 +488,9 @@ const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
  * one. That read also decides which rows are groups, their plan weeks,
  * their progress and their parents, because an active task's subtasks that
  * count and its parent are active too. Each row's newest comment is one
- * more read (lastCommentTimes), and a page whose comments do not fit in
- * what the request has left is refused with PAGE_TOO_LARGE.
+ * more read (lastCommentTimes). A page whose comments do not fit in what
+ * the request has left is refused with PAGE_TOO_LARGE, and with
+ * ACTIVE_TASKS_TOO_LARGE when the reads before them leave no room at all.
  *
  * In a search, each fragment may match any field of the app's task filter
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
@@ -589,13 +590,21 @@ export const COMMENT_READS_RESERVE = { ranges: 16, documents: 16, bytes: DOCUMEN
 export const PAGE_TOO_LARGE =
   'this page of tasks is too large to read at once; ask for a smaller limit'
 
+/** The refusal for an active list whose reads before its rows' comments,
+ * mostly the organization's active tasks, leave no room for even one, so a
+ * smaller limit cannot help. */
+export const ACTIVE_TASKS_TOO_LARGE =
+  "this organization's active tasks are too large to list in one request"
+
 /* When the newest comment on each of `tasks` was posted, or null for a task
  * without comments (model/comments.ts latestComment), by task id. Each read
  * is one index range and at most one comment, and they run a few at a time,
  * never more than the request's unspent room could hold at Convex's
  * document size limit, so they pass that room by one comment at most and
  * the request stays inside its limits. When the room runs out first, the
- * page is refused with PAGE_TOO_LARGE, never answered with a wrong null. */
+ * page is refused with PAGE_TOO_LARGE, or with ACTIVE_TASKS_TOO_LARGE when
+ * no room was left before the first read, never answered with a wrong
+ * null. */
 async function lastCommentTimes(
   ctx: QueryCtx,
   tasks: readonly Doc<'issues'>[],
@@ -606,7 +615,9 @@ async function lastCommentTimes(
     const ranges = m.databaseQueries.remaining - COMMENT_READS_RESERVE.ranges
     const documents = m.documentsRead.remaining - COMMENT_READS_RESERVE.documents
     const bytes = m.bytesRead.remaining - COMMENT_READS_RESERVE.bytes
-    if (ranges <= 0 || documents <= 0 || bytes <= 0) throw badRequest(PAGE_TOO_LARGE)
+    if (ranges <= 0 || documents <= 0 || bytes <= 0) {
+      throw badRequest(at === 0 ? ACTIVE_TASKS_TOO_LARGE : PAGE_TOO_LARGE)
+    }
     const fits = Math.max(1, Math.floor(bytes / DOCUMENT_MAX_BYTES))
     const batch = tasks.slice(at, at + Math.min(fits, ranges, documents))
     const latest = await Promise.all(batch.map((task) => latestComment(ctx, task.id)))
@@ -1025,9 +1036,9 @@ type IssueOutCommon = {
 }
 
 /** A group's Progress as the app's task window shows it (src/lib/issueGroups.ts
- * groupProgress): `done` of `total` leaves under it that the reader is
- * shown, `percent` rounded and 0 without leaves, and `partial` the app's
- * "Completion unknown" (GroupFacts). */
+ * groupProgress). It counts `done` of `total` leaves under it that the
+ * reader is shown, with `percent` rounded and 0 without leaves. `partial` is
+ * the app's "Completion unknown" (GroupFacts). */
 export type ProgressJson = { done: number; total: number; percent: number; partial: boolean }
 
 /* REST issueJson (rest:240-254): superset minus project_name, plus the
@@ -1310,13 +1321,14 @@ function groupCounter(
   }
 }
 
-/** What a group's subtree says about it to one reader: its calculated plan
- * weeks (the app's groupSpan) and how many of its leaves are done (the
- * app's groupProgress), over the tasks groupCounter counts. `partial` is the
- * app's "Completion unknown": a subtask that makes a task a group does not
- * count for the reader (hidden from it, or in an archived project while the
- * group's project is active), the walk meets a task twice (a cycle), or it
- * stops at the depth assertParentChain allows. */
+/** What a group's subtree says about it to one reader, over the tasks
+ * groupCounter counts. It holds the calculated plan weeks (the app's
+ * groupSpan) and how many of its leaves are done (the app's groupProgress).
+ * `partial` is the app's "Completion unknown". It is set when a subtask that
+ * makes a task a group does not count for the reader (hidden from it, or in
+ * an archived project while the group's project is active), when the walk
+ * meets a task twice (a cycle), or when it stops at the depth
+ * assertParentChain allows. */
 export type GroupFacts = {
   start_week: string | null
   end_week: string | null
@@ -1835,8 +1847,8 @@ export const projectJson = (
   access: { read: access.read, write: access.write },
 })
 
-/** A project's Completion as REST and MCP send it: `done` of `total` tasks,
- * `percent` rounded and 0 without tasks. */
+/** A project's Completion as REST and MCP send it, `done` of `total` tasks
+ * with `percent` rounded and 0 without tasks. */
 export type CompletionJson = { done: number; total: number; percent: number }
 
 /** The completion of a project that holds no tasks, such as a new one. */
@@ -1844,10 +1856,10 @@ export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
 
 /**
  * The Completion the app's Overview shows for `project` (src/store/planner.ts
- * progressIn over scopeInfo's sub-projects), as the caller sees it: how
- * many of the active tasks without active subtasks are Done, in the
- * project, or for a top-level project in its sub-projects that the caller
- * can read (`view.readable`) and that are not archived. A task with an
+ * progressIn over scopeInfo's sub-projects), as the caller sees it. It
+ * counts how many of the active tasks without active subtasks are Done, in
+ * the project, or for a top-level project in its sub-projects that the
+ * caller can read (`view.readable`) and that are not archived. A task with an
  * active subtask anywhere is a group and does not count, even when the
  * caller cannot read the subtask, as in the app. Null for an archived
  * project, whose tasks are outside the working plan. Reads the

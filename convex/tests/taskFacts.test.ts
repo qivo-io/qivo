@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type GroupIssue, groupProgress, isIssueGroup } from '../../src/lib/issueGroups'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { COMMENT_READS_RESERVE, PAGE_TOO_LARGE } from '../lib/core'
+import { ACTIVE_TASKS_TOO_LARGE, COMMENT_READS_RESERVE, PAGE_TOO_LARGE } from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import {
   as,
@@ -446,5 +446,28 @@ describe('an active page keeps inside the request’s read limits', () => {
       offset: 25,
     })
     expect(viaMcp.map((r) => r.last_comment_at)).toEqual(Array(5).fill(NOW))
+  })
+
+  it('says a smaller limit cannot help when the reads before the comments fill the request', async () => {
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 512 << 10 } }))
+    // the reserve stands in for active tasks that leave less than it unread
+    COMMENT_READS_RESERVE.bytes = 512 << 10
+    await task(fx, { title: 'Never discussed' })
+    const refusal = async (p: Promise<unknown>) => {
+      const e = await expectRefusal(p, 'bad_request')
+      expect((e.data as Refusal).message).toBe(ACTIVE_TASKS_TOO_LARGE)
+    }
+    await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }))
+    await refusal(
+      fx.t.query(internal.machine.mcp.listIssues, {
+        callerId: fx.agent.id,
+        access: 'read',
+        limit: 1,
+      }),
+    )
+    // a page past the end reads no comment, so it still answers
+    expect(
+      await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', offset: '1000' }),
+    ).toEqual([])
   })
 })

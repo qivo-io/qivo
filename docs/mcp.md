@@ -140,7 +140,9 @@ three read tools' descriptions now name the new fields. A client holding the
 older catalogue reads them too, but its model does not learn what they mean
 until the client refreshes its tool list. An active `list_tasks` page whose
 tasks' newest comments do not fit in one request is refused with `this page
-of tasks is too large to read at once; ask for a smaller limit`.
+of tasks is too large to read at once; ask for a smaller limit`, or with
+`this organization's active tasks are too large to list in one request`
+when none fit (see [Task results](#task-results)).
 
 ## Access model: the credential is a user
 
@@ -833,7 +835,7 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
-| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks under it that you can see) and `last_comment_at`. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
+| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see) and `last_comment_at`. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
 | `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`. It takes no `archive_reason`, which only tasks take |
@@ -1164,7 +1166,10 @@ through them until a page holds fewer tasks than `limit`. Each row's
 `last_comment_at` reads the task's newest comment. When those comments do
 not fit in one request beside the rest of the page, the call is refused
 with `this page of tasks is too large to read at once; ask for a smaller
-limit`; call again with a smaller `limit`.
+limit`; call again with a smaller `limit`. A list also reads every active
+task of the organization. When those alone leave no room for a single
+comment, the call is refused with `this organization's active tasks are too
+large to list in one request`, and a smaller `limit` does not help.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all

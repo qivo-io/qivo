@@ -852,7 +852,11 @@ same moment ordered by number, so `offset` pages through them. MCP's
 tasks than `limit`. Each row's `last_comment_at` reads the task's newest
 comment. When those comments do not fit in one request beside the rest of
 the page, the request is a `400` (`this page of tasks is too large to read
-at once; ask for a smaller limit`); ask again with a smaller `limit`.
+at once; ask for a smaller limit`); ask again with a smaller `limit`. A list
+also reads every active task of the organization. When those alone leave no
+room for a single comment, the request is a `400` with `this organization's
+active tasks are too large to list in one request`, and a smaller `limit`
+does not help.
 
 #### Archived tasks
 
