@@ -404,7 +404,6 @@ export function OrgUsersPage({
                     onClick={() => {
                       if (blocked) return
                       confirm.press(`u:${u.id}`, () => {
-                        if (P.refusePausedEdit()) return
                         P.removeUser(u.id)
                         window.showToast?.(`${u.name} removed from the organization`)
                       })

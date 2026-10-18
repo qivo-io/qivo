@@ -662,8 +662,7 @@ const readOnly = (d: ErrData) =>
    refusal never reaches that rollback. write() refuses any other shared
    write before it is sent, the backstop for a mutator that does not check
    first. Personal state (read marks, preferences, appearance, following)
-   still saves, and so does revoking or deleting a credential, which only
-   takes access away. Panels that call Convex directly (organization
+   still saves, and so do the writes that only take access away. Panels that call Convex directly (organization
    deletion and its export record, billing) act on their own live queries,
    not on the snapshot, so they do not pause. Convex reruns a failed query
    when the data it read changes, so a later delivery ends the trouble
@@ -687,9 +686,14 @@ let snapshotTrouble: SnapshotTrouble | null = null
 
 /* The writes that go on while the snapshot is stale, each named. They change
    only the signed-in person's own state, read the OAuth consent page's
-   request, or take a credential's access away. A leaked key must stay
-   revocable during an outage, because REST and MCP do not read the snapshot
-   and keep working. Every other mutation pauses, including ones added later. */
+   request, or only take access away: revoking or deleting a credential, and
+   deactivating or removing a seat. An admin must be able to shut out a
+   leaked key or a compromised person during an outage, because REST, MCP
+   and other people's sessions do not depend on this browser's snapshot. The
+   access removals act on one row by id, so stale data cannot make them
+   overwrite anyone's work. The server lets the same removals through while
+   billing has made an organization read-only (accessRemovalMutation).
+   Every other mutation pauses, including ones added later. */
 const UNPAUSED_WRITES = new Set([
   'prefs:save',
   'issues:subscribe',
@@ -703,6 +707,8 @@ const UNPAUSED_WRITES = new Set([
   'tokens:revokeMcpToken',
   'tokens:deleteMcpToken',
   'apiAccess:revoke',
+  'profiles:deactivate',
+  'profiles:remove',
 ])
 const isUnpausedWrite = (name: string) =>
   /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
@@ -5079,7 +5085,9 @@ export const PLANNER = {
       put the stored value back. */
   updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
-    if (!row || refusePausedEdit()) return false
+    // deactivation alone only takes access away, so it goes on while paused
+    const deactivation = Object.keys(patch).length === 1 && patch.active === false
+    if (!row || (!deactivation && refusePausedEdit())) return false
     /* The client-predicted refusals stay audible first (the server states
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
@@ -5308,7 +5316,8 @@ export const PLANNER = {
     const target = rows.profiles.get(id)
     if (!target) return
     const admins = [...rows.profiles.values()].filter((u) => u.org_role === 'admin')
-    if ((target.org_role === 'admin' && admins.length <= 1) || refusePausedEdit()) return
+    // removal only takes access away, so it goes on while edits are paused
+    if (target.org_role === 'admin' && admins.length <= 1) return
     ;[...rows.issues.values()].forEach((i) => {
       if (
         i.assignee_id !== id &&

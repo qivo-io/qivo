@@ -194,7 +194,20 @@ describe('snapshot trouble', () => {
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
   })
 
-  it('still revokes credentials while other edits pause', async () => {
+  it('still takes access away while other edits pause', async () => {
+    const [org] = snapshot.orgs
+    for (const id of ['seat-a', 'seat-b'])
+      snapshot.profiles.push({
+        id,
+        org_id: org.id,
+        name: `Member ${id}`,
+        initials: 'ME',
+        color: '#557733',
+        org_role: 'user',
+        active: true,
+        kind: 'person',
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
     await boot()
     const { P } = store
     live().fail(new Error(QUERY_FAILURE))
@@ -204,6 +217,10 @@ describe('snapshot trouble', () => {
     void P.deleteMcpToken('token-b')
     void P.revokeApiCredential('oauth_connections', 'connection-a')
     void P.revokeOAuthConnection('connection-b')
+    expect(P.updateUser('seat-a', { active: false })).toBe(true)
+    P.removeUser('seat-b')
+    // a role change or a new credential is an ordinary edit and pauses
+    expect(P.updateUser('seat-a', { orgRole: 'viewer' })).toBe(false)
     await expect(P.createMcpToken('Laptop', { access: 'read' })).resolves.toBeNull()
     await settle()
     expect(sentNames()).toEqual([
@@ -213,6 +230,8 @@ describe('snapshot trouble', () => {
       'tokens:deleteMcpToken',
       'apiAccess:revoke',
       'oauthConnections:revoke',
+      'profiles:deactivate',
+      'profiles:remove',
     ])
   })
 

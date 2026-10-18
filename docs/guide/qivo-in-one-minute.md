@@ -66,9 +66,9 @@ If Qivo can't load the latest changes, a notice says so and shows when your
 view was last current. Editing pauses until the changes load again, and Qivo
 keeps trying. **Try again** asks right away, and **Details** shows the error
 to pass on to support. Text you were typing stays in its field. Marking
-messages read and your own preferences still save, and you can still revoke
-keys and tokens. If you were signed out, the notice offers **Reload** to sign
-in again.
+messages read and your own preferences still save. You can still revoke keys
+and tokens, and admins can still deactivate or remove people. If you were
+signed out, the notice offers **Reload** to sign in again.
 
 ## Desktop app
 
