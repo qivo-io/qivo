@@ -40,6 +40,8 @@
  *     npx convex run internal/guestTeams:check '{"cursor": null}'
  *   "$T" demo --allow deployment:functions:runInternalActions --purpose guest-teams -- \
  *     npx convex run internal/guestTeams:repair '{"dry_run": true}'
+ *   "$T" demo --allow deployment:functions:runInternalActions --purpose guest-teams -- \
+ *     npx convex run internal/guestTeams:repair '{"dry_run": false}'
  *
  * The results hold counts only. Re-running the repair is safe, and a clean
  * deployment reports zeros. Like leaveAllTeams it writes no activity. A team
