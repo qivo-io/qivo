@@ -4,7 +4,7 @@ import { convexDeploymentUrl } from './backendUrl'
 const url = convexDeploymentUrl()
 
 if (!url) {
-  throw new Error('Missing VITE_CONVEX_URL — copy .env.example to .env.local')
+  throw new Error('Missing VITE_CONVEX_URL. Copy .env.example to .env.local.')
 }
 
 // Module singleton: the store is a pub-sub singleton (P), not a React tree,

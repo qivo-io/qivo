@@ -652,6 +652,11 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
+/** Capitalizes a refusal message and ends it with a period unless it already
+    ends in `.`, `!` or `?`. Server messages are often lowercase fragments,
+    and a toast joins them with a sentence of its own. */
+const asSentence = (m: string) =>
+  m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
 
 /* --- snapshot health ---------------------------------------------------------
    The live snapshot (snapshot.forMe) can stop loading mid-session, after a
@@ -747,31 +752,27 @@ function refusePausedEdit(): boolean {
   return true
 }
 
-/* 'rule' sentences are the P0001 successors and show VERBATIM; everything
-   else is deliberately generic — the wording says "reverted", never
-   "reloading", because rollback is a repaint, not a refetch. A paused write
-   never left the browser, so its sentence is the pause itself. */
+/* 'rule' and read-only sentences are the P0001 successors and keep their
+   words, shaped by asSentence. Everything else is deliberately generic. The
+   wording says "reverted", never "reloading", because rollback is a repaint,
+   not a refetch. A paused write never left the browser, so its sentence is
+   the pause itself. */
 function toastWriteError(e: unknown) {
   const d = errData(e)
   if (d.code === 'paused') {
     toastPaused()
     return
   }
-  if (readOnly(d) && d.message) {
-    toast(`${d.message} — reverted`)
-    return
-  }
-  if (d.code === 'rule' && d.message) {
-    const m = String(d.message)
-    toast(`${m.charAt(0).toUpperCase() + m.slice(1)} — reverted`)
+  if ((readOnly(d) || d.code === 'rule') && d.message) {
+    toast(`${asSentence(String(d.message))} Change reverted.`)
     return
   }
   if (d.code === 'forbidden') {
-    toast("You don't have permission for that — reverted")
+    toast("You don't have permission for that. Change reverted.")
     return
   }
   // not_found, bad_request, conflict, transport — all generic
-  toast("Couldn't save — reverted")
+  toast("Couldn't save. Change reverted.")
 }
 
 /* The two awaited restores share one refusal voice: a `rule` (or not_found)
@@ -781,7 +782,7 @@ function restoreErrorText(e: unknown): string {
   if (d.code === 'paused') return PAUSED_TEXT
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
-  if (d.message) return `Couldn't restore — ${String(d.message)}`
+  if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
   return "Couldn't restore"
 }
 
@@ -796,7 +797,7 @@ function toastCreateProjectError(e: unknown, label: string) {
     return
   }
   const m = d.message ? String(d.message) : ''
-  const reason = m && m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
+  const reason = m && asSentence(m)
   if ((d.code === 'rule' || readOnly(d)) && reason) {
     toast(`Couldn't create ${label}. ${reason}`)
     return
@@ -828,8 +829,8 @@ function avatarErrorText(e: unknown, fallback: string): string {
 function slugErrorText(e: unknown): string {
   const d = errData(e)
   if (d.code === 'conflict') {
-    if (d.reason === 'slug_taken') return 'That address is already taken — choose another.'
-    if (d.reason === 'slug_reserved') return 'That address is reserved — choose another.'
+    if (d.reason === 'slug_taken') return 'That address is already taken. Choose another.'
+    if (d.reason === 'slug_reserved') return 'That address is reserved. Choose another.'
     // slug_shape — a reserved word is also a perfectly well-shaped slug,
     // so the reason is the answer
     return 'Use lowercase letters, digits and single hyphens; 40 characters maximum.'
@@ -3875,7 +3876,7 @@ export const PLANNER = {
           // the server's cap verdict (size from storage metadata, never ours) —
           // a RETURNED refusal so its byte-delete commits; belt-and-braces
           // behind the pre-check above
-          toast(`Couldn't upload "${file.name}" — ${out.refused.message}`)
+          toast(`Couldn't upload "${file.name}". ${asSentence(out.refused.message)}`)
           return null
         }
         // adopt the returned row; the next snapshot delivery carries it anyway
@@ -3886,7 +3887,7 @@ export const PLANNER = {
       } catch (e) {
         console.error('[qivo] upload failed:', e)
         const msg = errData(e).message || ''
-        toast(`Couldn't upload "${file.name}"${msg ? ` — ${msg}` : ''}`)
+        toast(`Couldn't upload "${file.name}"${msg ? `. ${asSentence(msg)}` : ''}`)
         return null
       }
     },
@@ -5135,7 +5136,7 @@ export const PLANNER = {
           (p) => p.id !== id && p.org_id === row.org_id && p.email === next,
         )
       if (row.kind === 'agent') {
-        toast('An agent has no email address — its login is a key')
+        toast('An agent has no email address. Its login is a key.')
         return false
       }
       if (row.auth_user_id) {

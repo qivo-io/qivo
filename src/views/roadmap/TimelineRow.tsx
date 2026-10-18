@@ -290,7 +290,7 @@ function TimelineRowView({
             {renderGuides()}
             {/* The due hover strip stays below bars and inside the grid. */}
             {due && (
-              <HoverTooltip content={`Due ${P.fmtISO(row.issue.due)} — ${due.state}`}>
+              <HoverTooltip content={`Due ${P.fmtISO(row.issue.due)}, ${due.state}`}>
                 <div
                   style={{ left: Math.min(Math.max(due.x - 4, 0), timelineW - 8) }}
                   className="[position:absolute] [top:3px] [bottom:3px] [width:8px] [cursor:help]"

@@ -145,7 +145,7 @@ describe('settings edits through the client store', () => {
       )
       await vi.waitFor(() => expect(P.labelById['l-feat'].name).toBe('Feature'))
       expect(showToast).toHaveBeenCalledExactlyOnceWith(
-        'A label with that name already exists — reverted',
+        'A label with that name already exists. Change reverted.',
         'error',
       )
     })

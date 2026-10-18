@@ -119,14 +119,14 @@ function LabelRow({
           aria-label={
             armed
               ? used
-                ? `Click again — removes it from ${used} task${used === 1 ? '' : 's'}`
+                ? `Click again to remove it from ${used} task${used === 1 ? '' : 's'}`
                 : 'Click again to confirm'
               : 'Delete label'
           }
           title={
             armed
               ? used
-                ? `Click again — removes it from ${used} task${used === 1 ? '' : 's'}`
+                ? `Click again to remove it from ${used} task${used === 1 ? '' : 's'}`
                 : 'Click again to confirm'
               : 'Delete label'
           }

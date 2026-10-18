@@ -312,8 +312,9 @@ export const archive = orgMutation({
 })
 
 /* -------------------------------------------------------------- unarchive
- * P.unarchiveIssue — awaited by the client ("Couldn't restore — " + the
- * sentence); the snapshot pulls the restored rows back in reactively. */
+ * P.unarchiveIssue awaits it. A refusal toasts "Couldn't restore." and then
+ * the refusal sentence. The snapshot pulls the restored rows back in
+ * reactively. */
 export const unarchive = orgMutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {

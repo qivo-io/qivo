@@ -143,12 +143,12 @@ function authErrorText(
     return 'Use your password or the sign-in provider you originally used.'
   }
   if (code === 'USER_ALREADY_EXISTS') {
-    return 'That address already has an account — sign in instead.'
+    return 'That address already has an account. Sign in instead.'
   }
   // the reset-password token, spent or past its hour — from the landing
   // redirect (?reset=1&error=INVALID_TOKEN) or the resetPassword call itself
   if (code === 'INVALID_TOKEN' || code === 'TOKEN_EXPIRED') {
-    return 'That reset link has expired — request a new one.'
+    return 'That reset link has expired. Request a new one.'
   }
   return error?.message || fallback
 }
@@ -355,7 +355,7 @@ export function AuthGate() {
           setMode('reset')
         } else {
           showError(
-            authErrorText({ code: authError }, 'That reset link has expired — request a new one.'),
+            authErrorText({ code: authError }, 'That reset link has expired. Request a new one.'),
             'form',
           )
         }
@@ -381,7 +381,7 @@ export function AuthGate() {
            visitor was returned to the app with the link silently dead. */
         const deadLink = authError === 'TOKEN_EXPIRED' || authError === 'INVALID_TOKEN'
         if (deadLink) {
-          showError('That confirmation link has expired — send yourself a new one.', 'form')
+          showError('That confirmation link has expired. Send yourself a new one.', 'form')
         } else if (!data?.session) {
           showError(
             authError
@@ -587,7 +587,7 @@ export function AuthGate() {
     }
     setPassword('')
     setResetToken('')
-    setNote('Password updated — sign in with the new one.')
+    setNote('Password updated. Sign in with the new one.')
     setMode('in')
   }
 
@@ -615,7 +615,7 @@ export function AuthGate() {
       showError(authErrorText(error, "Couldn't send the confirmation email. Try again."), 'form')
       return
     }
-    setNote('Confirmation email sent — check your inbox.')
+    setNote('Confirmation email sent. Check your inbox.')
   }
 
   useEffect(() => {
@@ -623,7 +623,7 @@ export function AuthGate() {
     autoSent.current = true
     // the registration's own link is still fresh — say so, don't duplicate it
     if (account.current?.mailed) {
-      setNote('Confirmation email sent — check your inbox.')
+      setNote('Confirmation email sent. Check your inbox.')
       return
     }
     void sendVerification(false)

@@ -275,7 +275,7 @@ describe('removing someone who has work in the project', () => {
     })
     expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
     expect(window.showToast).toHaveBeenLastCalledWith(
-      "You don't have permission for that — reverted",
+      "You don't have permission for that. Change reverted.",
       'error',
     )
     refusal = new ConvexError({
@@ -285,12 +285,12 @@ describe('removing someone who has work in the project', () => {
     })
     expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
     expect(window.showToast).toHaveBeenLastCalledWith(
-      'This organization is read-only. — reverted',
+      'This organization is read-only. Change reverted.',
       'error',
     )
     refusal = new Error('network down')
     expect(await P.removeAccess(user('leo'), { to: 'dan' }, leo.items)).toBe(false)
-    expect(window.showToast).toHaveBeenLastCalledWith("Couldn't save — reverted", 'error')
+    expect(window.showToast).toHaveBeenLastCalledWith("Couldn't save. Change reverted.", 'error')
     expect(window.showToast).not.toHaveBeenCalledWith(
       'Leo Person keeps access, because not every task could be reassigned.',
       'error',
@@ -403,7 +403,7 @@ describe('removing someone who has work in the project', () => {
     })
     expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
     expect(window.showToast).toHaveBeenLastCalledWith(
-      'This organization is read-only. — reverted',
+      'This organization is read-only. Change reverted.',
       'error',
     )
     expect(P.user('ann')?.teams).toEqual(['crew'])

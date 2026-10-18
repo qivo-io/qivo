@@ -82,7 +82,7 @@ function AgentKeyPanel({
       <div className="[display:flex] [flex-direction:column] [gap:8px] mb-6">
         {mine.length === 0 && (
           <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [font-style:italic]">
-            No keys — this agent cannot sign in until it has one.
+            No keys. This agent cannot sign in until it has one.
           </div>
         )}
         {mine.map((k) => {
@@ -122,7 +122,7 @@ function AgentKeyPanel({
                       ? 'Confirm key deletion'
                       : 'Delete this revoked key'
                     : arm
-                      ? 'Confirm revocation — this key loses access immediately'
+                      ? 'Confirm revocation, this key loses access immediately'
                       : 'Revoke this key'
                 }
                 title={
@@ -131,7 +131,7 @@ function AgentKeyPanel({
                       ? 'Confirm key deletion'
                       : 'Delete this revoked key'
                     : arm
-                      ? 'Confirm revocation — this key loses access immediately'
+                      ? 'Confirm revocation, this key loses access immediately'
                       : 'Revoke this key'
                 }
                 onClick={() => {
@@ -248,7 +248,7 @@ export function OrgUsersPage({
     reloadKeys()
     if (!res) {
       window.showToast?.(
-        `${name} added, but its key could not be created — mint one below`,
+        `${name} added, but its key could not be created. Mint one below.`,
         'error',
       )
       setOpenKeys(added)
@@ -344,7 +344,7 @@ export function OrgUsersPage({
                             {activeKeys.length > 1 ? `, +${activeKeys.length - 1} more` : ''}
                           </>
                         ) : (
-                          'no key — cannot sign in'
+                          'no key, cannot sign in'
                         )}
                       </div>
                     ) : (
@@ -390,7 +390,7 @@ export function OrgUsersPage({
                           ? 'Add another admin first'
                           : arm
                             ? 'Click again to confirm removal'
-                            : 'Remove from the organization — switch them to Inactive instead to keep their history intact'
+                            : 'Remove from the organization, or switch them to Inactive to keep their history intact'
                     }
                     title={
                       isSelf
@@ -399,7 +399,7 @@ export function OrgUsersPage({
                           ? 'Add another admin first'
                           : arm
                             ? 'Click again to confirm removal'
-                            : 'Remove from the organization — switch them to Inactive instead to keep their history intact'
+                            : 'Remove from the organization, or switch them to Inactive to keep their history intact'
                     }
                     onClick={() => {
                       if (blocked) return
@@ -559,12 +559,12 @@ export function OrgUsersPage({
                     aria-label={
                       arm
                         ? 'Click again to remove this guest'
-                        : 'Remove guest — they lose every project shared with them'
+                        : 'Remove guest. They lose every project shared with them.'
                     }
                     title={
                       arm
                         ? 'Click again to remove this guest'
-                        : 'Remove guest — they lose every project shared with them'
+                        : 'Remove guest. They lose every project shared with them.'
                     }
                     onClick={() =>
                       confirm.press(`g:${g.id}`, () => {

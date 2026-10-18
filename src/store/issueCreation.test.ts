@@ -141,7 +141,7 @@ describe('task creation through the client store', () => {
     expect(P.issueById[key].uuid).toBe(competing.id)
     expect(onKeyFixed).not.toHaveBeenCalled()
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
-      "You don't have permission for that — reverted",
+      "You don't have permission for that. Change reverted.",
       'error',
     )
   })
