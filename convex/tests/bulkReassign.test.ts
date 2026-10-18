@@ -4,7 +4,7 @@
  *   1. An access removal that reassigns its held tasks
  *      (model/projectAccess.ts removeAndSettle) stays inside Convex's limits
  *      for one transaction up to REASSIGN_MAX tasks with a few followers
- *      each. It refuses more tasks, or fewer whose followers would fill the
+ *      each. It refuses more tasks, or fewer whose followers could fill the
  *      transaction (REASSIGN_ROOM), without blaming the tasks, and suggests
  *      keeping the people as Viewers only to a remover who could.
  *   2. The preload and the passed checks (model/issues.ts BulkUpdate) change
@@ -282,6 +282,47 @@ describe('reassigning the tasks of an access removal', () => {
     expect(await membership(fx)).not.toBeNull()
     expect(await holders(fx)).toEqual(before)
     expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
+  })
+
+  it('refuses before a task whose followers it has not checked would pass the limits', async () => {
+    const fx = await crowded(100)
+    // 150 more people of Hardware follow only the last task, which the
+    // removal reaches last. Without counting them first, their sight checks
+    // pass the limit of 4,096 index ranges during that task.
+    const last = fx.tasks[fx.tasks.length - 1]
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 150; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: fx.org.id,
+          name: `q${i}`,
+          initials: 'QQ',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          accepted_at: NOW,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: fx.team.id,
+          profile_id: id,
+          is_leader: false,
+        })
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: last.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+      }
+    })
+    const before = await holders(fx)
+    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect(await membership(fx)).not.toBeNull()
+    expect(await holders(fx)).toEqual(before)
   })
 
   it('still refuses, changing nothing, when the new holder cannot take a task', async () => {
