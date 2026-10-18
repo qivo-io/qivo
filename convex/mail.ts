@@ -65,7 +65,7 @@ const shell = (paragraphs: string[], cta: { href: string; label: string }) =>
 <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1f2328;max-width:36em">
 ${paragraphs.map((p) => `  <p style="margin:0 0 1em">${p}</p>`).join('\n')}
   <p style="margin:1.5em 0"><a href="${esc(cta.href)}" style="display:inline-block;padding:10px 18px;background:#6D7BF2;color:#fff;border-radius:6px;text-decoration:none">${esc(cta.label)}</a></p>
-  <p style="margin:2em 0 0;font-size:13px;color:#6a737d">Qivo — work planning</p>
+  <p style="margin:2em 0 0;font-size:13px;color:#6a737d">Qivo, work planning</p>
 </div>`.trim()
 
 type Letter = { to: string; subject: string; text: string; html: string }
@@ -97,7 +97,7 @@ const resetLetter = (to: string, url: string): Letter => ({
 Someone asked to reset the password for your Qivo account. If that was you, set a new password here:
 ${url}
 
-If it was not you, you can ignore this message — your password is unchanged.`,
+If it was not you, you can ignore this message. Your password is unchanged.`,
   html:
     shell(
       [
@@ -106,7 +106,7 @@ If it was not you, you can ignore this message — your password is unchanged.`,
       ],
       { href: url, label: 'Reset password' },
     ) +
-    '\n<p style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6a737d;max-width:36em">If it was not you, you can ignore this message — your password is unchanged.</p>',
+    '\n<p style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6a737d;max-width:36em">If it was not you, you can ignore this message. Your password is unchanged.</p>',
 })
 
 // ------------------------------------------------------------------- sender

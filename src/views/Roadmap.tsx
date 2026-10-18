@@ -123,6 +123,14 @@ function Roadmap({
   useUpdateBlocker(!!session)
   const sessionRef = useRefR<PlanSession | null>(null)
   const planRequest = useRefR(0)
+  /* The planning session's task and the answers to its date changes, so
+     Confirm says it was planned only once every change saved. */
+  const planned = useRefR<{ id: string; writes: Promise<boolean>[] } | null>(null)
+  /* Sends a task's new dates, and keeps the answer when it is the session's. */
+  const sendDates = (id, patch) => {
+    const saved = P.updateIssue(id, patch)
+    if (planned.current?.id === id) planned.current.writes.push(saved)
+  }
   sessionRef.current = session
   useEffectR(
     () => () => {
@@ -572,12 +580,12 @@ function Roadmap({
       // projection walks from, so the fitted end and the status agree
       const from = it.remainingSet != null ? Math.max(l.start, it.remainingSet) : l.start
       const end = fitEndWeekAgainst(sess.load, it.uuid, from, it.remaining, capacityFor(it))
-      if (l.start !== it.start || end !== it.end) P.updateIssue(id, { start: l.start, end })
+      if (l.start !== it.start || end !== it.end) sendDates(id, { start: l.start, end })
       return
     }
     // a drag that came back to (or was pinned at) its committed position is a
     // no-op: don't write, don't log 'rescheduled'
-    if (l.start !== it.start || l.end !== it.end) P.updateIssue(id, { start: l.start, end: l.end })
+    if (l.start !== it.start || l.end !== it.end) sendDates(id, { start: l.start, end: l.end })
   }, [])
 
   // milestone live drag
@@ -676,7 +684,7 @@ function Roadmap({
     // same measurement-week anchor as the drag commit and the delay projection
     const rs = P.issueById[id]?.remainingSet
     const from = rs != null ? Math.max(startW, rs) : startW
-    P.updateIssue(id, {
+    sendDates(id, {
       start: startW,
       end: fitEndWeekAgainst(load, uuid, from, remaining, capacity),
     })
@@ -723,11 +731,17 @@ function Roadmap({
     const s = sessionRef.current
     sessionRef.current = null
     setSession(null)
-    if (s) window.showToast?.(`Planned ${s.issueId}`)
+    const plan = planned.current
+    planned.current = null
+    if (!s || plan?.id !== s.issueId) return
+    void Promise.all(plan.writes).then((saved) => {
+      if (saved.every(Boolean)) window.showToast?.(`Planned ${s.issueId}`)
+    })
   }
   const cancelPlanning = () => {
     const s = sessionRef.current
     sessionRef.current = null
+    planned.current = null
     // a task that became a group has calculated dates, so nothing to restore
     if (s && P.issueById[s.issueId] && !P.isGroup(s.issueId))
       P.updateIssue(s.issueId, restoreWeekDates(s.orig))
@@ -857,13 +871,14 @@ function Roadmap({
     openTo(it)
     const wasUnscheduled = it.start == null
     const orig = captureWeekDates(it)
+    planned.current = { id: it.id, writes: [] }
     // give an unscheduled issue a provisional bar to plan (due-capped, like the
     // Plan pickers); auto-fit refines its end once the workload arrives
     if (wasUnscheduled) {
       const dueWeek = it.due ? P.isoToWeek(it.due) : null
       let end = P.TODAY_WEEK + 1
       if (dueWeek != null) end = Math.min(end, dueWeek)
-      P.updateIssue(it.id, { start: Math.min(P.TODAY_WEEK, end), end })
+      sendDates(it.id, { start: Math.min(P.TODAY_WEEK, end), end })
     }
     setSession({
       issueId: it.id,
@@ -1717,7 +1732,7 @@ function Roadmap({
                           wk.year +
                           ', starts ' +
                           P.fmtFull(d) +
-                          (curWeek ? `, today: ${P.fmtISO(P.TODAY_ISO)}` : '')
+                          (curWeek ? `, today is ${P.fmtISO(P.TODAY_ISO)}` : '')
                         }
                       >
                         <div

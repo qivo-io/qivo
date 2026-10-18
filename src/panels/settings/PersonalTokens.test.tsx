@@ -226,7 +226,7 @@ describe('the token list', () => {
     const revoke = find('[data-mcp-token="laptop"] button')
     await click(revoke)
     expect(revoke.getAttribute('aria-label')).toBe(
-      'Confirm revocation, connected clients lose access immediately',
+      'Confirm revocation. Connected clients lose access immediately',
     )
     expect(mutations()).not.toContain('tokens:revokeMcpToken')
     // opening New token disarms it, so a later click starts over
@@ -239,7 +239,7 @@ describe('the token list', () => {
     await click(revoke)
     expect(mutations()).not.toContain('tokens:revokeMcpToken')
     expect(revoke.getAttribute('aria-label')).toBe(
-      'Confirm revocation, connected clients lose access immediately',
+      'Confirm revocation. Connected clients lose access immediately',
     )
 
     // a later click revokes once; a click while that runs only arms again

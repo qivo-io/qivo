@@ -861,7 +861,8 @@ function MoveIssueModal({
    stays and so does the window, listing the tasks that remain. If someone
    else removed the access meanwhile, it closes and says so. If the
    organization turns read-only for its admin meanwhile, the window closes
-   and the removal goes ahead, leaving the tasks (P.removalLeavesTasks). */
+   and the removal goes ahead, leaving the tasks (P.removalLeavesTasks). A
+   removal the read-only organization refuses closes it (P.removalRefused). */
 const NOBODY = '__nobody__'
 function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClose: () => void }) {
   const read = () => {
@@ -928,10 +929,11 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
       : deleting
         ? `Keep as Viewer${people.length === 1 ? '' : 's'} and delete`
         : 'Change to Viewer'
-  // once the organization is read-only for its admin, the removal can only
-  // leave the tasks, so it goes ahead without the window (P.startRemoval)
+  // once the organization is read-only, an admin's removal can only leave
+  // the tasks, so it goes ahead without the window, and a removal the server
+  // would refuse says so (P.startRemoval)
   const handOver = () => {
-    if (!P.removalLeavesTasks(change)) return false
+    if (!P.removalLeavesTasks(change) && !P.removalRefused(change)) return false
     onClose()
     P.startRemoval(change)
     return true
@@ -939,6 +941,8 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
     void removal.then((removed) => {
+      // a read-only refusal already said why, and every retry would repeat it
+      if (!removed && P.removalRefused(change)) return onClose()
       if (!removed && handOver()) return
       const left = removed ? null : read()
       if (!left || (!left.items.length && !P.removalPending(change))) return onClose()
@@ -2038,9 +2042,9 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   }, [])
   const save = () => {
     if (!canSave) return
-    // a paused save keeps the editor open with the draft
-    if (P.refusePausedEdit()) return
-    P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) })
+    // a refused save (paused, or a name over the cap) keeps the editor open
+    // with the draft
+    if (!P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) })) return
     window.showToast?.('Milestone updated')
     onClose()
   }

@@ -157,7 +157,7 @@ function UpdateEstimateModal({ onClose }: { onClose: () => void }) {
                     <RemainingInput
                       hook="ue"
                       it={it}
-                      title="Remaining hours, empty means unset"
+                      title="Remaining hours. Leave empty for no estimate"
                       onCommit={(x) => reviewed.mark(x.uuid)}
                     />
                     <span className="[font-size:var(--fs-sm)] [color:var(--text-3)] [flex-shrink:0]">

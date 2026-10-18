@@ -179,9 +179,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
           maxLength={P.NAME_MAX}
           probe="data-org-name"
           onCommit={(v) => {
-            if (P.refusePausedEdit()) return
-            P.setOrg({ name: v })
-            window.showToast?.('Organization renamed')
+            if (P.setOrg({ name: v })) window.showToast?.('Organization renamed')
           }}
         />
         <OrgAddressField />

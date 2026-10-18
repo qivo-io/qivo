@@ -73,7 +73,7 @@ export function Demos() {
         description="24-hour demo workspaces, usage and monthly cost estimate."
         actions={
           <Button type="button" disabled={loading} onClick={() => setAttempt((value) => value + 1)}>
-            <RefreshCw className={loading ? 'size-4 animate-spin' : 'size-4'} aria-hidden="true" />
+            <RefreshCw className="size-4" aria-hidden="true" />
             {loading ? 'Refreshing…' : 'Refresh'}
           </Button>
         }

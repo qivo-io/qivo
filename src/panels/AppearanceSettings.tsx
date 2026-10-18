@@ -1,6 +1,6 @@
 /* Account appearance is applied live by the app's AppearanceProvider. */
 import { ConvexError } from 'convex/values'
-import { ImageIcon, LoaderCircle } from 'lucide-react'
+import { ImageIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -392,11 +392,7 @@ export function AppearanceSettings() {
             </div>
           </SettingsGroup>
           {busy && (
-            <p role="status" className="mt-4 flex items-center gap-2 text-sm text-text-2">
-              <LoaderCircle
-                className="size-4 animate-spin motion-reduce:animate-none"
-                aria-hidden="true"
-              />
+            <p role="status" className="mt-4 text-sm text-text-2">
               {uploading ? 'Checking and uploading image…' : 'Saving…'}
             </p>
           )}

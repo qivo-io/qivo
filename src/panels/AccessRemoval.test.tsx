@@ -4,6 +4,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BILLING_READ_ONLY } from '../../convex/lib/billingAccess'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
@@ -40,12 +41,19 @@ let writable: boolean
 let status: () => void
 let refusal: unknown
 
-async function load() {
+/* `lead` signs the Planner in as the project's lead who is not an
+   organization admin, which the server refuses every removal while the
+   organization is read-only. */
+async function load({ lead = false } = {}) {
   vi.resetModules()
   const snap = plannerFixture()
   const org = snap.orgs[0].id
   work = snap.projects[0].id
   snap.projects[0].type = 'meta'
+  if (lead) {
+    snap.profiles[0].org_role = 'user'
+    snap.projects[0].lead_id = snap.profiles[0].id
+  }
   snap.profiles.push({
     ...snap.profiles[0],
     id: 'leo',
@@ -191,6 +199,36 @@ describe('the removal window when the organization turns read-only', () => {
     expect(writes()).toEqual([['projects:removeAccess', 'leave']])
     expect(window.showToast).toHaveBeenLastCalledWith(NOTICE, 'info')
     expect(P.levelOn(work, 'leo')).toBeNull()
+  })
+
+  it('closes after the server refuses a lead who is not an admin, and refuses the next removal up front', async () => {
+    await load({ lead: true })
+    const onClose = await open()
+    refusal = READ_ONLY
+    await submit()
+    expect(onClose).toHaveBeenCalled()
+    expect(writes()).toEqual([['projects:removeAccess', 'keep_as_viewer']])
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. Change reverted.',
+      'error',
+    )
+    expect(P.startRemoval({ kind: 'userGrant', projectId: work, userId: 'leo' })).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith('This organization is read-only.', 'error')
+    expect(writes()).toHaveLength(1)
+    expect(P.levelOn(work, 'leo')).toBe('user')
+  })
+
+  it('closes with the read-only sentence when billing.status turns read-only for a lead who is not an admin', async () => {
+    await load({ lead: true })
+    const onClose = await open()
+    writable = false
+    status()
+    await submit()
+    expect(onClose).toHaveBeenCalled()
+    expect(writes()).toEqual([])
+    expect(window.showToast).toHaveBeenCalledTimes(1)
+    expect(window.showToast).toHaveBeenLastCalledWith(BILLING_READ_ONLY, 'error')
+    expect(P.levelOn(work, 'leo')).toBe('user')
   })
 
   it('stays open with its list after a refusal for any other reason', async () => {

@@ -95,7 +95,7 @@ function AgentKeyPanel({
             >
               <Icon name="zap" size={16} color="var(--text-2)" />
               <div className="[flex:1] [min-width:0]">
-                <div className="[font-size:var(--fs-sm)] [font-weight:600]">
+                <div className="[font-size:var(--fs-sm)] [font-weight:600] [overflow-wrap:anywhere]">
                   {k.name}
                   {k.revokedAt && (
                     <span className="[margin-left:6px] [font-size:var(--fs-xs)] [font-weight:700] [color:var(--danger)]">
@@ -122,7 +122,7 @@ function AgentKeyPanel({
                       ? 'Confirm key deletion'
                       : 'Delete this revoked key'
                     : arm
-                      ? 'Confirm revocation, this key loses access immediately'
+                      ? 'Confirm revocation. This key loses access immediately'
                       : 'Revoke this key'
                 }
                 title={
@@ -131,7 +131,7 @@ function AgentKeyPanel({
                       ? 'Confirm key deletion'
                       : 'Delete this revoked key'
                     : arm
-                      ? 'Confirm revocation, this key loses access immediately'
+                      ? 'Confirm revocation. This key loses access immediately'
                       : 'Revoke this key'
                 }
                 onClick={() => {

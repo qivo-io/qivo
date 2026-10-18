@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BILLING_READ_ONLY } from '../../convex/lib/billingAccess'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
@@ -30,9 +31,10 @@ describe('removing someone who has work in the project', () => {
   let refused: Set<string>
   let refusal: unknown
   let work: string
-  // what billing.status says about writing to the organization, and a way
-  // to send it again
+  // what billing.status says about writing to the organization and a
+  // pending deletion, and a way to send it again
   let writable: boolean
+  let deletion: { delete_after: string } | null
   let status: () => void
   let stopWatch: () => void
 
@@ -95,7 +97,7 @@ describe('removing someone who has work in the project', () => {
       const name = getFunctionName(ref)
       if (name === 'snapshot:forMe') next(structuredClone(snap))
       if (name === 'billing:status') {
-        status = () => next({ writable })
+        status = () => next({ writable, deletion })
         status()
       }
       return () => {}
@@ -114,6 +116,7 @@ describe('removing someone who has work in the project', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     requests = []
     writable = true
+    deletion = null
     refused = new Set()
     // what the server answers when settling the held tasks fails
     refusal = new ConvexError({ code: 'rule', message: 'refused', reason: 'held_tasks' })
@@ -448,6 +451,32 @@ describe('removing someone who has work in the project', () => {
     ])
   })
 
+  it('blames no Viewer grant when the server refuses a team deletion as read-only, and refuses the next one up front', async () => {
+    await load((snap, task) => {
+      inPlan(false)(snap, task)
+      snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })
+    })
+    // access ended at a set time, which billing.status has not said yet
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    for (const id of [work, 'plan', 'specs']) refused.add(id)
+    const all = P.accessRemoval(deleteCrew)
+    expect(P.startRemoval(deleteCrew)).toBe(true)
+    expect(await P.removeAccess(deleteCrew, { keep: true }, all.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. Change reverted.',
+      'error',
+    )
+    expect(P.removalRefused(deleteCrew)).toBe(true)
+    expect(P.startRemoval(deleteCrew)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith('This organization is read-only.', 'error')
+    expect(P.teams.some((t) => t.id === 'crew')).toBe(true)
+    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+  })
+
   it('saves nothing when the team to delete is the last one', async () => {
     await load()
     const all = P.accessRemoval(deleteCrew)
@@ -598,27 +627,51 @@ describe('removing someone who has work in the project', () => {
     expect(requests).toHaveLength(3)
   })
 
-  it('still asks while the organization can be edited, a lead who is not an admin, a team being deleted, or nothing watches', async () => {
+  it('still asks while the organization can be edited, or once nothing watches', async () => {
     await load(inPlan(false))
     expect(P.startRemoval(user('leo'))).toBe(true)
     expect(P.startRemoval(crewGrant('plan'))).toBe(true)
+    await load((snap, task) => {
+      inPlan(false)(snap, task)
+      snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })
+    })
+    expect(P.startRemoval(deleteCrew)).toBe(true)
+    expect(P.removalRefused(deleteCrew)).toBe(false)
+    // nothing follows the status once no settings page watches it
+    await load(readOnly())
+    stopWatch()
+    expect(P.startRemoval(user('leo'))).toBe(true)
+    expect(requests).toEqual([])
+  })
+
+  it('refuses a team deletion, and any removal by someone who is not an admin, while the organization is read-only', async () => {
+    const other = (snap: Snapshot) =>
+      snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })
+    await load(readOnly(other))
+    // the server refuses deleting a team for everyone, so no window opens
+    expect(P.startRemoval(deleteCrew)).toBe(false)
+    expect(P.removalRefused(deleteCrew)).toBe(true)
+    expect(window.showToast).toHaveBeenLastCalledWith(BILLING_READ_ONLY, 'error')
+    // a pending deletion says so in its own words
+    deletion = { delete_after: '2026-11-01T00:00:00.000Z' }
+    status()
+    expect(P.startRemoval(deleteCrew)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only and will be deleted on 2026-11-01. An organization admin can export its data in Settings.',
+      'error',
+    )
     // the signed-in Planner leads Plan but is not an admin, so the server
-    // refuses even 'leave'; the window and its refusal stay as they were
+    // refuses even 'leave'
+    deletion = null
     await load(
       readOnly((snap) => {
         snap.profiles[0].org_role = 'user'
         snap.projects.find((p) => p.id === 'plan')!.lead_id = snap.profiles[0].id
       }),
     )
-    expect(P.startRemoval(user('leo'))).toBe(true)
-    await load(
-      readOnly((snap) => snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })),
-    )
-    expect(P.startRemoval(deleteCrew)).toBe(true)
-    // nothing follows the status once no settings page watches it
-    await load(readOnly())
-    stopWatch()
-    expect(P.startRemoval(user('leo'))).toBe(true)
+    expect(P.startRemoval(user('leo'))).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(BILLING_READ_ONLY, 'error')
+    expect(P.levelOn(work, 'leo')).toBe('user')
     expect(requests).toEqual([])
   })
 })
