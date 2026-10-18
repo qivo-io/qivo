@@ -19,7 +19,11 @@ against a deployment through
 `"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" TARGET COMMAND`,
 which refuses a missing key, rather than exporting `CONVEX_DEPLOY_KEY` by
 hand. An empty key makes the Convex CLI fall back to the deployment in
-`.env.local`. To verify access, run
+`.env.local`. The demo's stored key may not run internal functions or read
+logs. Run those commands on the demo through
+`"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key"`,
+which runs one command with a short-lived key, and only after the user
+approves the command and its actions. To verify access, run
 `python3 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/check-env-access.py"`.
 
 Never copy credential values into this repository, patches, build artifacts,

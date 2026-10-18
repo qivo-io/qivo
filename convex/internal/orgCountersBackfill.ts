@@ -28,13 +28,26 @@
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     development npx convex run internal/orgCountersBackfill:start
  *
- * The other targets are staging, production and demo, the demo backend. The
- * command returns once the first page is done. Follow the progress in the
- * deployment's logs, then check with `remaining`, passing each returned
- * cursor back until `isDone`:
+ * The other targets are staging and production. The command returns once
+ * the first page is done. Follow the progress in the deployment's logs, then
+ * check with `remaining`, passing each returned cursor back until `isDone`:
  *
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
- *     development npx convex run internal/orgCountersBackfill:remaining */
+ *     development npx convex run internal/orgCountersBackfill:remaining
+ *
+ * The demo backend's stored key cannot run internal functions or read logs,
+ * so on the demo the private with-temp-deploy-key helper runs each command
+ * with a short-lived key that allows only the listed actions, then deletes
+ * it (qivo-internal docs/public-demo-operations.md). `start` is an internal
+ * mutation, `remaining` an internal query, and `npx convex logs` needs
+ * deployment:logs:view:
+ *
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
+ *     demo --allow deployment:functions:runInternalMutations \
+ *     --purpose org-counters -- npx convex run internal/orgCountersBackfill:start
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
+ *     demo --allow deployment:functions:runInternalQueries \
+ *     --purpose org-counters -- npx convex run internal/orgCountersBackfill:remaining */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'

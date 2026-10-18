@@ -52,11 +52,21 @@
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     development npx convex run internal/attachmentScopeBackfill:start
  *
- * The other targets are staging, production and demo, the demo backend. The
- * command returns once the first step is scheduled. Follow the progress in
- * the deployment's logs. After every deployment has run it and reported
- * `orphans: 0`, a later change may remove storageUsage's read of rows
- * without org_id. */
+ * The other targets are staging and production. The demo backend's stored
+ * key cannot run internal functions or read logs, so on the demo the private
+ * with-temp-deploy-key helper runs the command with a short-lived key that
+ * allows only the listed actions, then deletes it (qivo-internal
+ * docs/public-demo-operations.md):
+ *
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
+ *     demo --allow deployment:functions:runInternalMutations \
+ *     --purpose attachment-scope -- npx convex run internal/attachmentScopeBackfill:start
+ *
+ * The command returns once the first step is scheduled. Follow the progress
+ * in the deployment's logs. On the demo, `npx convex logs` also needs a
+ * temporary key, with deployment:logs:view. After every deployment has run
+ * it and reported `orphans: 0`, a later change may remove storageUsage's
+ * read of rows without org_id. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
