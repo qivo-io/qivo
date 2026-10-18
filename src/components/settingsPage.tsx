@@ -24,7 +24,7 @@ export function PageTitle({
   return (
     <div className="settings-page-title mb-6 flex max-w-[640px] items-start gap-4">
       <div className="min-w-0 flex-1">
-        <h1 tabIndex={-1} className="m-0 text-xl font-semibold">
+        <h1 tabIndex={-1} className="m-0 text-xl font-semibold [overflow-wrap:anywhere]">
           {children}
         </h1>
         {sub && (
