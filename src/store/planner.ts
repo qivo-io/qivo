@@ -353,10 +353,12 @@ function dropComment(id: string) {
    so a server echo cannot erase an optimistic comment before its write
    settles. A failed query keeps the comments delivered before it and shows
    as P.commentsFailure. Convex reruns it when the data it read changes, and
-   the next delivery ends the failure. Two refusals empty the thread instead,
-   so they fail closed. not_found (the task is gone or hidden) loads it
-   empty, and forbidden (my access is gone) empties it and shows the
-   failure. */
+   the next delivery ends the failure. not_found (the task is gone or hidden)
+   loads the thread empty instead, so it fails closed. forbidden (the
+   sign-in or every seat in this organization is gone) is a failure like
+   the rest. The snapshot notice says access ended, and the comments on
+   screen stay, like the rest of the last snapshot. A task that leaves the
+   snapshot closes its window, which drops the thread. */
 function subscribeThread(issueUuid: string, orgId: string) {
   commentsUnsub?.()
   const subscription = ++threadSubscription
@@ -375,7 +377,7 @@ function subscribeThread(issueUuid: string, orgId: string) {
     console.error('[qivo] comments subscription failed:', err)
     const code = errData(err).code
     PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
-    if (code !== 'not_found' && code !== 'forbidden') {
+    if (code !== 'not_found') {
       // nothing to adopt. What is on screen stays, with the failure under it.
       emit('comments')
       return

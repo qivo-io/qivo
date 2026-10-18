@@ -226,14 +226,16 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(bodies()).toEqual([])
     })
 
-    it('empties the thread when access is gone, and says it failed', () => {
+    it('keeps the comments on screen when access is gone, and says it failed', () => {
       const { P } = store
       live().deliver({ comments: range(1, 4), earlier: false })
+      // the sign-in or every seat is gone, which the snapshot notice reports
       live().fail(
         new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
       )
       expect(P.commentsFailure).toBe('failed')
-      expect(bodies()).toEqual([])
+      expect(P.commentsLoaded).toBe(true)
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
     })
 
     it('retries with a fresh subscription and keeps the comments meanwhile', async () => {
