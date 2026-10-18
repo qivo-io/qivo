@@ -45,7 +45,7 @@ import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
-import { syncSince } from '../../convex/lib/teamSync'
+import { SYNC_OWNERS_MAX, syncSince } from '../../convex/lib/teamSync'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
 import { TeamOpening } from './teamSync/TeamOpening'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
@@ -391,12 +391,6 @@ export function TeamSync({
   const onPlaceRef = useRef(onPlace)
   onPlaceRef.current = onPlace
 
-  // the latest comment per open task: the one fact the snapshot lacks
-  useEffect(() => {
-    P.watchTeamSync(P.homeOrg || null)
-    return () => P.watchTeamSync(null)
-  }, [P.homeOrg])
-
   const now = Date.now()
   const day: SyncDay = syncDay(now)
   const world: ScopeWorld = {
@@ -429,6 +423,25 @@ export function TeamSync({
   else if (shown.current?.step === want && shown.current.scope === scopeKey && want !== 'team')
     step = steps[Math.min(shown.current.idx, steps.length - 1)]
   const idx = steps.indexOf(step)
+
+  // the latest comment per open task, the one fact the snapshot lacks, for
+  // the people whose cards this step shows and then those of the steps on
+  // either side, so Next and Previous open with their marks. The order
+  // matters, because an answer cut short covers the first ones.
+  const cardOwners = (s: string | undefined): string[] =>
+    s === 'agents'
+      ? agents.filter((a) => openAgents.has(a.id)).map((a) => a.id)
+      : s === undefined || s === 'team'
+        ? []
+        : [s]
+  const syncOwners = [
+    ...new Set([...cardOwners(step), ...cardOwners(steps[idx - 1]), ...cardOwners(steps[idx + 1])]),
+  ]
+  const ownerKey = syncOwners.slice(0, SYNC_OWNERS_MAX).join(',')
+  useEffect(() => {
+    P.watchTeamSync(P.homeOrg || null, ownerKey ? ownerKey.split(',') : [])
+  }, [P.homeOrg, ownerKey])
+  useEffect(() => () => P.watchTeamSync(null), [])
 
   useEffect(() => {
     shown.current = { step, idx, scope: scopeKey }

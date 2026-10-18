@@ -353,6 +353,7 @@ describe('rowMarks', () => {
     since: SINCE,
     verdict: null,
     issueById: {},
+    lastCommentAt: null,
     activity: [],
   } as const
 
@@ -371,6 +372,19 @@ describe('rowMarks', () => {
     })
     // any other write since the sync is a touch too, with nothing to say
     expect(rowMarks({ ...t, updatedAt: at(28) }, base).since).toBeNull()
+  })
+  it('says no since mark while the latest comment is not known', () => {
+    const { lastCommentAt, ...unknown } = base
+    expect(lastCommentAt).toBeNull()
+    const t = task({ key: 'QN-1', status: 'progress', assignee: 'aisha', updatedAt: at(23) })
+    expect(rowMarks(t, unknown).since).toBeNull()
+    expect(rowMarks(t, { ...base, lastCommentAt: undefined }).since).toBeNull()
+    // a hand-off would be marked too once the comment is known
+    const r = task({ key: 'QN-2', status: 'review', reviewer: 'aisha', reviewAt: at(28) })
+    expect(rowMarks(r, base).since).toEqual({ kind: 'handed', at: at(28) })
+    expect(rowMarks(r, unknown).since).toBeNull()
+    // the other marks do not wait for it
+    expect(rowMarks({ ...t, remaining: undefined }, unknown).noEstimate).toBe(true)
   })
   it('says the latest status move or comment since the sync', () => {
     const t = task({ key: 'QN-1', status: 'progress', assignee: 'aisha', updatedAt: at(27) })
@@ -846,7 +860,7 @@ describe('the Northstar seed', () => {
         since: sinceOf(t.owner),
         verdict: null,
         issueById: {},
-        lastCommentAt: lastComment.get(t.key),
+        lastCommentAt: lastComment.get(t.key) ?? null,
         activity: [ev(t.id, t.updatedAt, 'created')],
       }).since
       if (m) byKind.set(m.kind, [...(byKind.get(m.kind) ?? []), t.key].sort())

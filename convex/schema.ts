@@ -189,6 +189,10 @@ const issuesTable = defineTable({
   // whole range.
   .index('by_assignee_archived', ['assignee_id', 'archived_at'])
   .index('by_reviewer_archived', ['reviewer_id', 'archived_at'])
+  // Team sync reads a person's open tasks without their Backlog and Done
+  // ones (teamSync.ts lastComments).
+  .index('by_assignee_archived_status', ['assignee_id', 'archived_at', 'status'])
+  .index('by_reviewer_archived_status', ['reviewer_id', 'archived_at', 'status'])
   .index('by_created_by_archived', ['created_by', 'archived_at'])
   .index('by_reporter_archived', ['reporter_id', 'archived_at'])
 

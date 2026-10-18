@@ -231,9 +231,11 @@ let delayMap = new Map<string, DelayInfo>()
 let orgLoadByOwner = new Map<string, LoadSpan[]>()
 const committedByOwner = new Map<string, Map<number, number>>()
 
-/* The home organization whose latest-comment facts are subscribed for the
-   Team sync page (P.watchTeamSync), or null. */
+/* The home organization whose latest-comment facts the Team sync page
+   watches (P.watchTeamSync), or null, and the people it asks about (joined
+   in the order asked), or '' for none. */
 let watchedSyncOrg: string | null = null
+let watchedSyncOwners = ''
 let syncUnsub: (() => void) | null = null
 let syncWatchEpoch = 0
 
@@ -2282,10 +2284,10 @@ export const PLANNER = {
   labelById: {} as Record<string, LabelVM>,
   comments: [] as CommentVM[],
   commentsLoaded: false, // the watched issue's thread (watchComments)
-  // Team sync (watchTeamSync): issue UUID → ms of its latest comment, for
-  // the open, visible tasks of the watched organization that have one
-  lastComments: new Map<string, number>(),
-  lastCommentsLoaded: false,
+  // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
+  // null when it has none, for the open, visible tasks the last answer
+  // covered; a task with no entry is not known yet
+  lastComments: new Map<string, number | null>(),
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
   unreadMessages: 0, // own inbox (0074), folded per task (0088)
@@ -3990,35 +3992,44 @@ export const PLANNER = {
   /* ---- Team sync (docs/team-sync-brief.md) ----
      The page's one fact the snapshot lacks: when each open task was last
      commented on (api.teamSync.lastComments), for its "untouched" and
-     "changed" marks. Subscribed only while the page is open: the page calls
-     this with the home organization on mount and with null on unmount. Every
-     delivery replaces the map wholesale; nothing here is optimistic, so no
+     "changed" marks. Subscribed only while the page is open, and only for
+     `ownerIds`, the people whose cards it shows or shows next, most needed
+     first. An answer cut short by the server's caps covers the first ones.
+     The page calls this with the home organization whenever they change,
+     and with null on unmount. No owners means no subscription. Every delivery
+     replaces the map wholesale. A new organization empties it; new owners
+     in the same one keep it until their answer arrives, so stepping through
+     the walk does not blank the marks. Nothing here is optimistic, so no
      paint gate is needed. */
-  watchTeamSync: (orgId: string | null) => {
-    if (watchedSyncOrg === orgId) return
+  watchTeamSync: (orgId: string | null, ownerIds: readonly string[] = []) => {
+    const owners = orgId ? [...new Set(ownerIds)] : []
+    const key = owners.join(',')
+    if (watchedSyncOrg === orgId && watchedSyncOwners === key) return
     const watchEpoch = ++syncWatchEpoch
-    watchedSyncOrg = orgId
     syncUnsub?.()
     syncUnsub = null
-    PLANNER.lastComments = new Map()
-    PLANNER.lastCommentsLoaded = false
-    emit('teamSync')
-    if (!orgId) return
+    watchedSyncOwners = key
+    if (watchedSyncOrg !== orgId) {
+      watchedSyncOrg = orgId
+      PLANNER.lastComments = new Map()
+      emit('teamSync')
+    }
+    if (!orgId || !owners.length) return
     syncUnsub = convex.onUpdate(
       api.teamSync.lastComments,
-      { org_id: orgId },
-      (list) => {
-        if (watchedSyncOrg !== orgId || syncWatchEpoch !== watchEpoch) return
-        PLANNER.lastComments = new Map(list.map((row) => [row.issue_id, Date.parse(row.at)]))
-        PLANNER.lastCommentsLoaded = true
+      { org_id: orgId, owner_ids: owners },
+      (answer) => {
+        if (syncWatchEpoch !== watchEpoch) return
+        PLANNER.lastComments = new Map(
+          answer.rows.map((row) => [row.issue_id, row.at === null ? null : Date.parse(row.at)]),
+        )
         emit('teamSync')
       },
       (err) => {
-        if (watchedSyncOrg !== orgId || syncWatchEpoch !== watchEpoch) return
-        // fail closed to "no comments known", never a page waiting forever
+        if (syncWatchEpoch !== watchEpoch) return
+        // fail closed to "nothing known", so no card claims untouched
         console.error('[qivo] team sync subscription failed:', err)
         PLANNER.lastComments = new Map()
-        PLANNER.lastCommentsLoaded = true
         emit('teamSync')
       },
     )
@@ -5819,8 +5830,8 @@ export function disposeDemoStore() {
   syncUnsub?.()
   syncUnsub = null
   watchedSyncOrg = null
+  watchedSyncOwners = ''
   PLANNER.lastComments = new Map()
-  PLANNER.lastCommentsLoaded = false
   pendingRestoreIssueIds.clear()
   serverSnap = null
   preferences.dispose(myProfileSet)
