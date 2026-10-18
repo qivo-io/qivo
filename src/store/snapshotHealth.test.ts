@@ -320,6 +320,20 @@ describe('snapshot trouble', () => {
     expect(claims).toHaveLength(2)
   })
 
+  it('keeps the trouble when a null delivery replaces a held recovery', async () => {
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    live().fail(new Error(QUERY_FAILURE))
+    live().deliver(structuredClone(snapshot))
+    live().deliver(null)
+    sent[0].resolve(null)
+    await settle()
+    expect(P.snapshotTrouble()?.kind).toBe('failed')
+    expect(showToast).not.toHaveBeenCalledWith('Qivo is up to date again.', 'success')
+  })
+
   it('keeps the last view without trouble when every seat is gone', async () => {
     await boot()
     live().deliver(null)

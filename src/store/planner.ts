@@ -5740,8 +5740,10 @@ function subscribeSnapshot(
         return
       }
       // a later delivery of null = every seat vanished mid-session; keep the
-      // last paint rather than tearing the app down under the user
+      // last paint rather than tearing the app down under the user. A held
+      // recovering delivery is gone with it, so it ends no trouble.
       if (snap === null) {
+        recoveryHeld = false
         if (DEMO_MODE) notifyDemoEnded()
         return
       }
