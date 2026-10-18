@@ -123,10 +123,14 @@ const answer = (status: number, body: unknown): Response =>
     },
   })
 
-/* The request body's chunks when it holds exactly `size` bytes, else null.
+/** The request body's chunks when it holds exactly `size` bytes, else null.
  * It stops reading once the body passes `size`, so a longer body never
- * fills memory, and refuses a body still arriving after READ_MS. */
-async function readExactly(request: Request, size: number): Promise<Uint8Array[] | null> {
+ * fills memory, and refuses a body still arriving after `readMs`. */
+export async function readExactly(
+  request: Request,
+  size: number,
+  readMs = READ_MS,
+): Promise<Uint8Array[] | null> {
   const declared = request.headers.get('Content-Length')
   if (declared !== null && Number(declared) !== size) return null
   const body = (request as Request & { body: BodyStream | null }).body
@@ -134,7 +138,7 @@ async function readExactly(request: Request, size: number): Promise<Uint8Array[]
   const reader = body.getReader()
   let timer: unknown
   const tooSlow = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(badRequest(UPLOAD_TOO_SLOW)), READ_MS)
+    timer = setTimeout(() => reject(badRequest(UPLOAD_TOO_SLOW)), readMs)
   })
   const read = async (): Promise<Uint8Array[] | null> => {
     const chunks: Uint8Array[] = []

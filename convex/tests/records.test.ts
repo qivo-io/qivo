@@ -29,7 +29,7 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
-import { MEDIA_TYPE_TOO_LONG } from '../machine/uploads'
+import { MEDIA_TYPE_TOO_LONG, readExactly, UPLOAD_TOO_SLOW } from '../machine/uploads'
 import {
   UPLOAD_CLAIM_MS,
   UPLOAD_NOT_SENT,
@@ -843,6 +843,34 @@ describe('the REST upload', () => {
       status: 409,
       json: { error: UPLOAD_URL_USED },
     })
+  })
+
+  it('reads exactly the declared bytes, and gives up on a body that stalls', async () => {
+    // a request whose body sends `chunks` and then waits until it is cancelled
+    let cancelled = false
+    const body = (...chunks: Uint8Array[]) =>
+      ({
+        headers: { get: () => null },
+        body: {
+          getReader: () => ({
+            read: () =>
+              chunks.length > 0
+                ? Promise.resolve({ done: false, value: chunks.shift() })
+                : new Promise<never>(() => {}),
+            cancel: async () => {
+              cancelled = true
+            },
+          }),
+        },
+      }) as unknown as Request
+    await expect(readExactly(body(new Uint8Array(2)), 4, 20)).rejects.toMatchObject({
+      data: { code: 'bad_request', message: UPLOAD_TOO_SLOW },
+    })
+    expect(cancelled).toBe(true)
+    // a longer body is refused once it passes the size, without waiting
+    cancelled = false
+    expect(await readExactly(body(new Uint8Array(3), new Uint8Array(2)), 4, 60_000)).toBeNull()
+    expect(cancelled).toBe(true)
   })
 
   it('stores an empty file and answers a browser preflight', async () => {
