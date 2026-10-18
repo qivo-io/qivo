@@ -267,6 +267,7 @@ export function MentionCtl({
   const [open, setOpen] = useState(false)
   const [who, setWho] = useState<string | null>(null)
   const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
   const close = useMobileBackLayer(open, () => setOpen(false))
   useUpdateBlocker(open && text.trim() !== '')
   const canWrite = P.canWrite(it.project)
@@ -276,14 +277,19 @@ export function MentionCtl({
     (u) => u.active && !u.isAgent && u.id !== P.CURRENT_USER,
   )
   const person = people.find((u) => u.id === who) || null
-  const ready = !!person && text.trim() !== ''
+  const ready = !!person && text.trim() !== '' && !sending
   const send = () => {
     if (!ready) return
-    // a refused note (the store toasts why, such as a body over the length
-    // cap once escaped) keeps the window open, so the note is not lost
-    if (P.addComment(it.uuid, mentionBody(person, text)) === null) return
-    close()
-    onSent()
+    // The window closes once the server saves the note. A refused one (the
+    // store toasts why, such as the task's comment cap or a body over the
+    // length cap once escaped) keeps the window open, so the note is not lost.
+    setSending(true)
+    void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {
+      setSending(false)
+      if (!saved) return
+      close()
+      onSent()
+    })
   }
   return (
     <PopoverRoot

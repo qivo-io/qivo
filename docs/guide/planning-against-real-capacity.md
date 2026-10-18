@@ -168,6 +168,8 @@ Use the row controls to change tasks without opening them:
   Pick someone, write a note and press **Send** or Ctrl/Cmd+Enter. It starts
   with the assignee selected on a reviewer's row, or the reviewer on a
   Waiting on review row. The recipient gets an Inbox notification ([Your inbox](./working-together.md#your-inbox)).
+  The window closes once the comment is saved. If Qivo refuses it, for
+  example on a task with 400 comments, the window stays open with your note.
 - **Board / Roadmap** opens the task there. Board opens its task window;
   Roadmap finds its bar or unplanned row without starting a planning session.
 - The **review tick** marks the task reviewed without changing it.

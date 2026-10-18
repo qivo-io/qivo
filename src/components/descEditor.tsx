@@ -17,7 +17,9 @@ import { HoverTooltip, hasOpenTooltip } from '@/components/ui/tooltip'
    fence languages. Only completed HTTP(S) tokens autolink; pasted text goes
    through parseMd. Comment mode shares Save/Discard and keys, but strips
    attachment images and rejects file paste/drop because comments own no files.
-   comment.reset clears a submitted composer; edits retain the committed baseline. */
+   A comment commit keeps the draft until the server saves it, and after a
+   refusal. comment.reset clears a saved composer; edits retain the committed
+   baseline. */
 
 import type { Attributes, Editor, NodeViewProps } from '@tiptap/core'
 import { Extension, markInputRule } from '@tiptap/core'
@@ -294,12 +296,15 @@ export type DescEditorHandle = {
 }
 
 /** Comment mode: commit goes to onCommit (the store's add/updateComment),
-    not the issue description. `label` is the primary button ("Comment" for
-    the composer, "Save" for edit-in-place); `reset` clears the doc after a
-    commit (composer); `onDiscard` lets edit-in-place close on Esc/Discard. */
+    not the issue description. onCommit resolves whether the server saved
+    the text; the editor keeps the draft, locked, until it answers, and keeps
+    it after a refusal. `label` is the primary button ("Comment" for the
+    composer, "Save" for edit-in-place); `reset` clears the doc after a saved
+    commit (composer); `onClose` lets edit-in-place close on Esc/Discard and
+    after a saved commit. */
 export type CommentMode = {
-  onCommit: (text: string) => void
-  onDiscard?: () => void
+  onCommit: (text: string) => Promise<boolean>
+  onClose?: () => void
   label: string
   reset?: boolean
 }
@@ -336,6 +341,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const [dirty, setDirty] = useState(false)
   useUpdateBlocker(dirty || linkPop?.mode === 'create')
   const dirtyRef = useRef(false)
+  // comment mode: a commit the server has not answered yet (see commit)
+  const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
   const linkUrlRef = useRef<HTMLInputElement | null>(null)
   const linkTextRef = useRef<HTMLInputElement | null>(null)
   const editorRef = useRef<Editor | null>(null)
@@ -734,6 +742,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     if (!ed) return
     const cm = commentRef.current
     if (cm) {
+      if (sendingRef.current) return // one commit at a time
       const text = serialize(ed)
       if (!text.trim()) return // an empty comment isn't a thing — Discard is the way out
       if (text.trim().length > TEXT_MAX) {
@@ -744,22 +753,45 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       }
       // while edits are paused (snapshot trouble) the draft and edit mode stay
       if (P.refusePausedEdit()) return
-      cm.onCommit(text) // the store no-ops a same-body save; still exits edit mode
-      if (cm.reset) {
-        // composer: posting clears the field for the next comment
-        rawRef.current = ''
-        canonRef.current = ''
-        setDocFromText(ed, '')
-        refreshDirty()
-        ed.commands.focus()
-      } else {
-        // edit-in-place: the save is the new baseline (the parent unmounts
-        // this editor on its own; a clean doc keeps the unmount silent)
-        rawRef.current = text
-        canonRef.current = text
-        committedDocRef.current = ed.state.doc
-        refreshDirty()
-      }
+      // The draft stays until the server answers, locked so nothing typed
+      // meanwhile is cleared with it. A refusal (the task's comment cap, lost
+      // access, a deleted task) keeps it dirty for another try.
+      sendingRef.current = true
+      setSending(true)
+      ed.setEditable(false, false)
+      void cm.onCommit(text).then((saved) => {
+        sendingRef.current = false
+        setSending(false)
+        if (ed.isDestroyed) return
+        ed.setEditable(true, false)
+        // back to the text unless the reader has moved on meanwhile
+        const at = document.activeElement
+        const idle = !at || at === document.body || !!wrapRef.current?.contains(at)
+        if (!saved) {
+          // No reconcile here. The value prop may still hold the store's
+          // optimistic paint of this very text, which would pass for an echo
+          // and become the baseline. The rollback's own render reconciles.
+          if (idle) ed.commands.focus()
+          return
+        }
+        if (cm.reset) {
+          // composer: posting clears the field for the next comment
+          rawRef.current = ''
+          canonRef.current = ''
+          setDocFromText(ed, '')
+          refreshDirtyRef.current()
+          if (idle) ed.commands.focus()
+        } else {
+          // edit-in-place: the save is the new baseline, and a clean doc
+          // keeps the unmount that closing starts silent. The store saves
+          // the same body without a write, and that still closes.
+          rawRef.current = text
+          canonRef.current = text
+          committedDocRef.current = ed.state.doc
+          refreshDirtyRef.current()
+          cm.onClose?.()
+        }
+      })
       return
     }
     if (issueKey === null) return
@@ -795,7 +827,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
 
   const revert = () => {
     const ed = editorRef.current
-    if (!ed) return
+    if (!ed || sendingRef.current) return // the draft is the commit in flight
     // the echo effect may have held (focused + dirty) while finishUpload
     // advanced the committed row — revert to the store's truth, not the refs
     if (commentRef.current) {
@@ -815,7 +847,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     refreshDirty()
     ed.commands.blur()
     const cm = commentRef.current
-    if (cm?.onDiscard) cm.onDiscard() // edit-in-place closes on discard
+    if (cm?.onClose) cm.onClose() // edit-in-place closes on discard
   }
 
   useImperativeHandle(
@@ -838,7 +870,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   const reconcile = () => {
     const ed = editorRef.current
     const val = valueRef.current
-    if (!ed || ed.isDestroyed || val === rawRef.current) return
+    // a commit in flight paints its text optimistically, and a refusal
+    // rolls it back; neither echo may move the baseline under the draft
+    if (!ed || ed.isDestroyed || sendingRef.current || val === rawRef.current) return
     const canon = canonical(val)
     if (serialize(ed) === canon) {
       // doc already matches (finishUpload patched both sides) — just advance
@@ -982,11 +1016,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
 
   // comment mode has no upload plumbing, but the same unmount contract: a
   // dirty draft (typed composer, half-edited comment) dies with the editor
-  // (modal closed, comment deleted remotely) — say so
+  // (modal closed, comment deleted remotely), so say so. A draft still being
+  // sent may yet be saved, and a refusal toasts on its own.
   useEffect(() => {
     if (!isComment) return
     return () => {
-      if (dirtyRef.current) toast('Unsaved comment discarded')
+      if (dirtyRef.current && !sendingRef.current) toast('Unsaved comment discarded')
     }
   }, [isComment])
 
@@ -1094,7 +1129,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       return
     }
     const cm = commentRef.current
-    if (cm?.onDiscard) {
+    if (cm?.onClose) {
       // edit-in-place: Esc exits edit mode even when clean — the modal only
       // closes from the read view
       e.preventDefault()
@@ -1374,6 +1409,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
             variant="ghost"
             className="h-control-sm [font-size:var(--fs-sm)]"
             title="Discard changes (Esc)"
+            disabled={sending}
             onClick={revert}
           >
             Discard changes
@@ -1382,6 +1418,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
             type="button"
             className="h-control-sm [font-size:var(--fs-sm)] [font-weight:600] [background:var(--primary)] [border-color:var(--primary)] [color:#fff]"
             title={comment ? `${comment.label} (${MOD}S)` : `Save description (${MOD}S)`}
+            disabled={sending}
             onClick={commit}
           >
             {comment ? comment.label : 'Save'}
@@ -1493,7 +1530,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     fallback must never round-trip through a commit). */
 const DescEditor = forwardRef<DescEditorHandle, DescEditorProps>(function DescEditor(props, ref) {
   if (props.value.length > MAX_PARSE) {
-    const onDiscard = props.comment?.onDiscard
+    const onClose = props.comment?.onClose
     return (
       <div>
         <Markdown text={props.value} />
@@ -1502,13 +1539,13 @@ const DescEditor = forwardRef<DescEditorHandle, DescEditorProps>(function DescEd
         </div>
         {/* edit-in-place must stay exitable: without this the row is stuck in
             edit mode (its own Edit/Delete buttons hide while editing) */}
-        {onDiscard && (
+        {onClose && (
           <div className="[display:flex] [justify-content:flex-end] [margin-top:8px]">
             <Button
               type="button"
               variant="ghost"
               className="h-control-sm [font-size:var(--fs-sm)]"
-              onClick={onDiscard}
+              onClick={onClose}
             >
               Close
             </Button>

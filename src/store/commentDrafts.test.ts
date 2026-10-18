@@ -1,0 +1,252 @@
+import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { plannerFixture, type Snapshot } from './plannerFixture.setup'
+import type { Row } from './rows'
+
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: {
+    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+  },
+  signOut: vi.fn(),
+}))
+
+type Page = { comments: Row<'comments'>[]; earlier: boolean }
+type Deferred = { resolve: (value: null) => void; reject: (reason: unknown) => void }
+/* One commentThread subscription: its two callbacks and whether it was
+   unsubscribed. */
+type Thread = { deliver: (page: Page) => void; fail: (e: unknown) => void; closed: boolean }
+
+const START = Date.parse('2026-09-14T08:00:00.000Z')
+// The server's sentence for the 401st comment (convex/model/commentCounts.ts).
+const CAP = 'this task has 400 comments, the most a task can have; start a new task to continue'
+
+/* What a comment's writer learns from the store, and what the thread shows
+   when its subscription fails. Writes and thread deliveries are answered by
+   hand. Comment #n is posted n minutes after START. */
+describe('comment drafts and a failed thread in the store', () => {
+  let store: typeof import('./planner')
+  let author: string
+  let threads: Thread[]
+  let writes: { name: string; answer: Deferred }[]
+  let toast: ReturnType<typeof vi.fn>
+
+  const comment = (n: number): Row<'comments'> => ({
+    id: `comment-${n}`,
+    issue_id: 'task-a',
+    author,
+    body: `#${n}`,
+    created_at: new Date(START + n * 60_000).toISOString(),
+  })
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from }, (_, n) => comment(from + n))
+  const bodies = () => store.P.comments.map((c) => c.body)
+  const live = () => threads[threads.length - 1]
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    toast = vi.fn()
+    vi.stubGlobal('window', { showToast: toast })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const snap: Snapshot = plannerFixture()
+    author = snap.profiles[0].id
+    snap.issues.push({
+      id: 'task-a',
+      org_id: snap.orgs[0].id,
+      project_id: snap.projects[0].id,
+      num: 1,
+      title: 'Soak test',
+      description: '',
+      status: 'progress',
+      priority: 'medium',
+      paused: false,
+      created_at: new Date(START).toISOString(),
+      updated_at: new Date(START).toISOString(),
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    threads = []
+    writes = []
+    network.query.mockResolvedValue(null)
+    network.mutation.mockImplementation(
+      (ref) =>
+        new Promise((resolve, reject) => {
+          const name = getFunctionName(ref)
+          if (name === 'identity:claimMySeats') return resolve(null)
+          writes.push({ name, answer: { resolve, reject } })
+        }),
+    )
+    network.onUpdate.mockImplementation((ref, _args, receive, onError) => {
+      if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
+      else if (getFunctionName(ref) === 'snapshot:commentThread') {
+        const thread: Thread = { deliver: receive, fail: onError, closed: false }
+        threads.push(thread)
+        return () => {
+          thread.closed = true
+        }
+      }
+      return () => {}
+    })
+    store = await import('./planner')
+    await store.initStore()
+    store.P.watchComments('task-a')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  describe('posting and editing', () => {
+    it('resolves true once the server saves a comment', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      let saved: boolean | undefined
+      void P.addComment('task-a', 'Soak run finished').then((v) => {
+        saved = v
+      })
+      expect(bodies()).toEqual(['#1', '#2', '#3', 'Soak run finished'])
+      await settle()
+      expect(saved).toBeUndefined() // the server has not answered yet
+      writes[0].answer.resolve(null)
+      await settle()
+      expect(saved).toBe(true)
+      expect(toast).not.toHaveBeenCalled()
+    })
+
+    it('resolves false on a refusal, toasts its sentence and drops the comment', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      const saved = P.addComment('task-a', 'The 401st comment')
+      expect(bodies()).toContain('The 401st comment')
+      writes[0].answer.reject(new ConvexError({ code: 'rule', message: CAP }))
+      expect(await saved).toBe(false)
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining('This task has 400 comments'),
+        'error',
+      )
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
+    })
+
+    it('drops a refused comment posted before the thread arrived', async () => {
+      const { P } = store
+      const saved = P.addComment('task-a', 'Posted while the thread loads')
+      expect(bodies()).toEqual(['Posted while the thread loads'])
+      writes[0].answer.reject(new ConvexError({ code: 'not_found', message: 'task not found' }))
+      expect(await saved).toBe(false)
+      expect(bodies()).toEqual([])
+    })
+
+    it('resolves whether an edit was saved, and true for the same text without a write', async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      expect(await P.updateComment('comment-2', ' #2 ')).toBe(true)
+      expect(writes).toHaveLength(0)
+      const refused = P.updateComment('comment-2', 'Edited')
+      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+      writes[0].answer.reject(new ConvexError({ code: 'forbidden', message: 'not yours' }))
+      expect(await refused).toBe(false)
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
+      const accepted = P.updateComment('comment-2', 'Edited')
+      writes[1].answer.resolve(null)
+      expect(await accepted).toBe(true)
+      expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+    })
+  })
+
+  describe('a failed thread', () => {
+    it('keeps the delivered comments and says the thread failed', () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 51), earlier: true })
+      live().fail(new Error('Server Error'))
+      expect(P.commentsFailure).toBe('failed')
+      expect(P.commentsLoaded).toBe(true)
+      expect(bodies()).toEqual(range(1, 51).map((c) => c.body))
+      expect(P.commentsEarlier).toBe('more')
+    })
+
+    it('fails without loading when nothing was delivered', () => {
+      const { P } = store
+      live().fail(new Error('Server Error'))
+      expect(P.commentsFailure).toBe('failed')
+      expect(P.commentsLoaded).toBe(false)
+      expect(bodies()).toEqual([])
+    })
+
+    it('ends the failure at the next delivery', () => {
+      const { P } = store
+      live().fail(new Error('Server Error'))
+      live().deliver({ comments: range(1, 4), earlier: false })
+      expect(P.commentsFailure).toBe('none')
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
+    })
+
+    it('loads an empty thread for a task that is gone or hidden', () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      live().fail(new ConvexError({ code: 'not_found', message: 'task not found' }))
+      expect(P.commentsFailure).toBe('none')
+      expect(P.commentsLoaded).toBe(true)
+      expect(bodies()).toEqual([])
+    })
+
+    it('empties the thread when access is gone, and says it failed', () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      live().fail(
+        new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
+      )
+      expect(P.commentsFailure).toBe('failed')
+      expect(bodies()).toEqual([])
+    })
+
+    it('retries with a fresh subscription and keeps the comments meanwhile', () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      const first = live()
+      first.fail(new Error('Server Error'))
+      P.retryComments()
+      expect(first.closed).toBe(true)
+      expect(threads).toHaveLength(2)
+      expect(P.commentsFailure).toBe('retrying')
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
+      live().fail(new Error('Server Error'))
+      expect(P.commentsFailure).toBe('failed')
+      P.retryComments()
+      live().deliver({ comments: range(1, 5), earlier: false })
+      expect(P.commentsFailure).toBe('none')
+      expect(bodies()).toEqual(['#1', '#2', '#3', '#4'])
+    })
+
+    it('retries only a failed thread, and ignores the subscription it replaced', () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      P.retryComments()
+      expect(threads).toHaveLength(1)
+      const first = live()
+      first.fail(new Error('Server Error'))
+      P.retryComments()
+      first.deliver({ comments: range(1, 9), earlier: false })
+      first.fail(new ConvexError({ code: 'not_found', message: 'task not found' }))
+      expect(P.commentsFailure).toBe('retrying')
+      expect(bodies()).toEqual(['#1', '#2', '#3'])
+    })
+
+    it('forgets the failure when the window moves to another task', () => {
+      const { P } = store
+      live().fail(new Error('Server Error'))
+      P.watchComments(null)
+      expect(P.commentsFailure).toBe('none')
+      P.watchComments('task-a')
+      expect(P.commentsFailure).toBe('none')
+      expect(P.commentsLoaded).toBe(false)
+    })
+  })
+})

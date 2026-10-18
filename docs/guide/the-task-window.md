@@ -45,6 +45,11 @@ that other people, or your other tabs, make to comments older than the newest
 50 show the next time you open the task. A task holds at most 400 comments.
 Once it has 400, Qivo refuses new ones, so start a new task to continue. An
 archive reason is still posted.
+The composer keeps your comment until Qivo saves it. If Qivo refuses it, for
+example on a task with 400 comments, the text stays for another try. A refused
+edit stays open with your text too. If the comments cannot load, the thread
+says so with **Retry** instead of looking empty, and the comments already on
+screen stay.
 **Comments** is the default filter; **All** adds changes such as assignments,
 status moves, dates, labels and attachments. Until the first comment is
 loaded, **All** shows only the changes since the oldest loaded comment.
