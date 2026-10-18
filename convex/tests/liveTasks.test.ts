@@ -13,6 +13,9 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { countsAsSubtask, groupTest } from '../lib/liveTasks'
+import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
+import { orgProjectView } from '../lib/visibility'
+import { weekGrid } from '../lib/workload'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
 import { assigneeLoad, workloadCore } from '../planning'
 import { RESTORE_REGROUP, restoredStep } from '../regroup'
@@ -271,6 +274,36 @@ describe('reading only live tasks', () => {
     })
     expect(rows.map((r) => r.issue_id).sort()).toEqual([leaf.id, shelvedOnly.id].sort())
     expect(documents).toBeLessThan(60)
+  })
+
+  it('a delay verdict’s owner load counts a task whose subtasks are archived away', async () => {
+    const fx = await setup()
+    const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
+    const leaf = await task(fx, { ...plan, remaining_hours: 5, remaining_set_at: NOW })
+    await task(fx, { project_id: fx.shelf.id, parent_id: leaf.id })
+    // a group, and a task of the archived sub-project, carry no load
+    const group = await task(fx, { ...plan, remaining_hours: 7 })
+    await task(fx, { parent_id: group.id })
+    await task(fx, { ...plan, project_id: fx.shelf.id, remaining_hours: 11 })
+    const checks = OWNER_LOAD_CHECKS.reads
+    try {
+      // task by task, and past the checks in one read of the live tasks
+      for (const reads of [checks, 0]) {
+        OWNER_LOAD_CHECKS.reads = reads
+        const spans = await fx.t.run(async (ctx) => {
+          const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
+          const owner = (await byId(ctx, 'profiles', fx.user.id)) as Doc<'profiles'>
+          const view = await orgProjectView(ctx, me)
+          return await ownerLoadSpans(ctx, me, owner, weekGrid(fx.org.week_start), view)
+        })
+        expect(
+          spans.map((span) => span.issueUuid),
+          `${reads} checks`,
+        ).toEqual([leaf.id])
+      }
+    } finally {
+      OWNER_LOAD_CHECKS.reads = checks
+    }
   })
 
   it('the workload reads the live tasks of the organization, also when it is limited to a project', async () => {
