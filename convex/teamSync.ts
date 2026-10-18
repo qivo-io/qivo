@@ -14,6 +14,7 @@ import { getDocumentSize, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
+import type { IssueStatus } from './lib/enums'
 import { badRequest, forbidden, notFound, orgMutation, orgQuery } from './lib/functions'
 import { taskOwnerId } from './lib/review'
 import { nextSyncStamp, SYNC_OWNERS_MAX } from './lib/teamSync'
@@ -43,28 +44,39 @@ export const stamp = orgMutation({
 })
 
 /* The statuses a sync row can have. */
-const OPEN_STATUSES: ReadonlySet<string> = new Set(['todo', 'progress', 'review'])
+const OPEN_STATUSES = ['todo', 'progress', 'review'] as const satisfies readonly IssueStatus[]
 
-/** The most people one lastComments call takes, the most tasks it answers,
- * and the comment bytes after which it stops reading. Tests lower them. */
+/** The most people one lastComments call takes and the most tasks it
+ * answers, and its read budget in bytes as Convex sizes a document. The
+ * owner scan stops once the tasks it read reach `taskBytes`, and the comment
+ * reads stop once tasks and comments together reach `bytes`. Each passes its
+ * budget by one document at most, so a call reads at most 13 MiB beside the
+ * caller's project view, under Convex's 16 MiB read limit. A task document
+ * takes at least about 400 bytes, so the task budget also keeps the
+ * documents read far below Convex's 32,000. Tests lower them. */
 export const LAST_COMMENTS = {
   owners: SYNC_OWNERS_MAX,
   tasks: 1000,
-  bytes: 8 * 1024 * 1024,
+  taskBytes: 6 * 1024 * 1024,
+  bytes: 12 * 1024 * 1024,
 }
 
 /* The latest comment's instant per open task the caller can see that one of
- * `owner_ids` owns: active (not archived, in an active project), To Do, In
- * Progress or In Review, and owned by that person under the Reviewer rule
- * (lib/review.ts taskOwnerId). `at` is null for a task with no comment. Any
- * member may read.
+ * `owner_ids` owns. A task counts when it is active (not archived, in an
+ * active project), To Do, In Progress or In Review, and owned by that person
+ * under the Reviewer rule (lib/review.ts taskOwnerId). `at` is null for a
+ * task with no comment. Any member may read.
  *
- * The answer covers at most LAST_COMMENTS.tasks tasks and stops reading
- * comments once it has read LAST_COMMENTS.bytes, and one comment more. When
- * either cuts it short, `complete` is false and the tasks left out have no
- * row, so the page shows no mark for them rather than a wrong one. Owners
- * are read in the order given, so the first ones keep their rows. Index
- * ranges are about two per person plus one per task answered, beside the
+ * Each owner's open tasks are read by index, so the call reads neither the
+ * organization's other tasks nor the owner's Backlog and Done ones. The
+ * answer covers at most LAST_COMMENTS.tasks tasks. The owner scan stops at
+ * the first task it reads once the tasks read reach LAST_COMMENTS.taskBytes.
+ * The comment reads stop once tasks and comments together reach
+ * LAST_COMMENTS.bytes, which they pass by one comment at most. When any of
+ * these cuts the answer short, `complete` is false and the tasks left out
+ * have no row, so the page shows no mark for them rather than a wrong one.
+ * Owners are read in the order given, so the first ones keep their rows.
+ * Index ranges are four per person plus one per task answered, beside the
  * caller's project view. */
 export const lastComments = orgQuery({
   args: { owner_ids: v.array(v.string()) },
@@ -76,30 +88,40 @@ export const lastComments = orgQuery({
     const view = await orgProjectView(ctx, ctx.me)
     const isRow = (task: Doc<'issues'>, owner: string) =>
       task.org_id === ctx.me.org_id &&
-      OPEN_STATUSES.has(task.status) &&
       taskOwnerId(task) === owner &&
       view.visible(task.project_id) &&
       view.byUuid.get(task.project_id)?.archived_at === undefined
+    // An owner's open tasks are those they are assigned and, In Review,
+    // those they review. A task with the same person in both roles turns up
+    // twice.
+    const held = (owner: string) => [
+      ...OPEN_STATUSES.map((status) =>
+        ctx.db
+          .query('issues')
+          .withIndex('by_assignee_archived_status', (q) =>
+            q.eq('assignee_id', owner).eq('archived_at', undefined).eq('status', status),
+          ),
+      ),
+      ctx.db
+        .query('issues')
+        .withIndex('by_reviewer_archived_status', (q) =>
+          q.eq('reviewer_id', owner).eq('archived_at', undefined).eq('status', 'review'),
+        ),
+    ]
 
-    // An owner's tasks are those they are assigned or review. A task with
-    // the same person in both roles turns up twice.
+    // Every task and comment read counts toward `bytes`, kept or not.
     const ids = new Set<string>()
+    let bytes = 0
     let complete = true
     scan: for (const owner of owners) {
-      const held = [
-        ctx.db
-          .query('issues')
-          .withIndex('by_assignee_archived', (q) =>
-            q.eq('assignee_id', owner).eq('archived_at', undefined),
-          ),
-        ctx.db
-          .query('issues')
-          .withIndex('by_reviewer_archived', (q) =>
-            q.eq('reviewer_id', owner).eq('archived_at', undefined),
-          ),
-      ]
-      for (const tasks of held) {
+      for (const tasks of held(owner)) {
         for await (const task of tasks) {
+          const spent = bytes >= LAST_COMMENTS.taskBytes
+          bytes += getDocumentSize(task)
+          if (spent) {
+            complete = false
+            break scan
+          }
           if (ids.has(task.id) || !isRow(task, owner)) continue
           if (ids.size === LAST_COMMENTS.tasks) {
             complete = false
@@ -115,7 +137,6 @@ export const lastComments = orgQuery({
     // at most one comment.
     const queue = [...ids]
     const rows: { issue_id: string; at: string | null }[] = []
-    let bytes = 0
     while (rows.length < queue.length) {
       if (bytes >= LAST_COMMENTS.bytes) {
         complete = false

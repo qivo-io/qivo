@@ -435,25 +435,37 @@ describe('teamSync.lastComments', () => {
     // the third comment passes the budget, so the answer ends there
     expect(cut.rows).toHaveLength(3)
     expect(cut.rows.every((r) => r.at === NOW)).toBe(true)
+
+    // the tasks read spend the same budget, so long ones leave no comment
+    // read at all
+    for (let n = 0; n < 3; n++) {
+      await plantIssue(t, { ...base, assignee_id: f.admin.id, description: 'x'.repeat(20_000) })
+    }
+    const spent = await lastComments(t, f.admin, f.org.id, [f.admin.id])
+    expect(spent).toEqual({ rows: [], complete: false })
   })
 
-  it('reads by owner, however many open tasks the organization holds', async () => {
-    const t = newT({ transactionLimits: { databaseQueries: 100 } })
+  it("reads only the asked owners' open tasks, however many others exist", async () => {
+    const t = newT({ transactionLimits: { databaseQueries: 100, documentsRead: 300 } })
     const f = await withOrg(t)
     const others = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.admin.id }
+    // 5,000 open tasks someone else holds, and 2,000 the owner closed or
+    // has not started. An organization-wide or a status-blind owner read
+    // passes the document limit.
     await t.run(async (ctx) => {
-      for (let n = 0; n < 5000; n++) {
+      for (let n = 0; n < 7000; n++) {
         await ctx.db.insert('issues', {
           id: uuid(),
           num: 10_000 + n,
           title: 'Bulk task',
           description: '',
-          status: 'progress',
+          status: n < 5000 ? 'progress' : n % 2 ? 'done' : 'backlog',
           priority: 'medium',
           paused: false,
           created_at: NOW,
           updated_at: NOW,
           ...others,
+          ...(n < 5000 ? {} : { assignee_id: f.user.id, reviewer_id: f.user.id }),
         })
       }
     })
@@ -464,6 +476,73 @@ describe('teamSync.lastComments', () => {
     const answer = await lastComments(t, f.viewer, f.org.id, [f.user.id])
     expect(answer.complete).toBe(true)
     expect(answer.rows.map((r) => r.issue_id).sort()).toEqual(owned.map((i) => i.id).sort())
+  })
+
+  it('counts every task it reads toward LAST_COMMENTS.taskBytes, kept or not', async () => {
+    LAST_COMMENTS.taskBytes = 50_000
+    const t = newT()
+    const f = await withOrg(t)
+    const hiddenSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
+    // read first (index order), and not the viewer's to see
+    for (let n = 0; n < 3; n++) {
+      await plantIssue(t, {
+        ...base,
+        project_id: hiddenSub.id,
+        status: 'todo',
+        description: 'x'.repeat(20_000),
+      })
+    }
+    const shown = await plantIssue(t, { ...base, status: 'todo' })
+    const viewer = await lastComments(t, f.viewer, f.org.id, [f.user.id])
+    expect(viewer).toEqual({ rows: [], complete: false })
+    // the hidden project's lead keeps the tasks the budget let it read
+    const lead = await lastComments(t, f.user, f.org.id, [f.user.id])
+    expect(lead.complete).toBe(false)
+    expect(lead.rows).toHaveLength(3)
+    expect(lead.rows.map((r) => r.issue_id)).not.toContain(shown.id)
+  })
+
+  it("stays under Convex's read limit with long tasks and comments, cut short", async () => {
+    const t = newT({ transactionLimits: { bytesRead: 16 * 2 ** 20 } })
+    const f = await withOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
+    // 430 open tasks with 20,000 characters each in their description and
+    // their latest comment, about 17 MB together
+    for (let chunk = 0; chunk < 430; chunk += 86) {
+      await t.run(async (ctx) => {
+        for (let n = chunk; n < chunk + 86; n++) {
+          const id = uuid()
+          await ctx.db.insert('issues', {
+            id,
+            num: 10_000 + n,
+            title: 'Long task',
+            description: 'd'.repeat(20_000),
+            status: 'progress',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            ...base,
+          })
+          await ctx.db.insert('comments', {
+            id: uuid(),
+            issue_id: id,
+            author: f.user.id,
+            body: 'c'.repeat(20_000),
+            created_at: NOW,
+          })
+        }
+      })
+    }
+    const answer = await lastComments(t, f.viewer, f.org.id, [f.user.id])
+    expect(answer.complete).toBe(false)
+    expect(answer.rows.length).toBeGreaterThan(100)
+    expect(answer.rows.every((r) => r.at === NOW)).toBe(true)
   })
 
   it(`refuses more than ${SYNC_OWNERS_MAX} people at a time`, async () => {

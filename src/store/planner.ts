@@ -3994,7 +3994,7 @@ export const PLANNER = {
      commented on (api.teamSync.lastComments), for its "untouched" and
      "changed" marks. Subscribed only while the page is open, and only for
      `ownerIds`, the people whose cards it shows or shows next, most needed
-     first: an answer cut short by the server's caps covers the first ones.
+     first. An answer cut short by the server's caps covers the first ones.
      The page calls this with the home organization whenever they change,
      and with null on unmount. No owners means no subscription. Every delivery
      replaces the map wholesale. A new organization empties it; new owners

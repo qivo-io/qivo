@@ -455,8 +455,10 @@ export type RowMarks = {
 }
 
 /** Everything a row says about itself on `person`'s page. `lastCommentAt` is
-    the task's latest comment (`P.lastComments` by uuid); `activity` may be
-    the whole feed or the task's own events. */
+    the task's latest comment (`P.lastComments` by uuid), null when it has
+    none. Left out, the comment is not known yet, so the row carries no since
+    mark rather than call a discussed task untouched. `activity` may be the
+    whole feed or the task's own events. */
 export function rowMarks(
   it: SyncIssue,
   o: {
@@ -464,7 +466,7 @@ export function rowMarks(
     since: number
     verdict: Verdict
     issueById: Readonly<Record<string, BlockerIssue>>
-    lastCommentAt?: number
+    lastCommentAt?: number | null
     activity: readonly SyncEvent[]
   },
 ): RowMarks {
@@ -476,17 +478,17 @@ export function rowMarks(
     noEstimate: it.remaining == null,
     noReviewer: it.status === 'review' && !it.reviewer,
     reviewFor: reviewing && it.assignee && it.assignee !== o.person ? it.assignee : null,
-    since: sinceMark(it, reviewing, o),
+    since: o.lastCommentAt === undefined ? null : sinceMark(it, reviewing, o.lastCommentAt, o),
   }
 }
 
 function sinceMark(
   it: SyncIssue,
   reviewing: boolean,
-  o: { since: number; lastCommentAt?: number; activity: readonly SyncEvent[] },
+  comment: number | null,
+  o: { since: number; activity: readonly SyncEvent[] },
 ): SinceMark | null {
   const events = eventsOf(it.id, o.activity)
-  const comment = o.lastCommentAt ?? null
   const lastTouch = Math.max(it.updatedAt, comment ?? 0, events.at(-1)?.ts ?? 0)
   if (it.status === 'progress' && lastTouch < o.since) return { kind: 'untouched', at: lastTouch }
   // an unknown hand-off (no stamp, not in the feed) says neither

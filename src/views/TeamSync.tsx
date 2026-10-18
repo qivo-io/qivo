@@ -426,8 +426,8 @@ export function TeamSync({
 
   // the latest comment per open task, the one fact the snapshot lacks, for
   // the people whose cards this step shows and then those of the steps on
-  // either side, so Next and Previous open with their marks (in that order:
-  // an answer cut short covers the first ones)
+  // either side, so Next and Previous open with their marks. The order
+  // matters, because an answer cut short covers the first ones.
   const cardOwners = (s: string | undefined): string[] =>
     s === 'agents'
       ? agents.filter((a) => openAgents.has(a.id)).map((a) => a.id)

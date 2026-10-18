@@ -472,17 +472,19 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
     since: ctx.since,
     verdict: bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
     issueById: P.issueById,
-    lastCommentAt: P.lastComments.get(it.uuid) ?? undefined,
+    // absent until an answer covers this task, so no since mark shows
+    lastCommentAt: P.lastComments.get(it.uuid),
     activity: P.activity,
   })
-  // untouched / changed read the latest comment too: say nothing until an
-  // answer has covered this task rather than call a discussed task untouched
-  const since = P.lastComments.has(it.uuid) ? marks.since : null
   const hint = planHint(it)
   const dueLate = !!it.due && (it.due < ctx.day.today || marks.verdict === 'late')
   const reviewFor = marks.reviewFor ? P.user(marks.reviewFor) : null
   const hasMarks =
-    marks.noEstimate || marks.noReviewer || marks.blockedBy.length > 0 || !!since || !!reviewFor
+    marks.noEstimate ||
+    marks.noReviewer ||
+    marks.blockedBy.length > 0 ||
+    !!marks.since ||
+    !!reviewFor
   const tick = (
     <ReviewTick
       hook="sync"
@@ -540,7 +542,7 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
                 blocked by <span className="!font-mono">{marks.blockedBy.join(', ')}</span>
               </span>
             )}
-            {since && <SinceText mark={since} now={ctx.now} />}
+            {marks.since && <SinceText mark={marks.since} now={ctx.now} />}
             {reviewFor && (
               <span className="inline-flex items-center gap-1.5 text-text-2">
                 <Avatar id={reviewFor.id} size={20} />
