@@ -89,15 +89,17 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
    that file's changes out and reviews an empty diff.
 6. Fix the valid findings and commit.
 7. Push and open the pull request. Merge it once its `quality`, `secrets`
-   and `Vercel – qivo` checks pass on the head commit, if the task says to
-   merge. The `Vercel – qivo` preview is the only run of `convex deploy`
-   before main.
+   and `Vercel – qivo` checks pass on the head commit. The `Vercel – qivo`
+   preview is the only run of `convex deploy` before main. If a check fails,
+   fix the cause, with a new commit if the change caused it, and wait for the
+   checks again. If a check is cancelled or does not finish, do not merge,
+   and report it.
 
 If a step fails, times out or cannot run, stop before step 7 and report it.
 A commit added after the pull request opens, other than a rebase without
 conflict edits, gets step 1 on its own diff, and the fixes, before the merge.
 A pull request opened another way, for example by Dependabot or from a fork,
-gets steps 1 to 6 on its head before it merges.
+gets steps 1 to 6 on its head, then merges on the same checks as step 7.
 
 `${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/README.md`
 has the exact steps, the reviewer prompt and how to record each step. Read it
