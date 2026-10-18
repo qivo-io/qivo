@@ -46,7 +46,7 @@ import {
   restoreItems,
   runStep,
 } from './model/deletedItems'
-import { listFor, matchesFor } from './model/deletedItemsList'
+import { listFor, matchesFor, rowFor } from './model/deletedItemsList'
 
 /* The items `ids` names that `me` can see, once each, and the other ids,
  * which answer not_found whether they are unknown, in another organization
@@ -70,6 +70,16 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
 export const list = authedQuery({
   args: { deleted_by: v.optional(v.string()) },
   handler: async (ctx, { deleted_by }) => await listFor(ctx, ctx.myProfiles.values(), deleted_by),
+})
+
+/* ------------------------------------------------------------------- item
+ * One item's row as the list would show it, or null when the caller does
+ * not see it, the same answer for unknown, hidden and other organizations'
+ * ids. For the project item a blocked row waits for, when no list the page
+ * holds has it. */
+export const item = authedQuery({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => await rowFor(ctx, ctx.myProfiles.values(), id),
 })
 
 /* ---------------------------------------------------------------- matches

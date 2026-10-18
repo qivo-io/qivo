@@ -438,6 +438,27 @@ async function rowOf(
   }
 }
 
+/** Item `id` as its row would show it to the caller's seat in the item's
+ * organization, or null when that seat does not see it: unknown, purging,
+ * hidden and other organizations' items alike. The page asks for the
+ * project item a blocked row must restore first when no list it holds has
+ * that item, since a capped list or one narrowed to one person need not. */
+export async function rowFor(
+  ctx: QueryCtx,
+  seats: Iterable<Doc<'profiles'>>,
+  id: string,
+): Promise<DeletedRow | null> {
+  const item = await byId(ctx, 'deleted_items', id)
+  if (item === null) return null
+  for (const me of seats) {
+    if (me.org_id !== item.org_id) continue
+    const sight = await sightOf(ctx, me)
+    const orgName = (await byId(ctx, 'organizations', me.org_id))?.name ?? ''
+    return await rowOf(ctx, sight, orgName, item)
+  }
+  return null
+}
+
 /** The task a redacted row shows: one of its tasks in a project the viewer
  * can see. It checks the item's tasks itself rather than filter the range,
  * so a metered ctx (seatList) counts every task it passes over, as Convex

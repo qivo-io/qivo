@@ -108,6 +108,8 @@ const rowsOf = async (t: T, who: Doc<'profiles'>) => (await list(t, who)).items
 const idsOf = async (t: T, who: Doc<'profiles'>) => (await rowsOf(t, who)).map((r) => r.id)
 const rowOf = async (t: T, who: Doc<'profiles'>, id: string) =>
   (await rowsOf(t, who)).find((r) => r.id === id)
+const item = (t: T, who: Doc<'profiles'>, id: string) =>
+  as(t, who).query(api.deletedItems.item, { id })
 const matches = (t: T, who: Doc<'profiles'>, text: string) =>
   as(t, who).query(api.deletedItems.matches, { text })
 const restore = (t: T, who: Doc<'profiles'>, ids: string[]) =>
@@ -1047,6 +1049,29 @@ describe('the list (design 6.2)', () => {
     await withOrg(t)
     await expectRefusal(t.query(api.deletedItems.list, {}), 'forbidden', /^not signed in$/)
     await expectRefusal(t.query(api.deletedItems.matches, { text: 'x' }), 'forbidden')
+    await expectRefusal(t.query(api.deletedItems.item, { id: uuid() }), 'forbidden')
+  })
+
+  it('answers one item as its row, for a blocked row whose project item no list holds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    await deleteTask(t, f.guest, task.id)
+    await deleteTask(t, f.otherAdmin, foreign.id)
+    later()
+    await deleteProject(t, f.user, f.meta.id)
+    const taskItem = await itemFor(t, task.id)
+    const projectItem = await itemFor(t, f.meta.id)
+    expect((await rowOf(t, f.admin, taskItem.id))?.blocked?.item_id).toBe(projectItem.id)
+
+    expect(await item(t, f.admin, projectItem.id)).toEqual(await rowOf(t, f.admin, projectItem.id))
+    expect(await item(t, f.admin, projectItem.id)).toMatchObject({ can_restore: true })
+    // hidden, foreign and unknown ids answer alike
+    expect(await item(t, f.guest, taskItem.id)).toBeNull()
+    expect(await item(t, f.guest, projectItem.id)).toBeNull()
+    expect(await item(t, f.admin, (await itemFor(t, foreign.id)).id)).toBeNull()
+    expect(await item(t, f.admin, uuid())).toBeNull()
   })
 })
 

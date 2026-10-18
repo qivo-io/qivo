@@ -142,6 +142,35 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
   return { list, latest, retry: () => setAttempt((n) => n + 1) }
 }
 
+/** deletedItems.item for `id`, live: one item's row, for the project item a
+    blocked row waits for when no list the page holds has it. Undefined
+    without an id and while loading, null when the caller does not see the
+    item or the query failed. */
+function useDeletedItem(id: string | undefined) {
+  const [answer, setAnswer] = useState<{ id: string; row: DeletedRow | null } | undefined>()
+  useEffect(() => {
+    setAnswer(undefined)
+    if (id === undefined) return
+    let active = true
+    const unsubscribe = convex.onUpdate(
+      api.deletedItems.item,
+      { id },
+      (row) => {
+        if (active) setAnswer({ id, row })
+      },
+      (cause) => {
+        console.error('[qivo] deleted item failed:', cause)
+        if (active) setAnswer({ id, row: null })
+      },
+    )
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [id])
+  return answer !== undefined && answer.id === id ? answer.row : undefined
+}
+
 /** The windows the page opens: restore several items, restore a line that
     can only come back with a whole item (WholeItemWindow), or delete one for
     good. `key` is the line that opened it, for focus. `selection` marks a
@@ -320,6 +349,14 @@ export function DeletedItemsPage() {
   /** Item `id` as a line acts on it. That is a list's row, else an item that
       only a search hit names. */
   const itemOf = (id: string): ItemRow | undefined => findItem(id) ?? hitItems.get(id)
+  /* The project item that the row of an open whole item window waits for,
+     asked of the server when no list holds it: a search can find a task
+     item older than a capped list whose project item the list left out
+     too, and a list narrowed to one person need not hold another's. */
+  const waitsFor =
+    ask?.kind === 'whole' && ask.line.kind === 'item' ? ask.line.row.blocked?.item_id : undefined
+  const missing = waitsFor !== undefined && findItem(waitsFor) === undefined ? waitsFor : undefined
+  const asked = useDeletedItem(missing)
 
   /* The selection holds only what the person can still act on. A delivery or
      a filter change drops a selected id whose row is no longer shown, or that
@@ -1071,10 +1108,12 @@ export function DeletedItemsPage() {
           line={ask.line}
           holder={(() => {
             const item = lineItem(ask.line)
-            if (ask.line.kind !== 'match') return findItem(item.blocked?.item_id)
+            if (ask.line.kind !== 'match')
+              return findItem(item.blocked?.item_id) ?? asked ?? undefined
             // the hit's own item stands in while no list holds its project item
             return itemOf(item.id) ?? (item.hit ? item : undefined)
           })()}
+          asking={missing !== undefined && asked === undefined}
           saving={saving}
           onClose={() => setAsk(null)}
           onRestore={async (holder) => {
@@ -1217,10 +1256,12 @@ function comesBack(holder: DeletedRow): string {
     (a capped list stopped before it) has no name or counts here, so the
     window speaks of "the project". While a restore is saving, the window
     waits for it, also when the list meanwhile shows the item restoring or
-    gone. */
+    gone. `asking` holds while the page asks the server for a holder that
+    no list has, and Restore waits for the answer. */
 function WholeItemWindow({
   line,
   holder,
+  asking,
   saving,
   onClose,
   onRestore,
@@ -1228,6 +1269,7 @@ function WholeItemWindow({
 }: {
   line: Line
   holder: ItemRow | undefined
+  asking: boolean
   saving: boolean
   onClose: () => void
   onRestore: (holder: ItemRow) => void
@@ -1260,7 +1302,7 @@ function WholeItemWindow({
       }
       focusAfterClose={focusAfterClose}
       footer={
-        canRestore || saving ? undefined : (
+        canRestore || saving || asking ? undefined : (
           <>
             <div className="min-w-0 flex-1" />
             <Button type="button" variant="ghost" className="text-text-1" onClick={onClose}>

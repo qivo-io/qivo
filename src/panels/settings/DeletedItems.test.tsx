@@ -55,6 +55,8 @@ let lists: Subscription[]
 let answers: Record<string, ((args: Record<string, unknown>) => Promise<Answer>) | undefined>
 // the page's deletedItems.matches subscriptions, one per searched text
 let searches: Search[]
+// the page's deletedItems.item subscriptions
+let itemQueries: { id: string; next: (row: DeletedRow | null) => void; live: boolean }[]
 
 const DANIEL: Deleter = {
   you: false,
@@ -177,9 +179,17 @@ async function load(role: Role = 'admin', setup?: (snapshot: Snapshot) => void) 
   lists = []
   answers = {}
   searches = []
+  itemQueries = []
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'snapshot:forMe') next(structuredClone(snap))
+    if (name === 'deletedItems:item') {
+      const subscription = { id: args.id, next, live: true }
+      itemQueries.push(subscription)
+      return () => {
+        subscription.live = false
+      }
+    }
     if (name === 'deletedItems:matches') {
       const subscription: Search = { text: args.text, next, fail, live: true }
       searches.push(subscription)
@@ -1751,6 +1761,35 @@ describe('task items the search finds', () => {
     // no list will drop it, so its row goes now, and focus with it to the search box
     expect(has('[data-deleted-row="item-old"]')).toBe(false)
     expect(document.activeElement).toBe(find('[data-deleted-search]'))
+  })
+
+  it('asks the server for the project item an older task waits for when no list holds it', async () => {
+    await open()
+    answers['deletedItems:restore'] = async () => ({
+      restored: ['item-trial'],
+      refused: [],
+      deferred: ['item-old'],
+    })
+    // the capped list ends before the task item and the project item deleted after it
+    await deliver([task(1)], true)
+    const blocked = { reason: 'project_deleted', item_id: 'item-trial' } as const
+    await found('QN-77', [taskHit({ can_restore: false, blocked })])
+    await click(find('[data-deleted-row="item-old"] [data-restore]'))
+    expect(text('[data-modal-shell] h2')).toBe('QN-77 is in a deleted project')
+    expect(itemQueries.filter((q) => q.live).map((q) => q.id)).toEqual(['item-trial'])
+    // Restore waits for the answer rather than offering only Close
+    expect(button('Restore the project and QN-77').disabled).toBe(true)
+    await act(async () => itemQueries[0].next(trial()))
+    await settle()
+    expect(text('[data-project-first]')).toContain(
+      'QN-77 was deleted before its project Field trial Q3, which is in Deleted items too.',
+    )
+    await click(button('Restore Field trial Q3 and QN-77'))
+    expect(calls('deletedItems:restore')).toEqual([
+      { org_id: ORG, ids: ['item-trial', 'item-old'] },
+    ])
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(itemQueries[0].live).toBe(false)
   })
 
   it('shows a task item the list holds once, also when the text is in its subtask', async () => {
