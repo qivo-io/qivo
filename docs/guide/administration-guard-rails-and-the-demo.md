@@ -174,8 +174,10 @@ removal leaves open tasks with the people who hold them, because keeping
 people as Viewers or reassigning their tasks saves more than the removal. In
 the app it therefore does not ask about the tasks. A message says who can no
 longer see how many tasks, so a project lead can reassign them once editing
-resumes. Reactivating users, deleting teams and every other change wait until
-billing is active again.
+resumes. Project leads and team leaders who are not admins cannot remove
+access then. Reactivating users, deleting teams and every other change wait
+until billing is active again. When you remove access you cannot, or delete a
+team, the app says the organization is read-only and opens no window.
 
 Each organization keeps its assigned plan version. New plans do not change
 existing prices or allowances. The published plan costs $1 per active billable

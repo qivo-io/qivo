@@ -374,7 +374,7 @@ describe('profiles.update — the admin door', () => {
       'rule',
     )
     expect(leadsProjects.data.message).toBe(
-      'user leads 2 project(s) — hand those over before making them a viewer',
+      'user leads 2 project(s). Hand those over before making them a viewer',
     )
     // Hand both projects over; team leadership is checked independently.
     await t.run(async (ctx) => {
@@ -400,7 +400,7 @@ describe('profiles.update — the admin door', () => {
       'rule',
     )
     expect(leadsTeams.data.message).toBe(
-      'user leads 1 team(s) — hand those over before making them a viewer',
+      'user leads 1 team(s). Hand those over before making them a viewer',
     )
     // a guest never joins a team through the diff either
     await expectRefusal(

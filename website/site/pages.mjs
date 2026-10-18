@@ -93,10 +93,10 @@ organization adds no user charge to yours.</p>
   <p class="amt"><b>$1</b><span>per user, per month</span></p>
   <p style="margin:0;color:var(--text-3);font-size:14.5px">Billed on the number of
   active users at monthly renewal, including pending invitations. Minimum
-  5 users — $5 a month, before applicable taxes.</p>
+  5 users, so $5 a month before applicable taxes.</p>
   <ul>
     <li>Unlimited projects, sub-projects and tasks</li>
-    <li>Every feature — there is no higher tier</li>
+    <li>Every feature, with no higher tier</li>
     <li>AI agents are users, priced the same and no differently</li>
     <li>REST API and MCP server included</li>
     <li>1&nbsp;GB of attachments per user (pooled)</li>
@@ -111,12 +111,12 @@ organization adds no user charge to yours.</p>
 <div class="wrap" style="padding:0;max-width:none">
 <h2>If you go past what is included</h2>
 <p class="lede">Two meters, both charged by the started unit so a line item is
-never a fraction of something — and <strong>both allowances are pooled</strong>.</p>
+never a fraction of something. <strong>Both allowances are pooled</strong>.</p>
 <div class="scroller"><table class="meter">
 <thead><tr><th>Meter</th><th>Included</th><th>After that</th></tr></thead>
 <tbody>
-<tr><td>Attachment storage</td><td>5&nbsp;GB, or 1&nbsp;GB × users if larger — pooled organization-wide</td><td>$1 per extra started GB</td></tr>
-<tr><td>API and MCP calls</td><td>25,000 × users — pooled organization-wide</td><td>$1 per extra started 25,000</td></tr>
+<tr><td>Attachment storage</td><td>5&nbsp;GB, or 1&nbsp;GB × users if larger, pooled organization-wide</td><td>$1 per extra started GB</td></tr>
+<tr><td>API and MCP calls</td><td>25,000 × users, pooled organization-wide</td><td>$1 per extra started 25,000</td></tr>
 </tbody>
 </table></div>
 <p style="color:var(--text-3);font-size:14.5px;max-width:680px">Pooled means
@@ -142,7 +142,7 @@ needed: the next renewal uses the current count, without prorated charges
 or credits during the month.</p></div>
 <div class="card"><h3>What about guests?</h3><p>If the guest you invite has
 an active membership in their own Qivo organization,
-you pay no extra user charge — which is the usual case for a
+you pay no extra user charge. That is the usual case for a
 client or a contractor who uses Qivo themselves. Otherwise, they count as a
 user on your bill while active in your organization.</p></div>
 <div class="card"><h3>And if two companies invite the same person?</h3><p>If
@@ -166,7 +166,7 @@ organization. No account or card is needed for the demo.</p></div>
 
   return {
     path: '/pricing/',
-    title: `Pricing — ${SITE_NAME}`,
+    title: `Pricing | ${SITE_NAME}`,
     description:
       '$1 per user per month, five-user minimum. AI agents cost the same as people, a guest with their own organization costs you nothing, and every feature is in the one plan.',
     body,

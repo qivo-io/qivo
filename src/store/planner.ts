@@ -20,6 +20,7 @@ import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
+import { BILLING_READ_ONLY, deletionReadOnly } from '../../convex/lib/billingAccess'
 import {
   canCreateProjects,
   isProjectCreators,
@@ -28,7 +29,7 @@ import {
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
-import { NAME_MAX, TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
+import { NAME_MAX, nameOverCap, TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
@@ -1063,15 +1064,20 @@ function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
   return true
 }
 
+/** Whether a refusal reads as the pause: a paused write never left the
+    browser, and a write that was in flight when the last seat went is
+    refused as forbidden, so it reads like the writes paused after it. */
+const refusedAsPaused = (d: ErrData) =>
+  d.code === 'paused' || (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
+
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
    wording says "reverted", never "reloading", because rollback is a repaint,
-   not a refetch. A paused write never left the browser, so its sentence is
-   the pause itself. A write that was in flight when the last seat went is
-   refused as forbidden, and it reads like the writes paused after it. */
+   not a refetch. A paused write's sentence is the pause itself
+   (refusedAsPaused). */
 function toastWriteError(e: unknown) {
   const d = errData(e)
-  if (d.code === 'paused' || (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')) {
+  if (refusedAsPaused(d)) {
     toastPaused()
     return
   }
@@ -1091,7 +1097,7 @@ function toastWriteError(e: unknown) {
    sentence is quoted, forbidden reads the fixed permission line. */
 function restoreErrorText(e: unknown): string {
   const d = errData(e)
-  if (d.code === 'paused') return pausedText()
+  if (refusedAsPaused(d)) return pausedText()
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
@@ -1104,7 +1110,7 @@ function restoreErrorText(e: unknown): string {
    Anything else (offline, a server fault) asks for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
   const d = errData(e)
-  if (d.code === 'paused') return pausedText()
+  if (refusedAsPaused(d)) return pausedText()
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that."
@@ -1164,6 +1170,23 @@ async function deletedItemsCalls<Reason>(
     }
   }
   return outcome
+}
+
+/** Toasts the server's refusal of a `what` name over NAME_MAX and answers
+    true, before anything is painted. A name stored before the cap shows in
+    its field and must be shortened to NAME_MAX before it saves; resending
+    the stored name passes (nameOverCap, model/projects.ts cleanProjectName
+    and its siblings). */
+function refuseLongName(
+  what: 'project' | 'team' | 'milestone' | 'organization',
+  name: string,
+  current: string,
+): boolean {
+  if (!nameOverCap(name.trim(), current)) return false
+  toast(
+    `${what === 'organization' ? 'An' : 'A'} ${what} name must be at most ${NAME_MAX} characters.`,
+  )
+  return true
 }
 
 /* A refused project create names what disappeared, followed by the reason
@@ -2222,10 +2245,11 @@ const removalOrg = (change: AccessRemoval) =>
    it. The snapshot leaves it out, because forMe would then read the billing
    row that the billing sync rewrites every minute and rerun for every
    member. `refused` records a read-only refusal the status has not caught up
-   with (see removeAtOnce) until the status answers again. */
+   with (see removeAtOnce) until the status answers again. `message` is the
+   server's sentence for the block (lib/billingAccess.ts orgWriteBlock). */
 const writeBlocks = new Map<
   string,
-  { readOnly: boolean; refused: boolean; watchers: number; stop: () => void }
+  { readOnly: boolean; refused: boolean; message: string; watchers: number; stop: () => void }
 >()
 /* Whether a removal can only leave the tasks it hides with their holders.
    While billing or a pending deletion makes the organization read-only, the
@@ -2239,6 +2263,17 @@ function leavesHeldTasks(change: AccessRemoval): boolean {
   const orgId = removalOrg(change)
   const block = orgId ? writeBlocks.get(orgId) : undefined
   return !!block && (block.readOnly || block.refused) && actorIn(orgId)?.orgRole === 'admin'
+}
+/* The read-only sentence the server would refuse a removal with, or null
+   while it may go ahead. While billing or a pending deletion makes the
+   organization read-only, the server refuses every removal by someone who
+   is not an organization admin (accessRemovalMutation), and deleting a team
+   for everyone (orgMutation). */
+function removalRefusal(change: AccessRemoval): string | null {
+  const orgId = removalOrg(change)
+  const block = orgId ? writeBlocks.get(orgId) : undefined
+  if (!block || !(block.readOnly || block.refused)) return null
+  return change.kind === 'deleteTeam' || actorIn(orgId)?.orgRole !== 'admin' ? block.message : null
 }
 /* Removes a person's or a team's grant on one project, or a member from a
    team, in one server write that settles the tasks it hides by `choice`
@@ -2325,8 +2360,9 @@ function removeAtOnce(
         // The server works the status out again only when data it read
         // changes, not when access ends at a set time. Until it does, the
         // next removal leaves the tasks (leavesHeldTasks).
-        const block = readOnly(errData(error)) ? writeBlocks.get(orgId) : undefined
-        if (block) block.refused = true
+        const d = errData(error)
+        const block = readOnly(d) ? writeBlocks.get(orgId) : undefined
+        if (block) Object.assign(block, { refused: true, message: d.message || block.message })
         // only a refused reassignment or Viewer grant (model/projectAccess.ts
         // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
         // pause or a lost connection says so itself
@@ -3183,12 +3219,25 @@ export const PLANNER = {
     if (DEMO_MODE || !orgId) return () => {}
     let block = writeBlocks.get(orgId)
     if (!block) {
-      const fresh = { readOnly: false, refused: false, watchers: 0, stop: () => {} }
+      const fresh = {
+        readOnly: false,
+        refused: false,
+        message: BILLING_READ_ONLY,
+        watchers: 0,
+        stop: () => {},
+      }
       writeBlocks.set(orgId, fresh)
       fresh.stop = convex.onUpdate(
         api.billing.status,
         { org_id: orgId },
-        (status) => Object.assign(fresh, { readOnly: !status.writable, refused: false }),
+        (status) =>
+          Object.assign(fresh, {
+            readOnly: !status.writable,
+            refused: false,
+            message: status.deletion
+              ? deletionReadOnly(status.deletion.delete_after)
+              : BILLING_READ_ONLY,
+          }),
         () => {
           fresh.readOnly = false
         },
@@ -3203,13 +3252,22 @@ export const PLANNER = {
       writeBlocks.delete(orgId)
     }
   },
+  /* Whether the server would refuse the removal because the organization is
+     read-only (removalRefusal). An open removal window then closes. */
+  removalRefused: (change: AccessRemoval): boolean => removalRefusal(change) !== null,
   /* Start a removal. Returns true when the removal window should ask first:
      someone would lose sight of their tasks and I can settle them. Otherwise
      the removal goes ahead now, and once the server accepts it, a notice says
      who lost sight of how many tasks. An organization admin's removal while
      the organization is read-only goes ahead too, because it can only leave
-     the tasks (leavesHeldTasks). */
+     the tasks (leavesHeldTasks). One the server would refuse then is refused
+     here with the server's sentence, and no window opens (removalRefusal). */
   startRemoval: (change: AccessRemoval): boolean => {
+    const refusal = removalRefusal(change)
+    if (refusal) {
+      toast(refusal)
+      return false
+    }
     const removal = PLANNER.accessRemoval(change)
     const { people, items } = removal
     if (items.length && PLANNER.canSettleRemoval(removal) && !leavesHeldTasks(change)) return true
@@ -5076,14 +5134,18 @@ export const PLANNER = {
       return null
     }
   },
+  /** Deletes one of my connected apps. Resolves true once it is gone,
+      including when the server no longer has it (a removal from the
+      organization deletes that seat's connections). The caller shows any
+      other refusal, so nothing is toasted here. */
   revokeOAuthConnection: async (id: string) => {
     const operation = write(api.oauthConnections.revoke, { id })
-    run(operation)
+    run(operation, undefined, undefined, () => {})
     try {
       await operation
       return true
-    } catch {
-      return false
+    } catch (e) {
+      return errData(e).code === 'not_found'
     }
   },
 
@@ -5236,6 +5298,8 @@ export const PLANNER = {
   updateProject: (id: string, patch: ProjectPatch): Promise<boolean> => {
     const row = rows.projects.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
+    if ('name' in patch && refuseLongName('project', patch.name ?? '', row.name))
+      return Promise.resolve(false)
     if ('teamAccess' in patch) {
       rows.teamAccess = rows.teamAccess.filter((a) => a.project_id !== id)
       Object.entries(patch.teamAccess || {}).forEach(([teamId, level]) => {
@@ -5442,10 +5506,12 @@ export const PLANNER = {
 
   /* Organization settings — the old six independent UPDATEs fold into ONE
      patch mutation; the client clamps stay (the field must show what will be
-     stored before it is). Narrates nothing, name included. */
-  setOrg: (patch: OrgPatch) => {
+     stored before it is). Narrates nothing, name included. Returns false
+     when it refused the change before sending it (toasted). */
+  setOrg: (patch: OrgPatch): boolean => {
     const org = homeRow()
-    if (!org || refusePausedEdit()) return
+    if (!org || refusePausedEdit()) return false
+    if ('name' in patch && refuseLongName('organization', patch.name ?? '', org.name)) return false
     const wire: FunctionArgs<typeof api.orgs.update>['patch'] = {}
     if ('name' in patch) {
       org.name = patch.name
@@ -5494,10 +5560,11 @@ export const PLANNER = {
       org.gravatar_avatars = on
       wire.gravatar_avatars = on
     }
-    if (!Object.keys(wire).length) return
+    if (!Object.keys(wire).length) return true
     rebuild() // re-anchors the grid when the week settings moved
     emit()
     run(write(api.orgs.update, { org_id: org.id, patch: wire }))
+    return true
   },
 
   /** Change the organization's address — the first segment under /app/.
@@ -5553,9 +5620,12 @@ export const PLANNER = {
     return uuid
   },
 
-  updateTeam: (id: string, patch: TeamPatch) => {
+  /** Paints the change at once and sends it. Returns false when it refused
+      the change before sending it (toasted). */
+  updateTeam: (id: string, patch: TeamPatch): boolean => {
     const row = rows.teams.get(id)
-    if (!row || refusePausedEdit()) return
+    if (!row || refusePausedEdit()) return false
+    if ('name' in patch && refuseLongName('team', patch.name ?? '', row.name)) return false
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
     if ('name' in patch) {
       row.name = patch.name
@@ -5585,10 +5655,11 @@ export const PLANNER = {
       row.track_delay_default = on
       wire.track_delay_default = on
     }
-    if (!Object.keys(wire).length) return
+    if (!Object.keys(wire).length) return true
     rebuild()
     emit()
     run(write(api.teams.update, { org_id: row.org_id, id, patch: wire }))
+    return true
   },
 
   /* --- team membership (managed in Team settings) ------------------------- */
@@ -6073,13 +6144,17 @@ export const PLANNER = {
     return uuid
   },
 
-  updateMilestone: (id: string, patch: { name?: string; week?: number }) => {
+  /** Paints the change at once and sends it. Returns false when it refused
+      the change before sending it (toasted). */
+  updateMilestone: (id: string, patch: { name?: string; week?: number }): boolean => {
     const row = rows.milestones.get(id)
-    if (!row) return
+    if (!row) return false
     const db: FunctionArgs<typeof api.projects.updateMilestone>['patch'] = {}
     if ('name' in patch) db.name = patch.name
     if (patch.week != null) db.week = weekToISO(patch.week)
-    if (!Object.keys(db).length || refusePausedEdit()) return
+    if (!Object.keys(db).length) return true
+    if (refusePausedEdit()) return false
+    if ('name' in patch && refuseLongName('milestone', patch.name ?? '', row.name)) return false
     Object.assign(row, db)
     rebuild()
     emit()
@@ -6092,6 +6167,7 @@ export const PLANNER = {
           patch: db,
         }),
       )
+    return true
   },
 
   removeMilestone: (id: string) => {

@@ -87,7 +87,7 @@ export function Dashboard() {
         description="Platform activity, workspace totals and demo growth."
         actions={
           <Button type="button" disabled={busy} onClick={refresh}>
-            <RefreshCw className={busy ? 'size-4 animate-spin' : 'size-4'} aria-hidden="true" />
+            <RefreshCw className="size-4" aria-hidden="true" />
             {busy ? 'Refreshing…' : 'Refresh'}
           </Button>
         }

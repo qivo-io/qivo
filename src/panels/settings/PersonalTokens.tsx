@@ -175,7 +175,7 @@ function TokenRow({
       ? 'Confirm token deletion'
       : `Delete ${revoked ? 'revoked' : 'expired'} token`
     : armed
-      ? 'Confirm revocation, connected clients lose access immediately'
+      ? 'Confirm revocation. Connected clients lose access immediately'
       : 'Revoke this token'
   return (
     <div

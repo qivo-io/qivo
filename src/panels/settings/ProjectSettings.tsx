@@ -21,6 +21,7 @@ import {
   SettingsGroup,
   SettingsSection,
 } from '../../components/settingsPage'
+import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
@@ -321,12 +322,12 @@ export function ArchivedProjectsPage() {
                         </span>
                       )}
                     </div>
-                    <HoverTooltip content={new Date(r.archivedAt).toLocaleString()}>
+                    <HoverTooltip content={deletedAtFull(new Date(r.archivedAt))}>
                       <div
                         data-archived-when
                         className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono"
                       >
-                        archived {P.fmtAgo(r.archivedAt)}
+                        archived {dayInSentence(new Date(r.archivedAt), new Date())}
                       </div>
                     </HoverTooltip>
                   </div>
@@ -588,9 +589,10 @@ function ProjectSettingsFields({
           maxLength={P.NAME_MAX}
           disabled={!isLead}
           onCommit={(v) => {
-            if (P.refusePausedEdit()) return
-            P.updateProject(proj.id, { name: v })
-            window.showToast?.(`Renamed to “${v}”`)
+            // the toast waits for the server, so a refusal never reads as done
+            void P.updateProject(proj.id, { name: v }).then((saved) => {
+              if (saved) window.showToast?.(`Renamed to “${v}”`)
+            })
           }}
         />
         {isMeta && (

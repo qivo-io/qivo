@@ -686,7 +686,7 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
           className="pointer-events-auto animate-in fade-in slide-in-from-bottom-2 [display:flex] [align-items:center] [gap:8px] [padding:8px] [background:var(--surface-2)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-pop)] [font-size:var(--fs-base)] [color:var(--text-1)]"
         >
           <Icon name={toastLook(t.tone).icon} size={16} color={toastLook(t.tone).color} />
-          {t.text}
+          <span className="min-w-0 [overflow-wrap:anywhere]">{t.text}</span>
           <Button
             type="button"
             variant="ghost"

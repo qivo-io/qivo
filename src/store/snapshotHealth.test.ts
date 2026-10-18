@@ -418,6 +418,50 @@ describe('snapshot trouble', () => {
     )
   })
 
+  it('words a restore or delete refused after every seat is gone like the access notice', async () => {
+    await boot()
+    const { P } = store
+    const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
+    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restored = P.restoreDeletedItems(items)
+    const purged = P.purgeDeletedItems(items)
+    await settle()
+    expect(sentNames()).toEqual([
+      'projects:unarchive',
+      'deletedItems:restore',
+      'deletedItems:purge',
+    ])
+    live().deliver(null)
+    const lost = new ConvexError({ code: 'forbidden', message: 'no profile in this organization' })
+    for (const request of sent) request.reject(lost)
+    expect(await restore).toBe(false)
+    expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+    for (const outcome of [await restored, await purged])
+      expect(outcome).toMatchObject({ failed: ['item-a'], error: store.NO_ACCESS_TEXT })
+    // with a seat, forbidden still reads as a permission refusal
+    live().deliver(structuredClone(snapshot))
+    const again = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    sent[sent.length - 1].reject(lost)
+    expect(await again).toBe(false)
+    expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+  })
+
+  it('deletes a connected app the server no longer has, with no error toast', async () => {
+    await boot()
+    const { P } = store
+    const gone = P.revokeOAuthConnection('connection-a')
+    const refused = P.revokeOAuthConnection('connection-b')
+    await settle()
+    sent[0].reject(new ConvexError({ code: 'not_found', message: 'Connection not found.' }))
+    sent[1].reject(new ConvexError({ code: 'bad_request', message: 'broken' }))
+    expect(await gone).toBe(true)
+    // the page says a failed deletion itself, so the store toasts nothing
+    expect(await refused).toBe(false)
+    await settle()
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
   it('keeps lost access through a query fault until a seat comes back', async () => {
     await boot()
     const { P } = store

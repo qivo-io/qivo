@@ -1,6 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TEXT_MAX } from '../../convex/lib/textLimits'
+import { NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
@@ -18,6 +18,9 @@ const NOW = '2026-09-14T08:00:00.000Z'
 const AT_CAP = 'a'.repeat(TEXT_MAX)
 const OVER = 'a'.repeat(TEXT_MAX + 1)
 const LEGACY = 'b'.repeat(25_000)
+// a name stored before NAME_MAX, and that name shortened but still too long
+const LEGACY_NAME = 'n'.repeat(NAME_MAX + 20)
+const SHORTENED = 'n'.repeat(NAME_MAX + 15)
 
 /* The store refuses text over the server's cap before it paints or sends,
  * so a refused draft is never replaced by a rollback. One task, saved before
@@ -49,6 +52,24 @@ describe('the text cap in the store', () => {
       updated_at: NOW,
       has_hidden_subtasks: false,
       has_hidden_parent: false,
+    })
+    snap.orgs[0].name = LEGACY_NAME
+    snap.projects[0].name = LEGACY_NAME
+    snap.teams.push({
+      id: 'team-a',
+      org_id: snap.orgs[0].id,
+      name: LEGACY_NAME,
+      stale_days: 14,
+      archive_days: 30,
+      track_delay_default: false,
+      created_at: NOW,
+    })
+    snap.milestones.push({
+      id: 'milestone-a',
+      project_id: snap.projects[0].id,
+      name: LEGACY_NAME,
+      week: '2026-09-14',
+      created_at: NOW,
     })
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation((ref) => {
@@ -106,6 +127,41 @@ describe('the text cap in the store', () => {
     void P.addComment('task-a', `  ${AT_CAP}  `)
     expect(P.comments.map((c) => c.body)).toEqual([AT_CAP])
     expect(sent).toEqual(['comments:create'])
+  })
+
+  it('refuses a rename that is still over the name cap before painting or sending', async () => {
+    const { P } = store
+    const project = P.projects[0].id
+    expect(await P.updateProject(project, { name: SHORTENED })).toBe(false)
+    expect(P.updateTeam('team-a', { name: SHORTENED })).toBe(false)
+    expect(P.setOrg({ name: SHORTENED })).toBe(false)
+    expect(P.updateMilestone('milestone-a', { name: SHORTENED })).toBe(false)
+    for (const what of ['A project', 'A team', 'An organization', 'A milestone'])
+      expect(toast).toHaveBeenCalledWith(`${what} name must be at most 80 characters.`, 'error')
+    expect(P.project(project)?.name).toBe(LEGACY_NAME)
+    expect(P.teamById('team-a')?.name).toBe(LEGACY_NAME)
+    expect(P.org.name).toBe(LEGACY_NAME)
+    expect(P.milestones.find((m) => m.id === 'milestone-a')?.name).toBe(LEGACY_NAME)
+    expect(sent).toEqual([])
+  })
+
+  it('sends the stored legacy name back, and any name within the cap', () => {
+    const { P } = store
+    const project = P.projects[0].id
+    void P.updateProject(project, { name: LEGACY_NAME })
+    void P.updateProject(project, { name: 'n'.repeat(NAME_MAX) })
+    expect(P.updateTeam('team-a', { name: ` ${LEGACY_NAME} ` })).toBe(true)
+    expect(P.setOrg({ name: 'Northstar Labs' })).toBe(true)
+    expect(P.updateMilestone('milestone-a', { name: 'Beta' })).toBe(true)
+    expect(P.org.name).toBe('Northstar Labs')
+    expect(sent).toEqual([
+      'projects:update',
+      'projects:update',
+      'teams:update',
+      'orgs:update',
+      'projects:updateMilestone',
+    ])
+    expect(toast).not.toHaveBeenCalled()
   })
 
   it('leaves a comment unchanged when the edit is over the cap', () => {

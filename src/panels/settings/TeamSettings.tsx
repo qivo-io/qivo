@@ -60,9 +60,7 @@ export function TeamPage({
             value={teamName}
             maxLength={P.NAME_MAX}
             onCommit={(v) => {
-              if (P.refusePausedEdit()) return
-              P.updateTeam(ws, { name: v })
-              window.showToast?.('Team renamed')
+              if (P.updateTeam(ws, { name: v })) window.showToast?.('Team renamed')
             }}
           />
         ) : (
@@ -221,7 +219,10 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const confirm = useConfirmArm<string>()
   // deleting a team whose members would lose sight of their tasks asks first
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  const homeTeams = P.teams.filter((t) => t.org === P.homeOrg)
+  // a read-only organization refuses the deletion before the window opens
+  const homeOrg = P.homeOrg
+  useEffect(() => P.watchWriteBlock(homeOrg), [homeOrg])
+  const homeTeams = P.teams.filter((t) => t.org === homeOrg)
   const mine = homeTeams.filter((t) => P.isTeamLeader(t.id))
   const addTeam = () => {
     if (!teamName.trim() || !admin) return

@@ -723,7 +723,8 @@ function Roadmap({
     const s = sessionRef.current
     sessionRef.current = null
     setSession(null)
-    if (s) window.showToast?.(`Planned ${s.issueId}`)
+    // while edits pause, the session's date changes were refused, not planned
+    if (s && !P.snapshotTrouble()) window.showToast?.(`Planned ${s.issueId}`)
   }
   const cancelPlanning = () => {
     const s = sessionRef.current
@@ -1717,7 +1718,7 @@ function Roadmap({
                           wk.year +
                           ', starts ' +
                           P.fmtFull(d) +
-                          (curWeek ? `, today: ${P.fmtISO(P.TODAY_ISO)}` : '')
+                          (curWeek ? `, today is ${P.fmtISO(P.TODAY_ISO)}` : '')
                         }
                       >
                         <div

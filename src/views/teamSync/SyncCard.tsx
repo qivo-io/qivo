@@ -372,7 +372,7 @@ export function MentionCtl({
               send()
             }
           }}
-          className="mb-2 min-h-0 resize-none bg-surface-1 text-sm"
+          className="mb-2 max-h-[min(48dvh,260px)] min-h-0 resize-none overflow-y-auto bg-surface-1 text-sm"
         />
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-text-3">
@@ -589,7 +589,7 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
             <RemainingInput
               hook="sync"
               it={it}
-              title={canWrite ? 'Remaining hours, empty means unset' : READ_ONLY}
+              title={canWrite ? 'Remaining hours. Leave empty for unset' : READ_ONLY}
               disabled={!canWrite}
               onCommit={ctx.touched}
               className={cn(ctx.mobile && 'w-12', it.remaining == null && 'border-warning')}
