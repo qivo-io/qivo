@@ -316,8 +316,18 @@ export const auditLog = platformQuery({
 /* --------------------------------------------------------------- addOperator */
 
 /* Operator enrolment stays CLI-only (0015: "operators are added via
- * SQL/dashboard only"):
- *   npx convex run admin:addOperator '{"email":"…"}'
+ * SQL/dashboard only"). Name the deployment with the private helper, which
+ * refuses to run without the target's key, because a bare `npx convex run`
+ * lands on the deployment in .env.local. TARGET is development, staging or
+ * production:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     TARGET npx convex run admin:addOperator '{"email":"…"}'
+ * The demo backend's stored key cannot run internal functions, so on the
+ * demo the private with-temp-deploy-key helper runs it with a short-lived key
+ * (qivo-internal docs/public-demo-operations.md):
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
+ *     demo --allow deployment:functions:runInternalMutations --purpose operator -- \
+ *     npx convex run admin:addOperator '{"email":"…"}'
  * Two writes, both required: the platform_admins row our wrappers gate on,
  * AND role 'admin' on the Better Auth user — adminMiddleware gates ban/unban
  * on the CALLER's BA role, so an operator without it opens the console but
@@ -364,8 +374,10 @@ export const addOperator = internalMutation({
 
 /* ------------------------------------------------------------ removeOperator */
 
-/* addOperator's inverse, CLI-only for the same reason:
- *   npx convex run admin:removeOperator '{"email":"…"}'
+/* addOperator's inverse, CLI-only for the same reason, and run the same way
+ * through the private helper:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     TARGET npx convex run admin:removeOperator '{"email":"…"}'
  * It undoes both writes — the platform_admins rows and the Better Auth role —
  * behind one guard: the LAST enrolled operator cannot be removed, because the
  * console gates on that table and re-enrolment only happens through

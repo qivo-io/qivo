@@ -1,5 +1,6 @@
 /* The LIVE contract pass (`npm run test:contract`) — drives the REAL cloud
- * dev deployment named in .env.local over HTTP. Deliberately NOT a vitest
+ * dev deployment that CONVEX_DEPLOY_KEY names over HTTP. Run it under the
+ * private with-dev helper (tests/contract/global.setup.mts). Deliberately NOT a vitest
  * workspace: a workspace would make ALL projects run under a plain
  * `vitest run`, which is exactly the hermeticity failure the separate config
  * exists to prevent (the main vitest.config.mts excludes tests/contract/**).

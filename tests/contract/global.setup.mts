@@ -1,16 +1,20 @@
 /* globalSetup for the LIVE contract pass (vitest.contract.config.mts).
  *
- * Target: the cloud dev deployment named in .env.local (CONVEX_DEPLOYMENT /
- * VITE_CONVEX_SITE_URL — the site URL var is the VITE_-prefixed one; there is
- * no bare CONVEX_SITE_URL). The deployment is SHARED: this setup RESETS the
- * Northstar Labs development copy — manual work and saved views inside that
- * organization are lost by design; logins, portraits and keys survive — so
- * never run the contract pass while `npm run dev` work or a smoke is in
- * flight.
+ * Run it under the private with-dev helper (qivo-internal
+ * docs/verification.md), which exports the development CONVEX_DEPLOY_KEY,
+ * QIVO_ENVIRONMENT=development and QIVO_FIXTURE_CREDENTIALS_DIR along with
+ * its runtime file's values. The key chooses the target: the reset and every
+ * `npx convex run` below reach the deployment it names, whatever .env.local
+ * links. The suites call VITE_CONVEX_SITE_URL, from the environment or else
+ * from .env.local, and the setup refuses to start unless that site belongs
+ * to the key's deployment (contract/site.mts). The deployment is SHARED:
+ * this setup RESETS the Northstar Labs development copy — manual work and
+ * saved views inside that organization are lost by design; logins, portraits
+ * and keys survive — so never run the contract pass while `npm run dev` work
+ * or a smoke is in flight.
  *
- * Sequence (cwd = repo root — the CLIs read .env.local themselves, no env
- * plumbing needed; the reset needs the dev-scoped CONVEX_DEPLOY_KEY the
- * browser drives already require, see docs/marketing-demo.md):
+ * Sequence (cwd = repo root; marketing-demo.mjs also loads .env.local, but
+ * the values with-dev exports take precedence):
  *   1. `node scripts/marketing-demo.mjs reset --dev --anchor <ANCHOR>
  *      --confirm northstar-labs` — the same command a person runs. It
  *      provisions the organization when absent, then wipes and seeds its
@@ -35,10 +39,11 @@
  *      revoked-token 401 live. */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marketingId } from '../../convex/internal/marketingDemoData'
+import { contractSiteUrl } from './site.mts'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const STASH = resolve(ROOT, 'tests', 'contract', '.credentials.json')
@@ -63,11 +68,10 @@ function convexRun(fn: string, args?: unknown): Record<string, unknown> {
   return JSON.parse(out.slice(start, end + 1)) as Record<string, unknown>
 }
 
-function siteUrlFromEnvLocal(): string {
-  const env = readFileSync(resolve(ROOT, '.env.local'), 'utf8')
-  const m = env.match(/^VITE_CONVEX_SITE_URL=(\S+)\s*$/m)
-  if (m === null) throw new Error('contract setup: VITE_CONVEX_SITE_URL not found in .env.local')
-  return m[1].replace(/\/$/, '')
+/** The .env.local text, or undefined when the checkout has none. */
+function envLocal(): string | undefined {
+  const file = resolve(ROOT, '.env.local')
+  return existsSync(file) ? readFileSync(file, 'utf8') : undefined
 }
 
 type Minted = { id: string; secret: string }
@@ -87,9 +91,9 @@ function mint(kind: 'agent_key' | 'mcp_token', who: Record<string, string>, name
 }
 
 export default async function setup(): Promise<() => void> {
-  const siteUrl = siteUrlFromEnvLocal()
+  const siteUrl = contractSiteUrl(process.env, envLocal())
   console.log(
-    `[contract] resetting Northstar Labs on ${siteUrl} (shared dev deployment — manual work in that organization is lost)`,
+    `[contract] resetting Northstar Labs on ${siteUrl} (the shared development deployment the key names, where manual work in that organization is lost)`,
   )
   // exits non-zero on any refusal (missing key, wrong deployment, bad anchor);
   // prints paths, never secrets
