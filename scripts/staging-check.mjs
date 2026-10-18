@@ -2240,10 +2240,7 @@ async function uploadChecks() {
     })
   // delete every file, each with the credential and surface that made it
   // Every file is tried, so one failed delete does not keep the others on
-  // the task. A delete that answered success must say deleted: true. One
-  // whose answer was a server or network error, or "attachment not found"
-  // as for a delete whose answer was lost, counts as deleted only when a
-  // read shows the file gone. Any other answer is a failure as it is.
+  // the task, and deleteOutcome decides what each answer means.
   await check('uploads/delete', async () => {
     const failed = []
     for (const { att, cred, surface } of made) {
@@ -2256,20 +2253,13 @@ async function uploadChecks() {
       } catch (error) {
         r = { status: 0, error: describe(error) }
       }
-      const answer = surface === 'rest' ? r.json : r.data
-      if (r.status === 200 && !r.isError && answer) {
-        if (answer.deleted !== true) failed.push(`${att.name}: deleted is ${answer.deleted}`)
+      const outcome = deleteOutcome(r, surface, att.id, task.key)
+      if (outcome === 'deleted') continue
+      if (outcome !== 'unsure') {
+        failed.push(`${att.name}: ${outcome}`)
         continue
       }
-      const notFound =
-        surface === 'rest'
-          ? r.status === 404 && r.json?.error === 'attachment not found'
-          : r.isError && r.text === 'attachment not found'
       const said = r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`
-      if (!(notFound || r.status === 0 || r.status >= 500)) {
-        failed.push(`${att.name}: ${said}`)
-        continue
-      }
       try {
         const left = await readOk(w, `/tasks/${task.key}/attachments`)
         if (left.some((a) => a.id === att.id)) failed.push(`${att.name}: ${said}`)
@@ -3461,6 +3451,29 @@ export async function findComment(readPage, body) {
     before = page[0].id
   }
   return undefined
+}
+
+/** What one attachment delete answered: 'deleted' for a success that says
+ *  deleted: true, 'unsure' for an answer that leaves open whether the file
+ *  is gone (a server or network error, MCP's internal error, or the
+ *  attachment's not-found answer, as for a delete whose answer was lost),
+ *  which a read of the task's files settles, or else the failure to report.
+ *  `r` is what rest() or tool() answered, or `{status: 0}` for a network
+ *  failure. */
+export function deleteOutcome(r, surface, attachmentId, taskKey) {
+  const answer = surface === 'rest' ? r.json : r.data
+  if (r.status === 200 && !r.isError && answer)
+    return answer.deleted === true ? 'deleted' : `deleted is ${answer.deleted}`
+  const unsure =
+    r.status === 0 ||
+    r.status >= 500 ||
+    (surface === 'rest'
+      ? r.status === 404 && r.json?.error === 'attachment not found'
+      : r.isError &&
+        (r.text === 'internal error' ||
+          r.text === `attachment "${attachmentId}" not found on ${taskKey}`))
+  if (unsure) return 'unsure'
+  return r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`
 }
 
 /** The ids of `comments` in the order the task window shows them: by time,

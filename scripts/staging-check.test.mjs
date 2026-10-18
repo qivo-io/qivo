@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import {
   addDays,
+  deleteOutcome,
   findComment,
   hasTag,
   parseArgs,
@@ -259,5 +260,40 @@ describe('comment cap helpers', () => {
       { id: 'c', created_at: '2026-10-18T10:00:01.000Z' },
     ]
     expect(windowOrder(stored)).toEqual(['b', 'a', 'z', 'c'])
+  })
+})
+
+describe('attachment delete answers', () => {
+  const id = '11111111-1111-4111-8111-111111111111'
+  const outcome = (r, surface) => deleteOutcome(r, surface, id, 'QN-7')
+  it('counts a success only when it says deleted: true', () => {
+    expect(outcome({ status: 200, json: { deleted: true } }, 'rest')).toBe('deleted')
+    expect(outcome({ status: 200, isError: false, data: { deleted: true } }, 'mcp')).toBe('deleted')
+    expect(outcome({ status: 200, json: { deleted: false } }, 'rest')).toBe('deleted is false')
+    expect(outcome({ status: 200, isError: false, data: {} }, 'mcp')).toBe('deleted is undefined')
+  })
+  it('leaves a lost answer, a server error and a not-found answer to a read', () => {
+    for (const [r, surface] of [
+      [{ status: 0, error: 'network error' }, 'rest'],
+      [{ status: 502, json: null }, 'rest'],
+      [{ status: 500, json: { error: 'internal error' } }, 'rest'],
+      [{ status: 404, json: { error: 'attachment not found' } }, 'rest'],
+      [{ status: 200, isError: true, text: 'internal error' }, 'mcp'],
+      [{ status: 200, isError: true, text: `attachment "${id}" not found on QN-7` }, 'mcp'],
+      [{ status: 503, json: null }, 'mcp'],
+    ])
+      expect(outcome(r, surface)).toBe('unsure')
+  })
+  it('fails a refusal or another not-found answer as it is', () => {
+    for (const [r, surface] of [
+      [{ status: 403, json: { error: 'this credential can only read' } }, 'rest'],
+      [{ status: 404, json: { error: 'task not found' } }, 'rest'],
+      [
+        { status: 200, isError: true, text: 'your account has no write access to that project' },
+        'mcp',
+      ],
+      [{ status: 200, isError: true, text: `attachment "${id}" not found on QN-8` }, 'mcp'],
+    ])
+      expect(outcome(r, surface)).toMatch(/^HTTP /)
   })
 })
