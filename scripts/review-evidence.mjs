@@ -134,8 +134,9 @@ export function greptileReview({ sha, checkRuns, comments }) {
   if (!comment) return incomplete(name, 'has no summary comment written by Greptile itself')
   const reviewed = [
     ...comment.body.matchAll(
-      // The link text is the commit title, which may itself contain brackets.
-      /Last reviewed commit: \[.*?\]\(https:\/\/github\.com\/qivo-io\/qivo\/commit\/([0-9a-f]{40})\)/g,
+      // The link text is the commit title, which may itself contain brackets or links. The
+      // greedy match takes the line's last commit link, which is Greptile's outer one.
+      /Last reviewed commit: \[.*\]\(https:\/\/github\.com\/qivo-io\/qivo\/commit\/([0-9a-f]{40})\)/g,
     ),
   ]
   if (reviewed.length !== 1 || reviewed[0][1] !== sha)

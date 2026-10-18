@@ -200,6 +200,10 @@ describe('Greptile evidence', () => {
     ])
       expect(review([check()], [greptileSummary(SHA, {}, title)]).complete, title).toBe(true)
     expect(review([check()], [greptileSummary(OLDER, {}, 'fix: [x](y)')]).complete).toBe(false)
+    // A link to another commit inside the title is not the reviewed commit.
+    const link = (sha) => `[backport](https://github.com/qivo-io/qivo/commit/${sha})`
+    expect(review([check()], [greptileSummary(SHA, {}, link(OLDER))]).complete).toBe(true)
+    expect(review([check()], [greptileSummary(OLDER, {}, link(SHA))]).complete).toBe(false)
   })
 
   it('refuses a summary of another commit or one someone else edited', () => {
