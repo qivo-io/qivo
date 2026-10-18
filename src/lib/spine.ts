@@ -28,6 +28,22 @@ export function mergeSpine<
   ].sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
 }
 
+/* The task's events the spine shows beside its loaded comments. While the
+   thread's first comment is not loaded (`complete` false), events older than
+   the oldest loaded comment stay hidden, so the All filter never shows
+   changes next to a gap in the comments. Events at that comment's instant
+   stay. With no comment loaded yet there is nothing to place them beside. */
+export function eventsBeside<E extends { ts: number }>(
+  events: readonly E[],
+  comments: readonly { ts: number }[],
+  complete: boolean,
+): E[] {
+  if (complete) return [...events]
+  if (comments.length === 0) return []
+  const oldest = Math.min(...comments.map((c) => c.ts))
+  return events.filter((e) => e.ts >= oldest)
+}
+
 type UnreadSource = { issueUuid: string; ts: number; read: boolean }
 
 /* Oldest unread message for this task, regardless of input order.

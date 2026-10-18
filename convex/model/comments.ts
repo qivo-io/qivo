@@ -14,7 +14,7 @@ import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
-import { insertUnique } from '../lib/db'
+import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
@@ -168,8 +168,9 @@ export async function deleteComment(
 /* -------------------------------------------------------------- reading */
 
 /** The most comments one page holds. The app's task window loads the
- * newest page of a thread (snapshot.ts commentsForIssue), and a REST or MCP
- * read answers one unless it asks for fewer (lib/core.ts listCommentsCore). */
+ * newest page of a thread and then earlier pages on request (threadPage),
+ * and a REST or MCP read answers one unless it asks for fewer (lib/core.ts
+ * listCommentsCore). */
 export const COMMENT_PAGE_MAX = 50
 
 /** The most one page of comments reads, in bytes as Convex counts a
@@ -296,4 +297,49 @@ export async function newestComments(
     if (rows.length < skip + n) break
   }
   return out
+}
+
+/** The refusal for a `before` that names no comment on the task read. */
+export const BEFORE_NOT_A_COMMENT = 'before must be the id of a comment on this task'
+
+/**
+ * The comment `ref` names on the task `issueId`, as the `before` of a page
+ * of earlier comments. Accepts the id in any case. Refuses anything else,
+ * unknown ids and comments on other tasks included, so a `before` reveals
+ * nothing about other threads.
+ */
+export async function commentAnchor(
+  ctx: QueryCtx,
+  issueId: string,
+  ref: string,
+): Promise<Doc<'comments'>> {
+  const anchor = await byId(ctx, 'comments', ref.toLowerCase())
+  if (anchor === null || anchor.issue_id !== issueId) throw badRequest(BEFORE_NOT_A_COMMENT)
+  return anchor
+}
+
+/**
+ * One page of the task `issueId`'s thread for the app's task window. It
+ * holds the newest COMMENT_PAGE_MAX comments, or with `before` the newest
+ * ones the thread holds before it (newestComments, so long comments make the
+ * page shorter), oldest first in thread order. `earlier` says whether the
+ * thread holds a comment before the page's first one. It reads one comment
+ * on top of the page, the thread's first, so a long thread costs nothing
+ * more to ask. An empty page has no earlier comments.
+ */
+export async function threadPage(
+  ctx: QueryCtx,
+  issueId: string,
+  before?: Doc<'comments'>,
+): Promise<{ comments: Doc<'comments'>[]; earlier: boolean }> {
+  const page = await newestComments(ctx, issueId, { limit: COMMENT_PAGE_MAX, before })
+  const oldest = page.at(-1)
+  if (oldest === undefined) return { comments: [], earlier: false }
+  // The by_issue index orders a thread, so its first row starts it.
+  const first = await ctx.db
+    .query('comments')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .order('asc')
+    .first()
+  return { comments: page.reverse(), earlier: first !== null && first._id !== oldest._id }
 }

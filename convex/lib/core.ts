@@ -34,7 +34,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { type AttachmentJson, taskAttachments } from '../model/attachments'
-import { newestComments, postArchiveReason } from '../model/comments'
+import { commentAnchor, newestComments, postArchiveReason } from '../model/comments'
 import type { Via } from '../model/deletedItems'
 import {
   assertLive,
@@ -890,11 +890,9 @@ export async function listProjectUsersCore(
 }
 
 /* The most comments one REST or MCP read answers, and how many it answers
- * unless the caller asks for fewer (model/comments.ts). */
-export { COMMENT_PAGE_MAX } from '../model/comments'
-
-/** The refusal for a `before` that names no comment on the task read. */
-export const BEFORE_NOT_A_COMMENT = 'before must be the id of a comment on this task'
+ * unless the caller asks for fewer, and the refusal for a `before` that
+ * names no comment on the task read (model/comments.ts). */
+export { BEFORE_NOT_A_COMMENT, COMMENT_PAGE_MAX } from '../model/comments'
 
 /* A page of a task's discussion thread for REST and MCP. It holds the
  * newest `limit` comments (model/comments.ts newestComments), or with
@@ -912,14 +910,8 @@ export async function listCommentsCore(
   issueId: string,
   page: { limit: number; before?: string },
 ): Promise<Doc<'comments'>[]> {
-  let before: Doc<'comments'> | undefined
-  if (page.before !== undefined) {
-    const anchor = UUID.test(page.before)
-      ? await byId(ctx, 'comments', page.before.toLowerCase())
-      : null
-    if (anchor === null || anchor.issue_id !== issueId) throw badRequest(BEFORE_NOT_A_COMMENT)
-    before = anchor
-  }
+  const before =
+    page.before === undefined ? undefined : await commentAnchor(ctx, issueId, page.before)
   const rows = await newestComments(ctx, issueId, { limit: page.limit, before })
   return rows
     .reverse()

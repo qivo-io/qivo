@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { firstUnreadTs, mergeSpine, unreadMark } from './spine'
+import { eventsBeside, firstUnreadTs, mergeSpine, unreadMark } from './spine'
 
 const c = (id: string, ts: number) => ({ id, ts, body: id })
 const e = (id: string, ts: number) => ({ id, ts, verb: 'moved' })
@@ -87,5 +87,23 @@ describe('unreadMark', () => {
 
   it('says none, not tail, for an empty feed with nothing unread', () => {
     expect(unreadMark([], null)).toEqual({ place: 'none', index: -1 })
+  })
+})
+
+describe('eventsBeside', () => {
+  const events = [e('e1', 100), e('e2', 300), e('e3', 500)]
+
+  it('shows every event once the thread is complete', () => {
+    expect(eventsBeside(events, [c('c1', 400)], true).map((x) => x.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(eventsBeside(events, [], true).map((x) => x.id)).toEqual(['e1', 'e2', 'e3'])
+  })
+
+  it('hides events older than the oldest loaded comment while earlier comments are not loaded', () => {
+    const loaded = [c('c2', 600), c('c1', 300)]
+    expect(eventsBeside(events, loaded, false).map((x) => x.id)).toEqual(['e2', 'e3'])
+  })
+
+  it('shows no events before any comment is loaded', () => {
+    expect(eventsBeside(events, [], false)).toEqual([])
   })
 })

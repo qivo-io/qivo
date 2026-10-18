@@ -34,6 +34,7 @@
  * before its members' app stops loading. */
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
+import type { QueryCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
 import { memberSeesActivity, withoutLegacySubtaskCount } from './lib/activityVisibility'
 import { byId } from './lib/db'
@@ -43,7 +44,7 @@ import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
 import { ACTIVITY_CAP } from './model/activity'
-import { COMMENT_PAGE_MAX, newestComments } from './model/comments'
+import { COMMENT_PAGE_MAX, commentAnchor, newestComments, threadPage } from './model/comments'
 import { shownLabelColor } from './model/labels'
 import { countersOf, type OrgCounters } from './model/orgs'
 import { shownAvatarColor } from './model/people'
@@ -493,20 +494,58 @@ export const forMe = authedQuery({
   },
 })
 
-// The task window's thread loads the newest COMMENT_PAGE_MAX comments, and
-// fewer when they are long (model/comments.ts newestComments), so a long
-// thread loads its newest part instead of passing Convex's read limits.
-// Comments remain available on visible archived tasks. Unknown, foreign and
-// invisible task IDs all return the same not-found refusal.
+/* The task `issueId` when the caller can see it. Unknown, foreign and
+ * invisible task IDs all refuse with the same not-found sentence. Comments
+ * remain available on visible archived tasks. */
+async function threadTask(
+  ctx: QueryCtx & { me: Doc<'profiles'> },
+  issueId: string,
+): Promise<Doc<'issues'>> {
+  const issue = await byId(ctx, 'issues', issueId)
+  if (issue === null || issue.org_id !== ctx.me.org_id) throw notFound('task not found')
+  const project = await byId(ctx, 'projects', issue.project_id)
+  if (project === null || !(await canSeeProject(ctx, ctx.me, project))) {
+    throw notFound('task not found')
+  }
+  return issue
+}
+
+/* The task window's live thread. It holds the thread's newest
+ * COMMENT_PAGE_MAX comments, and fewer when they are long, oldest first in
+ * thread order, and says whether the thread holds earlier ones
+ * (model/comments.ts threadPage). The window reads further back with
+ * commentsBefore. */
+export const commentThread = orgQuery({
+  args: { issue_id: v.string() },
+  handler: async (ctx, { issue_id }) => {
+    const issue = await threadTask(ctx, issue_id)
+    const page = await threadPage(ctx, issue.id)
+    return { comments: page.comments.map(rowOf), earlier: page.earlier }
+  },
+})
+
+/* The page "Show earlier comments" loads. It holds the newest
+ * COMMENT_PAGE_MAX comments the thread holds before the comment `before`, in
+ * commentThread's shape. The app reads it once rather than subscribing. A
+ * `before` that is not a comment on this task, deleted ones included,
+ * refuses with BEFORE_NOT_A_COMMENT as a bad_request. */
+export const commentsBefore = orgQuery({
+  args: { issue_id: v.string(), before: v.string() },
+  handler: async (ctx, { issue_id, before }) => {
+    const issue = await threadTask(ctx, issue_id)
+    const anchor = await commentAnchor(ctx, issue.id, before)
+    const page = await threadPage(ctx, issue.id, anchor)
+    return { comments: page.comments.map(rowOf), earlier: page.earlier }
+  },
+})
+
+/* The thread as browser tabs loaded before commentThread subscribe to it,
+ * the newest COMMENT_PAGE_MAX comments sorted by created_at with ties by
+ * id. Remove it in the release after commentThread ships. */
 export const commentsForIssue = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
-    const issue = await byId(ctx, 'issues', issue_id)
-    if (issue === null || issue.org_id !== ctx.me.org_id) throw notFound('task not found')
-    const project = await byId(ctx, 'projects', issue.project_id)
-    if (project === null || !(await canSeeProject(ctx, ctx.me, project))) {
-      throw notFound('task not found')
-    }
+    const issue = await threadTask(ctx, issue_id)
     const thread = await newestComments(ctx, issue.id, { limit: COMMENT_PAGE_MAX })
     // created_at asc, id tiebreak — the order spine.ts depends on
     thread.sort((a, b) =>

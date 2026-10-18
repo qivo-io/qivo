@@ -477,6 +477,8 @@ projects:updateMilestone mutation public {"type":"object","value":{"id":{"fieldT
 roadmap:change mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"operations":{"fieldType":{"type":"array","value":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"task"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true}}},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"milestone_create"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"milestone_update"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"week":{"fieldType":{"type":"string"},"optional":true}}},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"milestone_remove"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}}]}},"optional":false}}}
 roadmap:expire mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"session_id":{"fieldType":{"type":"string"},"optional":false},"expires_at":{"fieldType":{"type":"number"},"optional":false}}}
 roadmap:undo mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"all":{"fieldType":{"type":"boolean"},"optional":false}}}
+snapshot:commentThread query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsForIssue query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:forMe query public {"type":"object","value":{}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -781,7 +783,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
-  snapshot: { forMe: 'authedQuery', commentsForIssue: 'orgQuery' },
+  // The task window's thread, its earlier pages, and the thread as tabs
+  // loaded before commentThread read it (remove the release after).
+  snapshot: {
+    forMe: 'authedQuery',
+    commentThread: 'orgQuery',
+    commentsBefore: 'orgQuery',
+    commentsForIssue: 'orgQuery',
+  },
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
   teamSync: { lastComments: 'orgQuery', stamp: 'orgMutation' },
@@ -810,7 +819,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 161
+const PUBLIC_COUNT = 163
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

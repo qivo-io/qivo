@@ -261,15 +261,73 @@ let commentsUnsub: (() => void) | null = null
 let commentsWatchEpoch = 0
 /* The last thread the comments subscription delivered — the rollback anchor
    for optimistic comment rows (rows.comments is outside serverSnap). null =
-   nothing delivered yet for the watched issue. */
+   nothing delivered yet for the watched issue. It is the thread's live
+   window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
+/* The watched thread's comments older than the live window, oldest first in
+   thread order. They are earlier pages (P.loadEarlierComments) and comments
+   that left the window as newer ones arrived. Server truth like
+   commentsSnap, but not live. The store patches it for the person's own
+   edits and deletes; other people's changes to these comments show when the
+   task opens again. */
+let olderComments: Row<'comments'>[] = []
+/* Whether the watched thread's first comment is loaded, so nothing is
+   earlier, and how the last load of an earlier page went. */
+let threadStart = false
+let earlierLoad: 'idle' | 'loading' | 'failed' = 'idle'
 
-/* Re-adopt the watched thread from its last delivery. Safe to call blind:
-   with nothing delivered (or nothing watched) it leaves the cache alone. */
+/** What the task window shows above the oldest loaded comment
+    (P.commentsEarlier). */
+export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
+
+/* Re-adopt the watched thread from its last delivery and the comments loaded
+   before it. Safe to call blind: with nothing delivered (or nothing watched)
+   it leaves the cache alone. */
 function adoptComments() {
   if (commentsSnap === null) return
-  rows.comments = new Map(structuredClone(commentsSnap).map((r) => [r.id, r]))
+  rows.comments = new Map(
+    structuredClone([...olderComments, ...commentsSnap]).map((r) => [r.id, r]),
+  )
   PLANNER.commentsLoaded = true
+}
+
+/* Records a delivery of the watched thread's live window, oldest first in
+   thread order, and whether the thread holds earlier comments. Comments that
+   left the window at its old end move to olderComments, so what a reader
+   loaded stays while new comments arrive. A window with nothing earlier
+   starts the thread, so nothing loaded before it exists any more. A comment
+   deleted from the old end while new ones push the window on stays until
+   the task opens again, since nothing tells it from one that slid out. When
+   the window no longer meets what was loaded, because more comments arrived
+   between two deliveries than it holds, the thread starts over from the
+   window. */
+function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }) {
+  const prev = commentsSnap
+  const first = page.comments[0]
+  if (first === undefined || !page.earlier) {
+    olderComments = []
+  } else if (prev !== null) {
+    const at = prev.findIndex((r) => r.id === first.id)
+    if (at > 0) {
+      const known = new Set(olderComments.map((r) => r.id))
+      olderComments = [...olderComments, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
+    } else if (at === -1) {
+      // the window reached down into what was loaded before it, or past it
+      const kept = olderComments.findIndex((r) => r.id === first.id)
+      olderComments = kept === -1 ? [] : olderComments.slice(0, kept)
+      if (kept === -1) threadStart = false
+    }
+  }
+  if (!page.earlier) threadStart = true
+  commentsSnap = page.comments
+}
+
+/* Drops the comment `id` from the watched thread's server truth, for a
+   comment the server says no longer exists. */
+function dropComment(id: string) {
+  olderComments = olderComments.filter((r) => r.id !== id)
+  if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
+  rows.comments.delete(id)
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -679,7 +737,9 @@ let inFlight = 0
 let storeEpoch = 0
 let demoDisposed = false
 let snapDirty = false // a snapshot delivery arrived while a write was in flight
-let commentsDirty = false // …same for the watched comments thread
+// …same for the watched comments thread, or a saved change to its comments
+// older than the live window (olderComments), which no delivery repaints
+let commentsDirty = false
 
 type RoadmapOperation = FunctionArgs<typeof api.roadmap.change>['operations'][number]
 type RoadmapVisit = {
@@ -1508,6 +1568,8 @@ function rebuildComments() {
   PLANNER.comments = [...rows.comments.values()]
     .map(shapeComment)
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+  PLANNER.commentsEarlier =
+    !PLANNER.commentsLoaded || threadStart ? 'none' : earlierLoad === 'idle' ? 'more' : earlierLoad
 }
 
 function rebuild(now = new Date()) {
@@ -2478,6 +2540,11 @@ export const PLANNER = {
   labelById: {} as Record<string, LabelVM>,
   comments: [] as CommentVM[],
   commentsLoaded: false, // the watched issue's thread (watchComments)
+  // whether the watched thread holds comments before the oldest loaded one.
+  // 'none' once its first comment is loaded (or before anything is), else
+  // 'more', or 'loading' while P.loadEarlierComments runs and 'failed' after
+  // it failed
+  commentsEarlier: 'none' as CommentsEarlier,
   // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
   // null when it has none, for the open, visible tasks the last answer
   // covered; a task with no entry is not known yet
@@ -4158,29 +4225,33 @@ export const PLANNER = {
     rows.comments = new Map()
     commentsSnap = null // the old thread must not resurrect via a rollback
     commentsDirty = false // …nor may a held delivery flush into the new one
+    olderComments = []
+    threadStart = false
+    earlierLoad = 'idle'
     PLANNER.commentsLoaded = false
     rebuildComments()
     emit('comments')
     if (!issueUuid) return
-    // commentsForIssue is org-scoped; the watched issue is in the snapshot,
+    // commentThread is org-scoped; the watched issue is in the snapshot,
     // which is where its org comes from. An unknown uuid loads an empty
     // thread rather than spinning forever.
     const row = rows.issues.get(issueUuid)
     if (!row) {
       PLANNER.commentsLoaded = true
+      threadStart = true
       rebuildComments()
       emit('comments')
       return
     }
     commentsUnsub = convex.onUpdate(
-      api.snapshot.commentsForIssue,
+      api.snapshot.commentThread,
       { org_id: row.org_id, issue_id: issueUuid },
-      (thread) => {
+      (page) => {
         if (watchedComments !== issueUuid || commentsWatchEpoch !== watchEpoch) return
         // gate the paint, never the data: while our own writes are in flight
         // (an optimistic comment among them) the delivery is recorded and the
         // last settle flushes it — adopting now would eat the optimistic row
-        commentsSnap = thread as Row<'comments'>[]
+        receiveThread(page)
         if (inFlight > 0) {
           commentsDirty = true
           return
@@ -4195,6 +4266,8 @@ export const PLANNER = {
         // fail-closed answer is an EMPTY loaded thread, never a spinner
         console.error('[qivo] comments subscription failed:', err)
         commentsSnap = []
+        olderComments = []
+        threadStart = true
         if (inFlight > 0) {
           commentsDirty = true
           return
@@ -4204,6 +4277,61 @@ export const PLANNER = {
         emit('comments')
       },
     )
+  },
+
+  /** Loads the comments before the oldest loaded one in the watched thread
+      (snapshot.commentsBefore, one page) and adds them above it. One load at
+      a time. A failure shows as commentsEarlier 'failed', and calling this
+      again retries. When the oldest loaded comment was deleted meanwhile, it
+      is dropped and the load asks before the next one. Never throws. */
+  loadEarlierComments: async (): Promise<void> => {
+    const issueUuid = watchedComments
+    const watchEpoch = commentsWatchEpoch
+    const row = issueUuid ? rows.issues.get(issueUuid) : undefined
+    if (!issueUuid || !row || commentsSnap === null || threadStart || earlierLoad === 'loading')
+      return
+    const current = () => watchedComments === issueUuid && commentsWatchEpoch === watchEpoch
+    const show = (state: typeof earlierLoad) => {
+      earlierLoad = state
+      rebuildComments()
+      emit('comments')
+    }
+    show('loading')
+    for (;;) {
+      const anchor = olderComments[0] ?? commentsSnap?.[0]
+      if (!anchor) return show('idle')
+      let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
+      try {
+        page = await convex.query(api.snapshot.commentsBefore, {
+          org_id: row.org_id,
+          issue_id: issueUuid,
+          before: anchor.id,
+        })
+      } catch (e) {
+        if (!current()) return
+        // The one bad_request this query answers means `before` is no comment
+        // now. Drop it, unless my own delete already did, and ask again before
+        // the next one. Each pass drops a comment, so this ends.
+        if (errData(e).code === 'bad_request') {
+          dropComment(anchor.id)
+          continue
+        }
+        console.error('[qivo] earlier comments failed to load:', e)
+        return show('failed')
+      }
+      if (!current()) return
+      // Added only above the comment the page was asked about. When the
+      // thread started over from its live window meanwhile, the next click
+      // asks again.
+      if ((olderComments[0] ?? commentsSnap?.[0])?.id === anchor.id) {
+        const known = new Set([...olderComments, ...(commentsSnap ?? [])].map((r) => r.id))
+        const added = page.comments.filter((r) => !known.has(r.id))
+        olderComments = [...added, ...olderComments]
+        for (const comment of added) rows.comments.set(comment.id, structuredClone(comment))
+        if (!page.earlier) threadStart = true
+      }
+      return show('idle')
+    }
   },
 
   /* ---- Team sync (docs/team-sync-brief.md) ----
@@ -4339,9 +4467,19 @@ export const PLANNER = {
     // the server stamps the profile I hold in the ISSUE's org (0081) — mirror
     // that optimistically, or a foreign edit would flash my home identity
     rec.edited_by = profileIn(org) || CURRENT_USER
+    const edit = { body: text, edited_at: rec.edited_at, edited_by: rec.edited_by }
     rebuildComments()
     emit('comments')
-    run(write(api.comments.update, { org_id: org, id, body: text }))
+    // A comment older than the live window gets no delivery, so the saved
+    // edit is written into olderComments, the truth a later adopt reads. The
+    // last settle repaints from it, in case another write's refusal has
+    // rolled the screen back to before this edit meanwhile.
+    run(write(api.comments.update, { org_id: org, id, body: text }), () => {
+      const kept = olderComments.find((r) => r.id === id)
+      if (!kept) return
+      Object.assign(kept, edit)
+      commentsDirty = true
+    })
   },
 
   deleteComment: (id: string) => {
@@ -4351,7 +4489,12 @@ export const PLANNER = {
     rows.comments.delete(id)
     rebuildComments()
     emit('comments')
-    run(write(api.comments.remove, { org_id: issue ? issue.org_id : HOME_ORG, id }))
+    // as updateComment does for an edit
+    run(write(api.comments.remove, { org_id: issue ? issue.org_id : HOME_ORG, id }), () => {
+      if (!olderComments.some((r) => r.id === id)) return
+      olderComments = olderComments.filter((r) => r.id !== id)
+      commentsDirty = true
+    })
   },
 
   /* ---- inbox messages (0074) ----
@@ -6095,6 +6238,9 @@ export function disposeDemoStore() {
   commentsUnsub = null
   watchedComments = null
   commentsSnap = null
+  olderComments = []
+  threadStart = false
+  earlierLoad = 'idle'
   syncUnsub?.()
   syncUnsub = null
   watchedSyncOrg = null

@@ -67,7 +67,7 @@ describe('planner refresh boundaries', () => {
         publish = receive
         receive(structuredClone(snapshot))
       } else if (getFunctionName(ref) === 'teamSync:lastComments') publishTeamSync = receive
-      else publishComments = receive
+      else publishComments = (comments) => receive({ comments, earlier: false })
       return vi.fn()
     })
     store = await import('./planner')
