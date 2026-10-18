@@ -1072,7 +1072,7 @@ function App() {
   const openNewMilestone = (init) =>
     setModal({
       kind: 'milestone',
-      init: { project: P.isWideScope(scope) ? null : scope, ...(init || {}) },
+      init: { project: P.isWideScope(scope) ? null : scope, ...init },
     })
 
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
@@ -1081,7 +1081,7 @@ function App() {
   const openNewProject = (init) =>
     setModal({
       kind: init && init.kind === 'program' ? 'program' : 'subproject',
-      init: { ...(init || {}) },
+      init: { ...init },
     })
 
   // Jump from the issue window to the roadmap to plan an issue in context.

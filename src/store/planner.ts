@@ -2424,7 +2424,7 @@ function newProjectGrants(
   return grants
 }
 function omitKey<T>(map: Record<string, T> | undefined, key: string): Record<string, T> {
-  const next = { ...(map || {}) }
+  const next = { ...map }
   delete next[key]
   return next
 }
