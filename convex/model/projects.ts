@@ -694,7 +694,7 @@ export async function archiveProjectCore(
  * an archived parent is a restore of that parent, so it needs lead on the
  * parent as well; a sub-project's own lead cannot bring back a project its
  * lead archived. Not archived is a silent no-op. Returns whether it restored
- * anything. The restored sub-projects' tasks make the parents they have in
+ * anything. The restored projects' tasks make the parents they have in
  * other active projects groups again, which then lose their own remaining
  * hours in background steps (regroup.ts).
  */
@@ -714,11 +714,15 @@ export async function unarchiveProjectCore(
     throw forbidden('requires lead access to the archived parent project')
   }
   await ctx.db.patch(project._id, { archived_at: undefined })
-  // the sub-projects whose tasks come back; a top-level project holds none
-  const restored: string[] = []
+  // the projects whose tasks come back. Tasks live in sub-projects, but a
+  // task older code stored under a top-level project comes back too
+  // (lib/liveTasks.ts liveTasksOf reads it).
+  const restored = [project.id]
   if (project.parent_id !== undefined) {
-    if (parentArchived) await ctx.db.patch(parent._id, { archived_at: undefined })
-    restored.push(project.id)
+    if (parentArchived) {
+      await ctx.db.patch(parent._id, { archived_at: undefined })
+      restored.push(parent.id)
+    }
   } else {
     const subs = await ctx.db
       .query('projects')
@@ -730,9 +734,7 @@ export async function unarchiveProjectCore(
       restored.push(s.id)
     }
   }
-  if (restored.length > 0) {
-    await ctx.scheduler.runAfter(0, restoredStepRef, { projects: restored, restorer_id: me.id })
-  }
+  await ctx.scheduler.runAfter(0, restoredStepRef, { projects: restored, restorer_id: me.id })
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,

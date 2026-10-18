@@ -17,7 +17,7 @@ import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
-import { assigneeLoad, workloadCore } from '../planning'
+import { ASSIGNEE_LOAD_CHECKS, assigneeLoad, workloadCore } from '../planning'
 import { RESTORE_REGROUP, restoredStep } from '../regroup'
 import { invokeSnapshot } from './backendPerformance.setup'
 import {
@@ -276,6 +276,32 @@ describe('reading only live tasks', () => {
     expect(documents).toBeLessThan(60)
   })
 
+  it("a busy person's load finds the groups in one read past ASSIGNEE_LOAD_CHECKS", async () => {
+    // 300 subtask checks would take more index ranges than the read may
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 200 } }))
+    const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-14' }
+    await plantMany(fx, 300, { project_id: fx.sub.id, ...plan })
+    const group = await task(fx, plan)
+    await task(fx, { parent_id: group.id })
+    const shelvedOnly = await task(fx, plan)
+    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
+    const checks = ASSIGNEE_LOAD_CHECKS.reads
+    ASSIGNEE_LOAD_CHECKS.reads = 100
+    try {
+      const rows = await as(fx.t, fx.admin).query((ctx) =>
+        handlerOf<{ assignee_id: string }, { issue_id: string | null }[]>(assigneeLoad)(ctx, {
+          assignee_id: fx.user.id,
+        }),
+      )
+      const ids = rows.map((r) => r.issue_id)
+      expect(ids).toHaveLength(301)
+      expect(ids).toContain(shelvedOnly.id)
+      expect(ids).not.toContain(group.id)
+    } finally {
+      ASSIGNEE_LOAD_CHECKS.reads = checks
+    }
+  })
+
   it('a delay verdict’s owner load counts a task whose subtasks are archived away', async () => {
     const fx = await setup()
     const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
@@ -384,12 +410,15 @@ describe('writes that change which subtasks count', () => {
     expect(steps).toHaveLength(3)
   })
 
-  it('restoring a top-level project walks each restored sub-project, also when the restorer is gone', async () => {
+  it('restoring a top-level project walks it and each restored sub-project, also when the restorer is gone', async () => {
     const fx = await setup()
     // a subtask stored before a subtask had to stay in its parent's project
     const parent = await task(fx, { project_id: fx.away.id, remaining_hours: 6, title: 'Away' })
     await plantSubscription(fx.t, { issue_id: parent.id, profile_id: fx.admin.id })
     await task(fx, { project_id: fx.sub2.id, parent_id: parent.id })
+    // and one stored under the top-level project itself, as older code could
+    const second = await task(fx, { project_id: fx.away.id, remaining_hours: 2, title: 'Away 2' })
+    await task(fx, { project_id: fx.meta.id, parent_id: second.id })
     await as(fx.t, fx.user).mutation(api.projects.archive, { org_id: fx.org.id, id: fx.meta.id })
     expect((await restGet(fx, parent.id, fx.admin.id)).is_group).toBe(false)
     await as(fx.t, fx.user).mutation(api.projects.unarchive, { org_id: fx.org.id, id: fx.meta.id })
@@ -401,6 +430,7 @@ describe('writes that change which subtasks count', () => {
     await runSteps(fx.t)
     expect((await row(fx, parent.id))?.remaining_hours).toBeUndefined()
     expect(await details(fx, parent.id)).toEqual([['Remaining cleared (was 6 h)', null]])
+    expect((await row(fx, second.id))?.remaining_hours).toBeUndefined()
   })
 
   it('restoring a task’s sub-project after its subtask’s clears the hours it took as a leaf', async () => {
@@ -449,13 +479,45 @@ describe('writes that change which subtasks count', () => {
       return rows.filter((r) => r?.remaining_hours === undefined).length
     }
     expect(await cleared()).toBe(4)
-    // the next step reads the same page again
-    expect(first.next).toEqual([{ projects: [fx.shelf.id], restorer_id: fx.user.id }])
+    // the next step reads the same page from the task after the fourth
+    expect(first.next).toEqual([
+      { projects: [fx.shelf.id], restorer_id: fx.user.id, after: expect.any(Number) },
+    ])
     // 47 profiles, read once, not for each of the 4 tasks it cleared
     expect(first.read).toBeLessThan(120)
     await runSteps(fx.t)
     expect(await cleared()).toBe(6)
     expect(await details(fx, parents[5].id)).toEqual([['Remaining cleared (was 2 h)', fx.user.id]])
+  })
+
+  it('a regroup step stops reading once it is full and the next one starts after the last task it finished', async () => {
+    const fx = await setup()
+    const other = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      archived_at: NOW,
+    })
+    // two leaves whose subtasks stay archived away, and a group
+    const leaves = [await task(fx, { project_id: fx.shelf.id, remaining_hours: 3 })]
+    leaves.push(await task(fx, { project_id: fx.shelf.id, remaining_hours: 3 }))
+    for (const leaf of leaves) {
+      for (let i = 0; i < 2; i++) await task(fx, { project_id: other.id, parent_id: leaf.id })
+    }
+    const group = await task(fx, { project_id: fx.shelf.id, remaining_hours: 3 })
+    await task(fx, { project_id: fx.sub2.id, parent_id: group.id })
+    // full after the first task of each step
+    RESTORE_REGROUP.room = 0
+    await as(fx.t, fx.user).mutation(api.projects.unarchive, { org_id: fx.org.id, id: fx.shelf.id })
+    await runSteps(fx.t)
+    expect((await row(fx, group.id))?.remaining_hours).toBeUndefined()
+    for (const leaf of leaves) expect((await row(fx, leaf.id))?.remaining_hours).toBe(3)
+    const steps = await fx.t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+        (job) => job.name === 'regroup:restoredStep',
+      ),
+    )
+    expect(steps).toHaveLength(3)
   })
 
   it('a task moved out of an archived project clears its parent’s own hours', async () => {

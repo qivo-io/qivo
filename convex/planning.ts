@@ -103,10 +103,18 @@ export function orgLoadRows(
   return rows
 }
 
+/** How many of a person's tasks their load checks for subtasks, one
+ * by_parent_archived range each, before it reads the organization's live
+ * tasks once instead (lib/machineDelay.ts OWNER_LOAD_CHECKS does the same
+ * for a delay verdict). Tests lower `reads`. */
+export const ASSIGNEE_LOAD_CHECKS = { reads: 500 }
+
 /* plan_assignee_load: the person's own live tasks (lib/liveTasks.ts
  * ownedLiveTasks, two index ranges), never the organization's. A task that
  * passes every other test is checked for subtasks on its own (hasSubtasks),
- * so a group is left out as in orgLoadRows. */
+ * or, past ASSIGNEE_LOAD_CHECKS such tasks, against the organization's live
+ * tasks (lib/liveTasks.ts groupTest), so a group is left out as in
+ * orgLoadRows. */
 async function assigneeLoadRows(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -114,8 +122,9 @@ async function assigneeLoadRows(
   assigneeId: string,
 ): Promise<AssigneeLoadRow[]> {
   const staff = isOrgStaff(me)
-  const rows: AssigneeLoadRow[] = []
   const live = liveIn(view.byUuid)
+  // each task that passes every test but the group one, with its row
+  const candidates: { task: Doc<'issues'>; row: AssigneeLoadRow }[] = []
   for (const i of await ownedLiveTasks(ctx, assigneeId, live)) {
     if (i.start_week === undefined || i.end_week === undefined) continue
     if (i.status === 'done' || i.paused) continue
@@ -123,18 +132,28 @@ async function assigneeLoadRows(
     if (project === undefined) continue // ownedLiveTasks keeps only active projects
     const vis = view.visible(i.project_id)
     if (!(staff || vis || assigneeId === me.id)) continue
-    if (await hasSubtasks(ctx, i, live)) continue
-    rows.push({
-      issue_id: vis ? i.id : null,
-      title: vis ? i.title : null,
-      project_id: vis ? i.project_id : null,
-      project_name: vis ? project.name : null,
-      start_week: i.start_week,
-      end_week: i.end_week,
-      remaining: i.remaining_hours ?? null,
-      remaining_set_at: i.remaining_set_at ?? null,
-      visible: vis,
+    candidates.push({
+      task: i,
+      row: {
+        issue_id: vis ? i.id : null,
+        title: vis ? i.title : null,
+        project_id: vis ? i.project_id : null,
+        project_name: vis ? project.name : null,
+        start_week: i.start_week,
+        end_week: i.end_week,
+        remaining: i.remaining_hours ?? null,
+        remaining_set_at: i.remaining_set_at ?? null,
+        visible: vis,
+      },
     })
+  }
+  const isGroup =
+    candidates.length > ASSIGNEE_LOAD_CHECKS.reads
+      ? groupTest(await liveTasksOf(ctx, view.projects), live)
+      : null
+  const rows: AssigneeLoadRow[] = []
+  for (const { task, row } of candidates) {
+    if (!(isGroup === null ? await hasSubtasks(ctx, task, live) : isGroup(task))) rows.push(row)
   }
   return rows
 }

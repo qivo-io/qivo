@@ -10,7 +10,7 @@
  * one when the restorer's profile is gone.
  *
  * The restore (model/projects.ts unarchiveProjectCore) schedules one chain
- * with the sub-projects it restored. Each step reads one page of one of them,
+ * with the projects it restored. Each step reads one page of one of them,
  * its active tasks through by_project_archived, at most RESTORE_REGROUP.tasks
  * tasks and RESTORE_REGROUP.bytes bytes. It clears the own hours and
  * hand-off of two kinds of task that hold either:
@@ -19,7 +19,7 @@
  *   - a page task that is a group now, such as one whose subtasks are in a
  *     sub-project restored before its own. Archiving its project made it a
  *     group with the hours it took as a leaf, and no step cleared them then.
- * A sub-project archived again or deleted before its turn is skipped. Until
+ * A project archived again or deleted before its turn is skipped. Until
  * the steps run, such a task is a group everywhere while its stored hours
  * remain, and no app reader uses a group's own hours. */
 
@@ -33,22 +33,27 @@ import { clearParentRemaining, hasSubtasks } from './model/issues'
 import { loadNotifyPreload, type NotifyPreload } from './model/messages'
 
 /** Sizes of one regroup step. It reads at most `tasks` tasks and `bytes`
- * bytes of them, and clears at most `clears` tasks. Each clear notifies the
- * task's followers and its task.updated subscribers, which costs more the
- * more followers it has, so a step also stops clearing once it has used the
- * share `room` of any of Convex's limits for one transaction, as the subtask
- * family backfill does (internal/subtaskFamilyBackfill.ts). A step that
- * stops reads the same page again in the next one, which skips the tasks it
- * cleared. Tests lower these. */
+ * bytes of them, and clears about `clears` tasks at most. A page task's
+ * subtask check reads its subtasks, and each clear notifies the task's
+ * followers and its task.updated subscribers, so neither has a fixed cost.
+ * Before each page task after its first, a step therefore also stops once
+ * it has used the share `room` of any of Convex's limits for one
+ * transaction, as the subtask family backfill does
+ * (internal/subtaskFamilyBackfill.ts). A step that stops leaves the next one
+ * the same page from the task after the last it finished. Tests lower
+ * these. */
 export const RESTORE_REGROUP = { tasks: 200, bytes: 4 * 1024 * 1024, clears: 50, room: 0.5 }
 
 const restoredStepArgs = {
-  /** every sub-project the restore brought back, in the order they are read */
+  /** every project the restore brought back, in the order they are read */
   projects: v.array(v.string()),
   /** the one this step reads, by its place in `projects` */
   at: v.optional(v.number()),
   /** where its page starts, a pagination cursor, absent for its first page */
   cursor: v.optional(v.string()),
+  /** the creation time of the last page task an earlier step finished, so
+   * this one starts after it, absent for a fresh page */
+  after: v.optional(v.number()),
   restorer_id: v.string(),
 }
 type RestoredStep = ObjectType<typeof restoredStepArgs>
@@ -82,10 +87,10 @@ export const restoredStep = internalMutation({
     const projectId = a.projects[at]
     if (projectId === undefined) return null
     const schedule = (args: RestoredStep) => ctx.scheduler.runAfter(0, restoredStepRef, args)
-    // the same sub-project from `cursor`, else the next one when there is one
+    // the same project from `cursor`, else the next one when there is one
     const next = async (cursor?: string): Promise<void> => {
       if (cursor === undefined && at + 1 >= a.projects.length) return
-      await schedule({ ...a, at: cursor === undefined ? at + 1 : at, cursor })
+      await schedule({ ...a, at: cursor === undefined ? at + 1 : at, cursor, after: undefined })
     }
     const project = await byId(ctx, 'projects', projectId)
     if (project === null || project.archived_at !== undefined) {
@@ -109,38 +114,47 @@ export const restoredStep = internalMutation({
     // read at the first clear, serves every notice (NotifyPreload).
     let preload: NotifyPreload | undefined
     let cleared = 0
-    // Clears `task`, or answers false once the step is full. A step always
-    // clears one task, so the walk moves on.
-    const clear = async (task: Doc<'issues'>): Promise<boolean> => {
-      if (cleared > 0 && (cleared >= RESTORE_REGROUP.clears || (await stepIsFull(ctx)))) {
-        return false
-      }
+    const clear = async (task: Doc<'issues'>): Promise<void> => {
       preload ??= await loadNotifyPreload(ctx, project.org_id)
       await clearParentRemaining(ctx, { parentId: task.id, actor: restorer, now, preload })
       cleared += 1
-      return true
     }
+    // tasks this step has looked at, as page tasks or parents; a page row
+    // of one it cleared still holds the old hours
     const checked = new Set<string>()
+    // the creation time of the last page task this step finished
+    let finished: number | undefined
     for (const task of page.page) {
+      if (a.after !== undefined && task._creationTime <= a.after) continue
+      // a step always finishes one task, so the walk moves on
+      if (
+        finished !== undefined &&
+        (cleared >= RESTORE_REGROUP.clears || (await stepIsFull(ctx)))
+      ) {
+        await schedule({ ...a, after: finished })
+        return null
+      }
       // the task itself, when subtasks restored before it make it a group
       if (!checked.has(task.id)) {
         checked.add(task.id)
-        if (holdsOwn(task) && (await hasSubtasks(ctx, task, live)) && !(await clear(task))) {
-          await schedule(a)
-          return null
-        }
+        if (holdsOwn(task) && (await hasSubtasks(ctx, task, live))) await clear(task)
       }
       // its parent, which this live task makes a group when the parent is
       // active and in an active project
-      if (task.parent_id === undefined || checked.has(task.parent_id)) continue
-      checked.add(task.parent_id)
-      const parent = await byId(ctx, 'issues', task.parent_id)
-      if (parent === null || parent.archived_at !== undefined || !holdsOwn(parent)) continue
-      if (!(await live(parent.project_id))) continue
-      if (!(await clear(parent))) {
-        await schedule(a)
-        return null
+      const parentId = task.parent_id
+      if (parentId !== undefined && !checked.has(parentId)) {
+        checked.add(parentId)
+        const parent = await byId(ctx, 'issues', parentId)
+        if (
+          parent !== null &&
+          parent.archived_at === undefined &&
+          holdsOwn(parent) &&
+          (await live(parent.project_id))
+        ) {
+          await clear(parent)
+        }
       }
+      finished = task._creationTime
     }
     await next(page.isDone ? undefined : page.continueCursor)
     return null
