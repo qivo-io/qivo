@@ -652,9 +652,9 @@ const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as 
    name the reason, and for a pending deletion its date, so they show verbatim. */
 const readOnly = (d: ErrData) =>
   d.reason === 'billing_required' || d.reason === 'deletion_scheduled'
-/** A refusal message as a sentence: capitalized, and ending in a period
-    unless it already ends in one, `!` or `?`. Server messages are often
-    lowercase fragments, and a toast places them after its own sentence. */
+/** Capitalizes a refusal message and ends it with a period unless it already
+    ends in `.`, `!` or `?`. Server messages are often lowercase fragments,
+    and a toast joins them with a sentence of its own. */
 const asSentence = (m: string) =>
   m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.')
 
@@ -752,10 +752,11 @@ function refusePausedEdit(): boolean {
   return true
 }
 
-/* 'rule' sentences are the P0001 successors and show VERBATIM; everything
-   else is deliberately generic — the wording says "reverted", never
-   "reloading", because rollback is a repaint, not a refetch. A paused write
-   never left the browser, so its sentence is the pause itself. */
+/* 'rule' and read-only sentences are the P0001 successors and keep their
+   words, shaped by asSentence. Everything else is deliberately generic. The
+   wording says "reverted", never "reloading", because rollback is a repaint,
+   not a refetch. A paused write never left the browser, so its sentence is
+   the pause itself. */
 function toastWriteError(e: unknown) {
   const d = errData(e)
   if (d.code === 'paused') {
