@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { type AuditRow, auditLog, listOrgs } from '../api'
+import { type AuditRow, auditLog, listOrgNames } from '../api'
 import { AdminEmptyState, AdminPageHeader, AdminToolbar, ErrorNote, Loading } from '../ui'
 
 const ACTION_LABEL: Record<string, string> = {
@@ -76,7 +76,7 @@ export function Audit() {
       .finally(() => {
         if (active) setLoading(false)
       })
-    listOrgs()
+    listOrgNames()
       .then((orgs) => {
         if (active) setOrgNames(Object.fromEntries(orgs.map((org) => [org.id, org.name])))
       })

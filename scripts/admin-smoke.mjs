@@ -94,7 +94,7 @@ async function expectOrgBilling(page) {
   const summary = await page.evaluate(async (orgName) => {
     const { api } = await import('/convex/_generated/api.js')
     const { convex } = await import('/src/lib/convex.ts')
-    const org = (await convex.query(api.admin.listOrgs, {})).find((row) => row.name === orgName)
+    const org = (await convex.query(api.admin.orgNames, {})).find((row) => row.name === orgName)
     if (!org) throw new Error('The billing fixture is missing')
     return convex.query(api.adminBilling.orgBilling, { org_id: org.id })
   }, demo.orgName)
