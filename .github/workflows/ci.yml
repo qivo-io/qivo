@@ -4,48 +4,28 @@ on:
   pull_request:
   push:
     branches: ['**']
-  # Run by hand from a branch to test a change to this workflow before it merges.
-  workflow_dispatch:
-  # Start CI (reviewed-ci.yml) calls this workflow to test one reviewed pull request commit.
-  workflow_call:
-    inputs:
-      ref:
-        description: Full commit SHA to test
-        required: true
-        type: string
 
-# One in-flight run per ref; a new push supersedes the previous run. Start CI cancels its
-# own obsolete builds, so each call gets a group of its own here.
+# One in-flight run per ref; a new push supersedes the previous run.
 concurrency:
-  group: ${{ inputs.ref && format('ci-call-{0}', github.run_id) || format('ci-{0}', github.ref) }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # Keep the job name stable. Start CI's REQUIRED_JOBS (scripts/reviewed-ci.mjs) names it.
+  # Keep the published check name stable.
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     # Hermetic: no deployment secrets, live contract reset or browser drives.
     steps:
-      # Dependency install scripts run in this job, and no step needs the token. Without
-      # `ref`, checkout uses the triggering event's commit.
+      # Dependency install scripts run in this job, and no step needs the token.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
           persist-credentials: false
 
-      # Start CI must test exactly the commit it authorized.
-      - name: Confirm the requested commit
-        if: inputs.ref
-        env:
-          EXPECTED: ${{ inputs.ref }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
-
-      # Start CI limits this job to reading the cache, so pull request code cannot save one.
       - uses: actions/setup-node@v7
         with:
           node-version-file: package.json
