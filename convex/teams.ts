@@ -132,7 +132,7 @@ export const addMember = orgMutation({
  * team), so an organization admin can still do it while billing has made the
  * organization read-only (accessRemovalMutation). Keeping the member as a
  * Viewer or reassigning their tasks writes more than that, so the core meets
- * the billing gate for it (model/projectAccess.ts removeAndSettle), and the
+ * the billing gate for it (model/teams.ts removeTeamMemberCore), and the
  * wrapper does for a team leader who is not an admin. Adding members stays
  * behind the gate. */
 export const removeMember = accessRemovalMutation({

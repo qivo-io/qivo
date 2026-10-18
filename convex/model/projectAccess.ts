@@ -457,8 +457,9 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * An organization admin's removal passes the read-only gate of a billing
  * pause or a pending deletion (lib/functions.ts accessRemovalMutation,
  * lib/core.ts asMachineCaller 'access_removal'). Keeping people as Viewers
- * or reassigning their tasks writes more than a removal, so any `held` but
- * 'leave' meets that gate here first, even for an organization admin.
+ * or reassigning their tasks writes more than a removal, so each caller
+ * refuses any `held` but 'leave' while the organization is read-only before
+ * it reads anything, even for an organization admin.
  */
 export async function removeAndSettle(
   ctx: MutationCtx,
@@ -475,7 +476,6 @@ export async function removeAndSettle(
   },
 ): Promise<Settlement> {
   const { me, held, now } = a
-  if (held !== 'leave') await assertOrgWritable(ctx, me.org_id)
   const { lost, orgProjects } = await removeAndFindLost(ctx, a)
   const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
@@ -561,7 +561,8 @@ export async function removeAndSettle(
  * which a person whose removed grant was already Viewer cannot be given.
  * Keeping people as Viewers or reassigning their tasks writes more than a
  * removal, so it needs an organization that allows changes, even for an
- * organization admin (removeAndSettle). A refusal anywhere leaves everything
+ * organization admin, and the first line refuses it before anything is read,
+ * a grant that does not exist included. A refusal anywhere leaves everything
  * as it was. No grant to remove changes nothing.
  */
 export async function removeProjectGrantCore(
@@ -576,6 +577,7 @@ export async function removeProjectGrantCore(
   },
 ): Promise<AccessRemoval> {
   const { me, project, subject } = a
+  if (a.held !== 'leave') await assertOrgWritable(ctx, me.org_id)
   await assertManagesAccess(ctx, me, project, subject)
   await assertNotLead(ctx, project, subject)
   const row = await grantOf(ctx, project, subject)

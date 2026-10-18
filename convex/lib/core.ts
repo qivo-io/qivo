@@ -132,10 +132,11 @@ const callerGone = (): ConvexError<Refusal> =>
  * can change between auth and dispatch. Then the read-only gate of a billing
  * pause or a pending deletion applies.
  *
- * `write: 'access_removal'` mirrors the app's accessRemovalMutation: an
+ * `write: 'access_removal'` mirrors the app's accessRemovalMutation. An
  * organization admin passes that gate, and the removal core meets it for
- * anything a removal also writes (model/projectAccess.ts removeAndSettle).
- * Pass it only from a handler whose only write is an access removal. Only a
+ * anything a removal also writes (model/projectAccess.ts
+ * removeProjectGrantCore, model/teams.ts removeTeamMemberCore). Pass it only
+ * from a handler whose only write is an access removal. Only a
  * person changes access (lib/access.ts canChangeAccess), so the exception is
  * a person's.
  *

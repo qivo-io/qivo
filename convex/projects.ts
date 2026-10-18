@@ -178,8 +178,8 @@ export const update = orgMutation({
  * Leaving the tasks only takes access away, so an organization admin can
  * still do it while billing has made the organization read-only
  * (accessRemovalMutation). Keeping people as Viewers or reassigning their
- * tasks writes more, so the core meets the billing gate for it
- * (removeAndSettle), and the wrapper does for a lead who is not an admin. */
+ * tasks writes more, so the core meets the billing gate for it, and the
+ * wrapper does for a lead who is not an admin. */
 export const removeAccess = accessRemovalMutation({
   args: {
     id: v.string(),

@@ -599,6 +599,17 @@ describe('admin actions that take access away during read-only access', () => {
       'forbidden',
       /read-only/,
     )
+    // and so does keeping as a Viewer when there is no membership left to remove
+    await expectRefusal(
+      as(t, f.admin).mutation(api.teams.removeMember, {
+        org_id,
+        team_id,
+        profile_id: f.viewer.id,
+        on_held_tasks: 'keep_as_viewer',
+      }),
+      'forbidden',
+      /read-only/,
+    )
     const members = await t.run(async (ctx) =>
       (
         await ctx.db
@@ -633,6 +644,8 @@ describe('admin actions that take access away during read-only access', () => {
     expect(await tbedGrant(t, f, f.viewer.id)).toMatchObject({ level: 'user' })
     expect(await remove(f.admin, 'leave')).toEqual({ removed: true, stranded: 0 })
     expect(await tbedGrant(t, f, f.viewer.id)).toBeNull()
+    // the gate comes first, so a grant that is gone gets the same answer
+    await expectRefusal(remove(f.admin, 'keep_as_viewer'), 'forbidden', /read-only/)
   })
 
   it('lets an admin remove project access and team members over REST and MCP by leaving the tasks', async () => {
@@ -726,6 +739,19 @@ describe('admin actions that take access away during read-only access', () => {
     expect(await tbedGrant(t, f, f.viewer.id)).toBeNull()
     expect(await tbedGrant(t, f, f.guest.id)).toBeNull()
     expect(await teamMemberIds(t, f)).toEqual([f.admin.id])
+
+    // The gate comes first, so a grant or membership that is gone gets the
+    // same refusal instead of an answer that nothing changed.
+    for (const call of [
+      () => restRemove(admin, '{"on_held_tasks":"keep_as_viewer"}'),
+      () => mcpAccess({ level: null, on_held_tasks: 'keep_as_viewer' }),
+      () => restLeave(admin, '{"on_held_tasks":"keep_as_viewer"}'),
+      () =>
+        mcpMember(admin, { user_id: f.viewer.id, member: false, on_held_tasks: 'keep_as_viewer' }),
+    ]) {
+      const e = await expectRefusal(call(), 'forbidden')
+      expect(e.data).toMatchObject({ reason: 'billing_required', message: BILLING_READ_ONLY })
+    }
   })
 
   it('lets an admin remove access over REST while the organization waits for deletion', async () => {
