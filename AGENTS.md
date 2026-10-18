@@ -122,7 +122,9 @@ status. It then builds the commit in the `Build and test / quality` job, which
 runs the same checks as main CI with a read-only token, no secrets and
 read-only cache access. Only when that job succeeded and every check still
 holds does it set `reviewed-ci` to success on the commit. Watch that status, not
-the dispatch run. Start CI runs one request per commit at a time: a second
+the dispatch run. GitHub shows a dispatched run's job checks on main's latest
+commit, so a failed Start CI check there concerns a pull request, not main.
+Start CI runs one request per commit at a time: a second
 request waits for the first to finish, then starts nothing if it passed and
 builds again if it failed.
 
@@ -130,10 +132,9 @@ builds again if it failed.
 the replaced commit, and a new commit has no `reviewed-ci` status until its own
 reviews are finished and Start CI passes. To retry after a failure, fix the
 cause or wait out the infrastructure problem, then dispatch Start CI again.
-Re-running a Start CI run in the Actions interface is refused. GitHub deletes
-checks and statuses, the reviewers' included, after this repository's 7-day
-Actions retention, so a pull request that waits longer needs new reviews and a
-new Start CI run.
+Re-running a Start CI run in the Actions interface is refused. For an older
+pull request, run the check again and renew any review evidence that is missing
+or outdated before you dispatch Start CI.
 
 **5. Merge** only when your task says to. Successful CI permits merging; it does
 not authorize it. Recheck the reviews of the head first.
