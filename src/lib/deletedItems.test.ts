@@ -9,6 +9,7 @@ import {
   deletedAlong,
   deletedBy,
   deletedByOptions,
+  destinations,
   fold,
   foldText,
   hitItem,
@@ -258,6 +259,29 @@ describe('search hits', () => {
       blocked: { reason: 'no_access' },
     })
     expect(redacted).toMatchObject({ kind: 'task', redacted: true, path: [], can_restore: false })
+    // a subtask's hit stands for its whole task item, named after the root,
+    // whose place the hit does not tell
+    const subtask = hitItem({
+      ...hit,
+      item_id: 't',
+      item_kind: 'task',
+      key: 'QN-15',
+      title: 'Log the readings',
+      root_key: 'QN-12',
+      root_title: 'Calibrate the rig',
+      archived: true,
+    })
+    expect(subtask).toMatchObject({
+      id: 't',
+      kind: 'task',
+      key: 'QN-12',
+      title: 'Calibrate the rig',
+      path: [],
+      archived: false,
+    })
+    expect(destinations([subtask])).toEqual([
+      { key: 't', kind: 'task', name: 'QN-12 Calibrate the rig', count: 'task and its subtasks' },
+    ])
     // a project item's hit names only the task, never the project
     expect(hitItem(hit)).toMatchObject({ id: 'p', kind: 'project', key: '', title: '', path: [] })
   })

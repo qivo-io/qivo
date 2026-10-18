@@ -192,9 +192,11 @@ Filter the list by kind, by text and, for admins and leads, by **Deleted
 by**. The page shows up to the newest 2,000 items, and fewer when the trash
 is very large. The text filter also finds deleted tasks by key or title,
 including tasks inside deleted projects and items the list does not show. A
-task inside a deleted project can only come back with its project. **Deleted
-by** offers an admin everyone in the organization, so choosing a person
-reaches their older deletes too.
+task inside a deleted project can only come back with its project, and a
+subtask deleted with its task only with that task and its other subtasks.
+When the filter shows such a task on a line of its own, its **Restore** first
+says what comes back with it. **Deleted by** offers an admin everyone in the
+organization, so choosing a person reaches their older deletes too.
 
 **Restore** on a row brings the item back at once, where it was, with its
 comments, attachments, links and labels. To restore several, select their

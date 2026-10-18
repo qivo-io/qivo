@@ -634,7 +634,7 @@ describe('selecting and restoring', () => {
     expect(calls('deletedItems:restore')).toEqual([])
     await click(button('Restore 3 tasks'))
     expect(calls('deletedItems:restore')).toEqual([
-      { org_id: ORG, ids: ['item-1', 'item-2', 'item-3'] },
+      { org_id: ORG, ids: ['item-1', 'item-2', 'item-3'], bulk: true },
     ])
     expect(window.showToast).toHaveBeenCalledWith('Restored 3 tasks', undefined)
     expect(has('[data-modal-shell]')).toBe(false)
@@ -674,6 +674,30 @@ describe('selecting and restoring', () => {
     expect(text('[data-deleted-row="item-129"] [data-row-note="refused"]')).toBe(
       'Something now uses its key, so it cannot come back.',
     )
+  })
+
+  it('marks every call of a bulk restore as bulk, and leaves it off a single Restore', async () => {
+    await open()
+    answers['deletedItems:restore'] = async (args) => ({
+      restored: args.ids as string[],
+      refused: [],
+      deferred: [],
+    })
+    const many = burst(26)
+    await deliver([...many, task(1, { deleted_at: at(13, 0) })])
+    // a row's Restore brings back that one task and its followers hear of it
+    await click(find('[data-deleted-row="item-1"] [data-restore]'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-1'] }])
+    await deliver(many)
+    await click(find('[data-select-all]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    await click(button('Restore 26 tasks'))
+    // the second call holds one task, and is still part of the bulk restore
+    const [, ...bulk] = calls('deletedItems:restore')
+    expect(bulk.map((a) => [(a.ids as string[]).length, a.bulk])).toEqual([
+      [25, true],
+      [1, true],
+    ])
   })
 
   it('keeps the rows when the organization is read-only and says so', async () => {
@@ -1338,6 +1362,36 @@ describe('windows that wait for the server', () => {
     expect(has('[data-purge]')).toBe(false)
   })
 
+  it('keeps a whole item window waiting while the list shows its project restoring or gone', async () => {
+    await open()
+    let restored: (answer: Answer) => void = () => {}
+    answers['deletedItems:restore'] = () => new Promise((resolve) => (restored = resolve))
+    await deliver([trial()])
+    await found('Book', [hit()])
+    await click(find('[data-deleted-match="QN-12"] [data-restore]'))
+    await click(button('Restore Field trial Q3 and QN-12'))
+    const footer = () =>
+      buttons()
+        .filter((b) => b.closest('[data-modal-shell]'))
+        .map((b) => b.textContent)
+    // the list says the project is restoring before the answer arrives
+    await deliver([trial({ state: 'restoring', can_restore: false })])
+    expect(footer()).toEqual(['', 'Cancel', 'Restoring…'])
+    expect(button('Restoring…').disabled).toBe(true)
+    await click(button('Cancel'))
+    await click(find('[data-modal-shell] button[aria-label="Close"]'))
+    expect(has('[data-project-first]')).toBe(true)
+    // and then that it is gone
+    await deliver([])
+    expect(footer()).toEqual(['', 'Cancel', 'Restoring…'])
+    await click(button('Cancel'))
+    expect(has('[data-project-first]')).toBe(true)
+    await act(async () => restored({ restored: ['item-trial'], refused: [], deferred: [] }))
+    await settle()
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(window.showToast).toHaveBeenCalledWith('Restored “Field trial Q3”', undefined)
+  })
+
   it('says Restoring while a project comes back in steps', async () => {
     await open()
     answers['deletedItems:restore'] = async (args) => {
@@ -1656,8 +1710,15 @@ describe('task items the search finds', () => {
       title: 'Ship the firmware',
       counts: { tasks: 3, archived_tasks: 0, subtasks: 2, sub_projects: 0 },
     })
+    // a subtask's hit names the root, as the server does
     const ofParent = (key: string, title: string) =>
-      taskHit({ item_id: 'item-30', key, title, deleted_at: parent.deleted_at })
+      taskHit({
+        item_id: 'item-30',
+        key,
+        title,
+        deleted_at: parent.deleted_at,
+        ...(key === 'QN-30' ? {} : { root_key: 'QN-30', root_title: 'Ship the firmware' }),
+      })
     await deliver([parent, task(1)])
     // the root by key, and a subtask of the same item by title
     await found('QN-3', [ofParent('QN-30', 'Ship the firmware'), ofParent('QN-31', 'QN-3 notes')])
@@ -1668,6 +1729,65 @@ describe('task items the search finds', () => {
     expect(rowIds()).toEqual(['item-30'])
     expect(rowOf('item-30').textContent).toContain('QN-30Ship the firmwareand 2 subtasks')
     expect(has('[data-deleted-match]')).toBe(false)
+  })
+
+  it('asks before a subtask found outside a capped list brings back its whole task', async () => {
+    await open()
+    restoresAll()
+    await deliver([task(1, { title: 'Check the humidity alarm' })], true)
+    const subtask = taskHit({
+      key: 'QN-78',
+      title: 'Log the humidity readings',
+      root_key: 'QN-77',
+      root_title: 'Calibrate the humidity sensor',
+    })
+    // a hit on the root as well shows the item's own row, which restores at once
+    await found('humid', [taskHit(), subtask])
+    expect(rowIds()).toEqual(['item-1', 'item-old'])
+    expect(has('[data-deleted-match]')).toBe(false)
+
+    await found('readings', [subtask])
+    // the subtask's own line, which says it went with its task
+    expect(rowIds()).toEqual(['item-old:QN-78'])
+    expect(has('[data-deleted-row="item-old"]')).toBe(false)
+    const line = find('[data-deleted-match="QN-78"]')
+    expect(line.textContent).toContain('QN-78Log the humidity readings')
+    expect(text('[data-deleted-match="QN-78"] [data-row-place]')).toBe(
+      'Luma Sensor › Firmware, deleted with QN-77',
+    )
+    expect(text('[data-deleted-match="QN-78"] [data-row-who]')).toBe('Daniel Berg')
+    expect(text('[data-deleted-count]')).toBe('1 of 2 items')
+
+    // in the bulk window it is named by its root
+    await found('humidity', [subtask])
+    await click(find('[data-select-all]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    expect(
+      [...document.querySelectorAll('[data-destination]')].map((el) => el.textContent),
+    ).toEqual([
+      'Luma Sensor › Firmware1 task',
+      'QN-77 Calibrate the humidity sensortask and its subtasks',
+    ])
+    await click(button('Cancel'))
+    await click(button('Clear'))
+    // ticked alone, it asks too
+    await click(find('[data-deleted-match="QN-78"] [data-select]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    expect(text('[data-modal-shell] h2')).toBe('QN-78 is a subtask of a deleted task')
+    await click(button('Cancel'))
+    await click(button('Clear'))
+
+    await click(find('[data-deleted-match="QN-78"] [data-restore]'))
+    expect(calls('deletedItems:restore')).toEqual([])
+    expect(text('[data-modal-shell] h2')).toBe('QN-78 is a subtask of a deleted task')
+    expect(text('[data-task-first]')).toBe(
+      'QN-78 was deleted together with QN-77 Calibrate the humidity sensor. It can only come back with that task.QN-77 and its subtasks come back. They keep their keys.',
+    )
+    await click(button('Restore QN-77 and QN-78'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-old'] }])
+    expect(window.showToast).toHaveBeenCalledWith('Restored QN-77 and its subtasks', undefined)
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(rowIds()).toEqual(['item-1'])
   })
 
   it('shows a redacted task item the search finds as the redacted row', async () => {

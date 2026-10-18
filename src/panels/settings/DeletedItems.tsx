@@ -4,6 +4,9 @@
    by key or title, live from deletedItems.matches, also inside deleted
    projects and among task items a capped list leaves out. One item restores
    without asking, and several open a window that says where they go back.
+   A task that can only come back with a whole item the line does not show,
+   its deleted project or the task item it is a subtask of, opens a window
+   that says what else comes back.
    An organization admin can delete an item for good from its row menu. The
    page never names the 30 days an item stays, which only the user guide
    does. Row text, folding and the filters live in lib/deletedItems.ts, and
@@ -139,14 +142,15 @@ function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
   return { list, latest, retry: () => setAttempt((n) => n + 1) }
 }
 
-/** The windows the page opens: restore several items, restore an item that
-    waits for a deleted project, or delete one for good. `key` is the line
-    that opened it, for focus. `selection` marks a project window that
-    Restore N selected opened, which hands focus back like the bulk one.
-    `along` is what Delete now takes with the row, counted as it opens. */
+/** The windows the page opens: restore several items, restore a line that
+    can only come back with a whole item (WholeItemWindow), or delete one for
+    good. `key` is the line that opened it, for focus. `selection` marks a
+    whole item window that Restore N selected opened, which hands focus back
+    like the bulk one. `along` is what Delete now takes with the row, counted
+    as it opens. */
 type Ask =
   | { kind: 'bulk'; rows: ItemRow[] }
-  | { kind: 'project'; line: Line; key: string; selection?: boolean }
+  | { kind: 'whole'; line: Line; key: string; selection?: boolean }
   | { kind: 'purge'; row: DeletedRow; key: string; along: ReturnType<typeof deletedAlong> }
 
 /** The key of a line in the list, which also names it for focus. */
@@ -266,7 +270,9 @@ export function DeletedItemsPage() {
   // restores it. A hit inside a project item is a match line, which acts on
   // the project. A task item's hit is that item's own row, which shows once
   // however many of its tasks the search finds, and also when the text is
-  // in a subtask the row does not name.
+  // in a subtask the row does not name. Only a hit on a subtask of a task
+  // item that no list holds is a match line, which acts on the whole item,
+  // unless a hit on its root shows the item's row.
   const capped = source.list?.capped === true
   const lines = useMemo(() => {
     const out: Line[] = []
@@ -280,20 +286,23 @@ export function DeletedItemsPage() {
         out.push({ kind: 'item', row })
         shown.add(row.id)
       }
-    if (lower && kind !== 'project')
+    if (lower && kind !== 'project') {
+      const subtasks: { kind: 'match'; match: DeletedMatch; item: ItemRow }[] = []
       for (const match of hits) {
         const id = match.item_id
-        const item =
-          byId.get(id) ??
-          allById.get(id) ??
-          (capped && !restored.has(id) ? hitItem(match) : undefined)
+        const listed = byId.get(id) ?? allById.get(id)
+        const item = listed ?? (capped && !restored.has(id) ? hitItem(match) : undefined)
         if (!item || !deletedBy(item, by)) continue
         if (item.kind === 'project') out.push({ kind: 'match', match, item })
+        else if (!listed && match.root_key !== undefined)
+          subtasks.push({ kind: 'match', match, item })
         else if (!shown.has(id)) {
           out.push({ kind: 'item', row: item })
           shown.add(id)
         }
       }
+      out.push(...subtasks.filter((line) => !shown.has(line.item.id)))
+    }
     return out.sort(byTime)
   }, [rows, byId, allById, capped, restored, kind, by, lower, hits])
   // the items the lines show, each once however many hits it has
@@ -485,19 +494,22 @@ export function DeletedItemsPage() {
   /** Restores `items` and says how it went. `announce` are the items the
       person asked for; others in the call are what they wait for. `name`
       names the one announced item where the page has no name for it.
-      `settle` moves focus once the page shows the answer. */
+      `settle` moves focus once the page shows the answer. `bulk` marks a
+      restore of several items the person chose, which sends no Restored
+      notice however the calls split it (design 5.4). */
   async function restore(
     items: ItemRow[],
     {
       announce = items,
       name,
       settle,
-    }: { announce?: ItemRow[]; name?: string; settle?: () => void } = {},
+      bulk = false,
+    }: { announce?: ItemRow[]; name?: string; settle?: () => void; bulk?: boolean } = {},
   ) {
     const ids = items.map((row) => row.id)
     setBusy((current) => new Set([...current, ...ids]))
     setRefusals((current) => new Map([...current].filter(([id]) => !ids.includes(id))))
-    const outcome = await P.restoreDeletedItems(items)
+    const outcome = await P.restoreDeletedItems(items, { bulk })
     if (outcome.deferred.length > 0)
       setWaiting((current) => new Set([...current, ...outcome.deferred]))
     if (outcome.done.length > 0) setRestored((current) => new Set([...current, ...outcome.done]))
@@ -572,14 +584,14 @@ export function DeletedItemsPage() {
     )
   }
 
-  /** A row's Restore. One item restores at once, and a search hit inside a
-      deleted project or an item whose project is deleted too goes through
-      the project window. */
+  /** A row's Restore. One item restores at once. A search hit, inside a
+      deleted project or on a subtask of a task item no list holds, and an
+      item whose project is deleted too go through the whole item window. */
   const restoreLine = (line: Line, key: string) => {
     const row = lineItem(line)
     const reason = row.blocked?.reason
     if (line.kind === 'match' || reason === 'project_deleted' || reason === 'parent_deleted') {
-      openAsk({ kind: 'project', line, key })
+      openAsk({ kind: 'whole', line, key })
       return
     }
     if (!row.can_restore || busy.has(row.id)) return
@@ -587,9 +599,10 @@ export function DeletedItemsPage() {
   }
 
   /** Restore N selected. One item restores at once, and more open the bulk
-      window. A project item ticked through a search hit, while its own row
-      is filtered out, opens the project window instead, so the person learns
-      that the whole project comes back and not only the task. */
+      window. An item ticked through a search hit's match line, while it has
+      no row of its own, opens the whole item window instead, so the person
+      learns that the whole project or task comes back and not only the task
+      the search found. */
   const restoreSelected = () => {
     if (chosenReady.length === 0) return
     if (chosenReady.length > 1) {
@@ -599,7 +612,7 @@ export function DeletedItemsPage() {
     const [row] = chosenReady
     const hit = lines.find((line) => line.kind === 'match' && line.item.id === row.id)
     if (hit && !lines.some((line) => line.kind === 'item' && line.row.id === row.id)) {
-      openAsk({ kind: 'project', line: hit, key: lineKey(hit), selection: true })
+      openAsk({ kind: 'whole', line: hit, key: lineKey(hit), selection: true })
       return
     }
     void restore(chosenReady, { settle: () => restoreFocus(selectAllOrSearch()) })
@@ -739,7 +752,12 @@ export function DeletedItemsPage() {
                 place && (
                   <span>
                     {place}
-                    {match && <span className="text-danger">, deleted with the project</span>}
+                    {match && (
+                      <span className="text-danger">
+                        , deleted with{' '}
+                        {item.kind === 'project' ? 'the project' : (match.root_key ?? 'its task')}
+                      </span>
+                    )}
                   </span>
                 )
               )}
@@ -1032,7 +1050,7 @@ export function DeletedItemsPage() {
           onClose={() => setAsk(null)}
           onRestore={async () => {
             setSaving(true)
-            const outcome = await restore(ask.rows)
+            const outcome = await restore(ask.rows, { bulk: true })
             setSaving(false)
             // a call refused whole (billing, offline) keeps it open for another try
             if (outcome.error === null || outcome.done.length > 0) closeActed()
@@ -1040,8 +1058,8 @@ export function DeletedItemsPage() {
           focusAfterClose={afterSelectionWindow}
         />
       )}
-      {ask?.kind === 'project' && (
-        <ProjectFirstWindow
+      {ask?.kind === 'whole' && (
+        <WholeItemWindow
           line={ask.line}
           holder={(() => {
             const item = lineItem(ask.line)
@@ -1055,15 +1073,17 @@ export function DeletedItemsPage() {
             const { line } = ask
             windowSides.current = around(ask.key)
             setSaving(true)
-            // a search hit comes back with its project; an item that waits
-            // for its project goes in the same call and is deferred
+            // a search hit comes back with its item; an item that waits for
+            // its project goes in the same call and is deferred
             const outcome = await restore(line.kind === 'match' ? [holder] : [holder, line.row], {
               announce: [holder],
-              // a project item known only from a hit has no name of its own
+              // an item known only from a hit has no name or size of its own
               name:
-                line.kind === 'match' && holder.hit
-                  ? `${line.match.key} and its project`
-                  : undefined,
+                line.kind !== 'match' || !holder.hit
+                  ? undefined
+                  : holder.kind === 'project'
+                    ? `${line.match.key} and its project`
+                    : `${holder.key} and its subtasks`,
             })
             setSaving(false)
             // a call refused whole (billing, offline) keeps it open for another try
@@ -1178,14 +1198,19 @@ function comesBack(holder: DeletedRow): string {
   return `${holder.title} comes back with ${andList(parts)}${kept}. They keep their keys.`
 }
 
-/** The "<key> is in a deleted project" window. A search hit inside a deleted
-    project, or (for admins) an item deleted before its project, can only
-    come back with that project item, so Restore brings the project back
-    first. When the project item cannot be restored, the window says why and
-    offers Close. A project item that only a search hit names (a capped list
-    stopped before it) has no name or counts here, so the window speaks of
-    "the project". */
-function ProjectFirstWindow({
+/** The window of a line that can only come back with a whole item, which
+    `holder` is. A search hit inside a deleted project, or (for admins) an
+    item deleted before its project, comes back with that project item
+    ("<key> is in a deleted project"), so Restore brings the project back
+    first. A search hit on a subtask of a task item that no list holds comes
+    back with the whole item, its root and every other subtask ("<key> is a
+    subtask of a deleted task"). When the item cannot be restored, the window
+    says why and offers Close. A project item that only a search hit names
+    (a capped list stopped before it) has no name or counts here, so the
+    window speaks of "the project". While a restore is saving, the window
+    waits for it, also when the list meanwhile shows the item restoring or
+    gone. */
+function WholeItemWindow({
   line,
   holder,
   saving,
@@ -1202,6 +1227,11 @@ function ProjectFirstWindow({
 }) {
   const item = lineItem(line)
   const name = line.kind === 'match' ? line.match.key : itemName(item)
+  // the task item a subtask's hit belongs to, by its root
+  const root =
+    line.kind === 'match' && line.item.kind === 'task'
+      ? { key: line.match.root_key ?? line.item.key, title: line.match.root_title ?? '' }
+      : undefined
   const project = holder?.hit ? undefined : holder?.title
   const canRestore = holder?.can_restore === true
   const reason = !holder
@@ -1212,15 +1242,17 @@ function ProjectFirstWindow({
   return (
     <ModalShell
       icon="rotateCcw"
-      title={`${name} is in a deleted project`}
+      title={root ? `${name} is a subtask of a deleted task` : `${name} is in a deleted project`}
       width={440}
       onClose={saving ? () => false : onClose}
       onSubmit={() => holder && onRestore(holder)}
       canSubmit={canRestore && !saving}
-      submitLabel={saving ? 'Restoring…' : `Restore ${project ?? 'the project'} and ${name}`}
+      submitLabel={
+        saving ? 'Restoring…' : `Restore ${root?.key ?? project ?? 'the project'} and ${name}`
+      }
       focusAfterClose={focusAfterClose}
       footer={
-        canRestore ? undefined : (
+        canRestore || saving ? undefined : (
           <>
             <div className="min-w-0 flex-1" />
             <Button type="button" variant="ghost" className="text-text-1" onClick={onClose}>
@@ -1230,38 +1262,56 @@ function ProjectFirstWindow({
         )
       }
     >
-      <div data-project-first className="flex flex-col gap-3 text-base leading-normal text-text-2">
-        {holder ? (
+      {root ? (
+        <div data-task-first className="flex flex-col gap-3 text-base leading-normal text-text-2">
           <p>
-            <b className="font-semibold text-text-1">{name}</b>
-            {line.kind === 'match'
-              ? ' was deleted together with its project'
-              : ' was deleted before its project'}
-            {project !== undefined && (
-              <>
-                {' '}
-                <b className="font-semibold text-text-1">{project}</b>
-              </>
-            )}
-            {line.kind === 'match'
-              ? '. It can only come back with the project.'
-              : ', which is in Deleted items too. It can only come back after the project.'}
+            <b className="font-semibold text-text-1">{name}</b> was deleted together with{' '}
+            <b className="font-semibold text-text-1">
+              {root.key} {root.title}
+            </b>
+            . It can only come back with that task.
           </p>
-        ) : (
-          <p>
-            <b className="font-semibold text-text-1">{name}</b> is in a project that is in Deleted
-            items too. It can only come back after the project.
-          </p>
-        )}
-        {holder && (
           <p className="text-sm">
-            {reason ??
-              (project === undefined
-                ? 'The project comes back with all its tasks. They keep their keys.'
-                : comesBack(holder))}
+            {reason ?? `${root.key} and its subtasks come back. They keep their keys.`}
           </p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div
+          data-project-first
+          className="flex flex-col gap-3 text-base leading-normal text-text-2"
+        >
+          {holder ? (
+            <p>
+              <b className="font-semibold text-text-1">{name}</b>
+              {line.kind === 'match'
+                ? ' was deleted together with its project'
+                : ' was deleted before its project'}
+              {project !== undefined && (
+                <>
+                  {' '}
+                  <b className="font-semibold text-text-1">{project}</b>
+                </>
+              )}
+              {line.kind === 'match'
+                ? '. It can only come back with the project.'
+                : ', which is in Deleted items too. It can only come back after the project.'}
+            </p>
+          ) : (
+            <p>
+              <b className="font-semibold text-text-1">{name}</b> is in a project that is in Deleted
+              items too. It can only come back after the project.
+            </p>
+          )}
+          {holder && (
+            <p className="text-sm">
+              {reason ??
+                (project === undefined
+                  ? 'The project comes back with all its tasks. They keep their keys.'
+                  : comesBack(holder))}
+            </p>
+          )}
+        </div>
+      )}
     </ModalShell>
   )
 }

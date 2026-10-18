@@ -4994,13 +4994,18 @@ export const PLANNER = {
   /** Restore Deleted items (Settings, Deleted items). Awaited, never
       optimistic: the work comes back through the snapshot, and the page's
       list drops the items as the server does. Sent per organization, 25 ids
-      at a time. Never toasts; the page says what happened. */
+      at a time. `bulk` marks every call as part of a restore of several
+      items, so that a call left with one task item sends no Restored notice;
+      a single row's Restore leaves it out. Never toasts; the page says what
+      happened. */
   restoreDeletedItems: (
     items: { id: string; org_id: string }[],
+    { bulk = false }: { bulk?: boolean } = {},
   ): Promise<DeletedItemsOutcome<RestoreRefusal>> =>
     deletedItemsCalls(
       items,
-      (orgId, ids) => write(api.deletedItems.restore, { org_id: orgId, ids }),
+      (orgId, ids) =>
+        write(api.deletedItems.restore, { org_id: orgId, ids, ...(bulk ? { bulk } : {}) }),
       "Couldn't restore",
     ),
 

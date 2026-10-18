@@ -28,9 +28,11 @@ export type PurgeRefusal = FunctionReturnType<
     hit that no list holds (hitItem), which carries that `hit`. */
 export type ItemRow = DeletedRow & { hit?: DeletedMatch }
 
-/** One line of the list: an item, or a task inside a deleted project that the
-    search found. A match acts on its project item, `item`. A task item that
-    the search found is an item line, its own row. */
+/** One line of the list: an item, or a task the search found that can only
+    come back with an item the line does not show. That is a task inside a
+    deleted project, or a subtask of a task item that no list holds, whose
+    hit names the item's root (`root_key`). A match acts on its item, `item`.
+    Any other task item that the search found is an item line, its own row. */
 export type Line =
   | { kind: 'item'; row: ItemRow }
   | { kind: 'match'; match: DeletedMatch; item: ItemRow }
@@ -42,9 +44,12 @@ export const lineItem = (line: Line): ItemRow => (line.kind === 'item' ? line.ro
     no list holds. A capped list can stop before older items that the search
     still finds. The item has the hit's organization, deleter, time and
     restore state, and no counts or Delete now, which the hit does not carry.
-    A task item is the task the search found, with its key, title and place,
-    and shows as an ordinary task row, redacted when the hit is. A project
-    item has no name, so the page names it through `hit`. */
+    A task item found by its root is that task, with its key, title and
+    place, and shows as an ordinary task row, redacted when the hit is. A
+    task item found by a subtask is named after its root, which the hit
+    names, without a place, and shows as the hit's match line, since its
+    Restore brings back the root and every subtask. A project item has no
+    name, so the page names it through `hit`. */
 export function hitItem(match: DeletedMatch): ItemRow {
   const item: ItemRow = {
     id: match.item_id,
@@ -66,6 +71,8 @@ export function hitItem(match: DeletedMatch): ItemRow {
     hit: match,
   }
   if (match.item_kind !== 'task') return item
+  if (match.root_key !== undefined)
+    return { ...item, kind: 'task', key: match.root_key, title: match.root_title ?? '' }
   return {
     ...item,
     kind: 'task',
@@ -530,7 +537,9 @@ export type Destination = { key: string; kind: 'task' | 'project'; name: string;
  * tasks"), then the task items grouped by the project they go back to, most
  * first ("Luma Sensor › Firmware", "74 tasks" or "3 tasks and 2 subtasks").
  * A project item known only from a search hit is named by where the hit's
- * task sat and by that task ("project with QN-12").
+ * task sat and by that task ("project with QN-12"). A task item known only
+ * from a hit on a subtask is named by its root, whose place the hit does not
+ * tell ("QN-12 Calibrate the rig", "task and its subtasks"), after the rest.
  */
 export function destinations(rows: ItemRow[]): Destination[] {
   const projects: Destination[] = rows
@@ -555,8 +564,18 @@ export function destinations(rows: ItemRow[]): Destination[] {
       }
     })
   const groups = new Map<string, { name: string; tasks: number; subtasks: number }>()
+  const roots: Destination[] = []
   for (const row of rows) {
     if (row.kind !== 'task') continue
+    if (row.hit?.root_key !== undefined) {
+      roots.push({
+        key: row.id,
+        kind: 'task',
+        name: `${row.key} ${row.title}`,
+        count: 'task and its subtasks',
+      })
+      continue
+    }
     const name = placeText(row)
     const key = `${row.org_id}|${name}`
     const group = groups.get(key) ?? { name, tasks: 0, subtasks: 0 }
@@ -574,7 +593,7 @@ export function destinations(rows: ItemRow[]): Destination[] {
         ? `${plural(group.tasks, 'task')} and ${plural(group.subtasks, 'subtask')}`
         : plural(group.tasks, 'task'),
     }))
-  return [...projects, ...tasks]
+  return [...projects, ...tasks, ...roots]
 }
 
 /* ------------------------------------------------------------ Delete now */
