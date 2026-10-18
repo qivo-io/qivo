@@ -21,8 +21,7 @@ import { orgLoadRows } from '../planning'
 import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
 import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf, delayProjector } from './delay'
-import { ISSUE_STATUSES } from './enums'
-import { liveIn, liveTasksOf } from './liveTasks'
+import { liveIn, liveTasksOf, ownedOpenTasks } from './liveTasks'
 import { taskOwnerId } from './review'
 import { type OrgProjectView, orgProjectView } from './visibility'
 import {
@@ -217,9 +216,6 @@ export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Fo
   }
 }
 
-/* The statuses of tasks that can carry load, as orgLoadRows skips Done ones. */
-const LOAD_STATUSES = ISSUE_STATUSES.filter((status) => status !== 'done')
-
 /* How many of an owner's tasks a delay verdict checks for subtasks, one
  * by_parent_archived read each, before it reads the organization's live
  * tasks once instead, about the read an active list makes anyway. With the single read's subtree walk (lib/core.ts SUBTREE_WALK)
@@ -230,9 +226,9 @@ export const OWNER_LOAD_CHECKS = { reads: 500 }
 /**
  * The load rows of `owner`'s work as `me` may see them, as delay walks
  * them. These are orgLoadRows' rows owned by `owner`, read through the
- * owner's own open tasks (those assigned to them that are not Done, and
- * those In Review that they review) rather than the organization's active
- * ones. A group carries no load, so each candidate that orgLoadRows would
+ * owner's own open tasks (lib/liveTasks.ts ownedOpenTasks, those assigned
+ * to them that are not Done and those In Review that they review) rather
+ * than the organization's active ones. A group carries no load, so each candidate that orgLoadRows would
  * keep is checked for a subtask that makes it one (model/issues.ts
  * hasSubtasks). Past OWNER_LOAD_CHECKS candidates it reads the
  * organization's live tasks instead (lib/liveTasks.ts liveTasksOf), where
@@ -247,34 +243,17 @@ export async function ownerLoadSpans(
   view: LoadView,
 ): Promise<LoadSpan[]> {
   if (owner.org_id !== me.org_id) return []
-  const held = [
-    ...LOAD_STATUSES.map((status) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_assignee_archived_status', (q) =>
-          q.eq('assignee_id', owner.id).eq('archived_at', undefined).eq('status', status),
-        ),
-    ),
-    // a reviewer owns a task only while it is in review (lib/review.ts)
-    ctx.db
-      .query('issues')
-      .withIndex('by_reviewer_archived_status', (q) =>
-        q.eq('reviewer_id', owner.id).eq('archived_at', undefined).eq('status', 'review'),
-      ),
-  ]
-  const tasks = new Map<string, Doc<'issues'>>()
-  for (const range of held) for await (const task of range) tasks.set(task.id, task)
   const live = liveIn(view.byUuid)
-  // what orgLoadRows drops anyway needs no subtask read
-  const candidates = [...tasks.values()].filter(
+  // what orgLoadRows drops anyway needs no subtask read. The owner's tasks
+  // come in the organization's active order (by_org_archived), which the
+  // list's load and the app's follow, so each week's hours add up in the
+  // same order and round the same way
+  const candidates = (await ownedOpenTasks(ctx, owner.id, live)).filter(
     (task) =>
       task.org_id === me.org_id &&
-      taskOwnerId(task) === owner.id &&
       task.start_week !== undefined &&
-      task.status !== 'done' &&
       !task.paused &&
-      (task.remaining_hours ?? 0) > 0 &&
-      live(task.project_id),
+      (task.remaining_hours ?? 0) > 0,
   )
   let rows: Doc<'issues'>[] = []
   if (candidates.length > OWNER_LOAD_CHECKS.reads) {
@@ -283,10 +262,6 @@ export async function ownerLoadSpans(
     for (const task of candidates) {
       if (!(await hasSubtasks(ctx, task, live))) rows.push(task)
     }
-    // in the organization's active order (by_org_archived), which the
-    // list's load and the app's follow, so each week's hours add up in the
-    // same order and round the same way
-    rows.sort((a, b) => a._creationTime - b._creationTime)
   }
   return spansByOwner(orgLoadRows(me, view, new Set([owner.id]), rows), grid).get(owner.id) ?? []
 }

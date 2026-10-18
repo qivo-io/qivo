@@ -9,18 +9,19 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
 import { assertOrgWritable } from './lib/billingAccess'
-import { byId, insertUnique } from './lib/db'
+import { byId, insertUnique, usedMoreThan } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
 import { logActivity } from './model/activity'
 import {
   assertOwnRemaining,
   assertWeekPair,
+  type BulkUpdate,
   cleanRemaining,
   GROUP_DATES_RULE,
   hasSubtasks,
   updateIssueCore,
 } from './model/issues'
-import { notifyIssueUpdate } from './model/messages'
+import { loadNotifyPreload, notifyIssueUpdate } from './model/messages'
 import {
   changeableMilestone,
   cleanMilestoneName,
@@ -66,7 +67,7 @@ const taskValues = (row: Doc<'issues'>): TaskValues => ({
 })
 const milestoneValues = ({ _id, _creationTime, ...row }: Doc<'milestones'>): Milestone => row
 
-async function writer(ctx: Context, projectId: string) {
+async function checkWriter(ctx: Context, projectId: string) {
   const project = await byId(ctx, 'projects', projectId)
   const me = project && ctx.myProfiles.get(project.org_id)
   if (!project || !me || !(await canSeeProject(ctx, me, project)))
@@ -75,6 +76,70 @@ async function writer(ctx: Context, projectId: string) {
     throw forbidden('no write access to this project')
   await assertOrgWritable(ctx, project.org_id)
   return { project, me }
+}
+
+/* Each mutation's passed write checks by project id. */
+const writers = new WeakMap<Context, Map<string, ReturnType<typeof checkWriter>>>()
+
+/* The project and the caller's seat in it, once the caller may write there.
+ * A roadmap mutation changes only tasks, milestones and activity, never a
+ * project, profile, grant, team or the organization's plan, so each project
+ * is checked once per mutation however many operations name it. */
+function writer(ctx: Context, projectId: string): ReturnType<typeof checkWriter> {
+  let known = writers.get(ctx)
+  if (known === undefined) {
+    known = new Map()
+    writers.set(ctx, known)
+  }
+  let result = known.get(projectId)
+  if (result === undefined) {
+    result = checkWriter(ctx, projectId)
+    known.set(projectId, result)
+  }
+  return result
+}
+
+/** The share of each of Convex's limits for one transaction that a roadmap
+ * save or undo may have used before it changes, journals or notifies about
+ * another task. A task costs more the more followers it has, so no count of
+ * operations bounds a save (LIMIT counts them). The rest of each limit is
+ * room for one task's own reads and writes and the journal entry. */
+export const ROADMAP_ROOM = 0.95
+
+/** The refusals of a save or an undo too large for one transaction. The app
+ * quotes them in its toasts, so they carry no closing period. */
+export const ROADMAP_CHANGE_TOO_LARGE =
+  'this roadmap change is too large to save at once; change fewer tasks at a time'
+export const ROADMAP_UNDO_TOO_LARGE =
+  'these roadmap changes are too large to undo at once; undo them one step at a time'
+export const ROADMAP_STEP_TOO_LARGE = 'this roadmap change is too large to undo at once'
+
+/* What one roadmap mutation shares across its task writes: one BulkUpdate
+ * per organization, built at its first task there (model/issues.ts
+ * BulkUpdate), and the room check that refuses with `tooLarge`. A roadmap
+ * mutation changes only tasks, milestones and activity, so the preload stays
+ * valid for the whole mutation (model/messages.ts NotifyPreload). Its guard
+ * runs the room check before each webhook subscription a task write checks
+ * and each follower it notifies. */
+type Batch = { bulkOf: (orgId: string) => Promise<BulkUpdate>; room: () => Promise<void> }
+
+function batchOf(ctx: Context, tooLarge: string): Batch {
+  const room = async () => {
+    if (await usedMoreThan(ctx, ROADMAP_ROOM)) throw rule(tooLarge)
+  }
+  const bulks = new Map<string, Promise<BulkUpdate>>()
+  const bulkOf = (orgId: string) => {
+    let bulk = bulks.get(orgId)
+    if (bulk === undefined) {
+      bulk = loadNotifyPreload(ctx, orgId).then((preload) => ({
+        preload: { ...preload, guard: room },
+        checked: new Set<string>(),
+      }))
+      bulks.set(orgId, bulk)
+    }
+    return bulk
+  }
+  return { bulkOf, room }
 }
 
 /* The caller's seat in the organization that holds `projectId`, if any.
@@ -218,7 +283,9 @@ export const change = authedMutation({
     const beforeTasks = new Map<string, Doc<'issues'>>()
     const beforeMilestones = new Map<string, Milestone | undefined>()
     const now = new Date().toISOString()
+    const batch = batchOf(ctx, ROADMAP_CHANGE_TOO_LARGE)
     for (const op of operations) {
+      await batch.room()
       if (op.kind === 'task') {
         const row = await byId(ctx, 'issues', op.id)
         if (!row) throw notFound('task not found')
@@ -241,7 +308,13 @@ export const change = authedMutation({
         )
           continue
         if (!beforeTasks.has(row.id)) beforeTasks.set(row.id, row)
-        await updateIssueCore(ctx, { me, issue: row, patch, now })
+        await updateIssueCore(ctx, {
+          me,
+          issue: row,
+          patch,
+          now,
+          bulk: await batch.bulkOf(row.org_id),
+        })
       } else {
         const existing = await byId(ctx, 'milestones', op.id)
         if (!beforeMilestones.has(op.id))
@@ -291,6 +364,7 @@ export const change = authedMutation({
     }
     const changes: Change[] = []
     for (const before of beforeTasks.values()) {
+      await batch.room()
       const after = await byId(ctx, 'issues', before.id)
       if (!after) throw stale()
       // Amount and measurement time form one value, including two writes
@@ -342,9 +416,10 @@ export const change = authedMutation({
  * ordinary update core would re-stamp estimates. Validate the complete
  * transaction, then send normal notifications and activity for the actual
  * reverse changes. Each step restores only the rows it journaled. */
-async function restoreStep(ctx: Context, changes: Change[], now: string) {
+async function restoreStep(ctx: Context, changes: Change[], now: string, batch: Batch) {
   const tasks: { change: TaskChange; before: Doc<'issues'>; me: Doc<'profiles'> }[] = []
   for (const change of changes) {
+    await batch.room()
     if (change.kind === 'task') {
       // A receipt that still carries `authorities` was written while child
       // edits widened their ancestors, so it may restore ancestor dates that
@@ -394,6 +469,7 @@ async function restoreStep(ctx: Context, changes: Change[], now: string) {
     }
   }
   for (const { change, before } of tasks) {
+    await batch.room()
     const patch: Partial<TaskValues> = {}
     for (const field of change.fields) Object.assign(patch, { [field]: change.before[field] })
     await ctx.db.patch(before._id, { ...patch, updated_at: now })
@@ -402,12 +478,14 @@ async function restoreStep(ctx: Context, changes: Change[], now: string) {
   // complete week pair and restored hours only on a task without active
   // subtasks.
   for (const { change, before, me } of tasks) {
+    await batch.room()
     const after = await byId(ctx, 'issues', before.id)
     if (!after) throw stale()
     assertWeekPair(after.start_week, after.end_week)
     if (change.fields.includes('remaining_hours') && after.remaining_hours !== undefined)
       await assertOwnRemaining(ctx, after)
-    await notifyIssueUpdate(ctx, { before, after, actor: me, now })
+    const { preload } = await batch.bulkOf(after.org_id)
+    await notifyIssueUpdate(ctx, { before, after, actor: me, now, preload })
     await logActivity(ctx, {
       org_id: after.org_id,
       actor_id: me.id,
@@ -429,8 +507,9 @@ export const undo = authedMutation({
     if (!entries.length) throw expired()
     const selected = all ? entries.slice().reverse() : entries.slice(-1)
     const now = new Date().toISOString()
+    const batch = batchOf(ctx, all ? ROADMAP_UNDO_TOO_LARGE : ROADMAP_STEP_TOO_LARGE)
     for (const entry of selected) {
-      await restoreStep(ctx, JSON.parse(entry.changes) as Change[], now)
+      await restoreStep(ctx, JSON.parse(entry.changes) as Change[], now, batch)
       await ctx.db.delete(entry._id)
     }
     return { count: entries.length - selected.length }

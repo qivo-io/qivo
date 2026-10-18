@@ -214,14 +214,15 @@ Useful field rules:
   takes a list on MCP and comma-separated values on REST.
 - A group's `progress` is the app's Progress, the done and total tasks
   without subtasks under it that you can read; `partial: true` means some
-  are hidden from you, so its completion is unknown. `delay` is the app's
+  are hidden from you, or an archived group holds too many to read, so its
+  completion is unknown. `delay` is the app's
   projected delay (`status` `ok`, `behind` or `late`, with
   `projected_end_week`), or `null` when the project does not track delay or
   the app shows no verdict; it is judged on today's date in UTC.
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
   tasks. If a task list asks for a smaller limit, its rows' newest comments
-  were too large to read at once; retry with a smaller `limit`. If it says
+  and parents were too large to read at once; retry with a smaller `limit`. If it says
   the organization's active tasks are too large to list, a smaller `limit`
   does not help.
 

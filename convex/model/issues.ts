@@ -1606,7 +1606,7 @@ async function subtreeToCarry(
     if (c.archived_at === undefined && (await a.liveAfter(c.project_id))) groups.add(c.parent_id)
   }
   const dst = topLevelOf(a.target)
-  const editable = editableBy(ctx, a.actor)
+  const edits = editableBy(ctx, a.actor)
   const holds = new Map<string, Promise<boolean>>()
   const canHold = (profileId: string): Promise<boolean> => {
     let result = holds.get(profileId)
@@ -1619,7 +1619,9 @@ async function subtreeToCarry(
   const carried: { row: Doc<'issues'>; clearReviewer: boolean }[] = []
   for (const c of below) {
     if ((await a.topOf(c.project_id)) === dst) continue
-    if (!(await editable(c.project_id))) throw rule(MOVE_SUBTREE_EDIT_RULE)
+    const editable = await edits(c.project_id)
+    if (editable === null) throw rule(SUBTASK_BEING_DELETED)
+    if (!editable) throw rule(MOVE_SUBTREE_EDIT_RULE)
     let clearReviewer = false
     if (c.archived_at === undefined) {
       if (c.assignee_id !== undefined && !(await canHold(c.assignee_id))) {
@@ -1817,18 +1819,31 @@ export const ARCHIVE_CASCADE_RULE =
 export const RESTORE_CASCADE_RULE =
   'restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it'
 
-/* Per-call cache of the actor's Edit access. A cascade changes only tasks in
+/* The refusals for a cascade that meets a subtask or parent whose project
+ * Deleted items is moving (model/deletedItems.ts). The task still names the
+ * project until the move reaches it, and changing it could bring it back
+ * into a live project, so the change is refused until the move is done. No
+ * one can edit a project that is gone, an admin included. */
+export const SUBTASK_BEING_DELETED =
+  'a subtask of this task is being moved to Deleted items; try again when that finishes'
+export const PARENT_BEING_DELETED =
+  'a parent of this task is being moved to Deleted items; try again when that finishes'
+
+/* Per-call cache of the actor's Edit access, null for a project whose row
+ * is gone while Deleted items moves it. A cascade changes only tasks in
  * projects the actor could edit directly; otherwise the whole write is
  * refused and rolls back. */
 function editableBy(
   ctx: QueryCtx,
   actor: Doc<'profiles'>,
-): (projectId: string) => Promise<boolean> {
-  const seen = new Map<string, Promise<boolean>>()
+): (projectId: string) => Promise<boolean | null> {
+  const seen = new Map<string, Promise<boolean | null>>()
   return (projectId) => {
     let result = seen.get(projectId)
     if (result === undefined) {
-      result = hasProjectLevel(ctx, actor, projectId, 'user')
+      result = byId(ctx, 'projects', projectId).then((p) =>
+        p === null ? null : hasProjectLevel(ctx, actor, p.id, 'user'),
+      )
       seen.set(projectId, result)
     }
     return result
@@ -1845,7 +1860,7 @@ async function archiveSubtree(
   now: string,
   actor: Doc<'profiles'>,
 ): Promise<string[]> {
-  const editable = editableBy(ctx, actor)
+  const edits = editableBy(ctx, actor)
   const stamped: string[] = []
   let frontier = [rootId]
   const seen = new Set<string>([rootId])
@@ -1857,7 +1872,9 @@ async function archiveSubtree(
       for await (const c of kids) {
         if (c.archived_at !== undefined || seen.has(c.id)) continue
         seen.add(c.id)
-        if (!(await editable(c.project_id))) throw rule(ARCHIVE_CASCADE_RULE)
+        const editable = await edits(c.project_id)
+        if (editable === null) throw rule(SUBTASK_BEING_DELETED)
+        if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
         await ctx.db.patch(c._id, { archived_at: now, updated_at: now })
         const after = (await ctx.db.get(c._id)) as Doc<'issues'>
         await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before: c, actor, now })
@@ -1935,7 +1952,7 @@ async function restoreAncestors(
   a: { row: Doc<'issues'>; actor: Doc<'profiles'>; now: string },
 ): Promise<Doc<'issues'>[]> {
   const { actor, now } = a
-  const editable = editableBy(ctx, actor)
+  const edits = editableBy(ctx, actor)
   const live = projectLiveness(ctx)
   const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
@@ -1955,7 +1972,9 @@ async function restoreAncestors(
     const hadOwn = parent.remaining_hours !== undefined || parent.review_at !== undefined
     const clears = hadOwn && (await subtaskOf({ ...parent, archived_at: undefined }, cur, live))
     if (!wasArchived && !clears) break
-    if (!(await editable(parent.project_id))) throw rule(RESTORE_CASCADE_RULE)
+    const editable = await edits(parent.project_id)
+    if (editable === null) throw rule(PARENT_BEING_DELETED)
+    if (!editable) throw rule(RESTORE_CASCADE_RULE)
     const pBefore = { ...parent }
     const ownHours = clears
       ? { remaining_hours: undefined, remaining_set_at: undefined, review_at: undefined }

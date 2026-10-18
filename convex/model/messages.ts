@@ -226,7 +226,9 @@ async function trimUnreadMessages(
  *     at the first detach of a transaction that changes only tasks, their
  *     rows and activity;
  *   - the reassign loop of an access removal (projectAccess.ts
- *     removeAndSettle), which builds it after the access is gone.
+ *     removeAndSettle), which builds it after the access is gone;
+ *   - a roadmap save or undo (roadmap.ts), which changes only tasks,
+ *     milestones and activity, one preload per organization.
  * A write that changes one task passes none, so every row is read fresh. */
 export type NotifyPreload = {
   /* Every profile of the issue's org, as stored now (after any patch). */
@@ -237,7 +239,8 @@ export type NotifyPreload = {
   /* Recipient visibility answers by `${profile}:${project}` uuid, filled as
    * they are asked. */
   visibility: Map<string, boolean>
-  /* Run by notifyIssueUpdate before each mention and each follower it
+  /* Run by notifyIssueUpdate before each webhook subscription it checks
+   * (taskEvents.ts emitTaskEvent), each mention and each follower it
    * notifies. A bulk writer throws from it to stop before the transaction
    * passes Convex's limits (projectAccess.ts removeAndSettle). */
   guard?: () => Promise<void>
@@ -1210,7 +1213,14 @@ export async function notifyIssueUpdate(
 ): Promise<void> {
   const { before, after, actor, now, preload } = a
   if (!a.skipTaskEvent)
-    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before, actor, now })
+    await emitTaskEvent(ctx, {
+      name: 'task.updated',
+      issue: after,
+      before,
+      actor,
+      now,
+      guard: preload?.guard,
+    })
   const isGroup = a.isGroup === true
   const project = await preloadedProject(ctx, preload, after.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, after.org_id))

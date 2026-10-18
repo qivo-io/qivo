@@ -3,7 +3,9 @@
  * only active tasks and its search only active tasks' label assignments.
  * Archived tasks are listed one project at a time and paged with a cursor,
  * so each page reads a bounded amount whatever the archive holds. A
- * single-task read of an active group never reads archived tasks elsewhere. */
+ * single-task read of an active group never reads archived tasks elsewhere,
+ * and one of an archived group walks only as much of its subtree as the
+ * request can read. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -19,7 +21,8 @@ import {
   cursorAfter,
   parseArchiveCursor,
 } from '../lib/archivedTasks'
-import { SUBTREE_WALK } from '../lib/core'
+import { PAGE_TOO_LARGE, SUBTASKS_TOO_LARGE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
+import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import {
   expectRefusal,
@@ -177,6 +180,65 @@ describe('active task lists read active tasks only', () => {
     expect(mcp.map((row) => row.id)).toEqual(ids)
   })
 
+  it('lists tasks and a completion in an organization with 4,100 active projects', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    // empty sub-projects of TBED, more than one index range each can afford
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 4100; i++) {
+        await ctx.db.insert('projects', {
+          id: uuid(),
+          org_id: fx.org.id,
+          type: 'project',
+          parent_id: fx.meta.id,
+          key: `E${i}`,
+          name: `Empty ${i}`,
+          description: '',
+          sort_order: 1000 + i,
+          num: 1000 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+      }
+    })
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const all = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' })
+    expect(all.map((row) => row.id)).toEqual([task.id])
+    const mcp = await mcpList<{ id: string }[]>(fx, fx.agent.id, { project: 'FW', limit: 1 })
+    expect(mcp.map((row) => row.id)).toEqual([task.id])
+    const project = await fx.t.query(internal.machine.rest.getProject, {
+      callerId: fx.agent.id,
+      access: 'read',
+      ref: 'FW',
+    })
+    expect(project.completion).toEqual({ done: 0, total: 1, percent: 0 })
+  }, 60_000)
+
+  it('refuses a page whose parents in an archived project fill the room, and lists a smaller one', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 120 } }))
+    const shelf = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      archived_at: NOW,
+    })
+    // 60 tasks, each the subtask of its own parent left in the archived project
+    const parents = await plantMany(fx, 60, { project_id: shelf.id })
+    const rows: string[] = []
+    for (const parent_id of parents)
+      rows.push(
+        (await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, parent_id })).id,
+      )
+    await refused(
+      restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '60' }),
+      'bad_request',
+      PAGE_TOO_LARGE,
+    )
+    const page = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '5' })
+    expect(page.map((row) => [row.id, row.parent_id])).toEqual(
+      rows.slice(0, 5).map((id, i) => [id, parents[i]]),
+    )
+  })
+
   it('searches labels without reading archived tasks’ assignments', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 100 } }))
     const bug = uuid()
@@ -274,14 +336,65 @@ describe('active task lists read active tasks only', () => {
   })
 })
 
+describe('a single-task read of a large active group', () => {
+  const before = SUBTREE_WALK.reads
+  afterEach(() => {
+    SUBTREE_WALK.reads = before
+  })
+
+  it('reads the active projects past its walk, never the tasks an archived project keeps', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 100 } }))
+    SUBTREE_WALK.reads = 2
+    const shelf = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      archived_at: NOW,
+    })
+    await plantMany(fx, 300, { project_id: shelf.id })
+    const root = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const kids = []
+    for (const week of ['2026-03-02', '2026-03-09', '2026-03-16']) {
+      kids.push(
+        await plantIssue(fx.t, {
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          parent_id: root.id,
+          start_week: week,
+          end_week: week,
+        }),
+      )
+    }
+    // an active subtask left in the archived project is listed but does not count
+    const shelved = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: shelf.id,
+      parent_id: root.id,
+      start_week: '2026-06-01',
+      end_week: '2026-06-01',
+    })
+    const args = { now: NOW, callerId: fx.agent.id, access: 'read' as const, ref: root.id }
+    const rest = await fx.t.query(internal.machine.rest.getIssue, args)
+    expect(rest).toMatchObject({
+      is_group: true,
+      start_week: '2026-03-02',
+      end_week: '2026-03-16',
+      progress: { done: 0, total: 3 },
+    })
+    expect(rest.subtasks.map((task) => task.id)).toEqual([...kids, shelved].map((task) => task.id))
+    const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.getIssue, args)) as {
+      subtasks: { id: string }[]
+    }
+    expect(mcp.subtasks.map((task) => task.id)).toEqual(rest.subtasks.map((task) => task.id))
+  })
+})
+
 describe('archived task lists page one project with a cursor', () => {
   const page = { ...ARCHIVE_PAGE }
   const reserve = { ...ARCHIVE_RESERVE }
-  const walk = { ...SUBTREE_WALK }
   afterEach(() => {
     Object.assign(ARCHIVE_PAGE, page)
     Object.assign(ARCHIVE_RESERVE, reserve)
-    Object.assign(SUBTREE_WALK, walk)
   })
 
   it('writes sealed cursors that read back, and refuses anything else', async () => {
@@ -787,7 +900,6 @@ describe('archived task lists page one project with a cursor', () => {
 
   it('never reads the organization’s tasks for a large archived group', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 200 } }))
-    SUBTREE_WALK.reads = 2
     await plantMany(fx, 250, { project_id: fx.sub2.id, archived_at: day(1) })
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -808,7 +920,8 @@ describe('archived task lists page one project with a cursor', () => {
         }),
       )
     }
-    // a single-task read walks two tasks here, then reads them all
+    // the page walks the group's subtree under its own ceiling, never the
+    // organization's archived tasks
     const page = await restArchivedPage(fx.t, {
       callerId: fx.agent.id,
       access: 'read',
@@ -1064,5 +1177,271 @@ describe('archived task lists page one project with a cursor', () => {
       status: ['todo'],
     })
     expect(mcp.tasks.map((t) => t.id)).toEqual([child.id])
+  })
+})
+
+describe('a single-task read of an archived group', () => {
+  const reserve = { ...TASK_READ_RESERVE }
+  afterEach(() => {
+    Object.assign(TASK_READ_RESERVE, reserve)
+  })
+
+  /* REST GET /v1/tasks/{ref} and MCP get_task of `ref` as the agent. */
+  const reads = async (fx: Fx, ref: string) => {
+    const args = { now: NOW, callerId: fx.agent.id, access: 'read' as const, ref }
+    const rest = await fx.t.query(internal.machine.rest.getIssue, args)
+    const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.getIssue, args)) as Record<
+      string,
+      unknown
+    >
+    return { rest, mcp }
+  }
+
+  it('walks more subtasks than SUBTREE_WALK in an organization whose archive passes 16 MiB', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    // 1,700 archived tasks of 10 KB elsewhere, written a few hundred at a time
+    for (let i = 0; i < 5; i++) {
+      await plantMany(fx, 340, {
+        project_id: fx.sub2.id,
+        archived_at: day(1),
+        description: 'x'.repeat(10_000),
+      })
+    }
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    const kids = await plantMany(fx, 1200, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: group.id,
+      status: 'todo',
+      start_week: '2026-03-02',
+      end_week: '2026-03-09',
+      remaining_hours: 1,
+    })
+    const { rest, mcp } = await reads(fx, group.id)
+    expect(rest).toMatchObject({
+      is_group: true,
+      start_week: '2026-03-02',
+      end_week: '2026-03-09',
+      progress: { done: 0, total: 1200, percent: 0, partial: false },
+      group_remaining_hours: 1200,
+    })
+    expect(rest.subtasks.map((t) => t.id)).toEqual(kids)
+    expect(mcp).toMatchObject({ is_group: true, group_remaining_hours: 1200 })
+    expect((mcp.subtasks as unknown[]).length).toBe(1200)
+  })
+
+  it('lists the subtasks of a group too large to walk, without its plan weeks, progress or hours', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    await plantMany(fx, 500, { project_id: fx.sub2.id, archived_at: day(1) })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    const kids = await plantMany(fx, 3, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: group.id,
+    })
+    // 450 tasks under the three, more than the read may take
+    for (const parent_id of kids) {
+      await plantMany(fx, 150, {
+        project_id: fx.sub.id,
+        archived_at: day(9),
+        parent_id,
+        status: 'todo',
+        start_week: '2026-03-02',
+        remaining_hours: 1,
+      })
+    }
+    const { rest, mcp } = await reads(fx, group.id)
+    const unread = {
+      is_group: true,
+      start_week: null,
+      end_week: null,
+      progress: { done: 0, total: 0, percent: 0, partial: true },
+      group_remaining_hours: null,
+    }
+    expect(rest).toMatchObject(unread)
+    expect(rest.subtasks.map((t) => t.id)).toEqual(kids)
+    expect(mcp).toMatchObject(unread)
+    expect((mcp.subtasks as { id: string }[]).map((t) => t.id)).toEqual(kids)
+    // a subtask is a group of 150 that fits, and reads whole
+    const { rest: kid } = await reads(fx, kids[0])
+    expect(kid).toMatchObject({
+      is_group: true,
+      start_week: '2026-03-02',
+      progress: { total: 150, partial: false },
+      group_remaining_hours: 150,
+    })
+  })
+
+  it('reads the followers of a group too large to walk before the walk takes the room', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 400 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    // 450 subtasks, each one more range for the walk, and 60 followers, each
+    // one more profile read, more than the reserve holds
+    const kids = await plantMany(fx, 450, {
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      parent_id: group.id,
+    })
+    const followers = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 60; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: fx.org.id,
+          name: `Follower ${String(i).padStart(2, '0')}`,
+          initials: 'FO',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          created_at: NOW,
+        })
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: group.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    const { rest, mcp } = await reads(fx, group.id)
+    expect(rest).toMatchObject({
+      is_group: true,
+      progress: { done: 0, total: 0, percent: 0, partial: true },
+    })
+    expect(rest.subtasks.map((t) => t.id)).toEqual(kids)
+    expect(rest.followers.map((p) => p.id)).toEqual(followers)
+    expect((mcp.followers as unknown[]).length).toBe(60)
+  })
+
+  it('archives a group whose answer does not fit after the cascade, and answers its subtasks', async () => {
+    // the cascade reads each subtask twice, which leaves the answer's walk
+    // no room before the root's own subtasks
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 800 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 500, bytes: 1 << 20 })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      title: 'Group',
+    })
+    const kids = await plantMany(fx, 100, { project_id: fx.sub.id, parent_id: group.id })
+    const answer = await fx.t.mutation(internal.machine.rest.updateIssue, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'archive test',
+      ref: group.id,
+      body: JSON.stringify({ archived: true }),
+    })
+    expect(answer).toMatchObject({
+      is_group: true,
+      progress: { done: 0, total: 0, percent: 0, partial: true },
+    })
+    expect(answer.archived_at).not.toBeNull()
+    expect(answer.subtasks.map((t) => t.id)).toEqual(kids)
+    const stored = await fx.t.run((ctx) => byId(ctx, 'issues', kids[99]))
+    expect(stored?.archived_at).toBeDefined()
+    // a read of the same group, which the cascade does not burden, is whole
+    const { rest } = await reads(fx, group.id)
+    expect(rest).toMatchObject({ progress: { total: 100, partial: false } })
+  })
+
+  it('reads a group whose subtasks span 150 sub-projects without checking each one alone', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 400 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    // one archived subtask in each of 150 sub-projects of TBED, which the
+    // agent reads through its grant on TBED
+    const kids = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 150; i++) {
+        const project_id = uuid()
+        await ctx.db.insert('projects', {
+          id: project_id,
+          org_id: fx.org.id,
+          type: 'project',
+          parent_id: fx.meta.id,
+          key: `W${i}`,
+          name: `Wide ${i}`,
+          description: '',
+          sort_order: 500 + i,
+          num: 500 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+        const id = uuid()
+        await ctx.db.insert('issues', {
+          id,
+          org_id: fx.org.id,
+          project_id,
+          num: bulkNum++,
+          title: `Wide ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          parent_id: group.id,
+          archived_at: day(9),
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    const { rest, mcp } = await reads(fx, group.id)
+    expect(rest).toMatchObject({
+      is_group: true,
+      progress: { done: 150, total: 150, percent: 100, partial: false },
+    })
+    expect(new Set(rest.subtasks.map((t) => t.id))).toEqual(new Set(kids))
+    expect((mcp.subtasks as unknown[]).length).toBe(150)
+  })
+
+  it('refuses a group whose own subtasks do not fit in one request', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    await plantMany(fx, 450, { project_id: fx.sub.id, archived_at: day(9), parent_id: group.id })
+    const args = { now: NOW, callerId: fx.agent.id, access: 'read' as const, ref: group.id }
+    await refused(
+      fx.t.query(internal.machine.rest.getIssue, args),
+      'bad_request',
+      SUBTASKS_TOO_LARGE,
+    )
+    await refused(
+      fx.t.query(internal.machine.mcp.getIssue, args),
+      'bad_request',
+      SUBTASKS_TOO_LARGE,
+    )
   })
 })

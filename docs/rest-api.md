@@ -872,13 +872,16 @@ Active lists come in creation order, oldest first, with tasks created at the
 same moment ordered by number, so `offset` pages through them. MCP's
 `list_tasks` uses the same order. Page with `offset` until a page holds fewer
 tasks than `limit`. Each row's `last_comment_at` reads the task's newest
-comment. When those comments do not fit in one request beside the rest of
+comment, and a row whose parent is in an archived project reads that
+parent. When those reads do not fit in one request beside the rest of
 the page, the request is a `400` (`this page of tasks is too large to read
 at once; ask for a smaller limit`); ask again with a smaller `limit`. A list
-also reads every active task of the organization. When those alone leave no
-room for a single comment, the request is a `400` with `this organization's
-active tasks are too large to list in one request`, and a smaller `limit`
-does not help.
+also reads every active task in the organization's active projects, or every
+active task of the organization when it names an archived project or the
+organization has more than 1,000 active projects. When
+those alone leave no room for a single comment, the request is a `400` with
+`this organization's active tasks are too large to list in one request`, and
+a smaller `limit` does not help.
 
 #### Archived tasks
 
@@ -1042,7 +1045,10 @@ sub-project of another top-level project also moves every subtask, at any
 depth and archived ones included, that is not already in that top-level
 project. The caller needs Edit access on each of their projects (otherwise
 `400`, `moving this task would move a subtask in a project you cannot edit;
-an organization admin can move it`), and the assignee and the reviewer of
+an organization admin can move it`). A subtask in a project that is being
+moved to Deleted items refuses the move for everyone, admins included, with
+`400` `a subtask of this task is being moved to Deleted items; try again
+when that finishes`. The assignee and the reviewer of
 each active subtask without subtasks of its own must be able to work in the
 destination (otherwise `400`, `someone assigned to or reviewing a subtask of
 this task cannot edit that sub-project`); a group's own reviewer who cannot
@@ -1179,7 +1185,11 @@ access on every project the cascade changes. Otherwise the PATCH is a `400`
 with `archiving this task would change a subtask in a project you cannot edit; an
 organization admin can archive it` or `restoring this task would change a
 parent task in a project you cannot edit; an organization admin can restore
-it`, and nothing changes. Archived tasks disappear from the default list
+it`, and nothing changes. A subtask or parent in a project that is being
+moved to Deleted items refuses the PATCH for everyone, admins included, with
+`a subtask of this task is being moved to Deleted items; try again when that
+finishes` or `a parent of this task is being moved to Deleted items; try
+again when that finishes`. Archived tasks disappear from the default list
 (`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
 stop counting as workload, and in the app leave every normal view for
 the Archived tasks page. A nightly sweep archives tasks that have been `done` for
@@ -1278,6 +1288,15 @@ It counts the same subtasks as the group's dates, scheduled or not, and
 `total` is `0`. `partial` is `true` when some of the group is hidden from
 the caller, such as a subtask it cannot read, so the true completion is
 unknown. The app then says "Completion unknown".
+
+An archived group can have more tasks under it than one request can read,
+such as thousands of subtasks or hundreds with very long descriptions. Its
+single-task shape then still lists its direct `subtasks`, but `start_week`
+and `end_week` are `null`, `progress` is `0` of `0` with `partial: true`
+and `group_remaining_hours` is `null`. When even its direct subtasks do not
+fit, a `GET` is a `400` with `this task's subtasks are too large to read in
+one request`. A `PATCH` that archives such a group is not refused for the
+size of its answer, which then lists the direct subtasks in this shape.
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:

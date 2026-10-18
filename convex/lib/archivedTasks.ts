@@ -17,7 +17,7 @@
  * change the answer. The organization's matching labels and roster names
  * that a search reads live here too, and active task lists use them. */
 
-import type { TransactionMetric } from 'convex/server'
+import type { TransactionMetric, TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
@@ -296,6 +296,13 @@ export type ReadCeiling = { ranges: number; documents: number; bytes: number }
 /* A transaction's limit on one count, from what it used and has left. */
 const limitOf = (m: TransactionMetric): number => m.used + m.remaining
 
+/** The request's limits less `reserve`, as a ceiling, from its metrics. */
+export const roomOf = (m: TransactionMetrics, reserve: ReadCeiling): ReadCeiling => ({
+  ranges: limitOf(m.databaseQueries) - reserve.ranges,
+  documents: limitOf(m.documentsRead) - reserve.documents,
+  bytes: limitOf(m.bytesRead) - reserve.bytes,
+})
+
 /** Whether the request has read less than `ceiling` on every count. */
 export async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<boolean> {
   const m = await ctx.meta.getTransactionMetrics()
@@ -495,11 +502,7 @@ export async function archivedTasksPage<Row>(
     documents: start.documentsRead.used,
     bytes: start.bytesRead.used,
   }
-  const room: ReadCeiling = {
-    ranges: limitOf(start.databaseQueries) - ARCHIVE_RESERVE.ranges,
-    documents: limitOf(start.documentsRead) - ARCHIVE_RESERVE.documents,
-    bytes: limitOf(start.bytesRead) - ARCHIVE_RESERVE.bytes,
-  }
+  const room = roomOf(start, ARCHIVE_RESERVE)
   const budget: ReadCeiling = {
     ranges: Math.min(room.ranges, used.ranges + ARCHIVE_PAGE.ranges),
     documents: Math.min(room.documents, used.documents + ARCHIVE_PAGE.documents),

@@ -95,13 +95,8 @@
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
-import {
-  internalMutation,
-  internalQuery,
-  type MutationCtx,
-  type QueryCtx,
-} from '../_generated/server'
-import { byId } from '../lib/db'
+import { internalMutation, internalQuery, type QueryCtx } from '../_generated/server'
+import { byId, usedMoreThan } from '../lib/db'
 import { issueKey } from '../lib/taskRefs'
 import { audit as auditRow } from '../model/admin'
 import { sameTopLevel } from '../model/issues'
@@ -267,15 +262,6 @@ export const audit = internalQuery({
   },
 })
 
-/* Whether the transaction has used more than FAMILY_PAGE.room of any of
- * Convex's limits for one transaction. */
-async function stepIsFull(ctx: MutationCtx): Promise<boolean> {
-  const metrics = await ctx.meta.getTransactionMetrics()
-  return Object.values(metrics).some(
-    ({ used, remaining }) => used > (used + remaining) * FAMILY_PAGE.room,
-  )
-}
-
 /** One step of the backfill, then the next one scheduled. Empty arguments
  * start a run. Each step detaches the cross links of one page, or of its
  * start when the step spends its budget (FAMILY_PAGE), and carries the
@@ -292,7 +278,10 @@ export const start = internalMutation({
       if (link.kind !== 'cross') continue
       const fanOut = (await eventSubscriptions(ctx, link.child.org_id, 'task.updated')).length
       // a step always detaches one link, so the walk moves on
-      if (detached > 0 && (checks + fanOut > FAMILY_PAGE.checks || (await stepIsFull(ctx)))) {
+      if (
+        detached > 0 &&
+        (checks + fanOut > FAMILY_PAGE.checks || (await usedMoreThan(ctx, FAMILY_PAGE.room)))
+      ) {
         full = true
         break
       }

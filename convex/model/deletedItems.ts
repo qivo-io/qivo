@@ -773,14 +773,7 @@ async function storeTask(
 /** The step's NotifyPreload. A step changes no profile, grant, team or
  * project after it starts, so one read serves every detach. */
 async function preloadOf(run: Run): Promise<NotifyPreload> {
-  run.preload ??= {
-    orgProfiles: await run.ctx.db
-      .query('profiles')
-      .withIndex('by_org', (q) => q.eq('org_id', run.item.org_id))
-      .collect(),
-    projects: new Map(),
-    visibility: new Map(),
-  }
+  run.preload ??= await loadNotifyPreload(run.ctx, run.item.org_id)
   return run.preload
 }
 

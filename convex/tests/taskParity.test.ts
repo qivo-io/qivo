@@ -26,6 +26,7 @@ import {
   taskDetail,
   taskOut,
   taskRefOf,
+  taskRelations,
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
@@ -349,7 +350,7 @@ describe('a single-task read walks only the subtasks that can count', () => {
         surface === 'rest'
           ? await issueOut(ctx, issue, { surface, me, project, children, live, forecast })
           : await issueOut(ctx, issue, { surface, me, project, children, live, forecast })
-      const detail = await taskDetail(ctx, me, issue, {
+      const detail = await taskDetail(ctx, me, issue, await taskRelations(ctx, me, issue), {
         project,
         isGroup: row.is_group,
         children,

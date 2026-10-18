@@ -893,7 +893,7 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; a task holds at most 400 comments; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, and `description` and `archive_reason` at 20,000. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` is capped at 80 characters, and `description` and `archive_reason` at 20,000. The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks stay as top-level tasks and its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
@@ -1251,16 +1251,28 @@ the group's dates, it counts only active subtasks of an active group, leaves
 out subtasks in archived projects while the group's project is active, and
 stops at a subtask you cannot read.
 
+An archived group can have more tasks under it than one request can read,
+such as thousands of subtasks or hundreds with very long descriptions.
+`get_task` then still lists its direct `subtasks`, but `start_week` and
+`end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
+`group_remaining_hours` is `null`. When even its direct subtasks do not fit,
+the call is refused with `this task's subtasks are too large to read in one
+request`.
+
 `list_tasks` returns active tasks as an array, oldest first by creation,
 with tasks created at the same moment ordered by number, so `offset` pages
 through them until a page holds fewer tasks than `limit`. Each row's
-`last_comment_at` reads the task's newest comment. When those comments do
-not fit in one request beside the rest of the page, the call is refused
+`last_comment_at` reads the task's newest comment, and a row whose parent is
+in an archived project reads that parent. When those reads do not fit in
+one request beside the rest of the page, the call is refused
 with `this page of tasks is too large to read at once; ask for a smaller
 limit`; call again with a smaller `limit`. A list also reads every active
-task of the organization. When those alone leave no room for a single
-comment, the call is refused with `this organization's active tasks are too
-large to list in one request`, and a smaller `limit` does not help.
+task in the organization's active projects, or every active task of the
+organization when it names an archived project or the organization has more
+than 1,000 active projects. When those alone leave no
+room for a single comment, the call is refused with `this organization's
+active tasks are too large to list in one request`, and a smaller `limit`
+does not help.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
@@ -1323,7 +1335,10 @@ sub-project of another top-level project also moves every subtask, at any
 depth and archived ones included, that is not already in that top-level
 project. You need Edit access on each of their projects (otherwise `moving
 this task would move a subtask in a project you cannot edit; an organization
-admin can move it`), and the assignee and the reviewer of each active subtask
+admin can move it`). A subtask in a project that is being moved to Deleted
+items refuses the move for everyone, admins included, with `a subtask of
+this task is being moved to Deleted items; try again when that finishes`.
+The assignee and the reviewer of each active subtask
 without subtasks of its own must be able to work in the destination
 (otherwise `someone assigned to or reviewing a subtask of this task cannot
 edit that sub-project`); a group's own reviewer who cannot is cleared. A

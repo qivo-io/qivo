@@ -181,7 +181,10 @@ export function eventSubscriptions(
   return subscriptions
 }
 
-/** Record one event atomically, without multiplying task writes by subscription count. */
+/** Record one event atomically, without multiplying task writes by
+ * subscription count. `guard` runs before each subscription's sight check,
+ * so a bulk writer can stop before the transaction passes Convex's limits
+ * (model/messages.ts NotifyPreload). */
 export async function emitTaskEvent(
   ctx: MutationCtx,
   a: {
@@ -190,6 +193,7 @@ export async function emitTaskEvent(
     actor?: Doc<'profiles'>
     now: string
     before?: Doc<'issues'>
+    guard?: () => Promise<void>
   },
 ): Promise<void> {
   if (isDemoDeployment()) return
@@ -215,6 +219,7 @@ export async function emitTaskEvent(
       (subscription.filters.project_id && subscription.filters.project_id !== a.issue.project_id)
     )
       continue
+    await a.guard?.()
     if (
       !(await readableEventProject(ctx, subscription.owner, a.issue.project_id)) ||
       (source && !(await readableEventProject(ctx, subscription.owner, source)))

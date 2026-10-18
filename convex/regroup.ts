@@ -26,8 +26,8 @@
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
-import { internalMutation, type MutationCtx } from './_generated/server'
-import { byId } from './lib/db'
+import { internalMutation } from './_generated/server'
+import { byId, usedMoreThan } from './lib/db'
 import { projectLiveness } from './lib/liveTasks'
 import { clearParentRemaining, hasSubtasks } from './model/issues'
 import { loadNotifyPreload, type NotifyPreload } from './model/messages'
@@ -93,15 +93,6 @@ const restoredStepRef = makeFunctionReference<'mutation', RestoredStep, null>(
   'regroup:restoredStep',
 )
 
-/* Whether the step has used more than RESTORE_REGROUP.room of any of
- * Convex's limits for one transaction. */
-async function stepIsFull(ctx: MutationCtx): Promise<boolean> {
-  const metrics = await ctx.meta.getTransactionMetrics()
-  return Object.values(metrics).some(
-    ({ used, remaining }) => used > (used + remaining) * RESTORE_REGROUP.room,
-  )
-}
-
 /* Whether a task holds remaining hours or a review hand-off of its own. */
 const holdsOwn = (task: Doc<'issues'>): boolean =>
   task.remaining_hours !== undefined || task.review_at !== undefined
@@ -156,7 +147,10 @@ export const restoredStep = internalMutation({
     for (const task of page.page) {
       if (finishedBefore(task, a.after)) continue
       // a step always finishes one task, so the walk moves on
-      if (finishedOne && (cleared >= RESTORE_REGROUP.clears || (await stepIsFull(ctx)))) {
+      if (
+        finishedOne &&
+        (cleared >= RESTORE_REGROUP.clears || (await usedMoreThan(ctx, RESTORE_REGROUP.room)))
+      ) {
         await schedule({ ...a, after: position })
         return null
       }

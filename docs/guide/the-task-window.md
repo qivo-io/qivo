@@ -132,6 +132,8 @@ because a subtask stays in its parent's project. The dialog says both before
 you move. Qivo refuses the move if a subtask that would move is in a
 sub-project you cannot edit (an organization admin can move it), or if the
 task has more than 200 subtasks at any depth, archived ones included.
+While a subtask that would move is in a project being moved to Deleted
+items, Qivo refuses the move for everyone until that move finishes.
 
 The assignee and, for a task without subtasks, reviewer must be active and
 have User or Lead access at the destination. Otherwise, clear or change them
@@ -166,7 +168,8 @@ subtasks, the window lists them, and a box such as **Also archive the 3
 subtasks**, selected first, archives the whole subtask tree, including
 subtasks in other sub-projects. Qivo refuses that when one of them is in a
 project you cannot edit, and an organization admin can archive the whole tree
-instead. Clear the box to archive only the task. Its subtasks stay in their
+instead. While one of them is in a project being moved to Deleted items, Qivo
+refuses it for everyone until that move finishes. Clear the box to archive only the task. Its subtasks stay in their
 projects, those directly under it become top-level tasks, and restoring the
 task later does not bring them back under it.
 
@@ -189,6 +192,8 @@ and **Show 100 older tasks** loads the next 100.
 **Restore** returns a task to its Board and restores archived parents when
 needed. If that would change a parent task in a project you cannot edit, Qivo
 refuses the restore, and an organization admin can restore it instead.
+While the parent's project is being moved to Deleted items, Qivo refuses
+the restore for everyone until the move finishes.
 Parents restored this way send no **Restored** update. Restoring a Done task
 restarts its auto-archive clock. Archived tasks do not appear in other views,
 and shared task links work again only after restoration.
