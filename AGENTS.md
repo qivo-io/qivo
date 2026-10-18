@@ -105,9 +105,11 @@ or reject it.
 
 Save the review statistics in qivo-internal, because choosing and paying for
 these reviewers depends on what each one finds. Every branch gets one record
-in qivo-internal's `evaluations/pr-reviews/pre-pr/records/` with:
+in `${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/records/`
+with:
 
-- The branch name and the pull request number.
+- The branch name and the pull request number, or no number if the flow
+  stopped before step 7 opened one.
 - Every step, including one that failed, timed out or was skipped, and every
   follow-up review.
 - Each reviewer's findings, with your verdict on each one and your severity
@@ -115,10 +117,12 @@ in qivo-internal's `evaluations/pr-reviews/pre-pr/records/` with:
 - Each Greptile finding that reports the same problem as a CodeRabbit
   finding, so the findings that only one of them reported can be counted.
 
-Check the record with qivo-internal's
-`evaluations/pr-reviews/pre-pr/check_records.py` and commit it there once the
-pull request merges or the branch is dropped. The README above has the record
-format and the commands.
+Check the record with
+`python3 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/check_records.py" RECORD`
+and commit it to qivo-internal before your session ends, once step 7 has
+opened the pull request or a step has stopped the flow. Update and commit it
+again after each follow-up review and when you merge the pull request. The
+README above has the record format and the commands.
 
 ## Deployment and version control
 
