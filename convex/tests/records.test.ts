@@ -30,6 +30,8 @@ import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
 import {
+  UPLOAD_CLAIM_MS,
+  UPLOAD_NOT_SENT,
   UPLOAD_STORAGE_ID,
   UPLOAD_TICKET_MISSING,
   UPLOAD_URL_USED,
@@ -739,7 +741,7 @@ describe('the REST upload', () => {
     const siblings = await upload(fx.t, sibling.upload_url, 6 * MiB)
     // before the upload has stored anything
     for (const storage_id of [elsewhere, siblings]) {
-      await refused(confirm(fx, issue.id, ticket, { storage_id }), 'bad_request', UPLOAD_STORAGE_ID)
+      await refused(confirm(fx, issue.id, ticket, { storage_id }), 'bad_request', UPLOAD_NOT_SENT)
     }
     const mine = await upload(fx.t, upload_url, 6 * MiB)
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
@@ -755,48 +757,78 @@ describe('the REST upload', () => {
     expect(out).toMatchObject({ attachment: { name: 'six.bin', size_bytes: 6 * MiB } })
   })
 
-  it('deletes a file whose ticket went while it was stored, and frees a URL whose POST failed', async () => {
+  it('frees a URL whose POST failed, and never lets two POSTs hold one ticket', async () => {
     const fx = await setup()
     const issue = await task(fx)
-    const { ticket } = await start(fx, issue.id, { name: 'a.bin', size: 3 })
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.bin', size: 3 })
     const minter = fx.agent.id
-    await fx.t.mutation(internal.machine.uploads.begin, { ticket, minter })
-    await refused(
-      fx.t.mutation(internal.machine.uploads.begin, { ticket, minter }),
-      'conflict',
-      UPLOAD_URL_USED,
-    )
-    // the POST failed after it stored a file: the file goes, the URL frees
-    const failed = await storeFile(fx.t, 3)
-    await fx.t.mutation(internal.machine.uploads.abandon, { ticket, minter, storage_id: failed })
-    expect(await storageExists(fx.t, failed)).toBe(false)
+    const call = {
+      begin: (attempt: string) =>
+        fx.t.mutation(internal.machine.uploads.begin, { ticket, minter, attempt }),
+      finish: (attempt: string, storage_id: Id<'_storage'>) =>
+        fx.t.mutation(internal.machine.uploads.finish, { ticket, minter, attempt, storage_id }),
+      abandon: (attempt: string, storage_id?: Id<'_storage'>) =>
+        fx.t.mutation(internal.machine.uploads.abandon, { ticket, minter, attempt, storage_id }),
+    }
+    // begin committed but its answer never reached the POST: the POST's own
+    // cleanup frees the URL, and another POST's cleanup does not
+    await call.begin('a')
+    await refused(call.begin('b'), 'conflict', UPLOAD_URL_USED)
+    await call.abandon('b')
+    await refused(call.begin('c'), 'conflict', UPLOAD_URL_USED)
+    await call.abandon('a')
     expect((await tickets(fx.t))[0].upload_started_at).toBeUndefined()
-    // the ticket expired while the file was stored
-    await fx.t.mutation(internal.machine.uploads.begin, { ticket, minter })
+    // a POST that failed after it stored a file: the file goes, the URL frees
+    await call.begin('d')
+    const failed = await storeFile(fx.t, 3)
+    await call.abandon('d', failed)
+    expect(await storageExists(fx.t, failed)).toBe(false)
+    // a POST whose runtime stopped holds the URL for UPLOAD_CLAIM_MS at most;
+    // then another takes it, and the first one's late file is deleted
+    await call.begin('e')
+    await fx.t.run(async (ctx) => {
+      const [row] = await ctx.db.query('attachment_uploads').collect()
+      await ctx.db.patch(row._id, { upload_started_at: Date.now() - UPLOAD_CLAIM_MS - 1 })
+    })
+    await call.begin('f')
+    const late = await storeFile(fx.t, 3)
+    expect(await call.finish('e', late)).toBe(false)
+    expect(await storageExists(fx.t, late)).toBe(false)
+    // a file another row holds is never deleted
+    const held = await plantAttachment(fx, issue, { size_bytes: 3 })
+    expect(await call.finish('f', held.storage_id)).toBe(false)
+    await call.abandon('f', held.storage_id)
+    expect(await storageExists(fx.t, held.storage_id)).toBe(true)
+    // the ticket expired while its file was stored
+    await call.begin('g')
     await fx.t.run(async (ctx) => {
       const [row] = await ctx.db.query('attachment_uploads').collect()
       await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
     })
-    const late = await storeFile(fx.t, 3)
-    expect(
-      await fx.t.mutation(internal.machine.uploads.finish, { ticket, minter, storage_id: late }),
-    ).toBe(false)
-    expect(await storageExists(fx.t, late)).toBe(false)
-    // a file another row holds is never deleted
-    const held = await plantAttachment(fx, issue, { size_bytes: 3 })
-    expect(
-      await fx.t.mutation(internal.machine.uploads.finish, {
-        ticket,
-        minter,
-        storage_id: held.storage_id,
-      }),
-    ).toBe(false)
-    await fx.t.mutation(internal.machine.uploads.abandon, {
-      ticket,
-      minter,
-      storage_id: held.storage_id,
+    const expired = await storeFile(fx.t, 3)
+    expect(await call.finish('g', expired)).toBe(false)
+    expect(await storageExists(fx.t, expired)).toBe(false)
+    expect(await send(fx.t, upload_url, 3)).toEqual({
+      status: 404,
+      json: { error: UPLOAD_TICKET_MISSING },
     })
-    expect(await storageExists(fx.t, held.storage_id)).toBe(true)
+  })
+
+  it('tells a confirm that comes before any file to send it first', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    // also a ticket started before upload URLs stored a single file, whose
+    // file went to a Convex URL
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.bin', size: 3 })
+    const elsewhere = await storeFile(fx.t, 3)
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: elsewhere }),
+      'bad_request',
+      UPLOAD_NOT_SENT,
+    )
+    const stored = await upload(fx.t, upload_url, 3)
+    const out = await confirm(fx, issue.id, ticket, { storage_id: stored })
+    expect(out).toMatchObject({ attachment: { name: 'a.bin', size_bytes: 3 } })
   })
 
   it('checks sight, Edit and the body before minting anything', async () => {
@@ -854,9 +886,13 @@ describe('the REST upload', () => {
     const path = `/v1/tasks/QN-${issue.num}/attachments/${big.ticket}`
     expect(await rest(fx, 'POST', path, { storage_id: earlier })).toEqual({
       status: 400,
-      text: JSON.stringify({ error: UPLOAD_STORAGE_ID }),
+      text: JSON.stringify({ error: UPLOAD_NOT_SENT }),
     })
     const six = await upload(fx.t, big.upload_url, 6 * MiB)
+    expect(await rest(fx, 'POST', path, { storage_id: earlier })).toEqual({
+      status: 400,
+      text: JSON.stringify({ error: UPLOAD_STORAGE_ID }),
+    })
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 5 }))
     expect(await rest(fx, 'POST', path, { storage_id: six })).toEqual({
       status: 400,

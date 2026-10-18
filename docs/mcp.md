@@ -152,10 +152,9 @@ until the client refreshes its tool list.
 
 The label limit added `maxLength` 40 to `name` on `set_label`, counted in
 code points like the other names. A client holding the older catalogue keeps
-working, and the server refuses a longer name with `a label name is at most
-40 characters`. The schema checks the name as sent, so a name of at most 40
-characters padded with spaces past 40 is now refused before the server trims
-it.
+working, and the server refuses a longer name with the schema message. The
+schema checks the name as sent, so a name of at most 40 characters padded
+with spaces past 40 is now refused before the server trims it.
 
 Single-use upload URLs changed the `start_attachment_upload` description,
 which now says to send exactly `size` bytes in one POST. The tool takes the
@@ -1458,7 +1457,9 @@ confirmed over REST by the same user, and the reverse. The confirm follows
 REST's rules. Another ticket, including an expired one, answers `upload not
 found or expired; start a new upload`, and a `storage_id` that is not the
 `storageId` the upload URL answered is refused with `storage_id must be the
-storageId the upload answered`. If the organization lowered its per-file
+storageId the upload answered`, or with `no file has been sent to this upload
+URL; send it there, or start a new upload` before the upload URL has stored
+one. If the organization lowered its per-file
 limit after the upload started and the file now exceeds it, Qivo deletes the
 file, refuses the confirm and spends the ticket. Bytes uploaded but never
 confirmed are deleted by the weekly storage sweep.

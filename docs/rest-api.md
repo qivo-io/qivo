@@ -223,12 +223,13 @@ still counts as a call. A declared `Content-Length` over the limit is refused
 without reading the body. Files never travel in these bodies; see
 [Attachments](#attachments).
 
-A request body must be a JSON object. Anything else, such as invalid JSON,
-an array or a number, is a `400` (`request body must be JSON`). A string or
-field name holding an unpaired surrogate, such as a lone `\ud83c` escape
-left when text is cut in the middle of an emoji, is a `400` (`request body
-holds an unpaired surrogate, which UTF-8 cannot encode`). Such text cannot be
-stored, so the request changes nothing.
+A request that takes a JSON body needs a JSON object. Anything else, such as
+invalid JSON, an array or a number, is a `400` (`request body must be
+JSON`). A string or field name holding an unpaired surrogate, such as a lone
+`\ud83c` escape left when text is cut in the middle of an emoji, is a `400`
+(`request body holds an unpaired surrogate, which UTF-8 cannot encode`). Such
+text cannot be stored, so the request changes nothing. A request that takes
+no body, such as `DELETE /v1/tasks/{ref}`, ignores one it is sent.
 
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
@@ -1711,13 +1712,18 @@ one file. While a `POST` to it is storing the file, and once it has, another
 upload`) and stores nothing. A body of another size than declared answers
 `400` (`the upload must be exactly the 48213 bytes declared`) and stores
 nothing. After that, or any other failed `POST`, the URL can be tried again.
-An expired or altered upload URL answers `404` (`upload not found or
-expired; start a new upload`). Only the user that started the upload can
+A `POST` that ends without an answer, for example when the connection
+drops, holds the URL for at most 15 minutes, and one whose body takes more
+than 5 minutes to arrive answers `400` (`the upload took too long; send it
+again`). An expired or altered upload URL answers `404` (`upload not found
+or expired; start a new upload`). Only the user that started the upload can
 confirm it, only for the same task, and only once. Any other ticket,
 including an expired one, answers `404` (`upload not found or expired; start
-a new upload`). `storage_id` must be the `storageId` the upload URL
-answered. Any other value, including one sent before the upload finished,
-answers `400` (`storage_id must be the storageId the upload answered`).
+a new upload`). A confirm before the upload URL has stored a file answers
+`400` (`no file has been sent to this upload URL; send it there, or start a
+new upload`). `storage_id` must be the `storageId` the upload URL answered,
+and any other value answers `400` (`storage_id must be the storageId the
+upload answered`).
 Without a
 `content_type`, the attachment takes the upload's `Content-Type`, and one
 over 255 characters answers `400` (`the file's media type must be at most 255

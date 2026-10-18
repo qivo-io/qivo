@@ -340,6 +340,12 @@ export const UPLOAD_URL_USED = 'this upload URL has already been used; start a n
 export const uploadSizeWrong = (size: number): string =>
   `the upload must be exactly the ${size} bytes declared`
 
+/** How long a POST to an upload URL holds the URL. A POST that ended
+ * without storing its file, or without freeing the URL, such as one whose
+ * runtime was stopped, lets another POST take the URL once this has passed.
+ * The receiver stops reading a body well before (machine/uploads.ts). */
+export const UPLOAD_CLAIM_MS = 15 * 60 * 1000
+
 /* The ticket `ticketId` of `minter` while it is unexpired at `nowMs`, else
  * null. */
 async function liveTicket(
@@ -353,38 +359,48 @@ async function liveTicket(
 }
 
 /**
- * Claims the upload URL of ticket `ticketId` for one POST, and answers the
- * number of bytes the POST must carry. A ticket that is unknown, expired or
- * not `minter`'s is refused, and so is one whose URL is already storing or
- * has stored a file, so a URL stores at most one file however often it is
- * sent to.
+ * Claims the upload URL of ticket `ticketId` for the POST `attempt`, and
+ * answers the number of bytes the POST must carry. A ticket that is unknown,
+ * expired or not `minter`'s is refused, and so is one that holds a file or
+ * that another POST claimed less than UPLOAD_CLAIM_MS ago, so a URL stores
+ * at most one file however often it is sent to.
  */
 export async function beginTicketUpload(
   ctx: MutationCtx,
-  a: { ticketId: string; minter: string; nowMs: number },
+  a: { ticketId: string; minter: string; attempt: string; nowMs: number },
 ): Promise<{ size: number }> {
   const ticket = await liveTicket(ctx, a)
   if (ticket === null) throw notFound(UPLOAD_TICKET_MISSING)
-  if (ticket.upload_started_at !== undefined) throw conflict(UPLOAD_URL_USED, 'upload_url_used')
-  await ctx.db.patch(ticket._id, { upload_started_at: a.nowMs })
+  const claimed =
+    ticket.upload_started_at !== undefined && a.nowMs - ticket.upload_started_at < UPLOAD_CLAIM_MS
+  if (ticket.storage_id !== undefined || claimed) {
+    throw conflict(UPLOAD_URL_USED, 'upload_url_used')
+  }
+  await ctx.db.patch(ticket._id, { upload_started_at: a.nowMs, upload_attempt: a.attempt })
   return { size: ticket.size_bytes }
 }
 
 /**
- * Records `storageId` as the file of ticket `ticketId`, which
- * beginTicketUpload claimed. If the ticket is gone, expired or no longer
- * waiting for its file, the file is deleted instead and the answer is
- * false, so a ticket never holds two files.
+ * Records `storageId` as the file of ticket `ticketId`, which the POST
+ * `attempt` claimed (beginTicketUpload). If the ticket is gone, expired, holds
+ * a file or belongs to another POST now, the file is deleted instead and the
+ * answer is false, so a ticket never holds two files.
  */
 export async function finishTicketUpload(
   ctx: MutationCtx,
-  a: { ticketId: string; minter: string; storageId: Id<'_storage'>; nowMs: number },
+  a: {
+    ticketId: string
+    minter: string
+    attempt: string
+    storageId: Id<'_storage'>
+    nowMs: number
+  },
 ): Promise<boolean> {
   const ticket = await liveTicket(ctx, a)
   const inUse = await storageIdInUse(ctx, a.storageId)
   if (
     ticket === null ||
-    ticket.upload_started_at === undefined ||
+    ticket.upload_attempt !== a.attempt ||
     ticket.storage_id !== undefined ||
     inUse
   ) {
@@ -396,13 +412,14 @@ export async function finishTicketUpload(
 }
 
 /**
- * Undoes beginTicketUpload after a POST that left the ticket without a file:
- * deletes `storageId`, when given, unless the ticket or anything else holds
- * it, and frees the URL for another try while the ticket holds no file.
+ * Undoes the POST `attempt` after it failed: deletes `storageId`, when given,
+ * unless the ticket or anything else holds it, and frees the URL for another
+ * try if that POST still holds it and the ticket holds no file. Safe to run
+ * whether or not beginTicketUpload claimed the URL for this POST.
  */
 export async function abandonTicketUpload(
   ctx: MutationCtx,
-  a: { ticketId: string; minter: string; storageId?: Id<'_storage'> },
+  a: { ticketId: string; minter: string; attempt: string; storageId?: Id<'_storage'> },
 ): Promise<void> {
   const ticket = await byId(ctx, 'attachment_uploads', a.ticketId)
   if (
@@ -412,13 +429,23 @@ export async function abandonTicketUpload(
   ) {
     await ctx.storage.delete(a.storageId)
   }
-  if (ticket !== null && ticket.profile_id === a.minter && ticket.storage_id === undefined) {
-    await ctx.db.patch(ticket._id, { upload_started_at: undefined })
+  if (
+    ticket !== null &&
+    ticket.profile_id === a.minter &&
+    ticket.upload_attempt === a.attempt &&
+    ticket.storage_id === undefined
+  ) {
+    await ctx.db.patch(ticket._id, { upload_started_at: undefined, upload_attempt: undefined })
   }
 }
 
+/** The confirm's answer for a ticket whose upload URL has stored no file,
+ * such as one started before upload URLs stored a single file. */
+export const UPLOAD_NOT_SENT =
+  'no file has been sent to this upload URL; send it there, or start a new upload'
+
 /** The one answer for a `storage_id` that is not the file the ticket's
- * upload URL stored, including one sent before that upload finished. */
+ * upload URL stored. */
 export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload answered'
 
 /**
@@ -453,6 +480,7 @@ export async function confirmAttachmentUpload(
   ) {
     throw notFound(UPLOAD_TICKET_MISSING)
   }
+  if (ticket.storage_id === undefined) throw badRequest(UPLOAD_NOT_SENT)
   const storageId = ctx.db.system.normalizeId('_storage', a.storage_id)
   if (storageId === null || storageId !== ticket.storage_id) throw badRequest(UPLOAD_STORAGE_ID)
   const result = await attachFileCore(ctx, {

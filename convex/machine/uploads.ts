@@ -3,12 +3,13 @@
  * startAttachmentUpload). The URL names its ticket and carries a file token
  * for it (lib/fileTokens.ts attachmentUploadUrl), so it needs no credential,
  * like the Convex upload URL it replaces. Unlike that URL, it stores at most
- * one file: the first POST claims the ticket (beginTicketUpload), and every
- * later POST is refused before anything is read. The receiver reads exactly
- * the declared number of bytes, stores them and records the file on the
- * ticket (finishTicketUpload), which the confirm call then must name. A POST
- * that fails stores nothing and frees the URL for another try
- * (abandonTicketUpload).
+ * one file: a POST claims the ticket under its own id (beginTicketUpload),
+ * and every other POST is refused before anything is read. The receiver
+ * reads exactly the declared number of bytes, stores them and records the
+ * file on the ticket (finishTicketUpload), which the confirm call then must
+ * name. A POST that fails stores nothing and frees the URL for another try
+ * (abandonTicketUpload). One that cannot, because its runtime stopped, holds
+ * the URL for UPLOAD_CLAIM_MS at most.
  *
  * It answers like a Convex upload URL, `{"storageId": "…"}` with any
  * origin allowed, so clients built for one keep working. A refusal is
@@ -27,6 +28,7 @@ import {
   abandonTicketUpload,
   beginTicketUpload,
   finishTicketUpload,
+  UPLOAD_CLAIM_MS,
   UPLOAD_TICKET_MISSING,
   uploadSizeWrong,
 } from '../model/attachments'
@@ -34,9 +36,19 @@ import { internalError } from './shared'
 
 const PREFIX = '/attachment-uploads/'
 
-/* The Convex runtime's Blob, which convex/tsconfig's ESNext lib does not
- * declare. */
+/* How long the receiver reads a body before it gives up, well inside
+ * UPLOAD_CLAIM_MS so that a POST still storing its file keeps the URL. */
+const READ_MS = UPLOAD_CLAIM_MS / 3
+
+/** The answer for a body that took longer than READ_MS to arrive. */
+export const UPLOAD_TOO_SLOW = 'the upload took too long; send it again'
+
+/* The Convex runtime's Blob, timers and crypto, which convex/tsconfig's
+ * ESNext lib does not declare. */
 declare const Blob: { new (parts: Uint8Array[], options: { type: string }): Blob }
+declare function setTimeout(callback: () => void, delay: number): unknown
+declare function clearTimeout(timer: unknown): void
+declare const crypto: { randomUUID(): string }
 type BodyStream = {
   getReader(): {
     read(): Promise<{ done: boolean; value?: Uint8Array }>
@@ -46,19 +58,30 @@ type BodyStream = {
 
 /* Claims the ticket's one POST (model/attachments.ts beginTicketUpload). */
 export const begin = internalMutation({
-  args: { ticket: v.string(), minter: v.string() },
+  args: { ticket: v.string(), minter: v.string(), attempt: v.string() },
   handler: (ctx, a) =>
-    beginTicketUpload(ctx, { ticketId: a.ticket, minter: a.minter, nowMs: Date.now() }),
+    beginTicketUpload(ctx, {
+      ticketId: a.ticket,
+      minter: a.minter,
+      attempt: a.attempt,
+      nowMs: Date.now(),
+    }),
 })
 
 /* Records the stored file on the ticket, or deletes it
  * (model/attachments.ts finishTicketUpload). */
 export const finish = internalMutation({
-  args: { ticket: v.string(), minter: v.string(), storage_id: v.id('_storage') },
+  args: {
+    ticket: v.string(),
+    minter: v.string(),
+    attempt: v.string(),
+    storage_id: v.id('_storage'),
+  },
   handler: (ctx, a) =>
     finishTicketUpload(ctx, {
       ticketId: a.ticket,
       minter: a.minter,
+      attempt: a.attempt,
       storageId: a.storage_id,
       nowMs: Date.now(),
     }),
@@ -67,9 +90,19 @@ export const finish = internalMutation({
 /* Frees the ticket after a failed POST (model/attachments.ts
  * abandonTicketUpload). */
 export const abandon = internalMutation({
-  args: { ticket: v.string(), minter: v.string(), storage_id: v.optional(v.id('_storage')) },
+  args: {
+    ticket: v.string(),
+    minter: v.string(),
+    attempt: v.string(),
+    storage_id: v.optional(v.id('_storage')),
+  },
   handler: (ctx, a) =>
-    abandonTicketUpload(ctx, { ticketId: a.ticket, minter: a.minter, storageId: a.storage_id }),
+    abandonTicketUpload(ctx, {
+      ticketId: a.ticket,
+      minter: a.minter,
+      attempt: a.attempt,
+      storageId: a.storage_id,
+    }),
 })
 
 /* Every answer allows any origin, as a Convex upload URL does, and is never
@@ -87,26 +120,34 @@ const answer = (status: number, body: unknown): Response =>
 
 /* The request body's chunks when it holds exactly `size` bytes, else null.
  * It stops reading once the body passes `size`, so a longer body never
- * fills memory. */
+ * fills memory, and refuses a body still arriving after READ_MS. */
 async function readExactly(request: Request, size: number): Promise<Uint8Array[] | null> {
   const declared = request.headers.get('Content-Length')
   if (declared !== null && Number(declared) !== size) return null
   const body = (request as Request & { body: BodyStream | null }).body
   if (body === null) return size === 0 ? [] : null
   const reader = body.getReader()
-  try {
+  let timer: unknown
+  const tooSlow = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(badRequest(UPLOAD_TOO_SLOW)), READ_MS)
+  })
+  const read = async (): Promise<Uint8Array[] | null> => {
     const chunks: Uint8Array[] = []
-    let read = 0
+    let total = 0
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       if (value === undefined) continue
-      read += value.byteLength
-      if (read > size) return null
+      total += value.byteLength
+      if (total > size) return null
       chunks.push(value)
     }
-    return read === size ? chunks : null
+    return total === size ? chunks : null
+  }
+  try {
+    return await Promise.race([read(), tooSlow])
   } finally {
+    clearTimeout(timer)
     await reader.cancel().catch(() => {})
   }
 }
@@ -127,11 +168,15 @@ const receive = httpAction(async (ctx, request) => {
   ) {
     return answer(404, { error: UPLOAD_TICKET_MISSING })
   }
+  // this POST's own claim, so cleanup never frees another POST's claim
+  const attempt = crypto.randomUUID()
   let storageId: Id<'_storage'> | undefined
-  let claimed = false
   try {
-    const { size } = await ctx.runMutation(internal.machine.uploads.begin, { ticket, minter })
-    claimed = true
+    const { size } = await ctx.runMutation(internal.machine.uploads.begin, {
+      ticket,
+      minter,
+      attempt,
+    })
     const chunks = await readExactly(request, size)
     if (chunks === null) throw badRequest(uploadSizeWrong(size))
     const type = request.headers.get('Content-Type') ?? ''
@@ -139,17 +184,22 @@ const receive = httpAction(async (ctx, request) => {
     const kept = await ctx.runMutation(internal.machine.uploads.finish, {
       ticket,
       minter,
+      attempt,
       storage_id: storageId,
     })
     // finish deleted the file of a ticket that expired or went meanwhile
     if (!kept) return answer(404, { error: UPLOAD_TICKET_MISSING })
     return answer(200, { storageId })
   } catch (e) {
-    if (claimed) {
-      await ctx
-        .runMutation(internal.machine.uploads.abandon, { ticket, minter, storage_id: storageId })
-        .catch(() => {})
-    }
+    // also when begin's answer was lost after it committed the claim
+    await ctx
+      .runMutation(internal.machine.uploads.abandon, {
+        ticket,
+        minter,
+        attempt,
+        storage_id: storageId,
+      })
+      .catch(() => {})
     if (!(e instanceof ConvexError)) return answer(500, { error: internalError(e) })
     const refusal = e.data as Refusal
     const status = refusal.code === 'not_found' ? 404 : refusal.code === 'conflict' ? 409 : 400

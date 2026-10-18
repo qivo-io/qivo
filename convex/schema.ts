@@ -864,9 +864,11 @@ export default defineSchema({
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
     expires_at: v.number(), // epoch milliseconds
-    // epoch milliseconds when the upload URL's one POST began, absent while
-    // the URL is unused (model/attachments.ts beginTicketUpload)
+    // epoch milliseconds when the upload URL's current POST began, and that
+    // POST's own id, absent while the URL is unused (model/attachments.ts
+    // beginTicketUpload)
     upload_started_at: v.optional(v.number()),
+    upload_attempt: v.optional(v.string()),
     // the one file the upload URL stored, which confirm must name
     storage_id: v.optional(v.id('_storage')),
   })
