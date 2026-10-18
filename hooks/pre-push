@@ -1,9 +1,9 @@
 #!/bin/sh
 # Match verify:local and CI against the working tree, including uncommitted edits.
 # Enable with `git config core.hooksPath hooks`. Branch protection already makes
-# main require the quality (CI) and secrets (Secret scanning) checks. This gate
-# finds the same quality failures before a push instead of in CI. --no-verify is
-# for scratch work.
+# main require the reviewed-ci (Start CI) and secrets (Secret scanning) checks.
+# This gate finds the same quality failures before a push instead of in CI.
+# --no-verify is for scratch work.
 set -e
 
 cd "$(git rev-parse --show-toplevel)"

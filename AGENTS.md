@@ -74,11 +74,6 @@ its reviews are finished and publishes the `reviewed-ci` status. Branch
 protection on main requires `reviewed-ci`, `secrets` and `Greptile Review` on the
 head commit, a branch that is up to date with main and resolved conversations.
 
-**Transition.** Start CI is being rolled out. Until a change removes the pull
-request triggers from `ci.yml`, pull requests still run full CI on every push,
-and branch protection still requires `quality` instead of `reviewed-ci`. Follow
-the steps below anyway.
-
 **Reviewers.** CodeRabbit and Greptile are both required on every pull request.
 `.coderabbit.yaml` and `.greptile/config.json` make them review every push and
 rebase. Do not edit those files to skip or narrow a review. No formal approval
@@ -127,7 +122,9 @@ status. It then builds the commit in the `Build and test / quality` job, which
 runs the same checks as main CI with a read-only token, no secrets and
 read-only cache access. Only when that job succeeded and every check still
 holds does it set `reviewed-ci` to success on the commit. Watch that status, not
-the dispatch run. Start CI runs one request per commit at a time: a second
+the dispatch run. GitHub shows a dispatched run's job checks on main's latest
+commit, so a failed Start CI check there concerns a pull request, not main.
+Start CI runs one request per commit at a time: a second
 request waits for the first to finish, then starts nothing if it passed and
 builds again if it failed.
 
@@ -135,7 +132,9 @@ builds again if it failed.
 the replaced commit, and a new commit has no `reviewed-ci` status until its own
 reviews are finished and Start CI passes. To retry after a failure, fix the
 cause or wait out the infrastructure problem, then dispatch Start CI again.
-Re-running a Start CI run in the Actions interface is refused.
+Re-running a Start CI run in the Actions interface is refused. For an older
+pull request, run the check again and renew any review evidence that is missing
+or outdated before you dispatch Start CI.
 
 **5. Merge** only when your task says to. Successful CI permits merging; it does
 not authorize it. Recheck the reviews of the head first.
