@@ -892,7 +892,8 @@ function restoreErrorText(e: unknown): string {
    for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
   const d = errData(e)
-  if (d.reason === 'billing_required' && d.message) return d.message
+  // read-only for billing or a scheduled deletion says why, in its own words
+  if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that."
   if (d.code === 'rule' && d.message) {
     const m = String(d.message)

@@ -700,30 +700,27 @@ describe('selecting and restoring', () => {
     ])
   })
 
-  it('keeps the rows when the organization is read-only and says so', async () => {
-    await open()
-    const { ConvexError } = await import('convex/values')
-    answers['deletedItems:restore'] = () =>
-      Promise.reject(
-        new ConvexError({
-          code: 'forbidden',
-          reason: 'billing_required',
-          message: 'Your organization is read-only until billing is fixed.',
-        }),
-      )
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    await deliver([task(1), task(2)])
-    await click(find('[data-select-all]'))
-    await click(find('.deleted-selection-actions [data-restore-selected]'))
-    await click(button('Restore 2 tasks'))
-    expect(window.showToast).toHaveBeenCalledWith(
-      'Your organization is read-only until billing is fixed.',
-      'error',
-    )
-    expect(text('[data-deleted-count]')).toBe('2 selected')
-    // the window stays for another try
-    expect(has('[data-bulk-restore]')).toBe(true)
-  })
+  it.each([
+    ['billing_required', 'Your organization is read-only until billing is fixed.'],
+    ['deletion_scheduled', 'This organization is read-only until its deletion.'],
+  ])(
+    'keeps the rows when the organization is read-only (%s) and says so',
+    async (reason, message) => {
+      await open()
+      const { ConvexError } = await import('convex/values')
+      answers['deletedItems:restore'] = () =>
+        Promise.reject(new ConvexError({ code: 'forbidden', reason, message }))
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await deliver([task(1), task(2)])
+      await click(find('[data-select-all]'))
+      await click(find('.deleted-selection-actions [data-restore-selected]'))
+      await click(button('Restore 2 tasks'))
+      expect(window.showToast).toHaveBeenCalledWith(message, 'error')
+      expect(text('[data-deleted-count]')).toBe('2 selected')
+      // the window stays for another try
+      expect(has('[data-bulk-restore]')).toBe(true)
+    },
+  )
 })
 
 describe('items that wait for a deleted project', () => {
