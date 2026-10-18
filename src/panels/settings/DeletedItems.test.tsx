@@ -789,6 +789,32 @@ describe('items that wait for a deleted project', () => {
     expect(window.showToast).toHaveBeenLastCalledWith('Restored QN-5', undefined)
   })
 
+  it('sends an item a bulk restore deferred again as part of that bulk restore', async () => {
+    await open()
+    let answer: (value: Answer) => void = () => {}
+    answers['deletedItems:restore'] = (args) => {
+      const ids = args.ids as string[]
+      if (ids.includes('item-trial')) return new Promise((resolve) => (answer = resolve))
+      return Promise.resolve({ restored: ids, refused: [], deferred: [] })
+    }
+    // the list showed the task restorable when it was chosen, then its project went
+    await deliver([trial(), task(5)])
+    await click(find('[data-select-all]'))
+    await click(find('.deleted-selection-actions [data-restore-selected]'))
+    await click(button('Restore 2 items'))
+    const blocked = { reason: 'project_deleted', item_id: 'item-trial' } as const
+    await deliver([
+      trial({ state: 'restoring', can_restore: false }),
+      task(5, { can_restore: false, blocked }),
+    ])
+    await act(async () => answer({ restored: ['item-trial'], refused: [], deferred: ['item-5'] }))
+    await settle()
+    expect(calls('deletedItems:restore')).toHaveLength(1)
+    // alone in its call, the task would send its followers a Restored notice
+    await deliver([task(5)])
+    expect(calls('deletedItems:restore')[1]).toEqual({ org_id: ORG, ids: ['item-5'], bulk: true })
+  })
+
   it('forgets a waiting item that left the list', async () => {
     await open()
     answers['deletedItems:restore'] = async () => ({

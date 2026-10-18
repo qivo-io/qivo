@@ -199,9 +199,10 @@ export function DeletedItemsPage() {
   const [saving, setSaving] = useState(false)
   // whether the open window did what it asks, for where focus goes after it
   const acted = useRef(false)
-  // Items deferred behind a project item of the same restore. They are sent
-  // again once a list shows them restorable (design 5).
-  const [waiting, setWaiting] = useState<ReadonlySet<string>>(() => new Set())
+  // Items deferred behind a project item of the same restore, each with
+  // whether a bulk restore sent it. They are sent again once a list shows them
+  // restorable (design 5), still marked bulk if they were.
+  const [waiting, setWaiting] = useState<ReadonlyMap<string, boolean>>(() => new Map())
   // The items this page restored. A capped list need not have held them, so
   // their search hits cannot go by the item leaving it (the lines).
   const [restored, setRestored] = useState<ReadonlySet<string>>(() => new Set())
@@ -357,13 +358,14 @@ export function DeletedItemsPage() {
      holds is sent once its search hit shows it restorable. It runs on each
      delivery of either list or the search, and when an answer defers items,
      because the list that shows a small project back can arrive before the
-     answer that defers its items. */
+     answer that defers its items. Items a bulk restore deferred go in their
+     own call, marked bulk, so one sent alone sends no Restored notice. */
   useEffect(() => {
     if (waiting.size === 0) return
     const complete = main.list?.capped === false
     const ready: ItemRow[] = []
     const gone: string[] = []
-    for (const id of waiting) {
+    for (const id of waiting.keys()) {
       const held = [byId.get(id), allById.get(id), hitItems.get(id)]
       const row = held.find((r) => r?.can_restore)
       if (row) ready.push(row)
@@ -371,8 +373,11 @@ export function DeletedItemsPage() {
     }
     if (ready.length === 0 && gone.length === 0) return
     const settled = new Set([...gone, ...ready.map((row) => row.id)])
-    setWaiting((current) => new Set([...current].filter((id) => !settled.has(id))))
-    if (ready.length) void restore(ready)
+    setWaiting((current) => new Map([...current].filter(([id]) => !settled.has(id))))
+    const bulk = ready.filter((row) => waiting.get(row.id))
+    const single = ready.filter((row) => !waiting.get(row.id))
+    if (bulk.length) void restore(bulk, { bulk: true })
+    if (single.length) void restore(single)
     // restore reads the newest state through refs and setters
   }, [byId, allById, hitItems, main.list, waiting])
 
@@ -512,7 +517,9 @@ export function DeletedItemsPage() {
     setRefusals((current) => new Map([...current].filter(([id]) => !ids.includes(id))))
     const outcome = await P.restoreDeletedItems(items, { bulk })
     if (outcome.deferred.length > 0)
-      setWaiting((current) => new Set([...current, ...outcome.deferred]))
+      setWaiting(
+        (current) => new Map([...current, ...outcome.deferred.map((id) => [id, bulk] as const)]),
+      )
     if (outcome.done.length > 0) setRestored((current) => new Set([...current, ...outcome.done]))
     if (settle) focusNext.current = settle
     setBusy((current) => new Set([...current].filter((id) => !ids.includes(id))))
