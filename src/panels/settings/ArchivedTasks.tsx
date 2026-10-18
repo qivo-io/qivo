@@ -45,7 +45,9 @@ type Listing = {
 
 const START: Listing = { rows: [], nextCursor: null, scanned: 0, found: 0, phase: 'first' }
 
+/** `n` with thousands separators, "1,000". */
 const count = (n: number) => n.toLocaleString('en-US')
+/** "1 archived task", "1,000 archived tasks". */
 const tasks = (n: number) => `${count(n)} archived task${n === 1 ? '' : 's'}`
 
 /** "Luma Sensor › Firmware" for a sub-project, the name alone otherwise. */
@@ -129,6 +131,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     })
   }, [project, query, attempt])
 
+  /* The listed row of task `uuid`, or null when it is not shown. */
   const rowElement = (uuid: string) =>
     pageRef.current?.querySelector<HTMLElement>(`[data-archive-row="${uuid}"]`) ?? null
 

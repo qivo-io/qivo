@@ -44,6 +44,7 @@ let calls: Call[]
 let publish: (snapshot: Snapshot) => void
 let restores: ((value: unknown) => void)[]
 
+/** Lets pending promises, effects and renders run. */
 const settle = async () => {
   for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
 }
@@ -67,9 +68,13 @@ function task(num: number, days = 1, patch: Record<string, unknown> = {}): Row {
     ...patch,
   }
 }
+/** `n` archived task rows numbered from `from`, archived `days` days back
+    and a day earlier every ten rows. */
 const many = (from: number, n: number, days = 2) =>
   Array.from({ length: n }, (_, i) => task(from + i, days + Math.floor(i / 10)))
 
+/** The snapshot with Luma Sensor and its sub-projects Firmware and
+    Electronics. */
 function fixture(): Snapshot {
   const next = plannerFixture()
   const org = next.orgs[0].id
@@ -99,6 +104,8 @@ function fixture(): Snapshot {
   return next
 }
 
+/** Renders the page on a fresh store, on a phone or not, opened on Luma
+    Sensor or on no project. */
 async function open({ phone = false, initial = 'meta' as 'meta' | 'none' } = {}) {
   vi.resetModules()
   snap = fixture()
@@ -185,17 +192,22 @@ afterEach(async () => {
   network.onUpdate.mockReset()
 })
 
+/** The element `selector` names, or a thrown error when there is none. */
 function find<T extends Element = HTMLElement>(selector: string) {
   const element = document.querySelector<T>(selector)
   if (!element) throw new Error(`Missing ${selector}`)
   return element
 }
+/** Whether the page shows `selector`. */
 const has = (selector: string) => document.querySelector(selector) !== null
+/** The text of the element `selector` names. */
 const text = (selector: string) => find(selector).textContent ?? ''
+/** The task ids of the listed rows, in order. */
 const rowIds = () =>
   [...document.querySelectorAll<HTMLElement>('[data-archive-row]')].map(
     (el) => el.dataset.archiveRow,
   )
+/** The button whose text is `label`. */
 const button = (label: string) => {
   const match = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
     (b) => b.textContent?.trim() === label,
@@ -203,6 +215,7 @@ const button = (label: string) => {
   if (!match) throw new Error(`Missing button ${label}`)
   return match
 }
+/** Clicks `element` and lets the page settle. */
 async function click(element: HTMLElement) {
   await act(async () => element.click())
   await settle()
@@ -217,6 +230,7 @@ async function type(value: string) {
   await act(async () => await new Promise((r) => setTimeout(r, 300)))
   await settle()
 }
+/** Chooses `projectId` in the project select. */
 async function choose(projectId: string) {
   const select = find<HTMLSelectElement>('[data-archive-project]')
   await act(async () => {
@@ -225,6 +239,7 @@ async function choose(projectId: string) {
   })
   await settle()
 }
+/** The newest issues.archivedPage call. */
 const last = () => calls[calls.length - 1]
 
 describe('Archived tasks', () => {
