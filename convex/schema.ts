@@ -265,6 +265,11 @@ const issueAttachmentsTable = defineTable({
   task_archived: taskArchived,
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
+  // An organization's rows in the order they were stored. Archiving a task
+  // moves its rows within by_org_task_archived_issue but not here, so the
+  // billing storage sample pages through this one (model/billing.ts
+  // storagePage) and leaves out the rows stored after the period began.
+  .index('by_org', ['org_id'])
   .index('by_uuid', ['id'])
   .index('by_issue', ['issue_id'])
   .index('by_storage', ['storage_id'])
@@ -548,8 +553,15 @@ export default defineSchema({
     seats: v.number(),
     // Local membership evidence, never profiles from another tenant.
     profile_ids: v.array(v.string()),
-    storage_bytes: v.number(),
-    storage_blocks: v.number(),
+    // The storage sampled at period start and the blocks over the allowance
+    // it charges. Both are absent while the sample runs (billingSync.ts
+    // storageStep), and set once it finishes.
+    storage_bytes: v.optional(v.number()),
+    storage_blocks: v.optional(v.number()),
+    // The running sample's id, which its steps check before each page, and
+    // when its last step ran. Both are cleared when it finishes.
+    storage_run: v.optional(v.string()),
+    storage_run_at: v.optional(v.string()),
     created_at: v.string(),
   })
     .index('by_subscription_period', ['subscription_id', 'period_start'])

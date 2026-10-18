@@ -1,11 +1,16 @@
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
-import type { Doc } from './_generated/dataModel'
-import { internalAction, internalMutation, internalQuery } from './_generated/server'
+import { type ObjectType, v } from 'convex/values'
+import type { Doc, Id } from './_generated/dataModel'
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+} from './_generated/server'
 import { getBillableUsers } from './lib/billableUsers'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
-import { badRequest, require, rule } from './lib/functions'
+import { badRequest, notFound, require, rule } from './lib/functions'
 import {
   getPolarCheckout,
   getPolarSubscription,
@@ -18,7 +23,7 @@ import {
   validatePolarProduct,
 } from './lib/polar'
 import { audit } from './model/admin'
-import { GB, isoNow, storageUsage } from './model/billing'
+import { GB, isoNow, STORAGE_PAGE, storagePage } from './model/billing'
 import { syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
 
@@ -58,6 +63,25 @@ const eventResultRef = makeFunctionReference<'mutation', { id: string; success: 
 const noticesRef = makeFunctionReference<'mutation', Record<string, never>, null>(
   'billingSync:reminders',
 )
+
+const storageStepArgs = {
+  period: v.id('billing_periods'),
+  run: v.string(),
+  phase: v.union(v.literal('own'), v.literal('unscoped')),
+  cursor: v.optional(v.string()),
+  // the page size after a step split its page, else STORAGE_PAGE.rows
+  size: v.optional(v.number()),
+  bytes: v.number(),
+}
+type StorageStep = ObjectType<typeof storageStepArgs>
+const storageStepRef = makeFunctionReference<'mutation', StorageStep, null>(
+  'billingSync:storageStep',
+)
+
+/** How long a storage sample may go without a step before apply starts it
+ * again. A step runs in well under a second, so only a sample whose step
+ * failed waits this long. */
+export const STORAGE_STALL_MS = 15 * 60_000
 
 // API responses are normalized by the adapter; serialize their raw-equivalent
 // fields for one shared validator on the write boundary and webhook path.
@@ -119,8 +143,10 @@ export const release = internalMutation({
 
 /** Applies a Polar subscription, from a webhook or reconciliation, to the
  * organization's billing row. Stale or out-of-order events are ignored. It
- * opens the paid period's record when a new period starts, then starts or
- * stops the read-only period before deletion (model/orgRetention.ts). */
+ * opens the paid period's record when a new period starts and starts the
+ * period's storage sample (storageStep), or starts a sample again that has
+ * gone STORAGE_STALL_MS without a step. Then it starts or stops the
+ * read-only period before deletion (model/orgRetention.ts). */
 export const apply = internalMutation({
   args: { payload: v.string(), event_id: v.optional(v.string()) },
   handler: async (ctx, { payload, event_id }) => {
@@ -198,11 +224,7 @@ export const apply = internalMutation({
       )
       .unique()
     if (!period && (status === 'active' || status === 'past_due')) {
-      const storage = await storageUsage(ctx, sub.org_id)
-      const allowance =
-        Math.max(plan.minimum_storage_gb, remote.seats * plan.storage_gb_per_seat) * GB
-      const blocks = Math.ceil(Math.max(0, storage.bytes - allowance) / GB)
-      await ctx.db.insert('billing_periods', {
+      const periodId = await ctx.db.insert('billing_periods', {
         org_id: sub.org_id,
         subscription_id: incomingId,
         plan_id: plan.id,
@@ -210,23 +232,15 @@ export const apply = internalMutation({
         period_end: end,
         seats: remote.seats,
         profile_ids: counts.users.map((p) => p.profile_id),
-        storage_bytes: storage.bytes,
-        storage_blocks: blocks,
         created_at: now,
       })
-      // Storage is sampled once at period start, then collected with that
-      // period's metered usage on its closing invoice. Never a recurring flow.
-      if (blocks > 0 && (!sub.complimentary_until || sub.complimentary_until <= start))
-        await ctx.db.insert('billing_events', {
-          id: `${incomingId}:${start}:storage`,
-          org_id: sub.org_id,
-          kind: 'storage',
-          period_start: start,
-          units: blocks,
-          attempts: 0,
-          next_attempt_at: now,
-          created_at: now,
-        })
+      await startStorageSample(ctx, periodId)
+    } else if (
+      period &&
+      period.storage_bytes === undefined &&
+      (period.storage_run_at ?? '') < new Date(Date.now() - STORAGE_STALL_MS).toISOString()
+    ) {
+      await startStorageSample(ctx, period._id)
     }
     if (event_id)
       await ctx.db.insert('billing_webhooks', {
@@ -247,6 +261,95 @@ export const apply = internalMutation({
     return null
   },
 })
+
+/* Starts a period's storage sample, or starts it again. A new run id stops
+ * any earlier run at its next step. */
+async function startStorageSample(ctx: MutationCtx, period: Id<'billing_periods'>): Promise<void> {
+  const run = newUuid()
+  await ctx.db.patch(period, { storage_run: run, storage_run_at: isoNow() })
+  await ctx.scheduler.runAfter(0, storageStepRef, { period, run, phase: 'own', bytes: 0 })
+}
+
+/** One step of a period's storage sample. The renewal (apply) records the
+ * period at once and starts the sample, so the renewal never reads the
+ * organization's attachment rows. Each step counts one page of them
+ * (model/billing.ts storagePage), first the organization's own rows and then
+ * the rows stored before rows carried their organization, and schedules the
+ * next step with the running total. It counts the rows stored before the
+ * renewal recorded the period, so a file stored later, or a restore's rows
+ * written back, waits for the next period. The last step records the bytes and the
+ * blocks over the plan's allowance for the period's seats. When there are
+ * blocks and the period starts after any complimentary grant, it also adds
+ * the storage charge, which is collected with the period's metered usage on
+ * its closing invoice and never recurs. A step whose period is gone, or
+ * whose run was started again, does nothing. */
+export const storageStep = internalMutation({
+  args: storageStepArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const period = await ctx.db.get(a.period)
+    if (period === null || period.storage_run !== a.run) return null
+    const page = await storagePage(ctx, period.org_id, a.phase, {
+      cursor: a.cursor ?? null,
+      size: a.size ?? STORAGE_PAGE.rows,
+      before: period._creationTime,
+    })
+    let next: StorageStep | undefined
+    if ('split' in page) next = { ...a, size: page.split }
+    else {
+      const bytes = a.bytes + page.bytes
+      if (page.next !== null) next = { ...a, cursor: page.next, size: undefined, bytes }
+      else if (a.phase === 'own')
+        next = { ...a, phase: 'unscoped', cursor: undefined, size: undefined, bytes }
+      else return await finishStorageSample(ctx, period, bytes)
+    }
+    await ctx.db.patch(period._id, { storage_run_at: isoNow() })
+    await ctx.scheduler.runAfter(0, storageStepRef, next)
+    return null
+  },
+})
+
+/* A storage sample's last step. It records the bytes and the blocks over
+ * the allowance, and adds the period's storage charge when one is due. */
+async function finishStorageSample(
+  ctx: MutationCtx,
+  period: Doc<'billing_periods'>,
+  bytes: number,
+): Promise<null> {
+  const plan = await byId(ctx, 'billing_plans', period.plan_id)
+  require(plan, notFound('billing plan not found'))
+  const allowance = Math.max(plan.minimum_storage_gb, period.seats * plan.storage_gb_per_seat) * GB
+  const blocks = Math.ceil(Math.max(0, bytes - allowance) / GB)
+  await ctx.db.patch(period._id, {
+    storage_bytes: bytes,
+    storage_blocks: blocks,
+    storage_run: undefined,
+    storage_run_at: undefined,
+  })
+  const sub = await subscriptionFor(ctx, period.org_id)
+  const id = `${period.subscription_id}:${period.period_start}:storage`
+  if (
+    blocks > 0 &&
+    sub !== null &&
+    (!sub.complimentary_until || sub.complimentary_until <= period.period_start) &&
+    (await ctx.db
+      .query('billing_events')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique()) === null
+  ) {
+    const now = isoNow()
+    await ctx.db.insert('billing_events', {
+      id,
+      org_id: period.org_id,
+      kind: 'storage',
+      period_start: period.period_start,
+      units: blocks,
+      attempts: 0,
+      next_attempt_at: now,
+      created_at: now,
+    })
+  }
+  return null
+}
 
 export const reconcile = internalAction({
   args: { org_id: v.string() },

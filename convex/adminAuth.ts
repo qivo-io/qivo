@@ -262,9 +262,13 @@ export const createBreakGlass = platformAction({
   },
 })
 
-/* The break-glass write, one transaction: fence re-check, org lookup, profile
- * insert (edge field-for-field; retention 7 was the PG column default),
- * explicit claim, audit row. */
+/* The break-glass write, in one transaction. It re-checks the email
+ * existence fence that createBreakGlass checked first, so a seat added in
+ * between makes it refuse. Then it looks up the organization, inserts the
+ * org admin profile (edge field for field, and retention 7 was the PG column
+ * default), claims it for the login and writes the audit row. It refuses a
+ * demo deployment itself, because the dashboard and deploy keys can run it
+ * without createBreakGlass. */
 export const insertBreakGlass = internalMutation({
   args: {
     org_id: v.string(),
@@ -274,6 +278,7 @@ export const insertBreakGlass = internalMutation({
     actor: v.object({ auth_user_id: v.string(), email: v.string() }),
   },
   handler: async (ctx, a): Promise<{ profile_id: string }> => {
+    refuseDemoFeature()
     const clash = await ctx.db
       .query('profiles')
       .withIndex('by_email', (q) => q.eq('email', a.email))

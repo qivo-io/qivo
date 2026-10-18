@@ -93,12 +93,15 @@ const storedBytes = (row: Doc<'deleted_rows'>): number =>
   MEASURED_STORED.has(row.table) ? sizeOf(row) : 0
 
 /** Where the next page starts, or null after the last page. */
-const nextOf = (page: { isDone: boolean; continueCursor: string }): string | null =>
+export const nextOf = (page: { isDone: boolean; continueCursor: string }): string | null =>
   page.isDone ? null : page.continueCursor
 
 /** Runs `fn` over `items`, CONCURRENCY at a time, with results in input
  * order. */
-async function inParallel<I, R>(items: readonly I[], fn: (item: I) => Promise<R>): Promise<R[]> {
+export async function inParallel<I, R>(
+  items: readonly I[],
+  fn: (item: I) => Promise<R>,
+): Promise<R[]> {
   const results: R[] = []
   let next = 0
   const worker = async () => {
@@ -329,7 +332,8 @@ export const orgPart = internalQuery({
   },
 })
 
-type Runner = Pick<ActionCtx, 'runQuery'>
+/** What a platform action needs to read through internal queries. */
+export type Runner = Pick<ActionCtx, 'runQuery'>
 
 /** Every page of one part of an organization, with the child ranges its
  * pages left out, summed. */
@@ -396,7 +400,7 @@ async function orgRow(ctx: Runner, org_id: string): Promise<AdminOrgRow | null> 
 }
 
 /** Every organization's id and name, page by page, in creation order. */
-async function allOrgs(ctx: Runner): Promise<AdminOrgName[]> {
+export async function allOrgs(ctx: Runner): Promise<AdminOrgName[]> {
   const orgs: AdminOrgName[] = []
   let cursor: string | null = null
   do {

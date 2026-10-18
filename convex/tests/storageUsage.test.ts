@@ -1,6 +1,7 @@
 /* model/billing.ts storageUsage, the attachment bytes an organization
- * stores in total and per project, which the admin Billing page and each
- * new billing period read.
+ * stores in total and per project, which the admin Billing page reads. Each
+ * new billing period counts the same rows page by page (storagePage,
+ * covered in billing.test.ts).
  *
  *   1. It reads the organization's attachment rows in one index range and
  *      groups them by the project each row carries, counting only projects

@@ -1,9 +1,11 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
+import type { Id } from '../_generated/dataModel'
+import { STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
-import { enrollOrganization } from '../model/billing'
+import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
 import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 
 type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
@@ -25,6 +27,18 @@ const insertPlan = makeFunctionReference<
   { plan: PlanInput; actor: string; email: string },
   string
 >('adminBilling:insertPlan')
+const connectPlan = makeFunctionReference<
+  'mutation',
+  {
+    plan_id: string
+    polar_product_id: string
+    api_meter_id: string
+    storage_meter_id: string
+    actor: string
+    email: string
+  },
+  null
+>('adminBilling:connectPlan')
 const setDefaultPlan = makeFunctionReference<'mutation', { plan_id: string }, null>(
   'adminBilling:setDefaultPlan',
 )
@@ -60,6 +74,7 @@ beforeEach(() => {
   vi.stubEnv('POLAR_SERVER', 'sandbox')
 })
 afterEach(() => {
+  Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
@@ -100,6 +115,30 @@ async function fixture(options: Parameters<typeof newT>[0] = {}) {
   await t.run((ctx) => enrollOrganization(ctx, f.org.id))
   return { t, f, operator, operatorId, planId }
 }
+/* Runs the scheduled work, which holds each period's storage sample. */
+const sample = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
+
+/* The organization's billing period starting at `start`. */
+const periodAt = (t: T, start: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('billing_periods')
+      .withIndex('by_subscription_period', (q) =>
+        q.eq('subscription_id', providerId).eq('period_start', start),
+      )
+      .unique(),
+  )
+
+const storageEvents = (t: T) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query('billing_events').collect()).filter((e) => e.kind === 'storage'),
+  )
+
+/* A provider modification time `n` minutes after NOW. */
+const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
+
+const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
+
 async function stored(t: T, orgId: string) {
   return await t.run((ctx) =>
     ctx.db
@@ -274,6 +313,53 @@ describe('billing authority and plan versions', () => {
   )
 })
 
+describe('the plan writers behind the operator actions', () => {
+  /* createPlan and connectPlan refuse demo mode, and the dashboard and
+   * deploy keys can run these mutations without them. */
+  it('insertPlan and connectPlan refuse a demo deployment and write nothing', async () => {
+    const t = newT()
+    const planId = await t.mutation(insertPlan, {
+      plan: {
+        ...terms('Unconnected'),
+        polar_product_id: undefined,
+        api_meter_id: undefined,
+        storage_meter_id: undefined,
+      },
+      actor: 'billing-operator',
+      email: 'operator@testbed.test',
+    })
+    const rows = () =>
+      t.run(async (ctx) => ({
+        plans: await ctx.db.query('billing_plans').collect(),
+        audit: await ctx.db.query('platform_audit_log').collect(),
+      }))
+    const before = await rows()
+    vi.stubEnv('APP_MODE', 'demo')
+    await expectRefusal(
+      t.mutation(insertPlan, {
+        plan: terms('Demo'),
+        actor: 'billing-operator',
+        email: 'operator@testbed.test',
+      }),
+      'forbidden',
+      /requires a regular workspace/,
+    )
+    await expectRefusal(
+      t.mutation(connectPlan, {
+        plan_id: planId,
+        polar_product_id: productId,
+        api_meter_id: uuid(),
+        storage_meter_id: uuid(),
+        actor: 'billing-operator',
+        email: 'operator@testbed.test',
+      }),
+      'forbidden',
+      /requires a regular workspace/,
+    )
+    expect(await rows()).toEqual(before)
+  })
+})
+
 describe('complimentary access and paid expiry', () => {
   it('grants six calendar months with month-end clamping and refuses writes exactly at expiry', async () => {
     vi.setSystemTime('2026-08-31T10:30:00.000Z')
@@ -445,11 +531,13 @@ describe('provider state, retries and billing snapshots', () => {
       })
     })
     await t.mutation(apply, { payload: remote(f.org.id), event_id: 'initial-period' })
+    await sample(t)
     await t.run((ctx) => ctx.db.patch(attachment, { size_bytes: 12_000_000_000 }))
     await t.mutation(apply, {
       payload: remote(f.org.id, { modified_at: '2026-09-20T12:01:00.000Z' }),
       event_id: 'retry-period',
     })
+    await sample(t)
     const snapshot = await t.run(async (ctx) => ({
       periods: await ctx.db.query('billing_periods').collect(),
       events: await ctx.db.query('billing_events').collect(),
@@ -547,6 +635,7 @@ describe('provider state, retries and billing snapshots', () => {
       }),
       event_id: 'renewal',
     })
+    await sample(t)
     expect(await stored(t, f.org.id)).toMatchObject({
       current_period_start: next.start,
       current_period_end: next.end,
@@ -561,6 +650,246 @@ describe('provider state, retries and billing snapshots', () => {
     )
     // 9 GB against the 5 GB the plan includes for five seats
     expect(period).toMatchObject({ storage_bytes: 9_000_000_000, storage_blocks: 4 })
+  })
+
+  it('records a renewal of 6,000 attachment rows at once and samples them under 4,000 documents a read', async () => {
+    const { t, f } = await fixture({ transactionLimits: { documentsRead: 4000 } })
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const tasks = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 60; i++) {
+        const id = uuid()
+        await ctx.db.insert('issues', {
+          id,
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          num: i + 1,
+          title: `Task ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    for (let from = 0; from < 6000; from += 3000) {
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 3000; i++)
+          await ctx.db.insert('issue_attachments', {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            id: uuid(),
+            issue_id: tasks[i % tasks.length],
+            storage_id,
+            name: `file-${i}.bin`,
+            size_bytes: 1_000_000,
+            inline: false,
+            created_at: NOW,
+          })
+      })
+    }
+    // Measured inside the renewal, as before, the rows pass the limit.
+    await expect(t.run((ctx) => storageUsage(ctx, f.org.id))).rejects.toThrow(
+      /Scanned too many documents/,
+    )
+
+    await t.mutation(apply, { payload: remote(f.org.id), event_id: 'heavy-period' })
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'active', current_period_end: END })
+    const pending = await periodAt(t, START)
+    expect(pending?.storage_bytes).toBeUndefined()
+    expect(pending?.storage_run).toEqual(expect.any(String))
+
+    await sample(t)
+    // 6 GB against the 5 GB the plan includes for five seats
+    const period = await periodAt(t, START)
+    expect(period).toMatchObject({ storage_bytes: 6_000_000_000, storage_blocks: 1 })
+    expect(period).not.toHaveProperty('storage_run')
+    expect(period).not.toHaveProperty('storage_run_at')
+    expect(await storageEvents(t)).toMatchObject([{ units: 1, period_start: START }])
+  })
+
+  it('samples the bytes storageUsage counts, at any page size', async () => {
+    const { t, f } = await fixture()
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const file = (issue_id: string, size_bytes: number, scope: Record<string, string> = {}) => ({
+      ...scope,
+      id: uuid(),
+      issue_id,
+      storage_id,
+      name: 'fixture.bin',
+      size_bytes,
+      inline: false,
+      created_at: NOW,
+    })
+    const fw = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const pcb = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const elsewhere = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    await t.run(async (ctx) => {
+      // scoped rows, one without its project
+      await ctx.db.insert(
+        'issue_attachments',
+        file(fw.id, 2_000_000_000, { org_id: f.org.id, project_id: f.sub.id }),
+      )
+      await ctx.db.insert('issue_attachments', file(pcb.id, 3_000_000_000, { org_id: f.org.id }))
+      // rows stored before rows carried their organization
+      await ctx.db.insert('issue_attachments', file(fw.id, 4_000_000_000))
+      await ctx.db.insert('issue_attachments', file(elsewhere.id, 8_000_000_000))
+      await ctx.db.insert('issue_attachments', file(uuid(), 16_000_000_000))
+      // a row whose project is gone counts nowhere
+      await ctx.db.insert(
+        'issue_attachments',
+        file(fw.id, 32_000_000_000, { org_id: f.org.id, project_id: uuid() }),
+      )
+    })
+    const live = await t.run((ctx) => storageUsage(ctx, f.org.id))
+    expect(live.bytes).toBe(9_000_000_000)
+
+    const sizes = [{ rows: 1 }, { rows: 1000, taskBytes: 1 }]
+    for (const [i, size] of sizes.entries()) {
+      Object.assign(STORAGE_PAGE, size)
+      const start = new Date(Date.parse(START) + i * 31 * 86_400_000).toISOString()
+      await t.mutation(apply, {
+        payload: remote(f.org.id, {
+          current_period_start: start,
+          current_period_end: addCalendarMonths(start, 1),
+          modified_at: new Date(Date.parse(NOW) + i * 1000).toISOString(),
+        }),
+      })
+      await sample(t)
+      expect(await periodAt(t, start)).toMatchObject({
+        storage_bytes: 9_000_000_000,
+        storage_blocks: 4,
+      })
+    }
+    Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
+  })
+
+  it('counts each row once when tasks are archived, restored or brought back from Deleted items during the sample', async () => {
+    const { t, f } = await fixture()
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const rows: Id<'issue_attachments'>[] = []
+    for (const [size_bytes, archived] of [
+      [2_000_000_000, false],
+      [3_000_000_000, false],
+      [4_000_000_000, true],
+    ] as const) {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      rows.push(
+        await t.run((ctx) =>
+          ctx.db.insert('issue_attachments', {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            id: uuid(),
+            issue_id: task.id,
+            storage_id,
+            name: 'fixture.bin',
+            size_bytes,
+            inline: false,
+            created_at: NOW,
+            ...(archived ? { task_archived: true as const } : {}),
+          }),
+        ),
+      )
+    }
+    STORAGE_PAGE.rows = 1
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    // the first step counts the first row
+    vi.advanceTimersToNextTimer()
+    await t.finishInProgressScheduledFunctions()
+    // its task is archived, and the archived one restored
+    await t.run(async (ctx) => {
+      await ctx.db.patch(rows[0], { task_archived: true })
+      await ctx.db.patch(rows[2], { task_archived: undefined })
+    })
+    // the first task goes to Deleted items and comes back, which writes its
+    // row again as a new document
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(rows[0])
+      if (row === null) throw new Error('fixture row vanished')
+      const { _id, _creationTime, ...copy } = row
+      await ctx.db.delete(_id)
+      await ctx.db.insert('issue_attachments', copy)
+    })
+    await sample(t)
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_bytes: 9_000_000_000,
+      storage_blocks: 4,
+    })
+  })
+
+  it('starts a stalled sample again, and the earlier run stops', async () => {
+    const { t, f } = await fixture()
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      const storage_id = await ctx.storage.store(new Blob())
+      await ctx.db.insert('issue_attachments', {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        id: uuid(),
+        issue_id: task.id,
+        storage_id,
+        name: 'fixture.bin',
+        size_bytes: 6_000_000_000,
+        inline: false,
+        created_at: NOW,
+      })
+    })
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    const first = (await periodAt(t, START))?.storage_run
+    expect(first).toEqual(expect.any(String))
+
+    // a sample that ran recently is left alone
+    vi.setSystemTime(Date.parse(NOW) + STORAGE_STALL_MS - 1000)
+    await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(1) }) })
+    expect((await periodAt(t, START))?.storage_run).toBe(first)
+
+    vi.setSystemTime(Date.parse(NOW) + STORAGE_STALL_MS + 1000)
+    await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(2) }) })
+    const second = (await periodAt(t, START))?.storage_run
+    expect(second).toEqual(expect.any(String))
+    expect(second).not.toBe(first)
+
+    // both runs' first steps run; only the second records the sample
+    await sample(t)
+    const period = await periodAt(t, START)
+    expect(period).toMatchObject({ storage_bytes: 6_000_000_000, storage_blocks: 1 })
+    expect(period).not.toHaveProperty('storage_run')
+    expect(await storageEvents(t)).toHaveLength(1)
+  })
+
+  it('records the storage of a complimentary period without charging it', async () => {
+    const { t, f } = await fixture()
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      const storage_id = await ctx.storage.store(new Blob())
+      await ctx.db.insert('issue_attachments', {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        id: uuid(),
+        issue_id: task.id,
+        storage_id,
+        name: 'fixture.bin',
+        size_bytes: 6_000_000_000,
+        inline: false,
+        created_at: NOW,
+      })
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.patch(sub!._id, { complimentary_until: END })
+    })
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_bytes: 6_000_000_000,
+      storage_blocks: 1,
+    })
+    expect(await storageEvents(t)).toEqual([])
   })
 
   it.each([0, 1])(

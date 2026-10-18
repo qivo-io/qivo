@@ -1,6 +1,7 @@
 // Data layer for the platform-operator admin area: thin wrappers over the
 // operator-gated Convex functions (admin.ts platform* queries/mutations, the
-// adminStats.ts paged actions and the adminAuth.ts session-bound actions).
+// adminStats.ts and adminPeople.ts paged actions and the adminAuth.ts
+// session-bound actions).
 // Every call throws on error; views catch and surface the message.
 import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
@@ -11,18 +12,7 @@ import { convex } from '../lib/convex'
 // Admin responses normalize absent optional fields to null on the wire.
 export type OrgRow = FunctionReturnType<typeof api.adminStats.listOrgs>[number]
 
-export type UserRow = {
-  profile_id: string
-  name: string
-  email: string | null
-  org_id: string
-  org_name: string
-  org_role: 'admin' | 'user' | 'viewer' | 'guest'
-  has_login: boolean
-  last_sign_in_at: string | null
-  banned_until: string | null
-  created_at: string
-}
+export type UserRow = FunctionReturnType<typeof api.adminPeople.listUsers>[number]
 
 export type AuditRow = {
   id: string
@@ -36,7 +26,7 @@ export type AuditRow = {
 
 export type PlatformStats = FunctionReturnType<typeof api.adminStats.platformStats>
 
-export type OrgDetail = FunctionReturnType<typeof api.admin.orgDetail>
+export type OrgDetail = FunctionReturnType<typeof api.adminPeople.orgDetail>
 export type OrgMember = OrgDetail['members'][number]
 
 /* Organization creation and invitations (convex/adminOrgs.ts). */
@@ -66,11 +56,11 @@ export const listOrgs = (): Promise<OrgRow[]> =>
 /* Every organization's id and name, without the counts listOrgs reads. */
 export const listOrgNames = () => convex.action(api.adminStats.orgNames, {}).catch(mapError)
 export const listUsers = (search: string): Promise<UserRow[]> =>
-  convex.query(api.admin.listUsers, { search }).catch(mapError)
+  convex.action(api.adminPeople.listUsers, { search }).catch(mapError)
 export const auditLog = (limit = 200): Promise<AuditRow[]> =>
   convex.query(api.admin.auditLog, { limit }).catch(mapError)
 export const orgDetail = (orgId: string): Promise<OrgDetail> =>
-  convex.query(api.admin.orgDetail, { org_id: orgId }).catch(mapError)
+  convex.action(api.adminPeople.orgDetail, { org_id: orgId }).catch(mapError)
 export const platformStats = (): Promise<PlatformStats> =>
   convex.action(api.adminStats.platformStats, {}).catch(mapError)
 export const demoMetrics = (): Promise<DemoMetricsResult> =>

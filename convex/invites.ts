@@ -15,7 +15,7 @@
  * Every attempt is recorded as an 'invite_email' platform audit row before it
  * is sent, with the operator as actor for console sends and 'system' for the
  * app's, whose rows carry channel 'app'.
- * admin.orgDetail shows the newest one for the seat's current address. The
+ * adminPeople.orgDetail shows the newest one for the seat's current address. The
  * app's sends are capped per organization, because any org admin can trigger
  * them and they leave from the shared no-reply inbox. Past the cap, people
  * can still join by creating an account with the invited address. */

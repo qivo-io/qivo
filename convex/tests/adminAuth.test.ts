@@ -11,7 +11,7 @@
  * Env: better-auth's context wants a secret at first api call, and auth.ts
  * reads SITE_URL/CONVEX_SITE_URL — planted before any action runs. */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
@@ -240,6 +240,33 @@ describe('insertBreakGlass — the one-transaction write', () => {
     // the refused attempts audited nothing
     const rows = await auditRows(t)
     expect(rows.map((r) => r.action)).toEqual(['create_break_glass', 'create_break_glass'])
+  })
+
+  /* createBreakGlass refuses demo mode, and the dashboard and deploy keys
+   * can run this mutation without it. */
+  it('refuses a demo deployment and writes nothing', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const profiles = () => t.run((ctx) => ctx.db.query('profiles').collect())
+    const before = await profiles()
+    vi.stubEnv('APP_MODE', 'demo')
+    try {
+      await expectRefusal(
+        t.mutation(internal.adminAuth.insertBreakGlass, {
+          org_id: f.org.id,
+          email: 'rescue@test.local',
+          name: 'Recovery Admin',
+          auth_user_id: 'ba-rescue',
+          actor,
+        }),
+        'forbidden',
+        /requires a regular workspace/,
+      )
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(await profiles()).toEqual(before)
+    expect(await auditRows(t)).toEqual([])
   })
 })
 

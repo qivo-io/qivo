@@ -588,7 +588,7 @@ describe('resendInvite and orgDetail', () => {
       people: [BRIGHTWATER[0]],
     })
     const [elin] = await seatsOf(t, out.org_id)
-    let detail = await op.query(api.admin.orgDetail, { org_id: out.org_id })
+    let detail = await op.action(api.adminPeople.orgDetail, { org_id: out.org_id })
     expect(detail.members[0]).toMatchObject({
       kind: 'person',
       active: true,
@@ -601,7 +601,7 @@ describe('resendInvite and orgDetail', () => {
       sent: true,
     })
     expect(letters()).toHaveLength(1)
-    detail = await op.query(api.admin.orgDetail, { org_id: out.org_id })
+    detail = await op.action(api.adminPeople.orgDetail, { org_id: out.org_id })
     expect(detail.members[0].invite).toMatchObject({ sent: true })
     expect((await auditFor(t, 'invite_email')).map((r) => r.detail.resend)).toEqual([false, true])
   })
@@ -615,7 +615,7 @@ describe('resendInvite and orgDetail', () => {
     })
     const [elin] = await seatsOf(t, out.org_id)
     await t.run((ctx) => ctx.db.patch(elin._id, { email: 'elin.strand@brightwater.studio' }))
-    const detail = await op.query(api.admin.orgDetail, { org_id: out.org_id })
+    const detail = await op.action(api.adminPeople.orgDetail, { org_id: out.org_id })
     expect(detail.members[0]).toMatchObject({
       email: 'elin.strand@brightwater.studio',
       invite: null,
@@ -637,7 +637,7 @@ describe('resendInvite and orgDetail', () => {
       'not_found',
       /invitation not found/,
     )
-    const detail = await op.query(api.admin.orgDetail, { org_id: f.org.id })
+    const detail = await op.action(api.adminPeople.orgDetail, { org_id: f.org.id })
     const agent = detail.members.find((m) => m.profile_id === f.agent.id)
     expect(agent).toMatchObject({ kind: 'agent', invite: null })
     expect(detail.members.find((m) => m.profile_id === f.user.id)?.invite).toBeNull()
@@ -857,7 +857,7 @@ describe('editInvite', () => {
       { name: 'Elin Strand-Berg', email: 'elin@brightwater.studio' },
       { name: 'Elin Strand-Berg', email: 'elin.strand@brightwater.studio' },
     ])
-    const detail = await op.query(api.admin.orgDetail, { org_id: out.org_id })
+    const detail = await op.action(api.adminPeople.orgDetail, { org_id: out.org_id })
     expect(detail.members.find((m) => m.profile_id === elin.id)?.invite).toMatchObject({
       sent: true,
     })
@@ -982,7 +982,7 @@ describe('signing in after an operator invitation', () => {
       ['Tomas Lind', 'user', 'tomas-login'],
       ['Aisha Karim', 'viewer', undefined],
     ])
-    const detail = await op.query(api.admin.orgDetail, { org_id: out.org_id })
+    const detail = await op.action(api.adminPeople.orgDetail, { org_id: out.org_id })
     expect(detail.members.find((m) => m.name === 'Tomas Lind')).toMatchObject({
       has_login: true,
       invite: null,

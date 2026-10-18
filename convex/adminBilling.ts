@@ -3,6 +3,7 @@ import { internalMutation } from './_generated/server'
 import { subscriptionFor } from './lib/billingAccess'
 import { billingPlanFields } from './lib/billingTypes'
 import { byId } from './lib/db'
+import { refuseDemoFeature } from './lib/demo'
 import { notFound, platformMutation, platformQuery, require, rule } from './lib/functions'
 import { audit } from './model/admin'
 import {
@@ -31,9 +32,12 @@ export const orgBilling = platformQuery({
 })
 
 // Called only after the platform action validates the provider's actual terms.
+// Billing is refused on a demo deployment, and so are both plan writers,
+// because the dashboard and deploy keys can run them without the action.
 export const insertPlan = internalMutation({
   args: { plan: v.object(billingPlanFields), actor: v.string(), email: v.string() },
   handler: async (ctx, { plan, actor, email }) => {
+    refuseDemoFeature()
     validatePlan(plan)
     const id = newUuid()
     await ctx.db.insert('billing_plans', {
@@ -63,6 +67,7 @@ export const connectPlan = internalMutation({
     email: v.string(),
   },
   handler: async (ctx, { plan_id, actor, email, ...ids }) => {
+    refuseDemoFeature()
     const plan = await byId(ctx, 'billing_plans', plan_id)
     require(plan && !plan.archived, notFound('plan not found'))
     require(!plan.polar_product_id, rule(
