@@ -3058,11 +3058,15 @@ async function commentCapChecks() {
   let retried = 0
   const bodyOf = (n) => `${run.tag} cap ${n}`
   /** The id of comment `n` if the task already holds it. A gateway error
-   *  can come after the post was stored, and the newest 50 always hold it,
-   *  because two workers post far fewer than 50 in the two seconds before
-   *  this read. */
-  const stored = async (n) =>
-    (await readOk(w, `/tasks/${task.key}/comments`)).find((c) => c.body === bodyOf(n))?.id
+   *  can come after the post was stored, and the read can wait for a rate
+   *  window while the other worker posts more, so it pages back through the
+   *  whole thread rather than trusting the newest 50. */
+  const stored = (n) =>
+    findComment(
+      (before) =>
+        readOk(w, `/tasks/${task.key}/comments?limit=50${before ? `&before=${before}` : ''}`),
+      bodyOf(n),
+    )
   // One post, over REST for Nora and over MCP for the agent. An internal
   // error (500, which stores nothing), a gateway error (502 to 504) or a
   // network failure is tried once more, after a check that the first try
@@ -3249,6 +3253,29 @@ async function commentCapFullChecks(task, posted) {
   })
 }
 
+/** The id of the comment with `body`, paging back 50 at a time from the
+ *  newest with `readPage(before)` until it is found or the thread ends. */
+export async function findComment(readPage, body) {
+  let before
+  for (let pages = 0; pages <= COMMENT_MAX / 50; pages++) {
+    const page = await readPage(before)
+    const hit = page.find((c) => c.body === body)
+    if (hit) return hit.id
+    if (page.length < 50) return undefined
+    before = page[0].id
+  }
+  return undefined
+}
+
+/** The ids of `comments` in the order the task window shows them: by time,
+ *  then by id for comments posted in the same millisecond, where REST keeps
+ *  the order they were stored in (src/lib/spine.ts mergeSpine). */
+export const windowOrder = (comments) =>
+  comments
+    .map((c) => ({ ts: Date.parse(c.created_at), id: c.id }))
+    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+    .map((c) => c.id)
+
 /** The task window opens the full task at its newest 50 comments, and
  *  "Show earlier comments" loads the rest 50 at a time, oldest first, until
  *  it goes once the first comment is in (#140). `thread` holds the task's
@@ -3264,8 +3291,7 @@ async function earlierCommentsCheck(task, thread) {
       app
         .locator('[data-comment]')
         .evaluateAll((els) => els.map((el) => el.getAttribute('data-comment')))
-    const ids = thread.map((c) => c.id)
-    same(await shown(), ids.slice(-50), 'the comments the task opens with')
+    same(await shown(), windowOrder(thread.slice(-50)), 'the comments the task opens with')
     let clicks = 0
     while ((await shown()).length < COMMENT_MAX) {
       expect(clicks < COMMENT_MAX / 50, 'Show earlier comments did not reach the first comment')
@@ -3278,7 +3304,7 @@ async function earlierCommentsCheck(task, thread) {
       )
       same(
         await shown(),
-        ids.slice(-Math.min(before + 50, COMMENT_MAX)),
+        windowOrder(thread.slice(-Math.min(before + 50, COMMENT_MAX))),
         `the thread after click ${clicks}`,
       )
     }

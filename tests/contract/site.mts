@@ -8,9 +8,10 @@ const SITE_LINE = /^VITE_CONVEX_SITE_URL=(\S+)\s*$/m
 
 /**
  * The convex.site origin of the development deployment CONVEX_DEPLOY_KEY names.
- * Prefers an exported VITE_CONVEX_SITE_URL and falls back to the one in
- * .env.local. Throws when the key is missing or not a development key,
- * or when the site belongs to another deployment. Messages never repeat the key.
+ * Takes CONTRACT_BASE_URL when it is set, else an exported
+ * VITE_CONVEX_SITE_URL, else the one in .env.local, and checks whichever it
+ * takes. Throws when the key is missing or not a development key, or when the
+ * site belongs to another deployment. Messages never repeat the key.
  */
 export function contractSiteUrl(
   env: Record<string, string | undefined>,
@@ -21,7 +22,7 @@ export function contractSiteUrl(
     throw new Error(
       'contract setup: run the pass under the private with-dev helper, which sets a development CONVEX_DEPLOY_KEY',
     )
-  const raw = env.VITE_CONVEX_SITE_URL || envLocal?.match(SITE_LINE)?.[1]
+  const raw = env.CONTRACT_BASE_URL || env.VITE_CONVEX_SITE_URL || envLocal?.match(SITE_LINE)?.[1]
   if (!raw)
     throw new Error('contract setup: VITE_CONVEX_SITE_URL is neither exported nor in .env.local')
   const site = URL.canParse(raw) ? new URL(raw) : undefined

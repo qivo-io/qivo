@@ -12,6 +12,19 @@ describe('contract pass site', () => {
       SITE,
     )
     expect(contractSiteUrl({ CONVEX_DEPLOY_KEY: KEY }, envLocal(`${SITE}/`))).toBe(SITE)
+    expect(
+      contractSiteUrl({ CONVEX_DEPLOY_KEY: KEY, CONTRACT_BASE_URL: SITE }, envLocal('x')),
+    ).toBe(SITE)
+  })
+
+  it('checks a CONTRACT_BASE_URL override like any other site', () => {
+    const env = { CONVEX_DEPLOY_KEY: KEY, VITE_CONVEX_SITE_URL: SITE }
+    expect(() =>
+      contractSiteUrl(
+        { ...env, CONTRACT_BASE_URL: 'https://admired-wildcat-470.convex.site' },
+        undefined,
+      ),
+    ).toThrow(/not the convex.site of fine-goose-986/)
   })
 
   it('refuses a missing or non-development key without repeating it', () => {

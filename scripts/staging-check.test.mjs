@@ -1,6 +1,15 @@
 import { createServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import { addDays, parseArgs, redact, request, resolveConfig, weekOf } from './staging-check.mjs'
+import {
+  addDays,
+  findComment,
+  parseArgs,
+  redact,
+  request,
+  resolveConfig,
+  weekOf,
+  windowOrder,
+} from './staging-check.mjs'
 
 describe('staging check arguments', () => {
   it('takes the target, the comment cap and the cleanup options', () => {
@@ -180,5 +189,29 @@ describe('staging check requests', () => {
       first.server.close()
       other.server.close()
     }
+  })
+})
+
+describe('comment cap helpers', () => {
+  // 400 comments, oldest first, paged newest first like REST
+  const thread = Array.from({ length: 400 }, (_, i) => ({ id: `c${1000 + i}`, body: `cap ${i}` }))
+  const readPage = async (before) => {
+    const end = before ? thread.findIndex((c) => c.id === before) : thread.length
+    return thread.slice(Math.max(0, end - 50), end)
+  }
+  it('finds a stored comment beyond the newest 50', async () => {
+    expect(await findComment(readPage, 'cap 10')).toBe('c1010')
+    expect(await findComment(readPage, 'cap 399')).toBe('c1399')
+    expect(await findComment(readPage, 'cap 400')).toBeUndefined()
+  })
+  it('orders comments of the same millisecond by id, as the task window does', () => {
+    const at = '2026-10-18T10:00:00.123Z'
+    const stored = [
+      { id: 'b', created_at: '2026-10-18T09:59:59.000Z' },
+      { id: 'z', created_at: at },
+      { id: 'a', created_at: at },
+      { id: 'c', created_at: '2026-10-18T10:00:01.000Z' },
+    ]
+    expect(windowOrder(stored)).toEqual(['b', 'a', 'z', 'c'])
   })
 })

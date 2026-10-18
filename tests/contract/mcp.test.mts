@@ -6,8 +6,9 @@
  * content-type, allow, www-authenticate and the CORS surface.
  *
  * STATE HYGIENE (read before running):
- *   - The target is the SHARED cloud dev deployment from .env.local
- *     (override with CONTRACT_BASE_URL). globalSetup RESETS the Northstar Labs
+ *   - The target is the SHARED cloud dev deployment the key names, at the
+ *     site global.setup.mts checked (CONTRACT_BASE_URL may name it, and must
+ *     be that deployment's convex.site). globalSetup RESETS the Northstar Labs
  *     development copy, so a run loses manual work there by design — never overlap
  *     with `npm run dev` work or a smoke run.
  *   - This suite creates only rows it deletes (the modern-leg write trip,
@@ -37,7 +38,8 @@ type Stash = {
 const stash: Stash = JSON.parse(
   readFileSync(new URL('./.credentials.json', import.meta.url), 'utf8'),
 )
-const BASE = process.env.CONTRACT_BASE_URL ?? stash.siteUrl
+// global.setup.mts checked this site against the deploy key
+const BASE = stash.siteUrl
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex')
