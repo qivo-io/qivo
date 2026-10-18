@@ -224,6 +224,18 @@ describe('staging check requests', () => {
       other.server.close()
     }
   })
+
+  it('gives up on a request that gets no answer', async () => {
+    const stalled = await serve(() => {})
+    try {
+      await expect(request(`${stalled.origin}/me`, {}, 200)).rejects.toThrow(
+        'network error: no answer in 0.2 s',
+      )
+    } finally {
+      stalled.server.closeAllConnections()
+      stalled.server.close()
+    }
+  })
 })
 
 describe('comment cap helpers', () => {

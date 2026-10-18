@@ -391,13 +391,17 @@ const READ_TOOLS = new Set([
 /** A request that never follows a redirect. Request bodies carry OAuth codes,
  *  verifiers and refresh tokens, and Node's fetch drops the Authorization
  *  header on a cross-origin redirect but still sends the body, so every
- *  request refuses a redirect instead. The error names no URL. */
-export async function request(url, init = {}) {
+ *  request refuses a redirect instead. It ends after `timeoutMs`, reading
+ *  the body included, so a stalled request cannot hold up a stop or the
+ *  cleanup. The error names no URL. */
+export async function request(url, init = {}, timeoutMs = 120_000) {
   try {
-    return await fetch(url, { ...init, redirect: 'error' })
+    return await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) })
   } catch (error) {
     if (/redirect/i.test(String(error?.cause?.message ?? error?.message)))
       fail('a request was answered with a redirect, which this check never follows')
+    if (error?.name === 'TimeoutError')
+      throw new Error(`network error: no answer in ${timeoutMs / 1000} s`, { cause: error })
     const code = error?.cause?.code
     throw new Error(`network error${code ? ` ${code}` : ''}`, { cause: error })
   }
@@ -3868,10 +3872,16 @@ async function pauseBilling() {
   expect(await until(paused, 30_000), 'the organization did not become read-only')
 }
 
-/** Lifts a pause this run made, and waits until writes are allowed. */
+/** Lifts a pause this run made, and waits until writes are allowed. Like
+ *  liftLeftPause, it leaves BILLING_ENABLED alone when someone changed it
+ *  from the 'true' the run set. */
 async function liftBillingPause() {
   if (!run.billingPaused) return
-  await setLocalEnv({ BILLING_ENABLED: run.billingBefore ?? null, [PAUSE_MARK]: null })
+  const restore =
+    (await localEnv('BILLING_ENABLED')) === 'true'
+      ? { BILLING_ENABLED: run.billingBefore ?? null }
+      : {}
+  await setLocalEnv({ ...restore, [PAUSE_MARK]: null })
   expect(await until(async () => !(await paused()), 30_000), 'the organization stayed read-only')
   run.billingPaused = false
 }
