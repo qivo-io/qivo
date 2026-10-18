@@ -35,6 +35,7 @@ import { Icon } from './components/qivo'
 import { authClient, signOut as authSignOut, handleOAuthReturn } from './lib/auth'
 import { convex } from './lib/convex'
 import { lazyFromModule } from './lib/lazyModule'
+import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
@@ -279,7 +280,7 @@ export function AuthGate() {
       if (attempt !== loadAttempt.current) return
       if (workspaceResult.status === 'rejected') {
         reloadAfterCodeFailure.current = true
-        throw new Error('Check your connection, then try again.')
+        throw workspaceResult.reason
       }
       if (storeResult.status === 'rejected') throw storeResult.reason
       const ok = storeResult.value
@@ -305,15 +306,16 @@ export function AuthGate() {
       setPhase(connection || ok ? 'ready' : unverified ? 'unverified' : 'noProfile')
     } catch (e) {
       if (attempt !== loadAttempt.current) return
+      // The raw text, request id included, is for support, not for the card.
+      // A failed code download asks for a connection check instead.
+      console.error('[qivo] workspace load failed:', e)
       setAppearanceAccount(null)
-      const data = e instanceof ConvexError ? e.data : null
-      const msg =
-        data && typeof data === 'object' && 'message' in data && data.message
-          ? String(data.message)
-          : e instanceof Error && e.message
-            ? e.message
-            : String(e)
-      showError(msg, 'form')
+      showError(
+        reloadAfterCodeFailure.current
+          ? 'Check your connection, then try again.'
+          : loadFailureText(e),
+        'form',
+      )
       setPhase('loadFailed')
     }
   }
