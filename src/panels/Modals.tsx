@@ -928,7 +928,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
       : deleting
         ? `Keep as Viewer${people.length === 1 ? '' : 's'} and delete`
         : 'Change to Viewer'
-  // the organization turned read-only for its admin: the removal can only
+  // once the organization is read-only for its admin, the removal can only
   // leave the tasks, so it goes ahead without the window (P.startRemoval)
   const handOver = () => {
     if (!P.removalLeavesTasks(change)) return false

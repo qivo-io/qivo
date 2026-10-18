@@ -2215,14 +2215,14 @@ const removalOrg = (change: AccessRemoval) =>
   'projectId' in change
     ? rows.projects.get(change.projectId)?.org_id
     : rows.teams.get(change.teamId)?.org_id
-/* Whether an organization refuses writes, from billing.status (`writable`
-   is lib/billingAccess.ts orgWriteBlock: a billing pause or a pending
-   deletion), for each organization whose settings page can start a removal
-   (P.watchWriteBlock), with how many pages watch it. The snapshot leaves it
-   out, because forMe would then read the billing row that the billing sync
-   rewrites every minute and rerun for every member. `refused` records a
-   read-only refusal the status has not caught up with (see removeAtOnce)
-   until the status answers again. */
+/* Whether an organization refuses writes because of a billing pause or a
+   pending deletion, from billing.status (`writable` matches
+   lib/billingAccess.ts orgWriteBlock), for each organization whose settings
+   page can start a removal (P.watchWriteBlock), with how many pages watch
+   it. The snapshot leaves it out, because forMe would then read the billing
+   row that the billing sync rewrites every minute and rerun for every
+   member. `refused` records a read-only refusal the status has not caught up
+   with (see removeAtOnce) until the status answers again. */
 const writeBlocks = new Map<
   string,
   { readOnly: boolean; refused: boolean; watchers: number; stop: () => void }

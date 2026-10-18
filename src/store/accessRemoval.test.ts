@@ -592,7 +592,7 @@ describe('removing someone who has work in the project', () => {
       ['teams:removeMember', 'keep_as_viewer'],
       ['projects:removeAccess', 'leave'],
     ])
-    // the status answers again: the organization can be edited
+    // the status answers again and says the organization can be edited
     status()
     expect(P.startRemoval(crewGrant('plan'))).toBe(true)
     expect(requests).toHaveLength(3)
