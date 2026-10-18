@@ -416,6 +416,27 @@ function dropDeletedTasks(gone: Set<string>) {
   purgeIssueRows(gone)
 }
 
+/* Forgets what a server snapshot no longer holds: an archive or project
+   delete whose root it lacks, and each task of a task delete that left it,
+   the whole delete once none is left. Runs on every delivery, also one the
+   paint gate holds, so that a delivery that drops the work and then one that
+   restores it, both held behind another write, leave no marker to hide the
+   restored work. */
+function pruneAcceptedRemovals(snap: Snapshot) {
+  const issueIds = new Set(snap.issues.map((issue) => issue.id))
+  for (const rootId of pendingArchiveIssueIds.keys()) {
+    if (!issueIds.has(rootId)) pendingArchiveIssueIds.delete(rootId)
+  }
+  pendingTaskDeletes.forEach((gone, rootId) => {
+    for (const id of gone) if (!issueIds.has(id)) gone.delete(id)
+    if (gone.size === 0) pendingTaskDeletes.delete(rootId)
+  })
+  const projectIds = new Set(snap.projects.map((project) => project.id))
+  for (const id of pendingProjectDeletes) {
+    if (!projectIds.has(id)) pendingProjectDeletes.delete(id)
+  }
+}
+
 /* Applies every accepted archive and delete again after a rollback to a
    server snapshot that predates them. */
 function reapplyAcceptedRemovals() {
@@ -5991,6 +6012,7 @@ function subscribeSnapshot(
     (snap) => {
       if (!stillCurrent() || bootFailed) return
       serverSnap = snap
+      if (snap) pruneAcceptedRemovals(snap)
       if (!settled) {
         settled = true
         first?.resolve(snap)
@@ -6133,17 +6155,7 @@ function adopt(source: Snapshot) {
   // Optimistic edits mutate these rows. Keep the server's snapshot separate
   // so a refused write can restore it even without a newer delivery.
   const snap = structuredClone(source)
-  for (const rootId of pendingArchiveIssueIds.keys()) {
-    if (!snap.issues.some((issue) => issue.id === rootId)) pendingArchiveIssueIds.delete(rootId)
-  }
-  // a delete is done once the server's snapshot holds none of what it removed
-  const snapIssues = new Set(snap.issues.map((issue) => issue.id))
-  pendingTaskDeletes.forEach((gone, rootId) => {
-    if (![...gone].some((id) => snapIssues.has(id))) pendingTaskDeletes.delete(rootId)
-  })
-  for (const id of pendingProjectDeletes) {
-    if (!snap.projects.some((project) => project.id === id)) pendingProjectDeletes.delete(id)
-  }
+  pruneAcceptedRemovals(snap)
   const priorIssueIds = new Set(rows.issues.keys())
   const newlyVisibleIssueIds = new Set(
     snap.issues.filter((issue) => !priorIssueIds.has(issue.id)).map((issue) => issue.id),

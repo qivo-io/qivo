@@ -124,6 +124,61 @@ describe('archiving and deleting from the Archive or delete window', () => {
     await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
   }
 
+  /* Another write is in flight, so deliveries are held. `remove` is accepted
+     while the held snapshot still holds the work; a held delivery then drops
+     it, as `drop` says, and another brings it back, as a restore does, before
+     the write settles and the last delivery is painted. */
+  async function restoredWhileHeld(remove: () => Promise<boolean>, drop: (snap: Snapshot) => void) {
+    let saved: (value: null) => void = () => {}
+    answers['labels:create'] = () => new Promise((resolve) => (saved = resolve))
+    P.addLabel({ name: 'Bench' })
+    expect(await remove()).toBe(true)
+    await deliverSnap(drop)
+    await deliverSnap((snap) => {
+      snap.orgs[0].name = 'Restored Labs'
+    })
+    saved(null)
+    await vi.waitFor(() => expect(P.org.name).toBe('Restored Labs'))
+  }
+
+  it('shows an archived subtree restored while deliveries were held', async () => {
+    accept('issues:archive')
+    const subtree = new Set(['root', 'a', 'b', 'aa'])
+    await restoredWhileHeld(
+      () => P.archiveIssue(handle('root'), ''),
+      (snap) => {
+        snap.issues = snap.issues.filter((issue) => !subtree.has(issue.id))
+      },
+    )
+    expect(['root', 'a', 'b', 'aa'].map((id) => vm(id)?.uuid)).toEqual(['root', 'a', 'b', 'aa'])
+  })
+
+  it('shows a deleted task and its subtask restored while deliveries were held', async () => {
+    accept('issues:deleteDeep')
+    await restoredWhileHeld(
+      () => P.deleteIssue(handle('a'), [handle('aa')], true),
+      (snap) => {
+        snap.issues = snap.issues.filter((issue) => issue.id !== 'a' && issue.id !== 'aa')
+      },
+    )
+    expect(vm('a')).toBeDefined()
+    expect(vm('aa')?.parent).toBe(handle('a'))
+  })
+
+  it('shows a deleted project restored while deliveries were held', async () => {
+    accept('projects:deleteDeep')
+    await restoredWhileHeld(
+      () => P.removeProject('plan'),
+      (snap) => {
+        snap.projects = []
+        snap.issues = []
+      },
+    )
+    expect(P.project('plan')).toBeDefined()
+    expect(P.project('work')).toBeDefined()
+    expect(vm('root')).toBeDefined()
+  })
+
   it('archives the task alone when its subtasks are kept, and keeps them through a rollback', async () => {
     accept('issues:archive')
     const archived = P.archiveIssue(handle('root'), '  Moved to the next release  ', true)
