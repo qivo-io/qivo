@@ -17,7 +17,10 @@
  * subtasks, could see them before and cannot after. The caller chooses what
  * happens to them, and the removal and that choice land in one transaction or
  * not at all (removeAndSettle). Removing a team member (model/teams.ts)
- * settles the member's tasks through the same function. */
+ * settles the member's tasks through the same function. While billing or a
+ * pending deletion makes the organization read-only, an organization admin
+ * can still remove access, in the app and over REST and MCP, but only by
+ * leaving the tasks, because the other choices write more. */
 
 import { ConvexError, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -31,6 +34,7 @@ import {
   projectLevelsForOrg,
   rootMetaOf,
 } from '../lib/access'
+import { assertOrgWritable } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
@@ -449,6 +453,13 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
  * removal and team member removal (model/teams.ts) both run through this, as
  * the app, REST and MCP do.
+ *
+ * An organization admin's removal passes the read-only gate of a billing
+ * pause or a pending deletion (lib/functions.ts accessRemovalMutation,
+ * lib/core.ts asMachineCaller 'access_removal'). Keeping people as Viewers
+ * or reassigning their tasks writes more than a removal, so each caller
+ * refuses any `held` but 'leave' while the organization is read-only before
+ * it reads anything, even for an organization admin.
  */
 export async function removeAndSettle(
   ctx: MutationCtx,
@@ -547,9 +558,12 @@ export async function removeAndSettle(
  * Removes one person's or one team's grant from the project and settles the
  * open tasks that leave their holders' sight by `held` (removeAndSettle).
  * 'keep_as_viewer' gives each of those people a Viewer grant on the project,
- * which a person whose removed grant was already Viewer cannot be given. A
- * refusal anywhere leaves everything as it was. No grant to remove changes
- * nothing.
+ * which a person whose removed grant was already Viewer cannot be given.
+ * Keeping people as Viewers or reassigning their tasks writes more than a
+ * removal, so it needs an organization that allows changes, even for an
+ * organization admin, and the first line refuses it before anything is read,
+ * a grant that does not exist included. A refusal anywhere leaves everything
+ * as it was. No grant to remove changes nothing.
  */
 export async function removeProjectGrantCore(
   ctx: MutationCtx,
@@ -563,6 +577,7 @@ export async function removeProjectGrantCore(
   },
 ): Promise<AccessRemoval> {
   const { me, project, subject } = a
+  if (a.held !== 'leave') await assertOrgWritable(ctx, me.org_id)
   await assertManagesAccess(ctx, me, project, subject)
   await assertNotLead(ctx, project, subject)
   const row = await grantOf(ctx, project, subject)

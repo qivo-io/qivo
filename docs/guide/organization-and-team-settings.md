@@ -99,8 +99,11 @@ An organization's service ends in one of these ways:
   payments alone only pause editing.
 
 The organization then stays read-only for 30 days. Members can still read
-their work, and admins can export it. Qivo emails the admins unless one of
-them finished an export in the 7 days before. On the deletion date, Qivo
+their work, and admins can export it. Admins can also still take access away,
+as while billing pauses editing
+([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
+Qivo emails the admins unless one of them finished an export in the 7 days
+before. On the deletion date, Qivo
 deletes everything the organization owns, including uploaded files. Each
 person's sign-in and their other organizations remain.
 

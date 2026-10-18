@@ -350,6 +350,15 @@ or delete agent keys and make users Inactive in the app, and people can still
 revoke their own personal tokens and OAuth connections. Each of these also
 stops reads with the affected credentials.
 
+An organization admin's personal token or OAuth connection can also take
+access away while writes are paused, as in the app. `set_project_access`
+with `level: null` removes someone from a project, and `set_team_member`
+with `member: false` removes someone from a team, when `on_held_tasks` is
+`leave`, the default. Keeping them as Viewers or reassigning their tasks
+writes more, so it gets the same refusal as any other writing tool until
+writes are allowed again, and so does the same removal by anyone who is not
+an organization admin.
+
 ## Connecting Claude
 
 For an OAuth-capable remote MCP client, add `https://api.qivo.io/mcp` and start
@@ -905,8 +914,11 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
   rule as the app's **New project** button. A Standard user agent counts as
   a standard user, and a Viewer agent never may.
 - `billing.read_only` is `true` while organization billing pauses editing,
-  and `reason` is then the sentence every writing tool is refused with. No
-  plan, price or usage is included.
+  and while the organization is read-only before its deletion. `reason` is
+  then the sentence writing tools are refused with, which names the deletion
+  date in the second case. An organization admin can still remove access
+  ([Request limits and billing](#request-limits-and-billing)). No plan, price
+  or usage is included.
 - `credential.kind` is `personal_token`, `oauth` or `agent_key`. `access` is
   `write` when the credential may make changes and `read` when it can only
   read, from the same rule that refuses writing tools (see

@@ -29,7 +29,6 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { assertOrgWritable } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { accessRemovalMutation, adminMutation, notFound, orgMutation, rule } from './lib/functions'
 import { deleteTeamDeep } from './model/cascade'
@@ -132,19 +131,18 @@ export const addMember = orgMutation({
  * Leaving the tasks only takes access away (the projects shared with the
  * team), so an organization admin can still do it while billing has made the
  * organization read-only (accessRemovalMutation). Keeping the member as a
- * Viewer or reassigning their tasks writes more than that, so it meets the
- * billing gate like any other change, and so does a team leader who is not
- * an admin. Adding members stays behind the gate. */
+ * Viewer or reassigning their tasks writes more than that, so the core meets
+ * the billing gate for it (model/teams.ts removeTeamMemberCore), and the
+ * wrapper does for a team leader who is not an admin. Adding members stays
+ * behind the gate. */
 export const removeMember = accessRemovalMutation({
   args: { team_id: v.string(), profile_id: v.string(), on_held_tasks: v.optional(vHeldTasks) },
   handler: async (ctx, { team_id, profile_id, on_held_tasks }) => {
-    const held = on_held_tasks ?? 'leave'
-    if (held !== 'leave') await assertOrgWritable(ctx, ctx.me.org_id)
     await removeTeamMemberCore(ctx, {
       me: ctx.me,
       team: await myTeam(ctx, team_id),
       profileId: profile_id,
-      held,
+      held: on_held_tasks ?? 'leave',
       now: new Date().toISOString(),
     })
     return null

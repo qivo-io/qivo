@@ -167,9 +167,12 @@ usable. When enabled, editing requires a paid subscription or complimentary
 access. Paused editing leaves existing readable work and personal settings
 available. Admins can still take access away while editing is paused. They
 can revoke any credential on [API access](#api-access), revoke or delete agent
-keys, make users **Inactive**, remove users and remove users from teams. A team removal that asks about open tasks waits,
-because both of its choices also save Viewer grants or reassigned tasks.
-Reactivating users and every other change wait until billing is active again.
+keys, make users **Inactive**, remove users, remove users from teams and
+remove a person's or team's access to a project. The last two also work
+through the REST API and MCP with an admin's own token or connection. A
+removal that asks about open tasks waits, because both of its choices also
+save Viewer grants or reassigned tasks. Reactivating users and every other
+change wait until billing is active again.
 
 Each organization keeps its assigned plan version. New plans do not change
 existing prices or allowances. The published plan costs $1 per active billable

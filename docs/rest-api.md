@@ -222,6 +222,15 @@ period. While writes are paused, an organization admin can still revoke any
 credential on **API access**, revoke or delete an agent's keys or make the
 agent Inactive in the app, which also stops its reads.
 
+An organization admin's personal access token can also take access away
+while writes are paused, as in the app. It can remove someone from a project
+(`DELETE /v1/projects/{ref}/access/users/{user}` or
+`…/access/teams/{team}`) or from a team
+(`DELETE /v1/teams/{id}/members/{user}`) when `on_held_tasks` is `leave`, the
+default. Keeping them as Viewers or reassigning their tasks writes more, so
+it gets the `403` refusal of any other write until writes are allowed again,
+and so does the same removal by anyone who is not an organization admin.
+
 ## Endpoints
 
 ### Me
@@ -276,9 +285,11 @@ be refused.
   a standard user, and a Viewer agent never may.
 - `billing.read_only` is `true` while organization billing pauses editing,
   and while the organization is read-only before its deletion. `reason` is
-  then the sentence every write is refused with, which names the deletion
-  date in the second case, otherwise `null`. No plan, price or usage is
-  included. Once deletion begins, every request is refused with `403`.
+  then the sentence writes are refused with, which names the deletion date
+  in the second case, otherwise `null`. An organization admin can still
+  remove access ([Request limits and billing](#request-limits-and-billing)).
+  No plan, price or usage is included. Once deletion begins, every request
+  is refused with `403`.
 - `credential.access` is `write` when this credential may make changes and
   `read` when it can only read, such as a Viewer agent's key. It is the same
   rule that refuses writes (see Authentication). A write still needs Edit

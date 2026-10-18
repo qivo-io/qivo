@@ -155,7 +155,9 @@ export const mcpSetTeam = internalMutation({
   },
 })
 
-/* set_team_member: add or remove one member, and make or unmake a leader. */
+/* set_team_member: add or remove one member, and make or unmake a leader. A
+ * removal is an access removal for the read-only gate (asMachineCaller), as
+ * in the app. */
 export const mcpSetTeamMember = internalMutation({
   args: {
     callerId: v.string(),
@@ -167,7 +169,8 @@ export const mcpSetTeamMember = internalMutation({
     on_held_tasks: v.optional(vHeldTasks),
   },
   handler: async (ctx, a): Promise<string> => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const write = a.member ? 'change' : 'access_removal'
+    const me = await asMachineCaller(ctx, a.callerId, a.access, write)
     if (!a.member && a.leader !== undefined) {
       throw badRequest('leader applies only when member is true')
     }
@@ -304,7 +307,8 @@ export const restPutMember = internalMutation({
 
 /* DELETE /v1/teams/{ref}/members/{user}, with an optional body
  * {on_held_tasks}. Any other body field is refused (refuseUnknownFields),
- * so a misspelled choice never falls back to `leave`. */
+ * so a misspelled choice never falls back to `leave`. An access removal for
+ * the read-only gate (asMachineCaller), as in the app. */
 export const restDeleteMember = internalMutation({
   args: {
     callerId: v.string(),
@@ -315,7 +319,7 @@ export const restDeleteMember = internalMutation({
     body: v.string(),
   },
   handler: async (ctx, a) => {
-    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const me = await asMachineCaller(ctx, a.callerId, a.access, 'access_removal')
     const b = optionalJson(a.body)
     refuseUnknownFields(b, ['on_held_tasks'])
     const held = parseHeldTasks(b.on_held_tasks)

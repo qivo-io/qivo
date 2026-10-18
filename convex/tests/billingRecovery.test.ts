@@ -1,7 +1,7 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
-import { subscriptionFor } from '../lib/billingAccess'
+import { BILLING_READ_ONLY, subscriptionFor } from '../lib/billingAccess'
 import { billingSummary, enrollOrganization } from '../model/billing'
 import { deleteOrgDeep, removeProfile } from '../model/cascade'
 import { as, expectRefusal, newT, plantIssue, uuid, withOrg } from './helpers.setup'
@@ -599,6 +599,17 @@ describe('admin actions that take access away during read-only access', () => {
       'forbidden',
       /read-only/,
     )
+    // and so does keeping as a Viewer when there is no membership left to remove
+    await expectRefusal(
+      as(t, f.admin).mutation(api.teams.removeMember, {
+        org_id,
+        team_id,
+        profile_id: f.viewer.id,
+        on_held_tasks: 'keep_as_viewer',
+      }),
+      'forbidden',
+      /read-only/,
+    )
     const members = await t.run(async (ctx) =>
       (
         await ctx.db
@@ -609,4 +620,194 @@ describe('admin actions that take access away during read-only access', () => {
     )
     expect(members.sort()).toEqual([f.user.id, f.admin.id, f.agent.id].sort())
   })
+
+  it('lets an admin remove project access by leaving the tasks but refuses a lead who is not an admin', async () => {
+    const { t, f } = await fixture()
+    const org_id = f.org.id
+    const remove = (
+      who: typeof f.admin,
+      on_held_tasks: 'leave' | 'keep_as_viewer' | { reassign_to: null },
+    ) =>
+      as(t, who).mutation(api.projects.removeAccess, {
+        org_id,
+        id: f.meta.id,
+        user_id: f.viewer.id,
+        on_held_tasks,
+      })
+    // keeping the person as a Viewer or reassigning their tasks writes more
+    // than a removal, so it stays behind the gate, even for an admin
+    for (const held of ['keep_as_viewer', { reassign_to: null }] as const) {
+      await expectRefusal(remove(f.admin, held), 'forbidden', /read-only/)
+    }
+    // the user leads TBED but is not an admin
+    await expectRefusal(remove(f.user, 'leave'), 'forbidden', /read-only/)
+    expect(await tbedGrant(t, f, f.viewer.id)).toMatchObject({ level: 'user' })
+    expect(await remove(f.admin, 'leave')).toEqual({ removed: true, stranded: 0 })
+    expect(await tbedGrant(t, f, f.viewer.id)).toBeNull()
+    // the gate comes first, so a grant that is gone gets the same answer
+    await expectRefusal(remove(f.admin, 'keep_as_viewer'), 'forbidden', /read-only/)
+  })
+
+  it('lets an admin remove project access and team members over REST and MCP by leaving the tasks', async () => {
+    const { t, f } = await fixture()
+    const admin = { callerId: f.admin.id, access: 'write' as const }
+    const lead = { callerId: f.user.id, access: 'write' as const }
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: f.viewer.id,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: f.viewer.id,
+        is_leader: false,
+      })
+    })
+    const restRemove = (caller: typeof admin, body: string) =>
+      t.mutation(internal.machine.projects.restRemoveUserAccess, {
+        ...caller,
+        keyName: null,
+        ref: 'TBED',
+        subject: f.viewer.id,
+        body,
+      })
+    const mcpAccess = (args: { level: 'viewer' | null; on_held_tasks?: 'keep_as_viewer' }) =>
+      t.mutation(internal.machine.projects.mcpSetProjectAccess, {
+        ...admin,
+        project: 'TBED',
+        user_id: f.guest.id,
+        ...args,
+      })
+    const restLeave = (caller: typeof admin, body: string) =>
+      t.mutation(internal.machine.teams.restDeleteMember, {
+        ...caller,
+        keyName: null,
+        ref: f.team.id,
+        user: f.viewer.id,
+        body,
+      })
+    const mcpMember = (
+      caller: typeof admin,
+      args: { user_id: string; member: boolean; on_held_tasks?: 'keep_as_viewer' },
+    ) =>
+      t.mutation(internal.machine.teams.mcpSetTeamMember, {
+        ...caller,
+        team_id: f.team.id,
+        ...args,
+      })
+
+    // Giving or changing access, keeping people as Viewers, reassigning
+    // their tasks and a lead or team leader who is not an admin all meet
+    // the gate.
+    const refused = [
+      () => restRemove(admin, '{"on_held_tasks":"keep_as_viewer"}'),
+      () => restRemove(admin, '{"on_held_tasks":{"reassign_to":null}}'),
+      () => restRemove(lead, ''),
+      () => mcpAccess({ level: null, on_held_tasks: 'keep_as_viewer' }),
+      () => mcpAccess({ level: 'viewer' }),
+      () => restLeave(admin, '{"on_held_tasks":"keep_as_viewer"}'),
+      () => restLeave(lead, '{"on_held_tasks":"leave"}'),
+      () =>
+        mcpMember(admin, { user_id: f.viewer.id, member: false, on_held_tasks: 'keep_as_viewer' }),
+      () => mcpMember(admin, { user_id: f.guest.id, member: true }),
+      () => mcpMember(lead, { user_id: f.viewer.id, member: false }),
+    ]
+    for (const call of refused) {
+      const e = await expectRefusal(call(), 'forbidden')
+      expect(e.data).toMatchObject({ reason: 'billing_required', message: BILLING_READ_ONLY })
+    }
+    expect(await tbedGrant(t, f, f.viewer.id)).toMatchObject({ level: 'user' })
+    expect(await tbedGrant(t, f, f.guest.id)).toMatchObject({ level: 'user' })
+    expect(await teamMemberIds(t, f)).toEqual([f.user.id, f.admin.id, f.viewer.id].sort())
+
+    // The removal leaves the viewer's FW task out of their sight and says so.
+    expect(await restRemove(admin, '')).toMatchObject({
+      removed: true,
+      stranded: [{ id: task.id, user_id: f.viewer.id, role: 'assignee' }],
+      kept_as_viewer: [],
+      reassigned: [],
+    })
+    expect(JSON.parse(await mcpAccess({ level: null }))).toMatchObject({
+      level: null,
+      changed: true,
+    })
+    expect(await restLeave(admin, '{"on_held_tasks":"leave"}')).toMatchObject({ removed: true })
+    expect(JSON.parse(await mcpMember(admin, { user_id: f.user.id, member: false }))).toMatchObject(
+      { member: false, changed: true },
+    )
+    expect(await tbedGrant(t, f, f.viewer.id)).toBeNull()
+    expect(await tbedGrant(t, f, f.guest.id)).toBeNull()
+    expect(await teamMemberIds(t, f)).toEqual([f.admin.id])
+
+    // The gate comes first, so a grant or membership that is gone gets the
+    // same refusal instead of an answer that nothing changed.
+    for (const call of [
+      () => restRemove(admin, '{"on_held_tasks":"keep_as_viewer"}'),
+      () => mcpAccess({ level: null, on_held_tasks: 'keep_as_viewer' }),
+      () => restLeave(admin, '{"on_held_tasks":"keep_as_viewer"}'),
+      () =>
+        mcpMember(admin, { user_id: f.viewer.id, member: false, on_held_tasks: 'keep_as_viewer' }),
+    ]) {
+      const e = await expectRefusal(call(), 'forbidden')
+      expect(e.data).toMatchObject({ reason: 'billing_required', message: BILLING_READ_ONLY })
+    }
+  })
+
+  it('lets an admin remove access over REST while the organization waits for deletion', async () => {
+    const { t, f } = await fixture()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: UNTIL,
+        created_at: NOW,
+      })
+    })
+    const remove = (callerId: string, body: string) =>
+      t.mutation(internal.machine.projects.restRemoveUserAccess, {
+        callerId,
+        access: 'write',
+        keyName: null,
+        ref: 'TBED',
+        subject: f.viewer.id,
+        body,
+      })
+    for (const [callerId, body] of [
+      [f.user.id, ''],
+      [f.admin.id, '{"on_held_tasks":"keep_as_viewer"}'],
+    ]) {
+      const e = await expectRefusal(remove(callerId, body), 'forbidden', /deleted on 2026-09-25/)
+      expect(e.data).toMatchObject({ reason: 'deletion_scheduled' })
+    }
+    expect(await remove(f.admin.id, '')).toMatchObject({ removed: true, stranded: [] })
+    expect(await tbedGrant(t, f, f.viewer.id)).toBeNull()
+  })
 })
+
+/* The person's direct grant on the fixture's TBED, or null. */
+const tbedGrant = (t: Recovery['t'], f: Recovery['f'], profileId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('project_access')
+      .withIndex('by_project_profile', (q) =>
+        q.eq('project_id', f.meta.id).eq('profile_id', profileId),
+      )
+      .unique(),
+  )
+
+/* The fixture team's member ids, sorted. */
+const teamMemberIds = (t: Recovery['t'], f: Recovery['f']) =>
+  t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('team_members')
+        .withIndex('by_team', (q) => q.eq('team_id', f.team.id))
+        .collect()
+    )
+      .map((m) => m.profile_id)
+      .sort(),
+  )
+
+type Recovery = Awaited<ReturnType<typeof fixture>>

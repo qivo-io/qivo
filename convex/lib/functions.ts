@@ -174,16 +174,19 @@ export const adminMutation = withDemoPayloadLimit(
 )
 
 /* orgMutation for the admin actions that only take access away. These are
- * revoking or deleting an agent key, deactivating a seat, removing a seat and
- * removing someone from a team. An organization admin passes the read-only
- * gate here, so they can still shut out a leaked key or a departed person
- * while billing or a pending deletion has made the organization read-only.
- * Everyone else meets the gate
- * exactly as in orgMutation. Handlers keep their own admin rule and
- * sentences. Never build a write that only adds seats, access or data on
- * this wrapper. A handler that can also add them must call
- * assertOrgWritable itself before those branches, as teams.removeMember
- * does when it keeps the member as a Viewer or reassigns their tasks. */
+ * revoking any credential on API access, revoking or deleting an agent key,
+ * deactivating a seat, removing a seat, removing someone from a team and
+ * removing a person's or team's project access. An organization admin
+ * passes the read-only gate here, so they can still shut out a leaked key or
+ * a departed person while billing or a pending deletion has made the
+ * organization read-only. REST and MCP give an admin the same exception for
+ * the last two (lib/core.ts asMachineCaller 'access_removal'). Everyone else
+ * meets the gate exactly as in orgMutation. Handlers keep their own admin
+ * rule and sentences. Never build a write that only adds seats, access or
+ * data on this wrapper. A handler that can also add them must call
+ * assertOrgWritable itself before those branches, as removeTeamMemberCore
+ * and removeProjectGrantCore (model/) do when a removal keeps people as
+ * Viewers or reassigns their tasks. */
 export const accessRemovalMutation = withDemoPayloadLimit(
   customMutation(mutation, {
     args: { org_id: v.string() },

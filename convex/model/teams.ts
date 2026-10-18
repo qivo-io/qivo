@@ -24,6 +24,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON, canChangeAccess, canLeadTeams, isTeamLeader } from '../lib/access'
+import { assertOrgWritable } from '../lib/billingAccess'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
@@ -361,9 +362,12 @@ async function viewerProjectFor(
  * (model/projectAccess.ts removeAndSettle). 'keep_as_viewer' gives them a
  * Viewer grant on each project the team shared that showed those tasks, which
  * needs the right to manage that project's users. `reassign_to` hands the
- * tasks over by the task update rules, which needs Edit access on them. A
- * refusal anywhere leaves everything as it was. A missing membership changes
- * nothing.
+ * tasks over by the task update rules, which needs Edit access on them.
+ * Either of those two writes more than a removal, so it needs an
+ * organization that allows changes, even for an organization admin, and the
+ * first line refuses it before anything is read, a missing membership
+ * included. A refusal anywhere leaves everything as it was. A missing
+ * membership changes nothing.
  */
 export async function removeTeamMemberCore(
   ctx: MutationCtx,
@@ -377,6 +381,7 @@ export async function removeTeamMemberCore(
   },
 ): Promise<AccessRemoval> {
   const { me, team, now } = a
+  if (a.held !== 'leave') await assertOrgWritable(ctx, me.org_id)
   await assertManagesMembers(ctx, me, team)
   const row = await membershipOf(ctx, team.id, a.profileId)
   if (row === null) return { removed: false, stranded: [], kept_as_viewer: [], reassigned: [] }
