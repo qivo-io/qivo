@@ -6,8 +6,8 @@
  *     deployment in fixed hourly windows (oauthRegistrations.ts admit),
  *   - a client that nobody approved is deleted after a few days
  *     (oauthRegistrations.ts sweepClients).
- * The limits apply to /oauth2/register and to /oauth2/create-client, which a
- * signed-in person can call, because both store the same client rows. */
+ * /oauth2/register is the only endpoint Qivo serves that creates or changes a
+ * client. auth.ts disables the provider's client management endpoints. */
 
 import { sha256hex } from '../machine/auth'
 
@@ -34,7 +34,7 @@ export const OAUTH_REGISTRATIONS_TOTAL = 600
 export const OAUTH_CLIENT_METADATA_MAX_BYTES = 8 * 1024
 
 /** How old a client must be before the cleanup deletes it when no consent,
- * token or connection refers to it. */
+ * token, approved connection or pending authorization refers to it. */
 export const OAUTH_UNUSED_CLIENT_TTL_MS = 3 * 24 * 60 * 60_000
 
 /** The deployment's registration counter in machine_rate_limits. */

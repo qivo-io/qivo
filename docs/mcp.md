@@ -422,10 +422,14 @@ returns HTTP `429` with `Retry-After` set to the seconds left in the hour.
 When Qivo cannot check the limits, it refuses the registration with HTTP
 `503` and `Retry-After: 60`. Client metadata may be at most 8 KiB of JSON;
 larger registrations get HTTP `400` with `invalid_client_metadata`. Register
-once and keep the client ID. A client that no consent, token or connection
-refers to is deleted once it is three days old. If nobody approved a client
-in that time, its next authorization request fails with `invalid_client` and
-the client must register again.
+once and keep the client ID. A daily cleanup deletes a client that nobody
+approved on its first run after the client turns three days old, which is
+three to four days after it registered. A client stays while a consent, a
+token, an approved connection or a pending authorization refers to it. After
+the cleanup deletes a client, its next authorization request fails with
+`invalid_client` and the client must register again. Qivo serves no other
+client management endpoints, so a client cannot be changed after it
+registered.
 
 The MCP endpoint advertises its protected-resource metadata in
 `WWW-Authenticate` on HTTP 401, and serves

@@ -5,7 +5,7 @@
 
 import { v } from 'convex/values'
 import { components, internal } from './_generated/api'
-import { internalMutation } from './_generated/server'
+import { internalMutation, type QueryCtx } from './_generated/server'
 import {
   OAUTH_REGISTRATION_SOURCE_PREFIX,
   OAUTH_REGISTRATION_TOTAL_KEY,
@@ -58,37 +58,63 @@ export const admit = internalMutation({
 })
 
 const CLIENTS_PER_LEG = 100
+// Client rows read per leg, in bytes. The leg reads each client again before
+// it deletes it, so even with rows near the 1 MiB document limit it stays well
+// below Convex's 16 MiB read limit.
+const CLIENT_BYTES_PER_LEG = 2 * 1024 * 1024
 const COUNTERS_PER_LEG = 500
 
+/** Whether a Qivo connection keeps the client. A connection someone approved
+ * keeps it, even after it was revoked, and so does an authorization that is
+ * still pending. A pending authorization that expired does not, so opening
+ * the consent page without approving keeps no client. */
+async function clientConnected(ctx: QueryCtx, clientId: string): Promise<boolean> {
+  const approved = await ctx.db
+    .query('oauth_connections')
+    .withIndex('by_client', (q) => q.eq('client_id', clientId).gt('approved_at', ''))
+    .first()
+  if (approved) return true
+  const pending = await ctx.db
+    .query('oauth_connections')
+    .withIndex('by_client', (q) =>
+      q
+        .eq('client_id', clientId)
+        .eq('approved_at', undefined)
+        .gt('authorization_expires_at', new Date().toISOString()),
+    )
+    .first()
+  return pending !== null
+}
+
 /** Deletes OAuth clients older than OAUTH_UNUSED_CLIENT_TTL_MS that no
- * consent, token or Qivo connection refers to, a page per leg, oldest first.
- * The daily cron starts it with no arguments; each leg schedules the next.
- * Connections count even when revoked, so a client someone approved stays.
- * The component query, this check and the delete run in one transaction. */
+ * consent, token, approved connection or pending authorization refers to, a
+ * page per leg, oldest first. The daily cron starts it with no arguments;
+ * each leg schedules the next. The component query, this check and the
+ * delete run in one transaction. */
 export const sweepClients = internalMutation({
-  args: { after: v.optional(v.number()) },
+  args: { cursor: v.optional(v.string()) },
   handler: async (ctx, args): Promise<null> => {
     const before = Date.now() - OAUTH_UNUSED_CLIENT_TTL_MS
-    const page: { clientIds: string[]; last: number | null } = await ctx.runQuery(
+    const page: { clientIds: string[]; cursor: string | null } = await ctx.runQuery(
       components.betterAuth.oauth.unusedClients,
-      { after: args.after ?? 0, before, numItems: CLIENTS_PER_LEG },
+      {
+        cursor: args.cursor ?? null,
+        before,
+        numItems: CLIENTS_PER_LEG,
+        maximumBytesRead: CLIENT_BYTES_PER_LEG,
+      },
     )
     const unused: string[] = []
-    for (const clientId of page.clientIds) {
-      const connection = await ctx.db
-        .query('oauth_connections')
-        .withIndex('by_client', (q) => q.eq('client_id', clientId))
-        .first()
-      if (!connection) unused.push(clientId)
-    }
+    for (const clientId of page.clientIds)
+      if (!(await clientConnected(ctx, clientId))) unused.push(clientId)
     if (unused.length > 0)
       await ctx.runMutation(components.betterAuth.oauth.deleteUnusedClients, {
         clientIds: unused,
         before,
       })
-    if (page.last !== null)
+    if (page.cursor !== null)
       await ctx.scheduler.runAfter(0, internal.oauthRegistrations.sweepClients, {
-        after: page.last,
+        cursor: page.cursor,
       })
     return null
   },

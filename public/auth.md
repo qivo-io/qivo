@@ -53,7 +53,7 @@ endpoints. OAuth client registration creates no Qivo user or project access;
 a signed-in person must approve access. Register once and keep the client ID.
 Registration is limited per source address and per hour, and returns HTTP
 `429` with `Retry-After` past the limit. A client nobody approves within three
-days is deleted and must register again. OAuth access tokens are bound to the
+days is deleted within a day after that and must register again. OAuth access tokens are bound to the
 MCP server, so on REST they reach only webhook management; REST task, project
 and user routes take personal tokens and agent keys.
 The MCP endpoint's initial HTTP 401 challenge advertises

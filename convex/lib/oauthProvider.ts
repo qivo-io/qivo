@@ -232,7 +232,9 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
 async function requestAddress(ctx: GenericCtx<DataModel>): Promise<string | null> {
   if (!('getRequestMetadata' in ctx.meta)) return null
   try {
-    return (await ctx.meta.getRequestMetadata()).ip
+    // The type says string or null; a backend that omits the field must not
+    // turn every registration into a validation failure.
+    return (await ctx.meta.getRequestMetadata()).ip || null
   } catch {
     return null
   }
@@ -240,8 +242,8 @@ async function requestAddress(ctx: GenericCtx<DataModel>): Promise<string | null
 
 /** Refuses a client registration whose metadata is too large or that is over
  * the hourly limits (oauthRegistrations.ts admit), before the provider stores
- * a client. Fails closed: when the limits cannot be read, the registration is
- * refused. */
+ * a client. When the limits cannot be read, it refuses the registration, so
+ * it fails closed. */
 async function admitClientRegistration(ctx: GenericCtx<DataModel>, body: unknown) {
   if (clientMetadataTooLarge(body))
     throw new APIError('BAD_REQUEST', {
@@ -274,6 +276,9 @@ async function admitClientRegistration(ctx: GenericCtx<DataModel>, body: unknown
     )
 }
 
+/** Better Auth hooks for the OAuth provider. They limit client registration,
+ * check authorize and token requests before the provider handles them, and
+ * revoke a grant whose code or refresh token is replayed. */
 export function oauthHooks(ctx: GenericCtx<DataModel>) {
   const requestBody = (value: unknown): Record<string, unknown> | undefined =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -281,8 +286,8 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
       : undefined
   return {
     before: createAuthMiddleware(async (endpoint) => {
-      if (endpoint.path === '/oauth2/register' || endpoint.path === '/oauth2/create-client')
-        await admitClientRegistration(ctx, endpoint.body)
+      // The only client creation endpoint Qivo serves (auth.ts disabledPaths).
+      if (endpoint.path === '/oauth2/register') await admitClientRegistration(ctx, endpoint.body)
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read
         // the actual URL before that loss, including repeated parameters.

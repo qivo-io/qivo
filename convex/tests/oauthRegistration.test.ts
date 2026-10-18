@@ -1,8 +1,10 @@
 /* OAuth client registration limits (oauthRegistrations.ts admit, the Better
- * Auth hook in lib/oauthProvider.ts) and the cleanup of clients and counters
- * nobody uses (sweepClients, sweepCounters). Registration runs through the
- * real HTTP handler and Better Auth provider. convex-test reports no client
- * address, so every HTTP registration here shares the unknown source. */
+ * Auth hook in lib/oauthProvider.ts), the client management endpoints Qivo
+ * does not serve (auth.ts disabledPaths) and the cleanup of clients and
+ * counters nobody uses (sweepClients, sweepCounters). Registration runs
+ * through the real HTTP handler and Better Auth provider. convex-test reports
+ * no client address, so every HTTP registration here shares the unknown
+ * source. */
 /// <reference types="vite/client" />
 import { hashPassword } from 'better-auth/crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -237,7 +239,7 @@ describe('client registration over HTTP', () => {
     expect(await clients(t)).toEqual([])
   })
 
-  it('applies the same limits to signed-in client creation', async () => {
+  it('does not serve the endpoints that create or change a client for a signed-in owner', async () => {
     const t = newT()
     const now = Date.now()
     const email = 'oauth-registration@example.test'
@@ -271,20 +273,37 @@ describe('client registration over HTTP', () => {
       .get('Set-Better-Auth-Cookie')
       ?.match(/(?:^|,\s*)([^=;,]*session_token=[^;]+)/)?.[1]
     expect(cookie).toBeTruthy()
-    await setCounter(t, OAUTH_REGISTRATION_TOTAL_KEY, OAUTH_REGISTRATIONS_TOTAL)
-    const response = await http(t, '/api/auth/oauth2/create-client', {
-      method: 'POST',
-      headers: { Origin: APP, 'Content-Type': 'application/json', 'Better-Auth-Cookie': cookie! },
-      body: JSON.stringify(metadata({ token_endpoint_auth_method: 'client_secret_basic' })),
-    })
-    expect(response.status).toBe(429)
+    const signedIn = (path: string, body: Json) =>
+      http(t, `/api/auth/oauth2/${path}`, {
+        method: 'POST',
+        headers: { Origin: APP, 'Content-Type': 'application/json', 'Better-Auth-Cookie': cookie! },
+        body: JSON.stringify(body),
+      })
+    const created = await signedIn(
+      'create-client',
+      metadata({ token_endpoint_auth_method: 'client_secret_basic' }),
+    )
+    expect(created.status).toBe(404)
     expect(await clients(t)).toEqual([])
+    // A client this person owns cannot be grown past the metadata cap.
+    await plantClient(t, 'owned', { userId: user._id })
+    const large = 'x'.repeat(4 * OAUTH_CLIENT_METADATA_MAX_BYTES)
+    const updated = await signedIn('update-client', {
+      client_id: 'owned',
+      update: { client_uri: `${BROWSER}/${large}`, software_statement: large },
+    })
+    expect(updated.status).toBe(404)
+    const [owned] = (await clients(t)) as { uri?: string; softwareStatement?: string }[]
+    expect(owned.uri ?? null).toBeNull()
+    expect(owned.softwareStatement ?? null).toBeNull()
+    for (const path of ['client/rotate-secret', 'delete-client', 'get-clients'])
+      expect((await signedIn(path, { client_id: 'owned' })).status, path).toBe(404)
   })
 })
 
 /** Plants a client, as the provider stores one, created now. */
-const plantClient = (t: T, clientId: string) =>
-  t.mutation(components.betterAuth.adapter.create, {
+function plantClient(t: T, clientId: string, fields: Json = {}) {
+  return t.mutation(components.betterAuth.adapter.create, {
     input: {
       model: 'oauthClient',
       data: {
@@ -294,13 +313,47 @@ const plantClient = (t: T, clientId: string) =>
         public: true,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        ...fields,
       },
     },
   })
+}
+
+/** Plants a Qivo connection for the client, pending unless `approved_at` is
+ * given. */
+const plantConnection = (
+  t: T,
+  clientId: string,
+  fields: { authorization_expires_at: string; approved_at?: string; revoked_at?: string },
+) =>
+  t.run((ctx) =>
+    ctx.db.insert('oauth_connections', {
+      id: `connection-${clientId}`,
+      authorization_hash: `authorization-${clientId}`,
+      auth_user_id: 'u1',
+      profile_id: 'profile-1',
+      org_id: 'org-1',
+      client_id: clientId,
+      client_name: clientId,
+      resource: 'https://some.convex.site/mcp',
+      requested_scopes: ['qivo:read'],
+      scopes: fields.approved_at ? ['qivo:read'] : [],
+      created_at: new Date().toISOString(),
+      ...fields,
+    }),
+  )
 
 describe('unused client cleanup', () => {
   async function plantClients(t: T) {
-    for (const clientId of ['unused', 'consented', 'refreshing', 'accessing', 'connected'])
+    for (const clientId of [
+      'unused',
+      'consented',
+      'refreshing',
+      'accessing',
+      'connected',
+      'abandoned',
+      'authorizing',
+    ])
       await plantClient(t, clientId)
     const scopes = ['qivo:read']
     await t.mutation(components.betterAuth.adapter.create, {
@@ -318,25 +371,19 @@ describe('unused client cleanup', () => {
         data: { clientId: 'accessing', token: 'hash-2', scopes },
       },
     })
-    // a revoked connection still keeps its client
-    await t.run((ctx) =>
-      ctx.db.insert('oauth_connections', {
-        id: 'connection-1',
-        authorization_hash: 'authorization-1',
-        auth_user_id: 'u1',
-        profile_id: 'profile-1',
-        org_id: 'org-1',
-        client_id: 'connected',
-        client_name: 'Connected client',
-        resource: 'https://some.convex.site/mcp',
-        requested_scopes: scopes,
-        scopes: [],
-        created_at: new Date().toISOString(),
-        authorization_expires_at: new Date().toISOString(),
-        revoked_at: new Date().toISOString(),
-        revocation_reason: 'deleted',
-      }),
-    )
+    const at = (ms: number) => new Date(ms).toISOString()
+    // someone approved this connection and later revoked it
+    await plantConnection(t, 'connected', {
+      authorization_expires_at: at(NOW + 10 * 60_000),
+      approved_at: at(NOW + 60_000),
+      revoked_at: at(NOW + 2 * 60_000),
+    })
+    // someone opened the consent page and never approved
+    await plantConnection(t, 'abandoned', { authorization_expires_at: at(NOW + 10 * 60_000) })
+    // an authorization still in progress when the first cleanup runs
+    await plantConnection(t, 'authorizing', {
+      authorization_expires_at: at(NOW + OAUTH_UNUSED_CLIENT_TTL_MS + 10 * 60_000),
+    })
   }
   const sweep = async (t: T) => {
     await t.mutation(internal.oauthRegistrations.sweepClients, {})
@@ -351,11 +398,22 @@ describe('unused client cleanup', () => {
     await plantClient(t, 'recent')
     await sweep(t)
     expect(await ids(t)).toEqual(
-      ['accessing', 'connected', 'consented', 'recent', 'refreshing', 'unused'].sort(),
+      [
+        'abandoned',
+        'accessing',
+        'authorizing',
+        'connected',
+        'consented',
+        'recent',
+        'refreshing',
+        'unused',
+      ].sort(),
     )
     vi.setSystemTime(NOW + OAUTH_UNUSED_CLIENT_TTL_MS + 60_000)
     await sweep(t)
-    expect(await ids(t)).toEqual(['accessing', 'connected', 'consented', 'recent', 'refreshing'])
+    expect(await ids(t)).toEqual(
+      ['accessing', 'authorizing', 'connected', 'consented', 'recent', 'refreshing'].sort(),
+    )
     vi.setSystemTime(NOW + 2 * OAUTH_UNUSED_CLIENT_TTL_MS)
     await sweep(t)
     expect(await ids(t)).toEqual(['accessing', 'connected', 'consented', 'refreshing'])
@@ -366,9 +424,27 @@ describe('unused client cleanup', () => {
     await plantClients(t)
     const extra = Array.from({ length: 150 }, (_, i) => `extra-${String(i).padStart(3, '0')}`)
     for (const clientId of extra) await plantClient(t, clientId)
-    vi.setSystemTime(NOW + OAUTH_UNUSED_CLIENT_TTL_MS + 60_000)
+    vi.setSystemTime(NOW + 2 * OAUTH_UNUSED_CLIENT_TTL_MS)
     await sweep(t)
     expect(await ids(t)).toEqual(['accessing', 'connected', 'consented', 'refreshing'])
+  })
+
+  it('stays within the read limit when old client rows are near the document size limit', async () => {
+    const t = newT({ transactionLimits: true })
+    // Rows registered before the metadata cap, 30 of them about 900 KB each.
+    const statement = 'x'.repeat(900_000)
+    for (let i = 0; i < 30; i++)
+      await plantClient(t, `large-${i}`, { softwareStatement: statement })
+    await plantClient(t, 'consented')
+    await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'oauthConsent',
+        data: { clientId: 'consented', userId: 'u1', scopes: ['qivo:read'] },
+      },
+    })
+    vi.setSystemTime(NOW + OAUTH_UNUSED_CLIENT_TTL_MS + 60_000)
+    await sweep(t)
+    expect(await ids(t)).toEqual(['consented'])
   })
 
   it('never deletes a client that a consent or token refers to, even when asked', async () => {
@@ -381,7 +457,17 @@ describe('unused client cleanup', () => {
       before: Date.now() - OAUTH_UNUSED_CLIENT_TTL_MS,
     })
     expect(deleted).toBe(1)
-    expect(await ids(t)).toEqual(['accessing', 'connected', 'consented', 'recent', 'refreshing'])
+    expect(await ids(t)).toEqual(
+      [
+        'abandoned',
+        'accessing',
+        'authorizing',
+        'connected',
+        'consented',
+        'recent',
+        'refreshing',
+      ].sort(),
+    )
   })
 })
 

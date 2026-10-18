@@ -141,7 +141,20 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>, opts?: { schemaOnl
           '/delete-user',
           '/delete-anonymous-user',
         ]
-      : ['/sign-in/anonymous', '/delete-anonymous-user'],
+      : [
+          '/sign-in/anonymous',
+          '/delete-anonymous-user',
+          // Clients register through /oauth2/register, which is limited
+          // (lib/oauthRegistration.ts). Qivo uses none of the provider's
+          // client management endpoints, and update-client would store
+          // client metadata of any size.
+          '/oauth2/create-client',
+          '/oauth2/update-client',
+          '/oauth2/client/rotate-secret',
+          '/oauth2/delete-client',
+          '/oauth2/get-client',
+          '/oauth2/get-clients',
+        ],
     databaseHooks: {
       ...(demo
         ? {

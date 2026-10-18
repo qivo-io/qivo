@@ -1966,7 +1966,12 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       unusedClients: FunctionReference<
         "query",
         "internal",
-        { after: number; before: number; numItems: number },
+        {
+          before: number;
+          cursor: string | null;
+          maximumBytesRead: number;
+          numItems: number;
+        },
         any,
         Name
       >;

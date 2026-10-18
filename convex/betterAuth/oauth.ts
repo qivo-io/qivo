@@ -1,5 +1,7 @@
 import { v } from 'convex/values'
+import { stream } from 'convex-helpers/server/stream'
 import { mutation, type QueryCtx, query } from './_generated/server'
+import schema from './schema'
 
 const guardField = v.union(
   v.literal('id'),
@@ -63,26 +65,35 @@ async function clientInUse(ctx: QueryCtx, clientId: string): Promise<boolean> {
   return refresh !== null
 }
 
-/** Up to `numItems` clients registered after `after` and before `before`,
- * oldest first, keeping only those no consent or token refers to. `last` is
- * the creation time to pass as the next `after`, or null when no older
- * client is left. Components cannot paginate, so the creation time is the
- * cursor. The app checks its own connections before it deletes any
+/** One page of the clients registered before `before`, oldest first, keeping
+ * only those no consent or token refers to. A page ends after `numItems`
+ * clients or after reading about `maximumBytesRead` bytes of client rows,
+ * because rows registered before the metadata cap can each approach 1 MiB.
+ * `cursor` holds the index key of the last client read, so clients that share
+ * a creation time are not skipped; it is null when no older client is left.
+ * Components cannot use the built-in `.paginate()`, so convex-helpers pages
+ * the index. The app checks its own connections before it deletes any
  * (oauthRegistrations.ts sweepClients). */
 export const unusedClients = query({
-  args: { after: v.number(), before: v.number(), numItems: v.number() },
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    before: v.number(),
+    numItems: v.number(),
+    maximumBytesRead: v.number(),
+  },
   handler: async (ctx, args) => {
-    const page = await ctx.db
+    const page = await stream(ctx.db, schema)
       .query('oauthClient')
-      .withIndex('by_creation_time', (q) =>
-        q.gt('_creationTime', args.after).lt('_creationTime', args.before),
-      )
-      .take(args.numItems)
+      .withIndex('by_creation_time', (q) => q.lt('_creationTime', args.before))
+      .paginate({
+        cursor: args.cursor,
+        numItems: args.numItems,
+        maximumBytesRead: args.maximumBytesRead,
+      })
     const clientIds: string[] = []
-    for (const client of page)
+    for (const client of page.page)
       if (!(await clientInUse(ctx, client.clientId))) clientIds.push(client.clientId)
-    const last = page.length === args.numItems ? page[page.length - 1]._creationTime : null
-    return { clientIds, last }
+    return { clientIds, cursor: page.isDone ? null : page.continueCursor }
   },
 })
 
