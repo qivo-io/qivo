@@ -344,6 +344,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // comment mode: a commit the server has not answered yet (see commit)
   const [sending, setSending] = useState(false)
   const sendingRef = useRef(false)
+  // comment mode: whether this editor has unmounted, which Tiptap's own
+  // isDestroyed reports only a tick later
+  const closedRef = useRef(false)
   const linkUrlRef = useRef<HTMLInputElement | null>(null)
   const linkTextRef = useRef<HTMLInputElement | null>(null)
   const editorRef = useRef<Editor | null>(null)
@@ -773,7 +776,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       void cm.onCommit(text).then((saved) => {
         sendingRef.current = false
         setSending(false)
-        if (ed.isDestroyed) {
+        if (closedRef.current || ed.isDestroyed) {
           // closed while it was sent: the unmount held back its discard
           // toast in case the save went through
           if (!saved) toast('Unsaved comment discarded')
@@ -1036,7 +1039,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // sent may yet be saved, so commit says so only after a refusal.
   useEffect(() => {
     if (!isComment) return
+    closedRef.current = false
     return () => {
+      closedRef.current = true
       if (dirtyRef.current && !sendingRef.current) toast('Unsaved comment discarded')
     }
   }, [isComment])

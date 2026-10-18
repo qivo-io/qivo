@@ -145,6 +145,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
@@ -284,6 +285,9 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
       await click('Comment')
       await act(async () => root.render(null))
     }
+    // Tiptap destroys an unmounted editor on a 1 ms timer. Held here, the
+    // refusal lands before it, as it can in the app.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     await send('The 401st comment')
     // it may yet be saved, so closing says nothing
     expect(window.showToast).not.toHaveBeenCalled()
@@ -293,6 +297,8 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
       'error',
     )
     expect(window.showToast).toHaveBeenLastCalledWith('Unsaved comment discarded', 'error')
+    await act(async () => vi.runOnlyPendingTimers())
+    vi.useRealTimers()
     vi.mocked(window.showToast).mockClear()
     await open()
     await send('Soak run finished')
