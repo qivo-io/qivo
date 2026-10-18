@@ -410,33 +410,34 @@ export async function projectLevelsForProfiles(
   const root = await rootMetaOf(ctx, project)
   if (root.org_id !== project.org_id) return () => null
   const tree = project.id === root.id ? [project] : [root, project]
-  const grants: Doc<'project_access'>[] = []
-  // each share once for every member of its team, as levelsFrom takes them
-  const shares: (Pick<Doc<'project_team_access'>, 'project_id' | 'level'> & {
-    profile_id: string
-  })[] = []
+  type Level = Pick<Doc<'project_access'>, 'project_id' | 'level'>
+  // each profile's grants, and each share once for every member of its
+  // team, as levelsFrom takes them
+  const grantsOf = new Map<string, Level[]>()
+  const sharesOf = new Map<string, Level[]>()
+  const add = (to: Map<string, Level[]>, profileId: string, level: Level) => {
+    const held = to.get(profileId)
+    if (held === undefined) to.set(profileId, [level])
+    else held.push(level)
+  }
   const teamMembers = new Map<string, string[]>()
   for (const { id } of tree) {
-    grants.push(
-      ...(await ctx.db
-        .query('project_access')
-        .withIndex('by_project', (q) => q.eq('project_id', id))
-        .collect()),
-    )
+    const grants = ctx.db
+      .query('project_access')
+      .withIndex('by_project', (q) => q.eq('project_id', id))
+    for await (const grant of grants) add(grantsOf, grant.profile_id, grant)
     const teamShares = ctx.db
       .query('project_team_access')
       .withIndex('by_project', (q) => q.eq('project_id', id))
-    for await (const { team_id, project_id, level } of teamShares) {
-      let members = teamMembers.get(team_id)
+    for await (const share of teamShares) {
+      let members = teamMembers.get(share.team_id)
       if (members === undefined) {
-        members = await sameOrgTeamMembers(ctx, team_id, project.org_id)
-        teamMembers.set(team_id, members)
+        members = await sameOrgTeamMembers(ctx, share.team_id, project.org_id)
+        teamMembers.set(share.team_id, members)
       }
-      for (const profile_id of members) shares.push({ profile_id, project_id, level })
+      for (const profileId of members) add(sharesOf, profileId, share)
     }
   }
-  const grantsOf = Map.groupBy(grants, (grant) => grant.profile_id)
-  const sharesOf = Map.groupBy(shares, (share) => share.profile_id)
   return (profile) => {
     if (profile.org_id !== project.org_id) return null
     const { levelOf, navigationOnly } = levelsFrom(
