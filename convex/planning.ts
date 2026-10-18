@@ -60,10 +60,12 @@ export type AssigneeLoadRow = {
 
 /* plan_org_load for one org. orgProfileIds = ALL profile ids of the org
  * (active + inactive + agents) — the 0065 owner fence. The snapshot passes
- * its active org task read so planning and grouping do not scan it again. */
+ * its active org task read so planning and grouping do not scan it again.
+ * The REST and MCP delay verdicts (lib/machineDelay.ts) pass the machine
+ * catalogue and access flags as `view`, the same projects and rule. */
 export function orgLoadRows(
   me: Doc<'profiles'>,
-  view: OrgProjectView,
+  view: Pick<OrgProjectView, 'byUuid' | 'visible'>,
   orgProfileIds: Set<string>,
   issues: readonly Doc<'issues'>[],
 ): OrgLoadRow[] {

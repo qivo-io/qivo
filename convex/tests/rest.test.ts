@@ -898,6 +898,7 @@ describe('GET /v1/tasks/{ref}', () => {
     })
     for (const ref of [`qn-${row.num}`, String(row.num), row.id.toUpperCase()]) {
       const out = await t.query(internal.machine.rest.getIssue, {
+        now: NOW,
         callerId: f.agent.id,
         access: 'read',
         ref,
@@ -934,7 +935,12 @@ describe('GET /v1/tasks/{ref}', () => {
       String(foreign.num),
     ]) {
       await refused(
-        t.query(internal.machine.rest.getIssue, { callerId: f.agent.id, access: 'read', ref }),
+        t.query(internal.machine.rest.getIssue, {
+          now: NOW,
+          callerId: f.agent.id,
+          access: 'read',
+          ref,
+        }),
         'not_found',
         'task not found',
       )
@@ -978,6 +984,7 @@ describe('POST /v1/tasks', () => {
       start_week: null,
       end_week: null,
       due_date: null,
+      delay: null,
       remaining_hours: null,
       remaining_set_at: null,
       paused: false,
@@ -1882,7 +1889,12 @@ describe("a group's dates on REST", () => {
       out && { start_week: out.start_week, end_week: out.end_week }
     const read = async () => {
       const get = (ref: string) =>
-        t.query(internal.machine.rest.getIssue, { callerId: f.agent.id, access: 'read', ref })
+        t.query(internal.machine.rest.getIssue, {
+          now: NOW,
+          callerId: f.agent.id,
+          access: 'read',
+          ref,
+        })
       const listed = await restTasks(t, {
         callerId: f.agent.id,
         access: 'read',
@@ -1924,7 +1936,12 @@ describe("a group's dates on REST", () => {
     })
     const leaf = await plantIssue(t, { ...base, ...span('2026-01-05', '2026-01-11') })
     const get = (ref: string) =>
-      t.query(internal.machine.rest.getIssue, { callerId: f.agent.id, access: 'read', ref })
+      t.query(internal.machine.rest.getIssue, {
+        now: NOW,
+        callerId: f.agent.id,
+        access: 'read',
+        ref,
+      })
     expect(await get(group.id)).toMatchObject({
       is_group: true,
       ...span('2026-04-06', '2026-04-12'),
@@ -1976,6 +1993,7 @@ describe("a group's dates on REST", () => {
     expect(await issueRow(t, group.id)).toEqual(group)
     expect(await messagesFor(t, f.user.id, group.id)).toEqual([])
     const out = await t.query(internal.machine.rest.getIssue, {
+      now: NOW,
       callerId: f.agent.id,
       access: 'read',
       ref: group.id,
@@ -2026,6 +2044,7 @@ describe("a group's dates on REST", () => {
     expect(listed.filter((i) => i.is_group)).toHaveLength(22)
     expect(listed.find((i) => i.id === epic.id)).toMatchObject(span('2026-01-05', '2026-09-05'))
     const got = await t.query(internal.machine.rest.getIssue, {
+      now: NOW,
       callerId: f.agent.id,
       access: 'read',
       ref: epic.id,
@@ -2404,7 +2423,7 @@ describe('a navigation-only parent hides its other sub-projects', () => {
       parent_id: visibleParent.id,
     })
     const get = (callerId: string, ref: string) =>
-      t.query(internal.machine.rest.getIssue, { callerId, access: 'read', ref })
+      t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
     const one = await get(subOnly.id, child.id)
     const listed = (await restTasks(t, { callerId: subOnly.id, access: 'read' })).find(
       (i) => i.id === child.id,

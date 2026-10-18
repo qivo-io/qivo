@@ -336,6 +336,7 @@ describe('following tasks', () => {
     await plantSubscription(fx.t, { issue_id: fx.task.id, profile_id: fx.user.id })
     await plantSubscription(fx.t, { issue_id: fx.task.id, profile_id: fx.admin.id })
     const before = await fx.t.query(internal.machine.rest.getIssue, {
+      now: NOW,
       callerId: fx.agent.id,
       ...R,
       ref: key(fx.task),
@@ -354,6 +355,7 @@ describe('following tasks', () => {
     })
     const after = JSON.parse(
       await fx.t.query(internal.machine.mcp.getIssue, {
+        now: NOW,
         callerId: fx.agent.id,
         ...R,
         ref: key(fx.task),

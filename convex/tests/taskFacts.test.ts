@@ -133,7 +133,7 @@ function appCompletion(view: Awaited<ReturnType<typeof appView>>, metaId: string
 }
 
 const restGet = (fx: Fx, ref: string, callerId: string) =>
-  fx.t.query(internal.machine.rest.getIssue, { callerId, access: 'read', ref })
+  fx.t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
 
 const mcpRead = async <Out>(
   fx: Fx,
@@ -141,7 +141,7 @@ const mcpRead = async <Out>(
   callerId: string,
   args: Record<string, unknown>,
 ): Promise<Out> =>
-  JSON.parse(await fx.t.query(fn, { callerId, access: 'read', ...args } as never)) as Out
+  JSON.parse(await fx.t.query(fn, { now: NOW, callerId, access: 'read', ...args } as never)) as Out
 
 type Row = { id: string; progress: unknown; last_comment_at: unknown }
 
@@ -437,7 +437,11 @@ describe('an active page keeps inside the request’s read limits', () => {
     }
     await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read' }))
     await refusal(
-      fx.t.query(internal.machine.mcp.listIssues, { callerId: fx.agent.id, access: 'read' }),
+      fx.t.query(internal.machine.mcp.listIssues, {
+        now: NOW,
+        callerId: fx.agent.id,
+        access: 'read',
+      }),
     )
     const five = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '5' })
     expect(five.map((r) => r.last_comment_at)).toEqual(Array(5).fill(NOW))
@@ -460,6 +464,7 @@ describe('an active page keeps inside the request’s read limits', () => {
     await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }))
     await refusal(
       fx.t.query(internal.machine.mcp.listIssues, {
+        now: NOW,
         callerId: fx.agent.id,
         access: 'read',
         limit: 1,

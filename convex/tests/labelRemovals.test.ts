@@ -168,6 +168,7 @@ describe('a label on more tasks than one delete removes', () => {
     // The machine task read and label search, on an archived task too.
     for (const ref of [tasks[0], tasks[2]]) {
       const detail = await t.query(internal.machine.rest.getIssue, {
+        now: NOW,
         callerId: f.admin.id,
         access: 'read',
         ref,
@@ -176,6 +177,7 @@ describe('a label on more tasks than one delete removes', () => {
     }
     const search = (term: string) =>
       t.query(internal.machine.rest.listIssues, {
+        now: NOW,
         callerId: f.admin.id,
         access: 'read',
         search: term,

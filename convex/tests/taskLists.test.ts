@@ -87,7 +87,12 @@ const plantMany = (fx: Fx, count: number, over: Partial<Doc<'issues'>> & { proje
 /* MCP list_tasks as `callerId`, parsed. */
 const mcpList = async <Out>(fx: Fx, callerId: string, args: Record<string, unknown>) =>
   JSON.parse(
-    await fx.t.query(internal.machine.mcp.listIssues, { callerId, access: 'read', ...args }),
+    await fx.t.query(internal.machine.mcp.listIssues, {
+      now: NOW,
+      callerId,
+      access: 'read',
+      ...args,
+    }),
   ) as Out
 
 /** An archived page as MCP list_tasks answers it. */
@@ -238,6 +243,7 @@ describe('active task lists read active tasks only', () => {
       }
       // three subtasks take the walk past its two reads to the fallback
       const rest = await fx.t.query(internal.machine.rest.getIssue, {
+        now: NOW,
         callerId: fx.agent.id,
         access: 'read',
         ref: root.id,
@@ -250,6 +256,7 @@ describe('active task lists read active tasks only', () => {
       expect(rest.subtasks.map((task) => task.id)).toEqual(kids.map((task) => task.id))
       const mcp = JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
+          now: NOW,
           callerId: fx.agent.id,
           access: 'read',
           ref: root.id,
@@ -402,6 +409,7 @@ describe('archived task lists page one project with a cursor', () => {
     const fx = await setup()
     const rest = (args: Record<string, string>) =>
       fx.t.query(internal.machine.rest.listIssues, {
+        now: NOW,
         callerId: fx.agent.id,
         access: 'read',
         ...args,
@@ -787,6 +795,7 @@ describe('archived task lists page one project with a cursor', () => {
     // as the single-task read does
     await refused(
       fx.t.query(internal.machine.rest.getIssue, {
+        now: NOW,
         callerId: fx.agent.id,
         access: 'read',
         ref: foreign.id,

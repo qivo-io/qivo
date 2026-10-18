@@ -849,12 +849,14 @@ export async function expectRefusal(
 
 /* REST GET /v1/tasks answers an array for active tasks and a page for
  * archived ones (machine/rest.ts listIssues). These call it and require the
- * shape they expect. */
-type RestTaskListArgs = FunctionArgs<typeof internal.machine.rest.listIssues>
+ * shape they expect. The request's clock is NOW unless `now` says otherwise. */
+type RestTaskListArgs = Omit<FunctionArgs<typeof internal.machine.rest.listIssues>, 'now'> & {
+  now?: string
+}
 
 /** The active task list REST answers for `args`. */
 export async function restTasks(t: T, args: RestTaskListArgs): Promise<RestIssueJson[]> {
-  const out = await t.query(internal.machine.rest.listIssues, args)
+  const out = await t.query(internal.machine.rest.listIssues, { now: NOW, ...args })
   if (!Array.isArray(out)) throw new Error(`expected an array, got ${JSON.stringify(out)}`)
   return out
 }
@@ -864,7 +866,11 @@ export async function restArchivedPage(
   t: T,
   args: Omit<RestTaskListArgs, 'archived'>,
 ): Promise<{ next_cursor: string | null; tasks: RestIssueJson[] }> {
-  const out = await t.query(internal.machine.rest.listIssues, { ...args, archived: 'true' })
+  const out = await t.query(internal.machine.rest.listIssues, {
+    now: NOW,
+    ...args,
+    archived: 'true',
+  })
   if (Array.isArray(out)) throw new Error(`expected a page, got ${JSON.stringify(out)}`)
   return out
 }

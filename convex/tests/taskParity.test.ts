@@ -29,6 +29,7 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { delayClock, taskForecaster } from '../lib/machineDelay'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
 import { taskAttachments } from '../model/attachments'
@@ -119,7 +120,7 @@ const task = (fx: Fx, over: Partial<Doc<'issues'>> & { project_id?: string } = {
   plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, ...over })
 
 const restGet = (fx: Fx, ref: string, callerId = fx.agent.id) =>
-  fx.t.query(internal.machine.rest.getIssue, { callerId, access: 'read', ref })
+  fx.t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
 
 const restPatch = (fx: Fx, ref: string, body: unknown) =>
   fx.t.mutation(internal.machine.rest.updateIssue, {
@@ -135,13 +136,12 @@ const restList = (fx: Fx, q: Record<string, string>) =>
 
 const mcp = async <T = Record<string, unknown>>(
   fx: Fx,
-  fn:
-    | typeof internal.machine.mcp.getIssue
-    | typeof internal.machine.mcp.listIssues
-    | typeof internal.machine.mcp.listLabels,
+  fn: typeof internal.machine.mcp.getIssue | typeof internal.machine.mcp.listIssues,
   args: Record<string, unknown>,
 ): Promise<T> =>
-  JSON.parse(await fx.t.query(fn, { callerId: fx.agent.id, access: 'read', ...args } as never)) as T
+  JSON.parse(
+    await fx.t.query(fn, { now: NOW, callerId: fx.agent.id, access: 'read', ...args } as never),
+  ) as T
 
 const mcpWrite = async <T = Record<string, unknown>>(
   fx: Fx,
@@ -327,8 +327,8 @@ describe('a single-task read walks only the subtasks that can count', () => {
     fx.t.run(async (ctx) => {
       const out =
         surface === 'rest'
-          ? await taskOut(ctx, issue, { surface, me })
-          : await taskOut(ctx, issue, { surface, me })
+          ? await taskOut(ctx, issue, { surface, me, now: NOW })
+          : await taskOut(ctx, issue, { surface, me, now: NOW })
       const metrics = await ctx.meta.getTransactionMetrics()
       const project = (await byId(ctx, 'projects', issue.project_id)) as Doc<'projects'>
       const children = childIndexOf(
@@ -337,10 +337,12 @@ describe('a single-task read walks only the subtasks that can count', () => {
           .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
           .collect(),
       )
+      const org = await byId(ctx, 'organizations', issue.org_id)
+      const forecast = taskForecaster(ctx, me, delayClock(org, NOW))
       const row =
         surface === 'rest'
-          ? await issueOut(ctx, issue, { surface, me, project, children })
-          : await issueOut(ctx, issue, { surface, me, project, children })
+          ? await issueOut(ctx, issue, { surface, me, project, children, forecast })
+          : await issueOut(ctx, issue, { surface, me, project, children, forecast })
       const detail = await taskDetail(ctx, me, issue, { project, isGroup: row.is_group, children })
       const whole = { ...row, ...detail, attachments: await taskAttachments(ctx, me, issue) }
       return { out, whole, metrics }
@@ -1314,9 +1316,11 @@ describe('MCP task parity', () => {
       color: '#123ABC',
     })
     expect(made).toEqual({ id: made.id, name: 'Hardware', color: '#123ABC', created: true })
-    expect(await mcp(fx, internal.machine.mcp.listLabels, {})).toEqual([
-      { id: made.id, name: 'Hardware', color: '#123ABC' },
-    ])
+    const labels = await fx.t.query(internal.machine.mcp.listLabels, {
+      callerId: fx.agent.id,
+      access: 'read',
+    })
+    expect(JSON.parse(labels)).toEqual([{ id: made.id, name: 'Hardware', color: '#123ABC' }])
     await refused(
       mcpWrite(fx, internal.machine.mcp.setLabel, { name: 'Lonely' }),
       'bad_request',

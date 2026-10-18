@@ -72,10 +72,12 @@ import {
   archivedTaskMatcher,
   archivedTasksPage,
   matchingLabels,
+  namesOf,
   parseArchiveCursor,
   type ReadCeiling,
   readsUnder,
   rosterNames,
+  rosterOf,
   searchFields,
 } from './archivedTasks'
 import { assertOrgAvailable, assertOrgWritable, orgWriteBlock } from './billingAccess'
@@ -91,6 +93,14 @@ import {
   type ProjectType,
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
+import {
+  type DelayJson,
+  delayClock,
+  type Forecaster,
+  listForecaster,
+  noForecast,
+  taskForecaster,
+} from './machineDelay'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, taskSearchText } from './search'
@@ -378,6 +388,8 @@ export type ActiveListOpts = ListFilters & {
   scope: string[] | null
   limit: number
   offset: number
+  /** the request's clock, an ISO timestamp, which delay verdicts are judged by */
+  now: string
 }
 
 export type ArchivedListOpts = ListFilters & {
@@ -445,7 +457,7 @@ async function activeLabelNames(
 async function listRow(
   ctx: QueryCtx,
   task: Doc<'issues'>,
-  o: IssueOutPre & Reader & Subtree,
+  o: IssueOutPre & Reader & Subtree & Forecast,
 ): Promise<RestIssueJson | McpIssueOut> {
   return o.surface === 'rest'
     ? await issueOut(ctx, task, { ...o, surface: 'rest' })
@@ -462,8 +474,10 @@ const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
  * the organization's active tasks once (by_org_archived), never an archived
  * one. That read also decides which rows are groups, their plan weeks,
  * their progress and their parents, because an active task's subtasks that
- * count and its parent are active too. Each row's newest comment is one
- * more read (lastCommentTimes). A page whose comments do not fit in what
+ * count and its parent are active too. With the roster it also holds every
+ * input of the rows' delay verdicts (lib/machineDelay.ts listForecaster),
+ * judged on `o.now`. Each row's newest comment is one more read
+ * (lastCommentTimes). A page whose comments do not fit in what
  * the request has left is refused with PAGE_TOO_LARGE, and with
  * ACTIVE_TASKS_TOO_LARGE when the reads before them leave no room at all.
  *
@@ -498,7 +512,8 @@ export async function listActiveIssuesCore(
     .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
     .collect()
   const children = childIndexOf(active)
-  const names = await rosterNames(ctx, me.org_id)
+  const profiles = await rosterOf(ctx, me.org_id)
+  const names = namesOf(profiles)
   let match: ((i: Doc<'issues'>) => boolean) | null = null
   if (o.search) {
     const matches = allWordsMatcher(o.search, o.stars)
@@ -534,8 +549,15 @@ export async function listActiveIssuesCore(
   found.sort(byCreation)
   const page = found.slice(o.offset, o.offset + o.limit)
   const tasks = new Map(active.map((t) => [t.id, t]))
-  const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
+  const org = await byId(ctx, 'organizations', me.org_id)
   const projectOf = (id: string) => cat.byUuid.get(id)
+  const forecast = listForecaster({
+    clock: delayClock(org, o.now),
+    me,
+    active,
+    view: { byUuid: cat.byUuid, visible: readable },
+    profiles,
+  })
   const lastComments = await lastCommentTimes(ctx, page)
   return await Promise.all(
     page.map((task) =>
@@ -546,10 +568,11 @@ export async function listActiveIssuesCore(
         project: projectOf(task.project_id),
         projectOf,
         names,
-        orgSlug,
+        orgSlug: org?.slug,
         tasks,
         lastComments,
         children,
+        forecast,
       }),
     ),
   )
@@ -706,6 +729,8 @@ export async function listArchivedIssuesCore(
           children,
           counts,
           partial,
+          // an archived task has no delay
+          forecast: noForecast,
         })
       },
     },
@@ -919,6 +944,9 @@ type IssueOutCommon = {
   start_week: string | null
   end_week: string | null
   due_date: string | null
+  /** the app's projected delay, null when its project does not track delay
+   *  or the app shows no verdict (lib/machineDelay.ts) */
+  delay: DelayJson | null
   remaining_hours: number | null
   remaining_set_at: string | null
   paused: boolean
@@ -1305,20 +1333,23 @@ type Reader = {
  * answers null plan weeks and a partial progress that counts nothing. */
 type Subtree = { children: ChildIndex; counts?: GroupCounter; partial?: boolean }
 
+/** How a row gets its delay verdict, from its group facts (lib/machineDelay.ts). */
+type Forecast = { forecast: Forecaster }
+
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & Subtree & { surface: 'rest' },
+  opts: IssueOutPre & Reader & Subtree & Forecast & { surface: 'rest' },
 ): Promise<RestIssueJson>
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & Subtree & { surface: 'mcp' },
+  opts: IssueOutPre & Reader & Subtree & Forecast & { surface: 'mcp' },
 ): Promise<McpIssueOut>
 export async function issueOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & Subtree,
+  opts: IssueOutPre & Reader & Subtree & Forecast,
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
@@ -1340,6 +1371,7 @@ export async function issueOut(
       ? { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
       : { start_week: facts.start_week, end_week: facts.end_week }
   const progress = facts === null ? null : progressOf(facts)
+  const delay = await opts.forecast(issue, project, facts)
   const parent = await parentOut(ctx, opts.me, issue, opts.readable, opts.tasks)
   const owner_id = taskOwnerId(issue, is_group) ?? null
   const orgSlug = opts.orgSlug ?? (await byId(ctx, 'organizations', issue.org_id))?.slug ?? '~'
@@ -1372,6 +1404,7 @@ export async function issueOut(
       start_week: weeks.start_week,
       end_week: weeks.end_week,
       due_date: issue.due_date ?? null,
+      delay,
       remaining_hours: issue.remaining_hours ?? null,
       remaining_set_at: issue.remaining_set_at ?? null,
       paused: issue.paused,
@@ -1409,6 +1442,7 @@ export async function issueOut(
     start_week: weeks.start_week,
     end_week: weeks.end_week,
     due_date: issue.due_date ?? null,
+    delay,
     remaining_hours: issue.remaining_hours ?? null,
     remaining_set_at: issue.remaining_set_at ?? null,
     paused: issue.paused,
@@ -1534,22 +1568,27 @@ export async function taskDetail(
  * (model/attachments.ts taskAttachments), inline images included. */
 export type TaskAttachmentsJson = { attachments: AttachmentJson[] }
 
+/** The request's clock, an ISO timestamp, which a single-task read judges
+ * the task's delay by (the HTTP action's for a query, the mutation's own for
+ * a REST write answer). */
+type Clock = { now: string }
+
 /** issueOut plus taskDetail and the attachments, the shape of every
  * single-task read. */
 export async function taskOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & { surface: 'rest' },
+  opts: IssueOutPre & Reader & Clock & { surface: 'rest' },
 ): Promise<RestIssueJson & TaskDetailJson & TaskAttachmentsJson>
 export async function taskOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader & { surface: 'mcp' },
+  opts: IssueOutPre & Reader & Clock & { surface: 'mcp' },
 ): Promise<McpIssueOut & TaskDetailJson & TaskAttachmentsJson>
 export async function taskOut(
   ctx: QueryCtx,
   issue: Doc<'issues'>,
-  opts: IssueOutPre & Reader,
+  opts: IssueOutPre & Reader & Clock,
 ): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson & TaskAttachmentsJson> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
@@ -1557,10 +1596,18 @@ export async function taskOut(
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, opts.readable)
   const children = await subtreeIndex(ctx, issue, counts)
+  const org = await byId(ctx, 'organizations', issue.org_id)
+  const read = {
+    project,
+    children,
+    counts,
+    orgSlug: opts.orgSlug ?? org?.slug,
+    forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.now)),
+  }
   const row =
     opts.surface === 'rest'
-      ? await issueOut(ctx, issue, { ...opts, surface: 'rest', project, children, counts })
-      : await issueOut(ctx, issue, { ...opts, surface: 'mcp', project, children, counts })
+      ? await issueOut(ctx, issue, { ...opts, ...read, surface: 'rest' })
+      : await issueOut(ctx, issue, { ...opts, ...read, surface: 'mcp' })
   const detail = await taskDetail(ctx, opts.me, issue, {
     project,
     isGroup: row.is_group,

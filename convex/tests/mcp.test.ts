@@ -132,8 +132,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'c98ecfdbcdab33498f4168a0d324849aceab98351e2efe4a06462fb09874b944'
-const SHA_TOOLS_MODERN = 'c979de8093db352552311963ac72fc495c3a6f348f313e6d25f698bef7a079e3'
+const SHA_TOOLS_LEGACY = 'fdf6defb9a3ab87b336ada34afb868aeda6bbd85f3460ab2e7d1a46f5aa164b8'
+const SHA_TOOLS_MODERN = '0e98311021a3a87fdd4f2abe114fdabdf61e47e656b2e773005c567f64524487'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1165,6 +1165,7 @@ describe('read tools', () => {
     ]) {
       const rows = JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, {
+          now: NOW,
           callerId: fx.guest.id,
           access: 'read',
           search,
@@ -1205,6 +1206,7 @@ describe('read tools', () => {
       (
         JSON.parse(
           await fx.t.query(internal.machine.mcp.listIssues, {
+            now: NOW,
             callerId: fx.guest.id,
             access: 'read',
             search,
@@ -1250,7 +1252,12 @@ describe('read tools', () => {
     })
     const list = async (callerId: string, args: Record<string, unknown> = {}) =>
       JSON.parse(
-        await fx.t.query(internal.machine.mcp.listIssues, { callerId, access: 'read', ...args }),
+        await fx.t.query(internal.machine.mcp.listIssues, {
+          now: NOW,
+          callerId,
+          access: 'read',
+          ...args,
+        }),
       ) as Record<string, unknown>[]
     // without a scope, everything readable and active, oldest first by
     // creation as on REST, not by project key
@@ -1269,6 +1276,7 @@ describe('read tools', () => {
     // the archived axis answers one project's archived tasks as a page
     const archived = JSON.parse(
       await fx.t.query(internal.machine.mcp.listIssues, {
+        now: NOW,
         callerId: fx.guest.id,
         access: 'read',
         project: 'FW',
@@ -1294,6 +1302,7 @@ describe('read tools', () => {
     ] as const) {
       await expectRefusal(
         fx.t.query(internal.machine.mcp.listIssues, {
+          now: NOW,
           callerId: caller,
           access: 'read',
           project: ref,
@@ -1329,6 +1338,7 @@ describe('read tools', () => {
       'start_week',
       'end_week',
       'due_date',
+      'delay',
       'remaining_hours',
       'remaining_set_at',
       'paused',
@@ -1381,7 +1391,12 @@ describe('read tools', () => {
     })
     const get = async (callerId: string, ref: string) =>
       JSON.parse(
-        await fx.t.query(internal.machine.mcp.getIssue, { callerId, access: 'read', ref }),
+        await fx.t.query(internal.machine.mcp.getIssue, {
+          now: NOW,
+          callerId,
+          access: 'read',
+          ref,
+        }),
       ) as Record<string, unknown>
     for (const ref of [
       `QN-${i1.num}`,
@@ -1395,7 +1410,12 @@ describe('read tools', () => {
     expect((await get(fx.guest.id, String(archived.num))).archived_at).toBe(NOW)
     for (const ref of [`QN-999999`, String(hiddenIssue.num), foreign.id, 'QN-3000000000', 'xyz']) {
       await expectRefusal(
-        fx.t.query(internal.machine.mcp.getIssue, { callerId: fx.guest.id, access: 'read', ref }),
+        fx.t.query(internal.machine.mcp.getIssue, {
+          now: NOW,
+          callerId: fx.guest.id,
+          access: 'read',
+          ref,
+        }),
         'not_found',
         new RegExp(
           `^task "${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" not found \\(or not visible to you\\)$`,
@@ -1711,6 +1731,7 @@ describe('write tools', () => {
     const get = async (ref: string) =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
+          now: NOW,
           callerId: fx.agent.id,
           access: 'read',
           ref,
@@ -1812,7 +1833,11 @@ describe('write tools', () => {
     expect(await activityFor(fx.t, fx.org.id)).toEqual(activity)
     expect(await messagesFor(fx.t, fx.user.id, selected.id)).toEqual([])
     const rows = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listIssues, { callerId: fx.agent.id, access: 'read' }),
+      await fx.t.query(internal.machine.mcp.listIssues, {
+        now: NOW,
+        callerId: fx.agent.id,
+        access: 'read',
+      }),
     ) as unknown[]
     expect(rows).toHaveLength(2)
   })
@@ -1913,6 +1938,7 @@ describe('write tools', () => {
     const get = async () =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
+          now: NOW,
           callerId: fx.agent.id,
           access: 'read',
           ref: task.id,
