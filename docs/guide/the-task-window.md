@@ -36,14 +36,20 @@ shorten it. Older text over this limit can be read but not edited.
 **Comments** use the same editor but accept text only. Add images as
 attachments. The composer sits below the newest message, or below the scrolling
 Activity feed on phones. Comments and activity run oldest to newest. A long
-discussion shows its newest 50 comments, and fewer when they are very long.
-The API can read the earlier ones. A task holds at most 400 comments. Once it
-has 400, Qivo refuses new ones, so start a new task to continue. An archive
-reason is still posted.
+discussion opens at its newest 50 comments, and fewer when they are very long.
+**Show earlier comments** above the oldest one loads the 50 before it and
+keeps your place in the thread. It disappears once the first comment is
+loaded. If loading fails, **Retry** asks again. Comments that arrive while
+the task is open add to the end, and the earlier ones you loaded stay. A
+task holds at most 400 comments. Once it has 400, Qivo refuses new ones, so
+start a new task to continue. An archive reason is still posted.
 **Comments** is the default filter; **All** adds changes such as assignments,
-status moves, dates, labels and attachments. Field-change entries show before
-and after values, including short description excerpts. A **New** line marks
-unread activity ([Your inbox](./working-together.md#your-inbox)).
+status moves, dates, labels and attachments. Until the first comment is
+loaded, **All** shows only the changes since the oldest loaded comment.
+Field-change entries show before and after values, including short
+description excerpts. A **New** line marks unread activity, and sits at the
+top of the loaded comments when the first unread one is earlier
+([Your inbox](./working-together.md#your-inbox)).
 
 You can edit or delete your own comments. Project leads can moderate other
 people's comments. The edit indicator shows when and by whom a comment changed,

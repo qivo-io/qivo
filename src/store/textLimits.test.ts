@@ -59,7 +59,9 @@ describe('the text cap in the store', () => {
     })
     network.onUpdate.mockImplementation((ref, _args, receive) => {
       if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
-      else if (getFunctionName(ref) === 'snapshot:commentsForIssue') publishComments = receive
+      else if (getFunctionName(ref) === 'snapshot:commentThread') {
+        publishComments = (comments) => receive({ comments, earlier: false })
+      }
       return () => {}
     })
     store = await import('./planner')

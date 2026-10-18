@@ -1,0 +1,275 @@
+// @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '../components/ui/tooltip'
+import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import type { Row } from '../store/rows'
+
+/* "Show earlier comments" in the task window, on the real store. The thread
+   arrives through the commentThread subscription and earlier pages through
+   commentsBefore, both answered by hand. Comment #n is posted n minutes
+   after START; the task's status changed at minute 10. */
+
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('../lib/convex', () => ({ convex: network }))
+vi.mock('../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: {
+    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+  },
+  signOut: vi.fn(),
+}))
+
+type Page = { comments: Row<'comments'>[]; earlier: boolean }
+type Planner = typeof import('../store/planner')['P']
+type Detail = typeof import('./IssueDetail')
+
+const START = Date.parse('2026-09-14T08:00:00.000Z')
+const at = (minute: number) => new Date(START + minute * 60_000).toISOString()
+
+let P: Planner
+let detail: Detail
+let container: HTMLDivElement
+let root: Root
+let me: string
+let publish: (page: Page) => void
+let pages: { before: string; resolve: (page: Page) => void; reject: (e: unknown) => void }[]
+
+const comment = (n: number): Row<'comments'> => ({
+  id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+  issue_id: 'task-a',
+  author: me,
+  body: `Check ${n}`,
+  created_at: at(n),
+})
+const range = (from: number, to: number) =>
+  Array.from({ length: to - from }, (_, n) => comment(from + n))
+
+async function load(unread?: number) {
+  vi.resetModules()
+  const snap: Snapshot = plannerFixture()
+  me = snap.profiles[0].id
+  snap.issues.push({
+    id: 'task-a',
+    org_id: snap.orgs[0].id,
+    project_id: snap.projects[0].id,
+    num: 27,
+    title: 'Run the soak test',
+    description: '',
+    status: 'progress',
+    priority: 'medium',
+    paused: false,
+    created_at: at(0),
+    updated_at: at(0),
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  })
+  snap.activity.push({
+    id: 'event-a',
+    org_id: snap.orgs[0].id,
+    ts: at(10),
+    actor_id: me,
+    verb: 'moved',
+    target_type: 'issue',
+    target_id: 'task-a',
+    label: 'QN-27',
+    detail: 'To Do → In Progress',
+  })
+  if (unread !== undefined) {
+    snap.messages.push({
+      id: 'message-a',
+      org_id: snap.orgs[0].id,
+      recipient_id: me,
+      issue_id: 'task-a',
+      issue_title: 'Run the soak test',
+      kind: 'comment',
+      detail: 'New comment',
+      created_at: at(unread),
+    })
+  }
+  pages = []
+  network.onUpdate.mockImplementation((ref, _args, next) => {
+    const name = getFunctionName(ref)
+    if (name === 'snapshot:forMe') next(structuredClone(snap))
+    else if (name === 'snapshot:commentThread') publish = next
+    return () => {}
+  })
+  network.query.mockImplementation(
+    (ref, args: { before?: string }) =>
+      new Promise((resolve, reject) => {
+        if (getFunctionName(ref) !== 'snapshot:commentsBefore') return resolve(null)
+        pages.push({ before: args.before ?? '', resolve, reject })
+      }),
+  )
+  // writes succeed: opening the task marks its messages read
+  network.mutation.mockResolvedValue(null)
+  const store = await import('../store/planner')
+  P = store.P
+  await store.initStore()
+  detail = await import('./IssueDetail')
+}
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  )
+  window.showToast = vi.fn()
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+})
+
+afterEach(async () => {
+  await act(async () => root.unmount())
+  container.remove()
+  document.body.innerHTML = ''
+  vi.unstubAllGlobals()
+})
+
+async function open() {
+  const task = P.issues.find((it) => it.uuid === 'task-a')
+  if (!task) throw new Error('missing the task')
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <detail.IssueDetail issueId={task.id} onClose={vi.fn()} onOpen={vi.fn()} />
+      </TooltipProvider>,
+    ),
+  )
+}
+
+/* The thread as rendered, top to bottom: the control above it, comments by
+   their text, the status change as `event` and the New line as `New`. */
+function thread(): string[] {
+  const feed = document.querySelector('[data-spine]')
+  if (!feed) throw new Error('missing the thread')
+  return [...feed.children].map((row) => {
+    const html = row as HTMLElement
+    if (html.dataset.earlierComments) return `[${html.textContent}]`
+    if (html.dataset.unreadDivider) return 'New'
+    if (html.dataset.event) return 'event'
+    if (html.dataset.comment)
+      return html.querySelector('.md, p')?.textContent ?? html.textContent ?? ''
+    return html.textContent ?? ''
+  })
+}
+const control = () => document.querySelector<HTMLElement>('[data-earlier-comments]')
+
+async function deliver(page: Page) {
+  await act(async () => publish(page))
+}
+async function press(name: string) {
+  const button = [...document.querySelectorAll('[data-earlier-comments] button')].find(
+    (b) => b.textContent === name,
+  )
+  if (!(button instanceof HTMLElement)) throw new Error(`missing ${name}`)
+  await act(async () => button.click())
+}
+async function answer(page: Page) {
+  await act(async () => pages[pages.length - 1].resolve(page))
+}
+
+// Each test imports the whole task window afresh, which takes seconds on a
+// busy CI worker.
+describe('earlier comments in the task window', { timeout: 20_000 }, () => {
+  it('shows the button above the oldest loaded comment and loads the page above it', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    const rows = thread()
+    expect(rows[0]).toBe('[Show earlier comments]')
+    expect(rows[1]).toContain('Check 60')
+    await press('Show earlier comments')
+    expect(pages.map((p) => p.before)).toEqual([comment(60).id])
+    expect(control()?.dataset.earlierComments).toBe('loading')
+    expect(thread()[0]).toBe('[Loading earlier comments…]')
+    await answer({ comments: range(10, 60), earlier: true })
+    expect(thread()[0]).toBe('[Show earlier comments]')
+    expect(thread()[1]).toContain('Check 10')
+    expect(thread()).toHaveLength(101)
+    await press('Show earlier comments')
+    expect(pages[1].before).toBe(comment(10).id)
+    await answer({ comments: range(1, 10), earlier: false })
+    expect(control()).toBeNull()
+    expect(thread()[0]).toContain('Check 1')
+  })
+
+  it('offers Retry after a failed load and keeps the loaded thread', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    await press('Show earlier comments')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => pages[0].reject(new Error('offline')))
+    expect(thread()[0]).toBe("[Couldn't load earlier comments.Retry]")
+    expect(thread()).toHaveLength(51)
+    await press('Retry')
+    expect(pages.map((p) => p.before)).toEqual([comment(60).id, comment(60).id])
+    await answer({ comments: range(1, 60), earlier: false })
+    expect(control()).toBeNull()
+    expect(thread()).toHaveLength(109)
+  })
+
+  it('moves keyboard focus to the control that replaces the one pressed', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    control()?.querySelector('button')?.focus()
+    await press('Show earlier comments')
+    await answer({ comments: range(10, 60), earlier: true })
+    expect(document.activeElement?.textContent).toBe('Show earlier comments')
+  })
+
+  it('shows no button when the whole thread is loaded', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(1, 30), earlier: false })
+    expect(control()).toBeNull()
+  })
+
+  it('with All, hides changes older than the oldest loaded comment until the start is loaded', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(20, 70), earlier: true })
+    const all = [...document.querySelectorAll('button')].find((b) => b.textContent === 'All')
+    if (!all) throw new Error('missing the All filter')
+    await act(async () => all.click())
+    expect(thread()).not.toContain('event')
+    await press('Show earlier comments')
+    await answer({ comments: range(1, 20), earlier: false })
+    const rows = thread()
+    expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 10')) + 1)
+  })
+
+  it('puts the New line under the button when the first unread comment is not loaded', async () => {
+    await load(30)
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    expect(thread().slice(0, 3)).toEqual([
+      '[Show earlier comments]',
+      'New',
+      expect.stringContaining('Check 60'),
+    ])
+    await press('Show earlier comments')
+    await answer({ comments: range(10, 60), earlier: true })
+    const rows = thread()
+    expect(rows[rows.indexOf('New') + 1]).toContain('Check 30')
+  })
+
+  it('keeps the loaded thread while new comments arrive', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    await press('Show earlier comments')
+    await answer({ comments: range(10, 60), earlier: true })
+    await deliver({ comments: range(65, 115), earlier: true })
+    const rows = thread()
+    expect(rows).toHaveLength(106)
+    expect(rows[1]).toContain('Check 10')
+    expect(rows[rows.length - 1]).toContain('Check 114')
+  })
+})

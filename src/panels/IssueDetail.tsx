@@ -50,7 +50,7 @@ import { parentCandidatesFor, subtaskCandidatesFor } from '../lib/relationCandid
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
-import { firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
+import { eventsBeside, firstUnreadTs, mergeSpine, unreadMark } from '../lib/spine'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile } from '../lib/useMobile'
@@ -58,6 +58,7 @@ import '../styles/mobile-issue.css'
 import {
   type ActivityVM,
   type AttachmentVM,
+  type CommentsEarlier,
   type CommentVM,
   type IssueVM,
   P,
@@ -813,6 +814,73 @@ function EditedGlyph({ c, it }: { c: CommentVM; it: IssueVM }) {
   )
 }
 
+/* The first row of a thread whose start is not loaded (P.commentsEarlier):
+   a muted "Show earlier comments" button above the oldest loaded comment,
+   static text while the page above loads, and Retry when it failed. Each
+   is one control tall, so the rows under it do not move when it changes. */
+function EarlierComments({
+  state,
+  onLoad,
+}: {
+  state: Exclude<CommentsEarlier, 'none'>
+  onLoad: (control: HTMLElement) => void
+}) {
+  if (state === 'loading') {
+    return (
+      <div
+        data-earlier-comments="loading"
+        className="flex min-h-control-sm items-center text-sm italic text-text-3"
+      >
+        Loading earlier comments…
+      </div>
+    )
+  }
+  if (state === 'failed') {
+    return (
+      <div
+        data-earlier-comments="failed"
+        className="flex min-h-control-sm items-center gap-2 text-sm text-text-2"
+      >
+        Couldn't load earlier comments.
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="px-2"
+          onClick={(e) => onLoad(e.currentTarget)}
+        >
+          <Icon name="rotateCcw" size={16} />
+          Retry
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div data-earlier-comments="more" className="-ml-2 flex min-h-control-sm items-center">
+      <Button
+        type="button"
+        variant="quiet"
+        size="sm"
+        className="gap-1.5 px-2"
+        onClick={(e) => onLoad(e.currentTarget)}
+      >
+        <Icon name="chevronsUp" size={16} />
+        Show earlier comments
+      </Button>
+    </div>
+  )
+}
+
+/* The nearest ancestor of `el` that scrolls vertically, or the page. */
+function scrollerOf(el: Element): Element {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight)
+      return node
+  }
+  return document.scrollingElement ?? document.documentElement
+}
+
 function CommentRow({
   c,
   it,
@@ -1521,12 +1589,58 @@ function IssueDetail({
   // chat order — oldest at the top, newest at the bottom where the reply box
   // is and where the scroller opens. The Comments filter simply drops the
   // events from the merge.
+  // While the thread's start is not loaded, events older than its oldest
+  // loaded comment stay hidden, so All never shows a gap in the comments.
   const comments = it ? P.comments.filter((c) => c.issue === it.uuid) : []
   const events =
     it && actFilter === 'all'
-      ? P.activity.filter((e) => e.targetType === 'issue' && e.targetId === it.id)
+      ? eventsBeside(
+          P.activity.filter((e) => e.targetType === 'issue' && e.targetId === it.id),
+          comments,
+          P.commentsLoaded && P.commentsEarlier === 'none',
+        )
       : []
   const spine = mergeSpine(comments, events)
+  // "Show earlier comments" adds a page above the first row. The reader
+  // keeps their place: that row stays where it was on screen, in whichever
+  // ancestor scrolls (the spine, the stacked window's shared scroller or the
+  // phone page), and keyboard focus moves to the control that replaces the
+  // one pressed. Rows are found from the pressed control, because the
+  // Activity window renders the thread outside this frame.
+  const earlierFrom = useRefID<{
+    feed: Element
+    row: Element | null
+    top: number
+    focused: boolean
+  } | null>(null)
+  const loadEarlier = (control: HTMLElement) => {
+    const feed = control.closest('[data-spine-feed]')
+    if (feed) {
+      const row = feed.querySelector('[data-comment], [data-event]')
+      earlierFrom.current = { feed, row, top: 0, focused: document.activeElement === control }
+    }
+    void P.loadEarlierComments()
+  }
+  // Measured while rendering the page in, when the screen still shows the
+  // thread without it, so scrolling while it loaded is kept as well.
+  const pending = earlierFrom.current
+  if (pending?.row?.isConnected && P.commentsEarlier !== 'loading') {
+    pending.top = pending.row.getBoundingClientRect().top
+  }
+  useLayoutEffectID(() => {
+    const from = earlierFrom.current
+    if (!from || P.commentsEarlier === 'loading') return
+    earlierFrom.current = null
+    if (from.row?.isConnected) {
+      const shift = from.row.getBoundingClientRect().top - from.top
+      if (shift !== 0) scrollerOf(from.row).scrollTop += shift
+    }
+    if (from.focused) {
+      from.feed
+        .querySelector<HTMLElement>('[data-earlier-comments] button')
+        ?.focus({ preventScroll: true })
+    }
+  }, [P.commentsEarlier, spine.length])
   // nothing is said until the thread is in: watchComments empties the cache
   // first, and against an empty spine every mark degrades to 'tail' — which
   // would flash "New activity on this task" over "Loading comments…" and then
@@ -1658,6 +1772,9 @@ function IssueDetail({
             <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
               Loading comments…
             </div>
+          )}
+          {P.commentsLoaded && P.commentsEarlier !== 'none' && (
+            <EarlierComments state={P.commentsEarlier} onLoad={loadEarlier} />
           )}
           {spine.flatMap((s, i) => {
             const row =
