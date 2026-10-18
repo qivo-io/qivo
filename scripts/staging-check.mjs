@@ -9,7 +9,8 @@
  * Allow changes and one without. With every credential it checks that reads
  * succeed over REST and MCP, that writes succeed only where allowed, that
  * refusals carry the documented status and sentence, and that activity rows
- * name the credential. It uploads, downloads and deletes attachments, checks
+ * name the credential. It uploads, downloads and deletes attachments, one of
+ * them at the per-file limit, checks that an upload URL stores one file, checks
  * the text, name and request size limits, unknown arguments, comment paging,
  * the archived task lists, task progress, last comment times, delay and
  * project completion, and the live group rule. It opens the Settings page
@@ -1487,6 +1488,7 @@ const TOO_MANY_COMMENTS = `this task has ${COMMENT_MAX} comments, the most a tas
 const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
+const UPLOAD_URL_USED = 'this upload URL has already been used; start a new upload'
 const UNKNOWN_PROJECT = 'project must name a project by uuid, number or key'
 const GROUP_STATUS = 'status cannot be set on a task with subtasks — update its subtasks instead'
 
@@ -1863,7 +1865,8 @@ async function checkRevoked(cred, restSentence, mcpSentence) {
 
 /* ---------------------------------------------------------- attachments */
 
-/** Refuses an upload URL that is not this deployment's storage. */
+/** Refuses an upload URL that is not this deployment's single-use Qivo
+ *  upload URL, /attachment-uploads/{ticket} on the API origin (#166). */
 function checkUploadUrl(value) {
   keep(value)
   let u
@@ -1872,31 +1875,39 @@ function checkUploadUrl(value) {
   } catch {
     fail('the upload URL is not a URL')
   }
-  const ok =
-    cfg.target.target === 'local'
-      ? u.origin === cfg.target.url
-      : u.protocol === 'https:' &&
-        u.hostname.endsWith('.convex.cloud') &&
-        u.hostname.split('.')[0] === cfg.target.deployment
-  expect(ok, 'the upload URL is not on this deployment')
+  expect(
+    onApi(value) && u.pathname.startsWith('/attachment-uploads/'),
+    'the upload URL is not on this deployment',
+  )
+}
+
+/** POSTs `bytes` to a ticket's upload URL and answers the status and the
+ *  JSON body. A large body gets `timeoutMs` to arrive. */
+async function postUpload(uploadUrl, bytes, type, timeoutMs) {
+  checkUploadUrl(uploadUrl)
+  const r = await request(
+    uploadUrl,
+    { method: 'POST', headers: { 'Content-Type': type }, body: bytes },
+    timeoutMs,
+  )
+  return { status: r.status, json: await r.json().catch(() => null) }
 }
 
 /** Sends the bytes to a ticket's upload URL and answers the storage id. */
-async function putBytes(uploadUrl, bytes, type) {
-  checkUploadUrl(uploadUrl)
-  const r = await request(uploadUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': type },
-    body: bytes,
-  })
-  expect(r.ok, `the upload answered HTTP ${r.status}`)
-  const storageId = (await r.json().catch(() => null))?.storageId
+async function putBytes(uploadUrl, bytes, type, timeoutMs) {
+  const r = await postUpload(uploadUrl, bytes, type, timeoutMs)
+  expect(
+    r.status === 200,
+    `the upload answered HTTP ${r.status}${r.json?.error ? ` ${short(r.json.error)}` : ''}`,
+  )
+  const storageId = r.json?.storageId
   expect(typeof storageId === 'string', 'the upload answered no storageId')
   return storageId
 }
 
 /** Downloads an attachment link, which must be on the API origin. A server
- *  error or a network failure is tried once more, like any other read. */
+ *  error or a network failure is tried once more, like any other read. A
+ *  file at the per-file limit gets five minutes to arrive. */
 async function download(url) {
   keep(url)
   const u = new URL(url)
@@ -1904,7 +1915,7 @@ async function download(url) {
   for (let attempt = 0; ; attempt++) {
     let r
     try {
-      r = await request(url)
+      r = await request(url, {}, 300_000)
     } catch (error) {
       if (attempt > 0 || error instanceof CheckError) throw error
     }
@@ -2015,6 +2026,63 @@ async function uploadChecks() {
       return 'uploaded, downloaded and compared'
     })
   }
+  // An upload URL stores one file (#166): a body of another size stores
+  // nothing and leaves it usable, a second POST is refused, and once the
+  // upload is confirmed the URL is gone.
+  await check('write-token/rest/upload-url-once', async () => {
+    const { bytes, type } = sampleFile()
+    const start = await restOk(w, 'POST', `/tasks/${task.key}/attachments`, {
+      name: `${run.tag} once.bin`,
+      content_type: type,
+      size: bytes.length,
+    })
+    const wrong = await postUpload(start.upload_url, bytes.subarray(1), type)
+    eq(wrong.status, 400, 'a body one byte short')
+    eq(wrong.json?.error, `the upload must be exactly the ${bytes.length} bytes declared`, 'error')
+    const storage_id = await putBytes(start.upload_url, bytes, type)
+    const again = await postUpload(start.upload_url, bytes, type)
+    eq(again.status, 409, 'a second POST')
+    eq(again.json?.error, UPLOAD_URL_USED, 'error')
+    const att = await restOk(w, 'POST', `/tasks/${task.key}/attachments/${start.ticket}`, {
+      storage_id,
+    })
+    keepFile(att, w, 'rest')
+    await sameBytes(att, bytes, type)
+    const after = await postUpload(start.upload_url, bytes, type)
+    eq(after.status, 404, 'a POST after the confirm')
+    eq(after.json?.error, UPLOAD_MISSING, 'error')
+    return 'a short body 400, a second POST 409, after the confirm 404'
+  })
+  // One file at the organization's per-file limit through the REST ticket,
+  // which shows whether the deployment takes a body that large in an HTTP
+  // action. It is deleted again at once.
+  await check('write-token/rest/upload-at-cap', async () => {
+    const mb = (await restOk(w, 'GET', '/me')).organization.max_attachment_mb
+    expect(Number.isInteger(mb) && mb > 0, 'max_attachment_mb is not a positive integer')
+    const bytes = randomBytes(mb * 1024 * 1024)
+    const type = 'application/octet-stream'
+    const start = await restOk(w, 'POST', `/tasks/${task.key}/attachments`, {
+      name: `${run.tag} at the cap.bin`,
+      content_type: type,
+      size: bytes.length,
+    })
+    const began = Date.now()
+    const storage_id = await putBytes(start.upload_url, bytes, type, 600_000)
+    const seconds = Math.round((Date.now() - began) / 1000)
+    const att = await restOk(w, 'POST', `/tasks/${task.key}/attachments/${start.ticket}`, {
+      storage_id,
+    })
+    try {
+      await sameBytes(att, bytes, type)
+    } finally {
+      eq(
+        (await restOk(w, 'DELETE', `/tasks/${task.key}/attachments/${att.id}`)).deleted,
+        true,
+        'deleted',
+      )
+    }
+    return `${bytes.length} bytes (${mb} MiB) uploaded in ${seconds} s, confirmed, downloaded and deleted`
+  })
   const text = `Staging check ${run.tag}\nGrüße aus Göteborg, 東京, 🙂\nline 3\n`
   for (const cred of [o, w]) {
     await check(`${cred.id}/mcp/attach_text_file`, async () => {

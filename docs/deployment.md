@@ -105,7 +105,11 @@ Northstar fixture admin with a password, creates two personal tokens, a
 Standard and a Viewer agent with their keys, and two OAuth connections on the
 consent screen, one with **Allow changes** and one without. With each it
 checks reads, writes, refusals, attachments, activity attribution and
-revocation, and the text, name, comment and request size limits. It also
+revocation, and the text, name, comment and request size limits. Its uploads
+check that an upload URL stores one file, and one upload is a file at the
+organization's per-file limit (20 MiB by default), sent through a REST upload
+ticket, confirmed, downloaded and deleted again, which shows whether the
+deployment takes a body that large. It also
 checks task progress, last comment times, delay and project completion, the
 rule that a subtask in an archived project makes no group, and in the browser
 the search on **Settings → Projects → Archived tasks**. Everything it creates
