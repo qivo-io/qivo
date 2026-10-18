@@ -1,8 +1,9 @@
 /* When something went to Deleted items, as the page says it: "Today 14:09",
    "Yesterday 16:40" or "14 Oct 10:22" in the viewer's local time, the full
    date and time for the hover, and the short day and time phrases the page's
-   sentences use ("today", "on 12 Oct", "14:02 to 14:09"). Pure, so the page
-   and its tests share one reading of "today". */
+   sentences use ("today", "on 12 Oct", "14:02 to 14:09"). Archived tasks
+   says when a task was archived with the same words. Pure, so the pages and
+   their tests share one reading of "today". */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const MONTHS_LONG = [
@@ -54,6 +55,18 @@ export function dayLabel(at: Date, now: Date): string {
 /** A row's time: "Today 14:09", "Yesterday 16:40" or "14 Oct 10:22". */
 export function deletedAtLabel(at: Date, now: Date): string {
   return `${dayLabel(at, now)} ${clockTime(at)}`
+}
+
+/** An archived task's time: "Today 14:09", "Yesterday 16:40", or only the
+    day before that, "14 Oct" or "20 Dec 2025". */
+export function archivedAtLabel(at: Date, now: Date): string {
+  const day = dayLabel(at, now)
+  return daysBefore(at, now) <= 1 ? `${day} ${clockTime(at)}` : day
+}
+
+/** The month a list's divider names: "October 2026". */
+export function monthLabel(at: Date): string {
+  return `${MONTHS_LONG[at.getMonth()]} ${at.getFullYear()}`
 }
 
 /** The hover over a row's time: "14 October 2026, 10:22". */

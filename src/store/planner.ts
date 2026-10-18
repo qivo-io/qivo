@@ -3288,11 +3288,9 @@ export const PLANNER = {
      carries (QN key, title, description, status and priority display names,
      assignee name, label names). Each word may land on a different field
      ("to do cable" = status To Do + "cable" in the title). The text comes
-     from taskSearchText, which REST and MCP task search build too. */
-  /* Also answers for archived rows: fetchArchived's shapes carry every field
-     the haystack reads, which is what "shaped enough like snapshot issues for
-     matchesSearch" means. */
-  matchesSearch: (x: IssueVM | ArchivedIssueVM | string, query: string): boolean => {
+     from taskSearchText, which REST and MCP task search build too, and the
+     Archived tasks page searches the archive on the server by it. */
+  matchesSearch: (x: IssueVM | string, query: string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     if (!it) return false
     const hay = taskSearchText({
@@ -3964,7 +3962,7 @@ export const PLANNER = {
     )
   },
 
-  /** Restore from the Archive page. Awaited, never optimistic: the row is
+  /** Restore from Archived tasks. Awaited, never optimistic: the row is
       not in the snapshot, and the snapshot pulls the restored rows back in
       reactively — no refetch. Resolves false on refusal (toasted). */
   unarchiveIssue: async (
@@ -3985,35 +3983,47 @@ export const PLANNER = {
     return true
   },
 
-  /** One project's archived issues, on demand — never part of the snapshot.
-      A meta project loads itself plus its sub-projects (the app's notion of
-      "the project"); rows are shaped enough like snapshot issues for
-      matchesSearch to work on them. Newest-archived first (server-ordered).
-      Null on transport error. */
-  fetchArchived: async (projectId: string): Promise<ArchivedIssueVM[] | null> => {
-    // the archive is per project — neither sentinel scope is one, and letting
+  /** One page of a project's archived tasks for the Archived tasks page,
+      most recently archived first, or null on a transport or server error.
+      Never part of the snapshot. A top-level project includes its
+      sub-projects; the server decides which (issues.archivedPage). With
+      `search` the rows are the matches only, and a page may hold fewer rows
+      than asked, even none, while `nextCursor` says more remain. `scanned`
+      counts the archived tasks the page looked at. */
+  fetchArchivedPage: async (
+    projectId: string,
+    o: { cursor?: string | null; search?: string; limit?: number } = {},
+  ): Promise<{ rows: ArchivedIssueVM[]; nextCursor: string | null; scanned: number } | null> => {
+    // the archive is per project; neither sentinel scope is one, and letting
     // one through would query for the literal string "all" / "mine"
     if (projectId === ALL_SCOPE || projectId === MINE_SCOPE) return null
-    const p = PLANNER.project(projectId)
-    const ids =
-      p && p.type === 'meta'
-        ? [p.id, ...(p.children || []).filter((id) => PLANNER.canSee(id))]
-        : [projectId]
-    let data: FunctionReturnType<typeof api.issues.archivedFor>
+    let data: FunctionReturnType<typeof api.issues.archivedPage>
     try {
-      data = await convex.query(api.issues.archivedFor, { project_ids: ids })
+      data = await convex.query(api.issues.archivedPage, {
+        project_id: projectId,
+        ...(o.cursor ? { cursor: o.cursor } : {}),
+        ...(o.search ? { search: o.search } : {}),
+        ...(o.limit !== undefined ? { limit: o.limit } : {}),
+      })
     } catch (e) {
       console.error('[qivo] archived fetch failed:', e)
       return null
     }
-    return data.map((row) =>
-      shapeArchivedIssue(
-        row,
-        handleFor(row.id, row.org_id, `${ISSUE_PREFIX}-${row.num}`),
-        `${ISSUE_PREFIX}-${row.num}`,
+    return {
+      rows: data.rows.map((row) =>
+        shapeArchivedIssue(
+          row,
+          handleFor(row.id, row.org_id, `${ISSUE_PREFIX}-${row.num}`),
+          `${ISSUE_PREFIX}-${row.num}`,
+        ),
       ),
-    )
+      nextCursor: data.next_cursor,
+      scanned: data.scanned,
+    }
   },
+  /** Whether the snapshot holds task `uuid` as an active task, such as an
+      archived one that a restore brought back. */
+  isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),
 
   addLink: (srcId: string, type: string, dstId: string) => {
     if (srcId === dstId) return

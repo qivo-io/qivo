@@ -6,7 +6,6 @@ const chunks = vi.hoisted(() => ({
   loadInbox: vi.fn(async () => undefined),
   loadIssueDetail: vi.fn(async () => undefined),
   loadSettings: vi.fn(async () => undefined),
-  loadArchive: vi.fn(async () => undefined),
   loadRoadmap: vi.fn(async () => undefined),
   loadTeamSync: vi.fn(async () => undefined),
 }))
@@ -37,7 +36,7 @@ describe('workspace route preloading', () => {
       resources: 'loadRoadmap',
       inbox: 'loadInbox',
       sync: 'loadTeamSync',
-      archive: 'loadArchive',
+      archive: 'loadSettings',
       settings: 'loadSettings',
     } satisfies Record<string, keyof typeof chunks>
     for (const [page, loader] of Object.entries(routes)) {
@@ -86,7 +85,7 @@ describe('workspace route preloading', () => {
     expectPreload('/app/northstar/sync/people/tasks', '', ['loadTeamSync'])
     expectPreload('/app/northstar/sync/team/tasks/people/nora', '', ['loadTeamSync'])
     expectPreload('/app/northstar/settings/tasks/qn-42', '', ['loadSettings'])
-    expectPreload('/app/northstar/archive/tasks/qn-42', '', ['loadArchive'])
+    expectPreload('/app/northstar/archive/tasks/qn-42', '', ['loadSettings'])
     expectPreload('/app/northstar/inbox/all/tasks/qn-42', '', ['loadInbox'])
     expectPreload('/app/northstar/board/tasks', '', ['loadKanban'])
   })

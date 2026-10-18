@@ -531,8 +531,9 @@ current project permissions.
 
 Task links use `https://qivo.io/app/<org-slug>/tasks/qn-<number>`; a project board
 uses `/app/<org-slug>/board/p/<project-number>`. Use the actual organization
-slug and returned IDs. `/app/~/inbox` and `/app/~/archive` span the signed-in
-user's organizations. Archived task links open normally after restoration.
+slug and returned IDs. `/app/~/inbox` spans the signed-in user's
+organizations, and `/app/~/archive` opens Settings → Projects → Archived tasks.
+Archived task links open normally after restoration.
 
 For a complete organization export, an organization admin uses **Settings →
 Organization → General → Export data** in the browser. Export format 2 uses

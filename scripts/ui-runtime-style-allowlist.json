@@ -15,10 +15,6 @@
     "count": 1,
     "reason": "runtime filter-menu width"
   },
-  "src/panels/ArchivePage.tsx": {
-    "count": 1,
-    "reason": "data-derived status tone; select geometry uses shared control classes"
-  },
   "src/panels/Inbox.tsx": {
     "count": 1,
     "reason": "measured split-pane width; message titles and context use text classes"

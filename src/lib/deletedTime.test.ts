@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  archivedAtLabel,
   dayInSentence,
   dayLabel,
   deletedAtFull,
   deletedAtLabel,
+  monthLabel,
   sameDay,
   stretch,
   timeSpan,
@@ -59,5 +61,19 @@ describe('the time of a deleted item', () => {
     expect(stretch(at(10, 16, 0, 3), at(10, 15, 23, 58), NOW)).toBe(
       'yesterday 23:58 to today 00:03',
     )
+  })
+})
+
+describe('the time of an archived task', () => {
+  it('keeps the clock for today and yesterday, and only the day before that', () => {
+    expect(archivedAtLabel(at(10, 16, 14, 9), NOW)).toBe('Today 14:09')
+    expect(archivedAtLabel(at(10, 15, 16, 40), NOW)).toBe('Yesterday 16:40')
+    expect(archivedAtLabel(at(10, 14, 10, 22), NOW)).toBe('14 Oct')
+    expect(archivedAtLabel(at(12, 20, 9, 5, 2025), NOW)).toBe('20 Dec 2025')
+  })
+
+  it('names the month of a divider with its year', () => {
+    expect(monthLabel(at(10, 1, 0, 0))).toBe('October 2026')
+    expect(monthLabel(at(12, 31, 23, 59, 2025))).toBe('December 2025')
   })
 })

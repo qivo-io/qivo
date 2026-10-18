@@ -912,7 +912,7 @@ describe('Settings while a project page deletes its project', () => {
           onExit={vi.fn()}
           onNewProject={vi.fn()}
           onNewSubProject={vi.fn()}
-          onOpenArchive={vi.fn()}
+          onOpenArchivedTasks={vi.fn()}
         />
       )
     }

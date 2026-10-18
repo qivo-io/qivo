@@ -36,12 +36,12 @@ export function OrgProjectsPage({
   setPage,
   onNewProject,
   onNewSubProject,
-  onOpenArchive,
+  onOpenArchivedTasks,
 }: {
   setPage: (page: string) => void
   onNewProject: () => void
   onNewSubProject: (parent: string) => void
-  onOpenArchive: (projectId: string) => void
+  onOpenArchivedTasks: (projectId: string) => void
 }) {
   const visible = P.visibleProjects()
   const canCreate = P.canCreateProject()
@@ -120,7 +120,7 @@ export function OrgProjectsPage({
                 <MenuItem
                   onClick={() => {
                     close()
-                    onOpenArchive(m.id)
+                    onOpenArchivedTasks(m.id)
                   }}
                 >
                   <Icon name="inbox" size={14} />
@@ -164,7 +164,7 @@ export function OrgProjectsPage({
                     <MenuItem
                       onClick={() => {
                         close()
-                        onOpenArchive(sp.id)
+                        onOpenArchivedTasks(sp.id)
                       }}
                     >
                       <Icon name="inbox" size={14} />

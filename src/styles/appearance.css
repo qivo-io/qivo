@@ -68,8 +68,6 @@ html[data-appearance]
     [data-ov-strip],
     .overview-section,
     .settings-navigation,
-    .archive-navigation,
-    .archive-content-frame,
     .settings-content-frame,
     [data-roadmap-panel],
     [data-split-strip],
@@ -439,7 +437,7 @@ html[data-appearance] [data-slot="command-input-wrapper"] {
   border-color: var(--border);
 }
 
-/* The Archive search box is clear, like the project select beside it. */
+/* The Archived tasks search box is clear, like the project select beside it. */
 html[data-appearance] [data-archive-search-box] {
   background: transparent;
 }

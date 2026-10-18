@@ -124,7 +124,7 @@ export function MobileHeader({
                       <MenuItem
                         onClick={() => {
                           close()
-                          actions.openArchive(project.id)
+                          actions.openArchivedTasks(project.id)
                         }}
                       >
                         <Icon name="inbox" size={16} /> Archived tasks
@@ -331,7 +331,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
                     <MenuItem
                       onClick={() => {
                         close()
-                        actions.openArchive(project.id)
+                        actions.openArchivedTasks(project.id)
                       }}
                     >
                       <Icon name="inbox" size={16} /> Archived tasks

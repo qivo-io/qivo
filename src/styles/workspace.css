@@ -117,7 +117,7 @@ html[data-appearance] .workspace-shell > .planner-sidebar {
   .workspace-shell .inbox-layout {
     padding-bottom: 0;
   }
-  .workspace-shell :is(.settings-main, .archive-main) {
+  .workspace-shell .settings-main {
     padding-bottom: var(--workspace-bottom-gap);
   }
 }

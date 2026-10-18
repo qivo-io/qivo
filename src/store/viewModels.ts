@@ -416,14 +416,12 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
 }
 export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
 
-/* one project's archived issues (fetchArchived) — outside the snapshot, so
-   they carry the same handle/key split live ones get in rebuild(), and are
-   shaped enough like snapshot issues for matchesSearch to work on them.
-   The on-demand read includes label ids so Archive search keeps matching the
-   same vocabulary as the board without putting archived assignments in the
-   boot snapshot. */
+/* one archived task of the Archived tasks page (P.fetchArchivedPage),
+   outside the snapshot, so it carries the same handle/key split live ones
+   get in rebuild(). The server searches the archive, so a row carries no
+   description, labels or links, and it names no parent. */
 export const shapeArchivedIssue = (
-  r: FunctionReturnType<typeof api.issues.archivedFor>[number],
+  r: FunctionReturnType<typeof api.issues.archivedPage>['rows'][number],
   id: string,
   key: string,
 ) => ({
@@ -433,18 +431,13 @@ export const shapeArchivedIssue = (
   num: r.num,
   org: r.org_id,
   title: r.title,
-  description: r.description || '',
   project: r.project_id,
   status: r.status,
   priority: r.priority,
   assignee: r.assignee_id,
   reviewer: r.reviewer_id,
   owner: taskOwnerId(r, r.is_group), // the same ownership rule as shapeIssue
-  parent: null,
-  children: [] as string[],
   isGroup: r.is_group,
-  links: [] as { type: string; id: string }[],
-  labels: r.label_ids,
   paused: r.paused,
   remaining: r.remaining_hours != null ? Number(r.remaining_hours) : undefined,
   due: r.due_date,
