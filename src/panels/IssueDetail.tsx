@@ -45,7 +45,7 @@ import {
 } from '../components/qivo'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
-import { restoreFocus } from '../lib/focusVisibility'
+import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { parentCandidatesFor, subtaskCandidatesFor } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
@@ -814,10 +814,11 @@ function EditedGlyph({ c, it }: { c: CommentVM; it: IssueVM }) {
   )
 }
 
-/* The first row of a thread whose start is not loaded (P.commentsEarlier):
-   a muted "Show earlier comments" button above the oldest loaded comment,
-   static text while the page above loads, and Retry when it failed. Each
-   is one control tall, so the rows under it do not move when it changes. */
+/* The first row of a thread whose start is not loaded (P.commentsEarlier).
+   It is a muted "Show earlier comments" button above the oldest loaded
+   comment, static text while the page above loads, and Retry when it
+   failed. Each is one control tall, so the rows under it do not move when
+   it changes. */
 function EarlierComments({
   state,
   onLoad,
@@ -869,6 +870,17 @@ function EarlierComments({
       </Button>
     </div>
   )
+}
+
+/* The first row of the thread in `feed`, focusable until it loses focus, so
+   it can take keyboard focus once without staying focusable to a click. */
+function firstRowForFocus(feed: Element): HTMLElement | null {
+  const row = feed.querySelector<HTMLElement>('[data-comment], [data-event]')
+  if (row && !row.hasAttribute('tabindex')) {
+    row.tabIndex = -1
+    row.addEventListener('blur', () => row.removeAttribute('tabindex'), { once: true })
+  }
+  return row
 }
 
 /* The nearest ancestor of `el` that scrolls vertically, or the page. */
@@ -1602,11 +1614,13 @@ function IssueDetail({
       : []
   const spine = mergeSpine(comments, events)
   // "Show earlier comments" adds a page above the first row. The reader
-  // keeps their place: that row stays where it was on screen, in whichever
-  // ancestor scrolls (the spine, the stacked window's shared scroller or the
-  // phone page), and keyboard focus moves to the control that replaces the
-  // one pressed. Rows are found from the pressed control, because the
-  // Activity window renders the thread outside this frame.
+  // keeps their place, because that row stays where it was on screen in
+  // whichever ancestor scrolls (the spine, the stacked window's shared
+  // scroller or the phone page). Keyboard focus that went with the pressed
+  // control moves to the control that replaces it, or to the thread's first
+  // row once none does, unless the reader moved focus elsewhere meanwhile.
+  // Rows are found from the pressed control, because the Activity window
+  // renders the thread outside this frame.
   const earlierFrom = useRefID<{
     feed: Element
     row: Element | null
@@ -1617,7 +1631,8 @@ function IssueDetail({
     const feed = control.closest('[data-spine-feed]')
     if (feed) {
       const row = feed.querySelector('[data-comment], [data-event]')
-      earlierFrom.current = { feed, row, top: 0, focused: document.activeElement === control }
+      const focused = document.activeElement === control && !lastInputWasPointer()
+      earlierFrom.current = { feed, row, top: 0, focused }
     }
     void P.loadEarlierComments()
   }
@@ -1635,10 +1650,12 @@ function IssueDetail({
       const shift = from.row.getBoundingClientRect().top - from.top
       if (shift !== 0) scrollerOf(from.row).scrollTop += shift
     }
-    if (from.focused) {
-      from.feed
-        .querySelector<HTMLElement>('[data-earlier-comments] button')
-        ?.focus({ preventScroll: true })
+    const active = document.activeElement
+    if (from.focused && (active === null || active === document.body)) {
+      const next =
+        from.feed.querySelector<HTMLElement>('[data-earlier-comments] button') ??
+        firstRowForFocus(from.feed)
+      next?.focus({ preventScroll: true })
     }
   }, [P.commentsEarlier, spine.length])
   // nothing is said until the thread is in: watchComments empties the cache

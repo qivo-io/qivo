@@ -103,7 +103,7 @@ async function load(unread?: number) {
         pages.push({ before: args.before ?? '', resolve, reject })
       }),
   )
-  // writes succeed: opening the task marks its messages read
+  // writes succeed, since opening the task marks its messages read
   network.mutation.mockResolvedValue(null)
   const store = await import('../store/planner')
   P = store.P
@@ -127,6 +127,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -158,6 +159,12 @@ function thread(): string[] {
   })
 }
 const control = () => document.querySelector<HTMLElement>('[data-earlier-comments]')
+/* Focuses the control, once the window has taken its own first focus, as it
+   does right after it opens. */
+async function focusControl() {
+  await vi.waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('dialog'))
+  control()?.querySelector('button')?.focus()
+}
 
 async function deliver(page: Page) {
   await act(async () => publish(page))
@@ -218,10 +225,79 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await load()
     await open()
     await deliver({ comments: range(60, 110), earlier: true })
-    control()?.querySelector('button')?.focus()
+    await focusControl()
     await press('Show earlier comments')
     await answer({ comments: range(10, 60), earlier: true })
     expect(document.activeElement?.textContent).toBe('Show earlier comments')
+  })
+
+  it('leaves focus where the reader moved it while the page loaded', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    await focusControl()
+    await press('Show earlier comments')
+    const all = [...document.querySelectorAll('button')].find((b) => b.textContent === 'All')
+    if (!all) throw new Error('missing the All filter')
+    all.focus()
+    await answer({ comments: range(10, 60), earlier: true })
+    expect(document.activeElement).toBe(all)
+  })
+
+  it('moves keyboard focus to the first comment once the start of the thread is loaded', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    await focusControl()
+    await press('Show earlier comments')
+    await answer({ comments: range(1, 60), earlier: false })
+    expect(control()).toBeNull()
+    const first = document.querySelector<HTMLElement>(`[data-comment="${comment(1).id}"]`)
+    expect(document.activeElement).toBe(first)
+    // focusable only until focus moves on, so a click on it later does not focus it
+    first?.blur()
+    expect(first?.hasAttribute('tabindex')).toBe(false)
+  })
+
+  it('keeps the oldest loaded comment where it was on screen, also after a scroll while loading', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(60, 110), earlier: true })
+    // jsdom has no layout. Each row of the thread is 100 px tall, and the
+    // spine's scroller is the ancestor that scrolls.
+    const scroller = document.querySelector<HTMLElement>('[data-spine-scroll]')
+    if (!scroller) throw new Error('missing the scroller')
+    let scrollTop = 0
+    Object.defineProperties(scroller, {
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value
+        },
+      },
+      scrollHeight: { configurable: true, get: () => 20_000 },
+      clientHeight: { configurable: true, get: () => 600 },
+    })
+    const computed = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
+      el === scroller ? ({ overflowY: 'auto' } as CSSStyleDeclaration) : computed(el, pseudo),
+    )
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element,
+    ) {
+      const index = this.parentElement ? [...this.parentElement.children].indexOf(this) : 0
+      return new DOMRect(0, index * 100 - scrollTop, 600, 100)
+    })
+    const onScreen = () =>
+      document.querySelector(`[data-comment="${comment(60).id}"]`)?.getBoundingClientRect().top
+    expect(onScreen()).toBe(100)
+    await press('Show earlier comments')
+    // the reader scrolls a little while the page loads
+    scrollTop = 30
+    await answer({ comments: range(10, 60), earlier: true })
+    expect(onScreen()).toBe(70)
+    expect(scrollTop).toBe(30 + 50 * 100)
   })
 
   it('shows no button when the whole thread is loaded', async () => {
