@@ -841,19 +841,39 @@ function useBottomSnap(ref: RefObject<HTMLElement>, key: string | null) {
     el.scrollTop = el.scrollHeight
     // inline images load after the snap and grow the content below the
     // viewport — chase them (img load doesn't bubble; capture catches it)
-    // for a few seconds, then leave the user's scroll alone
+    // for a few seconds, then leave the user's scroll alone. A reader who
+    // scrolls meanwhile is left alone at once: a wheel or touch scroll, or
+    // any move up, which the snap itself never makes. Otherwise the avatars
+    // of earlier comments loaded above would pull them back to the end.
     let chasing = true
+    let top = el.scrollTop
     const onLoad = () => {
       if (chasing) el.scrollTop = el.scrollHeight
     }
+    const onScroll = () => {
+      if (el.scrollTop < top) chasing = false
+      top = el.scrollTop
+    }
+    const onReader = () => {
+      chasing = false
+    }
     el.addEventListener('load', onLoad, true)
+    el.addEventListener('scroll', onScroll)
+    el.addEventListener('wheel', onReader, { passive: true })
+    el.addEventListener('touchstart', onReader, { passive: true })
+    const stop = () => {
+      el.removeEventListener('load', onLoad, true)
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onReader)
+      el.removeEventListener('touchstart', onReader)
+    }
     const t = setTimeout(() => {
       chasing = false
-      el.removeEventListener('load', onLoad, true)
+      stop()
     }, 4000)
     return () => {
       clearTimeout(t)
-      el.removeEventListener('load', onLoad, true)
+      stop()
     }
   }, [key]) // eslint-disable-line
 }
