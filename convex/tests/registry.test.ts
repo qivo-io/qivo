@@ -303,8 +303,13 @@ describe('the machine action registry', () => {
       access: 'read',
       status: 200,
       run: (r, { callerId, access, param }) =>
-        // @ts-expect-error the path declares :ref, not :key
-        r.runQuery(internal.machine.rest.getIssue, { callerId, access, ref: param('key') }),
+        r.runQuery(internal.machine.rest.getIssue, {
+          callerId,
+          access,
+          now: new Date().toISOString(),
+          // @ts-expect-error the path declares :ref, not :key
+          ref: param('key'),
+        }),
     })
     expect(route.path).toBe('tasks/:ref')
   })
