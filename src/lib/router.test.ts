@@ -236,13 +236,25 @@ describe('parsePath — scopes and pages', () => {
   })
 
   it('reads the full-screen pages', () => {
-    expect(parsePath('/app/~/archive')).toEqual({ archive: true })
     expect(parsePath('/app/~/inbox')).toEqual({ inbox: true })
     expect(parsePath('/app/home/inbox/tasks/qn-9')).toEqual({ inbox: true, issue: 'QN-9' })
     expect(parsePath('/app/~/settings/account')).toEqual({ settings: 'account' })
     expect(parsePath('/app/~/settings/desktop')).toEqual({ settings: 'desktop' })
     expect(parsePath('/app/home/settings/org-general')).toEqual({ settings: 'org-general' })
     expect(parsePath('/app/home/settings/project/7')).toEqual({ settings: 'project:p-home-7' })
+    expect(parsePath('/app/home/settings/projects-archived-tasks')).toEqual({
+      settings: 'projects-archived-tasks',
+    })
+  })
+
+  it('opens Settings › Archived tasks at the old Archive address, rewritten in place', () => {
+    const page = { settings: 'projects-archived-tasks' }
+    expect(parsePath('/app/~/archive')).toEqual(page)
+    expect(parsePath('/app/home/archive')).toEqual(page)
+    const state = { scope: 'p-home-7', view: 'kanban', settingsPage: 'projects-archived-tasks' }
+    expect(buildPath(state)).toBe('/app/home/settings/projects-archived-tasks')
+    // the old address names the same page, so it is replaced, not stacked
+    expect(pathMatchesState('/app/~/archive', state)).toBe(true)
   })
 
   it('old view names still parse — split and resources folded into the roadmap', () => {
@@ -264,12 +276,11 @@ describe('buildPath', () => {
   })
 
   it('names NO organization for the addresses that are about none', () => {
-    // both sentinels span every org; the inbox and archive do too; an account
-    // page is about a person
+    // both sentinels span every org; the inbox does too; an account page is
+    // about a person
     expect(buildPath({ scope: 'all', view: 'kanban' })).toBe('/app/~/board/all')
     expect(buildPath({ scope: 'mine', view: 'overview' })).toBe('/app/~/overview/mine')
     expect(buildPath({ inboxOpen: true })).toBe('/app/~/inbox')
-    expect(buildPath({ archiveOpen: true })).toBe('/app/~/archive')
     expect(buildPath({ settingsPage: 'account' })).toBe('/app/~/settings/account')
     expect(buildPath({ settingsPage: 'desktop' })).toBe('/app/~/settings/desktop')
   })
@@ -297,7 +308,6 @@ describe('buildPath', () => {
 
   it('full-screen pages still outrank the scope', () => {
     expect(buildPath({ scope: 'all', view: 'kanban', inboxOpen: true })).toBe('/app/~/inbox')
-    expect(buildPath({ scope: 'all', view: 'kanban', archiveOpen: true })).toBe('/app/~/archive')
     expect(buildPath({ scope: 'all', view: 'kanban', settingsPage: 'account' })).toBe(
       '/app/~/settings/account',
     )
@@ -361,7 +371,7 @@ describe('parseHash — shared route grammar', () => {
     })
     expect(parseHash('#/settings/org-general')).toEqual({ settings: 'org-general' })
     expect(parseHash('#/inbox')).toEqual({ inbox: true })
-    expect(parseHash('#/archive')).toEqual({ archive: true })
+    expect(parseHash('#/archive')).toEqual({ settings: 'projects-archived-tasks' })
   })
 
   it('does not open tasks through former /i/ hash segments', () => {
@@ -640,7 +650,6 @@ describe('Team sync addresses', () => {
   it('full-screen pages still outrank it, and it outranks the scope below', () => {
     const sync = { scope: 'all', step: 'team' }
     expect(buildPath({ sync, settingsPage: 'account' })).toBe('/app/~/settings/account')
-    expect(buildPath({ sync, archiveOpen: true })).toBe('/app/~/archive')
     expect(buildPath({ scope: 'p-home-7', view: 'roadmap', sync })).toBe('/app/home/sync/all')
   })
 

@@ -15,6 +15,5 @@ export const loadTaskCreation = preloadModule(async () => {
 })
 export const loadPalette = preloadModule(() => import('../panels/Palette'))
 export const loadSettings = preloadModule(() => import('../panels/Settings'))
-export const loadArchive = preloadModule(() => import('../panels/ArchivePage'))
 export const loadRoadmap = preloadModule(() => import('../views/Roadmap'))
 export const loadTeamSync = preloadModule(() => import('../views/TeamSync'))

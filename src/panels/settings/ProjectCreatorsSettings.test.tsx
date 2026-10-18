@@ -188,7 +188,7 @@ describe('Who can create new projects?', () => {
           onExit={vi.fn()}
           onNewProject={vi.fn()}
           onNewSubProject={vi.fn()}
-          onOpenArchive={vi.fn()}
+          onOpenArchivedTasks={vi.fn()}
         />
       )
     }

@@ -1,0 +1,137 @@
+/* Settings, Archived tasks (src/panels/settings/ArchivedTasks.tsx), in the
+   Deleted items look (deleted-items.css). A row is a grid of the status
+   glyph, then the key and title over the place and owner, then the archive
+   time and Restore centred on the right. Month dividers name the month of
+   the rows under them.
+
+   The search comes first in the filters and takes the most room. A narrow
+   page stacks the filters, search on top, and gives each row three lines:
+   the key and title, the place and owner, then the time with Restore. Phones
+   get it by their width (760px or less, as useMobile), and any page narrower
+   than 600px gets it by a container query. The two blocks below must say the
+   same thing. */
+
+[data-archived-tasks] {
+  container: archived-tasks / inline-size;
+}
+
+.archived-search {
+  flex: 1 1 320px;
+  min-width: 0;
+  max-width: 440px;
+}
+.archived-project {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.archived-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "icon title time actions"
+    ".    meta  time actions";
+  column-gap: 10px;
+  align-items: start;
+}
+.archived-row-icon {
+  grid-area: icon;
+}
+.archived-row-title {
+  grid-area: title;
+}
+/* one line on a wide page; the hover shows the whole title */
+.archived-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archived-row-meta {
+  grid-area: meta;
+}
+.archived-row-time {
+  grid-area: time;
+  align-self: center;
+}
+.archived-row-actions {
+  grid-area: actions;
+  align-self: center;
+  min-width: 96px;
+}
+.archived-month {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 2px 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.archived-month::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+@container archived-tasks (max-width: 600px) {
+  .archived-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .archived-filters > * {
+    flex: none;
+    width: 100%;
+    max-width: none;
+  }
+  .archived-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "icon title title"
+      ".    meta  meta"
+      ".    time  actions";
+  }
+  .archived-row-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .archived-row-time {
+    margin-top: 4px;
+  }
+  .archived-row-actions {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .archived-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .archived-filters > * {
+    flex: none;
+    width: 100%;
+    max-width: none;
+  }
+  .archived-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "icon title title"
+      ".    meta  meta"
+      ".    time  actions";
+  }
+  .archived-row-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .archived-row-time {
+    margin-top: 4px;
+  }
+  .archived-row-actions {
+    min-width: 0;
+  }
+  /* a 44px touch target */
+  .settings-content-scroll .archived-row-actions button {
+    min-height: 44px;
+  }
+}

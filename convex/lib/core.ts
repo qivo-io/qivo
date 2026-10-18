@@ -28,7 +28,6 @@
  * forbidden 403, bad_request 400, rule 400 — readable beats a 500); MCP
  * collapses every refusal into the one isError sentence. */
 
-import type { TransactionMetric } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -69,10 +68,14 @@ import {
 } from './access'
 import {
   type ArchiveCursor,
-  type ArchivedTask,
-  archivedTasksAfter,
-  cursorAfter,
+  archivedTaskMatcher,
+  archivedTasksPage,
+  matchingLabels,
   parseArchiveCursor,
+  type ReadCeiling,
+  readsUnder,
+  rosterNames,
+  searchFields,
 } from './archivedTasks'
 import { assertOrgAvailable, assertOrgWritable, orgWriteBlock } from './billingAccess'
 import { byId } from './db'
@@ -89,7 +92,7 @@ import {
 import { badRequest, notFound, type Refusal } from './functions'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
-import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
+import { allWordsMatcher, searchPieces, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
 import { cutName } from './textLimits'
@@ -381,24 +384,6 @@ export type ListView = {
   readable: (projectId: string) => boolean
 }
 
-/* The organization's labels whose lowercased name contains one of the
- * search's `pieces` (lib/search.ts searchPieces), in the organization's label
- * order. No other label can change whether a task matches. */
-async function matchingLabels(
-  ctx: QueryCtx,
-  orgId: string,
-  pieces: readonly string[],
-): Promise<Doc<'labels'>[]> {
-  if (pieces.length === 0) return []
-  const out: Doc<'labels'>[] = []
-  const labels = ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', orgId))
-  for await (const label of labels) {
-    const name = label.name.toLowerCase()
-    if (pieces.some((piece) => name.includes(piece))) out.push(label)
-  }
-  return out
-}
-
 /* The names of `labels` that the task carries, in their order, read through
  * the task's own assignments (by_issue), archive marks included. */
 async function labelNamesOf(
@@ -442,29 +427,6 @@ async function activeLabelNames(
   for (const task of restored) out.set(task.id, await labelNamesOf(ctx, task.id, labels))
   return out
 }
-
-/* uuid → name over the organization's roster, for list rows and search. */
-async function rosterNames(ctx: QueryCtx, me: Caller): Promise<Map<string, string>> {
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-    .collect()
-  return new Map(profiles.map((p) => [p.id, p.name]))
-}
-
-/* The search fields of a task, without its labels and with its status line
- * decided by `group` (lib/search.ts taskSearchText). */
-const searchFields = (
-  task: Doc<'issues'>,
-  names: ReadonlyMap<string, string>,
-): Omit<TaskSearchFields, 'group' | 'labelNames'> => ({
-  key: issueKey(task.num),
-  title: task.title,
-  description: task.description,
-  status: task.status,
-  priority: task.priority,
-  assigneeName: task.assignee_id === undefined ? null : names.get(task.assignee_id),
-})
 
 /* The list row of `task` in the reader's shape. */
 async function listRow(
@@ -523,7 +485,7 @@ export async function listActiveIssuesCore(
     .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
     .collect()
   const children = childIndexOf(active)
-  const names = await rosterNames(ctx, me)
+  const names = await rosterNames(ctx, me.org_id)
   let match: ((i: Doc<'issues'>) => boolean) | null = null
   if (o.search) {
     const matches = allWordsMatcher(o.search, o.stars)
@@ -627,31 +589,6 @@ async function lastCommentTimes(
   return out
 }
 
-/** What one page of archived tasks may read, counted from the page's start
- * with Convex's own transaction metrics, inside the limits of one
- * transaction (4,096 index ranges, 32,000 documents and 16 MiB) once the
- * catalogue, access flags and roster are read, and never more than the
- * request has left. A page also stops after looking at `tasks` archived
- * tasks. Opening the scope's projects side by side, a task each, may read
- * the `opening` share of the page before the page reads the organization's
- * archive instead (archivedTasksAfter). Tests lower these. */
-export const ARCHIVE_PAGE = {
-  tasks: 1000,
-  ranges: 1500,
-  documents: 16_000,
-  bytes: 8 << 20,
-  opening: 1 / 4,
-}
-
-/** What an archived page keeps back from the request's limits, for the
- * reads of a row after its subtree walk, of the walk past its last check
- * and of the page's end. The first task a page looks at may walk the rest.
- * Past its last check a row reads at most four documents: the subtask the
- * walk read last, the first subtask of a group too large to walk, its
- * parent and its newest comment. The bytes hold four documents at Convex's
- * size limit. Tests lower these. */
-export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 4 * DOCUMENT_MAX_BYTES }
-
 /* The first subtask stored under `task`, whoever can read it. */
 const firstSubtask = (ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'issues'> | null> =>
   ctx.db
@@ -700,120 +637,67 @@ export async function listArchivedIssuesCore(
   view: ListView,
 ): Promise<ArchivedPage<RestIssueJson | McpIssueOut>> {
   const { cat, readable } = view
-  const names = await rosterNames(ctx, me)
+  const names = await rosterNames(ctx, me.org_id)
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
   const projectOf = (id: string) => cat.byUuid.get(id)
-  const scope = new Set(o.scope)
   const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
-  const matches = o.search ? allWordsMatcher(o.search, o.stars) : null
-  const labels = o.search
-    ? await matchingLabels(ctx, me.org_id, searchPieces(o.search, o.stars))
-    : []
-
-  /* Whether the filters keep `task`. An archived task is a group while it
-   * has any subtask, which is read only when a filter still needs it after
-   * the stored fields, such as a status that matches. Search first
-   * tries the text without the status line and labels, which needs no read.
-   * More text never undoes a match, so a task that matches there matches. */
-  const keeps = async (task: ArchivedTask): Promise<boolean> => {
-    if (o.priority && task.priority !== o.priority) return false
-    if (o.assignee && task.assignee_id !== o.assignee) return false
-    let group: boolean | undefined
-    const isGroup = async () => (group ??= (await firstSubtask(ctx, task)) !== null)
-    if (statuses !== null && (!statuses.includes(task.status) || (await isGroup()))) return false
-    if (o.owner && taskOwnerId(task, await isGroup()) !== o.owner) return false
-    if (matches === null) return true
-    const fields = searchFields(task, names)
-    if (matches(taskSearchText({ ...fields, group: true, labelNames: [] }))) return true
-    const labelNames = labels.length > 0 ? await labelNamesOf(ctx, task.id, labels) : []
-    return matches(taskSearchText({ ...fields, group: await isGroup(), labelNames }))
-  }
-
-  // the request's room less ARCHIVE_RESERVE, the page's budget inside it
-  // and the share of that budget that opening the projects may read
-  const start = await ctx.meta.getTransactionMetrics()
-  const used = {
-    ranges: start.databaseQueries.used,
-    documents: start.documentsRead.used,
-    bytes: start.bytesRead.used,
-  }
-  const room: ReadCeiling = {
-    ranges: limitOf(start.databaseQueries) - ARCHIVE_RESERVE.ranges,
-    documents: limitOf(start.documentsRead) - ARCHIVE_RESERVE.documents,
-    bytes: limitOf(start.bytesRead) - ARCHIVE_RESERVE.bytes,
-  }
-  const budget: ReadCeiling = {
-    ranges: Math.min(room.ranges, used.ranges + ARCHIVE_PAGE.ranges),
-    documents: Math.min(room.documents, used.documents + ARCHIVE_PAGE.documents),
-    bytes: Math.min(room.bytes, used.bytes + ARCHIVE_PAGE.bytes),
-  }
-  const opening: ReadCeiling = {
-    ranges: used.ranges + (budget.ranges - used.ranges) * ARCHIVE_PAGE.opening,
-    documents: used.documents + (budget.documents - used.documents) * ARCHIVE_PAGE.opening,
-    bytes: used.bytes + (budget.bytes - used.bytes) * ARCHIVE_PAGE.opening,
-  }
-  const rows: (RestIssueJson | McpIssueOut)[] = []
-  const stream = await archivedTasksAfter(
+  const matches = o.search
+    ? await archivedTaskMatcher(ctx, me.org_id, o.search, {
+        stars: o.stars,
+        names: async () => names,
+      })
+    : null
+  const page = await archivedTasksPage(
     ctx,
     { orgId: me.org_id, projectIds: o.scope },
     o.cursor,
-    () => readsUnder(ctx, opening),
-  )
-  let last: ArchiveCursor | null = null
-  let looked = 0
-  try {
-    for (let task = await stream.next(); task !== null; task = await stream.next()) {
-      looked++
-      const project = projectOf(task.project_id)
-      // a wide scope's stream hands out other projects' tasks too; the
-      // organization and readability are checked again to fail closed
-      if (
-        task.org_id === me.org_id &&
-        scope.has(task.project_id) &&
-        project !== undefined &&
-        readable(project.id) &&
-        (await keeps(task))
-      ) {
+    o.limit,
+    {
+      /* Whether the filters keep `task`. An archived task is a group while it
+       * has any subtask, which is read only when a filter still needs it after
+       * the stored fields, such as a status that matches. The project's
+       * readability is checked again to fail closed. */
+      keeps: async (task, facts) => {
+        const project = projectOf(task.project_id)
+        if (project === undefined || !readable(project.id)) return false
+        if (o.priority && task.priority !== o.priority) return false
+        if (o.assignee && task.assignee_id !== o.assignee) return false
+        if (statuses !== null && (!statuses.includes(task.status) || (await facts.isGroup())))
+          return false
+        if (o.owner && taskOwnerId(task, await facts.isGroup()) !== o.owner) return false
+        return matches === null || (await matches(task, facts))
+      },
+      row: async (task, _facts, ceiling, first) => {
+        // keeps found the project in the catalogue
+        const project = projectOf(task.project_id) as Doc<'projects'>
         const counts = groupCounter(ctx, me, task, project, readable, projectOf)
-        let children = await subtreeIndex(ctx, task, counts, last === null ? room : budget)
+        let children = await subtreeIndex(ctx, task, counts, ceiling)
         let partial = false
         if (children === null) {
           // the walk does not fit this page, so the next page starts with it
-          if (last !== null) return { rows, next: last }
+          if (!first) return null
           // nor any page, so the group is listed without its plan weeks
           // and progress
           const kid = await firstSubtask(ctx, task)
           children = new Map(kid === null ? [] : [[task.id, [kid]]])
           partial = true
         }
-        rows.push(
-          await listRow(ctx, task, {
-            surface: view.surface,
-            me,
-            readable,
-            project,
-            projectOf,
-            names,
-            orgSlug,
-            children,
-            counts,
-            partial,
-          }),
-        )
-      }
-      last = cursorAfter(task)
-      if (
-        rows.length >= o.limit ||
-        looked >= ARCHIVE_PAGE.tasks ||
-        !(await readsUnder(ctx, budget))
-      ) {
-        return { rows, next: stream.more() ? last : null }
-      }
-    }
-    return { rows, next: null }
-  } finally {
-    await stream.close()
-  }
+        return await listRow(ctx, task, {
+          surface: view.surface,
+          me,
+          readable,
+          project,
+          projectOf,
+          names,
+          orgSlug,
+          children,
+          counts,
+          partial,
+        })
+      },
+    },
+  )
+  return { rows: page.rows, next: page.next }
 }
 
 const byKeyOrder = (a: Doc<'projects'>, b: Doc<'projects'>): number => a.key.localeCompare(b.key)
@@ -854,7 +738,8 @@ export async function childProjectsCore(
  * readable sub-projects. For active tasks a live meta adds only its live
  * ones, asking for the project as it stands, and an archived meta all of
  * them, as it was put away (0106). For archived tasks it adds all of them,
- * archived ones included, like the app's Archive page. */
+ * archived ones included. The app's Archived tasks page leaves out a
+ * sub-project archived on its own (lib/archivedTasks.ts archiveFamily). */
 export function taskListScope(
   cat: Catalogue,
   project: Doc<'projects'>,
@@ -1185,23 +1070,6 @@ export function taskUrl(orgSlug: string, num: number): string | null {
  * tasks that count under it than this pays a full read. Tests lower
  * `reads`. */
 export const SUBTREE_WALK = { reads: 1000 }
-
-/** Transaction totals (ctx.meta.getTransactionMetrics) that a read keeps
- * below, in index ranges, documents and bytes read. */
-type ReadCeiling = { ranges: number; documents: number; bytes: number }
-
-/* A transaction's limit on one count, from what it used and has left. */
-const limitOf = (m: TransactionMetric): number => m.used + m.remaining
-
-/* Whether the request has read less than `ceiling` on every count. */
-async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<boolean> {
-  const m = await ctx.meta.getTransactionMetrics()
-  return (
-    m.databaseQueries.used < ceiling.ranges &&
-    m.documentsRead.used < ceiling.documents &&
-    m.bytesRead.used < ceiling.bytes
-  )
-}
 
 /* The subtasks a single-task read of `root` uses, indexed by parent. They
  * are the root's own and those of every task under it that counts toward

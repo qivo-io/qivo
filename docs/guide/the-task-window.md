@@ -166,9 +166,15 @@ archiving always include the subtasks. They accept the same optional reason,
 which also becomes a comment, but do not require one
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 
-Open **Archived tasks** from a project or sub-project's **…** menu. The Archive
-page works with one project at a time, optionally narrowed to a sub-project.
-Desktop offers a multi-word search; phones omit it and ignore its text query.
+Open **Archived tasks** from a project or sub-project's **…** menu, or from
+**Settings → Projects → Archived tasks**. The page works with one project at
+a time, optionally narrowed to a sub-project. Its search, on desktop and
+phones, looks through every archived task of that project by task ID, title,
+description, status, priority, assignee and label, with words in any order.
+A search reads a large archive in steps. When a step stops before the end,
+the page says how many archived tasks it has searched, and **Search older
+tasks** continues. Without a search, the newest archived tasks come first,
+and **Show 100 older tasks** loads the next 100.
 
 **Restore** returns a task to its Board and restores archived parents when
 needed. If that would change a parent task in a project you cannot edit, Qivo

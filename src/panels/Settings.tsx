@@ -11,6 +11,7 @@ import '../styles/settings-layout.css'
 import '../styles/mobile-settings.css'
 import { AccountPage } from './settings/AccountSettings'
 import { OrgApiAccessPage } from './settings/ApiAccessSettings'
+import { ArchivedTasksPage } from './settings/ArchivedTasks'
 import { DeletedItemsPage } from './settings/DeletedItems'
 import { DesktopSettingsPage } from './settings/DesktopSettings'
 import { OrgLabelsPage } from './settings/LabelsSettings'
@@ -26,7 +27,8 @@ function SettingsScreen({
   onExit,
   onNewProject,
   onNewSubProject,
-  onOpenArchive,
+  archivedTasksProject = null,
+  onOpenArchivedTasks,
   onProjectGone,
 }: {
   page: string
@@ -35,7 +37,10 @@ function SettingsScreen({
   onExit: () => void
   onNewProject: () => void
   onNewSubProject: (parent: string) => void
-  onOpenArchive: (projectId: string) => void
+  /** the project Archived tasks opens on, or null for the current scope's */
+  archivedTasksProject?: string | null
+  /** opens Archived tasks on one project, from a project row's menu */
+  onOpenArchivedTasks: (projectId: string) => void
   onProjectGone?: (parent: string | null) => void
 }) {
   const narrow = useMobile()
@@ -134,6 +139,8 @@ function SettingsScreen({
       { id: 'projects', label: 'All projects', icon: 'layers' },
       // Keep the archive discoverable even when empty.
       { id: 'projects-archived', label: 'Archived projects', icon: 'archive' },
+      // the menus' "Archived tasks" entries open it on their project
+      { id: 'projects-archived-tasks', label: 'Archived tasks', icon: 'inbox' },
       // every role has one, listing what each person may see and restore
       { id: 'projects-deleted', label: 'Deleted items', icon: 'trash' },
     ],
@@ -156,10 +163,12 @@ function SettingsScreen({
         setPage={setPage}
         onNewProject={onNewProject}
         onNewSubProject={onNewSubProject}
-        onOpenArchive={onOpenArchive}
+        onOpenArchivedTasks={onOpenArchivedTasks}
       />
     )
   else if (page === 'projects-archived') content = <ArchivedProjectsPage />
+  else if (page === 'projects-archived-tasks')
+    content = <ArchivedTasksPage initialProject={archivedTasksProject} />
   else if (page === 'projects-deleted') content = <DeletedItemsPage />
   else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
   else if (page === 'org-billing') content = <BillingSettings setPage={setPage} />

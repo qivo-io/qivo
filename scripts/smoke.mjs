@@ -1080,7 +1080,7 @@ try {
   const noPhonePageSearch = async (where, root = pageA) => {
     const fields = await root
       .locator(
-        'input[placeholder="Find a project…"], input[placeholder="Filter messages…"], input[placeholder="Filter tasks…"], [data-archive-search]',
+        'input[placeholder="Find a project…"], input[placeholder="Filter messages…"], input[placeholder="Filter tasks…"]',
       )
       .count()
     if (fields) await fail(`Phone ${where} still mounts a page-level search field`)
@@ -1306,13 +1306,17 @@ try {
     .first()
     .getByRole('button', { name: / actions$/ })
     .click()
+  // Archived tasks is a Settings page, and search is how a phone finds an
+  // old task there too (it replaced the full-screen Archive)
   await pageA.getByRole('button', { name: 'Archived tasks', exact: true }).click()
-  await pageA.locator('[data-archive-page]').waitFor({ state: 'visible' })
-  await noPhonePageSearch('Archive')
   await pageA
-    .locator('.archive-mobile-navigation')
-    .getByRole('button', { name: 'Back', exact: true })
-    .click()
+    .locator('[data-settings-page="projects-archived-tasks"] [data-archived-tasks]')
+    .waitFor({ state: 'visible' })
+  if ((await pageA.locator('[data-archive-search]').count()) !== 1)
+    await fail('Phone Archived tasks has no search')
+  await pageA.locator('[data-settings-back]').click()
+  await pageA.locator('[data-settings-page="menu"]').waitFor({ state: 'visible' })
+  await pageA.locator('[data-settings-back]').click()
   await pageA.waitForURL(projectsURL)
   await pageA.locator('.mobile-project-directory').waitFor({ state: 'visible' })
   await pageA.goBack()
@@ -1871,15 +1875,19 @@ try {
     'A: project forms use Name without an icon chooser; Sub-projects, Project access and Archive or delete are named boxes',
   )
 
-  // Settings › Projects ends with Deleted items, after Archived projects. Its
-  // page never names how long an item stays there (only the guide does).
+  // Settings › Projects ends with Archived projects, Archived tasks and
+  // Deleted items. The last page never names how long an item stays there
+  // (only the guide does).
   const projectPages = await pageA
     .locator('.settings-navigation [data-settings-item^="projects"]')
     .evaluateAll((items) => items.map((item) => item.getAttribute('data-settings-item')))
-  const archivedAt = projectPages.indexOf('projects-archived')
-  const deletedAt = projectPages.indexOf('projects-deleted')
-  if (archivedAt < 0 || deletedAt !== projectPages.length - 1 || archivedAt > deletedAt)
-    await fail(`Settings › Projects does not end with Deleted items: ${projectPages.join(', ')}`)
+  if (
+    projectPages.slice(-3).join(',') !==
+    'projects-archived,projects-archived-tasks,projects-deleted'
+  )
+    await fail(
+      `Settings › Projects does not end with Archived projects, Archived tasks and Deleted items: ${projectPages.join(', ')}`,
+    )
   await pageA.locator('[data-settings-item="projects-deleted"]').click()
   const deletedPage = pageA.locator('[data-settings-page="projects-deleted"]')
   await deletedPage.locator('[data-deleted-items]').waitFor({ state: 'visible', timeout: 10000 })
@@ -1887,7 +1895,9 @@ try {
     await fail('the Deleted items page has no Deleted items heading')
   if ((await deletedPage.getByText('30 days').count()) !== 0)
     await fail('the Deleted items page names the 30 days an item stays')
-  log('A: Settings › Projects lists Deleted items last, and its page names no retention period')
+  log(
+    'A: Settings › Projects lists Archived tasks before Deleted items, whose page names no retention period',
+  )
 
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-billing`, {
     waitUntil: 'domcontentloaded',

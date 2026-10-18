@@ -50,3 +50,8 @@ export function cutName(name: string): string {
  * the Deleted items list carries its reason, and one list reads up to 2,000
  * rows. */
 export const DELETE_REASON_MAX = 500
+
+/** The longest search the app's Archived tasks page sends, once trimmed
+ * (issues.archivedPage). Its search box has this maxLength, so the server
+ * never refuses what a person typed. */
+export const ARCHIVED_SEARCH_MAX = 200

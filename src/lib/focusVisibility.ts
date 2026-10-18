@@ -49,9 +49,9 @@ export function restoreFocus(element: HTMLElement | null | undefined) {
 
 // A customizable select (tokens.css) draws its open list in the page, so the
 // keys used in that list also reach the page's own key handlers, where an
-// OS-drawn list kept them to itself. Escape would close Settings, the Archive,
-// the task window, dialogs and pops, and a letter meant for typeahead would
-// fire a shortcut such as the task window's L. True for any key pressed in an
+// OS-drawn list kept them to itself. Escape would close Settings, the task
+// window, dialogs and pops, and a letter meant for typeahead would fire a
+// shortcut such as the task window's L. True for any key pressed in an
 // open list. The browser still acts on it, and nothing else should.
 export function isOpenSelectKey(event: Pick<KeyboardEvent, 'target'>) {
   if (!(event.target instanceof Element)) return false

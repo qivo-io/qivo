@@ -34,6 +34,7 @@ import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import {
+  ARCHIVED_TASKS_PAGE,
   buildPath,
   ORG_NONE,
   orgSegmentOf,
@@ -46,7 +47,6 @@ import {
 } from './lib/router'
 import { type ToastTone, toastLook } from './lib/toasts'
 import {
-  loadArchive,
   loadInbox,
   loadIssueDetail,
   loadKanban,
@@ -73,7 +73,6 @@ const MilestoneModal = lazyFromModule(loadModals, (module) => module.MilestoneMo
 const CreateOrgModal = lazyFromModule(loadModals, (module) => module.CreateOrgModal)
 const SearchPalette = lazyFromModule(loadPalette, (module) => module.SearchPalette)
 const SettingsScreen = lazyFromModule(loadSettings, (module) => module.SettingsScreen)
-const ArchivePage = lazyFromModule(loadArchive, (module) => module.ArchivePage)
 const Roadmap = lazyFromModule(loadRoadmap, (module) => module.Roadmap)
 const TeamSync = lazyFromModule(loadTeamSync, (module) => module.TeamSync)
 
@@ -353,7 +352,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                         <MenuItem
                           onClick={() => {
                             close()
-                            actions.openArchive(meta.id)
+                            actions.openArchivedTasks(meta.id)
                           }}
                         >
                           <Icon name="inbox" size={14} />
@@ -423,7 +422,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                             <MenuItem
                               onClick={() => {
                                 close()
-                                actions.openArchive(sp.id)
+                                actions.openArchivedTasks(sp.id)
                               }}
                             >
                               <Icon name="inbox" size={14} />
@@ -456,7 +455,8 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
           Lands on your own preferences; its own nav reaches the organization,
           the teams you lead and every project you can see, which is why the
           top bar no longer carries a per-project gear. (The Archive that sat
-          here is reached from a project row's "…" menu, or #/archive.) */}
+          here is Settings › Archived tasks, which a project row's "…" menu
+          opens on that project.) */}
         <div className="planner-sidebar-footer shrink-0 px-3 pb-3 [padding-top:var(--sidebar-section-gap)]">
           <Button
             variant="ghost"
@@ -712,7 +712,7 @@ function syncPlaceFor(r: NonNullable<Route['sync']>, mobile: boolean): SyncPlace
   return syncPlaceOf(r, { saved: P.loadUI().syncScope, me: P.CURRENT_USER, mobile })
 }
 
-/* The page under Settings, the Archive or Team sync, restored when it
+/* The page under Settings or Team sync, restored when it
    closes (Team sync never sits over itself, so its return has no sync). A
    restore uses it once: it is reset as it is read, and on any Back or
    Forward that leaves its page. */
@@ -761,9 +761,7 @@ function App() {
     // scope/settings routes without a view mean overview
     r0?.view
       ? r0.view
-      : r0?.issue ||
-          r0?.sync ||
-          (mobile && (r0?.settings || r0?.projects || r0?.inbox || r0?.archive))
+      : r0?.issue || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
         ? uiView
         : r0
           ? 'overview'
@@ -810,10 +808,7 @@ function App() {
   }))
   const [modal, setModal] = useState(null) // {kind:"issue"|"program"|"subproject"|"milestone", init}
   const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>"
-  const [archiveOpen, setArchiveOpen] = useState(!!r0?.archive) // the Archive page (0070)
   const [inboxOpen, setInboxOpen] = useState(!!r0?.inbox || (mobile && !r0)) // the message inbox (0074)
-  // the project a "⋯ → Archived issues" entry asked for; null = derive from
-  // the current scope (the sidebar's pinned Archive entry, deep links)
   const [projectsOpen, setProjectsOpen] = useState(!!r0?.projects)
   /* Team sync (the meeting page) while it is open: { scope, step }. It sits
      over the scope and view, which it leaves untouched so Done returns to
@@ -829,7 +824,6 @@ function App() {
     view,
     openIssue,
     settingsPage,
-    archiveOpen,
     inboxOpen,
     projectsOpen,
     sync,
@@ -839,18 +833,23 @@ function App() {
     placeRef.current = place
   }, [place])
   // edits made on the sync page are not roadmap edits, whatever the view below
-  const roadmapActive =
-    view === 'roadmap' && !settingsPage && !archiveOpen && !inboxOpen && !projectsOpen && !sync
+  const roadmapActive = view === 'roadmap' && !settingsPage && !inboxOpen && !projectsOpen && !sync
   useLayoutEffect(() => {
     P.roadmapContext(roadmapActive, !!openIssue)
   }, [roadmapActive, openIssue])
   useLayoutEffect(() => () => P.roadmapContext(false, false), [])
-  // the page Settings, the Archive and Team sync return to on exit
+  // the page Settings and Team sync return to on exit
   const settingsReturn = useRef(NO_RETURN)
-  const archiveReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
-  const [archiveProject, setArchiveProject] = useState(null)
+  // the project an "Archived tasks" entry asked for; null = derive from the
+  // current scope (Settings' own Archived tasks item, deep links)
+  const [archiveProject, setArchiveProject] = useState<string | null>(null)
+  // it holds only while Archived tasks stays open, so leaving the page by
+  // any way, Settings' own items and history included, forgets it
+  useEffect(() => {
+    if (settingsPage !== ARCHIVED_TASKS_PAGE) setArchiveProject(null)
+  }, [settingsPage])
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
@@ -892,7 +891,6 @@ function App() {
       view,
       openIssue,
       settingsPage,
-      archiveOpen,
       inboxOpen,
       projectsOpen,
       sync,
@@ -910,7 +908,6 @@ function App() {
         view,
         openIssue,
         settingsPage,
-        archiveOpen,
         inboxOpen,
         projectsOpen,
         sync,
@@ -919,7 +916,7 @@ function App() {
       history.replaceState(history.state, '', p)
     else history.pushState({ qivoPrevious: location.pathname }, '', p)
     replaceNextHistory.current = false
-  }, [scope, view, openIssue, settingsPage, archiveOpen, inboxOpen, projectsOpen, sync, rev])
+  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   /* Remember what each address opened, so the gate can tell a MOVED address
      from one this login has simply never followed. Deliberately after the
      url-sync effect above and skipped entirely while the gate is up: accepting
@@ -931,18 +928,7 @@ function App() {
     if (!seg || seg === ORG_NONE) return
     const org = P.orgBySlug(seg)
     if (org) rememberAddress(P.CURRENT_USER, seg, org.id)
-  }, [
-    addrMoved,
-    scope,
-    view,
-    openIssue,
-    settingsPage,
-    archiveOpen,
-    inboxOpen,
-    projectsOpen,
-    sync,
-    rev,
-  ])
+  }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
     const onPop = () => {
       // a Remaining number typed on Team sync and not yet committed: history
@@ -957,7 +943,6 @@ function App() {
          task closing over the sync); one that leaves drops it, so a later
          Exit or Done cannot restore a page from another visit. */
       if (!r.settings) settingsReturn.current = NO_RETURN
-      if (!r.archive) archiveReturn.current = NO_RETURN
       if (!r.sync) syncReturn.current = NO_RETURN
       /* Issue URLs carry no scope: keep the current scope when the issue is
          inside it, else re-scope to the issue's own sub-project. One case
@@ -983,14 +968,12 @@ function App() {
             : undefined
       if (liveScope(sc)) setScope(sc)
       if (r.view) setView(r.view)
-      // viewless issue links keep the current view; #/archive, #/inbox and
+      // viewless issue links keep the current view; Settings, #/inbox and
       // Team sync sit over/instead of the current view, so they must not
       // reset it either
-      else if (!r.issue && !r.archive && !r.inbox && !r.settings && !r.projects && !r.sync)
-        setView('overview')
+      else if (!r.issue && !r.inbox && !r.settings && !r.projects && !r.sync) setView('overview')
       setOpenIssue(r.issue || null)
       setSettingsPage(r.settings || null)
-      setArchiveOpen(!!r.archive)
       setInboxOpen(!!r.inbox)
       setProjectsOpen(!!r.projects)
       setSync(r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null)
@@ -1160,7 +1143,6 @@ function App() {
       view,
       openIssue,
       settingsPage,
-      archiveOpen,
       inboxOpen,
       projectsOpen,
       sync,
@@ -1234,26 +1216,26 @@ function App() {
     setOpenIssue(null)
   }
 
+  /* Opens Settings on `page`, remembering the page underneath for its exit.
+     `archived` is the project Archived tasks opens on. */
+  const openSettingsOn = (page: string, archived: string | null) => {
+    settingsReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync }
+    leaveInbox()
+    setArchiveProject(archived)
+    setSettingsPage(page)
+  }
+
   const actions = {
     openIssue: navOpenIssue,
     newIssue: openNewIssue,
     newProject: openNewProject,
     newMilestone: openNewMilestone,
     editMilestone: (id) => setModal({ kind: 'milestone', init: { id } }),
-    // settings, the archive and the inbox each own the screen — one at a time
-    openSettings: (page) => {
-      settingsReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync }
-      setArchiveOpen(false)
-      leaveInbox()
-      setSettingsPage(page || (mobile ? 'menu' : 'account'))
-    },
-    openArchive: (projectId?) => {
-      archiveReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync }
-      setSettingsPage(null)
-      leaveInbox()
-      setArchiveProject(projectId || null)
-      setArchiveOpen(true)
-    },
+    // settings and the inbox each own the screen, one at a time
+    openSettings: (page) => openSettingsOn(page || (mobile ? 'menu' : 'account'), null),
+    // Settings › Archived tasks on one project (the project menus' entry)
+    openArchivedTasks: (projectId?: string) =>
+      openSettingsOn(ARCHIVED_TASKS_PAGE, projectId || null),
     // …and its pane starts empty: the inbox is a triage surface, so arriving
     // at it holding whatever task the last view had open would light a row-less
     // pane before a single message has been read. A deep link straight to
@@ -1261,7 +1243,6 @@ function App() {
     openInbox: () => {
       setProjectsOpen(false)
       setSettingsPage(null)
-      setArchiveOpen(false)
       setSync(null)
       setOpenIssue(null)
       setInboxOpen(true)
@@ -1270,20 +1251,17 @@ function App() {
     // the screen — the sidebar is visible from the inbox, the palette from all
     openAll: () => {
       setSettingsPage(null)
-      setArchiveOpen(false)
       leaveInbox()
       setScope(P.ALL_SCOPE)
     },
     openMine: () => {
       setSettingsPage(null)
-      setArchiveOpen(false)
       leaveInbox()
       setScope(P.MINE_SCOPE)
       if (mobile) setView('kanban')
     },
     openProjects: () => {
       setSettingsPage(null)
-      setArchiveOpen(false)
       setInboxOpen(false)
       setSync(null)
       setOpenIssue(null)
@@ -1299,7 +1277,6 @@ function App() {
         setSync(syncPlaceFor({}, mobile))
       }
       setSettingsPage(null)
-      setArchiveOpen(false)
       setProjectsOpen(false)
       if (inboxOpen) setOpenIssue(null)
       setInboxOpen(false)
@@ -1453,6 +1430,13 @@ function App() {
   }
 
   if (settingsPage) {
+    // null from either sentinel scope, on purpose. Archived tasks shows ONE
+    // project at a time, so it opens on its own picker rather than being
+    // pre-scoped to an arbitrary one (P.project() is undefined for both)
+    const scopeMeta = (() => {
+      const p = P.project(scope)
+      return p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
+    })()
     return (
       <>
         <ViewBoundary onBack={() => setSettingsPage(null)}>
@@ -1481,7 +1465,11 @@ function App() {
               }}
               onNewProject={() => openNewProject({ kind: 'program' })}
               onNewSubProject={(parent) => openNewProject({ parent })}
-              onOpenArchive={(projectId) => actions.openArchive(projectId)}
+              archivedTasksProject={archiveProject || scopeMeta}
+              onOpenArchivedTasks={(projectId) => {
+                setArchiveProject(projectId)
+                setSettingsPage(ARCHIVED_TASKS_PAGE)
+              }}
               onProjectGone={(parent) => {
                 // deleted or archived — from out here they are the same event: a
                 // project the scope may have been pointing at is no longer one of
@@ -1513,46 +1501,6 @@ function App() {
             )}
           </DeferredOverlay>
         )}
-        <ToastHost toasts={toasts} dismiss={dismissToast} />
-      </>
-    )
-  }
-
-  if (archiveOpen) {
-    // null from either sentinel scope, deliberately: the Archive page shows
-    // ONE project at a time, so it opens on its own picker rather than being
-    // pre-scoped to an arbitrary one (P.project() is undefined for both)
-    const scopeMeta = (() => {
-      const p = P.project(scope)
-      return p ? (p.type === 'meta' ? p.id : p.parent) : null
-    })()
-    return (
-      <>
-        <ViewBoundary onBack={() => setArchiveOpen(false)}>
-          <Suspense fallback={<ViewLoading />}>
-            <ArchivePage
-              initialProject={archiveProject || scopeMeta}
-              onExit={() => {
-                const back = archiveReturn.current
-                archiveReturn.current = NO_RETURN
-                backOrSet(
-                  {
-                    archiveOpen: false,
-                    inboxOpen: back.inbox,
-                    projectsOpen: back.projects,
-                    sync: back.sync,
-                  },
-                  () => {
-                    setArchiveOpen(false)
-                    setInboxOpen(back.inbox)
-                    setProjectsOpen(back.projects)
-                    setSync(back.sync)
-                  },
-                )
-              }}
-            />
-          </Suspense>
-        </ViewBoundary>
         <ToastHost toasts={toasts} dismiss={dismissToast} />
       </>
     )

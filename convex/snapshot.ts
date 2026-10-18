@@ -303,8 +303,9 @@ export const forMe = authedQuery({
           seenLinkIds.add(link.id)
           links.push(relationRow(link))
         }
-        // issueLabels — active tasks only; fetchArchived does not depend on
-        // this snapshot and therefore does not need the archived rows here.
+        // issueLabels of active tasks only. Archived tasks are read outside
+        // this snapshot (P.fetchArchivedPage, issues.archivedPage), so it
+        // needs no archived rows here.
         for (const il of ils) issueLabels.push(relationRow(il))
         // attachments — active tasks only. This is the expensive storage row
         // that previously made every archive part of the initial boot.

@@ -4,7 +4,7 @@
    Beside a workspace it spans the space right of the sidebar column, so its
    center is the content column's center, the axis of the page header pill.
    That holds on every workspace page because the shell is centered and its
-   first column is --sidebar-w wide on the planner, Settings and the Archive
+   first column is --sidebar-w wide on the planner and in Settings
    (workspace.css). Without a workspace, such as on the sign-in screens and in
    the operator console, over the landscape phone Roadmap and on phones, it
    spans the window.

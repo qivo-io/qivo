@@ -19,7 +19,8 @@ allows it.
 
 **Settings** opens **Your preferences** ([Your preferences](./working-together.md#who-a-person-is)). Its navigation also contains
 Organization settings and **Projects**, with **All projects**, **Archived
-projects** and **Deleted items** ([Deleted items](./how-work-is-organized.md#deleted-items)).
+projects**, **Archived tasks** ([Archiving](./the-task-window.md#archiving)) and
+**Deleted items** ([Deleted items](./how-work-is-organized.md#deleted-items)).
 In supported Windows and Linux desktop builds, **Desktop app** appears below
 **Your preferences** for startup, tray and notification settings
 ([Desktop app](./qivo-in-one-minute.md#desktop-app)).
@@ -28,7 +29,7 @@ Organization settings are **General**, **Billing**, **Users**,
 **Teams** and **Labels**. They require admin access, except **Teams**, which
 team leaders can open. The project list groups projects by organization and
 expands one project at a time. Use a row or its **…** menu to open settings
-and archived tasks. Archive has no separate sidebar entry.
+or that project's archived tasks.
 
 ## Top bar
 
@@ -122,8 +123,8 @@ Enter to open a result, or select it directly.
 Search matches case-insensitive word fragments in any order. For example,
 “signed firm” finds “Add signed firmware updates and rollback”. A matching
 phrase ranks above separated or reordered fragments, and earlier phrase
-matches rank higher. Task filters, Archive, Inbox and searchable pickers
-use the same fragment-matching rule.
+matches rank higher. Task filters, Archived tasks, Inbox and searchable
+pickers use the same fragment-matching rule.
 
 **Close**, **esc** or Escape closes search. On phones, browser Back also
 closes it. After opening a result, Back returns to the page where the search
@@ -139,9 +140,10 @@ distinguishes numbers that different organizations reuse. For example:
 - Project Board, `qivo.io/app/acme/board/p/3`.
 - Team sync, `qivo.io/app/acme/sync/all`.
 
-Pages spanning organizations, including Inbox, Archive, My view, All
-projects and your account, use `~` instead of an organization name. For
-example, `qivo.io/app/~/inbox`.
+Pages spanning organizations, including Inbox, My view, All projects and
+your account, use `~` instead of an organization name. For example,
+`qivo.io/app/~/inbox`. The former Archive address, `qivo.io/app/~/archive`,
+opens Archived tasks.
 
 Task links accept any case, a bare number or a full key. Project URLs use a
 stable number that survives renaming. All projects and My view have their
@@ -151,7 +153,7 @@ own paths, `…/board/all` and `…/board/mine`. Opening a task adds
 Copying a task link uses its short permanent address. Opening that link
 keeps a saved My view scope if the task is yours; otherwise, it opens the
 task's project. Recipients still need access. Restore archived tasks from
-Archive before opening their links ([Archiving](./the-task-window.md#archiving)),
+Archived tasks before opening their links ([Archiving](./the-task-window.md#archiving)),
 and deleted ones from Deleted items.
 
 ## Keyboard, in brief

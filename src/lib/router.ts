@@ -6,9 +6,10 @@
      tasks/<ref>               task using saved view/scope
      [<view>/]p/<n>            project/sub-project scope
      <view>/all|mine           sentinel scope, optionally /tasks/<ref>
-     settings/<page>           account, org-* or team:<uuid>
+     settings/<page>           account, org-*, projects-* or team:<uuid>
      settings/project/<n>      project settings
-     projects | archive       directory or archive
+     projects                  directory
+     archive                   old Archive address; opens settings/projects-archived-tasks
      inbox[/tasks/<ref>]       inbox, optionally with a task open
      sync[/all|/p/<n>|/team/<uuid>][/people/<uuid>|/agents][/tasks/<ref>]
 
@@ -27,7 +28,6 @@ export type Route = {
   view?: string
   issue?: string
   settings?: string
-  archive?: boolean
   inbox?: boolean
   projects?: boolean
   /* The Team sync page. `scope` is 'all' | 'team:<uuid>' | 'project:<uuid>'
@@ -46,6 +46,10 @@ export const APP_PREFIX = '/app'
 
 /** The org segment for an address that is about no single organization. */
 export const ORG_NONE = '~'
+
+/** The Settings page that lists archived tasks, Settings › Projects ›
+    Archived tasks. */
+export const ARCHIVED_TASKS_PAGE = 'projects-archived-tasks'
 
 /* The scope tokens that name no project row. Both sit where a project number
    would and share the whole URL grammar, so the parser and the builder ask
@@ -164,10 +168,9 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
     } else r.settings = seg[1] || 'account'
     return r
   }
-  if (seg[0] === 'archive') {
-    r.archive = true
-    return r
-  }
+  // The full-screen Archive became Settings › Archived tasks. Its address
+  // still works and is rewritten to the page's own.
+  if (seg[0] === 'archive') return { settings: ARCHIVED_TASKS_PAGE }
   if (seg[0] === 'projects') return { projects: true }
   if (seg[0] === 'inbox') {
     r.inbox = true
@@ -292,7 +295,6 @@ export type UiState = {
   view?: string
   openIssue?: string | null
   settingsPage?: string | null
-  archiveOpen?: boolean
   inboxOpen?: boolean
   projectsOpen?: boolean
   // the Team sync page while it is open: scope as Route.sync, step 'team'
@@ -356,7 +358,6 @@ export function buildPath(s: UiState): string {
     }
     return at(settingsOrg(page), `/settings/${encodeURIComponent(page)}`)
   }
-  if (s.archiveOpen) return at(null, '/archive')
   if (s.projectsOpen) return at(null, '/projects')
   if (s.inboxOpen) {
     // the inbox owns the screen, but a task opened from a message floats over
@@ -429,7 +430,6 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   if (r.sync && !P.homeOrg) return true
   if (r.inbox || s.inboxOpen)
     return !!r.inbox === !!s.inboxOpen && (r.issue || null) === (s.openIssue || null)
-  if (r.archive || s.archiveOpen) return !!r.archive === !!s.archiveOpen
   if (r.projects || s.projectsOpen) return !!r.projects === !!s.projectsOpen
   if (r.settings || s.settingsPage) return (r.settings || null) === (s.settingsPage || null)
   /* Inside Team sync, a new step or scope rewrites the address in place: the

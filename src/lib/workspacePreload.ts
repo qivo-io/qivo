@@ -1,5 +1,4 @@
 import {
-  loadArchive,
   loadInbox,
   loadIssueDetail,
   loadKanban,
@@ -20,7 +19,8 @@ const pages: Record<string, (() => Promise<unknown>) | undefined> = {
   resources: loadRoadmap,
   inbox: loadInbox,
   sync: loadTeamSync,
-  archive: loadArchive,
+  // the old Archive address opens Settings › Archived tasks
+  archive: loadSettings,
   settings: loadSettings,
 }
 

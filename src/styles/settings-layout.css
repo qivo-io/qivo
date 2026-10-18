@@ -1,5 +1,5 @@
-/* Settings and Archive share the workspace header/body grid. Their reading
-   frames fit short content and keep longer content scrolling inside the edge. */
+/* Settings uses the workspace header/body grid. Its reading frame fits short
+   content and keeps longer content scrolling inside the edge. */
 .settings-shell {
   --workspace-content-max: 860px;
 }
@@ -14,11 +14,7 @@
 .settings-page-title h1:focus {
   outline: none;
 }
-.archive-shell {
-  --workspace-content-max: 920px;
-}
-.settings-navigation,
-.archive-navigation {
+.settings-navigation {
   display: flex;
   flex-direction: column;
   align-self: start;
@@ -33,9 +29,6 @@
 .settings-navigation {
   padding-bottom: 8px;
 }
-.archive-navigation {
-  padding: 8px 12px;
-}
 .settings-nav-scroll {
   flex: 0 1 auto;
   min-height: 0;
@@ -47,8 +40,7 @@
 .settings-nav-scroll > div:last-child {
   margin-bottom: 0;
 }
-.settings-main,
-.archive-main {
+.settings-main {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -57,8 +49,7 @@
   padding: 0 20px 12px;
   overflow: hidden;
 }
-.settings-content-frame,
-.archive-content-frame {
+.settings-content-frame {
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -84,11 +75,7 @@
 .settings-shell-wide .settings-page-title {
   max-width: none;
 }
-.archive-content-frame {
-  max-width: 880px;
-}
-.settings-content-scroll,
-.archive-content-scroll {
+.settings-content-scroll {
   min-height: 0;
   padding: 16px;
   overflow: auto;
@@ -96,18 +83,8 @@
   scrollbar-gutter: stable;
   scroll-padding-block: 16px;
 }
-.archive-shell > .archive-mobile-navigation {
-  display: none;
-}
 @media (max-width: 760px) {
-  .settings-main,
-  .archive-main {
+  .settings-main {
     padding-inline: 12px;
-  }
-  .archive-navigation {
-    display: none;
-  }
-  .archive-shell > .archive-mobile-navigation {
-    display: flex;
   }
 }
