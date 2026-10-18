@@ -1262,8 +1262,9 @@ request`.
 `list_tasks` returns active tasks as an array, oldest first by creation,
 with tasks created at the same moment ordered by number, so `offset` pages
 through them until a page holds fewer tasks than `limit`. Each row's
-`last_comment_at` reads the task's newest comment. When those comments do
-not fit in one request beside the rest of the page, the call is refused
+`last_comment_at` reads the task's newest comment, and a row whose parent is
+in an archived project reads that parent. When those reads do not fit in
+one request beside the rest of the page, the call is refused
 with `this page of tasks is too large to read at once; ask for a smaller
 limit`; call again with a smaller `limit`. A list also reads every active
 task in the organization's active projects, or every active task of the

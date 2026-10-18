@@ -222,7 +222,7 @@ Useful field rules:
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
   tasks. If a task list asks for a smaller limit, its rows' newest comments
-  were too large to read at once; retry with a smaller `limit`. If it says
+  and parents were too large to read at once; retry with a smaller `limit`. If it says
   the organization's active tasks are too large to list, a smaller `limit`
   does not help.
 

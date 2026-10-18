@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
+import { emitTaskEvent } from '../model/taskEvents'
 import { ROADMAP_CHANGE_TOO_LARGE, ROADMAP_UNDO_TOO_LARGE } from '../roadmap'
 import {
   as,
@@ -191,4 +192,67 @@ describe('roadmap saves and undo of many tasks', () => {
       ).toEqual({ count })
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
   }, 240_000)
+
+  it("checks the room before each webhook subscription's sight check", async () => {
+    const fx = await planted(1, 0)
+    await fx.t.run(async (ctx) => {
+      for (let n = 0; n < 3; n++) {
+        const profile_id = uuid()
+        await ctx.db.insert('profiles', {
+          id: profile_id,
+          org_id: fx.org.id,
+          name: `Agent ${n}`,
+          initials: 'AG',
+          color: '#50b070',
+          org_role: 'user',
+          active: true,
+          kind: 'agent',
+          created_at: NOW,
+        })
+        await ctx.db.insert('project_access', {
+          project_id: fx.meta.id,
+          profile_id,
+          level: 'viewer',
+        })
+        const credential_id = uuid()
+        const credential_row_id = await ctx.db.insert('agent_keys', {
+          id: credential_id,
+          profile_id,
+          name: 'Roadmap events',
+          key_prefix: 'qva_1...1111',
+          key_hash: uuid(),
+          created_at: NOW,
+        })
+        await ctx.db.insert('webhook_subscriptions', {
+          id: uuid(),
+          org_id: fx.org.id,
+          owner: { profile_id, credential_table: 'agent_keys', credential_id, credential_row_id },
+          name: 'task.updated',
+          filters: {},
+          url: `https://receiver.example/${n}`,
+          encrypted_secret: 'test-only',
+          created_at: Date.now(),
+        })
+      }
+    })
+    const [before] = fx.tasks
+    const after = { ...before, start_week: '2026-01-05', end_week: '2026-01-05' }
+    const event = { name: 'task.updated' as const, issue: after, before, now: NOW }
+    // each subscription is checked after the guard
+    let checks = 0
+    await fx.t.run((ctx) => emitTaskEvent(ctx, { ...event, guard: async () => void checks++ }))
+    expect(checks).toBe(3)
+    // a guard that refuses stops the event before any sight check
+    const full = new Error('full')
+    await expect(
+      fx.t.run((ctx) =>
+        emitTaskEvent(ctx, {
+          ...event,
+          guard: async () => {
+            throw full
+          },
+        }),
+      ),
+    ).rejects.toThrow('full')
+  })
 })

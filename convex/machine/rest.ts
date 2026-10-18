@@ -677,7 +677,14 @@ export const createIssue = internalMutation({
         parent_id: parent ?? undefined,
       },
     })
-    return await taskOut(ctx, issue, { surface: 'rest', me, readable, project: target, now })
+    return await taskOut(ctx, issue, {
+      surface: 'rest',
+      me,
+      readable,
+      project: target,
+      now,
+      write: true,
+    })
   },
 })
 
@@ -775,7 +782,7 @@ export const updateIssue = internalMutation({
       now,
       provenance: provenanceOf(a.keyName),
     })
-    return await taskOut(ctx, task, { surface: 'rest', me, now })
+    return await taskOut(ctx, task, { surface: 'rest', me, now, write: true })
   },
 })
 

@@ -239,7 +239,8 @@ export type NotifyPreload = {
   /* Recipient visibility answers by `${profile}:${project}` uuid, filled as
    * they are asked. */
   visibility: Map<string, boolean>
-  /* Run by notifyIssueUpdate before each mention and each follower it
+  /* Run by notifyIssueUpdate before each webhook subscription it checks
+   * (taskEvents.ts emitTaskEvent), each mention and each follower it
    * notifies. A bulk writer throws from it to stop before the transaction
    * passes Convex's limits (projectAccess.ts removeAndSettle). */
   guard?: () => Promise<void>
@@ -1212,7 +1213,14 @@ export async function notifyIssueUpdate(
 ): Promise<void> {
   const { before, after, actor, now, preload } = a
   if (!a.skipTaskEvent)
-    await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before, actor, now })
+    await emitTaskEvent(ctx, {
+      name: 'task.updated',
+      issue: after,
+      before,
+      actor,
+      now,
+      guard: preload?.guard,
+    })
   const isGroup = a.isGroup === true
   const project = await preloadedProject(ctx, preload, after.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, after.org_id))

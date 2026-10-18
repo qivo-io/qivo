@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { LIVE_PROJECT_READS } from '../lib/core'
 import { byId } from '../lib/db'
 import { countsAsSubtask, groupTest } from '../lib/liveTasks'
 import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
@@ -359,10 +360,68 @@ describe('reading only live tasks', () => {
     const fx = await setup()
     const shelved = await task(fx, { project_id: fx.shelf.id, title: 'Shelved group' })
     await task(fx, { parent_id: shelved.id, start_week: '2026-09-07', end_week: '2026-09-07' })
+    // its only subtask is in another archived project, which the active
+    // projects' tasks do not hold
+    const attic = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      key: 'ATTIC',
+      archived_at: NOW,
+    })
+    const atticGroup = await task(fx, { project_id: fx.shelf.id, title: 'Attic group' })
+    await task(fx, {
+      project_id: attic.id,
+      parent_id: atticGroup.id,
+      start_week: '2026-10-05',
+      end_week: '2026-10-12',
+    })
     const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', project: 'SHELF' })
-    expect(rest.map((r) => [r.id, r.is_group, r.start_week])).toEqual([
-      [shelved.id, true, '2026-09-07'],
+    expect(rest.map((r) => [r.id, r.is_group, r.start_week, r.end_week])).toEqual([
+      [shelved.id, true, '2026-09-07', '2026-09-07'],
+      [atticGroup.id, true, '2026-10-05', '2026-10-12'],
     ])
+  })
+
+  it('a list past LIVE_PROJECT_READS answers as the per-project read does', async () => {
+    const fx = await setup()
+    const group = await task(fx, { title: 'Group', start_week: '2026-09-07' })
+    await task(fx, {
+      project_id: fx.sub2.id,
+      parent_id: group.id,
+      status: 'done',
+      start_week: '2026-09-07',
+      end_week: '2026-09-14',
+    })
+    const shelvedOnly = await task(fx, { title: 'Shelved only' })
+    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
+    const stranded = await task(fx, { project_id: fx.shelf.id, title: 'Stranded parent' })
+    await task(fx, { parent_id: stranded.id, title: 'Child' })
+    const read = async () => ({
+      rest: await restTasks(fx.t, { callerId: fx.agent.id, access: 'read' }),
+      mcp: await fx.t.query(internal.machine.mcp.listIssues, {
+        callerId: fx.agent.id,
+        access: 'read',
+        now: NOW,
+        project: 'TBED',
+      }),
+      completion: (
+        await fx.t.query(internal.machine.rest.getProject, {
+          callerId: fx.agent.id,
+          access: 'read',
+          ref: 'TBED',
+        })
+      ).completion,
+    })
+    const perProject = await read()
+    expect(perProject.rest).toHaveLength(4)
+    const reads = LIVE_PROJECT_READS.reads
+    LIVE_PROJECT_READS.reads = 1
+    try {
+      expect(await read()).toEqual(perProject)
+    } finally {
+      LIVE_PROJECT_READS.reads = reads
+    }
   })
 
   it("a busy person's load finds the groups in one read past ASSIGNEE_LOAD_CHECKS", async () => {

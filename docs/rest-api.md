@@ -872,7 +872,8 @@ Active lists come in creation order, oldest first, with tasks created at the
 same moment ordered by number, so `offset` pages through them. MCP's
 `list_tasks` uses the same order. Page with `offset` until a page holds fewer
 tasks than `limit`. Each row's `last_comment_at` reads the task's newest
-comment. When those comments do not fit in one request beside the rest of
+comment, and a row whose parent is in an archived project reads that
+parent. When those reads do not fit in one request beside the rest of
 the page, the request is a `400` (`this page of tasks is too large to read
 at once; ask for a smaller limit`); ask again with a smaller `limit`. A list
 also reads every active task in the organization's active projects, or every
@@ -1293,8 +1294,9 @@ such as thousands of subtasks or hundreds with very long descriptions. Its
 single-task shape then still lists its direct `subtasks`, but `start_week`
 and `end_week` are `null`, `progress` is `0` of `0` with `partial: true`
 and `group_remaining_hours` is `null`. When even its direct subtasks do not
-fit, the request is a `400` with `this task's subtasks are too large to read
-in one request`.
+fit, a `GET` is a `400` with `this task's subtasks are too large to read in
+one request`. A `PATCH` that archives such a group is not refused for the
+size of its answer, which then lists the direct subtasks in this shape.
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:

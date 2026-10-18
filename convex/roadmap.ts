@@ -112,13 +112,15 @@ export const ROADMAP_CHANGE_TOO_LARGE =
   'this roadmap change is too large to save at once; change fewer tasks at a time'
 export const ROADMAP_UNDO_TOO_LARGE =
   'these roadmap changes are too large to undo at once; undo them one step at a time'
+export const ROADMAP_STEP_TOO_LARGE = 'this roadmap change is too large to undo at once'
 
 /* What one roadmap mutation shares across its task writes: one BulkUpdate
  * per organization, built at its first task there (model/issues.ts
  * BulkUpdate), and the room check that refuses with `tooLarge`. A roadmap
  * mutation changes only tasks, milestones and activity, so the preload stays
  * valid for the whole mutation (model/messages.ts NotifyPreload). Its guard
- * runs the room check before each follower a task write notifies. */
+ * runs the room check before each webhook subscription a task write checks
+ * and each follower it notifies. */
 type Batch = { bulkOf: (orgId: string) => Promise<BulkUpdate>; room: () => Promise<void> }
 
 function batchOf(ctx: Context, tooLarge: string): Batch {
@@ -467,6 +469,7 @@ async function restoreStep(ctx: Context, changes: Change[], now: string, batch: 
     }
   }
   for (const { change, before } of tasks) {
+    await batch.room()
     const patch: Partial<TaskValues> = {}
     for (const field of change.fields) Object.assign(patch, { [field]: change.before[field] })
     await ctx.db.patch(before._id, { ...patch, updated_at: now })
@@ -504,7 +507,7 @@ export const undo = authedMutation({
     if (!entries.length) throw expired()
     const selected = all ? entries.slice().reverse() : entries.slice(-1)
     const now = new Date().toISOString()
-    const batch = batchOf(ctx, ROADMAP_UNDO_TOO_LARGE)
+    const batch = batchOf(ctx, all ? ROADMAP_UNDO_TOO_LARGE : ROADMAP_STEP_TOO_LARGE)
     for (const entry of selected) {
       await restoreStep(ctx, JSON.parse(entry.changes) as Change[], now, batch)
       await ctx.db.delete(entry._id)
