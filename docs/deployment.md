@@ -61,6 +61,10 @@ Website, docs and app changes all ship the same way.
    own, older commit.
 5. Publish the draft. **Production release** deploys it in about two minutes.
    Check `https://qivo.io/version.json` for the commit.
+6. If the release adds a one-time backfill, such as
+   `internal/attachmentScopeBackfill`, run it on each hosted deployment once
+   that deployment serves the release, with the owner's approval for each
+   run, as the backfill's header says. Deployments never run it on their own.
 
 A release can also be created by hand in the GitHub interface. It must target
 a main commit that already passed staging, or production refuses it. That

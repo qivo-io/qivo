@@ -344,7 +344,7 @@ describe('invitations from the app', () => {
     const added = person(f.org.id, 'anna@example.se')
     await as(t, f.admin).mutation(api.profiles.create, added)
     await flush(t)
-    const detail = await op.query(api.admin.orgDetail, { org_id: f.org.id })
+    const detail = await op.action(api.adminPeople.orgDetail, { org_id: f.org.id })
     expect(detail.members.find((m) => m.profile_id === added.id)?.invite).toMatchObject({
       sent: true,
     })

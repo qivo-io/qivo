@@ -12,7 +12,9 @@
  * - An archive leg reads the organization's Done candidates past the
  *   shortest archive threshold it uses, by index, at most
  *   ARCHIVE_LIMITS.tasks tasks and ARCHIVE_LIMITS.bytes bytes. The leaf guard
- *   reads at most one child per candidate, by index. The chain's repair
+ *   reads at most one child per candidate, by index. A leg stops early when
+ *   the task.updated events of its archived tasks reach their budget
+ *   (ARCHIVE_LIMITS.checks and ARCHIVE_LIMITS.room). The chain's repair
  *   phase reads the organization's flagged active tasks by index.
  * - A sweep leg visits the profiles of its page and deletes or writes at most
  *   SWEEP_LIMITS.rows messages.
@@ -35,12 +37,13 @@ import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
+import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { scheduleMarkClears } from './model/archiveMarks'
 import { ITEM_UNREAD_CAP, scheduleArchivedReads, wakeSnoozedItem } from './model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from './model/orgs'
 import { messageRetentionDays } from './model/people'
-import { emitTaskEvent } from './model/taskEvents'
+import { emitTaskEvent, eventSubscriptions } from './model/taskEvents'
 
 const DAY = 86_400_000
 
@@ -57,6 +60,15 @@ export const ARCHIVE_LIMITS = {
   bytes: 4 * 1024 * 1024,
   /** Flagged active tasks per repair leg. */
   marked: 1000,
+  /** Subscriber checks the task.updated events of one leg may make. Each
+   * task in a project the leg has not met yet costs one check per
+   * subscription of the organization (model/taskEvents.ts), and the checks
+   * set a leg's execution time, as in internal/subtaskFamilyBackfill.ts
+   * FAMILY_PAGE.checks. */
+  checks: 400,
+  /** The share of each of Convex's limits for one transaction a leg may have
+   * used before it archives another task. */
+  room: 0.5,
 }
 
 const archiveRunArgs = {
@@ -207,6 +219,12 @@ async function afterArchive(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg
  * own stamps could change their answer. A child can be as large as its
  * parent, so when the children the guard read pass ARCHIVE_LIMITS.bytes, the
  * leg writes nothing and the next leg reads the same page at half the size.
+ * Each archived task sends a task.updated event, whose subscriber checks
+ * cost time the transaction metrics do not show. So before each task after
+ * its first, a leg stops when the task would take its checks past
+ * ARCHIVE_LIMITS.checks, or once it has used ARCHIVE_LIMITS.room of any
+ * transaction limit. The next leg then reads the same page again, without
+ * the tasks archived here, which have left its range.
  * Returns the next leg, or null when the chain is done. */
 async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
   const projects = await ctx.db
@@ -256,7 +274,18 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
     }
   }
 
+  // A leg always archives one task, so the chain moves on.
+  const fanOut = (await eventSubscriptions(ctx, a.org_id, 'task.updated')).length
+  const projectsMet = new Set<string>()
+  const patched: Doc<'issues'>[] = []
+  let checks = 0
+  let full = false
   for (const task of batch) {
+    const cost = projectsMet.has(task.project_id) ? 0 : fanOut
+    if (patched.length > 0 && (checks + cost > ARCHIVE_LIMITS.checks || (await legIsFull(ctx)))) {
+      full = true
+      break
+    }
     await ctx.db.patch(task._id, { archived_at: a.now })
     await emitTaskEvent(ctx, {
       name: 'task.updated',
@@ -264,11 +293,25 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
       before: task,
       now: a.now,
     })
+    projectsMet.add(task.project_id)
+    checks += cost
+    patched.push(task)
   }
-  await scheduleArchivedReads(ctx, { issues: batch.map((task) => task.id) })
-  const archived = a.archived + batch.length
+  await scheduleArchivedReads(ctx, { issues: patched.map((task) => task.id) })
+  const archived = a.archived + patched.length
+  // The same page again. The tasks archived here have left its range.
+  if (full) return { ...a, cutoff, archived }
   if (page.isDone) return await afterArchive(ctx, { ...a, archived })
   return { ...a, cutoff, cursor: page.continueCursor, size: undefined, archived }
+}
+
+/* Whether the transaction has used more than ARCHIVE_LIMITS.room of any of
+ * Convex's limits for one transaction. */
+async function legIsFull(ctx: MutationCtx): Promise<boolean> {
+  const metrics = await ctx.meta.getTransactionMetrics()
+  return Object.values(metrics).some(
+    ({ used, remaining }) => used > (used + remaining) * ARCHIVE_LIMITS.room,
+  )
 }
 
 /* One repair leg. It schedules the clear steps for one page of the
@@ -336,11 +379,15 @@ export const archiveDoneIssues = internalMutation({
  * pages through the due candidates, then the repair phase, when needed,
  * through the flagged active tasks, each leg scheduling the next with the
  * running counts. The last leg logs them. An organization deleted since the
- * dispatcher read it ends its chain. */
+ * dispatcher read it ends its chain, and so does one whose deletion has
+ * begun (lib/billingAccess.ts deletionBegun), because its deletion steps
+ * are removing the tasks a leg would archive. The read-only period before
+ * deletion begins still archives. */
 export const archiveOrg = internalMutation({
   args: archiveOrgArgs,
   handler: async (ctx, a): Promise<null> => {
     if ((await byId(ctx, 'organizations', a.org_id)) === null) return null
+    if (await deletionBegun(ctx, a.org_id)) return null
     const next = a.phase === 'archive' ? await archiveLeg(ctx, a) : await repairLeg(ctx, a)
     if (next !== null) await ctx.scheduler.runAfter(0, archiveOrgRef, next)
     return null

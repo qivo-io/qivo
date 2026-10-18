@@ -1,14 +1,11 @@
-/* The operator console backend (admin.ts) — the fail-closed sweep over every
+/* The operator console backend (admin.ts): the fail-closed sweep over every
  * public admin function (each platform wrapper refuses a signed-in
  * non-operator with 0015's per-call re-check, and the anonymous caller before
- * that), isOperator's deliberate fail-OPEN false (the AdminGate probe must
- * never throw — a clean false is what keeps the smoke's no-console-errors
- * check green), promoteOrgAdmin's rescue path with its audit row, and a
- * listUsers shape spot-check against the exact fields Users.tsx destructures,
- * including the banned_until wire-name mapping off Better Auth's
- * { banned, banExpires } and the newest-session last_sign_in_at
- * approximation (driven through the REAL local component, the identity-suite
- * pattern).
+ * that), isOperator's deliberate fail-open false (the AdminGate probe must
+ * never throw, because a clean false is what keeps the smoke's
+ * no-console-errors check green), promoteOrgAdmin's rescue path with its
+ * audit row, and CLI enrolment and removal of operators. The Users page and
+ * an organization's page are in adminPeople.test.ts.
  *
  * The sweep is table-driven and forgetting-proofed: every export of
  * convex/admin.ts must appear in the table or in the documented exclusion
@@ -16,7 +13,7 @@
 /// <reference types="vite/client" />
 
 import type { FunctionReference } from 'convex/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import * as adminModule from '../admin'
@@ -30,8 +27,6 @@ const newAuthT = (): T => {
   t.registerComponent('betterAuth', authSchema, componentModules)
   return t
 }
-
-const DAY = 86_400_000
 
 /* A real platform operator: a component user row (so audit's actor_email
  * resolves genuinely) plus the platform_admins row the wrappers gate on. */
@@ -118,8 +113,6 @@ const auditRows = (t: T): Promise<Doc<'platform_audit_log'>[]> =>
 /* ------------------------------------------------------ the fail-closed sweep */
 
 const SURFACE: Record<string, { kind: 'query' | 'mutation'; args: Record<string, unknown> }> = {
-  orgDetail: { kind: 'query', args: { org_id: '00000000-0000-4000-8000-000000000000' } },
-  listUsers: { kind: 'query', args: { search: '' } },
   auditLog: { kind: 'query', args: {} },
   promoteOrgAdmin: {
     kind: 'mutation',
@@ -278,85 +271,6 @@ describe('promoteOrgAdmin — the lockout rescue', () => {
   })
 })
 
-/* ------------------------------------------------------------------ listUsers */
-
-describe('listUsers — the cross-org account search', () => {
-  it('returns every profile with the Users.tsx fields, maps the BA auth columns, and narrows on search', async () => {
-    const t = newAuthT()
-    const f = await withOrg(t)
-    const op = await withOperator(t)
-
-    /* Ban the viewer's real Better Auth login with an expiry and give it
-     * one session — the two approximated auth.users columns. */
-    const now = Date.now()
-    const banExpires = now + DAY
-    const sessionCreated = now - 1000
-    await t.mutation(components.betterAuth.adapter.updateOne, {
-      input: {
-        model: 'user',
-        where: [{ field: '_id', value: f.viewer.auth_user_id! }],
-        update: { banned: true, banExpires },
-      },
-    })
-    await t.mutation(components.betterAuth.adapter.create, {
-      input: {
-        model: 'session',
-        data: {
-          token: uuid(),
-          userId: f.viewer.auth_user_id!,
-          expiresAt: now + 60 * 60 * 1000,
-          createdAt: sessionCreated,
-          updatedAt: sessionCreated,
-        },
-      },
-    })
-
-    const rows = await op.asOp.query(api.admin.listUsers, { search: '' })
-    /* withOrg: admin, user, viewer, guest, agent in Testbed Labs + otherAdmin in
-     * Other — the operator itself holds no profile and must not appear. */
-    expect(rows).toHaveLength(6)
-    /* ordered by org name then profile name: Other sorts before Testbed Labs */
-    expect(rows[0].org_name).toBe('Other')
-    expect(rows.slice(1).map((r) => r.name)).toEqual(['Relay', 'admin', 'guest', 'user', 'viewer'])
-
-    const viewerRow = rows.find((r) => r.profile_id === f.viewer.id)!
-    expect(viewerRow).toEqual({
-      profile_id: f.viewer.id,
-      name: 'viewer',
-      email: 'viewer@testbed.test',
-      org_id: f.org.id,
-      org_name: 'Testbed Labs',
-      org_role: 'viewer',
-      has_login: true,
-      last_sign_in_at: new Date(sessionCreated).toISOString(),
-      banned_until: new Date(banExpires).toISOString(),
-      created_at: NOW,
-    })
-
-    /* the agent: no email, no login, both auth columns null */
-    const agentRow = rows.find((r) => r.profile_id === f.agent.id)!
-    expect(agentRow.email).toBeNull()
-    expect(agentRow.has_login).toBe(false)
-    expect(agentRow.last_sign_in_at).toBeNull()
-    expect(agentRow.banned_until).toBeNull()
-
-    /* substring narrowing, the smoke's "row count NARROWS" check */
-    const narrowed = await op.asOp.query(api.admin.listUsers, { search: 'viewer' })
-    expect(narrowed.map((r) => r.profile_id)).toEqual([f.viewer.id])
-    expect(narrowed.length).toBeLessThan(rows.length)
-
-    // Fragments can appear in reverse order, and across name/email/org fields.
-    for (const [search, ids] of [
-      ['LABS VIEW', [f.viewer.id]],
-      ['  lay\ttestbed ', [f.agent.id]],
-      ['testbed missing', []],
-    ] as const) {
-      const matches = await op.asOp.query(api.admin.listUsers, { search })
-      expect(matches.map((r) => r.profile_id)).toEqual(ids)
-    }
-  })
-})
-
 /* ------------------------------------------------------------ removeOperator */
 
 describe('removeOperator — the CLI-only demotion', () => {
@@ -491,4 +405,63 @@ describe('removeOperator — the CLI-only demotion', () => {
     await t.mutation(internal.admin.removeOperator, { email: 'stale@platform.test' })
     expect(await auditRows(t)).toHaveLength(1)
   })
+})
+
+/* ------------------------------------------------------ demo deployment */
+
+/* The CLI-only operator writes. The console refuses a demo deployment, and
+ * the dashboard and deploy keys can run these directly, so each refuses it
+ * too. */
+describe('addOperator and removeOperator refuse a demo deployment', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  /* An enrolled operator, a second one, and a login that is not one yet. */
+  async function scene() {
+    const t = newAuthT()
+    await plantOperator(t, 'first@platform.test')
+    await plantOperator(t, 'second@platform.test')
+    await plantOperator(t, 'newcomer@platform.test', { enrolled: false, role: 'user' })
+    const state = async () => ({
+      operators: (await operatorIds(t)).sort(),
+      roles: [
+        await authRole(t, 'first@platform.test'),
+        await authRole(t, 'second@platform.test'),
+        await authRole(t, 'newcomer@platform.test'),
+      ],
+      audit: await auditRows(t),
+    })
+    return { t, state }
+  }
+
+  const WRITES = {
+    addOperator: (t: T) =>
+      t.mutation(internal.admin.addOperator, { email: 'newcomer@platform.test' }),
+    removeOperator: (t: T) =>
+      t.mutation(internal.admin.removeOperator, { email: 'second@platform.test' }),
+  }
+
+  it.each(Object.keys(WRITES) as Array<keyof typeof WRITES>)(
+    '%s refuses a demo deployment and writes nothing',
+    async (name) => {
+      const { t, state } = await scene()
+      const before = await state()
+      vi.stubEnv('APP_MODE', 'demo')
+      await expectRefusal(WRITES[name](t), 'forbidden', /requires a regular workspace/)
+      expect(await state()).toEqual(before)
+    },
+  )
+
+  it.each(Object.keys(WRITES) as Array<keyof typeof WRITES>)(
+    '%s writes on a regular deployment',
+    async (name) => {
+      const { t, state } = await scene()
+      const before = await state()
+      await WRITES[name](t)
+      const after = await state()
+      expect(after.operators).not.toEqual(before.operators)
+      expect(after.audit).toHaveLength(1)
+    },
+  )
 })

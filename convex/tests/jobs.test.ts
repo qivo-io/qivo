@@ -19,7 +19,7 @@
  * time stops only its own organization or page of profiles. */
 /// <reference types="vite/client" />
 
-import type { WithoutSystemFields } from 'convex/server'
+import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -612,6 +612,193 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     // the deleted organization's chain ended at its first leg
     const legs = await scheduled(t, 'archiveOrg')
     expect(legs.filter((job) => job.args[0].org_id === f.org.id)).toHaveLength(1)
+  })
+})
+
+/* `count` agents of the organization, each able to see `projects` and
+ * subscribed to its task.updated events. */
+async function plantSubscribers(
+  t: T,
+  orgId: string,
+  projects: readonly string[],
+  count: number,
+): Promise<void> {
+  await t.run(async (ctx) => {
+    for (let n = 0; n < count; n++) {
+      const profile_id = uuid()
+      await ctx.db.insert('profiles', {
+        id: profile_id,
+        org_id: orgId,
+        name: `Hook ${n}`,
+        initials: 'HK',
+        color: '#50b070',
+        org_role: 'user',
+        active: true,
+        kind: 'agent',
+        created_at: NOW,
+      })
+      for (const project_id of projects)
+        await ctx.db.insert('project_access', { project_id, profile_id, level: 'viewer' })
+      const credential_id = uuid()
+      const credential_row_id = await ctx.db.insert('agent_keys', {
+        id: credential_id,
+        profile_id,
+        name: 'Archive events',
+        key_prefix: 'qva_1...1111',
+        key_hash: uuid(),
+        created_at: NOW,
+      })
+      await ctx.db.insert('webhook_subscriptions', {
+        id: uuid(),
+        org_id: orgId,
+        owner: { profile_id, credential_table: 'agent_keys', credential_id, credential_row_id },
+        name: 'task.updated',
+        filters: {},
+        url: `https://receiver.example/${n}`,
+        encrypted_secret: 'test-only',
+        created_at: Date.now(),
+      })
+    }
+  })
+}
+
+/* The ids of the tasks each task.updated event in the outbox is about. */
+const updatedTasks = (t: T) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query('webhook_events').collect())
+      .filter((e) => e.name === 'task.updated')
+      .map((e) => e.task_id)
+      .sort(),
+  )
+
+/* Runs one nightly archive by hand, the dispatcher and the chains' legs in
+ * schedule order, on fake timers that never fire. Nothing else runs, so the
+ * task.updated events stay in the outbox. Returns the arguments of every
+ * archive leg of organization `orgId`, in order. */
+async function archiveByHand(
+  t: T,
+  orgId: string,
+): Promise<FunctionArgs<typeof internal.jobs.archiveOrg>[]> {
+  vi.useFakeTimers()
+  try {
+    const legs: FunctionArgs<typeof internal.jobs.archiveOrg>[] = []
+    const ran = new Set<string>()
+    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    for (let guard = 0; guard < 100; guard++) {
+      const job = (
+        await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+      ).find(
+        (j) =>
+          j.state.kind === 'pending' &&
+          !ran.has(j._id) &&
+          (j.name.includes('archiveOrg') || j.name.includes('archiveDoneIssues')),
+      )
+      if (job === undefined) return legs
+      ran.add(job._id)
+      if (job.name.includes('archiveDoneIssues')) {
+        await t.mutation(internal.jobs.archiveDoneIssues, job.args[0])
+        continue
+      }
+      const leg = job.args[0] as FunctionArgs<typeof internal.jobs.archiveOrg>
+      if (leg.org_id === orgId && leg.phase === 'archive') legs.push(leg)
+      await t.mutation(internal.jobs.archiveOrg, leg)
+    }
+    throw new Error('the archive did not finish')
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
+describe('archiveDoneIssues budgets the events of a leg', () => {
+  /* withOrg with two subscribers and three due Done tasks in each of its
+   * two sub-projects, Firmware's done first. */
+  async function scene() {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantSubscribers(t, f.org.id, [f.sub.id, f.sub2.id], 2)
+    const tasks: string[] = []
+    for (const [i, project_id] of [
+      f.sub.id,
+      f.sub.id,
+      f.sub.id,
+      f.sub2.id,
+      f.sub2.id,
+      f.sub2.id,
+    ].entries()) {
+      const task = await plantIssue(t, {
+        org_id: f.org.id,
+        project_id,
+        status: 'done',
+        done_at: ago(60 - i),
+      })
+      tasks.push(task.id)
+    }
+    return { t, f, tasks: tasks.sort() }
+  }
+
+  const archived = (t: T, ids: readonly string[]) =>
+    Promise.all(ids.map(async (id) => (await issueRow(t, id))?.archived_at !== undefined))
+
+  it('sends one event per task in one leg while the checks fit the budget', async () => {
+    const { t, f, tasks } = await scene()
+    expect(await archiveByHand(t, f.org.id)).toHaveLength(1)
+    expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
+    expect(await updatedTasks(t)).toEqual(tasks)
+  })
+
+  it('stops a leg before a project whose checks would pass ARCHIVE_LIMITS.checks, and the next leg goes on', async () => {
+    const { t, f, tasks } = await scene()
+    // Firmware's first task costs 2 checks and its other tasks none. Board
+    // rev's first task would make 4.
+    ARCHIVE_LIMITS.checks = 3
+    const legs = await archiveByHand(t, f.org.id)
+    expect(legs).toHaveLength(2)
+    // the second leg reads the first leg's page again
+    expect(legs[1].archived).toBe(3)
+    expect(legs[1].cursor).toBe(legs[0].cursor)
+    expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
+    expect(await updatedTasks(t)).toEqual(tasks)
+  })
+
+  it('stops a leg once it used ARCHIVE_LIMITS.room of a transaction limit, one task at least', async () => {
+    const { t, f, tasks } = await scene()
+    ARCHIVE_LIMITS.room = 0
+    expect(await archiveByHand(t, f.org.id)).toHaveLength(6)
+    expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
+    expect(await updatedTasks(t)).toEqual(tasks)
+  })
+})
+
+describe('archiveDoneIssues and organization deletion', () => {
+  it('ends the chain of an organization whose deletion has begun, and archives during the read-only period', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const deleting = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: ago(40),
+    })
+    const readOnly = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: f.otherProject.id,
+      status: 'done',
+      done_at: ago(40),
+    })
+    await t.run(async (ctx) => {
+      const removal = {
+        reason: 'requested' as const,
+        ended_at: NOW,
+        delete_after: NOW,
+        created_at: NOW,
+      }
+      await ctx.db.insert('org_removals', { ...removal, org_id: f.org.id, phase: 'profiles' })
+      await ctx.db.insert('org_removals', { ...removal, org_id: f.otherOrg.id })
+    })
+
+    expect(await runArchive(t)).toBe(1)
+    expect((await issueRow(t, deleting.id))?.archived_at).toBeUndefined()
+    expect((await issueRow(t, readOnly.id))?.archived_at).toBeDefined()
   })
 })
 

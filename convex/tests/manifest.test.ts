@@ -95,8 +95,6 @@ activityRetention:trim mutation internal {"type":"object","value":{"org_id":{"fi
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
-admin:listUsers query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
-admin:orgDetail query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:promoteOrgAdmin mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:removeOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:banUser action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
@@ -129,6 +127,15 @@ adminOrgs:resendInvite action public {"type":"object","value":{"profile_id":{"fi
 adminOrgs:setMemberRole mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}}}
 adminOrgs:suggestAddress query public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 adminOrgs:updateInvite mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+adminPeople:detailHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+adminPeople:invitePage query internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminPeople:listUsers action public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
+adminPeople:loginPage query internal {"type":"object","value":{"auth_user_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+adminPeople:memberPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminPeople:orgDetail action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+adminPeople:profilePage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminPeople:teamCountPage query internal {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"child":{"fieldType":{"type":"union","value":[{"type":"literal","value":"members"},{"type":"literal","value":"projects"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminPeople:teamPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:childPage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:listOrgs action public {"type":"object","value":{}}
 adminStats:orgHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -188,6 +195,7 @@ billingSync:pump action internal {"type":"object","value":{}}
 billingSync:reconcile action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:release mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"token":{"fieldType":{"type":"string"},"optional":false},"seats":{"fieldType":{"type":"number"},"optional":true},"error":{"fieldType":{"type":"string"},"optional":true}}}
 billingSync:reminders mutation internal {"type":"object","value":{}}
+billingSync:storageStep mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"size":{"fieldType":{"type":"number"},"optional":true},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
 billingSync:sweep action internal {"type":"object","value":{}}
 billingSync:webhook action internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false},"subscription_id":{"fieldType":{"type":"string"},"optional":false}}}
 commentCounts:step mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -621,8 +629,6 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // bare on purpose — the AdminGate's fail-OPEN probe answers false, never
     // throws (admin.ts documents it); every real admin door below re-checks.
     isOperator: 'query',
-    orgDetail: 'platformQuery',
-    listUsers: 'platformQuery',
     promoteOrgAdmin: 'platformMutation',
     auditLog: 'platformQuery',
   },
@@ -634,6 +640,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     orgNames: 'platformAction',
     platformStats: 'platformAction',
   },
+  // The Users page and an organization's page page through the data the same
+  // way (adminPeople.ts).
+  adminPeople: { listUsers: 'platformAction', orgDetail: 'platformAction' },
   adminAuth: {
     recoveryLink: 'platformAction',
     banUser: 'platformAction',
@@ -930,7 +939,7 @@ describe('the wrapper rule', () => {
    * public function must either carry the wrapper-injected org_id wire arg
    * or be a named non-org entry in the PUBLIC map — and the wrapper's kind
    * must agree with the registered kind. No inverse assertion: a non-org
-   * door may legitimately take org_id as a TARGET argument (admin:orgDetail
+   * door may legitimately take org_id as a TARGET argument (adminPeople:orgDetail
    * asks about an org, it is not scoped to one). */
   const ORG_WRAPPERS = new Set<Wrapper>([
     'orgQuery',
