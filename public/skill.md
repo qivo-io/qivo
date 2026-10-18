@@ -183,10 +183,12 @@ Useful field rules:
   `reporter_id` is refused in full, including its other requested changes.
 - `remaining_hours` means work left, not the original estimate. A task with
   `is_group: true` derives its progress, remaining work and planned weeks from
-  active subtasks. Setting its status, dates, a non-null `remaining_hours` or
-  `paused: true` is refused, as is clearing its dates; `remaining_hours: null`
-  and `paused: false` pass, so a stored value can be cleared. Inspect the
-  subtasks to determine which changes match the user's request.
+  active subtasks. A subtask in an archived project makes no task in an
+  active project a group. Setting its status, dates, a non-null
+  `remaining_hours` or `paused: true` is refused, as is clearing its dates;
+  `remaining_hours: null` and `paused: false` pass, so a stored value can be
+  cleared. Inspect the subtasks to determine which changes match the user's
+  request.
 - `start_week` and `end_week` plan a task, as `YYYY-MM-DD` on both
   interfaces. Send both to schedule, or both as `null` to clear. After a
   change, both dates must exist or both be absent, with start no later than
