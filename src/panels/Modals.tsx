@@ -19,7 +19,7 @@ import { hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
-import { NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
+import { DELETE_REASON_MAX, NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -1235,10 +1235,17 @@ function FateList({
 
 const fateRow = 'flex items-baseline gap-2 px-2.5 py-[5px] text-sm leading-[1.4]'
 
+/** Whether a delete reason is longer than Deleted items stores, counted as
+    the server counts it, after trimming. A reason typed for an archive,
+    which may be far longer, stays when the person switches to Delete. */
+const reasonTooLong = (reason: string) => reason.trim().length > DELETE_REASON_MAX
+
 /** The reason field under the cards. Archive's is a comment on the task and
     is required, since the field shows for an archive only when work is
-    unfinished. Delete's is optional and shown in Deleted items. The field
-    tells assistive technology both, and its hint. */
+    unfinished. Delete's is optional, shown in Deleted items and at most
+    DELETE_REASON_MAX characters; a longer one says so and holds the delete
+    rather than cut what was typed. The field tells assistive technology
+    both, and its hint. */
 function FateReason({
   archiving,
   value,
@@ -1249,15 +1256,17 @@ function FateReason({
   onChange: (value: string) => void
 }) {
   const hint = useIdM()
+  const tooLong = !archiving && reasonTooLong(value)
   return (
     <MField data-fate-reason-field label={archiving ? 'Reason (required)' : 'Reason (optional)'}>
       <Textarea
         data-fate-reason
         aria-label={archiving ? 'Reason for archiving' : 'Reason for deleting'}
         aria-required={archiving}
+        aria-invalid={tooLong || undefined}
         aria-describedby={hint}
         rows={archiving ? 3 : 2}
-        maxLength={TEXT_MAX}
+        maxLength={archiving ? TEXT_MAX : DELETE_REASON_MAX}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
@@ -1266,8 +1275,15 @@ function FateReason({
           archiving ? 'min-h-[72px]' : 'min-h-[56px]',
         )}
       />
-      <p id={hint} className="mt-2 text-sm text-text-2">
-        {archiving ? "Saved to the task's comments." : 'Shown in Deleted items.'}
+      <p
+        id={hint}
+        className={cn('mt-2 text-sm', tooLong ? '[color:var(--danger)]' : 'text-text-2')}
+      >
+        {archiving
+          ? "Saved to the task's comments."
+          : tooLong
+            ? `Shown in Deleted items. At most ${DELETE_REASON_MAX} characters.`
+            : 'Shown in Deleted items.'}
       </p>
     </MField>
   )
@@ -1374,7 +1390,10 @@ function ArchiveOrDeleteTaskModal({
   const showReason = !archiving || unfinished
   const archiveBlocked = archiving && withSubtasks && readOnly
   const canSubmit =
-    !saving && (!archiving || (!archiveBlocked && (!unfinished || reason.trim().length > 0)))
+    !saving &&
+    (archiving
+      ? !archiveBlocked && (!unfinished || reason.trim().length > 0)
+      : !reasonTooLong(reason))
   const viewOnly = plan.rows.some((r) => !r.deletable)
   const suffix = !withSubtasks
     ? ''
@@ -1648,7 +1667,7 @@ function ArchiveOrDeleteProjectModal({
         : `Moves the ${noun} to Deleted items. You can restore it from there.`
   const listed = archiving ? subs.filter((s) => !s.archived) : subs
   const submit = () => {
-    if (!summary || saving) return
+    if (!summary || saving || (!archiving && reasonTooLong(reason))) return
     if (archiving) {
       onArchive?.()
       return
@@ -1664,7 +1683,7 @@ function ArchiveOrDeleteProjectModal({
       title={deleteOnly ? `Delete “${P.projectLabel(project)}”?` : `Archive or delete ${noun}`}
       onClose={saving ? () => false : onClose}
       onSubmit={submit}
-      canSubmit={!!summary && !saving}
+      canSubmit={!!summary && !saving && (archiving || !reasonTooLong(reason))}
       dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={
