@@ -1103,13 +1103,14 @@ their own workflow status. Status filters return ordinary tasks only, and a
 PATCH containing `status` on a group returns `400` with
 `status cannot be set on a task with subtasks — update its subtasks instead`.
 For a task in an active project, only active subtasks in active projects
-count: a subtask in an archived project, such as a sub-project archived on
+count. A subtask in an archived project, such as a sub-project archived on
 its own, does not make it a group. A task in an archived project counts
 every active subtask. When its last such subtask is detached, deleted or
 archived, or that subtask's project is archived, the task resumes its saved
 status. Restoring that project makes it a group again, and background steps
 clear its own `remaining_hours` moments later, as attaching a subtask does.
-Archived parents retain `is_group: true` while they have attached subtasks.
+They do the same for a task that is still a group when its own project is
+restored after its subtasks' project. Archived parents retain `is_group: true` while they have attached subtasks.
 Child visibility does not change grouping; this flag reveals no child
 identities.
 

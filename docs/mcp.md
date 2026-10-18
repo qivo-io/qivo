@@ -1679,13 +1679,14 @@ or counted as their own workflow status. Status filters exclude groups.
 `update_task` with `status` on a group refuses with
 `status cannot be set on a task with subtasks — update its subtasks instead`.
 For a task in an active project, only active subtasks in active projects
-count: a subtask in an archived project, such as a sub-project archived on
+count. A subtask in an archived project, such as a sub-project archived on
 its own, does not make it a group. A task in an archived project counts
 every active subtask. Removing, detaching or archiving the last such
 subtask, or archiving its project, restores the parent's saved status.
 Restoring that project makes the parent a group again, and background steps
 clear its own `remaining_hours` moments later, as attaching a subtask does.
-Archived parents retain `is_group: true` while they
+They do the same for a task that is still a group when its own project is
+restored after its subtasks' project. Archived parents retain `is_group: true` while they
 have attached subtasks. This boolean also covers inaccessible children
 without disclosing their identities. A group has no reviewer of its own:
 setting a new non-null `reviewer_id` on one refuses with `a task with

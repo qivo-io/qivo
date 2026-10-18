@@ -4,11 +4,15 @@
  * A task is live while it is not archived and its project exists and is not
  * archived. That is what every reader already shows (lib/workingSet.ts
  * inWorkingSet), so a task in an active project is a group only through
- * live subtasks (countsAsSubtask). A task in an archived project counts
- * every active subtask, and an archived task every subtask, so archiving or
- * restoring a whole project or task never changes group state inside it.
- * A parent's group state therefore depends only on tasks every reader reads,
- * and the app, REST and MCP agree on it.
+ * live subtasks (countsAsSubtask). Its group state therefore depends only
+ * on tasks every reader reads, and the app, REST and MCP agree on it.
+ *
+ * A task in an archived project counts every active subtask, and an
+ * archived task every subtask, so archiving a project or a task never turns
+ * a group in it into a leaf. Archiving a project can turn a task in it into
+ * a group, through active subtasks in a project archived before it. A
+ * restore can then leave that task a group with the own hours it took as a
+ * leaf, which the restore's steps clear (regroup.ts).
  *
  * The readers that need the organization's live tasks read them per active
  * project (liveTasksOf), so tasks in archived projects are never read. */
@@ -24,8 +28,8 @@ export type ProjectLive = (projectId: string) => boolean
 /** ProjectLive that may read the project first. */
 export type Liveness = (projectId: string) => boolean | Promise<boolean>
 
-/** A task as the group rule sees it: whether it is archived and whether its
- * project exists and is not archived. */
+/** A task as the group rule sees it, which is whether it is archived and
+ * whether its project exists and is not archived. */
 export type TaskLayer = { archived: boolean; projectLive: boolean }
 
 /**

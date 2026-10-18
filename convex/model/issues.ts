@@ -292,19 +292,21 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[]) {
 }
 
 /* The people working on a task and its active subtasks at any depth: each
- * assignee, and each reviewer of a task without active subtasks (a group's
- * reviewer is dormant). `self` holds the task's own next values. Callers skip
+ * assignee, and each reviewer of a task that is no group (a group's
+ * reviewer is dormant). `self` holds the task's own next values. `live`
+ * tells which projects are live for the group test, by default as they are
+ * now; a move passes them as they are once its subtasks land. Callers skip
  * switched-off people, who hold no new work. */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
   self: { assignee_id?: string; reviewer_id?: string; group: boolean },
+  live: Liveness = projectLiveness(ctx),
 ): Promise<string[]> {
   const holders = new Set<string>()
   if (self.assignee_id !== undefined) holders.add(self.assignee_id)
   if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
   const seen = new Set<string>([rootId])
-  const live = projectLiveness(ctx)
   let frontier = [rootId]
   for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
     const next: string[] = []
@@ -412,9 +414,9 @@ async function subtaskOf(parent: GroupRow, child: GroupRow, live: Liveness): Pro
 }
 
 /* Whether the task has an active subtask that makes it a group
- * (countsAsSubtask): the remaining guards' test, which leaves archived
- * subtasks out even under an archived task (0070). One by_parent_archived
- * range and each subtask's project once. */
+ * (countsAsSubtask). This is the remaining guards' test, which leaves
+ * archived subtasks out even under an archived task (0070). One
+ * by_parent_archived range and each subtask's project once. */
 async function hasActiveSubtasks(
   ctx: QueryCtx,
   issue: GroupRow,
@@ -447,17 +449,17 @@ export async function assertNoSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<
 }
 
 /* A task is a group while a subtask makes it one (lib/liveTasks.ts
- * countsAsSubtask): an active task in an active project through an active
- * subtask in an active project, an active task in an archived project
- * through any active subtask, and an archived task through any subtask, so
- * archived groups retain their hierarchy for display until restored. The
- * stored status, start_week and end_week stay dormant, ready to resume after
- * the last such subtask is detached, deleted or archived, or its project is
- * archived. Nothing reads, clears or migrates them while the task is a
- * group; readers calculate its dates from its leaves instead. Child
- * visibility must not change this fact: readers disclose only the boolean,
- * never hidden child identities. `live` reads each project once; callers
- * that hold the organization's projects pass them. */
+ * countsAsSubtask). An active task in an active project is one through an
+ * active subtask in an active project, an active task in an archived
+ * project through any active subtask, and an archived task through any
+ * subtask, so archived groups retain their hierarchy for display until
+ * restored. The stored status, start_week and end_week stay dormant, ready
+ * to resume after the last such subtask is detached, deleted or archived,
+ * or its project is archived. Nothing reads, clears or migrates them while
+ * the task is a group; readers calculate its dates from its leaves instead.
+ * Child visibility must not change this fact: readers disclose only the
+ * boolean, never hidden child identities. `live` reads each project once;
+ * callers that hold the organization's projects pass them. */
 export async function hasSubtasks(
   ctx: QueryCtx,
   issue: GroupRow,
@@ -707,10 +709,15 @@ export function doneStampUpdate(
  * stamp, touch and notify triggers, so its subscribers saw
  * "Remaining cleared (was N h)". 0067's row lock is subsumed by Convex
  * serializability. `actor` is absent only for a background step whose
- * person is gone (regroup.ts). */
+ * person is gone, and `preload` is that step's (regroup.ts). */
 export async function clearParentRemaining(
   ctx: MutationCtx,
-  a: { parentId: string; actor: Doc<'profiles'> | undefined; now: string },
+  a: {
+    parentId: string
+    actor: Doc<'profiles'> | undefined
+    now: string
+    preload?: NotifyPreload
+  },
 ): Promise<void> {
   const parent = await byId(ctx, 'issues', a.parentId)
   if (parent === null) return
@@ -723,7 +730,7 @@ export async function clearParentRemaining(
     updated_at: a.now,
   })
   const after = (await ctx.db.get(parent._id)) as Doc<'issues'>
-  await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now })
+  await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now, preload: a.preload })
 }
 
 /* ------------------------------------------------------------- detaching
@@ -1570,9 +1577,11 @@ export async function subtasksWouldMove(
  * target's top-level project. Before anything is written, each needs Edit
  * on its project, and an active one needs an assignee and a leaf reviewer
  * who can hold it at the target. A group's dormant reviewer who cannot is cleared
- * (`clearReviewer`), as for the moved task. Archived subtasks keep their
- * people unchecked, as an archived task's people are. The walk reads every
- * descendant and refuses past MOVE_SUBTREE_MAX of them or 20 levels. */
+ * (`clearReviewer`), as for the moved task. Whether a subtask is a group is
+ * read as it will be once the move lands, with `liveAfter`. Archived
+ * subtasks keep their people unchecked, as an archived task's people are.
+ * The walk reads every descendant and refuses past MOVE_SUBTREE_MAX of them
+ * or 20 levels. */
 async function subtreeToCarry(
   ctx: QueryCtx,
   a: {
@@ -1580,6 +1589,7 @@ async function subtreeToCarry(
     target: Doc<'projects'>
     actor: Doc<'profiles'>
     topOf: (projectId: string) => Promise<string | null>
+    liveAfter: Liveness
   },
 ): Promise<{ row: Doc<'issues'>; clearReviewer: boolean }[]> {
   const below: Doc<'issues'>[] = []
@@ -1588,8 +1598,13 @@ async function subtreeToCarry(
     if (below.length >= MOVE_SUBTREE_MAX) throw rule(MOVE_SUBTREE_TOO_LARGE)
     below.push(row)
   }
-  // the walk read every subtask, so a group is one with an active subtask among them
-  const groups = new Set(below.filter((c) => c.archived_at === undefined).map((c) => c.parent_id))
+  // The walk read every subtask, so an active one is a group once it lands
+  // when one of its active subtasks among them lands in a live project
+  // (countsAsSubtask). Every carried task lands in the target.
+  const groups = new Set<string | undefined>()
+  for (const c of below) {
+    if (c.archived_at === undefined && (await a.liveAfter(c.project_id))) groups.add(c.parent_id)
+  }
   const dst = topLevelOf(a.target)
   const editable = editableBy(ctx, a.actor)
   const holds = new Map<string, Promise<boolean>>()
@@ -1675,29 +1690,17 @@ export async function moveIssueCore(
   const w: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
   const live = projectLiveness(ctx)
-  // Whether the task is a group once it has landed: an active task in the
-  // destination, which is active, counts its active subtasks in active
-  // projects, and a subtask the move carries lands there too. An archived
-  // task keeps counting every subtask.
-  const groupAfter = async (): Promise<boolean> => {
-    if (issue.archived_at !== undefined) return await hasSubtasks(ctx, issue, live)
-    const kids = ctx.db
-      .query('issues')
-      .withIndex('by_parent_archived', (q) =>
-        q.eq('parent_id', issue.id).eq('archived_at', undefined),
-      )
-    for await (const kid of kids) {
-      const carriedAlong = crosses && (await topOf(kid.project_id)) !== dst
-      if (carriedAlong || (await live(kid.project_id))) return true
-    }
-    return false
-  }
+  // Which projects are live once the move lands, for the group tests of the
+  // task and its subtasks. A subtask the move carries lands in the
+  // destination, which is active, and every other task stays where it is.
+  const liveAfter: Liveness = async (projectId) =>
+    (crosses && (await topOf(projectId)) !== dst) || (await live(projectId))
   const holdsOwn = issue.remaining_hours !== undefined || issue.review_at !== undefined
   // only a reviewer can change hands in a move, and only a group must lose
   // its own hours, so the group flag is read only for those
   let isGroup = false
   if (issue.reviewer_id !== undefined || (holdsOwn && issue.archived_at === undefined)) {
-    isGroup = await groupAfter()
+    isGroup = await hasSubtasks(ctx, { ...issue, project_id }, liveAfter)
   }
   // a group holds no hours of its own, so hours the task held as a leaf go,
   // as on an attach (clearParentRemaining). That happens when a subtask the
@@ -1718,12 +1721,12 @@ export async function moveIssueCore(
   }
   // to another top-level project, the subtasks outside it come along
   const carried = crosses
-    ? await subtreeToCarry(ctx, { root: issue, target, actor: me, topOf })
+    ? await subtreeToCarry(ctx, { root: issue, target, actor: me, topOf, liveAfter })
     : []
   // whoever works on a subtask must still see this task once it moves, so
   // every active assignee or reviewer below it needs access to the
   // destination (the sentence names no one: some subtasks may be hidden)
-  for (const holder of await holdersUnder(ctx, issue.id, { group: true })) {
+  for (const holder of await holdersUnder(ctx, issue.id, { group: true }, liveAfter)) {
     const profile = await byId(ctx, 'profiles', holder)
     if (!profile?.active) continue
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
@@ -1746,8 +1749,13 @@ export async function moveIssueCore(
   // (countsAsSubtask), so a parent it makes a group loses its own hours, as
   // on an attach. That is the task's parent, unless the task leaves it or a
   // later write of this update gives it another, and each carried subtask's.
+  // A later parent equal to the current one changes nothing, so that write
+  // is skipped (lib/core.ts applyTaskUpdate) and this one clears the hours.
   const regrouped = new Set(carried.map(({ row }) => row.parent_id))
-  if (!detach && a.machine?.laterParent === undefined) regrouped.add(issue.parent_id)
+  const laterParent = a.machine?.laterParent
+  if (!detach && (laterParent === undefined || laterParent === issue.parent_id)) {
+    regrouped.add(issue.parent_id)
+  }
   regrouped.delete(issue.id) // its own hours went with the move's patch
   for (const parentId of regrouped) {
     const parent = parentId === undefined ? null : await byId(ctx, 'issues', parentId)

@@ -2603,10 +2603,11 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * rule. An active parent stays when the restorer may change it, within 20
  * levels; an archived one only for an archived task, within the same depth.
  * `grouped`: the attach makes the parent a group (lib/liveTasks.ts
- * countsAsSubtask: any task under an archived parent, and an active task
- * under an active parent unless the task's project is archived while the
- * parent's is not), so the parent loses its own remaining hours as on a
- * reparent (model/issues.ts clearParentRemaining). An archived parent that holds hours of its own
+ * countsAsSubtask). Any task under an archived parent does, and so does an
+ * active task under an active parent unless the task's project is archived
+ * while the parent's is not. The parent then loses its own remaining hours
+ * as on a reparent (model/issues.ts clearParentRemaining). An archived
+ * parent that holds hours of its own
  * therefore needs the restorer's Edit too, so a restore never changes a
  * task in a project the restorer cannot edit.
  *

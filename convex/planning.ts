@@ -31,7 +31,7 @@ import { groupTest, liveIn, liveTasksOf, ownedLiveTasks } from './lib/liveTasks'
 import { taskOwnerId } from './lib/review'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
-import { hasSubtasks, topLevelOf } from './model/issues'
+import { hasSubtasks } from './model/issues'
 import { roundTenths } from './model/taskValues'
 
 /* rows.orgLoad element, field names verbatim (planner.ts:90): `remaining`,
@@ -195,8 +195,10 @@ export type WorkloadJson = {
  * limits the hours to it and its visible sub-projects, which leaves no
  * hidden hours. Lists every active member of the organization and every
  * inactive one with hours in the window, ordered by name. It reads the live
- * tasks of the organization, or with `project` of its top-level project,
- * one index range per active project (lib/liveTasks.ts liveTasksOf).
+ * tasks of the organization, one index range per active project
+ * (lib/liveTasks.ts liveTasksOf), also with `project`, because a subtask
+ * stored before subtasks had to stay in their parent's top-level project
+ * can make a task there a group.
  */
 export async function workloadCore(
   ctx: QueryCtx,
@@ -210,15 +212,7 @@ export async function workloadCore(
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
     .collect()
   const view = await orgProjectView(ctx, me)
-  // a project's hours need the group state of its tasks, which only subtasks
-  // in the same top-level project can change, so a scoped read takes that
-  // top-level project's live tasks and an unscoped one the organization's
-  const family = o.project === null ? null : topLevelOf(o.project)
-  const issues = await liveTasksOf(
-    ctx,
-    view.projects,
-    family === null ? undefined : (p) => topLevelOf(p) === family,
-  )
+  const issues = await liveTasksOf(ctx, view.projects)
   const scope =
     o.project === null
       ? null

@@ -227,9 +227,9 @@ export const forMe = authedQuery({
       }
 
       // Archived project metadata remains available for navigation. Every
-      // seat reads the active tasks of every active project, its own or not:
-      // a parent's group state and the anonymized load rows depend on tasks
-      // the member cannot see.
+      // seat reads the active tasks of every active project, its own or not,
+      // because a parent's group state and the anonymized load rows depend
+      // on tasks the member cannot see.
       const view = await orgProjectView(ctx, me)
       const liveOrgIssues = await liveTasksOf(ctx, view.projects)
       for (const p of view.projects) {

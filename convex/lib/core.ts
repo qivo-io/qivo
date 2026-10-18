@@ -1031,7 +1031,7 @@ export function childIndexOf(rows: Iterable<Doc<'issues'>>): ChildIndex {
 }
 
 /** model/issues.ts hasSubtasks over an index (lib/liveTasks.ts
- * countsAsSubtask): an active task needs its active subtasks in the index,
+ * countsAsSubtask). An active task needs its active subtasks in the index,
  * an archived one all of them. */
 const isGroupIn = (index: ChildIndex, task: Doc<'issues'>, live: ProjectLive): boolean => {
   const parent = layerOf(task, live)
@@ -1043,8 +1043,8 @@ const isGroupIn = (index: ChildIndex, task: Doc<'issues'>, live: ProjectLive): b
 const LIVENESS_POINT_READS = 16
 
 /* Which projects are live, for the tasks of a single-task read's subtree
- * index and its root: from `projectOf` when the caller holds the
- * organization's projects, else each project read once, or the
+ * index and its root. It answers from `projectOf` when the caller holds the
+ * organization's projects, else from each project read once, or from the
  * organization's projects at once when the index names more than
  * LIVENESS_POINT_READS of them, as the index of a subtree too large to walk
  * does. */
