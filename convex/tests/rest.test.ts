@@ -2027,7 +2027,9 @@ describe("a group's dates on REST", () => {
 
   /* Under Convex's real limits a function may read at most 4,096 index
    * ranges. A group's dates come from one read of the organization's tasks,
-   * so a large tree costs the same as a small one on list, get and PATCH. */
+   * so a large tree costs the same as a small one on list, get and PATCH.
+   * Inserting 2,121 rows takes several seconds, and far longer on a loaded
+   * host, so it gets the heavy fixture timeout. */
   it('a large tree stays within transaction limits on list, get and PATCH', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
@@ -2082,7 +2084,7 @@ describe("a group's dates on REST", () => {
       body: JSON.stringify({ title: 'Renamed' }),
     })
     expect(renamed).toMatchObject({ title: 'Renamed', ...span('2026-01-05', '2026-09-05') })
-  })
+  }, 60_000)
 })
 
 /* ----------------------------------------------------------- delete issue */

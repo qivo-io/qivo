@@ -9,7 +9,8 @@ type Stash = { siteUrl: string; qva: string; qvt: string }
 const stash: Stash = JSON.parse(
   readFileSync(new URL('./.credentials.json', import.meta.url), 'utf8'),
 )
-const BASE = process.env.CONTRACT_BASE_URL ?? stash.siteUrl
+// global.setup.mts checked this site against the deploy key
+const BASE = stash.siteUrl
 const UNKNOWN = `qvc_${randomBytes(32).toString('hex')}`
 const AUTH_ERROR = '{"error":"invalid or inactive curation key"}'
 

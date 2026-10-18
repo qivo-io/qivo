@@ -77,9 +77,10 @@ function changes(from, to, note = '') {
  * stop being true once the release is published.
  */
 export const DRAFT_STEPS =
-  "Review the draft's commit on https://preview.qivo.io, then publish the draft. " +
-  "Do not change the draft's tag or target. To ship something else, run Prepare release " +
-  'again. It replaces the draft.'
+  "Check that https://preview.qivo.io/version.json still names the draft's commit, review " +
+  "that commit on https://preview.qivo.io, then publish the draft. Do not change the draft's " +
+  'tag or target. If preview serves a newer commit, or to ship something else, run Prepare ' +
+  'release again. It replaces the draft.'
 
 /**
  * The first section of the release body. Publishing keeps the body, so it holds only facts
@@ -112,8 +113,10 @@ export function releaseHeader({ appSha, stagedAt, stagingRunId, previousTag, pro
  * not verified main or the version is unusable. Then deletes the older drafts this workflow
  * created, because each targets an older commit and publishing it later would deploy that
  * commit. They are kept if the new draft cannot be created. With `summaryFile` (the Actions
- * run summary), it appends the draft link, DRAFT_STEPS and the header there as soon as the
- * draft exists, so the owner gets the steps even if removing an older draft then fails.
+ * run summary), it appends the draft link, DRAFT_STEPS, any warnings and the header there as
+ * soon as the draft exists, so the owner gets the steps even if removing an older draft then
+ * fails. A draft of the commit production already serves gets a warning, not a refusal,
+ * because publishing it is a legitimate redeploy, for example of a lagging demo.
  */
 export async function prepareRelease({
   github,
@@ -145,13 +148,18 @@ export async function prepareRelease({
     )
   const staleDrafts = releases.filter((item) => item.draft && item.author?.login === ACTIONS_BOT)
   const otherDrafts = releases.filter((item) => item.draft && item.author?.login !== ACTIONS_BOT)
-  for (const draft of otherDrafts)
-    log(
+  const warnings = otherDrafts.map(
+    (draft) =>
       `Warning: draft ${draft.tag_name} made by a person also exists. Publishing it deploys ` +
-        'its own commit. Delete drafts you will not publish.',
-    )
+      'its own commit. Delete drafts you will not publish.',
+  )
 
   const productionApp = await liveCommit(fetchImpl)
+  if (productionApp === main)
+    warnings.push(
+      `Warning: qivo.io already serves ${short(main)}. Publishing redeploys it and uses up ${version}.`,
+    )
+  for (const warning of warnings) log(warning)
   const previousTag = await notesBase(github, tags, productionApp)
   const body = releaseHeader({
     appSha: main,
@@ -190,7 +198,9 @@ export async function prepareRelease({
   if (summaryFile)
     appendFileSync(
       summaryFile,
-      `Draft release [${version}](${draft.html_url}) is ready. ${DRAFT_STEPS}\n\n${body}\n`,
+      `Draft release [${version}](${draft.html_url}) is ready. ${DRAFT_STEPS}\n\n` +
+        warnings.map((warning) => `${warning}\n\n`).join('') +
+        `${body}\n`,
     )
   for (const stale of staleDrafts) {
     await github(`${prefix}/releases/${stale.id}`, 'DELETE')

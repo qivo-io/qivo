@@ -348,7 +348,17 @@ export const gatewayAvatar = internalQuery({
  * storage (Better Auth) is isolated from this _storage table.
  *
  * The weekly cron (crons.ts) starts a run with empty arguments, and so does
- * `npx convex run files:reapOrphans`, which returns when the first leg ends.
+ * a manual run, which returns when the first leg ends. Name the deployment
+ * with the private helper, because a bare `npx convex run` lands on the
+ * deployment in .env.local. TARGET is development, staging or production:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     TARGET npx convex run files:reapOrphans
+ * The demo backend's stored key cannot run internal functions, so on the
+ * demo the private with-temp-deploy-key helper runs it with a short-lived key
+ * (qivo-internal docs/public-demo-operations.md):
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
+ *     demo --allow deployment:functions:runInternalMutations --purpose reap-orphans -- \
+ *     npx convex run files:reapOrphans
  * A run has three phases: expired upload tickets, then account appearance
  * rows, then every stored file in creation order. Each leg is one
  * transaction that handles at most one REAP_PAGES page of its phase and

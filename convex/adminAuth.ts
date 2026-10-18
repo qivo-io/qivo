@@ -22,7 +22,7 @@
  * Every action writes its platform_audit_log row (model/admin.audit) with the
  * operator's Better Auth email as actor. delete_orphan is absent from the
  * console and lives on as the deleteOrphanLogin internal
- * mutation, run via `npx convex run adminAuth:deleteOrphanLogin`. */
+ * mutation, run through the private with-deployment helper (see below). */
 
 import { v } from 'convex/values'
 import { components, internal } from './_generated/api'
@@ -349,8 +349,18 @@ export const removeAuthUser = internalMutation({
 })
 
 /* Sign-up leftovers: a login no profile references. Cut from the console;
- * the edge's 20-page listUsers walk becomes one indexed lookup. Run via
- *   npx convex run adminAuth:deleteOrphanLogin '{"email":"…"}' */
+ * the edge's 20-page listUsers walk becomes one indexed lookup. Name the
+ * deployment with the private helper, which refuses to run without the
+ * target's key, because a bare `npx convex run` lands on the deployment in
+ * .env.local. TARGET is development, staging or production:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     TARGET npx convex run adminAuth:deleteOrphanLogin '{"email":"…"}'
+ * The demo backend's stored key cannot run internal functions, so on the
+ * demo the private with-temp-deploy-key helper runs it with a short-lived key
+ * (qivo-internal docs/public-demo-operations.md):
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
+ *     demo --allow deployment:functions:runInternalMutations --purpose orphan-login -- \
+ *     npx convex run adminAuth:deleteOrphanLogin '{"email":"…"}' */
 export const deleteOrphanLogin = internalMutation({
   args: { email: v.string() },
   handler: async (ctx, args) => {

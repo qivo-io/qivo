@@ -15,8 +15,12 @@
  *     Settings › Members under Guests, in every screenshot anyone took. The
  *     seat therefore belongs to Ben, a Northstar person no drive or
  *     screenshot signs in as — never to Nora.
- * So it is its own entry point:
- *   npx convex run internal/guestOrg:zzGuestOrg
+ * So it is its own entry point, run on development through the private
+ * helper, which refuses to run without the key, because a bare
+ * `npx convex run` lands on the deployment in .env.local:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     development npx convex run internal/guestOrg:zzGuestOrg
+ * It refuses production.
  *
  * RE-RUNNING IS SAFE and is the intended way to repair it. The build tears
  * the organization down first (deleteOrgDeep, the organizations row

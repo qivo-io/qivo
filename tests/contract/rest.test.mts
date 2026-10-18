@@ -1,8 +1,9 @@
 /* LIVE contract pass — the /v1/* REST surface over the real wire.
  *
  * STATE HYGIENE (read before running):
- *   - The target is the SHARED cloud dev deployment from .env.local
- *     (override with CONTRACT_BASE_URL). globalSetup RESETS the Northstar
+ *   - The target is the SHARED cloud dev deployment the key names, at the
+ *     site global.setup.mts checked (CONTRACT_BASE_URL may name it, and must
+ *     be that deployment's convex.site). globalSetup RESETS the Northstar
  *     Labs development copy, so a run loses manual work in that organization
  *     by design — never overlap with `npm run dev` work or a smoke run.
  *   - This suite creates only rows it deletes (write round-trip + OCC probe,
@@ -32,7 +33,8 @@ type Stash = {
 const stash: Stash = JSON.parse(
   readFileSync(new URL('./.credentials.json', import.meta.url), 'utf8'),
 )
-const BASE = process.env.CONTRACT_BASE_URL ?? stash.siteUrl
+// global.setup.mts checked this site against the deploy key
+const BASE = stash.siteUrl
 
 const AUTH = { Authorization: `Bearer ${stash.qva}` }
 const call = (

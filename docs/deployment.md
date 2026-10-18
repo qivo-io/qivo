@@ -52,15 +52,20 @@ Website, docs and app changes all ship the same way.
    until staging has verified the current main commit. If **Deploy staging**
    failed, run it again by hand from main, or fix the cause on main first.
 4. Open the draft release it links. Its first section names the commit and
-   links the changes since what `qivo.io` serves now. Do not change the
-   draft's tag or target. To ship something else, run **Prepare release**
-   again. Once the new draft exists, it deletes the older drafts it made. The
-   Actions run summary repeats these instructions. The release text leaves
-   them out, because a published release keeps its text. Delete any draft you
-   made yourself and will not publish, because publishing it later deploys its
-   own, older commit.
-5. Publish the draft. **Production release** deploys it in about two minutes.
-   Check `https://qivo.io/version.json` for the commit.
+   links the changes since what `qivo.io` serves now. If `qivo.io` already
+   serves that commit, the run warns that publishing only redeploys it and
+   uses up the version. That is still allowed, for example to redeploy a demo
+   whose last deploy failed. Do not change the draft's tag or target. To ship
+   something else, run **Prepare release** again. Once the new draft exists,
+   it deletes the older drafts it made. The Actions run summary repeats these
+   instructions. The release text leaves them out, because a published release
+   keeps its text. Delete any draft you made yourself and will not publish,
+   because publishing it later deploys its own, older commit.
+5. Check that `https://preview.qivo.io/version.json` still names the draft's
+   commit, because each new main commit replaces what staging serves. If it
+   names a newer commit, run **Prepare release** again. Otherwise review the
+   change there and publish the draft. **Production release** deploys it in
+   about two minutes. Check `https://qivo.io/version.json` for the commit.
 6. If the release adds a one-time backfill, such as
    `internal/attachmentScopeBackfill`, run it on each hosted deployment once
    that deployment serves the release, with the owner's approval for each
@@ -91,6 +96,88 @@ do not share staging data. The `qivo-staging` project serves only persistent
 staging and has preview deployment creation disabled. Private operators can
 provision synthetic data deliberately using the private setup instructions.
 A later deployment preserves it.
+
+### End-to-end API check
+
+`scripts/staging-check.mjs` checks the REST API, MCP and OAuth consent on
+staging with a real browser and real credentials. It signs in as the
+Northstar fixture admin with a password, creates two personal tokens, a
+Standard and a Viewer agent with their keys, and two OAuth connections on the
+consent screen, one with **Allow changes** and one without. With each it
+checks reads, writes, refusals, attachments, activity attribution and
+revocation, and the text, name, comment and request size limits. Its uploads
+check that an upload URL stores one file, and one upload is a file at the
+organization's per-file limit (20 MiB by default), sent through a REST upload
+ticket, confirmed, downloaded and deleted again, which shows whether the
+deployment takes a body that large. It also
+checks task progress, last comment times, delay and project completion, the
+rule that a subtask in an archived project makes no group, and in the browser
+the search on **Settings → Projects → Archived tasks**. Everything it creates
+carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
+creates. It deletes all of it at the end, also after a failure. Its deleted
+projects and tasks then wait in Deleted items for 30 days, where an admin can
+delete them for good, and OAuth client registrations stay, because they
+cannot be deleted. Run it from the application checkout through the private
+staging helper, which supplies the deployment, the fixture credentials and
+the protection bypass:
+
+```sh
+"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
+  node scripts/staging-check.mjs --staging --comment-cap
+```
+
+`--comment-cap` also fills one task to its 400 comments and pages through
+them with **Show earlier comments** in the task window. The script keeps
+each person and agent under 200 requests a minute, so a run with
+`--comment-cap` takes 4 to 8 minutes against a local backend and an
+estimated 8 to 15 minutes on staging. A tool that stops a foreground command
+after a few minutes would end the run before its cleanup, so start it in its
+own session with its output in a log file, which holds no secrets, and wait
+at least 30 minutes before treating it as stuck:
+
+```sh
+setsid "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
+  node scripts/staging-check.mjs --staging --comment-cap \
+  > "${TMPDIR:-/tmp}/staging-check.log" 2>&1 < /dev/null &
+```
+
+The run is over when the log has a `DONE` line with the number of passed,
+failed and skipped checks; the exit code is 0 only when nothing failed.
+Ctrl-C, `SIGTERM` and `SIGHUP` stop a run after its current step and clean
+up; a second signal exits at once without cleanup. `nohup` alone does not
+help, because the script handles `SIGHUP` itself.
+
+With `--staging` the script refuses any environment but staging,
+any app other than `preview.qivo.io` and any backend other than the one that
+app uses. `--local` runs it against a disposable local backend instead, with
+loopback addresses only. It prints status lines only, never a secret, and
+refuses to start while `DEBUG`, `PWDEBUG`, `DEBUG_FILE` or `NODE_DEBUG` is
+set, because Playwright's and Node's debug output would bypass that. If a
+run is killed before it cleans up, `--cleanup --run <hex>` with the six digits
+of its tag removes what it left, and `--cleanup` alone removes every run's
+leftovers, including the records of a run that is still going, so use it
+only while no other run is active. Cleanup removes the run's tokens, agent
+keys and OAuth connections first, through the app alone, so they go even when
+the REST API fails, and it reports `FAIL cleanup/sweep` with what is left
+whenever anything remains. If the browser closed during the run, the cleanup
+opens it and signs in again first. Its temporary cleanup token ends after a
+day, should a killed cleanup leave it.
+Run it once per release candidate, not in a loop, because each run writes to
+staging.
+
+The checks that an organization admin can still remove access while billing
+pauses editing need a pause. Staging runs without billing, so they report
+`SKIP` there. A local run given its backend's admin key in
+`QIVO_LOCAL_ADMIN_KEY` turns billing on in that backend for those checks,
+which pauses the fixture organization because it has no subscription, and
+turns it off again. `--require billing-pause-leave` makes the `SKIP` a
+failure. The run marks its pause with the backend variable
+`STGCHK_BILLING_PAUSE`. If it is killed before it lifts the pause, the
+organization stays read-only and the sweep cannot remove its records. The
+next local run or `--cleanup` given the key lifts a marked pause first. It
+restores `BILLING_ENABLED` only while it is still the `true` the run set,
+and otherwise removes just the mark, so a setting someone changed since
+stays. Run one local run per backend at a time.
 
 ## Production release
 

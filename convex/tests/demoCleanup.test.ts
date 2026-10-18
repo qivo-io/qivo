@@ -57,7 +57,7 @@ async function makeDemo(t: T, provision = true) {
     if (work) await ctx.db.patch(receiptId, { ...work, status: 'ready' })
     return {
       ...receipt,
-      ...(work ?? {}),
+      ...work,
       status: work ? ('ready' as const) : ('unprovisioned' as const),
     }
   })

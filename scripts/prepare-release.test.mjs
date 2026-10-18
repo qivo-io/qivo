@@ -139,6 +139,10 @@ describe('preparing a draft', () => {
       `Draft release [v0.1.10](https://github.com/qivo-io/qivo/releases/tag/draft) is ready. ${DRAFT_STEPS}\n\n${header}\n`,
     )
     expect(DRAFT_STEPS).toContain("Do not change the draft's tag or target.")
+    // Staging moves on with main, so the owner checks it still serves the draft's commit.
+    expect(DRAFT_STEPS).toContain(
+      "Check that https://preview.qivo.io/version.json still names the draft's commit",
+    )
   })
   it('writes nothing in a dry run and logs the steps apart from the body', async () => {
     const { api, writes } = github()
@@ -268,10 +272,40 @@ describe('preparing a draft', () => {
       previousTag: 'v0.2.0',
     })
   })
-  it('says when production already serves the staged commit', async () => {
+  it('warns, but still prepares, when production already serves the staged commit', async () => {
+    const warning =
+      'Warning: qivo.io already serves aaaaaaa. Publishing redeploys it and uses up v0.1.10.'
     const { api, writes } = github()
-    await prepareRelease({ github: api, log: quiet, fetchImpl: live(MAIN) })
+    const logged = []
+    const summaryFile = summaryPath()
+    await prepareRelease({
+      github: api,
+      log: (line) => logged.push(line),
+      fetchImpl: live(MAIN),
+      summaryFile,
+    })
     expect(writes[1].body.body).toContain('Changes since production: Unchanged')
+    // The warning is for the owner of the draft, not the published release text.
+    expect(writes[1].body.body).not.toContain(warning)
+    expect(logged).toContain(warning)
+    expect(readFileSync(summaryFile, 'utf8')).toContain(`${DRAFT_STEPS}\n\n${warning}\n\n## What`)
+    // A dry run warns too.
+    const dry = []
+    await prepareRelease({
+      github: github().api,
+      dryRun: true,
+      log: (line) => dry.push(line),
+      fetchImpl: live(MAIN),
+    })
+    expect(dry).toContain(warning)
+    // A newer commit than production gets no warning.
+    const other = []
+    await prepareRelease({
+      github: github().api,
+      log: (line) => other.push(line),
+      fetchImpl: live(),
+    })
+    expect(other.some((line) => line.includes('already serves'))).toBe(false)
   })
 })
 
