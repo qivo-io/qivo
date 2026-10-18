@@ -877,6 +877,32 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `set_following` | Follow a task (`following: true`) or stop following it |
 | `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
 
+### Stays in the app
+
+These actions have no REST route or MCP tool. A person does them in the app
+at https://qivo.io/app.
+
+- Deleting a project, a team or a label.
+- Restoring what is in Deleted items, or deleting it for good.
+- Inviting a guest to a project by email.
+- Adding or removing other people as followers of a task. A credential
+  changes only its own follow.
+- Creating or deleting an organization, changing its settings, such as the
+  name, address, calendar, attachment limit, default planning hours and who
+  can create projects, and exporting its data.
+- Billing, subscriptions and payment details.
+- Inviting people, adding agents, changing a user's name, email, role or
+  **Can create projects**, making a user Inactive and removing a user.
+  Plannable weekly hours are the exception (`PATCH /v1/users/{id}`,
+  `update_user`).
+- Creating, revoking or deleting agent keys, and revoking credentials on
+  **API access**.
+- A person's own name, picture, appearance, inbox retention and other
+  preferences, and their personal access tokens and connected apps.
+- Images inside task descriptions. Attach other files through REST or MCP.
+- The **Last sync** time on the Team sync page. Changes over REST and MCP do
+  not update it.
+
 ### Who am I
 
 `get_me` takes no arguments and answers four objects:
@@ -1083,8 +1109,8 @@ can create teams`). With `team_id` it renames that team, which an
 organization admin or a leader of the team may do (`requires an organization
 admin or a leader of this team` otherwise). `name` is trimmed, may not be
 blank and holds at most 80 characters. The result is the `list_teams` row
-plus `created`. Neither writes an activity row, as in the app. The team's
-other settings and deleting a team stay in the app.
+plus `created`. Neither writes an activity row, as in the app. Deleting a
+team stays in the app ([Stays in the app](#stays-in-the-app)).
 
 **Members and leaders.** `set_team_member` changes one `user_id` in a team.
 Members decide who sees the projects shared with the team, so it needs a
@@ -1503,17 +1529,20 @@ archived project stay stored and come back when the access or the task does,
 unless they were removed meanwhile. Archiving a task marks every message
 about it and the subtasks archived with it read, for every recipient,
 shortly after the archive, and archiving a project does the same for its
-tasks. A snoozed item loses its snooze. A snooze set on such an item later ends without making it unread. Messages that arrive while the task
-or its project is archived, including the `Archived` message, mentions and
-comments, are stored read. As with any read message, the nightly cleanup
-removes them after the recipient's retention period, and `update_inbox`
-with `action: "remove"` and `all: true` removes them too. A restore brings
-back the items still stored, with their messages read. A restore that comes
-before the marking leaves the messages as they were. Other followers of a
-restored task also receive an unread `Restored` message, which replaces the
-item's read messages as any new message does. Deleting a task or a project
-deletes the messages about its tasks, and restoring it from Deleted items does
-not bring them back. `messages` run oldest first, `kind` is
+tasks. A snoozed item loses its snooze, and a snooze that ends before the
+marking does not bring the item back unread. Messages that arrive while the
+task or its project is archived, including the `Archived` message (the
+nightly automatic archive sends none), mentions and comments, are stored
+read. As with any read message, the nightly cleanup removes them after the
+recipient's retention period, and `update_inbox` with `action: "remove"`
+and `all: true` removes them too. A restore brings back the items still
+stored, with their messages read. A restore that comes before the marking
+leaves the messages as they were. Other followers of a restored task also
+receive an unread `Restored` message, which replaces the item's read
+messages as any new message does. Parents restored along with a subtask
+send no `Restored` message. Deleting a task or a project deletes the
+messages about its tasks, and restoring it from Deleted items does not
+bring them back. `messages` run oldest first, `kind` is
 `mention`, `comment` or `change`, and `detail` is the line the app shows.
 `latest_at` is the newest message's time, or the end of a snooze when that
 is later. Snoozed items are left out unless `include_snoozed` is `true`. An

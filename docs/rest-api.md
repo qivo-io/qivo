@@ -498,8 +498,8 @@ lead write the app's activity rows (`created`, `renamed`, `archived`,
 under [Side effects and audit trail](#side-effects-and-audit-trail). Changes
 to the description, review time or delay tracking write none, as in the app.
 A request that renames a project and hands over its lead writes only
-`renamed`. Deleting a project, inviting a guest by email and changing a
-project's icon stay in the app.
+`renamed`. Deleting a project and inviting a guest by email stay in the app
+([Stays in the app](#stays-in-the-app)).
 
 ### Project access
 
@@ -621,9 +621,9 @@ or a leader of this team`. `name` is trimmed and may not be blank (`a team
 name cannot be blank`) or longer than 80 characters (`a team name must be at
 most 80 characters`), unless it is a longer name the team had before that
 limit, sent back unchanged. `PATCH` changes only `name`, and a body without
-it is a `400` (`no recognized fields to update`). The team's other settings
-and deleting a team stay in the app. `POST` answers `201` and `PATCH` `200`
-with the team. Neither writes an activity row, as in the app.
+it is a `400` (`no recognized fields to update`). Deleting a team stays in
+the app ([Stays in the app](#stays-in-the-app)). `POST` answers `201` and
+`PATCH` `200` with the team. Neither writes an activity row, as in the app.
 
 Members decide who sees the projects shared with the team, so changing them
 needs a person who is an organization admin or a leader of the team. An agent
@@ -1501,17 +1501,20 @@ that is later, and orders the list.
 Archiving a task marks every message about it and the subtasks archived
 with it read, for every recipient, shortly after the archive. Archiving a
 project does the same for the tasks of the project and its sub-projects. A
-snoozed item loses its snooze. A snooze set on such an item later ends without making it unread. Messages that arrive while the task or its
-project is archived, including the `Archived` message, mentions and
-comments, are stored read. As with any read message, the nightly cleanup
-removes them after the recipient's retention period, and
-`POST /v1/inbox/remove` with `"all": true` removes them too. A restore
-brings back the items still stored, with their messages read. A restore
-that comes before the marking leaves the messages as they were. Other
-followers of a restored task also receive an unread `Restored` message,
-which replaces the item's read messages as any new message does. Deleting a
-task or a project deletes the messages about its tasks, and restoring it
-from Deleted items does not bring them back.
+snoozed item loses its snooze, and a snooze that ends before the marking
+does not bring the item back unread. Messages that arrive while the task or
+its project is archived, including the `Archived` message (the nightly
+automatic archive sends none), mentions and comments, are stored read. As
+with any read message, the nightly cleanup removes them after the
+recipient's retention period, and `POST /v1/inbox/remove` with
+`"all": true` removes them too. A restore brings back the items still
+stored, with their messages read. A restore that comes before the marking
+leaves the messages as they were. Other followers of a restored task also
+receive an unread `Restored` message, which replaces the item's read
+messages as any new message does. Parents restored along with a subtask
+send no `Restored` message. Deleting a task or a project deletes the
+messages about its tasks, and restoring it from Deleted items does not
+bring them back.
 
 One request lists up to 500 of the caller's unread messages (newest first)
 and up to 500 read ones (most recently read first). It looks at no more than
@@ -1743,6 +1746,32 @@ receive only work in projects they can see and their own work. With
 inactive one with hours in the window, ordered by name. Weeks are computed
 in UTC, so an estimate saved close to midnight can land one week away from
 what the app shows in another time zone.
+
+### Stays in the app
+
+These actions have no REST route or MCP tool. A person does them in the app
+at https://qivo.io/app.
+
+- Deleting a project, a team or a label.
+- Restoring what is in Deleted items, or deleting it for good.
+- Inviting a guest to a project by email.
+- Adding or removing other people as followers of a task. A credential
+  changes only its own follow.
+- Creating or deleting an organization, changing its settings, such as the
+  name, address, calendar, attachment limit, default planning hours and who
+  can create projects, and exporting its data.
+- Billing, subscriptions and payment details.
+- Inviting people, adding agents, changing a user's name, email, role or
+  **Can create projects**, making a user Inactive and removing a user.
+  Plannable weekly hours are the exception (`PATCH /v1/users/{id}`,
+  `update_user`).
+- Creating, revoking or deleting agent keys, and revoking credentials on
+  **API access**.
+- A person's own name, picture, appearance, inbox retention and other
+  preferences, and their personal access tokens and connected apps.
+- Images inside task descriptions. Attach other files through REST or MCP.
+- The **Last sync** time on the Team sync page. Changes over REST and MCP do
+  not update it.
 
 ## Examples
 
