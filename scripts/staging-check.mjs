@@ -2240,21 +2240,43 @@ async function uploadChecks() {
     })
   // delete every file, each with the credential and surface that made it
   // Every file is tried, so one failed delete does not keep the others on
-  // the task, and a file that is already gone, such as one whose delete
-  // answer was lost, counts as deleted.
+  // the task. A delete that answered success must say deleted: true. One
+  // whose answer was a server or network error, or "attachment not found"
+  // as for a delete whose answer was lost, counts as deleted only when a
+  // read shows the file gone. Any other answer is a failure as it is.
   await check('uploads/delete', async () => {
     const failed = []
-    for (const { att, cred, surface } of made)
+    for (const { att, cred, surface } of made) {
+      let r
       try {
-        const r =
+        r =
           surface === 'rest'
-            ? await restOk(cred, 'DELETE', `/tasks/${task.key}/attachments/${att.id}`)
-            : await toolOk(cred, 'delete_attachment', { ref: task.key, attachment: att.id })
-        eq(r.deleted, true, `deleted ${att.name}`)
+            ? await rest(cred, 'DELETE', `/tasks/${task.key}/attachments/${att.id}`)
+            : await tool(cred, 'delete_attachment', { ref: task.key, attachment: att.id })
       } catch (error) {
-        const left = await readOk(w, `/tasks/${task.key}/attachments`)
-        if (left.some((a) => a.id === att.id)) failed.push(`${att.name}: ${describe(error)}`)
+        r = { status: 0, error: describe(error) }
       }
+      const answer = surface === 'rest' ? r.json : r.data
+      if (r.status === 200 && !r.isError && answer) {
+        if (answer.deleted !== true) failed.push(`${att.name}: deleted is ${answer.deleted}`)
+        continue
+      }
+      const notFound =
+        surface === 'rest'
+          ? r.status === 404 && r.json?.error === 'attachment not found'
+          : r.isError && r.text === 'attachment not found'
+      const said = r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`
+      if (!(notFound || r.status === 0 || r.status >= 500)) {
+        failed.push(`${att.name}: ${said}`)
+        continue
+      }
+      try {
+        const left = await readOk(w, `/tasks/${task.key}/attachments`)
+        if (left.some((a) => a.id === att.id)) failed.push(`${att.name}: ${said}`)
+      } catch (error) {
+        failed.push(`${att.name}: ${said}, and the file list could not be read: ${describe(error)}`)
+      }
+    }
     expect(failed.length === 0, `not deleted: ${failed.join('; ')}`)
     eq((await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).length, 0, 'files left')
     if (made[0]) eq((await download(made[0].att.url)).status, 404, 'a deleted file downloads')
