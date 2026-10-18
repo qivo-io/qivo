@@ -34,8 +34,8 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
-import { loadNotifyPreload } from '../model/messages'
-import { REASSIGN_MAX, reassignTooLarge } from '../model/projectAccess'
+import { ITEM_UNREAD_CAP, loadNotifyPreload } from '../model/messages'
+import { PER_FOLLOWER, REASSIGN_MAX, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -460,6 +460,68 @@ describe('a bulk update', () => {
       }),
       'rule',
     )
+  })
+})
+
+describe('the room a reassignment keeps', () => {
+  it('covers what each follower of a task costs, snoozed items and first sight checks included', async () => {
+    // 41 followers whose sight the preload has not answered yet, each with
+    // an item of ITEM_UNREAD_CAP snoozed rows that the message wakes
+    const fx = await crowded(1, { followers: 40, t: newT() })
+    const [task] = fx.tasks
+    const later = new Date(Date.parse(NOW) + 7 * 86_400_000).toISOString()
+    const followers = await fx.t.run(async (ctx) => {
+      const subs = await ctx.db
+        .query('issue_subscriptions')
+        .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', task.id))
+        .collect()
+      for (const sub of subs)
+        for (let m = 0; m < ITEM_UNREAD_CAP; m++)
+          await ctx.db.insert('messages', {
+            id: uuid(),
+            org_id: fx.org.id,
+            recipient_id: sub.profile_id,
+            issue_id: task.id,
+            issue_title: task.title,
+            kind: 'change',
+            detail: `Planted change ${m} with a detail as long as a busy edit writes`,
+            created_at: NOW,
+            snoozed_until: later,
+          })
+      return subs.length
+    })
+    expect(followers).toBe(41)
+    const used = await fx.t.run(async (ctx) => {
+      const bulk: BulkUpdate = {
+        preload: await loadNotifyPreload(ctx, fx.org.id),
+        checked: new Set(),
+      }
+      const before = await ctx.meta.getTransactionMetrics()
+      await updateIssueCore(ctx, {
+        me: fx.user,
+        issue: task,
+        patch: { assignee_id: fx.leo.id },
+        now: NOW,
+        bulk,
+      })
+      const after = await ctx.meta.getTransactionMetrics()
+      return Object.fromEntries(
+        Object.keys(PER_FOLLOWER).map((k) => {
+          const key = k as keyof typeof PER_FOLLOWER
+          return [
+            k,
+            {
+              used: after[key].used - before[key].used,
+              bound: followers * (PER_FOLLOWER[key] ?? 0),
+            },
+          ]
+        }),
+      )
+    })
+    for (const [k, { used: spent, bound }] of Object.entries(used)) {
+      expect(spent, k).toBeGreaterThan(0)
+      expect(spent, k).toBeLessThanOrEqual(bound)
+    }
   })
 })
 

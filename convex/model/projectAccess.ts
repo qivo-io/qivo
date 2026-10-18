@@ -36,7 +36,7 @@ import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
-import { loadNotifyPreload } from './messages'
+import { ITEM_UNREAD_CAP, loadNotifyPreload } from './messages'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
 /** The one person or team whose access a write changes, already resolved in
@@ -267,16 +267,20 @@ const LIMITED = [
   'scheduledFunctionArgsBytes',
 ] as const
 
-/* The most one follower of a task adds to its reassignment: a first check
+/** The most one follower of a task adds to its reassignment: a first check
  * of the follower's sight of the project (lib/access.ts projectLevel), and
- * the message with the read of the follower's inbox item for the task
- * (model/messages.ts postMessage), which holds at most ITEM_UNREAD_CAP
- * unread rows. The other counts grow by far less per follower. */
-const PER_FOLLOWER: Partial<Record<(typeof LIMITED)[number], number>> = {
+ * the message (model/messages.ts postMessage), which reads the follower's
+ * inbox item for the task, clears a snooze on each of its rows (a read and a
+ * write each), prunes it and trims it. An item holds at most ITEM_UNREAD_CAP
+ * unread rows and one read row, except one that grew past the cap before
+ * the cap existed. Each bound also covers its share of the task's own reads
+ * and writes once a task has a few followers. */
+export const PER_FOLLOWER: Partial<Record<(typeof LIMITED)[number], number>> = {
   databaseQueries: 16,
-  documentsRead: 64,
-  bytesRead: 64 * 1024,
-  documentsWritten: 4,
+  documentsRead: 2 * ITEM_UNREAD_CAP + 20,
+  bytesRead: 128 * 1024,
+  documentsWritten: ITEM_UNREAD_CAP + 6,
+  bytesWritten: 64 * 1024,
 }
 
 /* Whether reassigning a task with `followers` could take the transaction
