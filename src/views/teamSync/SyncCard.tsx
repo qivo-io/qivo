@@ -589,7 +589,7 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
             <RemainingInput
               hook="sync"
               it={it}
-              title={canWrite ? 'Remaining hours. Leave empty for unset' : READ_ONLY}
+              title={canWrite ? 'Remaining hours. Leave empty for no estimate' : READ_ONLY}
               disabled={!canWrite}
               onCommit={ctx.touched}
               className={cn(ctx.mobile && 'w-12', it.remaining == null && 'border-warning')}

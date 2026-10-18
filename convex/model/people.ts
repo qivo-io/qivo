@@ -168,7 +168,7 @@ export async function assertViewerLeadsNothing(
     .collect()
   if (led.length > 0) {
     throw rule(
-      `${name} leads ${led.length} project(s). Hand those over before making them a viewer`,
+      `${name} leads ${led.length} project(s). Hand those over before making them a viewer.`,
     )
   }
   let teamsLed = 0
@@ -179,6 +179,6 @@ export async function assertViewerLeadsNothing(
     if (tm.is_leader && row.org_role !== 'guest') teamsLed += 1
   }
   if (teamsLed > 0) {
-    throw rule(`${name} leads ${teamsLed} team(s). Hand those over before making them a viewer`)
+    throw rule(`${name} leads ${teamsLed} team(s). Hand those over before making them a viewer.`)
   }
 }

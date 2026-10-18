@@ -123,6 +123,14 @@ function Roadmap({
   useUpdateBlocker(!!session)
   const sessionRef = useRefR<PlanSession | null>(null)
   const planRequest = useRefR(0)
+  // whether a date change of the planning session's task was refused, so
+  // Confirm does not say it was planned
+  const planRefused = useRefR(false)
+  /* Sends a task's new dates, and notes a refusal of the session's task. */
+  const sendDates = (id, patch) =>
+    void P.updateIssue(id, patch).then((saved) => {
+      if (!saved && sessionRef.current?.issueId === id) planRefused.current = true
+    })
   sessionRef.current = session
   useEffectR(
     () => () => {
@@ -572,12 +580,12 @@ function Roadmap({
       // projection walks from, so the fitted end and the status agree
       const from = it.remainingSet != null ? Math.max(l.start, it.remainingSet) : l.start
       const end = fitEndWeekAgainst(sess.load, it.uuid, from, it.remaining, capacityFor(it))
-      if (l.start !== it.start || end !== it.end) P.updateIssue(id, { start: l.start, end })
+      if (l.start !== it.start || end !== it.end) sendDates(id, { start: l.start, end })
       return
     }
     // a drag that came back to (or was pinned at) its committed position is a
     // no-op: don't write, don't log 'rescheduled'
-    if (l.start !== it.start || l.end !== it.end) P.updateIssue(id, { start: l.start, end: l.end })
+    if (l.start !== it.start || l.end !== it.end) sendDates(id, { start: l.start, end: l.end })
   }, [])
 
   // milestone live drag
@@ -676,7 +684,7 @@ function Roadmap({
     // same measurement-week anchor as the drag commit and the delay projection
     const rs = P.issueById[id]?.remainingSet
     const from = rs != null ? Math.max(startW, rs) : startW
-    P.updateIssue(id, {
+    sendDates(id, {
       start: startW,
       end: fitEndWeekAgainst(load, uuid, from, remaining, capacity),
     })
@@ -723,8 +731,7 @@ function Roadmap({
     const s = sessionRef.current
     sessionRef.current = null
     setSession(null)
-    // while edits pause, the session's date changes were refused, not planned
-    if (s && !P.snapshotTrouble()) window.showToast?.(`Planned ${s.issueId}`)
+    if (s && !planRefused.current) window.showToast?.(`Planned ${s.issueId}`)
   }
   const cancelPlanning = () => {
     const s = sessionRef.current
@@ -858,13 +865,17 @@ function Roadmap({
     openTo(it)
     const wasUnscheduled = it.start == null
     const orig = captureWeekDates(it)
+    planRefused.current = false
     // give an unscheduled issue a provisional bar to plan (due-capped, like the
     // Plan pickers); auto-fit refines its end once the workload arrives
     if (wasUnscheduled) {
       const dueWeek = it.due ? P.isoToWeek(it.due) : null
       let end = P.TODAY_WEEK + 1
       if (dueWeek != null) end = Math.min(end, dueWeek)
-      P.updateIssue(it.id, { start: Math.min(P.TODAY_WEEK, end), end })
+      // the session starts after this write, so its refusal is noted here
+      void P.updateIssue(it.id, { start: Math.min(P.TODAY_WEEK, end), end }).then((saved) => {
+        if (!saved && request === planRequest.current) planRefused.current = true
+      })
     }
     setSession({
       issueId: it.id,

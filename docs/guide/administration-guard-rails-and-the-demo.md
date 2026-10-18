@@ -176,8 +176,9 @@ the app it therefore does not ask about the tasks. A message says who can no
 longer see how many tasks, so a project lead can reassign them once editing
 resumes. Project leads and team leaders who are not admins cannot remove
 access then. Reactivating users, deleting teams and every other change wait
-until billing is active again. When you remove access you cannot, or delete a
-team, the app says the organization is read-only and opens no window.
+until billing is active again. If you try a removal you cannot make then, or
+try to delete a team, the app says the organization is read-only and does not
+ask about the tasks.
 
 Each organization keeps its assigned plan version. New plans do not change
 existing prices or allowances. The published plan costs $1 per active billable

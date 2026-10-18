@@ -369,7 +369,7 @@ describe('creating projects and sub-projects', () => {
         patch: { org_role: 'viewer' },
       }),
       'rule',
-      /^Relay leads 1 project\(s\)\. Hand those over before making them a viewer$/,
+      /^Relay leads 1 project\(s\)\. Hand those over before making them a viewer\.$/,
     )
     // Inactive stops it at once, while it still leads the project
     await as(fx.t, fx.admin).mutation(api.profiles.deactivate, {

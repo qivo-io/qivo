@@ -187,7 +187,7 @@ function TokenRow({
     >
       <Icon name="command" size={16} color="var(--text-2)" />
       <div className="[flex:1] [min-width:0]">
-        <div className="[font-size:var(--fs-base)] [font-weight:600]">
+        <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow-wrap:anywhere]">
           {t.name}
           {ended && (
             <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:700] [color:var(--danger)]">

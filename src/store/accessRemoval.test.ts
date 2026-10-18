@@ -451,6 +451,32 @@ describe('removing someone who has work in the project', () => {
     ])
   })
 
+  it('blames no Viewer grant when the server refuses a team deletion as read-only, and refuses the next one up front', async () => {
+    await load((snap, task) => {
+      inPlan(false)(snap, task)
+      snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })
+    })
+    // access ended at a set time, which billing.status has not said yet
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    for (const id of [work, 'plan', 'specs']) refused.add(id)
+    const all = P.accessRemoval(deleteCrew)
+    expect(P.startRemoval(deleteCrew)).toBe(true)
+    expect(await P.removeAccess(deleteCrew, { keep: true }, all.items)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'This organization is read-only. Change reverted.',
+      'error',
+    )
+    expect(P.removalRefused(deleteCrew)).toBe(true)
+    expect(P.startRemoval(deleteCrew)).toBe(false)
+    expect(window.showToast).toHaveBeenLastCalledWith('This organization is read-only.', 'error')
+    expect(P.teams.some((t) => t.id === 'crew')).toBe(true)
+    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+  })
+
   it('saves nothing when the team to delete is the last one', async () => {
     await load()
     const all = P.accessRemoval(deleteCrew)

@@ -1276,6 +1276,7 @@ const write: typeof convex.mutation = (mutation, args, options) => {
       })
       .catch((error) => {
         if (DEMO_MODE && epoch === storeEpoch && isDemoLifecycleRefusal(error)) notifyDemoEnded()
+        noteReadOnlyRefusal(args && 'org_id' in args ? args.org_id : undefined, error)
         throw error
       })
       .finally(releaseUpdate)
@@ -1283,6 +1284,16 @@ const write: typeof convex.mutation = (mutation, args, options) => {
     releaseUpdate()
     throw error
   }
+}
+
+/* A read-only refusal can say what billing.status does not say yet. The
+   server works the status out again only when data it read changes, not when
+   access ends at a set time. Until the status answers again, removals in the
+   organization follow the refusal (leavesHeldTasks, removalRefusal). */
+function noteReadOnlyRefusal(orgId: unknown, error: unknown) {
+  const d = errData(error)
+  const block = typeof orgId === 'string' && readOnly(d) ? writeBlocks.get(orgId) : undefined
+  if (block) Object.assign(block, { refused: true, message: d.message || block.message })
 }
 
 // Compression, credential hashing and byte uploads span more than one
@@ -2356,16 +2367,10 @@ function removeAtOnce(
       () => resolve(true),
       undefined,
       (error) => {
-        // A read-only refusal can say what billing.status does not say yet.
-        // The server works the status out again only when data it read
-        // changes, not when access ends at a set time. Until it does, the
-        // next removal leaves the tasks (leavesHeldTasks).
-        const d = errData(error)
-        const block = readOnly(d) ? writeBlocks.get(orgId) : undefined
-        if (block) Object.assign(block, { refused: true, message: d.message || block.message })
-        // only a refused reassignment or Viewer grant (model/projectAccess.ts
-        // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
-        // pause or a lost connection says so itself
+        // write() has noted a read-only refusal for the next removal
+        // (noteReadOnlyRefusal). Only a refused reassignment or Viewer grant
+        // (model/projectAccess.ts HELD_TASKS_REFUSED) blames the tasks; a
+        // refused removal, a billing pause or a lost connection says so itself
         const settling = errData(error).reason === 'held_tasks'
         if (settling && typeof held === 'object') {
           toast(`${stays}, because not every task could be reassigned.`, 'error')
@@ -3355,7 +3360,9 @@ export const PLANNER = {
         ),
       )
       if (saved.includes(false)) {
-        toast(`${stays}, because not every task could be reassigned.`, 'error')
+        // a read-only refusal has said why itself (noteReadOnlyRefusal)
+        if (!removalRefusal(change))
+          toast(`${stays}, because not every task could be reassigned.`, 'error')
         return false
       }
     }
@@ -3376,7 +3383,8 @@ export const PLANNER = {
         projects.map((pid) => PLANNER.updateProject(pid, { access: withViewers(pid) })),
       )
       if (saved.includes(false)) {
-        toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
+        if (!removalRefusal(change))
+          toast(`${stays}, because not every Viewer grant could be saved.`, 'error')
         return false
       }
     }
@@ -5507,7 +5515,8 @@ export const PLANNER = {
   /* Organization settings — the old six independent UPDATEs fold into ONE
      patch mutation; the client clamps stay (the field must show what will be
      stored before it is). Narrates nothing, name included. Returns false
-     when it refused the change before sending it (toasted). */
+     when it refused the change before sending it (toasted), or when there is
+     no home organization here. */
   setOrg: (patch: OrgPatch): boolean => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return false
@@ -5621,7 +5630,8 @@ export const PLANNER = {
   },
 
   /** Paints the change at once and sends it. Returns false when it refused
-      the change before sending it (toasted). */
+      the change before sending it (toasted), or when the team is missing
+      here. */
   updateTeam: (id: string, patch: TeamPatch): boolean => {
     const row = rows.teams.get(id)
     if (!row || refusePausedEdit()) return false
@@ -6145,7 +6155,8 @@ export const PLANNER = {
   },
 
   /** Paints the change at once and sends it. Returns false when it refused
-      the change before sending it (toasted). */
+      the change before sending it (toasted), or when the milestone is missing
+      here. */
   updateMilestone: (id: string, patch: { name?: string; week?: number }): boolean => {
     const row = rows.milestones.get(id)
     if (!row) return false
