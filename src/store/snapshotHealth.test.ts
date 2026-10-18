@@ -276,7 +276,7 @@ describe('snapshot trouble', () => {
     expect(subscriptions).toHaveLength(1)
   })
 
-  it('ends the trouble on a delivery the paint gate holds back', async () => {
+  it('ends the trouble when a delivery the paint gate held reaches the screen', async () => {
     await boot()
     const { P } = store
     const [task] = P.issues
@@ -285,11 +285,17 @@ describe('snapshot trouble', () => {
     live().fail(new Error(QUERY_FAILURE))
     const next = structuredClone(snapshot)
     next.issues[0].status = 'progress'
+    next.issues[0].title = 'Calibrate the sensor again'
     live().deliver(next)
-    expect(P.snapshotTrouble()).toBeNull()
+    // the stale rows are still on screen, so edits stay paused
+    expect(P.issues[0].title).toBe('Calibrate the sensor')
+    expect(P.editsPaused()).toBe(true)
     sent[0].resolve(null)
     await settle()
+    expect(P.snapshotTrouble()).toBeNull()
+    expect(P.issues[0].title).toBe('Calibrate the sensor again')
     expect(P.issueById[task.id].status).toBe('progress')
+    expect(showToast).toHaveBeenCalledWith('Qivo is up to date again.', 'success')
   })
 
   it('leaves the boot failure to the sign-in gate, which can boot again', async () => {

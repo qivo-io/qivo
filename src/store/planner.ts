@@ -683,6 +683,15 @@ export type SnapshotTrouble = {
   detail: string
 }
 let snapshotTrouble: SnapshotTrouble | null = null
+/* A delivery that ends the trouble while run()'s paint gate holds it. The
+   trouble ends when that paint lands, not before, so nobody edits the stale
+   rows still on screen in the meantime. */
+let recoveryHeld = false
+
+/** Ends the trouble once a held recovering delivery has been painted. */
+function endHeldRecovery() {
+  if (recoveryHeld) snapshotRecovered()
+}
 
 /* The writes that go on while the snapshot is stale, each named. They change
    only the signed-in person's own state, read the OAuth consent page's
@@ -926,6 +935,7 @@ function run<T>(
         adoptComments()
         rebuild()
         emit()
+        endHeldRecovery()
       },
     )
     .finally(() => {
@@ -970,6 +980,7 @@ function flushHeldPaint() {
   if (snapHeld) rebuild()
   else rebuildComments()
   emit(snapHeld ? 'workspace' : 'comments')
+  if (snapHeld) endHeldRecovery()
 }
 
 /* --- minted file URLs (phase 7) ---------------------------------------------
@@ -5646,7 +5657,7 @@ export const PLANNER = {
    network drops, which only delay results until Convex reconnects and
    resubscribes. A failure after the first result is snapshot trouble (see
    snapshot health). The last snapshot stays on screen and shared edits pause
-   until a later result succeeds. */
+   until a later result succeeds and reaches the screen. */
 
 /* The last snapshot the server delivered — run()'s rollback anchor
    (rollback = re-adopt serverSnap + rebuild + emit; no refetch, no reload). */
@@ -5672,6 +5683,7 @@ function isDemoLifecycleRefusal(error: unknown) {
 /** Forgets any snapshot trouble without notifying (boot and disposal). */
 function resetSnapshotTrouble() {
   snapshotTrouble = null
+  recoveryHeld = false
   if (retryTimer) clearTimeout(retryTimer)
   retryTimer = null
 }
@@ -5690,6 +5702,8 @@ function snapshotFailed(err: unknown) {
     // Convex appends where the call came from; support needs the rest
     detail: text.replace(/\s*Called by client\s*$/, '').trim(),
   }
+  // a held delivery from before this failure no longer ends the trouble
+  recoveryHeld = false
   emit('health')
 }
 
@@ -5730,18 +5744,19 @@ function subscribeSnapshot(
         if (DEMO_MODE) notifyDemoEnded()
         return
       }
-      // the data is current again even while the gate below holds its paint
-      snapshotRecovered()
       // Gate the paint, never the data. While our own writes are in flight
       // the optimistic patches own the screen. serverSnap is recorded above,
-      // and run()'s last settle flushes the newest held delivery.
+      // and run()'s last settle flushes the newest held delivery. Snapshot
+      // trouble ends with that paint (endHeldRecovery).
       if (inFlight > 0) {
         snapDirty = true
+        if (snapshotTrouble) recoveryHeld = true
         return
       }
       adopt(snap)
       rebuild()
       emit()
+      snapshotRecovered()
     },
     (err) => {
       if (!stillCurrent() || bootFailed) return
