@@ -4,6 +4,11 @@
  * "changed" read from the instant syncSince derives from it. src/ imports this
  * module, so it must stay free of server runtime: it imports nothing. */
 
+/** The most people one latest-comment read takes (teamSync.ts
+ * lastComments). The page asks only for the people whose cards it shows and
+ * its neighbouring steps, so it stays far below this. */
+export const SYNC_OWNERS_MAX = 50
+
 /* A sync is one sitting: changes made on a person within this window of the
  * previous one belong to the same sync, so "since" stays put while the
  * meeting runs on every screen. */

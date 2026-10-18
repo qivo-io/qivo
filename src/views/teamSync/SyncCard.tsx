@@ -472,12 +472,12 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
     since: ctx.since,
     verdict: bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
     issueById: P.issueById,
-    lastCommentAt: P.lastComments.get(it.uuid),
+    lastCommentAt: P.lastComments.get(it.uuid) ?? undefined,
     activity: P.activity,
   })
-  // untouched / changed read the latest comments too: say nothing until
-  // they have arrived rather than call a discussed task untouched
-  const since = P.lastCommentsLoaded ? marks.since : null
+  // untouched / changed read the latest comment too: say nothing until an
+  // answer has covered this task rather than call a discussed task untouched
+  const since = P.lastComments.has(it.uuid) ? marks.since : null
   const hint = planHint(it)
   const dueLate = !!it.due && (it.due < ctx.day.today || marks.verdict === 'late')
   const reviewFor = marks.reviewFor ? P.user(marks.reviewFor) : null

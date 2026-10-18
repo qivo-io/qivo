@@ -19,7 +19,10 @@ describe('planner refresh boundaries', () => {
   let browser: EventTarget
   let publish: (snapshot: Snapshot) => void
   let publishComments: (rows: Row<'comments'>[]) => void
-  let publishTeamSync: (rows: { issue_id: string; at: string }[]) => void
+  let publishTeamSync: (answer: {
+    rows: { issue_id: string; at: string | null }[]
+    complete: boolean
+  }) => void
   let resolve: (value: unknown) => void
   let reject: (reason: unknown) => void
 
@@ -158,10 +161,12 @@ describe('planner refresh boundaries', () => {
     P.updates.workspace.subscribe(workspace)
     P.updates.comments.subscribe(detail)
     P.updates.teamSync.subscribe(sync)
-    P.watchTeamSync(P.homeOrg)
-    publishTeamSync([{ issue_id: 'task-a', at: '2026-10-04T12:00:00.000Z' }])
+    P.watchTeamSync(P.homeOrg, [snapshot.profiles[0].id])
+    publishTeamSync({
+      rows: [{ issue_id: 'task-a', at: '2026-10-04T12:00:00.000Z' }],
+      complete: true,
+    })
     expect(P.lastComments.get('task-a')).toBe(Date.parse('2026-10-04T12:00:00.000Z'))
-    expect(P.lastCommentsLoaded).toBe(true)
     expect(sync).toHaveBeenCalledTimes(2)
     expect(workspace).not.toHaveBeenCalled()
     expect(detail).not.toHaveBeenCalled()
@@ -177,12 +182,16 @@ describe('planner refresh boundaries', () => {
     oldThread([comment('Outdated thread')])
     expect(P.comments[0].body).toBe('Current thread')
 
-    P.watchTeamSync(P.homeOrg)
+    const owners = [snapshot.profiles[0].id]
+    P.watchTeamSync(P.homeOrg, owners)
     const oldSync = publishTeamSync
     P.watchTeamSync(null)
-    P.watchTeamSync(P.homeOrg)
-    publishTeamSync([{ issue_id: 'task-a', at: '2026-10-04T12:00:00.000Z' }])
-    oldSync([{ issue_id: 'task-a', at: '2026-10-01T12:00:00.000Z' }])
+    P.watchTeamSync(P.homeOrg, owners)
+    publishTeamSync({
+      rows: [{ issue_id: 'task-a', at: '2026-10-04T12:00:00.000Z' }],
+      complete: true,
+    })
+    oldSync({ rows: [{ issue_id: 'task-a', at: '2026-10-01T12:00:00.000Z' }], complete: true })
     expect(P.lastComments.get('task-a')).toBe(Date.parse('2026-10-04T12:00:00.000Z'))
   })
 

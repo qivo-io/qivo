@@ -131,7 +131,7 @@ const read = (name, args = {}) => {
     case 'snapshot:commentsForIssue':
       return comments.filter((comment) => comment.issue_id === args.issue_id)
     case 'teamSync:lastComments':
-      return []
+      return { rows: [], complete: true }
     case 'admin:isOperator':
       return false
     default:

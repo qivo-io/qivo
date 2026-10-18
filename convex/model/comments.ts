@@ -177,10 +177,28 @@ export const COMMENT_PAGE_MAX = 50
  * room for the task, the roster and the access checks. */
 export const COMMENT_PAGE_BYTES = 8 * 1024 * 1024
 
-/* Convex's limit on one document's size. A comment can come close to it, so
- * a page reads no more rows at a time than its unspent budget could hold at
- * this size. */
-const DOCUMENT_MAX_BYTES = 1024 * 1024
+/** Convex's limit on one document's size. A comment can come close to it, so
+ * a read with a byte budget takes no more comments at a time than its unspent
+ * budget could hold at this size (newestComments, teamSync.ts lastComments). */
+export const DOCUMENT_MAX_BYTES = 1024 * 1024
+
+/**
+ * The newest comment on the task `issueId`, or null when it has none. One
+ * index range and at most one comment. Comments are server-stamped and
+ * inserted in the order they were posted (see newestComments), so the
+ * by_issue index's last row is the latest. Editing a comment does not move
+ * it.
+ */
+export async function latestComment(
+  ctx: QueryCtx,
+  issueId: string,
+): Promise<Doc<'comments'> | null> {
+  return await ctx.db
+    .query('comments')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .order('desc')
+    .first()
+}
 
 /**
  * The newest comments on the task `issueId`, newest first. A page holds at
@@ -209,8 +227,8 @@ const DOCUMENT_MAX_BYTES = 1024 * 1024
  * count (model/commentCounts.ts) still work on such a thread.
  *
  * The index orders a thread by insertion, so a task's comments must be
- * inserted in the order they were posted (teamSync.ts lastComments relies
- * on this too).
+ * inserted in the order they were posted (latestComment relies on this
+ * too).
  */
 export async function newestComments(
   ctx: QueryCtx,

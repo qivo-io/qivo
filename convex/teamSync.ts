@@ -3,18 +3,22 @@
  * sync_since, read through the sitting rule in lib/teamSync.ts; the columns
  * ride the snapshot's profile rows). `lastComments` is the one per-task fact
  * the snapshot lacks: when each open task was last commented on, for the
- * page's "untouched" and "changed" marks. It is subscribed only while the
- * page is open, so forMe does not rerun a comment read per task.
+ * page's "untouched" and "changed" marks. The page subscribes to it only
+ * while it is open, and only for the people whose cards it shows, so neither
+ * forMe nor the page reads a comment per task of the whole organization.
  *
  * The stamp is meeting bookkeeping, not a task change: it writes no activity
  * row and notifies no one. */
 
-import { v } from 'convex/values'
+import { getDocumentSize, v } from 'convex/values'
+import type { Doc } from './_generated/dataModel'
 import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
-import { forbidden, notFound, orgMutation, orgQuery } from './lib/functions'
-import { nextSyncStamp } from './lib/teamSync'
+import { badRequest, forbidden, notFound, orgMutation, orgQuery } from './lib/functions'
+import { taskOwnerId } from './lib/review'
+import { nextSyncStamp, SYNC_OWNERS_MAX } from './lib/teamSync'
 import { orgProjectView } from './lib/visibility'
+import { DOCUMENT_MAX_BYTES, latestComment } from './model/comments'
 
 /* A change made from a sync page stamps the owner of that page, who is often
  * not the caller. The sync is a home-organization page for staff: guests
@@ -41,38 +45,91 @@ export const stamp = orgMutation({
 /* The statuses a sync row can have. */
 const OPEN_STATUSES: ReadonlySet<string> = new Set(['todo', 'progress', 'review'])
 
-/* The latest comment's instant per open task the caller can see: active
- * (not archived, in an active project), To Do, In Progress or In Review, with
- * at least one comment. Comments are server-stamped and inserted in time
- * order, so the index's newest row is the latest. Any member may read. */
+/** The most people one lastComments call takes, the most tasks it answers,
+ * and the comment bytes after which it stops reading. Tests lower them. */
+export const LAST_COMMENTS = {
+  owners: SYNC_OWNERS_MAX,
+  tasks: 1000,
+  bytes: 8 * 1024 * 1024,
+}
+
+/* The latest comment's instant per open task the caller can see that one of
+ * `owner_ids` owns: active (not archived, in an active project), To Do, In
+ * Progress or In Review, and owned by that person under the Reviewer rule
+ * (lib/review.ts taskOwnerId). `at` is null for a task with no comment. Any
+ * member may read.
+ *
+ * The answer covers at most LAST_COMMENTS.tasks tasks and stops reading
+ * comments once it has read LAST_COMMENTS.bytes, and one comment more. When
+ * either cuts it short, `complete` is false and the tasks left out have no
+ * row, so the page shows no mark for them rather than a wrong one. Owners
+ * are read in the order given, so the first ones keep their rows. Index
+ * ranges are about two per person plus one per task answered, beside the
+ * caller's project view. */
 export const lastComments = orgQuery({
-  args: {},
-  handler: async (ctx) => {
-    const [view, active] = await Promise.all([
-      orgProjectView(ctx, ctx.me),
-      ctx.db
-        .query('issues')
-        .withIndex('by_org_archived', (q) =>
-          q.eq('org_id', ctx.me.org_id).eq('archived_at', undefined),
-        )
-        .collect(),
-    ])
-    const open = active.filter(
-      (issue) =>
-        OPEN_STATUSES.has(issue.status) &&
-        view.visible(issue.project_id) &&
-        view.byUuid.get(issue.project_id)?.archived_at === undefined,
-    )
-    const latest = await Promise.all(
-      open.map(async (issue) => {
-        const comment = await ctx.db
-          .query('comments')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-          .order('desc')
-          .first()
-        return comment === null ? null : { issue_id: issue.id, at: comment.created_at }
-      }),
-    )
-    return latest.filter((row) => row !== null)
+  args: { owner_ids: v.array(v.string()) },
+  handler: async (ctx, { owner_ids }) => {
+    const owners = [...new Set(owner_ids.map((id) => id.toLowerCase()))]
+    if (owners.length > LAST_COMMENTS.owners) {
+      throw badRequest(`at most ${LAST_COMMENTS.owners} people at a time`)
+    }
+    const view = await orgProjectView(ctx, ctx.me)
+    const isRow = (task: Doc<'issues'>, owner: string) =>
+      task.org_id === ctx.me.org_id &&
+      OPEN_STATUSES.has(task.status) &&
+      taskOwnerId(task) === owner &&
+      view.visible(task.project_id) &&
+      view.byUuid.get(task.project_id)?.archived_at === undefined
+
+    // An owner's tasks are those they are assigned or review. A task with
+    // the same person in both roles turns up twice.
+    const ids = new Set<string>()
+    let complete = true
+    scan: for (const owner of owners) {
+      const held = [
+        ctx.db
+          .query('issues')
+          .withIndex('by_assignee_archived', (q) =>
+            q.eq('assignee_id', owner).eq('archived_at', undefined),
+          ),
+        ctx.db
+          .query('issues')
+          .withIndex('by_reviewer_archived', (q) =>
+            q.eq('reviewer_id', owner).eq('archived_at', undefined),
+          ),
+      ]
+      for (const tasks of held) {
+        for await (const task of tasks) {
+          if (ids.has(task.id) || !isRow(task, owner)) continue
+          if (ids.size === LAST_COMMENTS.tasks) {
+            complete = false
+            break scan
+          }
+          ids.add(task.id)
+        }
+      }
+    }
+
+    // Comments are read a few at a time, never more than the unspent budget
+    // could hold at Convex's document size limit, so the budget is passed by
+    // at most one comment.
+    const queue = [...ids]
+    const rows: { issue_id: string; at: string | null }[] = []
+    let bytes = 0
+    while (rows.length < queue.length) {
+      if (bytes >= LAST_COMMENTS.bytes) {
+        complete = false
+        break
+      }
+      const fits = Math.max(1, Math.floor((LAST_COMMENTS.bytes - bytes) / DOCUMENT_MAX_BYTES))
+      const batch = queue.slice(rows.length, rows.length + fits)
+      const latest = await Promise.all(batch.map((id) => latestComment(ctx, id)))
+      batch.forEach((issue_id, i) => {
+        const comment = latest[i]
+        if (comment !== null) bytes += getDocumentSize(comment)
+        rows.push({ issue_id, at: comment?.created_at ?? null })
+      })
+    }
+    return { rows, complete }
   },
 })

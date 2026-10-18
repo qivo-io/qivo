@@ -365,33 +365,63 @@ describe('the Team sync store', () => {
     expect(P.user(f.ben)!.sync).toBeNull()
   })
 
-  it('watches the latest comments of one organization while the page is open', () => {
-    expect(P.lastCommentsLoaded).toBe(false)
+  it('watches the latest comments of the people the page shows', () => {
+    // no people, no subscription
     P.watchTeamSync(f.org)
-    P.watchTeamSync(f.org) // the same org again subscribes nothing new
-    expect(watches).toHaveLength(1)
-    expect(watches[0].args).toEqual({ org_id: f.org })
-    const at = ago(HOUR)
-    watches[0].next([{ issue_id: f.todo.id, at }])
-    expect(P.lastCommentsLoaded).toBe(true)
-    expect(P.lastComments.get(f.todo.id)).toBe(Date.parse(at))
-    expect(P.lastComments.has(f.review.id)).toBe(false)
+    P.watchTeamSync(f.org, [])
+    expect(watches).toHaveLength(0)
 
-    P.watchTeamSync(null)
+    P.watchTeamSync(f.org, [f.ben, f.aisha])
+    P.watchTeamSync(f.org, [f.ben, f.aisha, f.ben]) // the same people again subscribes nothing new
+    expect(watches).toHaveLength(1)
+    // in the order asked, so an answer cut short covers the first person
+    expect(watches[0].args).toEqual({ org_id: f.org, owner_ids: [f.ben, f.aisha] })
+    const at = ago(HOUR)
+    watches[0].next({
+      rows: [
+        { issue_id: f.todo.id, at },
+        { issue_id: f.review.id, at: null },
+      ],
+      complete: true,
+    })
+    expect(P.lastComments.get(f.todo.id)).toBe(Date.parse(at))
+    // covered with no comment, unlike a task the answer did not cover
+    expect(P.lastComments.has(f.review.id)).toBe(true)
+    expect(P.lastComments.get(f.review.id)).toBeNull()
+    expect(P.lastComments.has(f.done.id)).toBe(false)
+
+    // other people in the same organization keep the marks until their answer
+    P.watchTeamSync(f.org, [f.ben])
     expect(watches[0].unsub).toHaveBeenCalledOnce()
-    expect(P.lastCommentsLoaded).toBe(false)
+    expect(watches).toHaveLength(2)
+    expect(watches[1].args).toEqual({ org_id: f.org, owner_ids: [f.ben] })
+    expect(P.lastComments.get(f.todo.id)).toBe(Date.parse(at))
+    watches[0].next({ rows: [{ issue_id: f.done.id, at }], complete: true })
+    expect(P.lastComments.has(f.done.id)).toBe(false)
+    watches[1].next({ rows: [{ issue_id: f.review.id, at }], complete: true })
+    expect([...P.lastComments]).toEqual([[f.review.id, Date.parse(at)]])
+
+    // leaving the page empties them, and a late delivery lands nowhere
+    P.watchTeamSync(null)
+    expect(watches[1].unsub).toHaveBeenCalledOnce()
     expect(P.lastComments.size).toBe(0)
-    // a delivery that was already on its way lands nowhere
-    watches[0].next([{ issue_id: f.todo.id, at }])
+    watches[1].next({ rows: [{ issue_id: f.todo.id, at }], complete: true })
     expect(P.lastComments.size).toBe(0)
   })
 
-  it('reads a failed subscription as loaded with no comments', () => {
-    P.watchTeamSync(f.org)
+  it('empties the marks of another organization', () => {
+    P.watchTeamSync(f.org, [f.aisha])
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
+    P.watchTeamSync(crypto.randomUUID(), [f.aisha])
+    expect(watches[0].unsub).toHaveBeenCalledOnce()
+    expect(P.lastComments.size).toBe(0)
+  })
+
+  it('reads a failed subscription as covering no task', () => {
+    P.watchTeamSync(f.org, [f.aisha])
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    watches[0].next([{ issue_id: f.todo.id, at: NOW }])
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })
     watches[0].fail(new Error('not_found'))
-    expect(P.lastCommentsLoaded).toBe(true)
     expect(P.lastComments.size).toBe(0)
   })
 })
