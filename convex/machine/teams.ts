@@ -275,7 +275,8 @@ export const restUpdateTeam = internalMutation({
 })
 
 /* PUT /v1/teams/{ref}/members/{user}, with an optional body {leader}. Any
- * other body field is refused (refuseUnknownFields). */
+ * other body field is refused (refuseUnknownFields). The body is checked
+ * before the path, as on DELETE. */
 export const restPutMember = internalMutation({
   args: {
     callerId: v.string(),
@@ -287,13 +288,13 @@ export const restPutMember = internalMutation({
   },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const team = await restTeam(ctx, me, a.ref)
-    const member = await restUser(ctx, me, a.user)
     const b = optionalJson(a.body)
     refuseUnknownFields(b, ['leader'])
     if ('leader' in b && typeof b.leader !== 'boolean') {
       throw badRequest('leader must be a boolean')
     }
+    const team = await restTeam(ctx, me, a.ref)
+    const member = await restUser(ctx, me, a.user)
     const put = await putMember(ctx, {
       me,
       team,

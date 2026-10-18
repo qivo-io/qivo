@@ -116,8 +116,6 @@ export const shapeTeam = (t: Row<'teams'>) => ({
   id: t.id,
   name: t.name,
   org: t.org_id,
-  icon: t.icon || null,
-  iconColor: t.icon_color || null,
   staleDays: t.stale_days,
   archiveDays: t.archive_days,
   trackDelayDefault: t.track_delay_default !== false,
@@ -158,8 +156,6 @@ export const shapeProject = (
   trackDelay: p.track_delay !== false,
   // the row's OWN review time; undefined inherits (P.reviewHoursFor resolves)
   reviewHours: p.review_hours,
-  icon: p.icon || null,
-  iconColor: p.icon_color || null,
   lead: p.lead_id || undefined,
   description: p.description || undefined,
   archivedAt: p.archived_at ? new Date(p.archived_at).getTime() : null,

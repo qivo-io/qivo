@@ -31,8 +31,6 @@ export type DemoPerson = {
 export type DemoTeam = {
   key: string
   name: string
-  icon: string
-  color: string
   lead: string
   members: string[]
 }
@@ -47,8 +45,6 @@ export type DemoProject = {
   // share when the demo is seeded. Database projects are team-less.
   team?: string
   lead: string
-  icon?: string
-  color?: string
 }
 
 export type DemoIssue = {
@@ -176,16 +172,12 @@ const teams: DemoTeam[] = [
   {
     key: 'northstar',
     name: 'Northstar Hardware',
-    icon: 'star',
-    color: '#0F766E',
     lead: 'leo',
     members: ['nora', 'leo', 'aisha', 'emil', 'sofia', 'atlas'],
   },
   {
     key: 'cloud-launch',
     name: 'Northstar Cloud & Launch',
-    icon: 'cloud',
-    color: '#2563EB',
     lead: 'daniel',
     members: ['nora', 'daniel', 'sofia', 'ben', 'atlas'],
   },
@@ -198,8 +190,6 @@ const projects: DemoProject[] = [
     code: 'SENS',
     name: 'Luma Sensor',
     lead: 'leo',
-    icon: 'zap',
-    color: '#D97706',
     description:
       'A quiet, connected sensor for healthier workplaces. Take the CO₂, temperature and humidity device from revision B electronics through a validated 30-unit pilot batch.',
   },
@@ -250,8 +240,6 @@ const projects: DemoProject[] = [
     code: 'CLOUD',
     name: 'Luma Cloud',
     lead: 'daniel',
-    icon: 'cloud',
-    color: '#2563EB',
     description:
       'A web workspace for understanding indoor air quality. Help workplace managers compare rooms, onboard devices and respond to sustained changes during the private beta.',
   },
@@ -293,8 +281,6 @@ const projects: DemoProject[] = [
     code: 'PILOT',
     name: 'Pilot & Launch',
     lead: 'ben',
-    icon: 'rocket',
-    color: '#0F766E',
     description:
       'Bring Luma to three fictional customer offices, learn from everyday use, and prepare a clear, practical launch. Pilot sites: Birch Studio, Cedar Works and Fjord House.',
   },

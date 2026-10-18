@@ -957,7 +957,7 @@ describe('teams.create / teams.update', () => {
     )
   })
 
-  it('settings clamp to their bounds and narrate nothing; icon strings are fenced', async () => {
+  it('settings clamp to their bounds and narrate nothing; icon fields are gone', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the team leader qualifies, not just the admin
@@ -969,7 +969,6 @@ describe('teams.create / teams.update', () => {
         stale_days: 0,
         archive_days: 99999,
         track_delay_default: true,
-        icon: 'zap',
       },
     })
     expect(await teamById(t, f.team.id)).toMatchObject({
@@ -977,51 +976,15 @@ describe('teams.create / teams.update', () => {
       stale_days: 1,
       archive_days: 3650,
       track_delay_default: true,
-      icon: 'zap',
     })
-    await as(t, f.admin).mutation(api.teams.update, {
-      org_id: f.org.id,
-      id: f.team.id,
-      patch: { icon: null },
-    })
-    const row = await teamById(t, f.team.id)
-    expect(row?.icon).toBeUndefined() // null clears the field
-    await expectRefusal(
-      as(t, f.admin).mutation(api.teams.update, {
-        org_id: f.org.id,
-        id: f.team.id,
-        patch: { icon: 'x'.repeat(41) },
-      }),
-      'bad_request',
-    )
-    /* icon_color is allowlisted, not length-capped: the glyph draws it as SVG
-       paint, and a 19-character value already fits an attribute break-out. */
-    for (const bad of [
-      'y'.repeat(21),
-      '" onclick=alert(1) ',
-      'red',
-      '#abc',
-      '#GGGGGG',
-      'rainbow ',
-    ]) {
-      await expectRefusal(
-        as(t, f.admin).mutation(api.teams.update, {
-          org_id: f.org.id,
-          id: f.team.id,
-          patch: { icon_color: bad },
-        }),
-        'bad_request',
-        /^an icon color must be a #rrggbb hex$/,
-      )
+    // a leftover no screen used, so the function no longer takes them
+    for (const patch of [{ icon: 'zap' }, { icon: null }, { icon_color: '#0366D6' }]) {
+      await expect(
+        // @ts-expect-error the patch no longer takes icon fields
+        as(t, f.admin).mutation(api.teams.update, { org_id: f.org.id, id: f.team.id, patch }),
+      ).rejects.toThrow(/Unexpected field `icon/)
     }
-    for (const ok of ['#0366D6', '#0366d6', 'rainbow']) {
-      await as(t, f.admin).mutation(api.teams.update, {
-        org_id: f.org.id,
-        id: f.team.id,
-        patch: { icon_color: ok },
-      })
-      expect((await teamById(t, f.team.id))?.icon_color).toBe(ok)
-    }
+    expect((await teamById(t, f.team.id))?.icon).toBeUndefined()
     await expectRefusal(
       as(t, f.guest).mutation(api.teams.update, {
         org_id: f.org.id,

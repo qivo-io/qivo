@@ -14,7 +14,8 @@
  * Web Crypto only — this runs in the V8 isolate (mintUrls query + the
  * /files//avatars gateway) and in edge-runtime under vitest. Deterministic
  * given key+message, so legal inside a query. The separate background_upload
- * kind authorizes only a short-lived, single-use owner-bound upload ticket. */
+ * and attachment_upload kinds authorize only a short-lived, single-use
+ * owner-bound upload ticket. */
 
 export const FILE_TOKEN_TTL_SECONDS = 600
 /* Client re-mint skew: a cached URL within this window of exp is stale. */
@@ -22,6 +23,7 @@ export const FILE_TOKEN_SKEW_MS = 120_000
 
 export type FileTokenKind =
   | 'attachment'
+  | 'attachment_upload'
   | 'avatar'
   | 'background'
   | 'background_preview'
@@ -175,6 +177,17 @@ export function attachmentFileUrl(p: {
   token: string
 }): string {
   return `${siteUrl()}/files/${p.id}?e=${p.exp}&m=${encodeURIComponent(p.minter)}&t=${p.token}`
+}
+
+/* The URL a REST or MCP upload sends its file to (machine/uploads.ts), for
+ * the ticket `id` of the profile `minter`. */
+export function attachmentUploadUrl(p: {
+  id: string
+  minter: string
+  exp: number
+  token: string
+}): string {
+  return `${siteUrl()}/attachment-uploads/${p.id}?e=${p.exp}&m=${encodeURIComponent(p.minter)}&t=${p.token}`
 }
 
 /* `v` is the avatar's storage id — pure cache-busting (the browser cache key

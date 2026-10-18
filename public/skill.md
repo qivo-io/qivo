@@ -265,8 +265,9 @@ Useful field rules:
   marks an image inside the description.
 - **Attach a file:** `start_attachment_upload` or
   `POST /v1/tasks/{ref}/attachments` with `name`, optional `content_type`
-  and the exact byte `size`; then POST the bytes to the returned
-  `upload_url` with the file's `Content-Type` and no Authorization header;
+  and the exact byte `size`; then POST exactly those bytes once to the
+  returned `upload_url`, which stores one file, with the file's
+  `Content-Type` and no Authorization header;
   then `confirm_attachment_upload` or
   `POST /v1/tasks/{ref}/attachments/{ticket}` with the `storage_id` the
   upload answered. Only the same user can confirm, within an hour, on

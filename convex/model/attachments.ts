@@ -23,14 +23,15 @@
  * storageUsage reads all of an organization's rows in one transaction.
  *
  * REST and MCP upload in two steps. startAttachmentUpload checks the write
- * gate and the declared size, mints a Convex upload URL and records a ticket
- * naming the caller, the task and an expiry. The client sends the bytes to
- * the URL, and confirmAttachmentUpload attaches them only for that caller
- * and task before the ticket expires, on either surface. Convex does not tell which URL stored a file,
- * so confirm binds the ticket to its bytes as far as it can. The file must
- * have been stored after the ticket was issued and have exactly the
- * declared size before anything else, the cap's byte delete included, looks
- * at it. Unconfirmed bytes are reaped with every other unreferenced file
+ * gate and the declared size, records a ticket naming the caller, the task
+ * and an expiry, and answers an upload URL signed for that ticket. The
+ * client sends the bytes to the URL, whose receiver (machine/uploads.ts)
+ * stores exactly the declared number of bytes once per ticket
+ * (beginTicketUpload, finishTicketUpload), and confirmAttachmentUpload
+ * attaches that one file only for that caller and task before the ticket
+ * expires, on either surface. Convex's own upload URLs are not used here,
+ * because one of them stores any number of files until it expires.
+ * Unconfirmed bytes are reaped with every other unreferenced file
  * (files.ts reapOrphans), which also deletes expired tickets.
  *
  * Downloads go through the /files gateway with a 10-minute token minted for
@@ -40,8 +41,13 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId, insertUnique } from '../lib/db'
-import { attachmentFileUrl, FILE_TOKEN_TTL_SECONDS, mintFileToken } from '../lib/fileTokens'
-import { badRequest, notFound } from '../lib/functions'
+import {
+  attachmentFileUrl,
+  attachmentUploadUrl,
+  FILE_TOKEN_TTL_SECONDS,
+  mintFileToken,
+} from '../lib/fileTokens'
+import { badRequest, conflict, notFound } from '../lib/functions'
 import { logActivity, signedDetail } from './activity'
 import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
@@ -266,9 +272,10 @@ export async function removeAttachmentCore(
 
 /* --------------------------------------------------------------- uploads */
 
-/** How long an upload ticket and its upload URL stay usable, matching
- * the lifetime Convex gives the URL. It stays within the 60 minutes
- * reapOrphans waits before reaping unreferenced bytes. */
+/** How long an upload ticket and its signed upload URL stay usable. It must
+ * not exceed the 60 minutes reapOrphans waits before reaping unreferenced
+ * bytes (files.ts REAP_FLOOR_MS), or the sweep could take a file a ticket
+ * still holds. */
 export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
 
 /** How many of a caller's expired tickets one new upload deletes, keeping
@@ -277,10 +284,10 @@ const EXPIRED_TICKETS_PER_UPLOAD = 100
 
 /**
  * Starts an upload of a file of `size` bytes to `issue` for `me`. Checks
- * the write gate and the organization's cap against the declared size, mints
- * a Convex upload URL and records the ticket that confirmAttachmentUpload
- * requires. `nowMs` is the request's clock. Deletes some of the caller's
- * expired tickets on the way.
+ * the write gate and the organization's cap against the declared size,
+ * records the ticket that confirmAttachmentUpload requires and answers its
+ * upload URL, which stores one file. `nowMs` is the request's clock. Deletes
+ * some of the caller's expired tickets on the way.
  */
 export async function startAttachmentUpload(
   ctx: MutationCtx,
@@ -302,9 +309,11 @@ export async function startAttachmentUpload(
     .withIndex('by_profile_expiry', (q) => q.eq('profile_id', me.id).lte('expires_at', a.nowMs))
     .take(EXPIRED_TICKETS_PER_UPLOAD)
   for (const old of expired) await ctx.db.delete(old._id)
-  const uploadUrl = await ctx.storage.generateUploadUrl()
+  const id = newUuid()
+  // the URL's token lapses at the ticket's expiry, rounded down to a second
+  const exp = Math.floor((a.nowMs + UPLOAD_TICKET_TTL_MS) / 1000)
   const rowId = await ctx.db.insert('attachment_uploads', {
-    id: newUuid(),
+    id,
     org_id: issue.org_id,
     profile_id: me.id,
     issue_id: issue.id,
@@ -313,15 +322,142 @@ export async function startAttachmentUpload(
     size_bytes: a.size,
     expires_at: a.nowMs + UPLOAD_TICKET_TTL_MS,
   })
-  return { ticket: (await ctx.db.get(rowId)) as Doc<'attachment_uploads'>, uploadUrl }
+  const token = await mintFileToken({ kind: 'attachment_upload', id, minter: me.id, exp })
+  return {
+    ticket: (await ctx.db.get(rowId)) as Doc<'attachment_uploads'>,
+    uploadUrl: attachmentUploadUrl({ id, minter: me.id, exp, token }),
+  }
 }
 
 /** The one answer for a ticket that is unknown, expired, another caller's
- * or another task's, so a refusal says nothing about other tickets. */
+ * or another task's, so a refusal says nothing about other tickets. The
+ * upload URL answers it too. */
 export const UPLOAD_TICKET_MISSING = 'upload not found or expired; start a new upload'
 
-/** The one answer for a `storage_id` that is not a file stored after the
- * ticket was issued: malformed, unknown, or stored earlier. */
+/** The upload URL's answer once it is storing or has stored its file. */
+export const UPLOAD_URL_USED = 'this upload URL has already been used; start a new upload'
+
+/** The upload URL's answer for a body that is not the declared size. */
+export const uploadSizeWrong = (size: number): string =>
+  `the upload must be exactly the ${size} bytes declared`
+
+/** How long a POST to an upload URL holds the URL. A POST that ended
+ * without storing its file, or without freeing the URL, such as one whose
+ * runtime was stopped, lets another POST take the URL once this has passed.
+ * The receiver stops reading a body well before (machine/uploads.ts). */
+export const UPLOAD_CLAIM_MS = 15 * 60 * 1000
+
+/* The ticket `ticketId` of `minter` while it is unexpired at `nowMs`, else
+ * null. */
+async function liveTicket(
+  ctx: QueryCtx,
+  a: { ticketId: string; minter: string; nowMs: number },
+): Promise<Doc<'attachment_uploads'> | null> {
+  const ticket = await byId(ctx, 'attachment_uploads', a.ticketId)
+  return ticket !== null && ticket.profile_id === a.minter && ticket.expires_at > a.nowMs
+    ? ticket
+    : null
+}
+
+/**
+ * Claims the upload URL of ticket `ticketId` for the POST `attempt`, and
+ * answers the number of bytes the POST must carry. A ticket that is unknown,
+ * expired or not `minter`'s is refused, and so is one that holds a file or
+ * that another POST claimed less than UPLOAD_CLAIM_MS ago, so a URL stores
+ * at most one file however often it is sent to.
+ */
+export async function beginTicketUpload(
+  ctx: MutationCtx,
+  a: { ticketId: string; minter: string; attempt: string; nowMs: number },
+): Promise<{ size: number }> {
+  const ticket = await liveTicket(ctx, a)
+  if (ticket === null) throw notFound(UPLOAD_TICKET_MISSING)
+  const claimed =
+    ticket.upload_started_at !== undefined && a.nowMs - ticket.upload_started_at < UPLOAD_CLAIM_MS
+  if (ticket.storage_id !== undefined || claimed) {
+    throw conflict(UPLOAD_URL_USED, 'upload_url_used')
+  }
+  await ctx.db.patch(ticket._id, { upload_started_at: a.nowMs, upload_attempt: a.attempt })
+  return { size: ticket.size_bytes }
+}
+
+/**
+ * Records `storageId` as the file of ticket `ticketId`, which the POST
+ * `attempt` claimed (beginTicketUpload). If the ticket is gone, expired, holds
+ * a file or belongs to another POST now, the file is deleted instead and the
+ * answer is false, so a ticket never holds two files.
+ */
+export async function finishTicketUpload(
+  ctx: MutationCtx,
+  a: {
+    ticketId: string
+    minter: string
+    attempt: string
+    storageId: Id<'_storage'>
+    nowMs: number
+  },
+): Promise<boolean> {
+  const ticket = await liveTicket(ctx, a)
+  const inUse = await storageIdInUse(ctx, a.storageId)
+  if (
+    ticket === null ||
+    ticket.upload_attempt !== a.attempt ||
+    ticket.storage_id !== undefined ||
+    inUse
+  ) {
+    if (!inUse) await ctx.storage.delete(a.storageId)
+    return false
+  }
+  await ctx.db.patch(ticket._id, { storage_id: a.storageId })
+  return true
+}
+
+/**
+ * Undoes the POST `attempt` after it failed: deletes `storageId`, when given,
+ * unless the ticket or anything else holds it, and frees the URL for another
+ * try if that POST still holds it and the ticket holds no file. Safe to run
+ * whether or not beginTicketUpload claimed the URL for this POST. Answers
+ * the ticket's file when this POST stored it after all, such as when the
+ * answer of finishTicketUpload was lost, else null.
+ */
+export async function abandonTicketUpload(
+  ctx: MutationCtx,
+  a: { ticketId: string; minter: string; attempt: string; storageId?: Id<'_storage'> },
+): Promise<Id<'_storage'> | null> {
+  const ticket = await byId(ctx, 'attachment_uploads', a.ticketId)
+  if (
+    ticket !== null &&
+    ticket.profile_id === a.minter &&
+    ticket.upload_attempt === a.attempt &&
+    ticket.storage_id !== undefined
+  ) {
+    return ticket.storage_id
+  }
+  if (
+    a.storageId !== undefined &&
+    ticket?.storage_id !== a.storageId &&
+    !(await storageIdInUse(ctx, a.storageId))
+  ) {
+    await ctx.storage.delete(a.storageId)
+  }
+  if (
+    ticket !== null &&
+    ticket.profile_id === a.minter &&
+    ticket.upload_attempt === a.attempt &&
+    ticket.storage_id === undefined
+  ) {
+    await ctx.db.patch(ticket._id, { upload_started_at: undefined, upload_attempt: undefined })
+  }
+  return null
+}
+
+/** The confirm's answer for a ticket whose upload URL has stored no file,
+ * such as one started before upload URLs stored a single file. */
+export const UPLOAD_NOT_SENT =
+  'no file has been sent to this upload URL; send it there, or start a new upload'
+
+/** The one answer for a `storage_id` that is not the file the ticket's
+ * upload URL stored. */
 export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload answered'
 
 /**
@@ -329,20 +465,12 @@ export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload an
  * file `storage_id`, then attaches it like the app does (attachFileCore,
  * with the declared size enforced and `provenance` signing the activity
  * row). The ticket must be this caller's, for this task and unexpired at
- * `nowMs`, and the file must have been stored after the ticket was issued,
- * so a ticket cannot claim or delete a file that existed before it. A
+ * `nowMs`, and `storage_id` must be the file its upload URL stored
+ * (finishTicketUpload), so a ticket cannot claim or delete any other file. A
  * confirmed ticket is spent, and so is one whose file was deleted for
  * exceeding the cap, which happens only when the organization lowered its
  * limit after the upload started. Any other refusal leaves the ticket for
  * another try.
- *
- * Convex storage does not record which upload URL stored a file, so this
- * cannot prove that `storage_id` came from the ticket's URL. It binds the
- * file by the ticket's owner, task and expiry, a creation time at or after
- * the ticket's, the exact declared size and a file nothing uses yet
- * (attachFileCore). Another unused file that meets all of these, such as
- * one from the same caller's other upload, can be attached in its place.
- * That is an accepted limit.
  */
 export async function confirmAttachmentUpload(
   ctx: MutationCtx,
@@ -364,11 +492,9 @@ export async function confirmAttachmentUpload(
   ) {
     throw notFound(UPLOAD_TICKET_MISSING)
   }
+  if (ticket.storage_id === undefined) throw badRequest(UPLOAD_NOT_SENT)
   const storageId = ctx.db.system.normalizeId('_storage', a.storage_id)
-  const meta = storageId === null ? null : await ctx.db.system.get(storageId)
-  if (storageId === null || meta === null || meta._creationTime < ticket._creationTime) {
-    throw badRequest(UPLOAD_STORAGE_ID)
-  }
+  if (storageId === null || storageId !== ticket.storage_id) throw badRequest(UPLOAD_STORAGE_ID)
   const result = await attachFileCore(ctx, {
     me: a.me,
     issue: a.issue,

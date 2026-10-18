@@ -223,6 +223,16 @@ still counts as a call. A declared `Content-Length` over the limit is refused
 without reading the body. Files never travel in these bodies; see
 [Attachments](#attachments).
 
+A request that takes a JSON body needs a JSON object. Anything else, such as
+invalid JSON, an array or a number, is a `400` (`request body must be
+JSON`). A string or field name holding an unpaired surrogate, such as a lone
+`\ud83c` escape left when text is cut in the middle of an emoji, is a `400`
+(`request body holds an unpaired surrogate, which UTF-8 cannot encode`). Such
+text cannot be stored, so the request changes nothing. A request that takes
+no body, such as `DELETE /v1/tasks/{ref}`, ignores one it is sent.
+`POST /v1/webhooks` checks its body by its own rules (see
+[Generic webhooks](#generic-webhooks)).
+
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
 existing access rules. An organization admin can subscribe or update payment
@@ -556,6 +566,8 @@ what happens to them:
 `PUT` takes only `level` and `DELETE` only `on_held_tasks`. Any other field
 is refused with `400`, such as `unknown field "on_held_task"; this request
 takes on_held_tasks`, so a misspelled choice never falls back to `leave`.
+Both check the body before the path, so a bad body is a `400` even when the
+project, user or team is unknown.
 
 The removal and its choice land together or not at all. If any task cannot
 be reassigned, the access stays and nothing changes. One removal reassigns at
@@ -663,7 +675,8 @@ access](#project-access):
 
 `PUT` takes only `leader` and `DELETE` only `on_held_tasks`, as for project
 access. Any other field is refused with `400`, such as `unknown field
-"leadr"; this request takes leader`, and the request changes nothing.
+"leadr"; this request takes leader`, and the request changes nothing. As for
+project access, the body is checked before the team and user.
 
 The removal and its choice land together or not at all. One removal
 reassigns at most 120 tasks, and fewer when the tasks have many followers. A
@@ -1157,7 +1170,9 @@ sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks — it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
 subtasks, and clients show the parent's value as the sum over its unfinished
-subtasks at any depth. Such tasks return `remaining_hours: null` in the shape below, and
+subtasks at any depth. Such tasks return `remaining_hours: null` and
+`remaining_set_at: null` in the shape below, also while they still store
+hours of their own from before their subtasks counted, and
 the single-task read adds that sum as `group_remaining_hours`. Attaching a
 subtask clears its new parent's own hours.
 Writing `remaining_hours` also stamps the read-only `remaining_set_at`
@@ -1687,24 +1702,39 @@ Uploading takes three requests:
    `GET /v1/me`) is a `400` (`attachment exceeds the organization limit of
    20 MiB`). It answers `201` with `{ "ticket": "…uuid…", "upload_url":
    "…", "expires_at": "…" }`.
-2. `POST` the file's bytes to `upload_url`, with the file's type as
-   `Content-Type` and no Authorization header. It answers `{ "storageId":
-   "…" }`.
+2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
+   the file's type as `Content-Type` and no Authorization header. It
+   answers `{ "storageId": "…" }`.
 3. `POST /v1/tasks/{ref}/attachments/{ticket}` with `{ "storage_id":
    "…" }`, which answers `201` with the attachment.
 
-The ticket and its upload URL expire after an hour. Only the user that
-started the upload can confirm it, only for the same task, and only once.
-Any other ticket, including an expired one, answers `404` (`upload not found
-or expired; start a new upload`). `storage_id` must name a file stored after
-the upload started. Any other value, including a file stored earlier,
-answers `400` (`storage_id must be the storageId the upload answered`). The
-stored file must have exactly the declared number of bytes. A file of
-another size answers `400` (`the uploaded file has 99 bytes, not the 100
-declared`), Qivo keeps it, and the ticket stays usable. Without a
-`content_type`, the attachment takes the upload's `Content-Type`, and one
-over 255 characters answers `400` (`the file's media type must be at most 255
-characters`). If the organization lowered its per-file limit after the upload
+The ticket and its upload URL expire after an hour. The upload URL stores
+one file:
+
+- While a `POST` to it is storing the file, and once it has, another `POST`
+  answers `409` (`this upload URL has already been used; start a new
+  upload`) and stores nothing. If the answer of the `POST` that stored the
+  file was lost, start a new upload.
+- A body of another size than declared answers `400` (`the upload must be
+  exactly the 48213 bytes declared`), a `Content-Type` over 255 characters
+  answers `400` (`the file's media type must be at most 255 characters`),
+  and a body that takes more than 5 minutes to arrive answers `400` (`the
+  upload took too long; send it again`). These store nothing, and the URL
+  can be tried again, as after any other failed `POST`. A `POST` that ends
+  without an answer and without storing a file, for example when the
+  connection drops, holds the URL for at most 15 minutes.
+- An expired or altered upload URL, and one whose upload was confirmed,
+  answers `404` (`upload not found or expired; start a new upload`).
+
+Only the user that started the upload can confirm it, only for the same
+task, and only once. Any other ticket, including an expired one, answers
+`404` (`upload not found or expired; start a new upload`). A confirm before
+the upload URL has stored a file answers `400` (`no file has been sent to
+this upload URL; send it there, or start a new upload`). `storage_id` must
+be the `storageId` the upload URL answered, and any other value answers
+`400` (`storage_id must be the storageId the upload answered`). Without a
+`content_type`, the attachment takes the upload's `Content-Type`.
+If the organization lowered its per-file limit after the upload
 started and the file now exceeds it, Qivo deletes the file, answers `400` and
 spends the ticket.
 Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
@@ -1771,9 +1801,12 @@ GET /v1/workload?from_week=2026-10-12&weeks=8&project=ENC     (read)
 Each person's planned hours per week, as the Roadmap's Team strip and the
 planning panel count them. `from_week` is any day of the first week, by
 default the current week; weeks begin on the organization's
-`week_start` (`GET /v1/me`). `weeks` is 1 to 52, 8 by default. `project`
-(uuid, number or key) limits the hours to that project and its sub-projects;
-one the caller cannot see is a `404`.
+`week_start` (`GET /v1/me`). `weeks` is 1 to 52, 8 by default. A window
+with a week that starts before 0000-01-01 or after 9999-12-31 is a `400`
+(`the workload window must fall within the years 0000 to 9999`), because its
+`week_starts` could not be written as `YYYY-MM-DD`. `project` (uuid, number
+or key) limits the hours to that project and its sub-projects; one the
+caller cannot see is a `404`.
 
 ```json
 {
@@ -1978,9 +2011,10 @@ authenticated request.
   when an organization admin revoked it on API access. The same row serves
   MCP and REST.
 - `attachment_uploads` holds one row per upload in progress: the ticket,
-  the user that started it, the task, the declared name, type and size, and
-  its expiry. Confirming deletes it; the weekly storage sweep deletes
-  expired ones.
+  the user that started it, the task, the declared name, type and size, its
+  expiry, the `POST` to its upload URL that holds the URL and when it began,
+  and the one file that URL stored, which the confirm must name. Confirming
+  deletes it; the weekly storage sweep deletes expired ones.
 - What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through

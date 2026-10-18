@@ -36,7 +36,7 @@ import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleArchivedReads } from './messages'
-import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
+import { nextProjectNum } from './orgs'
 
 /* The first step of a restore's regroup chain (regroup.ts), referenced by
  * name as model/messages.ts references its steps. */
@@ -259,8 +259,6 @@ export type NewProject = {
   /** the caller when absent */
   lead_id?: string
   description?: string | null
-  icon?: string | null
-  icon_color?: string | null
   /** after its siblings when absent */
   sort_order?: number
   track_delay?: boolean
@@ -341,13 +339,6 @@ export async function createProjectCore(
   if ((lead_id !== me.id || shares) && !canChangeAccess(me)) {
     throw forbidden(ACCESS_NEEDS_A_PERSON)
   }
-  if (p.type === 'project' && (p.icon != null || p.icon_color != null)) {
-    throw badRequest('sub-projects carry no icon')
-  }
-  const iconColor = p.icon_color === '' ? undefined : (p.icon_color ?? undefined)
-  if (iconColor !== undefined && !ICON_COLOR_SHAPE.test(iconColor)) {
-    throw badRequest('an icon color must be a #rrggbb hex')
-  }
   const name = cleanProjectName(p.name)
   const key = await allocateKey(
     ctx,
@@ -373,8 +364,6 @@ export async function createProjectCore(
       parent_id,
       key,
       name,
-      icon: p.icon ?? undefined,
-      icon_color: iconColor,
       lead_id,
       description,
       sort_order,
@@ -437,8 +426,6 @@ export async function createProjectCore(
  * lists, as the app's Project access editor sends them. */
 export type ProjectPatch = {
   name?: string
-  icon?: string | null
-  icon_color?: string | null
   lead_id?: string | null
   description?: string | null
   key?: string
@@ -451,7 +438,7 @@ export type ProjectPatch = {
 /**
  * Applies a field patch and any access-map diff in ONE write, and narrates
  * it once, by priority access > name > lead; same-value name and lead writes
- * are silent no-ops, and icon, description, key, track_delay and
+ * are silent no-ops, and description, key, track_delay and
  * review_hours alone narrate nothing. A lead handover without an access map
  * keeps the outgoing lead as User and drops the incoming lead's own grant
  * (lib/projectGrants.ts grantsAfterHandover). Changing access or the lead
@@ -496,21 +483,8 @@ export async function updateProjectCore(
   if (managesTeams && !(await canManageProjectTeams(ctx, me, project))) {
     throw forbidden('no permission to manage users on this project')
   }
-  // projects_sub_no_icon (0069): the glyph/tint stays a meta feature
-  if (project.type === 'project' && (patch.icon != null || patch.icon_color != null)) {
-    throw badRequest('sub-projects carry no icon')
-  }
   const db: Partial<Doc<'projects'>> = {}
   if (patch.name !== undefined) db.name = cleanProjectName(patch.name, project.name)
-  if (patch.icon !== undefined) db.icon = patch.icon ?? undefined
-  if (patch.icon_color !== undefined) {
-    const color =
-      patch.icon_color === null || patch.icon_color === '' ? undefined : patch.icon_color
-    if (color !== undefined && !ICON_COLOR_SHAPE.test(color)) {
-      throw badRequest('an icon color must be a #rrggbb hex')
-    }
-    db.icon_color = color
-  }
   if (patch.description !== undefined) db.description = projectDescription(patch.description)
   if (patch.track_delay !== undefined) db.track_delay = patch.track_delay
   // null clears: undefined unsets the column through ctx.db.patch

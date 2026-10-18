@@ -83,84 +83,27 @@ describe('projects.create', () => {
     expect(e.detail).toBeUndefined()
   })
 
-  it('persists the selected icon and color in the creation mutation', async () => {
+  /* The icon fields were a leftover no screen used, so the functions no
+     longer take them. Rows that hold one still validate. */
+  it('refuses icon fields without inserting the project or consuming a number', async () => {
     const t = newT()
     const f = await withOrg(t)
-    for (const [key, icon, icon_color] of [
-      ['GLYPH', 'rocket', '#0366D6'],
-      ['EMOJI', '🚀', 'rainbow'],
-      ['EMPTY', '', ''],
-      ['CLEAR', null, null],
-    ]) {
-      const created = await as(t, f.admin).mutation(
-        api.projects.create,
-        createArgs(f, { key, icon, icon_color }),
+    for (const extra of [{ icon: 'rocket' }, { icon_color: '#0366D6' }, { icon: null }]) {
+      const args = { ...createArgs(f), ...extra }
+      await expect(as(t, f.admin).mutation(api.projects.create, args)).rejects.toThrow(
+        /Unexpected field `icon/,
       )
-      const row = await t.run((ctx) =>
-        ctx.db
-          .query('projects')
-          .withIndex('by_uuid', (q) => q.eq('id', created.id))
-          .unique(),
-      )
-      expect(row?.icon).toBe(icon ?? undefined)
-      expect(row?.icon_color).toBe(icon_color === '' ? undefined : (icon_color ?? undefined))
-    }
-  })
-
-  it('refuses malformed creation colors without inserting the project, shares or consuming a number', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const args = createArgs(f, { icon: 'rocket', icon_color: 'red' })
-    await expectRefusal(
-      as(t, f.admin).mutation(api.projects.create, args),
-      'bad_request',
-      /^an icon color must be a #rrggbb hex$/,
-    )
-    await t.run(async (ctx) => {
       expect(
-        await ctx.db
-          .query('projects')
-          .withIndex('by_uuid', (q) => q.eq('id', args.id))
-          .unique(),
+        await t.run((ctx) =>
+          ctx.db
+            .query('projects')
+            .withIndex('by_uuid', (q) => q.eq('id', args.id))
+            .unique(),
+        ),
       ).toBeNull()
-      expect(await ctx.db.query('project_team_access').collect()).toEqual([])
-    })
+    }
     const created = await as(t, f.admin).mutation(api.projects.create, createArgs(f))
     expect(created.num).toBe(6)
-  })
-
-  it('refuses sub-project creation with icon fields, while null fields remain absent', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const args = createArgs(f, {
-      type: 'project',
-      parent_id: f.meta.id,
-    })
-    for (const extra of [
-      { icon: 'rocket' },
-      { icon_color: '#0366d6' },
-      { icon: '' },
-      { icon_color: '' },
-    ]) {
-      await expectRefusal(
-        as(t, f.admin).mutation(api.projects.create, { ...args, ...extra }),
-        'bad_request',
-        /^sub-projects carry no icon$/,
-      )
-    }
-    const created = await as(t, f.admin).mutation(api.projects.create, {
-      ...args,
-      icon: null,
-      icon_color: null,
-    })
-    const row = await t.run((ctx) =>
-      ctx.db
-        .query('projects')
-        .withIndex('by_uuid', (q) => q.eq('id', created.id))
-        .unique(),
-    )
-    expect(row?.icon).toBeUndefined()
-    expect(row?.icon_color).toBeUndefined()
   })
 
   /* Who may create a product follows organizations.project_creators
@@ -416,54 +359,23 @@ describe('projects.update', () => {
     expect((await activityFor(t, f.org.id)).length).toBe(before)
   })
 
-  /* icon_color reaches the browser as SVG paint on the project glyph, so the
-     write allowlists it. Before this it took any string at all: no length cap,
-     no shape, straight into the document. */
-  it('icon_color takes a #rrggbb hex or the legacy rainbow, and nothing else', async () => {
+  it('update refuses icon fields and leaves a stored icon alone', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const colorOf = async () =>
-      (
-        await t.run(async (ctx) =>
-          ctx.db
-            .query('projects')
-            .withIndex('by_uuid', (q) => q.eq('id', f.meta.id))
-            .unique(),
-        )
-      )?.icon_color
-    for (const ok of ['#0366D6', '#0366d6', 'rainbow']) {
-      await as(t, f.admin).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: f.meta.id,
-        patch: { icon_color: ok },
-      })
-      expect(await colorOf()).toBe(ok)
+    await t.run((ctx) => ctx.db.patch(f.meta._id, { icon: 'rocket', icon_color: '#0366D6' }))
+    for (const patch of [{ icon: null }, { icon_color: 'red' }]) {
+      await expect(
+        // @ts-expect-error the patch no longer takes icon fields
+        as(t, f.admin).mutation(api.projects.update, { org_id: f.org.id, id: f.meta.id, patch }),
+      ).rejects.toThrow(/Unexpected field `icon/)
     }
-    for (const bad of [
-      '" onclick=alert(1) ',
-      '"/><animate onbegin="alert(1)"',
-      'red',
-      '#abc',
-      '#GGGGGG',
-      'x'.repeat(64),
-    ]) {
-      await expectRefusal(
-        as(t, f.admin).mutation(api.projects.update, {
-          org_id: f.org.id,
-          id: f.meta.id,
-          patch: { icon_color: bad },
-        }),
-        'bad_request',
-        /^an icon color must be a #rrggbb hex$/,
-      )
-    }
-    expect(await colorOf()).toBe('rainbow') // the last good write still stands
     await as(t, f.admin).mutation(api.projects.update, {
       org_id: f.org.id,
       id: f.meta.id,
-      patch: { icon_color: null },
+      patch: { name: 'Platform 2' },
     })
-    expect(await colorOf()).toBeUndefined()
+    const row = await t.run((ctx) => ctx.db.get(f.meta._id))
+    expect(row).toMatchObject({ name: 'Platform 2', icon: 'rocket', icon_color: '#0366D6' })
   })
 
   it('lead handovers narrate both sides and a project lead cannot be cleared', async () => {

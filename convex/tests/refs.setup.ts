@@ -202,6 +202,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'panorama_images.preview_storage_id',
   'custom_backgrounds.storage_id',
   'custom_backgrounds.preview_storage_id',
+  // an upload ticket's file until it is confirmed; the reaper takes both
+  'attachment_uploads.storage_id',
   // Provider identity retained for deduplication, not an app database uuid.
   'panorama_images.source_id',
   'panorama_submissions.source_id',

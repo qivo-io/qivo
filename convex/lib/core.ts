@@ -1029,7 +1029,11 @@ type IssueOutCommon = {
   /** the app's projected delay, null when its project does not track delay
    *  or the app shows no verdict (lib/machineDelay.ts) */
   delay: DelayJson | null
+  /** null for an active group, whose time is its subtasks'
+   *  (group_remaining_hours on the single-task read), even while it still
+   *  stores hours of its own */
   remaining_hours: number | null
+  /** null for an active group, like remaining_hours */
   remaining_set_at: string | null
   paused: boolean
   /** a group's done and total leaves, null for a task without subtasks */
@@ -1572,6 +1576,18 @@ export async function issueOut(
           opts.counts ?? groupCounter(ctx, opts.me, issue, project, opts.readable, opts.projectOf),
           opts.live,
         )
+  // An active group can still store hours from before its subtasks counted,
+  // until convex/regroup.ts clears them. They are stale, so neither surface
+  // shows them. An archived task counts its archived subtasks as a group but
+  // keeps its own hours for its restore, and the remaining-time writes take
+  // them (model/issues.ts hasActiveSubtasks), so it shows them.
+  const hours =
+    is_group && issue.archived_at === undefined
+      ? { remaining_hours: null, remaining_set_at: null }
+      : {
+          remaining_hours: issue.remaining_hours ?? null,
+          remaining_set_at: issue.remaining_set_at ?? null,
+        }
   const weeks =
     facts === null
       ? { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
@@ -1611,8 +1627,8 @@ export async function issueOut(
       end_week: weeks.end_week,
       due_date: issue.due_date ?? null,
       delay,
-      remaining_hours: issue.remaining_hours ?? null,
-      remaining_set_at: issue.remaining_set_at ?? null,
+      remaining_hours: hours.remaining_hours,
+      remaining_set_at: hours.remaining_set_at,
       paused: issue.paused,
       progress,
       archived: issue.archived_at !== undefined,
@@ -1649,8 +1665,8 @@ export async function issueOut(
     end_week: weeks.end_week,
     due_date: issue.due_date ?? null,
     delay,
-    remaining_hours: issue.remaining_hours ?? null,
-    remaining_set_at: issue.remaining_set_at ?? null,
+    remaining_hours: hours.remaining_hours,
+    remaining_set_at: hours.remaining_set_at,
     paused: issue.paused,
     progress,
     archived_at: issue.archived_at ?? null,

@@ -352,8 +352,13 @@ describe('marketing demo rebuild ownership', () => {
       const children = projects.filter((p) => p.parent_id === meta.id)
       expect(children.length).toBeGreaterThanOrEqual(2)
       expect(children.length).toBeLessThanOrEqual(5)
-      expect(meta.icon).toBeTruthy()
     }
+    // the seed writes no icons, which nothing shows
+    for (const row of [
+      ...projects,
+      ...(await t.run(async (ctx) => ctx.db.query('teams').collect())),
+    ])
+      expect([row.icon, row.icon_color]).toEqual([undefined, undefined])
     const task = (await t.run(async (ctx) => ctx.db.query('issues').collect()))[0]
     await t.run(async (ctx) => ctx.db.patch(task._id, { title: 'Customer walkthrough adjustment' }))
     const manual = await plantIssue(t, {

@@ -13,6 +13,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
 import { byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { LABEL_NAME_MAX } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
 import { assertCanEdit } from './issues'
 
@@ -31,12 +32,14 @@ export function assertLabelManager(me: Doc<'profiles'>): void {
   }
 }
 
-/** Trims the name and refuses it when blank or longer than 40 codepoints
- * (0010's CHECK, Postgres char_length semantics). */
+/** Trims the name and refuses it when blank or longer than LABEL_NAME_MAX
+ * code points (0010's CHECK, Postgres char_length semantics). */
 export function labelName(raw: string): string {
   const name = raw.trim()
   if (name === '') throw badRequest('a label name cannot be blank')
-  if ([...name].length > 40) throw badRequest('a label name is at most 40 characters')
+  if ([...name].length > LABEL_NAME_MAX) {
+    throw badRequest(`a label name is at most ${LABEL_NAME_MAX} characters`)
+  }
   return name
 }
 

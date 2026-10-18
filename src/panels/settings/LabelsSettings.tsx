@@ -3,6 +3,7 @@ import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { LABEL_NAME_MAX } from '../../../convex/lib/textLimits'
 import { Icon, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
 import { LABEL_COLORS } from '../../lib/labelColors'
@@ -94,7 +95,7 @@ function LabelRow({
       {canEdit ? (
         <Input
           value={name}
-          maxLength={40}
+          maxLength={LABEL_NAME_MAX}
           aria-label={`Name of label ${label.name}`}
           onChange={(e) => setName(e.target.value)}
           onBlur={commit}
@@ -192,7 +193,7 @@ export function OrgLabelsPage() {
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
                 placeholder="New label name"
-                maxLength={40}
+                maxLength={LABEL_NAME_MAX}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') addLabel()
                 }}

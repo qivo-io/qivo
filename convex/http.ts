@@ -20,6 +20,7 @@ import { isoWeekForDate } from './lib/panoramaWeeks'
 import { registerCuration } from './machine/curation'
 import { registerMcpRoutes } from './machine/mcp'
 import { registerRestRoutes } from './machine/rest'
+import { registerUploadRoutes } from './machine/uploads'
 import { DEMO_FILE_BYTES } from './model/demoUploads'
 
 const http = httpRouter()
@@ -294,7 +295,10 @@ const attachmentDisposition = (name: string): string => {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`
 }
 
-const serve = (kind: Exclude<FileTokenKind, 'background_upload' | 'demo_upload'>, prefix: string) =>
+const serve = (
+  kind: Exclude<FileTokenKind, 'attachment_upload' | 'background_upload' | 'demo_upload'>,
+  prefix: string,
+) =>
   httpAction(async (ctx, request) => {
     const url = new URL(request.url)
     const headers = gatewayHeaders(request.headers.get('Origin'))
@@ -589,9 +593,11 @@ http.route({
 /* ------------------------------------------------ machine surfaces (phase 8)
  * Each surface registers its own routes from its own file — http.ts only
  * mounts them, once. Requests outside /v1/*, /mcp, /api/auth/*, /files/*,
- * /avatars/*, /backgrounds/*, /background-previews/*, /background-uploads/* get Convex's default 404 (a root catch-all would collide with
- * the auth + gateway prefixes — accepted delta). */
+ * /avatars/*, /backgrounds/*, /background-previews/*, /background-uploads/*,
+ * /attachment-uploads/* get Convex's default 404 (a root catch-all would
+ * collide with the auth + gateway prefixes — accepted delta). */
 registerRestRoutes(http)
+registerUploadRoutes(http)
 registerCuration(http)
 registerMcpRoutes(http)
 

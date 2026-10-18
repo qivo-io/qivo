@@ -63,16 +63,6 @@ describe('the versioned Northstar marketing scenario', () => {
         (key) => projects.filter((project) => project.parent === key).length,
       ),
     ).toEqual([5, 4, 3])
-    expect(projects.filter((project) => !project.parent).map((project) => project.icon)).toEqual([
-      'zap',
-      'cloud',
-      'rocket',
-    ])
-    expect(
-      projects
-        .filter((project) => project.parent)
-        .every((project) => !project.icon && !project.color),
-    ).toBe(true)
     expect(issues).toHaveLength(90)
     expect(new Set(issues.map((issue) => issue.status))).toEqual(
       new Set(['backlog', 'todo', 'progress', 'review', 'done']),

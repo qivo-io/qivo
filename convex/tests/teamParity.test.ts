@@ -844,6 +844,15 @@ describe('team routes over HTTP', () => {
       body: { error: 'unknown fields "leadr", "x"; this request takes leader' },
     })
     expect(await membership(fx.t, fx.team.id, fx.pia.id)).toBeNull()
+    // the body is checked before the team and user, as on DELETE
+    expect(await call('PUT', `/v1/teams/${uuid()}/members/${uuid()}`, { leadr: true })).toEqual({
+      status: 400,
+      body: { error: 'unknown field "leadr"; this request takes leader' },
+    })
+    expect(await call('PUT', `/v1/teams/${uuid()}/members/${uuid()}`, { leader: 'yes' })).toEqual({
+      status: 400,
+      body: { error: 'leader must be a boolean' },
+    })
     expect(await activityFor(fx.t, fx.org.id)).toEqual([])
     // the fields each route takes still pass, and an empty object is no field
     expect(await call('PUT', `${members}/${fx.pia.id}`, {})).toMatchObject({

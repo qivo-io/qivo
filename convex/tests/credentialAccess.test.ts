@@ -48,10 +48,8 @@ import {
   withOrg,
 } from './helpers.setup'
 
-/* edge-runtime provides Blob's constructor and TextEncoder; convex/env.d.ts
- * declares Blob without its constructor, and convex/tsconfig's ESNext-only
- * lib lacks TextEncoder. */
-declare const Blob: { new (parts: Uint8Array[]): Blob }
+/* edge-runtime provides TextEncoder; convex/tsconfig's ESNext-only lib lacks
+ * it. */
 declare class TextEncoder {
   encode(input: string): Uint8Array
 }
@@ -642,6 +640,10 @@ const EXEMPT: Record<string, string> = {
     'deploy-key test seam that mints credentials, refused on production',
   'machine/testing:deleteCredential':
     'deploy-key test seam that deletes minted credentials, refused on production',
+  'machine/uploads:begin':
+    'the upload URL takes no credential; its signed token names the ticket a write credential started',
+  'machine/uploads:finish': 'the upload URL records the file of a ticket begin claimed',
+  'machine/uploads:abandon': 'the upload URL frees a ticket begin claimed after a failed POST',
   'billingMetering:ingress':
     'counts every machine request before authentication (machine HTTP actions)',
   'billingMetering:oauthCall':
@@ -1256,11 +1258,17 @@ describe('read-only credentials over HTTP', () => {
       name: 'wiring.pdf',
       size: 5,
     })
-    const { ticket } = JSON.parse(toolText(started.body).text) as { ticket: string }
-    // convex-test's upload URL is no endpoint, so the bytes are stored directly
-    const storage_id = await c.t.run((ctx) =>
-      ctx.storage.store(new Blob([new Uint8Array([1, 2, 3, 4, 5])])),
-    )
+    const { ticket, upload_url } = JSON.parse(toolText(started.body).text) as {
+      ticket: string
+      upload_url: string
+    }
+    const url = new URL(upload_url)
+    const sent = await fetchAs(c.t, `${url.pathname}${url.search}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/pdf' },
+      body: new Uint8Array([1, 2, 3, 4, 5]),
+    })
+    const { storageId: storage_id } = JSON.parse(sent.text) as { storageId: string }
     const confirmed = await callTool(c.t, token, 'confirm_attachment_upload', {
       ref: key,
       ticket,
