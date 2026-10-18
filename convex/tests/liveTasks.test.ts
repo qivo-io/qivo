@@ -31,6 +31,7 @@ import {
   plantProject,
   plantSeat,
   plantSubscription,
+  restTasks,
   type T,
   uuid,
   withOrg,
@@ -274,6 +275,94 @@ describe('reading only live tasks', () => {
     })
     expect(rows.map((r) => r.issue_id).sort()).toEqual([leaf.id, shelvedOnly.id].sort())
     expect(documents).toBeLessThan(60)
+  })
+
+  it("a busy agent's load reads none of the Done tasks it keeps for a month", async () => {
+    const fx = await setup()
+    const plan = { start_week: '2026-09-07', end_week: '2026-09-14', remaining_hours: 2 }
+    const open = await task(fx, { ...plan, assignee_id: fx.agent.id })
+    // the agent reviews this one, which is its own work while In Review
+    const reviewing = await task(fx, {
+      ...plan,
+      status: 'review',
+      assignee_id: fx.user.id,
+      reviewer_id: fx.agent.id,
+    })
+    // a month of an agent closing a hundred tasks a day, and reviewing more
+    const done = { ...plan, status: 'done' as const, done_at: NOW }
+    await plantMany(fx, 3000, { ...done, project_id: fx.sub.id, assignee_id: fx.agent.id })
+    await plantMany(fx, 500, {
+      ...done,
+      project_id: fx.sub2.id,
+      assignee_id: fx.user.id,
+      reviewer_id: fx.agent.id,
+    })
+    const { rows, documents } = await as(fx.t, fx.admin).query(async (ctx) => {
+      const rows = await handlerOf<{ assignee_id: string }, { issue_id: string | null }[]>(
+        assigneeLoad,
+      )(ctx, { assignee_id: fx.agent.id })
+      return { rows, documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used }
+    })
+    expect(rows.map((r) => r.issue_id).sort()).toEqual([open.id, reviewing.id].sort())
+    expect(documents).toBeLessThan(60)
+  })
+
+  it('active lists and a project’s completion never read the tasks of an archived project', async () => {
+    // far fewer documents than the archived project holds
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
+    const group = await task(fx, { title: 'Group' })
+    const kid = await task(fx, { project_id: fx.sub2.id, parent_id: group.id, status: 'done' })
+    // its only subtask is in the archived sub-project, so it is no group
+    const shelvedOnly = await task(fx, { title: 'Shelved only' })
+    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
+    // a parent left behind in the archived sub-project
+    const stranded = await task(fx, { project_id: fx.shelf.id, title: 'Stranded parent' })
+    const child = await task(fx, { parent_id: stranded.id, title: 'Child' })
+    await plantMany(fx, 2000, { project_id: fx.shelf.id })
+    const expected = [group.id, kid.id, shelvedOnly.id, child.id]
+    const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read' })
+    expect(rest.map((r) => r.id)).toEqual(expected)
+    expect(rest.map((r) => [r.is_group, r.parent_id])).toEqual([
+      [true, null],
+      [false, group.id],
+      [false, null],
+      [false, stranded.id],
+    ])
+    const mcp = JSON.parse(
+      await fx.t.query(internal.machine.mcp.listIssues, {
+        callerId: fx.agent.id,
+        access: 'read',
+        now: NOW,
+        project: 'TBED',
+      }),
+    ) as { id: string }[]
+    expect(mcp.map((r) => r.id)).toEqual(expected)
+    // the group's done subtask, the leaf without a group and the child
+    const completion = { done: 1, total: 3, percent: 33 }
+    const project = await fx.t.query(internal.machine.rest.getProject, {
+      callerId: fx.agent.id,
+      access: 'read',
+      ref: 'TBED',
+    })
+    expect(project.completion).toEqual(completion)
+    const mcpProject = JSON.parse(
+      await fx.t.query(internal.machine.projects.mcpGetProject, {
+        callerId: fx.agent.id,
+        access: 'read',
+        project: 'TBED',
+      }),
+    ) as { completion: unknown }
+    expect(mcpProject.completion).toEqual(completion)
+  })
+
+  it('a list that names an archived project still counts every active subtask of its tasks', async () => {
+    const fx = await setup()
+    const shelved = await task(fx, { project_id: fx.shelf.id, title: 'Shelved group' })
+    await task(fx, { parent_id: shelved.id, start_week: '2026-09-07', end_week: '2026-09-07' })
+    const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', project: 'SHELF' })
+    expect(rest.map((r) => [r.id, r.is_group, r.start_week])).toEqual([
+      [shelved.id, true, '2026-09-07'],
+    ])
   })
 
   it("a busy person's load finds the groups in one read past ASSIGNEE_LOAD_CHECKS", async () => {

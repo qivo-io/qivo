@@ -27,7 +27,7 @@ import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
 import { authedQuery } from './lib/functions'
-import { groupTest, liveIn, liveTasksOf, ownedLiveTasks } from './lib/liveTasks'
+import { groupTest, liveIn, liveTasksOf, ownedOpenTasks } from './lib/liveTasks'
 import { taskOwnerId } from './lib/review'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
@@ -109,8 +109,8 @@ export function orgLoadRows(
  * for a delay verdict). Tests lower `reads`. */
 export const ASSIGNEE_LOAD_CHECKS = { reads: 500 }
 
-/* plan_assignee_load: the person's own live tasks (lib/liveTasks.ts
- * ownedLiveTasks, two index ranges), never the organization's. A task that
+/* plan_assignee_load: the person's own live tasks that are not Done
+ * (lib/liveTasks.ts ownedOpenTasks), never the organization's. A task that
  * passes every other test is checked for subtasks on its own (hasSubtasks),
  * or, past ASSIGNEE_LOAD_CHECKS such tasks, against the organization's live
  * tasks (lib/liveTasks.ts groupTest), so a group is left out as in
@@ -125,11 +125,12 @@ async function assigneeLoadRows(
   const live = liveIn(view.byUuid)
   // each task that passes every test but the group one, with its row
   const candidates: { task: Doc<'issues'>; row: AssigneeLoadRow }[] = []
-  for (const i of await ownedLiveTasks(ctx, assigneeId, live)) {
+  // ownedOpenTasks leaves out Done tasks and tasks outside active projects
+  for (const i of await ownedOpenTasks(ctx, assigneeId, live)) {
     if (i.start_week === undefined || i.end_week === undefined) continue
-    if (i.status === 'done' || i.paused) continue
+    if (i.paused) continue
     const project = view.byUuid.get(i.project_id)
-    if (project === undefined) continue // ownedLiveTasks keeps only active projects
+    if (project === undefined) continue
     const vis = view.visible(i.project_id)
     if (!(staff || vis || assigneeId === me.id)) continue
     candidates.push({

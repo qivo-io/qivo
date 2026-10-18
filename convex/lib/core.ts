@@ -75,6 +75,7 @@ import {
   parseArchiveCursor,
   type ReadCeiling,
   readsUnder,
+  roomOf,
   rosterNames,
   rosterOf,
   searchFields,
@@ -97,6 +98,7 @@ import {
   groupTest,
   layerOf,
   liveIn,
+  liveTasksOf,
   type ProjectLive,
   projectLiveness,
 } from './liveTasks'
@@ -475,18 +477,43 @@ async function listRow(
 const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
   a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.num - b.num
 
+/* The active tasks an active list reads (listActiveIssuesCore,
+ * projectCompletion), oldest first by creation. Those of the active
+ * projects (lib/liveTasks.ts liveTasksOf) hold every subtask that makes a
+ * task in an active project a group and every task that carries load, so
+ * the active tasks that archived projects keep forever are never read. A
+ * list that names an archived project reads all the organization's active
+ * tasks (by_org_archived), because a task there counts every active
+ * subtask, in any project (countsAsSubtask). */
+async function listedActiveTasks(
+  ctx: QueryCtx,
+  me: Caller,
+  cat: Catalogue,
+  scope: readonly string[] | null,
+): Promise<Doc<'issues'>[]> {
+  const archived = scope?.some((id) => cat.byUuid.get(id)?.archived_at !== undefined) ?? false
+  if (!archived) return await liveTasksOf(ctx, cat.projects)
+  return await ctx.db
+    .query('issues')
+    .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
+    .collect()
+}
+
 /**
  * One page of the active tasks a list asks for, as list rows, oldest first
  * by creation with ties by number, so `offset` pages through them. It reads
- * the organization's active tasks once (by_org_archived), never an archived
- * one. That read also decides which rows are groups, their plan weeks,
- * their progress and their parents, because an active task's subtasks that
- * count and its parent are active too. With the roster it also holds every
- * input of the rows' delay verdicts (lib/machineDelay.ts listForecaster),
- * judged on `o.now`. Each row's newest comment is one more read
- * (lastCommentTimes). A page whose comments do not fit in what
- * the request has left is refused with PAGE_TOO_LARGE, and with
- * ACTIVE_TASKS_TOO_LARGE when the reads before them leave no room at all.
+ * the active tasks once (listedActiveTasks), never an archived one. That
+ * read also decides which rows are groups, their plan weeks and their
+ * progress, because an active task's subtasks that count are active too,
+ * and in an active project they are in active projects. It holds the rows'
+ * parents too, except a parent in an archived project under a list of
+ * active projects, which is read on its own before the comments. With the
+ * roster it also holds every input of the rows' delay verdicts
+ * (lib/machineDelay.ts listForecaster), judged on `o.now`. Each row's
+ * newest comment is one more read (lastCommentTimes). A page whose comments
+ * do not fit in what the request has left is refused with PAGE_TOO_LARGE,
+ * and with ACTIVE_TASKS_TOO_LARGE when the reads before them leave no room
+ * at all.
  *
  * In a search, each fragment may match any field of the app's task filter
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
@@ -514,10 +541,7 @@ export async function listActiveIssuesCore(
 ): Promise<(RestIssueJson | McpIssueOut)[]> {
   const { cat, readable } = view
   const scope = o.scope === null ? null : new Set(o.scope)
-  const active = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
-    .collect()
+  const active = await listedActiveTasks(ctx, me, cat, o.scope)
   const children = childIndexOf(active)
   const live = liveIn(cat.byUuid)
   const isGroup = (task: Doc<'issues'>): boolean => isGroupIn(children, task, live)
@@ -557,6 +581,14 @@ export async function listActiveIssuesCore(
   found.sort(byCreation)
   const page = found.slice(o.offset, o.offset + o.limit)
   const tasks = new Map(active.map((t) => [t.id, t]))
+  // parents outside the read, read before the comments spend the room left
+  const absent = new Set<string>()
+  for (const task of page) {
+    if (task.parent_id !== undefined && !tasks.has(task.parent_id)) absent.add(task.parent_id)
+  }
+  for (const parent of await Promise.all([...absent].map((id) => byId(ctx, 'issues', id)))) {
+    if (parent !== null) tasks.set(parent.id, parent)
+  }
   const org = await byId(ctx, 'organizations', me.org_id)
   const projectOf = (id: string) => cat.byUuid.get(id)
   const forecast = listForecaster({
@@ -717,9 +749,10 @@ export async function listArchivedIssuesCore(
         // keeps found the project in the catalogue
         const project = projectOf(task.project_id) as Doc<'projects'>
         const counts = groupCounter(ctx, me, task, project, readable, projectOf)
-        let children = await subtreeIndex(ctx, task, counts, ceiling)
+        const walk = await subtreeIndex(ctx, task, counts, ceiling)
+        let children = walk.children
         let partial = false
-        if (children === null) {
+        if (!walk.whole) {
           // the walk does not fit this page, so the next page starts with it
           if (!first) return null
           // nor any page, so the group is listed without its plan weeks
@@ -1154,15 +1187,35 @@ export function taskUrl(orgSlug: string, num: number): string | null {
   return `${site}/app/${orgSlug}/tasks/${encodeURIComponent(issueKey(num).toLowerCase())}`
 }
 
-/* How many tasks a single-task read walks, one by_parent read at a time,
- * before it reads the organization's tasks once instead. For an active task
- * that is the active ones, the read an active list makes anyway, and for an
- * archived one all of them. The read walks the subtree once (subtreeIndex) and
- * every group total uses that one index, which keeps both Convex limits in
- * reach. Index ranges stay far below 4,096, and only a group with more
- * tasks that count under it than this pays a full read. Tests lower
- * `reads`. */
+/* How many tasks a single-task read of an active task walks, one by_parent
+ * read at a time, before it reads the organization's active tasks once
+ * instead, the read an active list makes anyway. The read walks the subtree
+ * once (subtreeIndex) and every group total uses that one index, which
+ * keeps both Convex limits in reach. Index ranges stay far below 4,096, and
+ * only a group with more tasks that count under it than this pays a full
+ * read. An archived task's walk stops at a ceiling instead
+ * (TASK_READ_RESERVE). Tests lower `reads`. */
 export const SUBTREE_WALK = { reads: 1000 }
+
+/** What a single-task read of an archived task keeps back from the
+ * request's limits for the reads after its subtree walk, which stops short
+ * of them. They are the task's parent, people, newest comment, links,
+ * labels, followers and attachments, and the access to the projects they
+ * name. Tests lower these. */
+export const TASK_READ_RESERVE = {
+  ranges: 1024,
+  documents: 4096,
+  bytes: 4 * DOCUMENT_MAX_BYTES,
+}
+
+/** The refusal for a single-task read of an archived task whose own
+ * subtasks alone do not fit in one request. */
+export const SUBTASKS_TOO_LARGE = "this task's subtasks are too large to read in one request"
+
+/* A subtree index and whether the walk read all of it. A walk that a
+ * ceiling stopped holds the subtasks of each task whose read it finished,
+ * the root's first. */
+type Walk = { children: ChildIndex; whole: boolean }
 
 /* The subtasks a single-task read of `root` uses, indexed by parent. They
  * are the root's own and those of every task under it that counts toward
@@ -1170,34 +1223,29 @@ export const SUBTREE_WALK = { reads: 1000 }
  * only the root's subtasks, and the totals' walks enter only tasks that
  * count and need each one's subtasks to tell a leaf from a group, so a
  * branch that cannot count is never read below its top. It reads one level
- * at a time and stops at the depth assertParentChain allows; past
- * SUBTREE_WALK reads it reads the organization's tasks once instead. An
- * active task's walk enters only active tasks, and each decision about one
- * needs only its active subtasks (isGroupIn), so the organization's
- * active tasks are all it needs.
+ * at a time and stops at the depth assertParentChain allows. An active
+ * root's walk past SUBTREE_WALK reads reads the organization's active tasks
+ * once instead. It enters only active tasks, and each decision about one
+ * needs only its active subtasks (isGroupIn), so the organization's active
+ * tasks are all it needs.
  *
- * With a `ceiling` it never reads the organization's tasks. It checks the
- * request's reads before each by_parent read and after each task, since one
- * read can hold many large tasks, and answers null once they reach the
- * ceiling. */
-async function subtreeIndex(
-  ctx: QueryCtx,
-  root: Doc<'issues'>,
-  counts: GroupCounter,
-): Promise<ChildIndex>
-async function subtreeIndex(
-  ctx: QueryCtx,
-  root: Doc<'issues'>,
-  counts: GroupCounter,
-  ceiling: ReadCeiling,
-): Promise<ChildIndex | null>
+ * An archived root's walk needs a `ceiling`, because it can enter the
+ * task's whole history, and it never reads the organization's tasks. After
+ * the root's own read it checks the request's reads before each by_parent
+ * read, and it checks them after each task, since one read can hold many
+ * large tasks. Once they reach the ceiling it stops, with what it has read
+ * so far. */
 async function subtreeIndex(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
   ceiling?: ReadCeiling,
-): Promise<ChildIndex | null> {
+): Promise<Walk> {
+  if (ceiling === undefined && root.archived_at !== undefined) {
+    throw new Error('an archived task walks its subtree under a ceiling')
+  }
   const index = new Map<string, Doc<'issues'>[]>()
+  const stopped: Walk = { children: index, whole: false }
   const seen = new Set<string>([root.id])
   let frontier = [root.id]
   let reads = 0
@@ -1205,27 +1253,21 @@ async function subtreeIndex(
     const next: string[] = []
     for (const id of frontier) {
       if (ceiling !== undefined) {
-        if (!(await readsUnder(ctx, ceiling))) return null
+        if (depth > 0 && !(await readsUnder(ctx, ceiling))) return stopped
       } else if (++reads > SUBTREE_WALK.reads) {
-        const rows =
-          root.archived_at === undefined
-            ? await ctx.db
-                .query('issues')
-                .withIndex('by_org_archived', (q) =>
-                  q.eq('org_id', root.org_id).eq('archived_at', undefined),
-                )
-                .collect()
-            : await ctx.db
-                .query('issues')
-                .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
-                .collect()
-        return childIndexOf(rows)
+        const active = await ctx.db
+          .query('issues')
+          .withIndex('by_org_archived', (q) =>
+            q.eq('org_id', root.org_id).eq('archived_at', undefined),
+          )
+          .collect()
+        return { children: childIndexOf(active), whole: true }
       }
       const kids: Doc<'issues'>[] = []
       const read = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const kid of read) {
         kids.push(kid)
-        if (ceiling !== undefined && !(await readsUnder(ctx, ceiling))) return null
+        if (ceiling !== undefined && !(await readsUnder(ctx, ceiling))) return stopped
       }
       index.set(id, kids)
       for (const kid of kids) {
@@ -1236,7 +1278,29 @@ async function subtreeIndex(
     }
     frontier = next
   }
-  return index
+  return { children: index, whole: true }
+}
+
+/* The subtree index of a single-task read of `root` (subtreeIndex), and
+ * whether the group's facts went unread (Subtree.partial). An archived
+ * task's walk takes what the request has left less TASK_READ_RESERVE. When
+ * that stops it, the index keeps only the root's own subtasks, which it
+ * reads first, so the read still lists them. An archived task whose own
+ * subtasks do not fit is refused with SUBTASKS_TOO_LARGE. */
+async function taskSubtree(
+  ctx: QueryCtx,
+  root: Doc<'issues'>,
+  counts: GroupCounter,
+): Promise<{ children: ChildIndex; partial: boolean }> {
+  if (root.archived_at === undefined) {
+    return { children: (await subtreeIndex(ctx, root, counts)).children, partial: false }
+  }
+  const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
+  const walk = await subtreeIndex(ctx, root, counts, room)
+  if (walk.whole) return { children: walk.children, partial: false }
+  const kids = walk.children.get(root.id)
+  if (kids === undefined) throw badRequest(SUBTASKS_TOO_LARGE)
+  return { children: new Map([[root.id, kids]]), partial: true }
 }
 
 /** Whether a task under a group counts toward the group's totals. */
@@ -1384,12 +1448,13 @@ type Reader = {
 }
 
 /** The tasks by parent that a row's group facts come from. An active list
- * passes the organization's active tasks, and an archived list and a
- * single-task read the task's subtreeIndex with the groupCounter that walk
- * used, which the totals then share. `live` tells which of their projects
- * are active. `partial` says the subtree was too large to read and
- * `children` holds only a subtask of the root, so a group answers null plan
- * weeks and a partial progress that counts nothing. */
+ * passes the active tasks it read, and an archived list and a single-task
+ * read the task's subtreeIndex with the groupCounter that walk used, which
+ * the totals then share. `live` tells which of their projects are active.
+ * `partial` says the subtree was too large to read and `children` holds
+ * only the root's subtasks (a single-task read) or one of them (an archived
+ * list), so a group answers null plan weeks and a partial progress that
+ * counts nothing. */
 type Subtree = {
   children: ChildIndex
   live: ProjectLive
@@ -1531,7 +1596,8 @@ export async function issueOut(
 export type TaskRefJson = { id: string; key: string; title: string; status: IssueStatus }
 
 export type TaskDetailJson = TaskFollowJson & {
-  /** a group's remaining hours as the app shows them, null for a leaf */
+  /** a group's remaining hours as the app shows them, null for a leaf and
+   * for a group whose subtree is too large to read */
   group_remaining_hours: number | null
   labels: ReturnType<typeof labelJson>[]
   /** the subtasks the caller can read, active ones for an active task */
@@ -1560,9 +1626,11 @@ const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
 
 /**
  * The single-task read's extra fields for `issue`, read by `me`. `isGroup`,
- * `project`, `children` (its subtreeIndex), `live` and `counts` (the
- * groupCounter that walk used) are what taskOut already holds. The group
- * total counts what groupCounter counts, as the plan weeks do.
+ * `project`, `children` (its subtreeIndex), `live`, `counts` (the
+ * groupCounter that walk used) and `partial` (the subtree was too large to
+ * read) are what taskOut already holds. The group total counts what
+ * groupCounter counts, as the plan weeks do, and is null when the subtree
+ * went unread.
  */
 export async function taskDetail(
   ctx: QueryCtx,
@@ -1574,6 +1642,7 @@ export async function taskDetail(
     children: ChildIndex
     live: ProjectLive
     counts?: GroupCounter
+    partial?: boolean
     readable?: (projectId: string) => boolean
   },
 ): Promise<TaskDetailJson> {
@@ -1587,7 +1656,7 @@ export async function taskDetail(
     .sort(byNum)
     .map(taskRefOf)
   let group_remaining_hours: number | null = null
-  if (o.isGroup) {
+  if (o.isGroup && o.partial !== true) {
     const counts = o.counts ?? groupCounter(ctx, me, issue, o.project, o.readable)
     const counted = new Set<string>()
     for (const task of [...o.children.values()].flat()) {
@@ -1661,9 +1730,9 @@ export async function taskOut(
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, opts.readable)
-  const children = await subtreeIndex(ctx, issue, counts)
+  const { children, partial } = await taskSubtree(ctx, issue, counts)
   const live = await indexLiveness(ctx, issue, children, opts.projectOf)
-  const subtree = { project, children, live, counts }
+  const subtree = { project, children, live, counts, partial }
   const org = await byId(ctx, 'organizations', issue.org_id)
   const read = {
     ...subtree,
@@ -1854,8 +1923,9 @@ export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
  * can read (`view.readable`) and that are not archived. A task with an
  * active subtask in an active project is a group and does not count, even
  * when the caller cannot read the subtask, as in the app. Null for an archived
- * project, whose tasks are outside the working plan. Reads the
- * organization's active tasks once, the read an active task list makes.
+ * project, whose tasks are outside the working plan. Reads the active tasks
+ * of the organization's active projects once, the read an active task list
+ * makes (listedActiveTasks).
  */
 export async function projectCompletion(
   ctx: QueryCtx,
@@ -1870,10 +1940,7 @@ export async function projectCompletion(
       : [project]
   const scope = new Set(subs.filter((p) => view.readable(p.id)).map((p) => p.id))
   if (scope.size === 0) return NO_TASKS
-  const active = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
-    .collect()
+  const active = await listedActiveTasks(ctx, me, view.cat, [...scope])
   const isGroup = groupTest(active, liveIn(view.cat.byUuid))
   let done = 0
   let total = 0

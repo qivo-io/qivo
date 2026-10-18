@@ -35,6 +35,7 @@ import {
   whereIsTask,
 } from '../model/deletedItems'
 import { estimateDocumentBytes } from '../model/demoMetrics'
+import { PARENT_BEING_DELETED, SUBTASK_BEING_DELETED } from '../model/issues'
 import {
   as,
   chargeFilteredReads,
@@ -739,6 +740,60 @@ describe('moving a project to Deleted items', () => {
     expect(edgeSteps).toBeGreaterThan(2)
     expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 61 } })
     expect((await storedIssue(t, parent.id))?.parent_id).toBeUndefined()
+  })
+
+  it('refuses a move, archive or restore that would change a task it still holds until it is done, for an admin too', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // PCB holds subtasks of a Firmware task, and the archived parent of another
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const inPcb: Doc<'issues'>[] = []
+    for (let i = 0; i < 3; i++) {
+      inPcb.push(await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id }))
+    }
+    const shelved = await plantIssue(t, { org_id, project_id: f.sub2.id, archived_at: NOW })
+    const child = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      parent_id: shelved.id,
+      archived_at: NOW,
+    })
+    const away = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+    await deleteProject(t, f, f.sub2.id)
+    // the project rows are gone, and its first budget left these behind
+    expect(await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))).toBeNull()
+    expect(await liveTask(t, shelved.id)).not.toBeNull()
+    const left = []
+    for (const kid of inPcb) if ((await liveTask(t, kid.id)) !== null) left.push(kid)
+    expect(left.length).toBeGreaterThan(0)
+    const admin = as(t, f.admin)
+    const move = () =>
+      admin.mutation(api.issues.move, { org_id, id: parent.id, project_id: away.id })
+    const archive = () => admin.mutation(api.issues.archive, { org_id, id: parent.id })
+    const restore = () => admin.mutation(api.issues.unarchive, { org_id, id: child.id })
+    for (const [attempt, sentence] of [
+      [move, SUBTASK_BEING_DELETED],
+      [archive, SUBTASK_BEING_DELETED],
+      [restore, PARENT_BEING_DELETED],
+    ] as const) {
+      expect((await expectRefusal(attempt(), 'rule')).data.message).toBe(sentence)
+    }
+    expect(await liveTask(t, parent.id)).toEqual(parent)
+    expect(await liveTask(t, child.id)).toEqual(child)
+    // once the move finishes, each goes through
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await runSteps(t)
+    expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
+    await restore()
+    const restored = await liveTask(t, child.id)
+    expect([restored?.parent_id, restored?.archived_at]).toEqual([undefined, undefined])
+    await move()
+    await archive()
+    const moved = await liveTask(t, parent.id)
+    expect(moved?.project_id).toBe(away.id)
+    expect(moved?.archived_at).toBeDefined()
   })
 
   it('detaches without an actor once the deleter is gone', async () => {

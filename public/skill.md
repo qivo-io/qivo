@@ -214,7 +214,8 @@ Useful field rules:
   takes a list on MCP and comma-separated values on REST.
 - A group's `progress` is the app's Progress, the done and total tasks
   without subtasks under it that you can read; `partial: true` means some
-  are hidden from you, so its completion is unknown. `delay` is the app's
+  are hidden from you, or an archived group holds too many to read, so its
+  completion is unknown. `delay` is the app's
   projected delay (`status` `ok`, `behind` or `late`, with
   `projected_end_week`), or `null` when the project does not track delay or
   the app shows no verdict; it is judged on today's date in UTC.

@@ -189,6 +189,8 @@ and **Show 100 older tasks** loads the next 100.
 **Restore** returns a task to its Board and restores archived parents when
 needed. If that would change a parent task in a project you cannot edit, Qivo
 refuses the restore, and an organization admin can restore it instead.
+While the parent's project is being moved to Deleted items, Qivo refuses
+the restore for everyone until the move finishes.
 Parents restored this way send no **Restored** update. Restoring a Done task
 restarts its auto-archive clock. Archived tasks do not appear in other views,
 and shared task links work again only after restoration.
