@@ -1120,11 +1120,44 @@ export type IssuePatch = {
   paused?: boolean
 }
 
+/** Reused answers for a bulk writer that runs updateIssueCore for many
+ * tasks in one transaction, which changes no profile, project, grant, team or
+ * team membership while it runs (model/messages.ts NotifyPreload). `checked`
+ * holds the checks already passed, under gateKey and holderKey, so the write
+ * gate runs once per project and each assignee or reviewer rule once per
+ * person and project. No single task write passes one. */
+export type BulkUpdate = { preload: NotifyPreload; checked: Set<string> }
+
+/* The BulkUpdate key of `actorId`'s passed write gate on a project. */
+const gateKey = (actorId: string, projectId: string): string => `gate:${actorId}:${projectId}`
+
+/** The BulkUpdate key of a passed assignee or reviewer rule for a profile on
+ * a project (assertAssigneeRule). */
+export const holderKey = (
+  role: 'assignee' | 'reviewer',
+  profileId: string,
+  projectId: string,
+): string => `holder:${role}:${profileId}:${projectId}`
+
+/* Runs `check` unless the bulk writer already passed `key`, and records the
+ * key once it passes. Without a bulk writer it always runs. */
+async function checkOnce(
+  bulk: BulkUpdate | undefined,
+  key: string,
+  check: () => Promise<void>,
+): Promise<void> {
+  if (bulk?.checked.has(key)) return
+  await check()
+  bulk?.checked.add(key)
+}
+
 /** Applies `patch` to `issue` as `me`, who needs Edit on its project, and
  * answers the stored row. A key present in the patch sets that field and null
  * clears it. A description over TEXT_MAX is refused unless it equals the
  * stored text. `machine` carries a REST or MCP caller's provenance and
- * archive toggle (MachineUpdate). */
+ * archive toggle (MachineUpdate). `bulk` lets a bulk writer skip the write
+ * gate and the assignee and reviewer rules it already passed for the
+ * project, and notify from its preload (BulkUpdate). */
 export async function updateIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1133,10 +1166,13 @@ export async function updateIssueCore(
     patch: IssuePatch
     now: string
     machine?: MachineUpdate
+    bulk?: BulkUpdate
   },
 ): Promise<Doc<'issues'>> {
-  const { me, issue, now } = a
-  await assertCanEdit(ctx, me, issue.project_id)
+  const { me, issue, now, bulk } = a
+  await checkOnce(bulk, gateKey(me.id, issue.project_id), () =>
+    assertCanEdit(ctx, me, issue.project_id),
+  )
   // An unchanged parent is no attach: it is dropped, so no access check,
   // write, hours clear or narration runs for a parent the caller may not
   // even see.
@@ -1188,7 +1224,9 @@ export async function updateIssueCore(
     // fires only when the assignee actually CHANGES (0099/0102): deactivating
     // someone leaves existing assignments alone
     if (next !== undefined && next !== issue.assignee_id) {
-      await assertAssigneeRule(ctx, await loadProject(), next)
+      await checkOnce(bulk, holderKey('assignee', next, issue.project_id), async () =>
+        assertAssigneeRule(ctx, await loadProject(), next),
+      )
     }
     w.assignee_id = next
   }
@@ -1201,7 +1239,9 @@ export async function updateIssueCore(
       const onGroup = await isGroup()
       if (next !== undefined) {
         if (onGroup) throw rule(REVIEWER_ON_GROUP)
-        await assertAssigneeRule(ctx, await loadProject(), next, 'reviewer')
+        await checkOnce(bulk, holderKey('reviewer', next, issue.project_id), async () =>
+          assertAssigneeRule(ctx, await loadProject(), next, 'reviewer'),
+        )
       }
     }
     w.reviewer_id = next
@@ -1320,7 +1360,14 @@ export async function updateIssueCore(
   //    the Archived/Restored line rides the same message as the field changes).
   //    `group` is known whenever the status, dates or reviewer changed; an assignee
   //    change alone subscribes the same people either way.
-  await notifyIssueUpdate(ctx, { before: issue, after, actor: me, now, isGroup: group === true })
+  await notifyIssueUpdate(ctx, {
+    before: issue,
+    after,
+    actor: me,
+    now,
+    isGroup: group === true,
+    preload: bulk?.preload,
+  })
   // -- activity: ONE row — machine grammar when the trusted override is
   //    present (verb archived/restored wins, else 'changed'; multi-field diff
   //    + provenance), else the browser verb/detail strings, ported verbatim

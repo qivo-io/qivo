@@ -35,7 +35,8 @@ import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { logActivity, signedDetail } from './activity'
-import { assertAssigneeRule, hasSubtasks, updateIssueCore } from './issues'
+import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
+import { loadNotifyPreload } from './messages'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
 /** The one person or team whose access a write changes, already resolved in
@@ -227,9 +228,21 @@ export async function reachedProjects(
  * the task's project. */
 type Lost = Holding & { project: Doc<'projects'> }
 
+/** The most tasks one access removal reassigns. Each task's reassignment
+ * runs every rule of a task update and notifies its followers inside the
+ * removal's one transaction, so a larger handover would pass Convex's limits
+ * for one transaction. Set at about 60% of the largest count that passed the
+ * measurement behind tests/bulkReassign.test.ts (196 tasks in an organization
+ * of 100 people). */
+export const REASSIGN_MAX = 120
+
+/** The refusal of a reassignment above REASSIGN_MAX. */
+export const REASSIGN_TOO_LARGE = `a removal can reassign at most ${REASSIGN_MAX} tasks at once, so keep the people as Viewers or reassign some of the tasks first`
+
 /**
  * Runs `remove` and answers the open tasks in `projects` that someone in
- * `people` works on and could see before and cannot see after. A
+ * `people` works on and could see before and cannot see after, with the
+ * organization's projects it read (none when nobody holds such a task). A
  * switched-off person holds no work, and a group's reviewer is dormant.
  *
  * The reads are bounded by what the app's snapshot reads, never by history.
@@ -246,7 +259,7 @@ async function removeAndFindLost(
     people: ReadonlyMap<string, Doc<'profiles'>>
     remove: () => Promise<void>
   },
-): Promise<Lost[]> {
+): Promise<{ lost: Lost[]; orgProjects: Doc<'projects'>[] }> {
   const candidates: Lost[] = []
   for (const project of a.projects) {
     const tasks = ctx.db
@@ -292,7 +305,7 @@ async function removeAndFindLost(
     if (h.role === 'reviewer' && (await hasSubtasks(ctx, h.task.id))) continue
     lost.push(h)
   }
-  return lost
+  return { lost, orgProjects }
 }
 
 /* The people a removal can take access from: the person, or every member of
@@ -314,17 +327,22 @@ async function peopleOf(
 }
 
 /* Refuses a reassignment target who cannot work on every task handed over,
- * checked once per project and role after the access is gone.
- * updateIssueCore checks a holder only when it changes, so without this a
- * task handed back to the person who just lost sight of it would stay with
- * them. */
-async function assertCanTakeOver(ctx: QueryCtx, lost: readonly Lost[], to: string) {
-  const checked = new Set<string>()
+ * checked once per project and role after the access is gone, and records
+ * each passed rule in `checked` (model/issues.ts holderKey) so the task
+ * updates do not check it again. updateIssueCore checks a holder only when
+ * it changes, so without this a task handed back to the person who just lost
+ * sight of it would stay with them. */
+async function assertCanTakeOver(
+  ctx: QueryCtx,
+  lost: readonly Lost[],
+  to: string,
+  checked: Set<string>,
+) {
   for (const h of lost) {
-    const key = `${h.project.id}:${h.role}`
+    const key = holderKey(h.role, to, h.project.id)
     if (checked.has(key)) continue
-    checked.add(key)
     await assertAssigneeRule(ctx, h.project, to, h.role)
+    checked.add(key)
   }
 }
 
@@ -361,11 +379,13 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * `keepRefusal`, when set, refuses that choice instead. `reassign_to` hands
  * each of those tasks, by role, to that user or to nobody, with every rule of
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
- * Edit access and sight of every task above once the access is gone. Any
- * refusal throws, so the removal and its settlement land together or not at
- * all, and one while settling the tasks carries HELD_TASKS_REFUSED. Project
- * grant removal and team member removal (model/teams.ts) both run through
- * this, as the app, REST and MCP do.
+ * Edit access and sight of every task above once the access is gone. More
+ * than REASSIGN_MAX tasks are refused with REASSIGN_TOO_LARGE, which blames
+ * the number rather than the tasks. Any refusal throws, so the removal and
+ * its settlement land together or not at all, and one while settling the
+ * tasks carries HELD_TASKS_REFUSED. Project grant removal and team member
+ * removal (model/teams.ts) both run through this, as the app, REST and MCP
+ * do.
  */
 export async function removeAndSettle(
   ctx: MutationCtx,
@@ -382,7 +402,7 @@ export async function removeAndSettle(
   },
 ): Promise<Settlement> {
   const { me, held, now } = a
-  const lost = await removeAndFindLost(ctx, a)
+  const { lost, orgProjects } = await removeAndFindLost(ctx, a)
   const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
   if (stranded.length > 0 && held === 'keep_as_viewer') {
@@ -419,10 +439,18 @@ export async function removeAndSettle(
     result.kept_as_viewer = [...new Set(lost.map((h) => h.profile_id))]
   } else if (stranded.length > 0 && typeof held === 'object') {
     const to = held.reassign_to
+    const byTask = new Map<string, Holding[]>()
+    for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
+    // the number of tasks is at fault, not one of them, so no HELD_TASKS_REFUSED
+    if (byTask.size > REASSIGN_MAX) throw rule(REASSIGN_TOO_LARGE)
     await settling(async () => {
-      if (to !== null) await assertCanTakeOver(ctx, lost, to)
-      const byTask = new Map<string, Holding[]>()
-      for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
+      // The access is gone and the loop below writes only tasks, follows,
+      // messages and activity, so one preload serves every task update.
+      const bulk = {
+        preload: await loadNotifyPreload(ctx, me.org_id, orgProjects),
+        checked: new Set<string>(),
+      }
+      if (to !== null) await assertCanTakeOver(ctx, lost, to, bulk.checked)
       for (const holdings of byTask.values()) {
         const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
         for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
@@ -432,6 +460,7 @@ export async function removeAndSettle(
           patch,
           now,
           machine: a.provenance === undefined ? undefined : { provenance: a.provenance },
+          bulk,
         })
       }
     })

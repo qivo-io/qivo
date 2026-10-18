@@ -1010,11 +1010,13 @@ without subtasks) and can no longer see afterwards are settled by
   `{"reassign_to": null}` unassigns them; the new holder must be able to work
   on each task once the access is gone.
 
-The removal and its choice land together or not at all. The result adds
-`stranded`, `kept_as_viewer` and `reassigned`; `stranded` and `reassigned`
-list `{id, key, title, user_id, role}`. `changed` is `false` when there was
-no grant to remove. `on_held_tasks` with a level is refused, and so is a
-misspelled `on_held_tasks`, like any argument the schema does not know.
+The removal and its choice land together or not at all. At most 120 tasks can
+be reassigned in one removal. Above that the removal is refused and nothing
+changes. The result adds `stranded`, `kept_as_viewer` and `reassigned`;
+`stranded` and `reassigned` list `{id, key, title, user_id, role}`.
+`changed` is `false` when there was no grant to remove. `on_held_tasks` with
+a level is refused, and so is a misspelled `on_held_tasks`, like any argument
+the schema does not know.
 
 **Milestones.** `set_milestone` without `milestone` adds one from `name` and
 `date` (`YYYY-MM-DD`, a real calendar day) to the top-level project of
@@ -1073,10 +1075,11 @@ person who is an organization admin or a leader of the team; an agent gets
   null}` hands them over. Keeping someone as a Viewer needs the right to
   manage that project's users, so a team leader without it is refused with
   `no permission to manage users on this project` and can still leave the
-  tasks. The removal and its choice land together or not at all. The result
-  is `{team, user, member: false, leader: false, changed}` plus `stranded`,
-  `kept_as_viewer` and `reassigned`; `changed` is `false` when the user was
-  not a member.
+  tasks. The removal and its choice land together or not at all. At most 120
+  tasks can be reassigned in one removal. Above that the removal is refused
+  and nothing changes. The result is `{team, user, member: false, leader:
+  false, changed}` plus `stranded`, `kept_as_viewer` and `reassigned`;
+  `changed` is `false` when the user was not a member.
 
 `leader` with `member: false`, and `on_held_tasks` with `member: true`, are
 refused. Every membership change writes the app's activity row, signed `via

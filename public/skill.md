@@ -335,8 +335,9 @@ Useful field rules:
   credential is refused. Before removing someone, choose `on_held_tasks`:
   `leave` (default) lists the open tasks they lose sight of, `keep_as_viewer`
   keeps them as Viewers, and `{"reassign_to": user id or null}` hands those
-  tasks over. Confirm the choice with the user when it is not clear. A
-  misspelled `on_held_tasks` is refused, on MCP and on these REST routes.
+  tasks over, at most 120 in one removal. Confirm the choice with the user
+  when it is not clear. A misspelled `on_held_tasks` is refused, on MCP and on
+  these REST routes.
 - **Milestones:** they live on the top-level project; naming a sub-project
   adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them.
 
@@ -356,9 +357,9 @@ Useful field rules:
 - **Removing:** choose `on_held_tasks` as for project access. `leave`
   (default) lists the open tasks the member loses sight of,
   `keep_as_viewer` keeps them as a Viewer of the project the team shared,
-  and `{"reassign_to": user id or null}` hands those tasks over. Confirm the
-  choice with the user when it is not clear. A misspelled `on_held_tasks` is
-  refused, on MCP and on these REST routes.
+  and `{"reassign_to": user id or null}` hands those tasks over, at most 120
+  in one removal. Confirm the choice with the user when it is not clear. A
+  misspelled `on_held_tasks` is refused, on MCP and on these REST routes.
 - Teams are named by uuid; two teams may share a name.
 
 ## Receive task events
