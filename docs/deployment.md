@@ -146,12 +146,18 @@ help, because the script handles `SIGHUP` itself.
 With `--staging` the script refuses any environment but staging,
 any app other than `preview.qivo.io` and any backend other than the one that
 app uses. `--local` runs it against a disposable local backend instead, with
-loopback addresses only. It prints status lines only, never a secret. If a
+loopback addresses only. It prints status lines only, never a secret, and
+refuses to start while `DEBUG`, `PWDEBUG`, `DEBUG_FILE` or `NODE_DEBUG` is
+set, because Playwright's and Node's debug output would bypass that. If a
 run is killed before it cleans up, `--cleanup --run <hex>` with the six digits
 of its tag removes what it left, and `--cleanup` alone removes every run's
-leftovers. Cleanup removes the run's tokens, agent keys and OAuth connections
-first, through the app alone, so they go even when the REST API fails, and it
-reports `FAIL cleanup/sweep` with what is left whenever anything remains.
+leftovers, including the records of a run that is still going, so use it
+only while no other run is active. Cleanup removes the run's tokens, agent
+keys and OAuth connections first, through the app alone, so they go even when
+the REST API fails, and it reports `FAIL cleanup/sweep` with what is left
+whenever anything remains. If the browser closed during the run, the cleanup
+opens it and signs in again first. Its temporary cleanup token ends after a
+day, should a killed cleanup leave it.
 Run it once per release candidate, not in a loop, because each run writes to
 staging.
 
@@ -164,9 +170,10 @@ turns it off again. `--require billing-pause-leave` makes the `SKIP` a
 failure. The run marks its pause with the backend variable
 `STGCHK_BILLING_PAUSE`. If it is killed before it lifts the pause, the
 organization stays read-only and the sweep cannot remove its records. The
-next local run or `--cleanup` given the key lifts a marked pause first.
-Without the key, remove `BILLING_ENABLED` and `STGCHK_BILLING_PAUSE` with
-`npx convex env remove` against the local backend, then run `--cleanup`.
+next local run or `--cleanup` given the key lifts a marked pause first. It
+restores `BILLING_ENABLED` only while it is still the `true` the run set,
+and otherwise removes just the mark, so a setting someone changed since
+stays. Run one local run per backend at a time.
 
 ## Production release
 

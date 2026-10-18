@@ -57,6 +57,12 @@ const ORG_SLUG = 'northstar-labs'
 /** Every name this script gives a record starts with the tag and a space. */
 export const TAG_PREFIX = 'stgchk-'
 export const TAG_ANY = /^stgchk-[0-9a-f]{6} /
+
+/** Whether `name` carries the run tag `tag`, or any run's tag when `tag` is
+ *  TAG_ANY. The tag and a space must start the name, so a sweep never
+ *  touches a record that only contains a tag or carries a longer one. */
+export const hasTag = (tag, name) =>
+  typeof name === 'string' && (tag instanceof RegExp ? tag.test(name) : name.startsWith(`${tag} `))
 /** Requests per profile and minute. The deployment allows 300. */
 const RATE_BUDGET = 200
 /** The second click of an in-place confirm must come 0.5 to 3.5 s after the first. */
@@ -169,6 +175,9 @@ const isSiteOf = (url, deployment) =>
  *  staging needs QIVO_ENVIRONMENT=staging, a prod: key for a deployment the
  *  fixture CLI accepts and the app at preview.qivo.io. */
 export function resolveConfig(o, env) {
+  // Playwright's and Node's debug output would print secrets past redact()
+  for (const name of ['DEBUG', 'PWDEBUG', 'DEBUG_FILE', 'NODE_DEBUG'])
+    if (env[name]) throw new UsageError(`Unset ${name}: its debug output bypasses redaction.`)
   if (o.target === 'staging') {
     if (env.QIVO_ENVIRONMENT !== 'staging')
       throw new UsageError('--staging needs QIVO_ENVIRONMENT=staging from the staging helper.')
@@ -321,6 +330,13 @@ function skip(id, reason) {
   say('SKIP', id, reason)
 }
 
+/** skip() for a probe in PROBES, which --require turns into a failure. */
+function skipProbe(id, reason) {
+  if (!cfg.require.has(id)) return skip(id, reason)
+  results.fail.push(id)
+  say('FAIL', id, `required, but ${reason}`)
+}
+
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 
 /** Polls `fn` until it answers true, for at most `ms`. */
@@ -387,13 +403,16 @@ export async function request(url, init = {}) {
   }
 }
 
-/** One authenticated request. A 429 waits 61 seconds once, which only
- *  happens when something else uses the same profile at the same time. A
- *  read that answers a server error (5xx) or fails on the network is sent
- *  once more after two seconds, with a NOTE, because a read changes
- *  nothing. A write's server error is reported as it is. */
+/** One authenticated request. A 429 waits 61 seconds once, which happens
+ *  only when something else uses the same profile at the same time or the
+ *  deployment's own limit is reached. A read that answers a server error
+ *  (5xx) or fails on the network is sent once more after two seconds, with a
+ *  NOTE, because a read changes nothing. A write answered with the 503 of a
+ *  write conflict, which changed nothing, is sent once more after a second.
+ *  Any other server error of a write is reported as it is. */
 async function send(profile, url, init, { read = false } = {}) {
   let retried = false
+  let waited = false
   const again = async (why) => {
     retried = true
     results.retried++
@@ -410,7 +429,8 @@ async function send(profile, url, init, { read = false } = {}) {
       await again(`hit a ${error.message}`)
       continue
     }
-    if (response.status === 429 && attempt === 0) {
+    if (response.status === 429 && !waited) {
+      waited = true
       say('NOTE', 'rate-limit', `${profile} hit the request limit; waiting 61 seconds`)
       await response.arrayBuffer().catch(() => {})
       await sleep(61_000)
@@ -420,6 +440,25 @@ async function send(profile, url, init, { read = false } = {}) {
       await response.arrayBuffer().catch(() => {})
       await again(`answered HTTP ${response.status}`)
       continue
+    }
+    if (response.status === 503 && !read && !retried) {
+      const error = await response
+        .clone()
+        .json()
+        .then((body) => body?.error)
+        .catch(() => null)
+      if (error === WRITE_CONFLICT) {
+        await response.arrayBuffer().catch(() => {})
+        retried = true
+        results.retried++
+        say(
+          'NOTE',
+          'write-conflict',
+          'a write conflicted and changed nothing; sending it once more',
+        )
+        await sleep(1000)
+        continue
+      }
     }
     return response
   }
@@ -784,10 +823,12 @@ async function openBrowser() {
   })
   context = await browser.newContext({ viewport: { width: 1360, height: 900 } })
   if (cfg.bypass) {
-    // Vercel Deployment Protection: the bypass header goes to the app origin
-    // only, never to Convex or anywhere else. Playwright does not route the
-    // requests a redirect makes, such as the OAuth authorization endpoint's
-    // redirect to the consent page, so the header also asks Vercel for its
+    // Vercel Deployment Protection: the bypass header goes to app origin
+    // requests only, never to Convex. Playwright keeps headers set here on
+    // the redirects such a request follows, so this relies on the app origin
+    // never redirecting elsewhere. A request a redirect from another origin
+    // makes, such as the OAuth authorization endpoint's redirect to the
+    // consent page, is not routed, so the header also asks Vercel for its
     // bypass cookie, which the browser keeps for the app origin alone.
     await context.route(
       (url) => url.origin === cfg.appOrigin,
@@ -1110,8 +1151,9 @@ async function deleteProjectInApp(cred, project) {
 }
 
 /** Runs `call(arg)` in the app and collects the toasts and console errors
- *  it causes, which hold a refusal's sentence. Nothing collected is printed,
- *  and a secret `call` answers stays in memory. */
+ *  it causes, which hold a refusal's sentence. It waits up to 15 seconds for
+ *  the first one, because a refusal comes after the server round trip.
+ *  Nothing collected is printed, and a secret `call` answers stays in memory. */
 async function appMessages(call, arg) {
   await app.evaluate(() => {
     const hooks = { show: window.showToast, error: console.error, seen: [] }
@@ -1128,7 +1170,8 @@ async function appMessages(call, arg) {
   try {
     const value = (await app.evaluate(call, arg)) ?? null
     if (value?.secret) keep(value.secret)
-    await sleep(1500)
+    await until(async () => (await app.evaluate(() => window.__stgchk.seen.length)) > 0, 15_000)
+    await sleep(500)
     return { value, seen: await app.evaluate(() => window.__stgchk.seen) }
   } finally {
     await app.evaluate(() => {
@@ -1157,9 +1200,7 @@ async function appMessages(call, arg) {
  *  records it removed and the problems it met, each one line that is safe
  *  to print. No phase stops another. */
 async function sweep(tag, label) {
-  const matches = (name) =>
-    typeof name === 'string' &&
-    (tag instanceof RegExp ? tag.test(name) : name.startsWith(`${tag} `))
+  const matches = (name) => hasTag(tag, name)
   let removed = 0
   const problems = []
   const note = (what) => {
@@ -1235,14 +1276,16 @@ async function sweep(tag, label) {
   })
 
   // 2. records found over REST, with a temporary token minted in the app
-  // like the New token dialog does
+  // like the New token dialog does. It ends after a day, should a killed
+  // sweep never remove it.
   const tokenName = `${typeof tag === 'string' ? tag : `${TAG_PREFIX}000000`} cleanup token`
   let minted = null
   let cleaner = null
   await step('creating the temporary cleanup token', async () => {
     minted = await app.evaluate(
-      async (name) => window.PLANNER.createMcpToken(name, { access: 'write' }),
-      tokenName,
+      async ([name, expiresAt]) =>
+        window.PLANNER.createMcpToken(name, { access: 'write', expiresAt }),
+      [tokenName, new Date(Date.now() + 86_400_000).toISOString()],
     )
     expect(minted?.secret, 'the app could not create it')
     cleaner = {
@@ -1398,9 +1441,7 @@ async function findTasks(cred, tag) {
   const fragment = typeof tag === 'string' ? tag : TAG_PREFIX
   const found = new Map()
   const take = (rows) => {
-    for (const row of rows ?? [])
-      if (typeof tag === 'string' ? row.title.startsWith(`${tag} `) : tag.test(row.title))
-        found.set(row.id, row)
+    for (const row of rows ?? []) if (hasTag(tag, row.title)) found.set(row.id, row)
   }
   const search = encodeURIComponent(fragment)
   for (let offset = 0; ; offset += 200) {
@@ -1434,6 +1475,10 @@ const AGENT_NO_WRITE = 'this agent has no write access to that project'
 const MCP_NO_WRITE = 'your account has no write access to that project'
 const REST_MISSING = 'missing agent key (Authorization: Bearer qva_…)'
 const OAUTH_GONE = 'OAuth connection is invalid, expired or disconnected'
+/** A write that kept conflicting and changed nothing (convex/machine/shared.ts
+ *  WRITE_CONFLICT_MESSAGE): REST's 503 error and MCP's tool error. */
+const WRITE_CONFLICT =
+  'the request conflicted with other changes made at the same time and changed nothing; send it again'
 const TOO_MANY_COMMENTS = `this task has ${COMMENT_MAX} comments, the most a task can have; start a new task to continue`
 const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
@@ -1846,13 +1891,26 @@ async function putBytes(uploadUrl, bytes, type) {
   return storageId
 }
 
-/** Downloads an attachment link, which must be on the API origin. */
+/** Downloads an attachment link, which must be on the API origin. A server
+ *  error or a network failure is tried once more, like any other read. */
 async function download(url) {
   keep(url)
   const u = new URL(url)
   expect(onApi(url) && u.pathname.startsWith('/files/'), 'a file link is not on this API origin')
-  const r = await request(url)
-  return { status: r.status, bytes: Buffer.from(await r.arrayBuffer()) }
+  for (let attempt = 0; ; attempt++) {
+    let r
+    try {
+      r = await request(url)
+    } catch (error) {
+      if (attempt > 0 || error instanceof CheckError) throw error
+    }
+    if (r && (r.status < 500 || attempt > 0))
+      return { status: r.status, bytes: Buffer.from(await r.arrayBuffer()) }
+    await r?.arrayBuffer().catch(() => {})
+    results.retried++
+    say('NOTE', 'server-error', 'a download failed; sending it once more')
+    await sleep(2000)
+  }
 }
 
 /** The attachment's stored bytes equal `bytes`. */
@@ -1871,8 +1929,10 @@ async function sameBytes(att, bytes, type) {
 
 const sampleFile = () => ({ bytes: randomBytes(3000), type: 'application/octet-stream' })
 
-/** Uploads over REST with the three requests, downloads and compares. */
-async function restUpload(cred, task, name) {
+/** Uploads over REST with the three requests, downloads and compares.
+ *  `confirmed(att)` runs as soon as the file is attached, so a later failed
+ *  comparison still leaves it to delete. */
+async function restUpload(cred, task, name, confirmed) {
   const { bytes, type } = sampleFile()
   const start = await restOk(cred, 'POST', `/tasks/${task.key}/attachments`, {
     name,
@@ -1884,6 +1944,7 @@ async function restUpload(cred, task, name) {
   const att = await restOk(cred, 'POST', `/tasks/${task.key}/attachments/${start.ticket}`, {
     storage_id,
   })
+  confirmed(att)
   eq(att.name, name, 'name')
   eq(att.uploaded_by_id, cred.userId, 'uploaded by')
   await sameBytes(att, bytes, type)
@@ -1895,8 +1956,9 @@ async function restUpload(cred, task, name) {
   return att
 }
 
-/** Uploads over MCP: start_attachment_upload, the bytes, then the confirm. */
-async function mcpUpload(cred, task, name) {
+/** Uploads over MCP: start_attachment_upload, the bytes, then the confirm.
+ *  `confirmed` as for restUpload. */
+async function mcpUpload(cred, task, name, confirmed) {
   const { bytes, type } = sampleFile()
   const start = await toolOk(cred, 'start_attachment_upload', {
     ref: task.key,
@@ -1911,6 +1973,7 @@ async function mcpUpload(cred, task, name) {
     ticket: start.ticket,
     storage_id,
   })
+  confirmed(att)
   eq(att.name, name, 'name')
   eq(att.uploaded_by_id, cred.userId, 'uploaded by')
   await sameBytes(att, bytes, type)
@@ -1943,11 +2006,8 @@ async function uploadChecks() {
   ]) {
     await check(`${cred.id}/${surface}/upload`, async () => {
       const name = `${run.tag} ${cred.id} ${surface}.bin`
-      keepFile(
-        await (surface === 'rest' ? restUpload(cred, task, name) : mcpUpload(cred, task, name)),
-        cred,
-        surface,
-      )
+      const confirmed = (att) => keepFile(att, cred, surface)
+      await (surface === 'rest' ? restUpload : mcpUpload)(cred, task, name, confirmed)
       return 'uploaded, downloaded and compared'
     })
   }
@@ -2090,7 +2150,7 @@ async function uploadChecks() {
   })
   // The refused confirms left the ticket usable. Confirming it attaches the
   // bytes, so the delete below removes them instead of the weekly sweep.
-  if (pending)
+  if (pending && pendingStorage)
     await check('write-token/mcp/confirm-after-refusals', async () => {
       keepFile(
         await toolOk(w, 'confirm_attachment_upload', {
@@ -2319,7 +2379,8 @@ async function nameCapChecks() {
   await check('name-caps/rest/project', async () => {
     await restRefusal(w, 'POST', '/projects', { name: over }, 400, PROJECT)
     await restRefusal(w, 'POST', '/projects', { name: over, parent: M.id }, 400, PROJECT)
-    // 80 code points of emoji are 159 UTF-16 code units, and still fit
+    // the tag, a space and 66 emoji are 80 code points but 146 UTF-16 code
+    // units, and still fit
     sub = await restOk(w, 'POST', '/projects', { name: emoji, parent: M.id })
     eq(sub.name, emoji, 'the 80 code point name')
     await restRefusal(w, 'PATCH', `/projects/${sub.id}`, { name: over }, 400, PROJECT)
@@ -2405,9 +2466,16 @@ async function nameCapChecks() {
     )
   }).then(async (ok) => {
     // a deployment that took the name gets Northstar's name back at once
-    const now = (await rest(w, 'GET', '/me')).json?.organization?.name
-    if (!ok && now !== run.orgName)
+    if (ok) return
+    const name = async () => (await rest(w, 'GET', '/me')).json?.organization?.name
+    if ((await name()) === run.orgName) return
+    await check('name-caps/app/organization-restored', async () => {
       await app.evaluate((name) => window.PLANNER.setOrg({ name }), run.orgName)
+      expect(
+        await until(async () => (await name()) === run.orgName),
+        "Northstar's name was not restored",
+      )
+    })
   })
   await check('name-caps/app/token', async () => {
     const out = await appMessages(
@@ -2649,7 +2717,6 @@ async function unknownArgumentChecks() {
       : []),
   ]
   await check('unknown-args/rest/access-routes', async () => {
-    expect(team, 'the run has no team, so only two routes were checked')
     for (const [method, path, body, field, takes] of routes)
       await restRefusal(
         w,
@@ -2674,6 +2741,8 @@ async function unknownArgumentChecks() {
       0,
       'team grants on the project',
     )
+    // without the run's team only the user routes could be checked
+    expect(team, `the run has no team, so only ${routes.length} routes were checked`)
     eq((await restOk(w, 'GET', `/teams/${team.id}`)).members.length, 0, 'team members')
     return `${routes.length} routes`
   })
@@ -3003,7 +3072,9 @@ async function archiveChecks() {
         tasks.some((t) => t.id === run.t0.id),
         'naming the archived project lists its tasks',
       )
-      const all = await restOk(cred, 'GET', '/tasks?limit=200')
+      // the run's tag keeps the list to this run's tasks, so t0 cannot be
+      // pushed off the page by the organization's other tasks
+      const all = await restOk(cred, 'GET', `/tasks?limit=200&search=${run.tag}`)
       expect(
         !all.some((t) => t.id === run.t0.id),
         'tasks of an archived project are in the default list',
@@ -3067,10 +3138,12 @@ async function commentCapChecks() {
         readOk(w, `/tasks/${task.key}/comments?limit=50${before ? `&before=${before}` : ''}`),
       bodyOf(n),
     )
-  // One post, over REST for Nora and over MCP for the agent. An internal
-  // error (500, which stores nothing), a gateway error (502 to 504) or a
-  // network failure is tried once more, after a check that the first try
-  // did not store the comment after all.
+  // One post, over REST for Nora and over MCP for the agent, tried once
+  // more after a transient failure. A write conflict changed nothing, so it
+  // is sent again after a second. An internal error (500), a gateway error
+  // (502 to 504) or a network failure may have come after the comment was
+  // stored, so it is sent again only when reads 2 and 10 seconds later do
+  // not find it.
   const post = async (cred, n) => {
     const body = bodyOf(n)
     for (let attempt = 0; ; attempt++) {
@@ -3086,7 +3159,9 @@ async function commentCapChecks() {
       }
       if (cred === w && r.status === 201) return r.json.id
       if (cred !== w && r.status === 200 && r.data?.id) return r.data.id
+      const conflict = r.json?.error === WRITE_CONFLICT || (r.isError && r.text === WRITE_CONFLICT)
       const transient =
+        conflict ||
         r.status === 0 ||
         (r.status >= 500 && r.status <= 504) ||
         (r.isError && r.text === 'internal error') ||
@@ -3099,8 +3174,16 @@ async function commentCapChecks() {
         'comment-cap',
         `comment ${n} answered ${r.status === 0 ? 'a network error' : r.isError ? short(r.text) : `HTTP ${r.status}`}; trying it once more`,
       )
+      if (conflict) {
+        await sleep(1000)
+        continue
+      }
       await sleep(2000)
-      const id = await stored(n)
+      let id = await stored(n)
+      if (!id) {
+        await sleep(8000)
+        id = await stored(n)
+      }
       if (id) return id
     }
   }
@@ -3134,7 +3217,13 @@ async function commentCapChecks() {
   })
   if (full) await commentCapFullChecks(task, posted)
   else
-    for (const id of ['refused', 'pages', 'delete-makes-room', 'archive-reason-past-cap'])
+    for (const id of [
+      'refused',
+      'pages',
+      'ui/earlier-comments',
+      'delete-makes-room',
+      'archive-reason-past-cap',
+    ])
       skip(`comment-cap/${id}`, 'the task could not be filled to its cap')
   await check('comment-cap/delete-task', async () => {
     eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
@@ -3385,13 +3474,12 @@ async function factsFixture() {
   const w = run.creds.writeToken
   let fixture = null
   await check('facts/setup', async () => {
-    if (!run.projects.N) {
-      run.projects.N = await restOk(w, 'POST', '/projects', { name: `${run.tag} second project` })
-      run.projects.N1 = await restOk(w, 'POST', '/projects', {
-        name: `${run.tag} second sub`,
-        parent: run.projects.N.id,
-      })
-    }
+    // the subtask rule checks may have made one or both already
+    run.projects.N ??= await restOk(w, 'POST', '/projects', { name: `${run.tag} second project` })
+    run.projects.N1 ??= await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} second sub`,
+      parent: run.projects.N.id,
+    })
     const { N, N1 } = run.projects
     const N2 = await toolOk(w, 'create_project', { name: `${run.tag} second Zulu`, parent: N.id })
     run.projects.N2 = N2
@@ -3775,7 +3863,7 @@ async function pauseBilling() {
   say(
     'NOTE',
     'billing-pause',
-    `billing is on in the local backend until this run lifts it. If the run is killed first, --cleanup with QIVO_LOCAL_ADMIN_KEY lifts it, or remove BILLING_ENABLED and ${PAUSE_MARK} with npx convex env remove`,
+    `billing is on in the local backend until this run lifts it. If the run is killed first, --cleanup with QIVO_LOCAL_ADMIN_KEY lifts it (docs/deployment.md)`,
   )
   expect(await until(paused, 30_000), 'the organization did not become read-only')
 }
@@ -3795,13 +3883,14 @@ function billingPauseHint(problems) {
   say(
     'NOTE',
     'billing-pause',
-    `the local organization is read-only, likely from a billing pause a killed run left. Run --cleanup with QIVO_LOCAL_ADMIN_KEY, or remove BILLING_ENABLED and ${PAUSE_MARK} with npx convex env remove and run --cleanup again`,
+    `the local organization is read-only, likely from a billing pause a killed run left. Run --cleanup with QIVO_LOCAL_ADMIN_KEY, which lifts it (docs/deployment.md)`,
   )
 }
 
 /** Lifts a billing pause that an earlier local run made and never lifted,
  *  because it was killed, so this run's writes and sweep can work. Acts
- *  only on a pause with this script's mark. Answers the earlier run's tag,
+ *  only on a pause with this script's mark, and restores BILLING_ENABLED only
+ *  while it is still the 'true' that run set. Answers the earlier run's tag,
  *  or null when no pause was left. */
 async function liftLeftPause() {
   const mark = await localEnv(PAUSE_MARK)
@@ -3810,10 +3899,13 @@ async function liftLeftPause() {
   try {
     left = JSON.parse(mark) ?? {}
   } catch {}
-  await setLocalEnv({
-    BILLING_ENABLED: typeof left.before === 'string' ? left.before : null,
-    [PAUSE_MARK]: null,
-  })
+  // Billing that is no longer the 'true' the run set was changed by someone
+  // else since, so only the mark goes.
+  const restore =
+    (await localEnv('BILLING_ENABLED')) === 'true'
+      ? { BILLING_ENABLED: typeof left.before === 'string' ? left.before : null }
+      : {}
+  await setLocalEnv({ ...restore, [PAUSE_MARK]: null })
   return TAG_ANY.test(`${left.run} `) ? left.run : 'an earlier run'
 }
 
@@ -3828,10 +3920,7 @@ async function billingPauseChecks() {
       cfg.target.target === 'staging'
         ? 'billing is off on staging and this run cannot pause it; a local run with QIVO_LOCAL_ADMIN_KEY checks it'
         : 'set QIVO_LOCAL_ADMIN_KEY to the local backend admin key to pause billing for these checks'
-    if (cfg.require.has(name)) {
-      results.fail.push(name)
-      say('FAIL', name, `required, but ${reason}`)
-    } else skip(name, reason)
+    skipProbe(name, reason)
     return
   }
   const w = run.creds.writeToken
@@ -4000,7 +4089,7 @@ async function factChecks() {
     await liveTaskChecks(f)
   }
   if (run.projects.N1) await billingPauseChecks()
-  else skip('billing-pause-leave', 'the second project could not be made')
+  else skipProbe('billing-pause-leave', 'the second project could not be made')
   say(
     'NOTE',
     'subtask-audit',
@@ -4097,8 +4186,12 @@ async function setup() {
   const w = run.creds.writeToken
   // who Nora is, as the API says
   const me = await must('setup/rest/me', async () => restOk(w, 'GET', '/me'))
-  if (me.billing.read_only)
+  if (me.billing.read_only) {
+    // a run that stops here checked nothing, so it must not report success
+    results.fail.push('setup/billing-read-only')
+    say('FAIL', 'setup/billing-read-only', 'billing pauses editing in this organization')
     throw new Abort('billing pauses editing in this organization, so writes cannot be checked')
+  }
   w.userId = me.user.id
   run.orgName = me.organization.name
   run.creds.readToken.userId = me.user.id
@@ -4548,6 +4641,18 @@ async function start() {
         results.fail.push('billing-pause/lift')
         say('FAIL', 'billing-pause/lift', describe(error))
       }
+    // The sweep works through the app, so a browser that crashed is opened
+    // and signed in again first.
+    if (!cfg.cleanup && verified && (!browser?.isConnected() || app?.isClosed()))
+      try {
+        await browser?.close().catch(() => {})
+        consent = undefined
+        await openBrowser()
+        await signIn(cfg.nora)
+        say('NOTE', 'cleanup', 'the browser had closed, so the sweep signed in again')
+      } catch (error) {
+        say('NOTE', 'cleanup', `the browser could not be opened again: ${describe(error)}`)
+      }
     if (!cfg.cleanup && verified) {
       let swept = { removed: 0, problems: [] }
       try {
@@ -4586,7 +4691,14 @@ async function start() {
         )
     }
     try {
-      if (app) await app.evaluate(() => window.PLANNER?.signOut?.()).catch(() => {})
+      // signOut does not wait for its request, so wait for the answer here
+      if (app && !app.isClosed()) {
+        const signedOut = app
+          .waitForResponse((r) => r.url().includes('/sign-out'), { timeout: 10_000 })
+          .catch(() => {})
+        await app.evaluate(() => window.PLANNER?.signOut?.()).catch(() => {})
+        await signedOut
+      }
       await browser?.close()
     } catch {}
     if (callbackServer) await new Promise((done) => callbackServer.close(done))
@@ -4594,7 +4706,7 @@ async function start() {
     say(
       'DONE',
       cfg.cleanup ? 'cleanup' : run.tag,
-      `${results.pass} passed, ${failed} failed, ${results.skip.length} skipped in ${Math.round((Date.now() - began) / 1000)} s${results.retried ? `, ${results.retried} read(s) sent twice after a server error` : ''}`,
+      `${results.pass} passed, ${failed} failed, ${results.skip.length} skipped in ${Math.round((Date.now() - began) / 1000)} s${results.retried ? `, ${results.retried} request(s) sent twice after a server error or a write conflict` : ''}`,
     )
     if (failed) say('NOTE', 'failed', results.fail.join(', '))
     if (results.skip.length) say('NOTE', 'skipped', results.skip.join(', '))

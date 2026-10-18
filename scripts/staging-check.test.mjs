@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest'
 import {
   addDays,
   findComment,
+  hasTag,
   parseArgs,
   redact,
   request,
   resolveConfig,
+  TAG_ANY,
   weekOf,
   windowOrder,
 } from './staging-check.mjs'
@@ -118,6 +120,38 @@ describe('staging check target', () => {
     expect(() => resolveConfig(parseArgs(local), { QIVO_ENVIRONMENT: 'production' })).toThrow()
     const remote = local.map((a) => (a === 'http://127.0.0.1:3237' ? 'https://api.qivo.io' : a))
     expect(() => resolveConfig(parseArgs(remote), {})).toThrow()
+    expect(() => resolveConfig(parseArgs(local), { QIVO_ENVIRONMENT: 'demo' })).toThrow()
+    for (const [from, to] of [
+      ['http://127.0.0.1:3236', 'http://192.168.1.20:3236'],
+      ['http://localhost:5241', 'https://localhost:5241'],
+    ])
+      expect(() => resolveConfig(parseArgs(local.map((a) => (a === from ? to : a))), {})).toThrow()
+  })
+  it('refuses debug output that would print secrets past redaction', () => {
+    for (const env of [
+      { DEBUG: 'pw:api' },
+      { PWDEBUG: '1' },
+      { DEBUG_FILE: '/tmp/x' },
+      { NODE_DEBUG: 'http' },
+    ])
+      expect(() => resolve({ ...staging, ...env })).toThrow(/debug output/)
+  })
+})
+
+describe('run tags', () => {
+  it('matches a name that starts with the tag and a space, and nothing else', () => {
+    expect(hasTag('stgchk-1a2b3c', 'stgchk-1a2b3c project')).toBe(true)
+    for (const name of [
+      'stgchk-1a2b3cd project',
+      'stgchk-1a2b3c',
+      'my stgchk-1a2b3c project',
+      'Stgchk-1a2b3c project',
+      undefined,
+    ])
+      expect(hasTag('stgchk-1a2b3c', name)).toBe(false)
+    expect(hasTag(TAG_ANY, 'stgchk-00ff99 cleanup token')).toBe(true)
+    for (const name of ['stgchk-00ff9 x', 'stgchk-00ff99x', 'stgchk-00FF99 x', 'x stgchk-00ff99 y'])
+      expect(hasTag(TAG_ANY, name)).toBe(false)
   })
 })
 
