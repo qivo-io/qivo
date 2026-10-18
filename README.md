@@ -65,10 +65,11 @@ npm run verify:local
 This sequential gate checks formatting, lint, UI conventions, frontend/backend/
 desktop types, production build and hermetic tests with at most two workers.
 It needs no deployment credentials and does not reset any hosted data.
-In GitHub Actions, pull requests get full CI only through the manual
-**Start CI** workflow, after CodeRabbit and Greptile finish reviewing the head
-commit. CI also reports Biome warnings, which this gate hides. See
-[AGENTS.md](AGENTS.md) for the review and CI steps.
+A pull request merges only after the manual **Start CI** workflow passes for its
+head commit. Start CI runs full CI once CodeRabbit and Greptile finish reviewing
+that commit, and it alone publishes the required `reviewed-ci` status. CI also
+reports Biome warnings, which this gate hides. See [AGENTS.md](AGENTS.md) for
+the review and CI steps.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
 not part of the safe migration gate and must target an authorized isolated
