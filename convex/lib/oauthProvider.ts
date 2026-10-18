@@ -7,6 +7,7 @@ import { makeFunctionReference } from 'convex/server'
 import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
 import { clientDisplayName, mcpResource, OAUTH_SCOPES, validateOAuthQuery } from './oauth'
+import { clientMetadataTooLarge, OAUTH_CLIENT_METADATA_MAX_BYTES } from './oauthRegistration'
 
 export const authorizationHash = (authUserId: string, query: URLSearchParams) =>
   sha256hex(
@@ -56,6 +57,11 @@ const replayRef = makeFunctionReference<
   },
   null
 >('oauthConnections:revokeReplay')
+const admitRegistrationRef = makeFunctionReference<
+  'mutation',
+  { address: string | null },
+  { admitted: boolean; retryAfter: number }
+>('oauthRegistrations:admit')
 const registerCodeRef = makeFunctionReference<
   'mutation',
   { id: string; credentialHash: string },
@@ -219,6 +225,55 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
   }
 }
 
+/** The client address the backend reports for the current HTTP request, or
+ * null when it reports none. The test runtime (convex-test 0.0.58) cannot
+ * report it; every such request then shares one source counter, which only
+ * makes the per-source limit stricter. */
+async function requestAddress(ctx: GenericCtx<DataModel>): Promise<string | null> {
+  if (!('getRequestMetadata' in ctx.meta)) return null
+  try {
+    return (await ctx.meta.getRequestMetadata()).ip
+  } catch {
+    return null
+  }
+}
+
+/** Refuses a client registration whose metadata is too large or that is over
+ * the hourly limits (oauthRegistrations.ts admit), before the provider stores
+ * a client. Fails closed: when the limits cannot be read, the registration is
+ * refused. */
+async function admitClientRegistration(ctx: GenericCtx<DataModel>, body: unknown) {
+  if (clientMetadataTooLarge(body))
+    throw new APIError('BAD_REQUEST', {
+      error: 'invalid_client_metadata',
+      error_description: `Client metadata must be at most ${OAUTH_CLIENT_METADATA_MAX_BYTES} bytes of JSON.`,
+    })
+  let result: { admitted: boolean; retryAfter: number }
+  try {
+    result = await requireRunMutationCtx(ctx).runMutation(admitRegistrationRef, {
+      address: await requestAddress(ctx),
+    })
+  } catch {
+    throw new APIError(
+      'SERVICE_UNAVAILABLE',
+      {
+        error: 'temporarily_unavailable',
+        error_description: 'Client registration is unavailable. Try again later.',
+      },
+      { 'Retry-After': '60' },
+    )
+  }
+  if (!result.admitted)
+    throw new APIError(
+      'TOO_MANY_REQUESTS',
+      {
+        error: 'too_many_requests',
+        error_description: `Too many client registrations. Try again in ${result.retryAfter} seconds.`,
+      },
+      { 'Retry-After': String(result.retryAfter) },
+    )
+}
+
 export function oauthHooks(ctx: GenericCtx<DataModel>) {
   const requestBody = (value: unknown): Record<string, unknown> | undefined =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -226,6 +281,8 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
       : undefined
   return {
     before: createAuthMiddleware(async (endpoint) => {
+      if (endpoint.path === '/oauth2/register' || endpoint.path === '/oauth2/create-client')
+        await admitClientRegistration(ctx, endpoint.body)
       if (endpoint.path === '/oauth2/authorize') {
         // Provider 1.6 drops `resource` from its parsed authorize schema. Read
         // the actual URL before that loss, including repeated parameters.

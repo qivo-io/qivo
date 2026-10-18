@@ -1956,5 +1956,19 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
+      deleteUnusedClients: FunctionReference<
+        "mutation",
+        "internal",
+        { before: number; clientIds: Array<string> },
+        any,
+        Name
+      >;
+      unusedClients: FunctionReference<
+        "query",
+        "internal",
+        { after: number; before: number; numItems: number },
+        any,
+        Name
+      >;
     };
   };

@@ -106,6 +106,24 @@ crons.interval(
   makeFunctionReference<'mutation', Record<string, never>, null>('webhookQueue:dispatch'),
 )
 
+// Deletes OAuth clients that nobody approved within three days of
+// registration. The empty arguments start a run; each leg schedules the next
+// (oauthRegistrations.ts).
+crons.daily(
+  'oauth client cleanup',
+  { hourUTC: 4, minuteUTC: 15 },
+  internal.oauthRegistrations.sweepClients,
+  {},
+)
+
+// Deletes per-source OAuth registration counters from earlier hours.
+crons.interval(
+  'oauth registration counter cleanup',
+  { hours: 1 },
+  internal.oauthRegistrations.sweepCounters,
+  {},
+)
+
 crons.interval(
   'webhook retention',
   { minutes: 15 },

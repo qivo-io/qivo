@@ -163,7 +163,7 @@ const oauthMachineHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Expose-Headers': 'WWW-Authenticate',
+  'Access-Control-Expose-Headers': 'WWW-Authenticate, Retry-After',
   'Cache-Control': 'no-store',
 }
 const oauthMachine = httpAction(async (ctx, request) => {

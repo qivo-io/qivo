@@ -1304,7 +1304,9 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_authorization', ['authorization_hash'])
     .index('by_auth_user', ['auth_user_id'])
-    .index('by_profile', ['profile_id']),
+    .index('by_profile', ['profile_id'])
+    // OAuth client cleanup keeps any client with a connection (oauthRegistrations.ts).
+    .index('by_client', ['client_id']),
 
   // Retained hash tombstones catch replay even after the provider deletes its
   // code/refresh rows. Never store a bearer credential here.
