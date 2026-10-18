@@ -296,9 +296,10 @@ The response never contains a secret, a hash or a display identifier.
 GET   /v1/projects                → readable ACTIVE projects, with access flags
 GET   /v1/projects?archived=true  → the archived ones instead (0106)
 GET   /v1/projects/{id|num|KEY}   → one project (uuid, per-org number, or
-                                    key) with its lead, settings, milestones
-                                    and grants; an explicit ref resolves an
-                                    archived project too
+                                    key) with its lead, settings,
+                                    completion, milestones and grants; an
+                                    explicit ref resolves an archived
+                                    project too
 GET   /v1/projects/{ref}/users    → users with access to that project, for
                                     reporter, assignee and reviewer
                                     selection
@@ -324,6 +325,7 @@ A row of the list:
 {
   "lead_id": "…uuid…", "lead_name": "Leo Martins",
   "review_hours": null, "effective_review_hours": 2, "track_delay": true,
+  "completion": { "done": 12, "total": 30, "percent": 40 },
   "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
   "grants": {
     "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
@@ -337,6 +339,13 @@ A row of the list:
 - `review_hours` is the project's own **Review time**, or `null` when it uses
   its parent's or the 2-hour default. `effective_review_hours` is the time a
   task entering `review` gets.
+- `completion` is the project's **Completion** on the app's Overview. It
+  counts the active tasks without subtasks in the project, or for a
+  top-level project in its sub-projects you can read that are not archived,
+  and `done` counts those that are Done. A task whose only subtasks are
+  hidden from you still counts as a group and is left out, as in the app.
+  `percent` is rounded, and `0` when `total` is `0`. It is `null` for an
+  archived project. A new project answers zeros, because it holds no tasks.
 - `milestones` are the milestones of the top-level project, ordered by date.
   A sub-project shows its parent's, because milestones live on the top-level
   project's roadmap.
@@ -840,7 +849,10 @@ literal.
 Active lists come in creation order, oldest first, with tasks created at the
 same moment ordered by number, so `offset` pages through them. MCP's
 `list_tasks` uses the same order. Page with `offset` until a page holds fewer
-tasks than `limit`.
+tasks than `limit`. Each row's `last_comment_at` reads the task's newest
+comment. When those comments do not fit in one request beside the rest of
+the page, the request is a `400` (`this page of tasks is too large to read
+at once; ask for a smaller limit`); ask again with a smaller `limit`.
 
 #### Archived tasks
 
@@ -865,7 +877,8 @@ bounded amount however large the archive is. Tasks archived after you start
 paging appear at the start of the list, so start again to see them. If an
 archived group has more tasks under it than one request can read, such as
 thousands of subtasks or hundreds with very long descriptions, its row has
-`start_week` and `end_week` set to `null`, so paging still moves past it.
+`start_week` and `end_week` set to `null` and a `progress` of `0` of `0`
+with `partial: true`, so paging still moves past it.
 
 To find every archived task you can read, take two steps. First list
 projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
@@ -1165,9 +1178,10 @@ Task shape of a list row from `GET /v1/tasks`:
   "parent_id": null, "has_hidden_parent": false,
   "start_week": null, "end_week": null, "due_date": null,
   "remaining_hours": 8, "remaining_set_at": "…timestamp or null…",
-  "paused": false,
+  "paused": false, "progress": null,
   "archived": false, "archived_at": null,
   "created_at": "…", "updated_at": "…",
+  "last_comment_at": "…timestamp or null…",
   "url": "https://qivo.io/app/northstar-labs/tasks/qn-3"
 }
 ```
@@ -1212,6 +1226,25 @@ leaves out subtasks in archived projects while the group's project is active,
 and stops at a subtask the caller cannot read. `is_group` still reports
 subtasks the caller cannot read, without identifying them. Their dates do not
 count toward the group's `start_week` and `end_week`.
+
+`progress` is `null` for a task without subtasks. For a group it is the
+**Progress** of the app's task window, `done` of `total` tasks without
+subtasks under it, at any depth, that the caller can read:
+
+```json
+{ "progress": { "done": 2, "total": 3, "percent": 67, "partial": true } }
+```
+
+It counts the same subtasks as the group's dates, scheduled or not, and
+`done` counts those that are Done. `percent` is rounded, and `0` when
+`total` is `0`. `partial` is `true` when some of the group is hidden from
+the caller, such as a subtask it cannot read or, while the group's project
+is active, one in an archived project, so the true completion is unknown.
+The app then says "Completion unknown".
+
+`last_comment_at` is when the newest comment on the task was posted, or
+`null` when it has none. Editing a comment does not change it, and deleting
+the newest one makes the one before it the newest.
 
 `DELETE` moves the task to **Deleted items**, as deleting it in the app does,
 and returns `{ "deleted": true, "id": "…", "key": "QN-3" }`. Its comments,

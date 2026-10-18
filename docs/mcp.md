@@ -132,6 +132,16 @@ catalogue keeps working. Its model reads the old description, which does not
 say that a person can restore the task, until the client refreshes its tool
 list.
 
+In October 2026 every `list_tasks` and `get_task` result gained `progress`
+and `last_comment_at`, and `get_project`, `create_project` and
+`update_project` gained `completion` (see [Task results](#task-results) and
+[Projects, access and milestones](#projects-access-and-milestones)). The
+three read tools' descriptions now name the new fields. A client holding the
+older catalogue reads them too, but its model does not learn what they mean
+until the client refreshes its tool list. An active `list_tasks` page whose
+tasks' newest comments do not fit in one request is refused with `this page
+of tasks is too large to read at once; ask for a smaller limit`.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -823,8 +833,8 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
-| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
-| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks under it that you can see) and `last_comment_at`. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
+| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`. It takes no `archive_reason`, which only tasks take |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access |
@@ -834,7 +844,7 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer, plus its `labels`, `subtasks`, `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group and `last_comment_at`, plus its `labels`, `subtasks`, `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; a task holds at most 400 comments; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` is capped at 80 characters and `description` at 20,000. Returns `id` and `key` |
@@ -938,6 +948,7 @@ A `list_projects` row:
 {
   "lead_id": "…uuid…", "lead_name": "Leo Martins",
   "review_hours": null, "effective_review_hours": 2, "track_delay": true,
+  "completion": { "done": 12, "total": 30, "percent": 40 },
   "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
   "grants": {
     "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
@@ -948,7 +959,14 @@ A `list_projects` row:
 
 A sub-project without a lead of its own is led by its parent's lead.
 `review_hours` is the project's own review time, and `effective_review_hours`
-the time a task entering `review` gets. `milestones` belong to the top-level
+the time a task entering `review` gets. `completion` is the project's
+**Completion** on the app's Overview. It counts the active tasks without
+subtasks in the project, or for a top-level project in its sub-projects you
+can read that are not archived, and `done` counts those that are Done. A
+task whose only subtasks are hidden from you still counts as a group and is
+left out, as in the app. `percent` is rounded, and `0` when `total` is `0`.
+It is `null` for an archived project, and `create_project` answers zeros,
+because a new project holds no tasks. `milestones` belong to the top-level
 project, so a sub-project shows its parent's, ordered by date. `grants` are
 the project's own individual and team grants, as its **Project access** list
 shows them; a sub-project also inherits its parent's. A project you cannot
@@ -1098,6 +1116,20 @@ is `true`, so a subtask under a task hidden from you is not mistaken for a
 top-level task. A group's `start_week` and `end_week` come from the subtasks
 you can read, at any depth.
 
+`progress` is `null` for a task without subtasks. For a group it is the
+**Progress** of the app's task window, `done` of `total` tasks without
+subtasks under it, at any depth, that you can read, for example `{"done": 2,
+"total": 3, "percent": 67, "partial": true}`. It counts the same subtasks
+as the group's dates, scheduled or not, and `done` counts those that are
+Done. `percent` is rounded, and `0` when `total` is `0`. `partial` is `true`
+when some of the group is hidden from you, such as a subtask you cannot read
+or, while the group's project is active, one in an archived project, so the
+true completion is unknown. The app then says "Completion unknown".
+
+`last_comment_at` is when the newest comment on the task was posted, or
+`null` when it has none. Editing a comment does not change it, and deleting
+the newest one makes the one before it the newest.
+
 `get_task` adds seven fields, which name only tasks you can read:
 
 ```json
@@ -1128,7 +1160,11 @@ stops at a subtask you cannot read.
 
 `list_tasks` returns active tasks as an array, oldest first by creation,
 with tasks created at the same moment ordered by number, so `offset` pages
-through them until a page holds fewer tasks than `limit`.
+through them until a page holds fewer tasks than `limit`. Each row's
+`last_comment_at` reads the task's newest comment. When those comments do
+not fit in one request beside the rest of the page, the call is refused
+with `this page of tasks is too large to read at once; ask for a smaller
+limit`; call again with a smaller `limit`.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
@@ -1151,7 +1187,8 @@ the archive is. Tasks archived after you start paging appear at the start of
 the list, so start again to see them. If an archived group has more tasks
 under it than one request can read, such as thousands of subtasks or hundreds
 with very long descriptions, its row has `start_week` and `end_week` set to
-`null`, so paging still moves past it.
+`null` and a `progress` of `0` of `0` with `partial: true`, so paging still
+moves past it.
 
 To find every archived task you can read, take two steps. First call
 `list_projects`, once without arguments and once with `archived: true`.
