@@ -412,6 +412,21 @@ describe('snapshot trouble', () => {
     expect(P.snapshotTrouble()?.kind).toBe('no_access')
   })
 
+  it('keeps lost access through a query fault until a seat comes back', async () => {
+    await boot()
+    const { P } = store
+    live().deliver(null)
+    live().fail(new Error(QUERY_FAILURE))
+    expect(P.snapshotTrouble()?.kind).toBe('no_access')
+    // read marks need a seat, so they stay paused
+    P.markMessagesRead(['message-a'])
+    await settle()
+    expect(sentNames()).toEqual([])
+    // a lost sign-in still says so
+    live().fail(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
+    expect(P.snapshotTrouble()?.kind).toBe('signed_out')
+  })
+
   it('ends lost access when a seat comes back', async () => {
     await boot()
     const { P } = store

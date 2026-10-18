@@ -6269,12 +6269,15 @@ function beginTrouble(kind: SnapshotTrouble['kind'], detail: string) {
 
 /** Records a failed snapshot query after the first delivery. A lost sign-in
     (the server's `forbidden('not signed in')`) is `signed_out`; anything
-    else is `failed`. */
+    else is `failed`, except after every seat is gone. A fault says nothing
+    about access, so `no_access` holds until a snapshot brings a seat back. */
 function snapshotFailed(err: unknown) {
   const d = errData(err)
+  const signedOut = d.code === 'forbidden' && d.message === 'not signed in'
+  if (!signedOut && snapshotTrouble?.kind === 'no_access') return
   const text = err instanceof Error ? err.message : String(err)
   beginTrouble(
-    d.code === 'forbidden' && d.message === 'not signed in' ? 'signed_out' : 'failed',
+    signedOut ? 'signed_out' : 'failed',
     // Convex appends where the call came from; support needs the rest
     text.replace(/\s*Called by client\s*$/, '').trim(),
   )
