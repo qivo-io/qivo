@@ -265,10 +265,11 @@ let commentsWatchEpoch = 0
    window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
 /* The watched thread's comments older than the live window, oldest first in
-   thread order: earlier pages (P.loadEarlierComments) and comments that left
-   the window as newer ones arrived. Server truth like commentsSnap, but not
-   live. The store patches it for the person's own edits and deletes; other
-   people's changes to these comments show when the task opens again. */
+   thread order. They are earlier pages (P.loadEarlierComments) and comments
+   that left the window as newer ones arrived. Server truth like
+   commentsSnap, but not live. The store patches it for the person's own
+   edits and deletes; other people's changes to these comments show when the
+   task opens again. */
 let olderComments: Row<'comments'>[] = []
 /* Whether the watched thread's first comment is loaded, so nothing is
    earlier, and how the last load of an earlier page went. */
@@ -293,14 +294,17 @@ function adoptComments() {
 /* Records a delivery of the watched thread's live window, oldest first in
    thread order, and whether the thread holds earlier comments. Comments that
    left the window at its old end move to olderComments, so what a reader
-   loaded stays while new comments arrive. A comment deleted from that end at
-   the same moment stays too, until the task opens again. When the window no
-   longer meets what was loaded, because more comments arrived between two
-   deliveries than it holds, the thread starts over from the window. */
+   loaded stays while new comments arrive. A window with nothing earlier
+   starts the thread, so nothing loaded before it exists any more. A comment
+   deleted from the old end while new ones push the window on stays until
+   the task opens again, since nothing tells it from one that slid out. When
+   the window no longer meets what was loaded, because more comments arrived
+   between two deliveries than it holds, the thread starts over from the
+   window. */
 function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }) {
   const prev = commentsSnap
   const first = page.comments[0]
-  if (first === undefined) {
+  if (first === undefined || !page.earlier) {
     olderComments = []
   } else if (prev !== null) {
     const at = prev.findIndex((r) => r.id === first.id)
@@ -319,13 +323,11 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }) 
 }
 
 /* Drops the comment `id` from the watched thread's server truth, for a
-   comment the server says no longer exists. Returns whether it was there. */
-function dropComment(id: string): boolean {
-  const had = olderComments.some((r) => r.id === id) || !!commentsSnap?.some((r) => r.id === id)
+   comment the server says no longer exists. */
+function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
   rows.comments.delete(id)
-  return had
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -735,7 +737,9 @@ let inFlight = 0
 let storeEpoch = 0
 let demoDisposed = false
 let snapDirty = false // a snapshot delivery arrived while a write was in flight
-let commentsDirty = false // …same for the watched comments thread
+// …same for the watched comments thread, or a saved change to its comments
+// older than the live window (olderComments), which no delivery repaints
+let commentsDirty = false
 
 type RoadmapOperation = FunctionArgs<typeof api.roadmap.change>['operations'][number]
 type RoadmapVisit = {
@@ -2536,9 +2540,10 @@ export const PLANNER = {
   labelById: {} as Record<string, LabelVM>,
   comments: [] as CommentVM[],
   commentsLoaded: false, // the watched issue's thread (watchComments)
-  // whether the watched thread holds comments before the oldest loaded one:
-  // 'none' once its first comment is loaded (or before anything is), 'more',
-  // or while P.loadEarlierComments runs, 'loading' and then 'failed' if it did
+  // whether the watched thread holds comments before the oldest loaded one.
+  // 'none' once its first comment is loaded (or before anything is), else
+  // 'more', or 'loading' while P.loadEarlierComments runs and 'failed' after
+  // it failed
   commentsEarlier: 'none' as CommentsEarlier,
   // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
   // null when it has none, for the open, visible tasks the last answer
@@ -4304,8 +4309,13 @@ export const PLANNER = {
         })
       } catch (e) {
         if (!current()) return
-        // the one bad_request this query answers: `before` is no comment now
-        if (errData(e).code === 'bad_request' && dropComment(anchor.id)) continue
+        // The one bad_request this query answers means `before` is no comment
+        // now. Drop it, unless my own delete already did, and ask again before
+        // the next one. Each pass drops a comment, so this ends.
+        if (errData(e).code === 'bad_request') {
+          dropComment(anchor.id)
+          continue
+        }
         console.error('[qivo] earlier comments failed to load:', e)
         return show('failed')
       }
@@ -4460,11 +4470,15 @@ export const PLANNER = {
     const edit = { body: text, edited_at: rec.edited_at, edited_by: rec.edited_by }
     rebuildComments()
     emit('comments')
-    // a comment older than the live window gets no delivery, so the saved
-    // edit is written into olderComments, the truth a later adopt reads
+    // A comment older than the live window gets no delivery, so the saved
+    // edit is written into olderComments, the truth a later adopt reads. The
+    // last settle repaints from it, in case another write's refusal has
+    // rolled the screen back to before this edit meanwhile.
     run(write(api.comments.update, { org_id: org, id, body: text }), () => {
       const kept = olderComments.find((r) => r.id === id)
-      if (kept) Object.assign(kept, edit)
+      if (!kept) return
+      Object.assign(kept, edit)
+      commentsDirty = true
     })
   },
 
@@ -4475,8 +4489,11 @@ export const PLANNER = {
     rows.comments.delete(id)
     rebuildComments()
     emit('comments')
+    // as updateComment does for an edit
     run(write(api.comments.remove, { org_id: issue ? issue.org_id : HOME_ORG, id }), () => {
+      if (!olderComments.some((r) => r.id === id)) return
       olderComments = olderComments.filter((r) => r.id !== id)
+      commentsDirty = true
     })
   },
 

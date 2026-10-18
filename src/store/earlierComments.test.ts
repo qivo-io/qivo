@@ -177,6 +177,23 @@ describe('earlier comments in the store', () => {
     expect(store.P.commentsEarlier).toBe('none')
   })
 
+  it("drops a short thread's first comment that someone else deleted", () => {
+    publish({ comments: range(0, 30), earlier: false })
+    publish({ comments: range(1, 30), earlier: false })
+    expect(bodies()).toEqual(range(1, 30).map((c) => c.body))
+    expect(store.P.commentsEarlier).toBe('none')
+  })
+
+  it('drops a loaded first comment that someone else deleted', async () => {
+    publish({ comments: range(1, 51), earlier: true })
+    load().answer.resolve({ comments: [comment(0)], earlier: false })
+    await settle()
+    expect(bodies()).toEqual(range(0, 51).map((c) => c.body))
+    // the live window now starts the thread
+    publish({ comments: range(1, 51), earlier: false })
+    expect(bodies()).toEqual(range(1, 51).map((c) => c.body))
+  })
+
   it('starts over from the live window when it no longer meets what was loaded', async () => {
     const { P } = store
     publish({ comments: range(100, 150), earlier: true })
@@ -220,6 +237,27 @@ describe('earlier comments in the store', () => {
     expect(P.commentsEarlier).toBe('none')
   })
 
+  it('asks before the next comment when my delete of the oldest one settles first', async () => {
+    const { P } = store
+    publish({ comments: range(100, 150), earlier: true })
+    load().answer.resolve({ comments: range(50, 100), earlier: true })
+    await settle()
+    P.deleteComment('comment-50')
+    const page = load()
+    expect(page.before).toBe('comment-50')
+    writes[0].answer.resolve(null)
+    await settle()
+    page.answer.reject(
+      new ConvexError({
+        code: 'bad_request',
+        message: 'before must be the id of a comment on this task',
+      }),
+    )
+    await settle()
+    expect(asked[2].before).toBe('comment-51')
+    expect(P.commentsEarlier).toBe('loading')
+  })
+
   it('keeps my saved edit and delete of an earlier comment through later deliveries', async () => {
     const { P } = store
     publish({ comments: range(100, 150), earlier: true })
@@ -235,6 +273,27 @@ describe('earlier comments in the store', () => {
     expect(shown.get('comment-60')).toBe('Edited')
     expect(shown.has('comment-61')).toBe(false)
     expect(shown.get('comment-100')).toBe('#100')
+  })
+
+  it('shows my saved edit and delete of an earlier comment after another write is refused', async () => {
+    const { P } = store
+    publish({ comments: range(100, 150), earlier: true })
+    load().answer.resolve({ comments: range(50, 100), earlier: true })
+    await settle()
+    P.updateComment('comment-60', 'Edited')
+    P.deleteComment('comment-61')
+    P.updateComment('comment-120', 'Refused')
+    // the refusal repaints the thread from the server's rows, which the two
+    // earlier writes have not reached yet
+    writes[2].answer.reject(new ConvexError({ code: 'forbidden', message: 'not yours' }))
+    await settle()
+    writes[0].answer.resolve(null)
+    writes[1].answer.resolve(null)
+    await settle()
+    const shown = new Map(P.comments.map((c) => [c.id, c.body]))
+    expect(shown.get('comment-60')).toBe('Edited')
+    expect(shown.has('comment-61')).toBe(false)
+    expect(shown.get('comment-120')).toBe('#120')
   })
 
   it('a refused edit of an earlier comment restores its text', async () => {
