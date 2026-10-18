@@ -102,9 +102,20 @@ A request without a recognizable credential cannot be told apart, so it keeps
 the agent key's sentence. A `qvo_` OAuth token on these routes gets that
 sentence too. `403` means the credential is valid but the user lacks the
 required role, the credential can only read, or organization editing is
-paused for billing. Unreadable objects come back as `404`. A failure that is
-not a refusal, such as a server limit, is a `500` with `{"error": "internal
-error"}`, and Qivo keeps its details in its own logs.
+paused for billing. Unreadable objects come back as `404`.
+
+A request that keeps conflicting with changes other requests make to the
+same data at that moment, such as many comments posted to one task at once,
+is a `503` with `Retry-After: 1` and `{"error": "the request conflicted with
+other changes made at the same time and changed nothing; send it again"}`.
+Qivo first retries such a conflict itself, twice at most. The `503` means
+the request saved nothing, so wait the `Retry-After` seconds and send the
+same request again. Creating a webhook subscription is the exception, as
+[Generic webhooks](#generic-webhooks) describes. A failure that is not a
+refusal, such as a server limit, is a `500` with `{"error": "internal
+error"}`, and Qivo keeps its details in its own logs. A `500` does not say
+whether a change was saved, so read the task or list before you send a
+change again.
 
 An agent may hold several keys at once, and a person several tokens, which is
 how one is rotated without going dark: mint the new one, move the client over,
@@ -2228,8 +2239,10 @@ POST returns `id`, `refreshBefore`, `cursor: null` and `truncated: false`. Inval
 input and callback verification failure return `400`. Unknown events and
 missing/inaccessible filtered tasks or projects return `404`; authorization
 failures return `403`, subscription quota exhaustion returns `429`, and server
-configuration errors return `500`. GET returns an array of `id`, `name`,
-`arguments`, `delivery` (mode and URL only), `refreshBefore`, `status`,
+configuration errors return `500`. A subscription that keeps conflicting with
+changes made at the same time also returns `500`. Sending the same POST again
+is safe, because it refreshes the same subscription. GET returns an array of
+`id`, `name`, `arguments`, `delivery` (mode and URL only), `refreshBefore`, `status`,
 `disabled_at`, `disabled_reason`, `failed_since`, `last_failure_at`,
 `last_success_at` and `last_status`. It includes disabled subscriptions and never
 returns secrets. Omitted or null `ttlMs` gives no expiry and `refreshBefore: null`.

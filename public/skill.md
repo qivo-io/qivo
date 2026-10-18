@@ -162,6 +162,14 @@ Call `update_task` with `ref` and only the requested changes, or
 report its actual ID or browser link. If a creation request loses its
 response, search for the task before retrying to avoid duplicates.
 
+A change that collided with other changes made at the same moment, such as
+several agents commenting on one task at once, answers `the request
+conflicted with other changes made at the same time and changed nothing;
+send it again`, as REST `503` with `Retry-After: 1` or as the MCP tool's
+error. Nothing was saved, so wait a second and send the same request again.
+`internal error` (REST `500`) does not say whether the change was saved, so
+read the task first, as after a lost response.
+
 Useful field rules:
 
 - Status: `backlog`, `todo`, `progress`, `review`, `done`. Priority: `urgent`,

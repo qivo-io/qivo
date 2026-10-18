@@ -1,8 +1,9 @@
 /* The machine action registry (machine/registry.ts). Every agent-key REST
  * route and MCP tool declares read or write once; these tests hold each flag
- * to the kind of internal function its entry actually calls, prove a read
- * entry cannot reach a mutation at runtime, check that a garbled flag fails
- * closed, and pin the REST route matching rules. The OAuth step-up derived
+ * to the kind of internal function its entry actually calls, hold each write
+ * entry to one write call, prove a read entry cannot reach a mutation at
+ * runtime, check that a garbled flag fails closed, and pin the REST route
+ * matching rules. The OAuth step-up derived
  * from the flag is driven over HTTP in oauth.test.ts.
  *
  * Entries call internal functions in their surface's module or in a domain
@@ -188,6 +189,20 @@ describe('the machine action registry', () => {
         }
       }
       expect(mismatches).toEqual([])
+    }
+  })
+
+  it('every write entry makes exactly one write call', async () => {
+    // so a write that kept conflicting (registry.ts retryConflicts) left
+    // the request with nothing saved, as its WRITE_CONFLICT answer says
+    for (const surface of SURFACES) {
+      const several: string[] = []
+      for (const { label, access, calls } of await callsOf(surface)) {
+        const writes = calls.filter((call) => call.via !== 'query')
+        if (access === 'write' && writes.length !== 1)
+          several.push(`${label} makes ${writes.length} write calls`)
+      }
+      expect(several).toEqual([])
     }
   })
 
