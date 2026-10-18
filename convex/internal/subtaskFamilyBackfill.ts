@@ -38,11 +38,14 @@
  * in the same transaction, removes parent_id from each cross subtask and
  * sends task.updated without an actor, as the nightly archive does
  * (jobs.ts). It writes no inbox message, no activity row and no updated_at,
- * because this is maintenance and not a person's edit. A dangling, foreign
- * or unresolved link is logged by the subtask's id. The last step logs
- * 'Subtask family backfill done' with the counts and writes one
- * platform_audit_log row, action 'subtask_family_backfill', with the counts
- * only.
+ * because this is maintenance and not a person's edit. Once a step has
+ * spent its budget for those events (FAMILY_PAGE), it stops detaching and
+ * the next step reads the same page again. The subtasks it detached have
+ * left that page, and the step that finishes the page counts the rest. A
+ * dangling, foreign or unresolved link is logged by the subtask's id. The
+ * last step logs 'Subtask family backfill done' with the counts and writes
+ * one platform_audit_log row, action 'subtask_family_backfill', with the
+ * counts only.
  *
  * Running either twice, or while people work, is safe. A step reads and
  * writes in one transaction, and the app refuses every new cross link, so a
@@ -53,58 +56,87 @@
  * hosted deployment (development, staging, production or demo) needs the
  * user's approval first, each time, even though `audit` only reads. Never
  * use `npx convex export` or `npx convex data` instead, because both print
- * customer content. From a Qivo checkout, the private helper names the
- * deployment and refuses to run without its key, for example development,
- * with jq reading each page:
+ * customer content. `audit` answers one page per call, so the full audit is
+ * this loop, which passes each cursor back until `done`, with jq reading
+ * each page:
  *
- *   cursor=null
+ *   audit='cursor=null
  *   while :; do
- *     out=$("${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
- *       development npx convex run internal/subtaskFamilyBackfill:audit "{\"cursor\": $cursor}")
- *     echo "$out" | jq -c '.cross[]'
- *     echo "$out" | jq -c '{scanned, dangling, foreign_org, no_project}'
+ *     out=$(npx convex run internal/subtaskFamilyBackfill:audit "{\"cursor\": $cursor}")
+ *     echo "$out" | jq -c ".cross[]"
+ *     echo "$out" | jq -c "{scanned, dangling, foreign_org, no_project}"
  *     [ "$(echo "$out" | jq -r .done)" = true ] && break
  *     cursor=$(echo "$out" | jq -c .cursor)
- *   done
+ *   done'
  *
- *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
- *     development npx convex run internal/subtaskFamilyBackfill:start
+ * From a Qivo checkout, the private helper names the deployment and refuses
+ * to run without its key, for example development:
+ *
+ *   helpers="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts"
+ *   "$helpers/with-deployment" development sh -c "$audit"
+ *   "$helpers/with-deployment" development npx convex run internal/subtaskFamilyBackfill:start
  *
  * The other targets are staging and production. The demo backend's stored
  * key cannot run internal functions or read logs, so on the demo the private
  * with-temp-deploy-key helper runs each command with a short-lived key that
  * allows only the listed actions, then deletes it (qivo-internal
- * docs/public-demo-operations.md). `audit` is an internal query, `start` an
- * internal mutation, and `npx convex logs` needs deployment:logs:view:
+ * docs/public-demo-operations.md). The whole audit loop runs under one key.
+ * `audit` is an internal query, `start` an internal mutation, and
+ * `npx convex logs` needs deployment:logs:view:
  *
- *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
- *     demo --allow deployment:functions:runInternalQueries \
- *     --purpose subtask-family -- npx convex run internal/subtaskFamilyBackfill:audit
- *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
- *     demo --allow deployment:functions:runInternalMutations \
+ *   "$helpers/with-temp-deploy-key" demo --allow deployment:functions:runInternalQueries \
+ *     --purpose subtask-family -- sh -c "$audit"
+ *   "$helpers/with-temp-deploy-key" demo --allow deployment:functions:runInternalMutations \
  *     --purpose subtask-family -- npx convex run internal/subtaskFamilyBackfill:start
  *
- * `start` returns once its first page is done. Follow the progress in the
+ * `start` returns once its first step is done. Follow the progress in the
  * deployment's logs, then run the audit again, which should list nothing. */
 
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
-import { internalMutation, internalQuery, type QueryCtx } from '../_generated/server'
+import {
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+  type QueryCtx,
+} from '../_generated/server'
 import { byId } from '../lib/db'
 import { issueKey } from '../lib/taskRefs'
 import { audit as auditRow } from '../model/admin'
 import { sameTopLevel } from '../model/issues'
-import { emitTaskEvent } from '../model/taskEvents'
+import { emitTaskEvent, eventSubscriptions } from '../model/taskEvents'
 
-/** The most tasks (`tasks`) and task bytes (`bytes`) one page reads, and
- * about the most bytes of parents it reads for them (`parentBytes`). Older
- * tasks can be near the 1 MiB document limit. A `start` step reads each
- * subtask it detaches once more when it writes it, so a step reads about
- * 2 * bytes + parentBytes + 1 MiB, inside the 16 MiB a transaction may
- * read, and at most one parent and two projects per task, far below its
- * 4,096 index ranges. Tests lower these. */
-export const FAMILY_PAGE = { tasks: 200, bytes: 4 * 1024 * 1024, parentBytes: 4 * 1024 * 1024 }
+/** The most tasks (`tasks`) and task bytes (`bytes`) one page reads, about
+ * the most bytes of parents it reads for them (`parentBytes`), and the
+ * budget of a `start` step for the task.updated events it sends: at most
+ * `checks` subscriber checks, and at most the share `room` of each of
+ * Convex's limits for one transaction.
+ *
+ * Older tasks can be near the 1 MiB document limit, and each read may pass
+ * its budget by one document, so a page reads about bytes + parentBytes +
+ * 2 MiB, under half of the 16 MiB a transaction may read. It reads at most
+ * one parent and two projects per task, about 600 of the 4,096 index
+ * ranges. A detach reads its subtask once more, and its task.updated checks
+ * whether each subscriber of the organization (eventSubscriptions, at most
+ * 200 rows) may see the task's project (model/taskEvents.ts).
+ *
+ * Those checks set a step's cost. Each takes execution time, of which a
+ * mutation has 1 second, and the transaction metrics do not report it. On
+ * a busy local backend, 61 subscribers and 25 detaches into new projects
+ * (1,525 checks) took about that second, and steps of 366 checks passed
+ * each time. So before each detach after its first, a step stops when the
+ * detach's subscriptions would take it past `checks`. A check also reads a varying number of index ranges and
+ * documents, so the step also stops once it has used `room` of any limit
+ * the deployment reports (ctx.meta.getTransactionMetrics), as an access
+ * removal does (model/projectAccess.ts). Tests lower these. */
+export const FAMILY_PAGE = {
+  tasks: 200,
+  bytes: 2 * 1024 * 1024,
+  parentBytes: 2 * 1024 * 1024,
+  checks: 400,
+  room: 0.5,
+}
 
 /* Where a walk stands, as the parent id its range starts at (`from`,
  * absent for the first range) and the page cursor within that range. */
@@ -235,30 +267,34 @@ export const audit = internalQuery({
   },
 })
 
+/* Whether the transaction has used more than FAMILY_PAGE.room of any of
+ * Convex's limits for one transaction. */
+async function stepIsFull(ctx: MutationCtx): Promise<boolean> {
+  const metrics = await ctx.meta.getTransactionMetrics()
+  return Object.values(metrics).some(
+    ({ used, remaining }) => used > (used + remaining) * FAMILY_PAGE.room,
+  )
+}
+
 /** One step of the backfill, then the next one scheduled. Empty arguments
- * start a run. Each step detaches the cross links of one page (header) and
- * carries the running counts for the final log and audit row. */
+ * start a run. Each step detaches the cross links of one page, or of its
+ * start when the step spends its budget (FAMILY_PAGE), and carries the
+ * running counts for the final log and audit row. */
 export const start = internalMutation({
   args: { ...vPosition.fields, ...counts },
   handler: async (ctx, a): Promise<null> => {
     const { links, next } = await readPage(ctx, a)
-    const total: Counts = {
-      scanned: (a.scanned ?? 0) + links.length,
-      detached: a.detached ?? 0,
-      dangling: a.dangling ?? 0,
-      foreign_org: a.foreign_org ?? 0,
-      no_project: a.no_project ?? 0,
-    }
     const now = new Date().toISOString()
+    let detached = 0
+    let checks = 0
+    let full = false
     for (const link of links) {
-      if (link.kind === 'family') continue
-      if (link.kind !== 'cross') {
-        total[link.kind] += 1
-        console.warn('Subtask family backfill left a link alone', {
-          id: link.child.id,
-          reason: link.kind,
-        })
-        continue
+      if (link.kind !== 'cross') continue
+      const fanOut = (await eventSubscriptions(ctx, link.child.org_id, 'task.updated')).length
+      // a step always detaches one link, so the walk moves on
+      if (detached > 0 && (checks + fanOut > FAMILY_PAGE.checks || (await stepIsFull(ctx)))) {
+        full = true
+        break
       }
       await ctx.db.patch(link.child._id, { parent_id: undefined })
       await emitTaskEvent(ctx, {
@@ -267,7 +303,29 @@ export const start = internalMutation({
         before: link.child,
         now,
       })
-      total.detached += 1
+      checks += fanOut
+      detached += 1
+    }
+    const total: Counts = {
+      scanned: (a.scanned ?? 0) + (full ? detached : links.length),
+      detached: (a.detached ?? 0) + detached,
+      dangling: a.dangling ?? 0,
+      foreign_org: a.foreign_org ?? 0,
+      no_project: a.no_project ?? 0,
+    }
+    if (full) {
+      // the same page again, without the links detached here, which have
+      // left its range; the step that finishes it counts the others
+      await ctx.scheduler.runAfter(0, startRef, { from: a.from, cursor: a.cursor, ...total })
+      return null
+    }
+    for (const link of links) {
+      if (link.kind === 'family' || link.kind === 'cross') continue
+      total[link.kind] += 1
+      console.warn('Subtask family backfill left a link alone', {
+        id: link.child.id,
+        reason: link.kind,
+      })
     }
     if (next !== null) {
       await ctx.scheduler.runAfter(0, startRef, { ...next, ...total })

@@ -150,6 +150,37 @@ export async function readableEventProject(
   return access
 }
 
+/** The unexpired subscriptions to `name` events in `orgId`, at most 200,
+ * read once per mutation and shared with emitTaskEvent. An event checks
+ * each one, so their number bounds what one event costs. */
+export function eventSubscriptions(
+  ctx: MutationCtx,
+  orgId: string,
+  name: EventName,
+): Promise<Doc<'webhook_subscriptions'>[]> {
+  const cached = eventContext(ctx)
+  const key = JSON.stringify([orgId, name])
+  let subscriptions = cached.subscriptions.get(key)
+  if (!subscriptions) {
+    subscriptions = Promise.all([
+      ctx.db
+        .query('webhook_subscriptions')
+        .withIndex('by_org_name_expiry', (q) =>
+          q.eq('org_id', orgId).eq('name', name).eq('expires_at', undefined),
+        )
+        .take(100),
+      ctx.db
+        .query('webhook_subscriptions')
+        .withIndex('by_org_name_expiry', (q) =>
+          q.eq('org_id', orgId).eq('name', name).gt('expires_at', Date.now()),
+        )
+        .take(100),
+    ]).then((rows) => rows.flat())
+    cached.subscriptions.set(key, subscriptions)
+  }
+  return subscriptions
+}
+
 /** Record one event atomically, without multiplying task writes by subscription count. */
 export async function emitTaskEvent(
   ctx: MutationCtx,
@@ -173,25 +204,7 @@ export async function emitTaskEvent(
     : []
   if (a.name === 'task.updated' && changed.length === 0) return
   const cached = eventContext(ctx)
-  const key = JSON.stringify([a.issue.org_id, a.name])
-  let subscriptions = cached.subscriptions.get(key)
-  if (!subscriptions) {
-    subscriptions = Promise.all([
-      ctx.db
-        .query('webhook_subscriptions')
-        .withIndex('by_org_name_expiry', (q) =>
-          q.eq('org_id', a.issue.org_id).eq('name', a.name).eq('expires_at', undefined),
-        )
-        .take(100),
-      ctx.db
-        .query('webhook_subscriptions')
-        .withIndex('by_org_name_expiry', (q) =>
-          q.eq('org_id', a.issue.org_id).eq('name', a.name).gt('expires_at', Date.now()),
-        )
-        .take(100),
-    ]).then((rows) => rows.flat())
-    cached.subscriptions.set(key, subscriptions)
-  }
+  const subscriptions = eventSubscriptions(ctx, a.issue.org_id, a.name)
   const source =
     a.before && a.before.project_id !== a.issue.project_id ? a.before.project_id : undefined
   const recipients: Doc<'webhook_subscriptions'>['_id'][] = []

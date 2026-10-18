@@ -6,6 +6,7 @@
  * when the test fires the fake timers. */
 /// <reference types="vite/client" />
 
+import type { FunctionArgs } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -14,6 +15,7 @@ import { issueKey } from '../lib/taskRefs'
 import {
   activityFor,
   allMessages,
+  NOW,
   newT,
   plantIssue,
   plantProject,
@@ -70,15 +72,32 @@ const auditRows = (t: T) =>
     ),
   )
 
-/* The arguments of every backfill step scheduled so far. */
-const steps = async (t: T): Promise<Record<string, unknown>[]> =>
+type StepArgs = FunctionArgs<typeof backfill.start>
+
+/* The arguments of every backfill step scheduled so far, oldest first. */
+const steps = async (t: T): Promise<StepArgs[]> =>
   (await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect()))
     .filter((job) => job.name === 'internal/subtaskFamilyBackfill:start')
-    .map((job) => job.args[0] as Record<string, unknown>)
+    .map((job) => job.args[0] as StepArgs)
 
-/* withOrg plus Cloud › Backend and these links:
- *   - parent (FW): subtasks in FW and PCB (same top-level), and in Backend,
- *     one active and one archived
+/* A full backfill run from empty arguments, one step at a time, each with
+ * the arguments the step before scheduled. Unlike run, it leaves the
+ * webhook work the steps schedule alone. Answers the number of steps. */
+async function stepAll(t: T): Promise<number> {
+  let args: StepArgs = {}
+  for (let n = 1; n <= 100; n++) {
+    const before = (await steps(t)).length
+    await t.mutation(backfill.start, args)
+    const after = await steps(t)
+    if (after.length === before) return n
+    args = after[after.length - 1]
+  }
+  throw new Error('the backfill did not finish')
+}
+
+/* withOrg plus Cloud › Backend, Cloud › Ops (archived) and these links:
+ *   - parent (FW): subtasks in FW and PCB (same top-level), in Backend, one
+ *     active and one archived, and in Ops
  *   - lone (FW): its only subtask is in Backend
  *   - shelved (FW, archived): an archived subtask in Backend
  *   - a Backend task whose parent no longer exists, an Other task under
@@ -93,6 +112,14 @@ async function scene(t: T) {
     key: 'BE',
     name: 'Backend',
   })
+  const ops = await plantProject(t, {
+    org_id: f.org.id,
+    type: 'project',
+    parent_id: cloud.id,
+    key: 'OPS',
+    name: 'Ops',
+    archived_at: ARCHIVED,
+  })
   const task = (project_id: string, extra: Partial<Doc<'issues'>> = {}) =>
     plantIssue(t, { org_id: f.org.id, project_id, ...extra })
   const parent = await task(f.sub.id)
@@ -104,6 +131,7 @@ async function scene(t: T) {
     sibling: await task(f.sub2.id, { parent_id: parent.id }),
     cross: await task(backend.id, { parent_id: parent.id }),
     crossArchived: await task(backend.id, { parent_id: parent.id, archived_at: ARCHIVED }),
+    inArchivedProject: await task(ops.id, { parent_id: parent.id }),
     loneChild: await task(backend.id, { parent_id: lone.id }),
     underShelved: await task(backend.id, { parent_id: shelved.id, archived_at: ARCHIVED }),
     dangling: await task(backend.id, { parent_id: uuid() }),
@@ -114,21 +142,23 @@ async function scene(t: T) {
     }),
     noProject: await task(backend.id, { parent_id: gone.id }),
   }
-  return { f, backend, parent, lone, shelved, links }
+  return { f, cloud, parent, lone, shelved, links }
 }
 
 type Scene = Awaited<ReturnType<typeof scene>>
 
-/* The audit's row for `child` under `parent`. */
+/* The audit's row for `child` under `parent`, a subtask in Backend unless
+ * `child_project` names another sub-project. */
 const crossRow = (
   s: Scene,
   child: Doc<'issues'>,
   parent: Doc<'issues'>,
   archived: { child: boolean; parent: boolean },
+  child_project = 'BE',
 ) => ({
   org_id: s.f.org.id,
   child: issueKey(child.num),
-  child_project: 'BE',
+  child_project,
   parent: issueKey(parent.num),
   parent_project: 'FW',
   child_archived: archived.child,
@@ -138,6 +168,7 @@ const crossRow = (
 const expectedCross = (s: Scene) => [
   crossRow(s, s.links.cross, s.parent, { child: false, parent: false }),
   crossRow(s, s.links.crossArchived, s.parent, { child: true, parent: false }),
+  crossRow(s, s.links.inArchivedProject, s.parent, { child: false, parent: false }, 'OPS'),
   crossRow(s, s.links.loneChild, s.lone, { child: false, parent: false }),
   crossRow(s, s.links.underShelved, s.shelved, { child: true, parent: true }),
 ]
@@ -175,6 +206,54 @@ async function subscribeToUpdates(t: T, f: Scene['f']): Promise<void> {
   })
 }
 
+const SUBSCRIBERS = 6
+
+/* `count` agents with a grant on Cloud, each with its own key and a
+ * task.updated subscription, so each detach checks each agent's sight of
+ * the subtask's project. */
+async function subscribeAgents(t: T, s: Scene, count: number): Promise<void> {
+  await t.run(async (ctx) => {
+    for (let n = 0; n < count; n++) {
+      const profile_id = uuid()
+      await ctx.db.insert('profiles', {
+        id: profile_id,
+        org_id: s.f.org.id,
+        name: `Agent ${n}`,
+        initials: 'AG',
+        color: '#50b070',
+        org_role: 'user',
+        active: true,
+        kind: 'agent',
+        created_at: NOW,
+      })
+      await ctx.db.insert('project_access', {
+        project_id: s.cloud.id,
+        profile_id,
+        level: 'viewer',
+      })
+      const credential_id = uuid()
+      const credential_row_id = await ctx.db.insert('agent_keys', {
+        id: credential_id,
+        profile_id,
+        name: 'Backfill events',
+        key_prefix: 'qva_1...1111',
+        key_hash: uuid(),
+        created_at: NOW,
+      })
+      await ctx.db.insert('webhook_subscriptions', {
+        id: uuid(),
+        org_id: s.f.org.id,
+        owner: { profile_id, credential_table: 'agent_keys', credential_id, credential_row_id },
+        name: 'task.updated',
+        filters: {},
+        url: `https://receiver.example/${n}`,
+        encrypted_secret: 'test-only',
+        created_at: Date.now(),
+      })
+    }
+  })
+}
+
 /* The task id, actor and changed fields of each task.updated in the outbox. */
 const updateEvents = (t: T) =>
   t.run(async (ctx) =>
@@ -202,7 +281,7 @@ describe('subtaskFamilyBackfill audit', () => {
       dangling: 1,
       foreign_org: 1,
       no_project: 1,
-      scanned: 9,
+      scanned: 10,
       cursor: null,
       done: true,
     })
@@ -210,7 +289,7 @@ describe('subtaskFamilyBackfill audit', () => {
     expect(await steps(t)).toEqual([])
   })
 
-  it('pages by task count and stops before a parent past the byte budget', async () => {
+  it('pages by task count and task bytes, and stops before a parent past the byte budget', async () => {
     const t = newT()
     const s = await scene(t)
     const all = (await auditAll(t))[0]
@@ -220,8 +299,15 @@ describe('subtaskFamilyBackfill audit', () => {
     expect(small.length).toBe(5)
     for (const page of small) expect(page.scanned).toBeLessThanOrEqual(2)
 
-    // with a parent byte budget of 0, each page reads one parent
+    // with a task byte budget of 1, each page reads one task
     FAMILY_PAGE.tasks = DEFAULT_PAGE.tasks
+    FAMILY_PAGE.bytes = 1
+    const thin = await auditAll(t)
+    expect(thin.length).toBeGreaterThanOrEqual(all.scanned)
+    for (const page of thin) expect(page.scanned).toBeLessThanOrEqual(1)
+
+    // with a parent byte budget of 0, each page reads one parent
+    FAMILY_PAGE.bytes = DEFAULT_PAGE.bytes
     FAMILY_PAGE.parentBytes = 0
     const narrow = await auditAll(t)
     // parent, lone, shelved, the gone task and the missing parent
@@ -229,7 +315,7 @@ describe('subtaskFamilyBackfill audit', () => {
     for (const page of narrow.slice(0, -1))
       expect(page.cursor).toEqual({ from: expect.any(String) })
 
-    for (const pages of [small, narrow]) {
+    for (const pages of [small, thin, narrow]) {
       expect(pages.flatMap((p) => p.cross).sort(byChild)).toEqual(expectedCross(s).sort(byChild))
       const sum = (key: 'scanned' | 'dangling' | 'foreign_org' | 'no_project') =>
         pages.reduce((n, p) => n + p[key], 0)
@@ -260,6 +346,7 @@ describe('subtaskFamilyBackfill start', () => {
     const detached = [
       s.links.cross,
       s.links.crossArchived,
+      s.links.inArchivedProject,
       s.links.loneChild,
       s.links.underShelved,
     ].map((task) => task.id)
@@ -281,7 +368,7 @@ describe('subtaskFamilyBackfill start', () => {
     expect(await allMessages(t)).toEqual([])
     expect(await activityFor(t, s.f.org.id)).toEqual([])
 
-    const counts = { scanned: 9, detached: 4, dangling: 1, foreign_org: 1, no_project: 1 }
+    const counts = { scanned: 10, detached: 5, dangling: 1, foreign_org: 1, no_project: 1 }
     expect((await auditRows(t)).map((row) => [row.actor_email, row.detail])).toEqual([
       ['cli', counts],
     ])
@@ -318,24 +405,84 @@ describe('subtaskFamilyBackfill start', () => {
     expect(await getTask(s.links.cross.id)).toMatchObject({ parent_id: null })
   })
 
-  it('carries the counts across steps, and a second run detaches nothing', async () => {
+  it.each([
+    ['task count and parent bytes', { tasks: 2, parentBytes: 1 }],
+    ['task bytes', { bytes: 1 }],
+    ['room, so each step detaches one link', { room: 0 }],
+  ])(
+    'carries the counts across steps bounded by %s, and a second run detaches nothing',
+    async (_, page) => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const t = newT()
+      await scene(t)
+      Object.assign(FAMILY_PAGE, page)
+
+      await run(t)
+      const after = await allIssues(t)
+      expect((await steps(t)).length).toBeGreaterThan(3)
+      await run(t)
+
+      expect(await allIssues(t)).toEqual(after)
+      const first = { scanned: 10, detached: 5, dangling: 1, foreign_org: 1, no_project: 1 }
+      const second = { ...first, scanned: 5, detached: 0 }
+      expect((await auditRows(t)).map((row) => row.detail)).toEqual([first, second])
+      const done = info.mock.calls.filter(([message]) => message === 'Subtask family backfill done')
+      expect(done.map(([, counts]) => counts)).toEqual([first, second])
+      expect((await auditAll(t)).flatMap((p) => p.cross)).toEqual([])
+    },
+  )
+
+  /* The scene plus SUBSCRIBERS agents subscribed to task.updated, and 12
+   * more subtasks of parent, each in its own new Cloud sub-project, so each
+   * of the 17 detaches checks every agent's sight of a new project. */
+  async function fanOutScene(t: T) {
+    const s = await scene(t)
+    await subscribeAgents(t, s, SUBSCRIBERS)
+    for (let n = 0; n < 12; n++) {
+      const project = await plantProject(t, {
+        org_id: s.f.org.id,
+        type: 'project',
+        parent_id: s.cloud.id,
+      })
+      await plantIssue(t, { org_id: s.f.org.id, project_id: project.id, parent_id: s.parent.id })
+    }
+    return s
+  }
+
+  /* Runs the backfill step by step and checks its counts and events. */
+  async function expectFullRun(t: T, info: { mock: { calls: unknown[][] } }): Promise<void> {
+    expect(await stepAll(t)).toBeGreaterThan(2)
+    const counts = { scanned: 22, detached: 17, dangling: 1, foreign_org: 1, no_project: 1 }
+    expect((await auditRows(t)).map((row) => row.detail)).toEqual([counts])
+    const done = info.mock.calls.filter(([message]) => message === 'Subtask family backfill done')
+    expect(done.map(([, detail]) => detail)).toEqual([counts])
+    expect((await updateEvents(t)).length).toBe(17)
+    expect((await auditAll(t)).flatMap((p) => p.cross)).toEqual([])
+  }
+
+  it('stops a step at its budget of subscriber checks, then reads the same page again', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
-    await scene(t)
-    FAMILY_PAGE.tasks = 2
-    FAMILY_PAGE.parentBytes = 1
+    await fanOutScene(t)
+    // two detaches of SUBSCRIBERS checks each fit, a third does not
+    FAMILY_PAGE.checks = 2 * SUBSCRIBERS + SUBSCRIBERS - 1
 
-    await run(t)
-    const after = await allIssues(t)
-    expect((await steps(t)).length).toBeGreaterThan(3)
-    await run(t)
+    await expectFullRun(t, info)
+    const detached = (await steps(t)).map((step) => step.detached ?? 0)
+    expect(detached.map((n, i) => n - (detached[i - 1] ?? 0))).toEqual(Array(8).fill(2))
+  })
 
-    expect(await allIssues(t)).toEqual(after)
-    const first = { scanned: 9, detached: 4, dangling: 1, foreign_org: 1, no_project: 1 }
-    const second = { ...first, scanned: 5, detached: 0 }
-    expect((await auditRows(t)).map((row) => row.detail)).toEqual([first, second])
-    const done = info.mock.calls.filter(([message]) => message === 'Subtask family backfill done')
-    expect(done.map(([, counts]) => counts)).toEqual([first, second])
+  it('stops a step before its events pass Convex limits, then reads the same page again', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Each task.updated checks every subscriber's sight of the task's
+    // project, five index ranges per subscriber here. The page's 17 detaches
+    // in one step read about 470 ranges, past the 300 allowed here.
+    const t = newT({ transactionLimits: { databaseQueries: 300 } })
+    await fanOutScene(t)
+
+    await expectFullRun(t, info)
   })
 })
