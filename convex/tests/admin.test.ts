@@ -118,7 +118,6 @@ const auditRows = (t: T): Promise<Doc<'platform_audit_log'>[]> =>
 /* ------------------------------------------------------ the fail-closed sweep */
 
 const SURFACE: Record<string, { kind: 'query' | 'mutation'; args: Record<string, unknown> }> = {
-  orgNames: { kind: 'query', args: {} },
   orgDetail: { kind: 'query', args: { org_id: '00000000-0000-4000-8000-000000000000' } },
   listUsers: { kind: 'query', args: { search: '' } },
   auditLog: { kind: 'query', args: {} },

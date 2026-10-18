@@ -21,8 +21,8 @@
  * null/'' when the login row is unreachable — the SQL's LEFT JOIN said the
  * same thing.
  *
- * The organization table and the platform totals page through the data in
- * actions, so they live in adminStats.ts. */
+ * The organization table, the platform totals and the organization names
+ * page through the data in actions, so they live in adminStats.ts. */
 
 import { v } from 'convex/values'
 import { components } from './_generated/api'
@@ -128,18 +128,6 @@ export const isOperator = query({
       .withIndex('by_auth_user', (q) => q.eq('auth_user_id', identity.subject))
       .first()
     return operator !== null
-  },
-})
-
-/* ------------------------------------------------------------------ orgNames */
-
-/* Every organization's id and name, for the audit page's labels and its
- * organization filter. */
-export const orgNames = platformQuery({
-  args: {},
-  handler: async (ctx): Promise<Array<{ id: string; name: string }>> => {
-    const orgs = await ctx.db.query('organizations').withIndex('by_uuid').collect()
-    return orgs.map((org) => ({ id: org.id, name: org.name }))
   },
 })
 

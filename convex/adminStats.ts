@@ -1,16 +1,17 @@
-/* The operator console's organization table and platform totals
- * (src/admin/views/Orgs.tsx and Dashboard.tsx), the ports of
- * admin_list_orgs (LAST def 0086:11-48) and admin_platform_stats (LAST def
- * 0078:583-614).
+/* The operator console's organization table, platform totals and
+ * organization names (src/admin/views/Orgs.tsx, Dashboard.tsx and
+ * Audit.tsx). The first two port admin_list_orgs (LAST def 0086:11-48) and
+ * admin_platform_stats (LAST def 0078:583-614).
  *
- * Both are platform actions that page through the data with bounded
+ * All three are platform actions that page through the data with bounded
  * internal queries. Each runQuery is its own transaction, so no read grows
  * with the deployment. A page reads at most its STATS_PAGE rows and
- * STATS_PAGE.bytes of its range, plus at most STATS_PAGE.children members,
- * grants, milestones or links of each team, project or task on it. A longer
- * list is paged on its own (childPage). The answer is built from many snapshots, so a write during a
- * load can be counted in one table and not yet in another. The console
- * loads on demand and shows when, so that is accepted.
+ * STATS_PAGE.bytes of its range. It also reads up to one more than
+ * STATS_PAGE.children members, grants, milestones or links of each team,
+ * project or task on it, and pages a longer list on its own (childPage).
+ * The answer is built from many snapshots, so a write during a load can be
+ * counted in one table and not yet in another. The console loads on demand
+ * and shows when, so that is accepted.
  *
  * A load reads every row it counts, about one round trip per page,
  * CONCURRENCY organizations or tables at a time. One organization's pages
@@ -46,7 +47,7 @@ const DAY = 24 * HOUR
 /** Rows per internal page, and the bytes one page's range may read. Tests
  * lower them. */
 export const STATS_PAGE = {
-  /** Organization ids per page. */
+  /** Organizations per page. */
   orgs: 500,
   /** An organization's profiles, activity or Deleted items rows per page.
    * They read nothing per row. */
@@ -131,18 +132,20 @@ export type AdminOrgRow = {
 
 const vCursor = v.union(v.string(), v.null())
 
-type OrgIdsPage = { ids: string[]; next: string | null }
+export type AdminOrgName = { id: string; name: string }
 
-/** One page of organization ids, in creation order. */
-export const orgIds = internalQuery({
+type OrgPage = { orgs: AdminOrgName[]; next: string | null }
+
+/** One page of organization ids and names, in creation order. */
+export const orgPage = internalQuery({
   args: { cursor: vCursor },
-  handler: async (ctx, { cursor }): Promise<OrgIdsPage> => {
+  handler: async (ctx, { cursor }): Promise<OrgPage> => {
     const page = await ctx.db.query('organizations').paginate({
       cursor,
       numItems: STATS_PAGE.orgs,
       maximumBytesRead: STATS_PAGE.bytes,
     })
-    return { ids: page.page.map((org) => org.id), next: nextOf(page) }
+    return { orgs: page.page.map(({ id, name }) => ({ id, name })), next: nextOf(page) }
   },
 })
 
@@ -264,7 +267,7 @@ export const orgPart = internalQuery({
           .paginate(opts(STATS_PAGE.rows))
         for (const p of page.page) {
           counts.bytes += sizeOf(p)
-          // the 0086 split: guests hold a profile but no seat, counted apart
+          // The 0086 split counts guests apart, as they hold a profile but no seat.
           if (p.org_role === 'guest') counts.guests += 1
           else counts.members += 1
           if (p.auth_user_id !== undefined) counts.logins += 1
@@ -392,28 +395,43 @@ async function orgRow(ctx: Runner, org_id: string): Promise<AdminOrgRow | null> 
   }
 }
 
-/** listOrgs' answer, read through `ctx.runQuery`: a row for every
- * organization that is still there when its turn comes, ordered by
- * created_at. Exported for tests that change data between its reads. */
-export async function orgRows(ctx: Runner): Promise<AdminOrgRow[]> {
-  const ids: string[] = []
+/** Every organization's id and name, page by page, in creation order. */
+async function allOrgs(ctx: Runner): Promise<AdminOrgName[]> {
+  const orgs: AdminOrgName[] = []
   let cursor: string | null = null
   do {
-    const page: OrgIdsPage = await ctx.runQuery(internal.adminStats.orgIds, { cursor })
-    ids.push(...page.ids)
+    const page: OrgPage = await ctx.runQuery(internal.adminStats.orgPage, { cursor })
+    orgs.push(...page.orgs)
     cursor = page.next
   } while (cursor !== null)
-  const rows = await inParallel(ids, (id) => orgRow(ctx, id))
+  return orgs
+}
+
+/** Builds listOrgs' answer through `ctx.runQuery`. It holds a row for every
+ * organization still there when its turn comes, ordered by created_at.
+ * Exported for tests that change data between its reads. */
+export async function orgRows(ctx: Runner): Promise<AdminOrgRow[]> {
+  const orgs = await allOrgs(ctx)
+  const rows = await inParallel(orgs, (org) => orgRow(ctx, org.id))
   return rows
     .filter((row): row is AdminOrgRow => row !== null)
     .sort((a, b) => cmp(a.created_at, b.created_at) || cmp(a.id, b.id))
 }
 
-/* admin_list_orgs: every organization's row, its footprint over the
+/* admin_list_orgs. Every organization's row with its footprint over the
  * measured tables, ordered by created_at. */
 export const listOrgs = platformAction({
   args: {},
   handler: async (ctx): Promise<AdminOrgRow[]> => await orgRows(ctx),
+})
+
+/* ------------------------------------------------------------------ orgNames */
+
+/* Every organization's id and name, without the counts listOrgs reads, for
+ * the audit page's labels and organization filter. */
+export const orgNames = platformAction({
+  args: {},
+  handler: async (ctx): Promise<AdminOrgName[]> => await allOrgs(ctx),
 })
 
 /* ------------------------------------------------------------- platformStats */

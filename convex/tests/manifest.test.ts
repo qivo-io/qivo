@@ -97,7 +97,6 @@ admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"typ
 admin:isOperator query public {"type":"object","value":{}}
 admin:listUsers query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
 admin:orgDetail query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-admin:orgNames query public {"type":"object","value":{}}
 admin:promoteOrgAdmin mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:removeOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:banUser action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
@@ -133,7 +132,8 @@ adminOrgs:updateInvite mutation internal {"type":"object","value":{"profile_id":
 adminStats:childPage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:listOrgs action public {"type":"object","value":{}}
 adminStats:orgHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-adminStats:orgIds query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminStats:orgNames action public {"type":"object","value":{}}
+adminStats:orgPage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:orgPart query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"part":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"activity"},{"type":"literal","value":"deleted"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:platformStats action public {"type":"object","value":{}}
 adminStats:tablePage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"organizations"},{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"activity_events"},{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"milestones"},{"type":"literal","value":"org_counters"},{"type":"literal","value":"deleted_rows"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"window":{"fieldType":{"type":"object","value":{"cutoff30":{"fieldType":{"type":"string"},"optional":false},"cutoff84":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}
@@ -611,15 +611,19 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // bare on purpose — the AdminGate's fail-OPEN probe answers false, never
     // throws (admin.ts documents it); every real admin door below re-checks.
     isOperator: 'query',
-    orgNames: 'platformQuery',
     orgDetail: 'platformQuery',
     listUsers: 'platformQuery',
     promoteOrgAdmin: 'platformMutation',
     auditLog: 'platformQuery',
   },
-  // The organization table and platform totals page through the data in
-  // actions, each page a bounded internal query (adminStats.ts).
-  adminStats: { listOrgs: 'platformAction', platformStats: 'platformAction' },
+  // The organization table, platform totals and organization names page
+  // through the data in actions, each page a bounded internal query
+  // (adminStats.ts).
+  adminStats: {
+    listOrgs: 'platformAction',
+    orgNames: 'platformAction',
+    platformStats: 'platformAction',
+  },
   adminAuth: {
     recoveryLink: 'platformAction',
     banUser: 'platformAction',

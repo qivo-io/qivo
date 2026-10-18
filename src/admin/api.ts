@@ -64,7 +64,7 @@ function mapError(e: unknown): never {
 export const listOrgs = (): Promise<OrgRow[]> =>
   convex.action(api.adminStats.listOrgs, {}).catch(mapError)
 /* Every organization's id and name, without the counts listOrgs reads. */
-export const listOrgNames = () => convex.query(api.admin.orgNames, {}).catch(mapError)
+export const listOrgNames = () => convex.action(api.adminStats.orgNames, {}).catch(mapError)
 export const listUsers = (search: string): Promise<UserRow[]> =>
   convex.query(api.admin.listUsers, { search }).catch(mapError)
 export const auditLog = (limit = 200): Promise<AuditRow[]> =>

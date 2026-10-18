@@ -1,10 +1,11 @@
-/* The operator console's organization table and platform totals
- * (adminStats.ts): both actions refuse every caller but an operator, and a
- * demo deployment; the numbers on a small fixture, written out; the same
- * numbers at the smallest page sizes; an organization or a team too large
- * for the old single query; weekly buckets across page boundaries; page
- * arguments that stay the same within an hour; and an organization deleted
- * while a load runs. */
+/* The operator console's organization table, platform totals and
+ * organization names (adminStats.ts). Every action refuses all callers but
+ * an operator, and refuses a demo deployment. The suite writes out the
+ * numbers on a small fixture and checks them again at the smallest page
+ * sizes. It also covers an organization, a team and an organization list too
+ * large for the old single query, weekly buckets across page boundaries,
+ * page arguments that stay the same within an hour, and an organization
+ * deleted while a load runs. */
 /// <reference types="vite/client" />
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
@@ -26,7 +27,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { comment, deleteTask } from './trash.setup'
+import { attach, comment, deleteTask } from './trash.setup'
 
 const DEFAULT_PAGE = { ...STATS_PAGE }
 /* A Wednesday, so the weekly buckets below start on known Mondays. */
@@ -43,7 +44,8 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-/** A platform operator: a Better Auth user with a platform_admins row. */
+/** A platform operator, which is a Better Auth user with a platform_admins
+ * row. */
 async function operator(t: T) {
   const now = Date.now()
   const user = await t.mutation(components.betterAuth.adapter.create, {
@@ -77,7 +79,8 @@ const activity = (org_id: string, ts: string) => ({
 
 /* withOrg, with Other created a month after Testbed, three live tasks with
  * a link, a milestone, a team grant, the counters row, two activity rows,
- * and a fourth task with a comment moved to Deleted items. */
+ * and a fourth task moved to Deleted items with a comment, a label, a follow
+ * and an attachment. */
 async function consoleFixture(t: T): Promise<OrgFixture> {
   const f = await withOrg(t)
   const org_id = f.org.id
@@ -89,7 +92,23 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
   }
   const gone = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Duplicate' })
   await comment(t, gone)
+  await attach(t, gone)
   await t.run(async (ctx) => {
+    const label_id = uuid()
+    await ctx.db.insert('labels', {
+      id: label_id,
+      org_id,
+      name: 'Field',
+      name_lower: 'field',
+      color: '#ffcc00',
+      created_at: NOW,
+    })
+    await ctx.db.insert('issue_labels', { org_id, issue_id: gone.id, label_id })
+    await ctx.db.insert('issue_subscriptions', {
+      issue_id: gone.id,
+      profile_id: f.admin.id,
+      created_at: NOW,
+    })
     await ctx.db.patch(f.otherOrg._id, { created_at: '2026-02-01T00:00:00.000Z' })
     await ctx.db.insert('issue_links', {
       org_id,
@@ -121,11 +140,23 @@ async function consoleFixture(t: T): Promise<OrgFixture> {
   return f
 }
 
-/* The footprint adminStats.ts documents, summed straight from the tables:
- * the organization and counters rows, its profiles, teams with members,
- * projects with grants, team grants and milestones, tasks with the links
- * they are the source of, activity, and the Deleted items copies of those
- * tables. Stored comments are left out, as live comments are. */
+/* The tables whose Deleted items copies the footprint counts. Stored
+ * comments, labels, follows and attachments stay out, as their live rows
+ * do. */
+const MEASURED_STORED = new Set([
+  'issues',
+  'issue_links',
+  'projects',
+  'milestones',
+  'project_access',
+  'project_team_access',
+])
+
+/* The footprint adminStats.ts documents, summed straight from the tables.
+ * It covers the organization and counters rows, its profiles, teams with
+ * members, projects with grants, team grants and milestones, tasks with the
+ * links they are the source of, activity, and the Deleted items copies of
+ * those tables. */
 const measuredBytes = (t: T, orgId: string) =>
   t.run(async (ctx) => {
     const size = (doc: unknown) => JSON.stringify(doc).length
@@ -194,17 +225,17 @@ const measuredBytes = (t: T, orgId: string) =>
       .query('deleted_rows')
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .collect()
-    bytes += sum(stored.filter((row) => row.table !== 'comments'))
+    bytes += sum(stored.filter((row) => MEASURED_STORED.has(row.table)))
     return { bytes, storedTables: stored.map((row) => row.table).sort() }
   })
 
 type PublicAction = FunctionReference<'action', 'public', Record<string, never>, unknown>
-const PUBLIC = ['listOrgs', 'platformStats'] as const
+const PUBLIC = ['listOrgs', 'orgNames', 'platformStats'] as const
 const publicRef = (name: (typeof PUBLIC)[number]): PublicAction => api.adminStats[name]
 
 /* ---------------------------------------------------------- the fail-closed gate */
 
-describe('fail-closed: both actions refuse everyone but an operator', () => {
+describe('fail-closed: every action refuses everyone but an operator', () => {
   it('names every public function of adminStats.ts', () => {
     const exported = Object.entries(statsModule).filter(
       ([, value]) => (value as { isPublic?: true }).isPublic === true,
@@ -250,8 +281,15 @@ describe('listOrgs', () => {
 
     const testbed = await measuredBytes(t, f.org.id)
     const other = await measuredBytes(t, f.otherOrg.id)
-    // the deleted task and its comment are in Deleted items; only the task counts
-    expect(testbed.storedTables).toEqual(['comments', 'issues'])
+    // Deleted items holds the task with its comment, label, follow and
+    // attachment. Only the task counts.
+    expect(testbed.storedTables).toEqual([
+      'comments',
+      'issue_attachments',
+      'issue_labels',
+      'issue_subscriptions',
+      'issues',
+    ])
     expect(rows).toEqual([
       {
         id: f.org.id,
@@ -304,7 +342,7 @@ describe('listOrgs', () => {
     expect(await asOp.action(api.adminStats.listOrgs, {})).toEqual(expected)
   })
 
-  it('pages the members of a team of 3,000 on their own, within 2,500 documents a read', async () => {
+  it('pages the members of a team of 3,000 on their own, under 2,500 documents a read', async () => {
     const t = newT({ transactionLimits: { documentsRead: 2500 } })
     const f = await withOrg(t)
     const asOp = await operator(t)
@@ -381,7 +419,7 @@ describe('listOrgs', () => {
     const runner = {
       runQuery: (async (ref: FunctionReference<'query', 'internal'>, args: object) => {
         const result: unknown = await t.query(ref, args)
-        if (getFunctionName(ref) === getFunctionName(internal.adminStats.orgIds)) {
+        if (getFunctionName(ref) === getFunctionName(internal.adminStats.orgPage)) {
           await t.run(async (ctx) => {
             await ctx.db.delete(f.otherOrg._id)
           })
@@ -518,20 +556,44 @@ describe('platformStats page arguments', () => {
 
 /* --------------------------------------------------------------------- orgNames */
 
-describe('admin.orgNames', () => {
+describe('orgNames', () => {
   it('names every organization for the audit page', async () => {
     const t = newT()
     const f = await withOrg(t)
     const asOp = await operator(t)
 
-    const names = await asOp.query(api.admin.orgNames, {})
+    expect(await asOp.action(api.adminStats.orgNames, {})).toEqual([
+      { id: f.org.id, name: 'Testbed Labs' },
+      { id: f.otherOrg.id, name: 'Other' },
+    ])
+  })
 
-    expect(names).toHaveLength(2)
-    expect(names).toEqual(
-      expect.arrayContaining([
-        { id: f.org.id, name: 'Testbed Labs' },
-        { id: f.otherOrg.id, name: 'Other' },
-      ]),
+  it('names 120 organizations within 50 documents a read', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 50 } })
+    const f = await withOrg(t)
+    const asOp = await operator(t)
+    const { _id, _creationTime, ...template } = f.otherOrg
+    const added = await t.run(async (ctx) => {
+      const names: { id: string; name: string }[] = []
+      for (let i = 0; i < 118; i++) {
+        const org = { ...template, id: uuid(), name: `Org ${i}`, slug: `org-${i}` }
+        await ctx.db.insert('organizations', org)
+        names.push({ id: org.id, name: org.name })
+      }
+      return names
+    })
+    Object.assign(STATS_PAGE, { orgs: 40 })
+
+    expect(await asOp.action(api.adminStats.orgNames, {})).toEqual([
+      { id: f.org.id, name: 'Testbed Labs' },
+      { id: f.otherOrg.id, name: 'Other' },
+      ...added,
+    ])
+
+    // Read in one page, as the old query did, the list passes the limit.
+    Object.assign(STATS_PAGE, { orgs: 200 })
+    await expect(asOp.action(api.adminStats.orgNames, {})).rejects.toThrow(
+      /Scanned too many documents/,
     )
   })
 })
