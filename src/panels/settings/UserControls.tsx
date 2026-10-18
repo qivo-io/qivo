@@ -42,6 +42,8 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
       setV(user.name)
       return
     }
+    // a paused rename keeps the typed name
+    if (P.refusePausedEdit()) return
     P.updateUser(user.id, { name: next })
     window.showToast?.(`${(user.isAgent ? 'Agent renamed to “' : 'Renamed to “') + next}”`)
   }
@@ -131,12 +133,9 @@ export function UserEmail({ user }: { user: UserVM }) {
   const commit = () => {
     const saved = user.email || ''
     const next = v.trim()
-    if (
-      next.toLowerCase() === saved ||
-      !P.emailLooksValid(next) ||
-      !P.updateUser(user.id, { email: next })
-    )
-      setV(saved)
+    if (next.toLowerCase() === saved || !P.emailLooksValid(next)) setV(saved)
+    // a paused change keeps the typed address
+    else if (!P.refusePausedEdit() && !P.updateUser(user.id, { email: next })) setV(saved)
   }
   if (!canEdit) {
     return (
@@ -240,7 +239,7 @@ export function PlannableHoursInput({
             }
             const h = Math.max(1, Math.min(168, Math.round(Number(raw))))
             e.target.value = String(h)
-            if (h === stored) return
+            if (h === stored || P.refusePausedEdit()) return
             P.updateUser(user.id, { plannableHours: h })
             window.showToast?.(`${user.name} plans ${h} h per week`)
           }}
@@ -288,6 +287,7 @@ export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: b
             disabled={locked}
             onChange={(e) => {
               const on = e.target.checked
+              if (P.refusePausedEdit()) return
               P.updateUser(user.id, { canCreateProjects: on })
               window.showToast?.(
                 on

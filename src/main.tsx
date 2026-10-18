@@ -4,6 +4,7 @@ import './styles/app.css'
 import './styles/demo.css'
 import { AuthGate } from './AuthGate'
 import { AppUpdates } from './components/AppUpdates'
+import { SnapshotNotice } from './components/SnapshotNotice'
 import { DemoGate } from './DemoGate'
 import { installAnnouncer } from './lib/announce'
 import { DEMO_MODE } from './lib/demoMode'
@@ -25,5 +26,6 @@ createRoot(document.getElementById('root')!).render(
         <AppUpdates />
       </>
     )}
+    <SnapshotNotice />
   </TooltipProvider>,
 )

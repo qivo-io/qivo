@@ -1460,6 +1460,8 @@ function MilestoneModal({
   const canAdd = canWrite && name.trim().length > 0
   const add = () => {
     if (!canAdd || !project) return
+    // a paused add keeps the typed name and date
+    if (P.refusePausedEdit()) return
     P.addMilestone({ name: name.trim(), week: exactWeekForDate(date), project: project.id })
     window.showToast?.(`Milestone “${name.trim()}” added`)
     setName('')
@@ -1658,6 +1660,8 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   }, [])
   const save = () => {
     if (!canSave) return
+    // a paused save keeps the editor open with the draft
+    if (P.refusePausedEdit()) return
     P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) })
     window.showToast?.('Milestone updated')
     onClose()
@@ -1669,6 +1673,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   const armDel = deletion.armed !== null
   const remove = () =>
     deletion.press('delete', () => {
+      if (P.refusePausedEdit()) return
       P.removeMilestone(m.id)
       window.showToast?.('Milestone removed')
       onClose()

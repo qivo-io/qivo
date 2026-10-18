@@ -12,6 +12,7 @@
     "src/lib/canvasWeek.ts",
     "src/lib/dates.ts",
     "src/lib/delay.ts",
+    "src/lib/floatStack.ts",
     "src/lib/imageMetadata.ts",
     "src/lib/images.ts",
     "src/lib/gravatar.ts",

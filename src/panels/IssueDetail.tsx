@@ -492,6 +492,8 @@ function LabelPickerPopup({
     P.canWriteOrgLabels() &&
     !all.some((l) => l.name.toLowerCase() === ql)
   const create = () => {
+    // a paused create keeps the typed name in the search field
+    if (P.refusePausedEdit()) return
     const id = P.addLabel({ name: q.trim() })
     if (id && !(it.labels || []).includes(id)) P.toggleIssueLabel(it.id, id)
     setQ('')
@@ -631,6 +633,8 @@ function IssuePickerPopup({
     else setQ('')
   }
   const create = () => {
+    // a paused create keeps the typed title and the picker open
+    if (P.refusePausedEdit()) return
     onCreate?.(q.trim())
     if (single) onDone()
     else setQ('')
@@ -1293,7 +1297,8 @@ function IssueDetail({
       // The Inbox task lives inside main. Isolate sibling branches on the way
       // to body, rather than making its own ancestor inert. Menus and dialogs
       // created later in portals remain available above the task, and so do
-      // the announcer, the toasts and the update notice ([data-top-layer]).
+      // the announcer and the floating column of toasts and notices
+      // ([data-top-layer]).
       let branch: HTMLElement = frame
       while (branch.parentElement) {
         for (const sibling of branch.parentElement.children) {
@@ -1901,7 +1906,11 @@ function IssueDetail({
               onChange={(e) => setTitleDraft(e.target.value)}
               onBlur={() => {
                 const v = titleDraft.trim()
-                if (v && v !== it.title) upd({ title: v })
+                if (v && v !== it.title) {
+                  // a paused save keeps the field open with the draft
+                  if (P.refusePausedEdit()) return
+                  upd({ title: v })
+                }
                 setEditTitle(false)
               }}
               onKeyDown={(e) => {
@@ -2202,6 +2211,8 @@ function IssueDetail({
                                       setArchiveOpen(true)
                                       return
                                     }
+                                    // a paused archive leaves the window open
+                                    if (P.refusePausedEdit()) return
                                     const id = it.id
                                     const shown = it.key
                                     onClose()
@@ -2235,6 +2246,8 @@ function IssueDetail({
                                     const id = it.id
                                     const shown = it.key
                                     close()
+                                    // a paused delete leaves the window open
+                                    if (P.refusePausedEdit()) return
                                     onClose()
                                     P.deleteIssue(id)
                                     window.showToast?.(`Deleted ${shown}`)
@@ -3057,6 +3070,8 @@ function IssueDetail({
           onClose={() => setMoveOpen(false)}
           focusAfterClose={taskActionsButton}
           onMove={(pid) => {
+            // a paused move keeps the dialog open with its choice
+            if (P.refusePausedEdit()) return
             // the key is org-scoped and immutable (0050): the modal stays
             // anchored to the same issue, nothing to re-open or re-anchor
             const key = P.moveIssue(it.id, pid)
@@ -3106,6 +3121,8 @@ function IssueDetail({
           onClose={() => setArchiveOpen(false)}
           focusAfterClose={taskActionsButton}
           onArchive={(reason) => {
+            // a paused archive keeps the dialog open with the typed reason
+            if (P.refusePausedEdit()) return
             const id = it.id
             const shown = it.key
             setArchiveOpen(false)

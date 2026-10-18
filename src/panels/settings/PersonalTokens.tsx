@@ -286,6 +286,8 @@ export function NewTokenDialog({
 
   const create = async () => {
     if (!name.trim() || busy || expiresAt === null) return
+    // a paused create keeps the dialog and says why
+    if (P.refusePausedEdit()) return
     const choice: McpTokenChoice = { access: allowChanges ? 'write' : 'read', expiresAt }
     setBusy(true)
     const res = await P.createMcpToken(name.trim(), choice)

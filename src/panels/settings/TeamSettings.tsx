@@ -57,6 +57,7 @@ export function TeamPage({
             value={teamName}
             maxLength={P.NAME_MAX}
             onCommit={(v) => {
+              if (P.refusePausedEdit()) return
               P.updateTeam(ws, { name: v })
               window.showToast?.('Team renamed')
             }}
@@ -221,6 +222,8 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const mine = homeTeams.filter((t) => P.isTeamLeader(t.id))
   const addTeam = () => {
     if (!teamName.trim() || !admin) return
+    // a paused create keeps the typed name
+    if (P.refusePausedEdit()) return
     P.addTeam(teamName.trim())
     window.showToast?.(`Team “${teamName.trim()}” created`)
     setTeamName('')

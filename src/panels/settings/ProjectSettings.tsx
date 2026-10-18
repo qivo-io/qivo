@@ -261,6 +261,7 @@ export function ArchivedProjectsPage() {
     })
   }
   const del = (r: ArchivedProjectVM) => {
+    if (P.refusePausedEdit()) return
     P.removeProject(r.id)
     window.showToast?.(`Deleted “${r.name}”`)
   }
@@ -429,6 +430,8 @@ export function ProjectPage({
     canManageUsers && (!inviteTarget || P.canManageProjectUser(proj.id, inviteTarget.id))
   const subCount = visibleChildren.length
   const del = () => {
+    // a paused delete or archive stays on the project's page
+    if (P.refusePausedEdit()) return
     const parent = proj.parent || null
     const label = proj.name
     P.removeProject(proj.id)
@@ -444,6 +447,7 @@ export function ProjectPage({
      difference is that this one can be taken back, so the page that can take
      it back is where you should be standing when the toast appears. */
   const archive = () => {
+    if (P.refusePausedEdit()) return
     const label = proj.name
     P.archiveProject(proj.id)
     window.showToast?.(`Archived “${label}”`)
@@ -489,6 +493,7 @@ export function ProjectPage({
           maxLength={P.NAME_MAX}
           disabled={!isLead}
           onCommit={(v) => {
+            if (P.refusePausedEdit()) return
             P.updateProject(proj.id, { name: v })
             window.showToast?.(`Renamed to “${v}”`)
           }}
@@ -526,6 +531,7 @@ export function ProjectPage({
                 title={proj.trackDelay ? 'Delay tracking is on' : 'Delay tracking is off'}
                 onClick={() => {
                   const v = !proj.trackDelay
+                  if (P.refusePausedEdit()) return
                   P.updateProject(proj.id, { trackDelay: v })
                   window.showToast?.(v ? 'Projected delays are highlighted' : 'Tasks stay neutral')
                 }}
@@ -575,7 +581,7 @@ export function ProjectPage({
                   return
                 }
                 if (!raw) {
-                  if (own !== null) {
+                  if (own !== null && !P.refusePausedEdit()) {
                     P.updateProject(proj.id, { reviewHours: null })
                     window.showToast?.(`Review time set to ${inheritedReview} h`)
                   }
@@ -583,7 +589,7 @@ export function ProjectPage({
                 }
                 const h = roundReviewHours(Math.min(REVIEW_HOURS_MAX, Math.max(0, n)))
                 el.value = String(h)
-                if (h === own) return
+                if (h === own || P.refusePausedEdit()) return
                 P.updateProject(proj.id, { reviewHours: h })
                 window.showToast?.(`Review time set to ${h} h`)
               }}
