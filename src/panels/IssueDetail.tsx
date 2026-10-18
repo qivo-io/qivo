@@ -59,6 +59,7 @@ import {
   type ActivityVM,
   type AttachmentVM,
   type CommentsEarlier,
+  type CommentsFailure,
   type CommentVM,
   type IssueVM,
   P,
@@ -872,6 +873,44 @@ function EarlierComments({
   )
 }
 
+/* The last row of a thread whose subscription failed (P.commentsFailure).
+   It says so with Retry, and shows static text while the retry runs, in
+   EarlierComments' style and height. `shown` says whether comments loaded
+   before the failure are still on screen above it, which then reads as the
+   newest ones failing to load. */
+function ThreadFailure({
+  state,
+  shown,
+  onRetry,
+}: {
+  state: Exclude<CommentsFailure, 'none'>
+  shown: boolean
+  onRetry: () => void
+}) {
+  if (state === 'retrying') {
+    return (
+      <div
+        data-thread-failure="retrying"
+        className="flex min-h-control-sm items-center text-sm italic text-text-3"
+      >
+        {shown ? 'Loading the latest comments…' : 'Loading comments…'}
+      </div>
+    )
+  }
+  return (
+    <div
+      data-thread-failure="failed"
+      className="flex min-h-control-sm items-center gap-2 text-sm text-text-2"
+    >
+      {shown ? "Couldn't load the latest comments." : "Couldn't load comments."}
+      <Button type="button" variant="ghost" size="sm" className="px-2" onClick={onRetry}>
+        <Icon name="rotateCcw" size={16} />
+        Retry
+      </Button>
+    </div>
+  )
+}
+
 /* The first row of the thread in `feed`, focusable until it loses focus, so
    it can take keyboard focus once without staying focusable to a click. */
 function firstRowForFocus(feed: Element): HTMLElement | null {
@@ -987,11 +1026,8 @@ function CommentRow({
                 autoFocus
                 comment={{
                   label: 'Save',
-                  onCommit: (text: string) => {
-                    P.updateComment(c.id, text)
-                    onDoneEdit()
-                  },
-                  onDiscard: onDoneEdit,
+                  onCommit: (text: string) => P.updateComment(c.id, text),
+                  onClose: onDoneEdit,
                 }}
               />
             </Suspense>
@@ -1676,9 +1712,11 @@ function IssueDetail({
       ? 'New activity on this task. See All.'
       : 'New activity on this task.'
   const canLead = !!it && P.levelOn(it.project) === 'lead'
-  const postComment = (text: string) => {
-    if (!it) return
-    P.addComment(it.uuid, text)
+  /* Resolves whether the server saved the comment; the composer keeps the
+     draft until it did. */
+  const postComment = (text: string): Promise<boolean> => {
+    if (!it) return Promise.resolve(false)
+    const saved = P.addComment(it.uuid, text)
     // chat order: follow the fresh comment to the bottom. One tick late —
     // addComment emits synchronously but React's re-render is scheduled, so
     // reading scrollHeight now would use the pre-append height.
@@ -1690,6 +1728,7 @@ function IssueDetail({
         el?.querySelector('[data-composer]')?.scrollIntoView({ block: 'nearest' })
       } else if (el) el.scrollTop = el.scrollHeight
     }, 0)
+    return saved
   }
   const labelClass = 'text-md font-semibold text-text-1'
 
@@ -1785,7 +1824,7 @@ function IssueDetail({
           threads the rows together now. */}
       <div data-spine-feed ref={mobile ? actScrollRef : undefined}>
         <div data-spine className="relative flex flex-col gap-4">
-          {!P.commentsLoaded && (
+          {!P.commentsLoaded && P.commentsFailure === 'none' && (
             <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
               Loading comments…
             </div>
@@ -1813,12 +1852,21 @@ function IssueDetail({
               ? [<UnreadDivider key="unread" />, row]
               : [row]
           })}
-          {P.commentsLoaded && spine.length === 0 && (
+          {P.commentsLoaded && P.commentsFailure === 'none' && spine.length === 0 && (
             <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
               {actFilter === 'comments' ? 'No comments yet.' : 'No activity yet.'}
             </div>
           )}
           {mark.place === 'tail' && <UnreadDivider key="unread" place="tail" note={tailNote} />}
+          {/* a failed thread never passes for an empty one. The comments
+              that did load stay, and this row closes the thread. */}
+          {P.commentsFailure !== 'none' && (
+            <ThreadFailure
+              state={P.commentsFailure}
+              shown={comments.length > 0}
+              onRetry={P.retryComments}
+            />
+          )}
         </div>
       </div>
 

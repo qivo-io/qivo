@@ -259,6 +259,12 @@ let syncWatchEpoch = 0
 let watchedComments: string | null = null
 let commentsUnsub: (() => void) | null = null
 let commentsWatchEpoch = 0
+/* Counts thread subscriptions, so a replaced one (P.retryComments) is
+   ignored even if it calls back once more. */
+let threadSubscription = 0
+/* How long a failure skipped as held (subscribeThread) waits for the
+   server's answer before it shows anyway. */
+const HELD_FAILURE_MS = 5000
 /* The last thread the comments subscription delivered — the rollback anchor
    for optimistic comment rows (rows.comments is outside serverSnap). null =
    nothing delivered yet for the watched issue. It is the thread's live
@@ -279,6 +285,11 @@ let earlierLoad: 'idle' | 'loading' | 'failed' = 'idle'
 /** What the task window shows above the oldest loaded comment
     (P.commentsEarlier). */
 export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
+
+/** Whether the watched thread's subscription failed (P.commentsFailure):
+    'failed' until a later delivery or Retry, 'retrying' from Retry until the
+    server answers the new subscription (subscribeThread), else 'none'. */
+export type CommentsFailure = 'none' | 'failed' | 'retrying'
 
 /* Re-adopt the watched thread from its last delivery and the comments loaded
    before it. Safe to call blind: with nothing delivered (or nothing watched)
@@ -328,6 +339,89 @@ function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
   rows.comments.delete(id)
+}
+
+/* Subscribes to the watched thread `issueUuid` in organization `orgId`,
+   replacing any earlier subscription. Deliveries share run()'s paint gate,
+   so a server echo cannot erase an optimistic comment before its write
+   settles. A failed query keeps the comments delivered before it and shows
+   as P.commentsFailure. Convex reruns it when the data it read changes, and
+   the next delivery ends the failure. Two refusals empty the thread instead,
+   so they fail closed. not_found (the task is gone or hidden) loads it
+   empty, and forbidden (my access is gone) empties it and shows the
+   failure. */
+function subscribeThread(issueUuid: string, orgId: string) {
+  commentsUnsub?.()
+  const subscription = ++threadSubscription
+  const current = () => watchedComments === issueUuid && threadSubscription === subscription
+  /* ConvexClient holds a query's last result until the server answers the
+     next subscription to it, and hands a held result to a new listener on a
+     0 ms timer that onUpdate queues. This store's one listener to the thread
+     was just dropped, so an error before the timer queued below runs is
+     taken for the dropped run's and skipped, and Retry, or a task opened
+     again at once, waits for the rerun. Should the server's own answer have
+     come that early instead, the client replays nothing after it, so a
+     skipped failure shows once HELD_FAILURE_MS passes with no other answer. */
+  let held = true
+  let skipped: { err: unknown } | null = null
+  const failed = (err: unknown) => {
+    console.error('[qivo] comments subscription failed:', err)
+    const code = errData(err).code
+    PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
+    if (code !== 'not_found' && code !== 'forbidden') {
+      // nothing to adopt. What is on screen stays, with the failure under it.
+      emit('comments')
+      return
+    }
+    commentsSnap = []
+    olderComments = []
+    threadStart = true
+    if (inFlight > 0) {
+      commentsDirty = true
+      return
+    }
+    adoptComments()
+    rebuildComments()
+    emit('comments')
+  }
+  commentsUnsub = convex.onUpdate(
+    api.snapshot.commentThread,
+    { org_id: orgId, issue_id: issueUuid },
+    (page) => {
+      if (!current()) return
+      skipped = null
+      PLANNER.commentsFailure = 'none'
+      // gate the paint, never the data: while our own writes are in flight
+      // (an optimistic comment among them) the delivery is recorded and the
+      // last settle flushes it — adopting now would eat the optimistic row
+      receiveThread(page)
+      if (inFlight > 0) {
+        commentsDirty = true
+        return
+      }
+      adoptComments()
+      rebuildComments()
+      emit('comments')
+    },
+    (err) => {
+      if (!current()) return
+      if (held) {
+        skipped = { err }
+        return
+      }
+      skipped = null
+      failed(err)
+    },
+  )
+  setTimeout(() => {
+    held = false
+  }, 0)
+  setTimeout(() => {
+    if (!current() || !skipped) return
+    const { err } = skipped
+    skipped = null
+    failed(err)
+  }, HELD_FAILURE_MS)
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -1205,12 +1299,16 @@ function run<T>(
 }
 
 /* run() a write and resolve whether the server accepted it. A refusal is
-   toasted and rolled back as usual before the promise settles. */
-function runSaved(op: Promise<unknown>): Promise<boolean> {
+   toasted and rolled back as usual before the promise settles. `onOk` is
+   run()'s, called with the result before the promise resolves. */
+function runSaved<T>(op: Promise<T>, onOk?: (v: T) => void): Promise<boolean> {
   return new Promise<boolean>((resolve) =>
     run(
       op,
-      () => resolve(true),
+      (v) => {
+        onOk?.(v)
+        resolve(true)
+      },
       undefined,
       (error) => {
         toastWriteError(error)
@@ -2545,6 +2643,9 @@ export const PLANNER = {
   // 'more', or 'loading' while P.loadEarlierComments runs and 'failed' after
   // it failed
   commentsEarlier: 'none' as CommentsEarlier,
+  // whether the watched thread stopped loading; the comments delivered
+  // before the failure stay (P.retryComments)
+  commentsFailure: 'none' as CommentsFailure,
   // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
   // null when it has none, for the open, visible tasks the last answer
   // covered; a task with no entry is not known yet
@@ -4222,11 +4323,10 @@ export const PLANNER = {
     return download ? `${url}&download=1` : url
   },
 
-  /** Subscribe to one task's thread. Deliveries share run()'s paint gate so
-      server echoes cannot erase an optimistic comment before its write settles. */
+  /** Subscribe to one task's thread (subscribeThread). */
   watchComments: (issueUuid: string | null) => {
     if (watchedComments === issueUuid) return
-    const watchEpoch = ++commentsWatchEpoch
+    ++commentsWatchEpoch
     watchedComments = issueUuid
     if (commentsUnsub) {
       commentsUnsub()
@@ -4239,6 +4339,7 @@ export const PLANNER = {
     threadStart = false
     earlierLoad = 'idle'
     PLANNER.commentsLoaded = false
+    PLANNER.commentsFailure = 'none'
     rebuildComments()
     emit('comments')
     if (!issueUuid) return
@@ -4253,40 +4354,20 @@ export const PLANNER = {
       emit('comments')
       return
     }
-    commentsUnsub = convex.onUpdate(
-      api.snapshot.commentThread,
-      { org_id: row.org_id, issue_id: issueUuid },
-      (page) => {
-        if (watchedComments !== issueUuid || commentsWatchEpoch !== watchEpoch) return
-        // gate the paint, never the data: while our own writes are in flight
-        // (an optimistic comment among them) the delivery is recorded and the
-        // last settle flushes it — adopting now would eat the optimistic row
-        receiveThread(page)
-        if (inFlight > 0) {
-          commentsDirty = true
-          return
-        }
-        adoptComments()
-        rebuildComments()
-        emit('comments')
-      },
-      (err) => {
-        if (watchedComments !== issueUuid || commentsWatchEpoch !== watchEpoch) return
-        // not_found = the issue vanished / lost visibility mid-watch — the
-        // fail-closed answer is an EMPTY loaded thread, never a spinner
-        console.error('[qivo] comments subscription failed:', err)
-        commentsSnap = []
-        olderComments = []
-        threadStart = true
-        if (inFlight > 0) {
-          commentsDirty = true
-          return
-        }
-        adoptComments()
-        rebuildComments()
-        emit('comments')
-      },
-    )
+    subscribeThread(issueUuid, row.org_id)
+  },
+
+  /** Retry. A fresh subscription makes the server run the watched thread's
+      failed query again (it never caches a failed run), and 'retrying'
+      lasts until the server answers it, or HELD_FAILURE_MS without an
+      answer. The comments on screen stay meanwhile. Does nothing unless the
+      thread failed. */
+  retryComments: () => {
+    const row = watchedComments ? rows.issues.get(watchedComments) : undefined
+    if (!watchedComments || !row || PLANNER.commentsFailure !== 'failed') return
+    PLANNER.commentsFailure = 'retrying'
+    emit('comments')
+    subscribeThread(watchedComments, row.org_id)
   },
 
   /** Loads the comments before the oldest loaded one in the watched thread
@@ -4419,21 +4500,22 @@ export const PLANNER = {
     run(write(api.teamSync.stamp, { org_id: row.org_id, profile_id: profileId, first_since }))
   },
 
-  /** Post a comment (issue uuid — modal-side, like addAttachment). Returns
-      the new comment id, or null when the issue is gone/refused. A body over
-      TEXT_MAX after trimming, or any comment while edits are paused, is
-      refused here with a toast, before the optimistic row, so the caller
-      can keep the draft. */
-  addComment: (issueUuid: string, body: string): string | null => {
+  /** Post a comment (issue uuid — modal-side, like addAttachment). Resolves
+      whether the server saved it, so the caller keeps the draft until it
+      did. A body over TEXT_MAX after trimming, or any comment while edits
+      are paused, is refused here with a toast, before the optimistic row.
+      A server refusal, such as the comment cap, is toasted and its row
+      rolled back before the promise resolves false. */
+  addComment: (issueUuid: string, body: string): Promise<boolean> => {
     const row = rows.issues.get(issueUuid)
-    if (!row) return null
+    if (!row) return Promise.resolve(false)
     const text = (body || '').trim()
-    if (!text) return null
+    if (!text) return Promise.resolve(false)
     if (text.length > TEXT_MAX) {
       toast(TEXT_TOO_LONG.comment)
-      return null
+      return Promise.resolve(false)
     }
-    if (refusePausedEdit()) return null
+    if (refusePausedEdit()) return Promise.resolve(false)
     const rec: Row<'comments'> = {
       id: crypto.randomUUID(),
       issue_id: issueUuid,
@@ -4446,30 +4528,40 @@ export const PLANNER = {
       rebuildComments()
       emit('comments')
     }
-    run(
+    return runSaved(
       write(api.comments.create, {
         org_id: row.org_id,
         id: rec.id,
         issue_id: issueUuid,
         body: text,
       }),
-    )
-    return rec.id
+    ).then((saved) => {
+      // The rollback re-adopts the delivered thread, which drops this row.
+      // A thread that never arrived (still loading, or failed) has no
+      // delivery to re-adopt, so the refused row goes here.
+      if (!saved && rows.comments.delete(rec.id)) {
+        rebuildComments()
+        emit('comments')
+      }
+      return saved
+    })
   },
 
   /** Replaces a comment's body with `body`, trimmed, and stamps the edit.
-      A missing comment, a blank body or the same text changes nothing. A
-      body over TEXT_MAX is refused here with a toast, before the paint, so
-      the editor keeps the draft. */
-  updateComment: (id: string, body: string) => {
+      Resolves whether the server saved it, so the editor keeps the draft
+      until it did; the same text resolves true without a write, and a
+      missing comment or a blank body false. A body over TEXT_MAX is refused
+      here with a toast, before the paint. */
+  updateComment: (id: string, body: string): Promise<boolean> => {
     const rec = rows.comments.get(id)
     const text = (body || '').trim()
-    if (!rec || !text || rec.body === text) return
+    if (!rec || !text) return Promise.resolve(false)
+    if (rec.body === text) return Promise.resolve(true)
     if (text.length > TEXT_MAX) {
       toast(TEXT_TOO_LONG.comment)
-      return
+      return Promise.resolve(false)
     }
-    if (refusePausedEdit()) return
+    if (refusePausedEdit()) return Promise.resolve(false)
     const issue = rows.issues.get(rec.issue_id)
     const org = issue ? issue.org_id : HOME_ORG
     rec.body = text
@@ -4484,7 +4576,7 @@ export const PLANNER = {
     // edit is written into olderComments, the truth a later adopt reads. The
     // last settle repaints from it, in case another write's refusal has
     // rolled the screen back to before this edit meanwhile.
-    run(write(api.comments.update, { org_id: org, id, body: text }), () => {
+    return runSaved(write(api.comments.update, { org_id: org, id, body: text }), () => {
       const kept = olderComments.find((r) => r.id === id)
       if (!kept) return
       Object.assign(kept, edit)
@@ -6298,6 +6390,7 @@ export function disposeDemoStore() {
   commentsDirty = false
   PLANNER.loaded = false
   PLANNER.commentsLoaded = false
+  PLANNER.commentsFailure = 'none'
   rebuild()
   emit()
 }

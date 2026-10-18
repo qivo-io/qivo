@@ -95,15 +95,15 @@ describe('the text cap in the store', () => {
     expect(toast).not.toHaveBeenCalled()
   })
 
-  it('posts a comment of 20,000 characters after trimming and refuses one more', () => {
+  it('posts a comment of 20,000 characters after trimming and refuses one more', async () => {
     const { P, TEXT_TOO_LONG } = store
     P.watchComments('task-a')
     publishComments([])
-    expect(P.addComment('task-a', ` ${OVER} `)).toBeNull()
+    expect(await P.addComment('task-a', ` ${OVER} `)).toBe(false)
     expect(toast).toHaveBeenCalledWith(TEXT_TOO_LONG.comment, 'error')
     expect(P.comments).toEqual([])
     expect(sent).toEqual([])
-    expect(P.addComment('task-a', `  ${AT_CAP}  `)).not.toBeNull()
+    void P.addComment('task-a', `  ${AT_CAP}  `)
     expect(P.comments.map((c) => c.body)).toEqual([AT_CAP])
     expect(sent).toEqual(['comments:create'])
   })

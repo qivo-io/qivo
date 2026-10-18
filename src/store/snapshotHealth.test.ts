@@ -252,7 +252,7 @@ describe('snapshot trouble', () => {
     const { P } = store
     P.watchComments('task-a')
     live().fail(new Error(QUERY_FAILURE))
-    expect(P.addComment('task-a', 'Measured on the bench')).toBeNull()
+    expect(await P.addComment('task-a', 'Measured on the bench')).toBe(false)
     expect(P.comments).toHaveLength(0)
     expect(sentNames()).not.toContain('comments:create')
     expect(P.refusePausedEdit()).toBe(true)
