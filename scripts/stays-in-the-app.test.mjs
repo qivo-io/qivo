@@ -32,6 +32,24 @@ function staysInTheApp(text) {
 
 const read = (file) => readFileSync(new URL(file, root), 'utf8')
 
+/* A small copy for the parser checks, so editing the real list in all three
+ * files never breaks them. */
+const FIXTURE = [
+  '# Guide',
+  '',
+  '## Stays in the app',
+  '',
+  'Introduction text.',
+  '',
+  '- Deleting a project, a team or a label.',
+  '- Adding or removing other people as followers of a task. A credential',
+  '  changes only its own follow.',
+  '',
+  '## Next section',
+  '',
+  '- Not part of the list.',
+].join('\n')
+
 describe('Stays in the app', () => {
   it('holds the same bullets in every copy', () => {
     const [first, ...others] = COPIES.map((file) => staysInTheApp(read(file)))
@@ -39,25 +57,31 @@ describe('Stays in the app', () => {
     for (const list of others) expect(list).toEqual(first)
   })
 
+  it('reads the bullets up to the next heading, each on one line', () => {
+    expect(staysInTheApp(FIXTURE)).toEqual([
+      'Deleting a project, a team or a label.',
+      'Adding or removing other people as followers of a task. A credential changes only its own follow.',
+    ])
+  })
+
   it('reads a rewrapped bullet as unchanged and an edited one as a change', () => {
-    const text = read('docs/rest-api.md')
-    const list = staysInTheApp(text)
-    const rewrapped = text.replace(
-      '- Adding or removing other people as followers of a task. A credential\n  changes',
-      '- Adding or removing other people as followers of a task.\n  A credential changes',
+    const list = staysInTheApp(FIXTURE)
+    const rewrapped = FIXTURE.replace(
+      'task. A credential\n  changes',
+      'task.\n  A credential changes',
     )
-    expect(rewrapped).not.toBe(text)
+    expect(rewrapped).not.toBe(FIXTURE)
     expect(staysInTheApp(rewrapped)).toEqual(list)
-    const edited = text.replace('- Inviting a guest to a project by email.', '- Inviting a guest.')
+    const edited = FIXTURE.replace('a team or a label', 'a team')
     expect(staysInTheApp(edited)).not.toEqual(list)
-    expect(staysInTheApp(text.replace(/\n- Billing[^\n]*/, ''))).toHaveLength(list.length - 1)
+    const removed = FIXTURE.replace('- Deleting a project, a team or a label.\n', '')
+    expect(staysInTheApp(removed)).toEqual(list.slice(1))
   })
 
   it('refuses a file without the heading or with two', () => {
-    const text = read('public/skill.md')
-    expect(() => staysInTheApp(text.replace('## Stays in the app', '## Browser only'))).toThrow(
+    expect(() => staysInTheApp(FIXTURE.replace('## Stays in the app', '## Browser only'))).toThrow(
       'found 0',
     )
-    expect(() => staysInTheApp(`${text}\n## Stays in the app\n`)).toThrow('found 2')
+    expect(() => staysInTheApp(`${FIXTURE}\n### Stays in the app\n`)).toThrow('found 2')
   })
 })

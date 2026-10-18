@@ -375,10 +375,11 @@ export const gatewayAvatar = internalQuery({
  * a removed login, its cleanup. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
-/* A sweep never deletes a file younger than this when its run starts. Upload
- * tickets live exactly this long (model/attachments.ts
- * UPLOAD_TICKET_TTL_MS), so no sweep deletes a file while the ticket it was
- * uploaded for can still confirm it. */
+/* A sweep never deletes a file younger than this when its run starts.
+ * Attachment upload tickets (REST and MCP) live exactly this long
+ * (model/attachments.ts UPLOAD_TICKET_TTL_MS) and background upload tickets
+ * at most 15 minutes (appearance.ts UPLOAD_TTL_SECONDS), so no sweep deletes
+ * a file while the ticket it was uploaded for can still confirm it. */
 const REAP_FLOOR_MS = 60 * 60 * 1000
 
 const vReapCounts = v.object({

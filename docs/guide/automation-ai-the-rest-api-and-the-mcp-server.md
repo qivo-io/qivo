@@ -57,8 +57,8 @@ choice for their open tasks.
 
 To learn who a credential acts as and find people, MCP offers `get_me`,
 `list_users` and `list_project_users`, and `update_user` sets a person's
-plannable weekly hours. REST uses `/v1/me`, `/v1/users` and
-`/v1/projects/{ref}/users`.
+plannable weekly hours. REST reads with `/v1/me`, `/v1/users` and
+`/v1/projects/{ref}/users`, and `PATCH /v1/users/{id}` sets the hours.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
