@@ -992,6 +992,32 @@ describe('Deleted by', () => {
   })
 })
 
+describe('organization groups', () => {
+  it('groups a narrowed answer from an organization the capped list left out', async () => {
+    const withDaniel = (snap: Snapshot) => {
+      const me = snap.profiles[0]
+      snap.profiles.push({
+        ...me,
+        id: 'daniel',
+        name: 'Daniel Berg',
+        org_role: 'user',
+        auth_user_id: 'account-daniel',
+      })
+    }
+    await open('admin', withDaniel)
+    // the capped main list reached only two other organizations
+    const other = { org_id: 'org-other', org_name: 'Aurora Studio' }
+    const third = { org_id: 'org-third', org_name: 'Nimbus Works' }
+    await deliver([task(1, other), task(2, { ...third, deleted_at: at(14, 30) })], true)
+    // the admin chooses someone from their own organization's roster
+    await deletedByChoice('Daniel Berg, Testbed Labs')
+    await deliverNarrowed('daniel', [task(9, { deleter: DANIEL, deleted_at: at(9, 0, 0, 2) })])
+    const groups = [...document.querySelectorAll<HTMLElement>('[data-org-group]')]
+    expect(groups.map((g) => g.firstElementChild?.textContent)).toEqual(['Testbed Labs'])
+    expect(rowIds()).toEqual(['item-9'])
+  })
+})
+
 describe('Delete now', () => {
   it('lets an admin delete a row for good from its menu', async () => {
     await open()

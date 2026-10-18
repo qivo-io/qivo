@@ -28,6 +28,7 @@ describe('archiving and deleting from the Archive or delete window', () => {
   let requests: { name: string; args: Record<string, unknown> }[]
   // the server's answer per mutation name; a write without one never settles
   let answers: Record<string, () => Promise<null>>
+  let deliverSnap: (edit: (snap: Snapshot) => void) => Promise<void>
 
   async function load() {
     vi.resetModules()
@@ -83,7 +84,16 @@ describe('archiving and deleting from the Archive or delete window', () => {
       task('c', 5),
     )
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') next(structuredClone(snap))
+      if (getFunctionName(ref) === 'snapshot:forMe') {
+        next(structuredClone(snap))
+        // a later delivery of the server's snapshot, as `edit` leaves it
+        deliverSnap = async (edit) => {
+          const later = structuredClone(snap)
+          edit(later)
+          next(later)
+          await Promise.resolve()
+        }
+      }
       return () => {}
     })
     const store = await import('./planner')
@@ -208,6 +218,26 @@ describe('archiving and deleting from the Archive or delete window', () => {
     expect(vm('aa')?.parent).toBeNull()
     expect(vm('root')).toBeDefined()
     expect(vm('c')?.title).toBe('c')
+  })
+
+  it('keeps no marker for a delete whose delivery came first, so a restored task stays through a rollback', async () => {
+    let settle: (value: null) => void = () => {}
+    answers['issues:deleteDeep'] = () => new Promise((resolve) => (settle = resolve))
+    const deleted = P.deleteIssue(handle('c'), [], true)
+    // the delivery without the task lands before the answer
+    await deliverSnap((snap) => {
+      snap.issues = snap.issues.filter((issue) => issue.id !== 'c')
+    })
+    settle(null)
+    expect(await deleted).toBe(true)
+    expect(vm('c')).toBeUndefined()
+    // the task comes back from Deleted items
+    await deliverSnap(() => {})
+    expect(vm('c')).toBeDefined()
+    refuse('issues:update', 'refused')
+    P.updateIssue(handle('b'), { title: 'renamed' })
+    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalled())
+    expect(vm('c')).toBeDefined()
   })
 
   it('keeps an accepted project delete through a rollback', async () => {

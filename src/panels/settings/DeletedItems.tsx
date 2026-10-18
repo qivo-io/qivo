@@ -394,8 +394,9 @@ export function DeletedItemsPage() {
   }, [main.list, by, options])
 
   const filtered = kind !== 'all' || !!lower || by !== ANYONE
-  // a search hit can come from an organization that a capped list stopped before
-  const orgRows = [...all, ...hitItems.values()]
+  // a search hit, or a narrowed answer such as one person's deletes, can come
+  // from an organization that a capped list stopped before
+  const orgRows = [...all, ...rows, ...hitItems.values()]
   const orgs = [...new Set(orgRows.map((row) => row.org_id))]
   const grouped = orgs.length > 1
   const groups = grouped

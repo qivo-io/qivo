@@ -3787,9 +3787,13 @@ export const PLANNER = {
     }
     const epoch = storeEpoch
     // kept until a delivery no longer holds them (adopt), so a rollback after
-    // another refused write cannot bring them back meanwhile
+    // another refused write cannot bring them back meanwhile. Only while the
+    // server's last snapshot still holds them: once a delivery dropped them,
+    // nothing can bring them back, and a marker left behind would hide them
+    // again after a restore.
     const accepted = () => {
-      if (epoch === storeEpoch) pendingTaskDeletes.set(uuid, gone)
+      if (epoch !== storeEpoch) return
+      if (serverSnap?.issues.some((issue) => gone.has(issue.id))) pendingTaskDeletes.set(uuid, gone)
     }
     const text = (reason || '').trim()
     const sent = write(api.issues.deleteDeep, {
@@ -5040,7 +5044,8 @@ export const PLANNER = {
         // the delivery may already hold the result; the mirror finds nothing
         // then. Kept for a rollback, as task deletes are.
         if (epoch === storeEpoch) {
-          if (rows.projects.has(id)) pendingProjectDeletes.add(id)
+          if (serverSnap?.projects.some((project) => project.id === id))
+            pendingProjectDeletes.add(id)
           mirrorProjectDelete(id)
         }
         return true
