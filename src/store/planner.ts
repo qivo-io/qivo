@@ -2,8 +2,10 @@
    across organizations; display keys are org-scoped QN numbers. Relationships,
    project access and week-indexed schedules are derived from the raw rows.
 
-   Snapshots always update serverSnap. During optimistic writes, run() holds
-   their paint until the last write settles; refusal restores server truth.
+   Every non-null snapshot updates serverSnap. A later null (no seat left)
+   keeps the last one as the rollback anchor. During optimistic writes, run()
+   holds their paint until the last write settles; refusal restores server
+   truth.
    Comments and Team sync have separate subscriptions and update channels.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
@@ -827,11 +829,12 @@ export const TEXT_TOO_LONG = {
    not contain our effects, and adopting it would wipe the optimistic patch,
    flicker the pre-write state, then repaint when our write's own delivery
    lands. So both subscription handlers ALWAYS record the delivery (serverSnap
-   / commentsSnap) but defer adopt/rebuild/emit while inFlight > 0; the last
-   settle flushes the newest held delivery. Convergence is guaranteed —
-   Convex redelivers snapshots that include our own completed mutations —
-   and rollback stays trivially correct: a failed write's effects never
-   existed server-side, so re-adopting the newest serverSnap is the truth. */
+   / commentsSnap; a later null snapshot keeps the last serverSnap) but defer
+   adopt/rebuild/emit while inFlight > 0; the last settle flushes the newest
+   held delivery. Convergence is guaranteed — Convex redelivers snapshots
+   that include our own completed mutations — and rollback stays trivially
+   correct: a failed write's effects never existed server-side, so
+   re-adopting the newest serverSnap is the truth. */
 let inFlight = 0
 let storeEpoch = 0
 let demoDisposed = false
@@ -1062,10 +1065,11 @@ function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
    words, shaped by asSentence. Everything else is deliberately generic. The
    wording says "reverted", never "reloading", because rollback is a repaint,
    not a refetch. A paused write never left the browser, so its sentence is
-   the pause itself. */
+   the pause itself. A write that was in flight when the last seat went is
+   refused as forbidden, and it reads like the writes paused after it. */
 function toastWriteError(e: unknown) {
   const d = errData(e)
-  if (d.code === 'paused') {
+  if (d.code === 'paused' || (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')) {
     toastPaused()
     return
   }

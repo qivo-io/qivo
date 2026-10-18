@@ -410,6 +410,12 @@ describe('snapshot trouble', () => {
     await settle()
     expect(P.issueById[task.id].status).toBe('todo')
     expect(P.snapshotTrouble()?.kind).toBe('no_access')
+    // it reads like the edits paused after the seat went
+    expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+    expect(showToast).not.toHaveBeenCalledWith(
+      "You don't have permission for that. Change reverted.",
+      'error',
+    )
   })
 
   it('keeps lost access through a query fault until a seat comes back', async () => {
