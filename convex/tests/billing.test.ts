@@ -1,6 +1,7 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
+import type { Id } from '../_generated/dataModel'
 import { STORAGE_STALL_MS } from '../billingSync'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
@@ -765,6 +766,50 @@ describe('provider state, retries and billing snapshots', () => {
       })
     }
     Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
+  })
+
+  it('counts each row once when tasks are archived or restored during the sample', async () => {
+    const { t, f } = await fixture()
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
+    const rows: Id<'issue_attachments'>[] = []
+    for (const [size_bytes, archived] of [
+      [2_000_000_000, false],
+      [3_000_000_000, false],
+      [4_000_000_000, true],
+    ] as const) {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      rows.push(
+        await t.run((ctx) =>
+          ctx.db.insert('issue_attachments', {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            id: uuid(),
+            issue_id: task.id,
+            storage_id,
+            name: 'fixture.bin',
+            size_bytes,
+            inline: false,
+            created_at: NOW,
+            ...(archived ? { task_archived: true as const } : {}),
+          }),
+        ),
+      )
+    }
+    STORAGE_PAGE.rows = 1
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    // the first step counts the first row
+    vi.advanceTimersToNextTimer()
+    await t.finishInProgressScheduledFunctions()
+    // its task is archived, and the archived one restored
+    await t.run(async (ctx) => {
+      await ctx.db.patch(rows[0], { task_archived: true })
+      await ctx.db.patch(rows[2], { task_archived: undefined })
+    })
+    await sample(t)
+    expect(await periodAt(t, START)).toMatchObject({
+      storage_bytes: 9_000_000_000,
+      storage_blocks: 4,
+    })
   })
 
   it('starts a stalled sample again, and the earlier run stops', async () => {

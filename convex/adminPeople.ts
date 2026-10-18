@@ -75,14 +75,14 @@ const BAN_NEVER_EXPIRES = '9999-12-31T00:00:00.000Z'
 
 /* ------------------------------------------------------------- auth columns */
 
-type AuthColumns = { last_sign_in_at: string | null; banned_until: string | null }
+export type AuthColumns = { last_sign_in_at: string | null; banned_until: string | null }
 
 const NO_AUTH_COLUMNS: AuthColumns = { last_sign_in_at: null, banned_until: null }
 
 /* The two approximated auth.users columns for one Better Auth login. The
  * catch is the LEFT JOIN's null arm. A vanished or unreadable user row means
  * no auth columns, never a failed console view. */
-async function authColumnsFor(ctx: QueryCtx, authUserId: string): Promise<AuthColumns> {
+export async function authColumnsFor(ctx: QueryCtx, authUserId: string): Promise<AuthColumns> {
   try {
     const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: 'user',

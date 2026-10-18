@@ -265,6 +265,11 @@ const issueAttachmentsTable = defineTable({
   task_archived: taskArchived,
 })
   .index('by_org_task_archived_issue', ['org_id', 'task_archived', 'issue_id'])
+  // An organization's rows in the order they were stored. Archiving a task
+  // moves its rows within by_org_task_archived_issue but not here, so the
+  // billing storage sample pages through this one (model/billing.ts
+  // storagePage).
+  .index('by_org', ['org_id'])
   .index('by_uuid', ['id'])
   .index('by_issue', ['issue_id'])
   .index('by_storage', ['storage_id'])

@@ -338,6 +338,19 @@ describe('orgDetail', () => {
     ])
   })
 
+  it('answers as the earlier single-query reads do, which older console builds still call', async () => {
+    const t = newT()
+    const { f } = await peopleFixture(t)
+    const asOp = await operator(t)
+    expect(await asOp.action(api.adminPeople.orgDetail, { org_id: f.org.id })).toEqual(
+      await asOp.query(api.admin.orgDetail, { org_id: f.org.id }),
+    )
+    for (const search of ['', 'testbed view'])
+      expect(await asOp.action(api.adminPeople.listUsers, { search })).toEqual(
+        await asOp.query(api.admin.listUsers, { search }),
+      )
+  })
+
   it('refuses an organization that does not exist', async () => {
     const t = newT()
     const asOp = await operator(t)

@@ -95,6 +95,8 @@ activityRetention:trim mutation internal {"type":"object","value":{"org_id":{"fi
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
+admin:listUsers query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
+admin:orgDetail query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:promoteOrgAdmin mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:removeOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:banUser action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
@@ -629,6 +631,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // bare on purpose — the AdminGate's fail-OPEN probe answers false, never
     // throws (admin.ts documents it); every real admin door below re-checks.
     isOperator: 'query',
+    // the console's earlier single-query reads, kept for older console
+    // builds; adminPeople holds the paged ones
+    orgDetail: 'platformQuery',
+    listUsers: 'platformQuery',
     promoteOrgAdmin: 'platformMutation',
     auditLog: 'platformQuery',
   },
@@ -843,7 +849,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 164
+const PUBLIC_COUNT = 166
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

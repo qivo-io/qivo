@@ -13,12 +13,23 @@
  * The reads that page through the data in actions live apart: the
  * organization table, the platform totals and the organization names in
  * adminStats.ts, and the Users page and an organization's page in
- * adminPeople.ts. */
+ * adminPeople.ts. listUsers and orgDetail here are those two pages' earlier
+ * single-query reads, kept for older console builds. */
 
 import { v } from 'convex/values'
 import { components } from './_generated/api'
+import type { Doc } from './_generated/dataModel'
+import type { QueryCtx } from './_generated/server'
 import { internalMutation, query } from './_generated/server'
+import {
+  type AdminMemberRow,
+  type AdminOrgDetail,
+  type AdminUserRow,
+  type AuthColumns,
+  authColumnsFor,
+} from './adminPeople'
 import { markBillingMembershipChanged } from './lib/billableUsers'
+import { subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import {
@@ -29,6 +40,7 @@ import {
   require,
   rule,
 } from './lib/functions'
+import { allWordsMatcher } from './lib/search'
 import { audit, operatorEmail } from './model/admin'
 import { leaveAllTeams } from './model/orgs'
 import { adminElsewhere, homeElsewhere } from './model/people'
@@ -50,6 +62,170 @@ export const isOperator = query({
       .withIndex('by_auth_user', (q) => q.eq('auth_user_id', identity.subject))
       .first()
     return operator !== null
+  },
+})
+
+/* ------------------------------------------------------- earlier console reads */
+
+/* The console's people reads before they moved to adminPeople.ts, kept so
+ * that console tabs opened before that release, and a frontend rolled back
+ * past it, keep working (docs/deployment.md, Recovery and compatibility).
+ * Each reads its whole answer in one query, so a large deployment or
+ * organization can pass Convex's limits here. Remove them once no served
+ * console build calls them. */
+
+/* One component round trip per distinct login across a profile list. */
+async function authColumnsMap(
+  ctx: QueryCtx,
+  profiles: Array<Doc<'profiles'>>,
+): Promise<Map<string, AuthColumns>> {
+  const map = new Map<string, AuthColumns>()
+  for (const p of profiles) {
+    if (p.auth_user_id === undefined || map.has(p.auth_user_id)) continue
+    map.set(p.auth_user_id, await authColumnsFor(ctx, p.auth_user_id))
+  }
+  return map
+}
+
+const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+/* The seat's newest 'invite_email' audit row for its current address. An
+ * org admin may correct a pending seat's address, and a letter to the old
+ * address says nothing about the new one. */
+async function latestInvite(
+  ctx: QueryCtx,
+  seat: Doc<'profiles'>,
+): Promise<AdminMemberRow['invite']> {
+  const rows = ctx.db
+    .query('platform_audit_log')
+    .withIndex('by_target_profile', (q) => q.eq('target_profile_id', seat.id))
+    .order('desc')
+  for await (const row of rows) {
+    if (row.action !== 'invite_email') continue
+    const detail = row.detail as { sent?: unknown; email?: unknown }
+    if (detail.email !== seat.email) continue
+    return { sent: detail.sent === true, at: row.ts }
+  }
+  return null
+}
+
+/* admin_org_detail (LAST def 0096:377-418): members and teams each ordered by
+ * name; the missing org throws the SQL's sentence. */
+export const orgDetail = platformQuery({
+  args: { org_id: v.string() },
+  handler: async (ctx, { org_id }): Promise<AdminOrgDetail> => {
+    const org = await byId(ctx, 'organizations', org_id)
+    require(org !== null, notFound('organization not found'))
+    const subscription = await subscriptionFor(ctx, org.id)
+    const plan = subscription ? await byId(ctx, 'billing_plans', subscription.plan_id) : null
+
+    const profiles = await ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect()
+    profiles.sort((a, b) => cmp(a.name, b.name))
+    const authColumns = await authColumnsMap(ctx, profiles)
+    const members: AdminMemberRow[] = []
+    for (const p of profiles) {
+      const cols = p.auth_user_id !== undefined ? authColumns.get(p.auth_user_id) : undefined
+      const pending = p.kind === 'person' && p.auth_user_id === undefined
+      members.push({
+        profile_id: p.id,
+        name: p.name,
+        email: p.email ?? null,
+        org_role: p.org_role,
+        kind: p.kind,
+        active: p.active,
+        has_login: p.auth_user_id !== undefined,
+        last_sign_in_at: cols?.last_sign_in_at ?? null,
+        banned_until: cols?.banned_until ?? null,
+        created_at: p.created_at,
+        invite: pending ? await latestInvite(ctx, p) : null,
+      })
+    }
+
+    const teamDocs = await ctx.db
+      .query('teams')
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect()
+    teamDocs.sort((a, b) => cmp(a.name, b.name))
+    const teams: AdminOrgDetail['teams'] = []
+    for (const team of teamDocs) {
+      const members_ = await ctx.db
+        .query('team_members')
+        .withIndex('by_team', (q) => q.eq('team_id', team.id))
+        .collect()
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_team', (q) => q.eq('team_id', team.id))
+        .collect()
+      teams.push({
+        id: team.id,
+        name: team.name,
+        member_count: members_.length,
+        project_count: projects.length,
+      })
+    }
+
+    return {
+      org: { id: org.id, name: org.name, created_at: org.created_at },
+      billing:
+        subscription && plan
+          ? {
+              plan: plan.name,
+              seats: subscription.billed_seats,
+              renewal_date: subscription.current_period_end?.slice(0, 10) ?? null,
+            }
+          : org.billing !== undefined
+            ? {
+                plan: org.billing.plan,
+                seats: org.billing.seats,
+                renewal_date: org.billing.renewal_date,
+              }
+            : null,
+      members,
+      teams,
+    }
+  },
+})
+
+/* admin_list_users (LAST def 0096:425-455): cross-org, empty search = all,
+ * else every case-insensitive fragment across profile name, email and org name;
+ * ordered by org name then profile name. A profile whose org row is gone
+ * drops out (the SQL's INNER join on organizations). */
+export const listUsers = platformQuery({
+  args: { search: v.string() },
+  handler: async (ctx, { search }): Promise<AdminUserRow[]> => {
+    const orgs = await ctx.db.query('organizations').withIndex('by_uuid').collect()
+    const orgNames = new Map(orgs.map((o) => [o.id, o.name]))
+    const profiles = await ctx.db.query('profiles').withIndex('by_uuid').collect()
+
+    const matches = allWordsMatcher(search)
+    const matched = profiles
+      .map((p) => ({ p, org_name: orgNames.get(p.org_id) }))
+      .filter((r): r is { p: Doc<'profiles'>; org_name: string } => r.org_name !== undefined)
+      .filter(({ p, org_name }) => matches(`${p.name}\n${p.email ?? ''}\n${org_name}`))
+    matched.sort((a, b) => cmp(a.org_name, b.org_name) || cmp(a.p.name, b.p.name))
+
+    const authColumns = await authColumnsMap(
+      ctx,
+      matched.map((r) => r.p),
+    )
+    return matched.map(({ p, org_name }): AdminUserRow => {
+      const cols = p.auth_user_id !== undefined ? authColumns.get(p.auth_user_id) : undefined
+      return {
+        profile_id: p.id,
+        name: p.name,
+        email: p.email ?? null,
+        org_id: p.org_id,
+        org_name,
+        org_role: p.org_role,
+        has_login: p.auth_user_id !== undefined,
+        last_sign_in_at: cols?.last_sign_in_at ?? null,
+        banned_until: cols?.banned_until ?? null,
+        created_at: p.created_at,
+      }
+    })
   },
 })
 

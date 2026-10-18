@@ -351,7 +351,9 @@ export type StoragePage = { bytes: number; next: string | null } | { split: numb
  * none. In the 'unscoped' phase a row counts in its task's project when the
  * task belongs to `orgId`. Either way the project must still exist in the
  * organization. Each page is its own snapshot, so a file stored or removed
- * while the sample runs may count or not.
+ * while the sample runs may count or not. Pages follow the order rows were
+ * stored, so archiving or restoring a task during the sample moves none of
+ * them.
  *
  * Returns the bytes the page counts and the cursor of the next one, or
  * `split` with a smaller size when the tasks it read pass
@@ -364,11 +366,11 @@ export async function storagePage(
   cursor: string | null,
   size: number,
 ): Promise<StoragePage> {
+  // by_org keeps each row in place while its task is archived or restored,
+  // so a page never meets a row it counted before or skips one.
   const page = await ctx.db
     .query('issue_attachments')
-    .withIndex('by_org_task_archived_issue', (q) =>
-      q.eq('org_id', phase === 'own' ? orgId : undefined),
-    )
+    .withIndex('by_org', (q) => q.eq('org_id', phase === 'own' ? orgId : undefined))
     .paginate({ cursor, numItems: Math.max(1, size), maximumBytesRead: STORAGE_PAGE.bytes })
   const tasks = new Map<string, Doc<'issues'> | null>()
   const live = new Map<string, boolean>()
