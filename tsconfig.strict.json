@@ -12,6 +12,8 @@
     "src/lib/canvasWeek.ts",
     "src/lib/dates.ts",
     "src/lib/delay.ts",
+    "src/lib/deletedItems.ts",
+    "src/lib/deletedTime.ts",
     "src/lib/floatStack.ts",
     "src/lib/imageMetadata.ts",
     "src/lib/images.ts",

@@ -1,0 +1,247 @@
+/* Settings, Deleted items (src/panels/settings/DeletedItems.tsx). A row is a
+   grid of the checkbox and icon, then the title over its place and deleter
+   and any notes, then the time and the actions centred on the right.
+
+   A narrow page gives each row three lines. They are the key and title, the
+   place, then the deleter with the time, with the notes below. A row with
+   no place puts its deleter on the second line. Restore and the row menu
+   keep only their icons, and the filters stack. Phones get it by their
+   width (760px or less, as useMobile), and any page narrower than 600px gets
+   it by a container query, like the personal token list. The two blocks
+   below must say the same thing. */
+
+[data-deleted-items] {
+  container: deleted-items / inline-size;
+}
+
+.deleted-row {
+  display: grid;
+  grid-template-columns: 16px 16px minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "check icon title time actions"
+    ".     .    meta  time actions"
+    ".     .    notes time actions";
+  column-gap: 10px;
+  align-items: start;
+}
+.deleted-row-check {
+  grid-area: check;
+}
+.deleted-row-icon {
+  grid-area: icon;
+}
+.deleted-row-title {
+  grid-area: title;
+}
+.deleted-row-meta {
+  grid-area: meta;
+}
+.deleted-row-notes {
+  grid-area: notes;
+}
+.deleted-row-time {
+  grid-area: time;
+  align-self: center;
+}
+.deleted-row-actions {
+  grid-area: actions;
+  align-self: center;
+}
+/* The filters stay at the top while the list scrolls under them, on the
+   panel's own fill, so no box shows around them. The search box and the
+   Deleted by select give up width before the row would overflow, from the
+   page's 600px down to where the filters stack. */
+.deleted-filter-block {
+  background: var(--workspace-panel);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
+.deleted-search {
+  flex: 0 1 220px;
+  min-width: 0;
+}
+.deleted-by {
+  flex: 0 1 270px;
+}
+/* A control that takes keyboard focus scrolls clear of the sticky filters,
+   which are 80px tall and stick 16px above the scroller's padding: 80 - 16
+   plus 8px of air. */
+.deleted-list :is(button, [tabindex]) {
+  scroll-margin-top: 72px;
+}
+/* the selection bar a phone keeps at the bottom of the page */
+.deleted-selection-bar {
+  display: none;
+}
+
+@container deleted-items (max-width: 600px) {
+  .deleted-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .deleted-filters > * {
+    flex: none;
+    width: 100%;
+  }
+  /* the stacked filters and the count line are 160px tall */
+  .deleted-list :is(button, [tabindex]) {
+    scroll-margin-top: 152px;
+  }
+  /* the actions sit beside the title and place, and the time under them,
+     so the deleter and the notes get the row's whole width */
+  .deleted-row {
+    grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check icon title actions"
+      ".     .    where actions"
+      ".     .    who   time"
+      ".     .    notes notes";
+  }
+  /* the key, the title and its suffix run as one text of at most three
+     lines */
+  .deleted-row-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
+  .deleted-row-title > * {
+    display: inline;
+    margin-right: 8px;
+  }
+  .deleted-row-meta {
+    display: contents;
+  }
+  .deleted-row-where {
+    grid-area: where;
+    margin-top: 4px;
+  }
+  .deleted-row-who {
+    grid-area: who;
+    margin-top: 4px;
+  }
+  .deleted-row-unplaced .deleted-row-who {
+    grid-area: where;
+  }
+  .deleted-row-time {
+    align-self: start;
+    justify-self: end;
+    margin-top: 4px;
+    line-height: inherit;
+  }
+  .deleted-row-actions {
+    align-self: start;
+    width: auto;
+  }
+  .deleted-restore-label {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .deleted-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .deleted-filters > * {
+    flex: none;
+    width: 100%;
+  }
+  /* the stacked filters and the count line are 160px tall */
+  .deleted-list :is(button, [tabindex]) {
+    scroll-margin-top: 152px;
+  }
+  /* the actions sit beside the title and place, and the time under them,
+     so the deleter and the notes get the row's whole width */
+  .deleted-row {
+    grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check icon title actions"
+      ".     .    where actions"
+      ".     .    who   time"
+      ".     .    notes notes";
+  }
+  /* the key, the title and its suffix run as one text of at most three
+     lines */
+  .deleted-row-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
+  .deleted-row-title > * {
+    display: inline;
+    margin-right: 8px;
+  }
+  .deleted-row-meta {
+    display: contents;
+  }
+  .deleted-row-where {
+    grid-area: where;
+    margin-top: 4px;
+  }
+  .deleted-row-who {
+    grid-area: who;
+    margin-top: 4px;
+  }
+  .deleted-row-unplaced .deleted-row-who {
+    grid-area: where;
+  }
+  .deleted-row-time {
+    align-self: start;
+    justify-self: end;
+    margin-top: 4px;
+    line-height: inherit;
+  }
+  .deleted-row-actions {
+    align-self: start;
+    width: auto;
+  }
+  .deleted-restore-label {
+    display: none;
+  }
+
+  /* Phone only. The filters scroll with the page, Restore and the row menu
+     are 44px icon buttons, a checkbox keeps its 16px box with a 44px touch
+     area, and the selection's actions move to a bar that sticks to the
+     bottom of the page. */
+  .deleted-filter-block {
+    position: static;
+  }
+  /* the filters scroll away, and the selection bar covers the last 56px */
+  .deleted-list :is(button, [tabindex]) {
+    scroll-margin-top: 0;
+    scroll-margin-bottom: 64px;
+  }
+  .settings-content-scroll .deleted-row-actions button {
+    min-width: 44px;
+  }
+  .settings-content-scroll [data-deleted-items] [data-slot="checkbox"] {
+    position: relative;
+    min-height: 0;
+  }
+  [data-deleted-items] [data-slot="checkbox"]::after {
+    content: "";
+    position: absolute;
+    inset: -14px;
+  }
+  .deleted-selection-actions {
+    display: none;
+  }
+  .deleted-selection-bar {
+    position: sticky;
+    /* the page keeps 24px under its content (mobile-settings.css), which
+       sticky positions inside of */
+    bottom: -24px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px -20px -24px;
+    padding: 8px 20px calc(8px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: var(--workspace-panel);
+    -webkit-backdrop-filter: var(--workspace-panel-blur);
+    backdrop-filter: var(--workspace-panel-blur);
+  }
+}

@@ -8,10 +8,12 @@
  * The search finds any stored task, a task item's root or subtask or a task
  * inside a deleted project, so it reaches the older items a capped list
  * leaves out. Each match names the kind of its item: a task item's match
- * is restored with that item like a row of the list, a project item's only
- * with its whole project. It judges each item as the list does and shows
- * only tasks in the projects the seat's view of the item holds, so the
- * match of a redacted task item never names its root.
+ * is restored with that item like a row of the list, its root and every
+ * subtask together, and a project item's only with its whole project. A
+ * match of a task item's subtask names the item's root, as its row does. It
+ * judges each item as the list does and shows only tasks in the projects
+ * the seat's view of the item holds, so the match of a redacted task item
+ * never names its root.
  *
  * A seat reads only the index ranges that can hold what it sees. An admin
  * reads the organization's items newest first. Anyone else reads their own
@@ -178,7 +180,10 @@ export type DeletedRow = {
  * it can only come back with that item, which `item_kind` names. `key`,
  * `title`, `archived` and `path` are the task's own; `path` is where it
  * sat, its project after the top-level or parent project, empty for a
- * redacted task item as on its row. */
+ * redacted task item as on its row. `root_key` and `root_title` name a task
+ * item's root when the task found is one of its subtasks, as the item's row
+ * would, so the page can say that the root and its other subtasks come back
+ * too. A redacted match has neither, since its row never names the root. */
 export type DeletedMatch = {
   item_id: string
   item_kind: Item['kind']
@@ -186,6 +191,8 @@ export type DeletedMatch = {
   org_name: string
   key: string
   title: string
+  root_key?: string
+  root_title?: string
   archived: boolean
   path: string[]
   deleted_at: string
@@ -431,6 +438,27 @@ async function rowOf(
   }
 }
 
+/** Item `id` as its row would show it to the caller's seat in the item's
+ * organization, or null when that seat does not see it: unknown, purging,
+ * hidden and other organizations' items alike. The page asks for the
+ * project item a blocked row must restore first when no list it holds has
+ * that item, since a capped list or one narrowed to one person need not. */
+export async function rowFor(
+  ctx: QueryCtx,
+  seats: Iterable<Doc<'profiles'>>,
+  id: string,
+): Promise<DeletedRow | null> {
+  const item = await byId(ctx, 'deleted_items', id)
+  if (item === null) return null
+  for (const me of seats) {
+    if (me.org_id !== item.org_id) continue
+    const sight = await sightOf(ctx, me)
+    const orgName = (await byId(ctx, 'organizations', me.org_id))?.name ?? ''
+    return await rowOf(ctx, sight, orgName, item)
+  }
+  return null
+}
+
 /** The task a redacted row shows: one of its tasks in a project the viewer
  * can see. It checks the item's tasks itself rather than filter the range,
  * so a metered ctx (seatList) counts every task it passes over, as Convex
@@ -500,7 +528,8 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * project items. Only tasks of items the seat sees (viewOf), in projects
  * their view of the item holds, count, and each match says what the row of
  * its item would: a redacted task item's match has no path and cannot be
- * restored by the seat, as its row (rowOf). Every read of the call spends
+ * restored by the seat, as its row (rowOf), and a subtask of any other task
+ * item names the item's root. Every read of the call spends
  * one LIST.call budget, as a list call's do: the hits, each seat's sight
  * and each item it judges. Once it is spent, the search answers the
  * matches it found so far.
@@ -558,6 +587,8 @@ export async function matchesFor(
         blocked = view.redacted
           ? { reason: block }
           : await blockDetail(reader, sight.memo, item, block)
+      // the row of a task item names its root, unless it is redacted
+      const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id
       out.push({
         item_id: item.id,
         item_kind: item.kind,
@@ -565,6 +596,7 @@ export async function matchesFor(
         org_name: orgName,
         key: issueKey(task.num),
         title: task.title,
+        ...(subtask ? { root_key: issueKey(item.num), root_title: item.name } : {}),
         archived: task.archived,
         path: view.redacted ? [] : hitPath(sight, item, project),
         deleted_at: item.deleted_at,

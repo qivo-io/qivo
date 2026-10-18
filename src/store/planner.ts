@@ -72,6 +72,7 @@ import {
   DELAY_NEUTRAL,
   type DelayInfo,
 } from '../lib/delay'
+import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { prime as primeGravatar } from '../lib/gravatar'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
@@ -155,6 +156,20 @@ export type {
 
 /* Personal theme and Canvas background, exactly as appearance:get returns them. */
 export type AppearancePreferences = FunctionReturnType<typeof api.appearance.get>
+/** What archiving or deleting a project takes along, as P.projectRemovalSummary answers. */
+export type ProjectRemovalSummary = FunctionReturnType<typeof api.projects.removalSummary>
+/** What one restore or Delete now did over every call it took (P.restoreDeletedItems,
+    P.purgeDeletedItems): the ids the server restored or deleted for good, the
+    ids it refused with their reason, the ids it deferred until a project item
+    of the same call is back, and the ids of calls it refused whole, with the
+    sentence to show for them. */
+export type DeletedItemsOutcome<Reason> = {
+  done: string[]
+  refused: { id: string; reason: Reason }[]
+  deferred: string[]
+  failed: string[]
+  error: string | null
+}
 
 /* The wire shape of the one snapshot — derived from the server function so
    the cache can never drift from what forMe actually emits. Optional columns
@@ -276,10 +291,15 @@ let lastDeliveryAt: string | null = null
    Either way, keep them from looking like new arrivals when the next
    snapshot admits the restored task (and any ancestors restored with it). */
 const pendingRestoreIssueIds = new Set<string>()
-/* An optimistic archive can finish before another write refuses. Keep its
-   root here so that rollback from the stale server snapshot cannot briefly
-   resurrect the archived working set. */
-const pendingArchiveIssueIds = new Set<string>()
+/* An archive the server accepted can be mirrored here before the delivery
+   that drops it, and another write can refuse in between. Keep its root here,
+   with whether its subtasks were kept, so that rollback from the stale server
+   snapshot cannot briefly resurrect the archived working set. */
+const pendingArchiveIssueIds = new Map<string, { keepSubtasks: boolean }>()
+/* Accepted deletes, kept for the same reason as archives: the tasks a task
+   delete removed, by root, and the projects a project delete removed. */
+const pendingTaskDeletes = new Map<string, Set<string>>()
+const pendingProjectDeletes = new Set<string>()
 
 function issueSubtree(rootId: string): Set<string> {
   const subtree = new Set<string>([rootId])
@@ -324,9 +344,110 @@ function purgeIssueRows(subtree: Set<string>) {
   })
 }
 
-function reapplyPendingArchives() {
-  pendingArchiveIssueIds.forEach((rootId) => {
+/* The local mirror of an accepted archive. With `keepSubtasks` the server
+   detached every active direct child first (it keeps its own subtasks) and
+   archived the task alone, so only the task leaves the board; otherwise the
+   whole visible subtree goes with it. */
+function mirrorArchive(rootId: string, keepSubtasks: boolean) {
+  if (!keepSubtasks) {
     purgeIssueRows(issueSubtree(rootId))
+    return
+  }
+  const now = new Date().toISOString()
+  rows.issues.forEach((issue) => {
+    // the detach fires the touch server-side, as a delete's does
+    if (issue.parent_id === rootId) {
+      issue.parent_id = undefined
+      issue.updated_at = now
+    }
+  })
+  purgeIssueRows(new Set([rootId]))
+}
+
+/* The local mirror of an accepted project delete. The server hides the
+   project and its sub-projects in one transaction and moves their tasks to
+   Deleted items in steps, so the next delivery already lacks all of them. */
+function mirrorProjectDelete(id: string) {
+  if (!dropProjectRows(id)) return
+  rebuild()
+  emit()
+}
+
+/* The rows part of mirrorProjectDelete. Answers whether the project was
+   still here. */
+function dropProjectRows(id: string): boolean {
+  const row = rows.projects.get(id)
+  if (!row) return false
+  const ids =
+    row.type === 'meta'
+      ? [id, ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id)]
+      : [id]
+  ;[...rows.issues.values()].forEach((i) => {
+    if (ids.includes(i.project_id)) rows.issues.delete(i.id)
+  })
+  ;[...rows.milestones.values()].forEach((m) => {
+    if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
+  })
+  ;[...rows.links.values()].forEach((l) => {
+    if (!rows.issues.has(l.source_id) || !rows.issues.has(l.target_id)) rows.links.delete(l.id)
+  })
+  rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
+  rows.issueSubs = rows.issueSubs.filter((s) => rows.issues.has(s.issue_id))
+  rows.access = rows.access.filter((a) => !ids.includes(a.project_id))
+  rows.teamAccess = rows.teamAccess.filter((a) => !ids.includes(a.project_id))
+  ids.forEach((pid) => {
+    rows.projects.delete(pid)
+  })
+  return true
+}
+
+/* The rows part of a task delete: the tasks in `gone` leave, and their
+   subtasks outside it become top-level tasks, as the server detaches them. */
+function dropDeletedTasks(gone: Set<string>) {
+  rows.issues.forEach((r) => {
+    // the SET NULL cascade fires the touch server-side — mirror both
+    if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
+      r.parent_id = undefined
+      r.updated_at = new Date().toISOString()
+    }
+  })
+  // the rows, and everything hung on them: links, labels, attachments,
+  // inbox messages, load and the watched comment thread
+  purgeIssueRows(gone)
+}
+
+/* Forgets what a server snapshot no longer holds: an archive or project
+   delete whose root it lacks, and each task of a task delete that left it,
+   the whole delete once none is left. Runs on every delivery, also one the
+   paint gate holds, so that a delivery that drops the work and then one that
+   restores it, both held behind another write, leave no marker to hide the
+   restored work. */
+function pruneAcceptedRemovals(snap: Snapshot) {
+  const issueIds = new Set(snap.issues.map((issue) => issue.id))
+  for (const rootId of pendingArchiveIssueIds.keys()) {
+    if (!issueIds.has(rootId)) pendingArchiveIssueIds.delete(rootId)
+  }
+  pendingTaskDeletes.forEach((gone, rootId) => {
+    for (const id of gone) if (!issueIds.has(id)) gone.delete(id)
+    if (gone.size === 0) pendingTaskDeletes.delete(rootId)
+  })
+  const projectIds = new Set(snap.projects.map((project) => project.id))
+  for (const id of pendingProjectDeletes) {
+    if (!projectIds.has(id)) pendingProjectDeletes.delete(id)
+  }
+}
+
+/* Applies every accepted archive and delete again after a rollback to a
+   server snapshot that predates them. */
+function reapplyAcceptedRemovals() {
+  pendingArchiveIssueIds.forEach(({ keepSubtasks }, rootId) => {
+    mirrorArchive(rootId, keepSubtasks)
+  })
+  pendingTaskDeletes.forEach((gone) => {
+    dropDeletedTasks(gone)
+  })
+  pendingProjectDeletes.forEach((id) => {
+    dropProjectRows(id)
   })
 }
 
@@ -786,6 +907,74 @@ function restoreErrorText(e: unknown): string {
   return "Couldn't restore"
 }
 
+/* A Deleted items call the server refused whole, in the restore refusal voice
+   above: the pause sentence while edits pause, billing's sentence as it is,
+   the fixed permission line, a rule's own sentence after what failed.
+   Anything else (offline, a server fault) asks for another try. */
+function deletedItemsErrorText(e: unknown, failed: string): string {
+  const d = errData(e)
+  if (d.code === 'paused') return PAUSED_TEXT
+  // read-only for billing or a scheduled deletion says why, in its own words
+  if (readOnly(d) && d.message) return d.message
+  if (d.code === 'forbidden') return "You don't have permission for that."
+  if (d.code === 'rule' && d.message) {
+    const m = String(d.message)
+    return `${failed}. ${m.charAt(0).toUpperCase()}${m.slice(1)}${/[.!?]$/.test(m) ? '' : '.'}`
+  }
+  return `${failed}. Try again.`
+}
+
+/** The most ids one deletedItems.restore or purge call takes
+    (convex/model/deletedItems.ts RESTORE_MAX, PURGE_MAX). */
+const DELETED_ITEMS_BATCH = 25
+
+/* Sends `items` in calls of one organization and at most 25 ids each, one
+   call after another, and adds up the answers. A call refused whole fails
+   only its own ids. */
+async function deletedItemsCalls<Reason>(
+  items: { id: string; org_id: string }[],
+  send: (
+    orgId: string,
+    ids: string[],
+  ) => Promise<
+    { refused: { id: string; reason: Reason }[]; deferred?: string[] } & (
+      | { restored: string[] }
+      | { purged: string[] }
+    )
+  >,
+  failed: string,
+): Promise<DeletedItemsOutcome<Reason>> {
+  const outcome: DeletedItemsOutcome<Reason> = {
+    done: [],
+    refused: [],
+    deferred: [],
+    failed: [],
+    error: null,
+  }
+  const byOrg = new Map<string, string[]>()
+  for (const { id, org_id } of items) {
+    const ids = byOrg.get(org_id) ?? []
+    if (!ids.includes(id)) ids.push(id)
+    byOrg.set(org_id, ids)
+  }
+  for (const [orgId, ids] of byOrg) {
+    for (let at = 0; at < ids.length; at += DELETED_ITEMS_BATCH) {
+      const batch = ids.slice(at, at + DELETED_ITEMS_BATCH)
+      try {
+        const answer = await send(orgId, batch)
+        outcome.done.push(...('restored' in answer ? answer.restored : answer.purged))
+        outcome.refused.push(...answer.refused)
+        outcome.deferred.push(...(answer.deferred ?? []))
+      } catch (e) {
+        console.error('[qivo] deleted items call failed:', e)
+        outcome.failed.push(...batch)
+        outcome.error ??= deletedItemsErrorText(e, failed)
+      }
+    }
+  }
+  return outcome
+}
+
 /* A refused project create names what disappeared, followed by the reason
    when a rule, billing or permission refusal carries one (a forbidden create
    says who can create projects); every other refusal would read
@@ -933,9 +1122,9 @@ function run<T>(
         snapDirty = false
         commentsDirty = false
         if (serverSnap) adopt(serverSnap)
-        /* A successful archive may still be awaiting its reactive delivery;
-           preserve that optimistic boundary if another write refuses first. */
-        reapplyPendingArchives()
+        /* A successful archive or delete may still be awaiting its reactive
+           delivery; preserve that boundary if another write refuses first. */
+        reapplyAcceptedRemovals()
         adoptComments()
         rebuild()
         emit()
@@ -979,7 +1168,11 @@ function flushHeldPaint() {
   snapDirty = false
   commentsDirty = false
   if (!snapHeld && !comHeld) return
-  if (snapHeld && serverSnap) adopt(serverSnap)
+  if (snapHeld && serverSnap) {
+    adopt(serverSnap)
+    // the held delivery can predate an archive or delete accepted meanwhile
+    reapplyAcceptedRemovals()
+  }
   if (comHeld) adoptComments()
   if (snapHeld) rebuild()
   else rebuildComments()
@@ -1967,7 +2160,7 @@ export function andList(
 
 /** Someone working on a task, as a parent change or a move checks them. */
 export type Holder = { uid: string; task: IssueVM; role: 'assignee' | 'reviewer' }
-/** A subtask the delete window lists: see P.deletePlan. */
+/** A subtask the Archive or delete window lists for a delete (P.deletePlan). */
 export type DeleteRow = { task: IssueVM; depth: number; deletable: boolean }
 /** What a removal would do to work: see P.accessRemoval. */
 export type RemovalEffect = { people: string[]; items: Holder[]; projects: string[] }
@@ -3563,10 +3756,10 @@ export const PLANNER = {
     return id
   },
 
-  /* What the delete window lists for a task with subtasks: each subtask
-     under it, and under every subtask that would be deleted with it, with
-     whether I can delete it (Edit access to its project). A subtask I cannot
-     delete stays, keeping its own subtasks, so those are not listed.
+  /* What the Archive or delete window lists for deleting a task: each
+     subtask under it, and under every subtask that would be deleted with it,
+     with whether I can delete it (Edit access to its project). A subtask I
+     cannot delete stays, keeping its own subtasks, so those are not listed.
      `hidden` is true when the task, or a subtask that would be deleted, has
      subtasks in projects I cannot see; how many is not known here. */
   deletePlan: (id: string): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {
@@ -3591,15 +3784,21 @@ export const PLANNER = {
     return { rows, deletable: rows.filter((r) => r.deletable).map((r) => r.task), hidden }
   },
 
-  /* Delete a task, and with it the `subtasks` (handles) the delete window
-     listed as deletable. Every other subtask under a deleted task loses its
-     parent and becomes a top-level task; the server checks the subtasks
-     again and refuses the whole delete if they changed. Resolves whether the
-     server deleted it (a refusal is toasted). Normally the change paints at
-     once and rolls back on refusal; with `wait`, as the delete window asks,
-     nothing changes here until the server accepts, so a refusal leaves the
-     task and the window in place. */
-  deleteIssue: (id: string, subtasks: string[] = [], wait = false): Promise<boolean> => {
+  /* Move a task to Deleted items, and with it the `subtasks` (handles) the
+     Archive or delete window listed as deletable. Every other subtask under
+     a deleted task loses its parent and becomes a top-level task; the server
+     checks the subtasks again and refuses the whole delete if they changed.
+     Resolves whether the server deleted it (a refusal is toasted). Normally
+     the change paints at once and rolls back on refusal; with `wait`, as the
+     window asks, nothing changes here until the server accepts, so a refusal
+     leaves the task and the window in place. `reason` is shown in Deleted
+     items. */
+  deleteIssue: (
+    id: string,
+    subtasks: string[] = [],
+    wait = false,
+    reason?: string,
+  ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
@@ -3608,33 +3807,39 @@ export const PLANNER = {
     // local mirror of the delete; the server moves the rows to Deleted items
     // (convex/model/deletedItems.ts) and keeps the attachment bytes there
     const mirror = () => {
-      rows.issues.forEach((r) => {
-        // the SET NULL cascade fires the touch server-side — mirror both
-        if (r.parent_id && gone.has(r.parent_id) && !gone.has(r.id)) {
-          r.parent_id = undefined
-          r.updated_at = new Date().toISOString()
-        }
-      })
-      // the rows, and everything hung on them: links, labels, attachments,
-      // inbox messages, load and the watched comment thread
-      purgeIssueRows(gone)
+      dropDeletedTasks(gone)
       rebuild()
       emit()
     }
+    const epoch = storeEpoch
+    // kept until a delivery no longer holds them (adopt), so a rollback after
+    // another refused write cannot bring them back meanwhile. Only while the
+    // server's last snapshot still holds them: once a delivery dropped them,
+    // nothing can bring them back, and a marker left behind would hide them
+    // again after a restore.
+    const accepted = () => {
+      if (epoch !== storeEpoch) return
+      if (serverSnap?.issues.some((issue) => gone.has(issue.id))) pendingTaskDeletes.set(uuid, gone)
+    }
+    const text = (reason || '').trim()
     const sent = write(api.issues.deleteDeep, {
       org_id: row.org_id,
       id: uuid,
       ...(subtaskIds.length ? { subtask_ids: subtaskIds } : {}),
+      ...(text ? { reason: text } : {}),
     })
     if (!wait) {
       mirror()
+      sent.then(accepted, () => {})
       return runSaved(sent)
     }
-    const epoch = storeEpoch
     return sent.then(
       () => {
         // the delivery may already hold the result; the mirror finds nothing then
-        if (epoch === storeEpoch) mirror()
+        if (epoch === storeEpoch) {
+          accepted()
+          mirror()
+        }
         return true
       },
       (error) => {
@@ -3647,38 +3852,49 @@ export const PLANNER = {
 
   /* ---- archive (0070): the Active/Archived axis, orthogonal to status ----
      Archived issues are invisible to the snapshot, so archiving locally
-     means dropping the subtree from the row cache — exactly what the next
-     delivery holds. The early-archive reason travels as an ARG now: the
-     server posts it as a comment inside the same transaction. */
-  archiveIssue: (id: string, reason?: string) => {
+     means dropping rows from the row cache, exactly what the next delivery
+     holds. The Archive or delete window waits for the server, so nothing
+     changes here until it accepts and a refusal leaves the task and the
+     window in place (toasted). Resolves whether the server archived it.
+     `reason` travels as an argument, and the server posts it as a comment in
+     the same transaction. With `keepSubtasks` the server detaches the task's
+     active direct children first and archives the task alone, so only the
+     task leaves the board and its subtasks become top-level tasks;
+     otherwise the whole subtree goes with it. */
+  archiveIssue: (id: string, reason?: string, keepSubtasks = false): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid || refusePausedEdit()) return null
-    // the visible subtree, root included (cycle-safe: membership only grows)
-    const subtree = issueSubtree(uuid)
-    pendingArchiveIssueIds.add(uuid)
-    /* The server snapshot will drop this working set on its next delivery,
-       but the write is asynchronous. Remove every dependent row now so an
-       archived task cannot remain visible in Inbox, planning, or attachment
-       lookups during that gap. */
-    purgeIssueRows(subtree)
-    rebuild()
-    emit()
+    if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
     const text = (reason || '').trim()
-    run(
-      write(api.issues.archive, {
-        org_id: row.org_id,
-        id: uuid,
-        ...(text ? { reason: text } : {}),
-      }),
-      undefined,
-      undefined,
+    const epoch = storeEpoch
+    return write(api.issues.archive, {
+      org_id: row.org_id,
+      id: uuid,
+      ...(text ? { reason: text } : {}),
+      ...(keepSubtasks ? { keep_subtasks: true } : {}),
+    }).then(
+      () => {
+        /* The delivery that drops the task usually lands first. When it has
+           not, mirror it. Keep the root only while the server's last snapshot
+           still holds it, so that a rollback or held paint from that stale
+           snapshot applies the archive again. A snapshot that already dropped
+           it needs no marker, and one would hide the task if it is restored
+           before the held paint lands. */
+        if (epoch !== storeEpoch) return true
+        if (serverSnap?.issues.some((issue) => issue.id === uuid))
+          pendingArchiveIssueIds.set(uuid, { keepSubtasks })
+        if (!rows.issues.has(uuid)) return true
+        mirrorArchive(uuid, keepSubtasks)
+        rebuild()
+        emit()
+        return true
+      },
       (error) => {
-        pendingArchiveIssueIds.delete(uuid)
-        toastWriteError(error)
+        console.error('[qivo] archive failed:', error)
+        if (epoch === storeEpoch) toastWriteError(error)
+        return false
       },
     )
-    return id
   },
 
   /** Restore from the Archive page. Awaited, never optimistic: the row is
@@ -4794,33 +5010,83 @@ export const PLANNER = {
     return true
   },
 
-  removeProject: (id: string) => {
+  /** What archiving or deleting a project takes along, for its Archive or
+      delete window: the sub-projects, archived ones included, and the tasks
+      of the whole tree, archived ones included (the server stops counting
+      past 5,000 and says so with `more`). Asked only when the window opens,
+      because only the project's lead may read it. Null when refused or
+      unreachable. */
+  projectRemovalSummary: async (id: string): Promise<ProjectRemovalSummary | null> => {
     const row = rows.projects.get(id)
-    if (!row || refusePausedEdit()) return
-    // local cascade mirror; the server's deleteProjectDeep owns the FK edges
-    const ids =
-      row.type === 'meta'
-        ? [id, ...[...rows.projects.values()].filter((x) => x.parent_id === id).map((x) => x.id)]
-        : [id]
-    ;[...rows.issues.values()].forEach((i) => {
-      if (ids.includes(i.project_id)) rows.issues.delete(i.id)
-    })
-    ;[...rows.milestones.values()].forEach((m) => {
-      if (ids.includes(m.project_id)) rows.milestones.delete(m.id)
-    })
-    ;[...rows.links.values()].forEach((l) => {
-      if (!rows.issues.has(l.source_id) || !rows.issues.has(l.target_id)) rows.links.delete(l.id)
-    })
-    rows.issueLabels = rows.issueLabels.filter((il) => rows.issues.has(il.issue_id))
-    rows.issueSubs = rows.issueSubs.filter((s) => rows.issues.has(s.issue_id))
-    rows.access = rows.access.filter((a) => !ids.includes(a.project_id))
-    rows.teamAccess = rows.teamAccess.filter((a) => !ids.includes(a.project_id))
-    ids.forEach((pid) => {
-      rows.projects.delete(pid)
-    })
-    rebuild()
-    emit()
-    run(write(api.projects.deleteDeep, { org_id: row.org_id, id }))
+    if (!row) return null
+    try {
+      return await convex.query(api.projects.removalSummary, { org_id: row.org_id, id })
+    } catch (e) {
+      console.error('[qivo] removal summary failed:', e)
+      return null
+    }
+  },
+
+  /** Restore Deleted items (Settings, Deleted items). Awaited, never
+      optimistic: the work comes back through the snapshot, and the page's
+      list drops the items as the server does. Sent per organization, 25 ids
+      at a time. `bulk` marks every call as part of a restore of several
+      items, so that a call left with one task item sends no Restored notice;
+      a single row's Restore leaves it out. Never toasts; the page says what
+      happened. */
+  restoreDeletedItems: (
+    items: { id: string; org_id: string }[],
+    { bulk = false }: { bulk?: boolean } = {},
+  ): Promise<DeletedItemsOutcome<RestoreRefusal>> =>
+    deletedItemsCalls(
+      items,
+      (orgId, ids) =>
+        write(api.deletedItems.restore, { org_id: orgId, ids, ...(bulk ? { bulk } : {}) }),
+      "Couldn't restore",
+    ),
+
+  /** Delete now, where an organization admin deletes Deleted items for good.
+      Awaited like restoreDeletedItems, and never toasts either. */
+  purgeDeletedItems: (
+    items: { id: string; org_id: string }[],
+  ): Promise<DeletedItemsOutcome<PurgeRefusal>> =>
+    deletedItemsCalls(
+      items,
+      (orgId, ids) => write(api.deletedItems.purge, { org_id: orgId, ids }),
+      "Couldn't delete it for good",
+    ),
+
+  /* Move a project, its sub-projects and every task in them to Deleted
+     items. Awaited, as the Archive or delete window asks. Nothing changes
+     here until the server accepts, so a refusal (toasted) leaves the project
+     and the window in place. `reason` is shown in Deleted items. Resolves
+     whether the server deleted it. */
+  removeProject: (id: string, reason?: string): Promise<boolean> => {
+    const row = rows.projects.get(id)
+    if (!row || refusePausedEdit()) return Promise.resolve(false)
+    const text = (reason || '').trim()
+    const epoch = storeEpoch
+    return write(api.projects.deleteDeep, {
+      org_id: row.org_id,
+      id,
+      ...(text ? { reason: text } : {}),
+    }).then(
+      () => {
+        // the delivery may already hold the result; the mirror finds nothing
+        // then. Kept for a rollback, as task deletes are.
+        if (epoch === storeEpoch) {
+          if (serverSnap?.projects.some((project) => project.id === id))
+            pendingProjectDeletes.add(id)
+          mirrorProjectDelete(id)
+        }
+        return true
+      },
+      (error) => {
+        console.error('[qivo] project delete failed:', error)
+        if (epoch === storeEpoch) toastWriteError(error)
+        return false
+      },
+    )
   },
 
   /* Organization settings — the old six independent UPDATEs fold into ONE
@@ -5746,6 +6012,7 @@ function subscribeSnapshot(
     (snap) => {
       if (!stillCurrent() || bootFailed) return
       serverSnap = snap
+      if (snap) pruneAcceptedRemovals(snap)
       if (!settled) {
         settled = true
         first?.resolve(snap)
@@ -5866,6 +6133,8 @@ export function disposeDemoStore() {
   announcedMessages = null
   lastDeliveryAt = null
   pendingArchiveIssueIds.clear()
+  pendingTaskDeletes.clear()
+  pendingProjectDeletes.clear()
   roadmapVisit = null
   roadmapBatch = null
   roadmapDetailOpen = false
@@ -5886,9 +6155,7 @@ function adopt(source: Snapshot) {
   // Optimistic edits mutate these rows. Keep the server's snapshot separate
   // so a refused write can restore it even without a newer delivery.
   const snap = structuredClone(source)
-  for (const rootId of pendingArchiveIssueIds) {
-    if (!snap.issues.some((issue) => issue.id === rootId)) pendingArchiveIssueIds.delete(rootId)
-  }
+  pruneAcceptedRemovals(snap)
   const priorIssueIds = new Set(rows.issues.keys())
   const newlyVisibleIssueIds = new Set(
     snap.issues.filter((issue) => !priorIssueIds.has(issue.id)).map((issue) => issue.id),

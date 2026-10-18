@@ -2842,7 +2842,8 @@ async function workersBelow(
 
 /* What a reveal tells (design 5.4). A task item sends task.restored for
  * each task it wrote back, and its root's followers get the Restored notice
- * when the restore call held this item alone. A project item sends
+ * when the restore call held this item alone and was not part of a bulk
+ * restore. A project item sends
  * neither, as its delete sent no task.deleted, and so reads none of the
  * tasks it wrote. The activity row is the call's when it collects reveals,
  * else the item's own. */
@@ -3044,12 +3045,14 @@ async function attachParent(
  * call's one shared budget fills, reveals and attaches as much as it can;
  * the rest goes on in steps. The reveals of this call share one activity
  * row, and an item revealed by a later step writes its own.
- * The Restored notice goes out only when the call held a single task item,
- * whichever transaction reveals it.
+ * The Restored notice goes out only when the call held a single task item
+ * and is not `bulk`, whichever transaction reveals it. A client that sends
+ * one restore of several items in several calls marks each call `bulk`, so
+ * a call that happens to hold one item sends no notice either.
  */
 export async function restoreItems(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; items: Item[]; now: string },
+  a: { me: Doc<'profiles'>; items: Item[]; now: string; bulk?: boolean },
 ): Promise<RestoreResult> {
   if (a.items.length > RESTORE_MAX)
     throw rule(`at most ${RESTORE_MAX} items can be restored at a time`)
@@ -3090,7 +3093,7 @@ export async function restoreItems(
     const state: JobState = {
       phase: 'restore_split',
       tally: tallyFromItem(item),
-      alone: ordered.length === 1 || undefined,
+      alone: (a.bulk !== true && ordered.length === 1) || undefined,
     }
     const next = await work(counted, budget, restoring, state, txn)
     if (next !== null) await saveJob(ctx, restoring, next, null)

@@ -48,6 +48,15 @@ invitations, and only people can change sharing, never agents. Renaming,
 archiving, deleting or changing project settings also requires Lead access,
 which organization admins have.
 
+[Deleted items](./how-work-is-organized.md#deleted-items) follows project
+access too. Organization admins see every deleted task and project, except
+one that is being deleted for good. A project lead sees what they deleted and
+what was deleted in projects they lead.
+Everyone else sees what they deleted. Except for admins, an item stays in
+view only while you can still open the project it was in. Restoring needs
+edit access where the work goes back, or Lead access for a project. Only
+organization admins can delete an item for good before it expires.
+
 Each project and sub-project has one named lead. Choosing a new lead changes
 the outgoing lead to **User**. An active guest with access to the project can
 become its lead. Only a person can hand over a lead; an agent that leads a
@@ -82,7 +91,9 @@ sub-projects was deleted, and a task that moved out of a project before it was
 deleted keeps that earlier history for everyone who can open the task. Changes
 that name a deleted task reach organization admins only, and so do agent key
 creation and revocation and every revocation an admin makes on
-[API access](./administration-guard-rails-and-the-demo.md#api-access).
+[API access](./administration-guard-rails-and-the-demo.md#api-access). A task
+restored from Deleted items shows its history again to everyone who can open
+it.
 
 Organization admins add people through **Organization → Users**. There is no
 purchased-seat limit on adding or reactivating users. Billing counts active

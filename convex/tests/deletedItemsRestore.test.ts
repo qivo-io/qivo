@@ -1274,6 +1274,35 @@ describe('notices, activity and events', () => {
     ])
   })
 
+  it('sends no Restored notice for a call of a bulk restore that holds one task item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantSubscription(t, { issue_id: task.id, profile_id: f.guest.id })
+    const notices = async () =>
+      (await messagesFor(t, f.guest.id, task.id)).map((m) => [m.detail, m.actor_id])
+    const restoreOne = async (extra: { bulk?: boolean }) => {
+      const id = (await itemFor(t, task.id)).id
+      const result = await as(t, f.user).mutation(api.deletedItems.restore, {
+        org_id,
+        ids: [id],
+        ...extra,
+      })
+      expect(result.restored).toEqual([id])
+    }
+
+    // the last call of a 26-item restore, which the client marks bulk
+    await deleteTask(t, f, task.id)
+    await restoreOne({ bulk: true })
+    expect(await liveTask(t, task.id)).not.toBeNull()
+    expect(await notices()).toEqual([])
+    // the same task restored from its own row
+    await deleteTask(t, f, task.id)
+    await restoreOne({})
+    expect(await notices()).toEqual([['Restored', f.user.id]])
+  })
+
   it('sends task.restored for the tasks of a task item and none for those of a project item', async () => {
     const t = newT()
     const f = await withOrg(t)

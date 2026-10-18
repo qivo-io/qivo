@@ -1,4 +1,4 @@
-/* Shared settings navigation, fields and confirmation controls. */
+/* Shared settings navigation, fields and toggles. */
 import type React from 'react'
 import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,6 @@ import { Icon } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { WORKSPACE_SIGNUP_URL } from '../../lib/demoMode'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import { useConfirmArm } from '../../lib/useConfirmArm'
 
 /* ---------- shared page atoms ---------- */
 export function DemoCapabilityNotice({ children }: { children: React.ReactNode }) {
@@ -105,53 +104,6 @@ export function TextField({
         }
       />
     </SettingsField>
-  )
-}
-
-// The second click confirms only after a short pause, and the arm lapses after
-// 3.5 seconds or when the button turns disabled (lib/useConfirmArm).
-// Reversible actions may use neutral color.
-export function ConfirmButton({
-  label,
-  confirmLabel,
-  onConfirm,
-  icon = 'trash',
-  disabled,
-  title,
-  danger = true,
-  ...rest
-}: {
-  label: string
-  confirmLabel: string
-  onConfirm: () => void
-  icon?: string
-  disabled?: boolean
-  title?: string
-  danger?: boolean
-  // the callers' data-* probes ride through `rest` onto the button
-  [dataAttr: `data-${string}`]: string | undefined
-}) {
-  const { armed, press, disarm } = useConfirmArm<'confirm'>()
-  const arm = armed !== null
-  useEffectS(() => {
-    if (disabled) disarm()
-  }, [disabled, disarm])
-  const tone = danger ? 'var(--danger)' : 'var(--text-1)'
-  return (
-    <Button
-      disabled={disabled}
-      title={title}
-      {...rest}
-      style={{
-        color: tone,
-        borderColor: arm ? tone : 'var(--border)',
-        background: arm ? (danger ? 'var(--danger-soft)' : 'var(--surface-2)') : 'var(--surface-1)',
-      }}
-      onClick={() => press('confirm', onConfirm)}
-    >
-      <Icon name={icon} size={16} />
-      {arm ? confirmLabel : label}
-    </Button>
   )
 }
 

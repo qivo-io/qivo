@@ -105,7 +105,7 @@ export function SettingsSection({
       className={cn(
         'settings-section min-w-0 max-w-[640px] rounded-md border p-5 pt-4',
         danger
-          ? 'settings-danger-zone [border-color:color-mix(in_oklab,var(--danger)_45%,transparent)]'
+          ? '[border-color:color-mix(in_oklab,var(--danger)_45%,transparent)]'
           : 'border-border',
         className,
       )}

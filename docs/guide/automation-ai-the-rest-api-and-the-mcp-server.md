@@ -101,12 +101,17 @@ for archived projects. Task listings omit their tasks unless you name the projec
 archived tasks also need an explicit request, one project at a time. Restore a
 project before creating tasks in it.
 
+Deleting a task through REST or MCP moves it to
+[Deleted items](./how-work-is-organized.md#deleted-items), as deleting it in
+the app does, and Deleted items names the credential that deleted it. Agents
+cannot restore deleted work. A person restores it in the app.
+
 ## Automatic task events
 
-Integrations can receive task creation, field changes, deletion and new-comment
-events through signed webhooks. Register through REST or an MCP client that
-supports the draft MCP Events extension. A regular MCP tool connection does
-not receive events automatically.
+Integrations can receive task creation, field changes, deletion, restoration
+from Deleted items and new-comment events through signed webhooks. Register
+through REST or an MCP client that supports the draft MCP Events extension. A
+regular MCP tool connection does not receive events automatically.
 
 Subscribe to one task, one exact sub-project or readable projects across the
 organization. Parent-project filters are refused. Qivo

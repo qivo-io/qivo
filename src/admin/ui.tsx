@@ -173,12 +173,11 @@ export function StableLabel({ labels, current }: { labels: readonly string[]; cu
   )
 }
 
-/* A destructive action that takes a second click, the app's settings
-   ConfirmButton pattern (src/panels/settings/controls.tsx). That component
-   draws its icon through the planner store, so the console keeps this small
-   copy. The first click arms the button and swaps in `confirmLabel`. The
-   second click confirms only after a short pause, and the arm lapses after
-   3.5 seconds (lib/useConfirmArm). `busyLabel` shows while the action runs.
+/* A destructive action that takes a second click, the app's in-place
+   confirm (lib/useConfirmArm, as the settings rows use it). The first click
+   arms the button and swaps in `confirmLabel`. The second click confirms
+   only after a short pause, and the arm lapses after 3.5 seconds.
+   `busyLabel` shows while the action runs.
    `blockedReason` turns the action off but keeps the button focusable, so
    the reason in its tooltip reaches the keyboard too. */
 export function ConfirmAction({

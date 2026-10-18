@@ -108,6 +108,8 @@ const rowsOf = async (t: T, who: Doc<'profiles'>) => (await list(t, who)).items
 const idsOf = async (t: T, who: Doc<'profiles'>) => (await rowsOf(t, who)).map((r) => r.id)
 const rowOf = async (t: T, who: Doc<'profiles'>, id: string) =>
   (await rowsOf(t, who)).find((r) => r.id === id)
+const item = (t: T, who: Doc<'profiles'>, id: string) =>
+  as(t, who).query(api.deletedItems.item, { id })
 const matches = (t: T, who: Doc<'profiles'>, text: string) =>
   as(t, who).query(api.deletedItems.matches, { text })
 const restore = (t: T, who: Doc<'profiles'>, ids: string[]) =>
@@ -1047,6 +1049,29 @@ describe('the list (design 6.2)', () => {
     await withOrg(t)
     await expectRefusal(t.query(api.deletedItems.list, {}), 'forbidden', /^not signed in$/)
     await expectRefusal(t.query(api.deletedItems.matches, { text: 'x' }), 'forbidden')
+    await expectRefusal(t.query(api.deletedItems.item, { id: uuid() }), 'forbidden')
+  })
+
+  it('answers one item as its row, for a blocked row whose project item no list holds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    await deleteTask(t, f.guest, task.id)
+    await deleteTask(t, f.otherAdmin, foreign.id)
+    later()
+    await deleteProject(t, f.user, f.meta.id)
+    const taskItem = await itemFor(t, task.id)
+    const projectItem = await itemFor(t, f.meta.id)
+    expect((await rowOf(t, f.admin, taskItem.id))?.blocked?.item_id).toBe(projectItem.id)
+
+    expect(await item(t, f.admin, projectItem.id)).toEqual(await rowOf(t, f.admin, projectItem.id))
+    expect(await item(t, f.admin, projectItem.id)).toMatchObject({ can_restore: true })
+    // hidden, foreign and unknown ids answer alike
+    expect(await item(t, f.guest, taskItem.id)).toBeNull()
+    expect(await item(t, f.guest, projectItem.id)).toBeNull()
+    expect(await item(t, f.admin, (await itemFor(t, foreign.id)).id)).toBeNull()
+    expect(await item(t, f.admin, uuid())).toBeNull()
   })
 })
 
@@ -1253,6 +1278,65 @@ describe('searching for deleted tasks', () => {
       expect.objectContaining({ key: `QN-${sub.num}`, path: ['Operations', 'Infra'] }),
     ])
     expect(theirs[0]).not.toHaveProperty('redacted')
+  })
+
+  it('names the root of a task item for a hit on its subtask, unless the hit is redacted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const omar = await person(t, f.org.id, 'Omar')
+    const dana = await person(t, f.org.id, 'Dana')
+    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
+    const infra = ops.subs[0]
+    await grant(t, f.meta.id, dana.id, 'user')
+    await grant(t, ops.top.id, dana.id, 'user')
+    const root = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Contoso acquisition due diligence',
+    })
+    const near = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Draft the room checklist',
+      parent_id: root.id,
+    })
+    const far = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: infra.id,
+      title: 'Provision the data room',
+      parent_id: root.id,
+    })
+    await deleteTask(t, dana, root.id, { subtask_ids: [near.id, far.id] })
+    const named = (m: { key: string; root_key?: string; root_title?: string }) => [
+      m.key,
+      m.root_key,
+      m.root_title,
+    ]
+
+    // the deleter sees the root's project, and each subtask hit names the root
+    const theirs = await matches(t, dana, 'room')
+    expect(theirs.map(named).sort()).toEqual(
+      [
+        [`QN-${near.num}`, `QN-${root.num}`, 'Contoso acquisition due diligence'],
+        [`QN-${far.num}`, `QN-${root.num}`, 'Contoso acquisition due diligence'],
+      ].sort(),
+    )
+    // as it does for an admin, and a hit on the root names nothing more
+    expect((await matches(t, f.admin, 'checklist')).map(named)).toEqual([
+      [`QN-${near.num}`, `QN-${root.num}`, 'Contoso acquisition due diligence'],
+    ])
+    const roots = await matches(t, dana, 'contoso')
+    expect(roots.map(named)).toEqual([[`QN-${root.num}`, undefined, undefined]])
+    expect(roots[0]).not.toHaveProperty('root_key')
+    // Omar leads Infra and cannot see Firmware, so his hit is redacted and
+    // names neither the root's key nor its title
+    const his = await matches(t, omar, 'room')
+    expect(his).toEqual([
+      expect.objectContaining({ key: `QN-${far.num}`, redacted: true, path: [] }),
+    ])
+    expect(his[0]).not.toHaveProperty('root_key')
+    expect(his[0]).not.toHaveProperty('root_title')
+    expect(JSON.stringify(his)).not.toMatch(/Contoso/)
   })
 
   it('answers instead of failing when many project items it cannot show match in many seats', async () => {

@@ -195,13 +195,14 @@ comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"ty
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:expire mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true}}}
+deletedItems:item query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:list query public {"type":"object","value":{"deleted_by":{"fieldType":{"type":"string"},"optional":true}}}
 deletedItems:matches query public {"type":"object","value":{"text":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:purge mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:purgeOrg mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:purgeTasks mutation internal {"type":"object","value":{"task_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 deletedItems:recover mutation internal {"type":"object","value":{}}
-deletedItems:restore mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+deletedItems:restore mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"bulk":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 deletedItems:step mutation internal {"type":"object","value":{"item_id":{"fieldType":{"type":"string"},"optional":false}}}
 demo:configuration query public {"type":"object","value":{}}
 demo:current query public {"type":"object","value":{}}
@@ -645,12 +646,13 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // A post on a thread too long to count at once schedules commentCounts:step (internal).
   comments: { create: 'orgMutation', update: 'orgMutation', remove: 'orgMutation' },
-  // Deleted items spans organizations like Archived projects: list and
-  // matches read every active seat and judge each item with the seat in its
-  // organization. restore acts in one organization; Delete now (purge) is
+  // Deleted items spans organizations like Archived projects: list, item
+  // and matches read every active seat and judge each item with the seat in
+  // its organization. restore acts in one organization; Delete now (purge) is
   // for its admins. Each loads items through the same not_found fence.
   deletedItems: {
     list: 'authedQuery',
+    item: 'authedQuery',
     matches: 'authedQuery',
     restore: 'orgMutation',
     purge: 'adminMutation',
@@ -808,7 +810,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 160
+const PUBLIC_COUNT = 161
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
