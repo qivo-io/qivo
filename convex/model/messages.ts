@@ -1188,7 +1188,8 @@ export async function notifyIssueInsert(
  * caller changes neither the status nor the reviewer.
  *
  * `actor` is absent only for a Deleted items step whose deleter is gone
- * (model/deletedItems.ts), which also passes the step's `preload`.
+ * (model/deletedItems.ts), which also passes the step's `preload`, and for a
+ * restore's regroup step whose restorer is gone (regroup.ts).
  *
  * `preload` is a bulk writer's NotifyPreload, which answers the
  * organization's profiles, the projects and the recipients' sight from

@@ -69,6 +69,7 @@ import {
 import { byId, insertUnique } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { reviewStamp } from '../lib/review'
 import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
@@ -303,6 +304,7 @@ async function holdersUnder(
   if (self.assignee_id !== undefined) holders.add(self.assignee_id)
   if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
   const seen = new Set<string>([rootId])
+  const live = projectLiveness(ctx)
   let frontier = [rootId]
   for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
     const next: string[] = []
@@ -313,7 +315,7 @@ async function holdersUnder(
         seen.add(c.id)
         next.push(c.id)
         if (c.assignee_id !== undefined) holders.add(c.assignee_id)
-        if (c.reviewer_id !== undefined && !(await hasSubtasks(ctx, c.id))) {
+        if (c.reviewer_id !== undefined && !(await hasSubtasks(ctx, c, live))) {
           holders.add(c.reviewer_id)
         }
       }
@@ -397,56 +399,83 @@ export function metaNeedsSub(
   )
 }
 
-/* Machine pre-check twin of the remaining guard (core.ts:397-402), naming
- * the remaining_hours field that the caller needs to correct. */
-export async function assertNoSubtasks(ctx: QueryCtx, issueId: string): Promise<void> {
-  const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', issueId))
-  for await (const c of kids) {
-    if (c.archived_at === undefined) {
-      throw badRequest(
-        'remaining_hours cannot be set on a task with subtasks — it is the sum of their remaining time',
-      )
-    }
-  }
+/* The task fields the group rule reads. */
+type GroupRow = Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>
+
+/* Whether `child` makes `parent` a group (countsAsSubtask), with each
+ * project's state read through `live`. */
+async function subtaskOf(parent: GroupRow, child: GroupRow, live: Liveness): Promise<boolean> {
+  return countsAsSubtask(
+    { archived: parent.archived_at !== undefined, projectLive: await live(parent.project_id) },
+    { archived: child.archived_at !== undefined, projectLive: await live(child.project_id) },
+  )
 }
 
-/* An active task is a grouping while it has an unarchived direct child.
- * Archived groups retain their hierarchy for display until restored. The
- * stored status, start_week and end_week stay dormant, ready to resume after
- * the last active child is detached, deleted or archived. Nothing reads,
- * clears or migrates them while the task is a group; readers calculate its
- * dates from its leaves instead. Child visibility must not change this
- * fact: readers disclose only the boolean, never hidden child identities. */
-export async function hasSubtasks(
+/* Whether the task has an active subtask that makes it a group
+ * (countsAsSubtask): the remaining guards' test, which leaves archived
+ * subtasks out even under an archived task (0070). One by_parent_archived
+ * range and each subtask's project once. */
+async function hasActiveSubtasks(
   ctx: QueryCtx,
-  issueId: string,
-  includeArchived = false,
+  issue: GroupRow,
+  live: Liveness = projectLiveness(ctx),
 ): Promise<boolean> {
-  const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', issueId))
-  for await (const child of kids) {
-    if (includeArchived || child.archived_at === undefined) return true
+  const archived = issue.archived_at !== undefined
+  // an archived task counts every subtask, whatever its project
+  const parent = { archived, projectLive: !archived && (await live(issue.project_id)) }
+  const kids = ctx.db
+    .query('issues')
+    .withIndex('by_parent_archived', (q) =>
+      q.eq('parent_id', issue.id).eq('archived_at', undefined),
+    )
+  for await (const kid of kids) {
+    if (countsAsSubtask(parent, { archived: false, projectLive: await live(kid.project_id) })) {
+      return true
+    }
   }
   return false
 }
 
-export function subtaskParentIds(
-  issues: Iterable<Pick<Doc<'issues'>, 'parent_id' | 'archived_at'>>,
-  includeArchived = false,
-): Set<string> {
-  const parents = new Set<string>()
-  for (const issue of issues) {
-    if (issue.parent_id !== undefined && (includeArchived || issue.archived_at === undefined)) {
-      parents.add(issue.parent_id)
-    }
+/* Machine pre-check twin of the remaining guard (core.ts:397-402), naming
+ * the remaining_hours field that the caller needs to correct. */
+export async function assertNoSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<void> {
+  if (await hasActiveSubtasks(ctx, issue)) {
+    throw badRequest(
+      'remaining_hours cannot be set on a task with subtasks — it is the sum of their remaining time',
+    )
   }
-  return parents
+}
+
+/* A task is a group while a subtask makes it one (lib/liveTasks.ts
+ * countsAsSubtask): an active task in an active project through an active
+ * subtask in an active project, an active task in an archived project
+ * through any active subtask, and an archived task through any subtask, so
+ * archived groups retain their hierarchy for display until restored. The
+ * stored status, start_week and end_week stay dormant, ready to resume after
+ * the last such subtask is detached, deleted or archived, or its project is
+ * archived. Nothing reads, clears or migrates them while the task is a
+ * group; readers calculate its dates from its leaves instead. Child
+ * visibility must not change this fact: readers disclose only the boolean,
+ * never hidden child identities. `live` reads each project once; callers
+ * that hold the organization's projects pass them. */
+export async function hasSubtasks(
+  ctx: QueryCtx,
+  issue: GroupRow,
+  live: Liveness = projectLiveness(ctx),
+): Promise<boolean> {
+  if (issue.archived_at === undefined) return await hasActiveSubtasks(ctx, issue, live)
+  const kid = await ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
+    .first()
+  return kid !== null
 }
 
 /* Machine pre-check twin of the group-dates guard in updateIssueCore,
  * naming both REST fields. The caller runs it whenever start_week or
  * end_week is present, so null and unchanged values are refused too. */
 export async function assertNoGroupDates(ctx: QueryCtx, issue: Doc<'issues'>): Promise<void> {
-  if (await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)) {
+  if (await hasSubtasks(ctx, issue)) {
     throw badRequest(GROUP_DATES_MACHINE)
   }
 }
@@ -454,14 +483,11 @@ export async function assertNoGroupDates(ctx: QueryCtx, issue: Doc<'issues'>): P
 /* The trigger's sentence (issue_remaining_guard, 0066:44 + 0070:184 child
  * filter): the browser mutation's backstop, fired only when the value
  * actually changes to non-null; clearing always passes. */
-export async function assertOwnRemaining(ctx: QueryCtx, issueId: string): Promise<void> {
-  const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', issueId))
-  for await (const c of kids) {
-    if (c.archived_at === undefined) {
-      throw rule(
-        'a task with subtasks has no remaining time of its own — it shows the sum of its subtasks',
-      )
-    }
+export async function assertOwnRemaining(ctx: QueryCtx, issue: GroupRow): Promise<void> {
+  if (await hasActiveSubtasks(ctx, issue)) {
+    throw rule(
+      'a task with subtasks has no remaining time of its own — it shows the sum of its subtasks',
+    )
   }
 }
 
@@ -680,10 +706,11 @@ export function doneStampUpdate(
  * the parent is touched AND notified — in SQL this inner UPDATE fired the
  * stamp, touch and notify triggers, so its subscribers saw
  * "Remaining cleared (was N h)". 0067's row lock is subsumed by Convex
- * serializability. */
+ * serializability. `actor` is absent only for a background step whose
+ * person is gone (regroup.ts). */
 export async function clearParentRemaining(
   ctx: MutationCtx,
-  a: { parentId: string; actor: Doc<'profiles'>; now: string },
+  a: { parentId: string; actor: Doc<'profiles'> | undefined; now: string },
 ): Promise<void> {
   const parent = await byId(ctx, 'issues', a.parentId)
   if (parent === null) return
@@ -1076,7 +1103,9 @@ export async function createIssueCore(
     badRequest('a task with this id already exists'),
   )
   const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
-  // the attach clears the parent's hours; its dates are calculated, never written
+  // the attach clears the parent's hours; its dates are calculated, never
+  // written. A new task is active in an active project (the arrival guard),
+  // so it always makes its parent a group.
   if (issue.parent_id !== undefined) {
     await clearParentRemaining(ctx, { parentId: issue.parent_id, actor: me, now })
   }
@@ -1196,10 +1225,12 @@ export async function updateIssueCore(
   // -- guards, in trigger order: parent chain → archive-parent → user refs →
   //    remaining guard (which must raise BEFORE the stamp — 0072)
   const nextParent = 'parent_id' in patch ? (patch.parent_id ?? undefined) : issue.parent_id
+  // the new parent's row, for the clear-on-attach below
+  let attachedTo: Doc<'issues'> | undefined
   if ('parent_id' in patch) {
     if (nextParent !== undefined) {
-      const parent = await assertParentChain(ctx, issue, nextParent, me)
-      assertParentActive(parent, issue.archived_at)
+      attachedTo = await assertParentChain(ctx, issue, nextParent, me)
+      assertParentActive(attachedTo, issue.archived_at)
     }
     w.parent_id = nextParent
   }
@@ -1217,8 +1248,8 @@ export async function updateIssueCore(
   // and only by the status, dates, pause and reviewer guards (a group's are
   // dormant)
   let group: boolean | undefined
-  const isGroup = async (): Promise<boolean> =>
-    (group ??= await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined))
+  const live = projectLiveness(ctx)
+  const isGroup = async (): Promise<boolean> => (group ??= await hasSubtasks(ctx, issue, live))
   if ('assignee_id' in patch) {
     const next = patch.assignee_id ?? undefined
     // fires only when the assignee actually CHANGES (0099/0102): deactivating
@@ -1280,7 +1311,7 @@ export async function updateIssueCore(
   if ('remaining_hours' in patch) {
     const next = cleanRemaining(patch.remaining_hours)
     const changed = (issue.remaining_hours ?? null) !== (next ?? null)
-    if (changed && next !== undefined) await assertOwnRemaining(ctx, issue.id)
+    if (changed && next !== undefined) await assertOwnRemaining(ctx, issue)
     w.remaining_hours = next
     // server-owned stamp (0072): stamped exactly when the value changes; a
     // client-sent stamp cannot stick because no arg carries one
@@ -1353,8 +1384,10 @@ export async function updateIssueCore(
     const descendants = await archiveSubtree(ctx, issue.id, now, me)
     await scheduleArchivedReads(ctx, { issues: [issue.id, ...descendants] })
   }
-  if ('parent_id' in patch && nextParent !== undefined) {
-    await clearParentRemaining(ctx, { parentId: nextParent, actor: me, now })
+  // the attach makes the parent a group only when this task counts for it,
+  // so a task in an archived project leaves a parent in an active one alone
+  if (attachedTo !== undefined && (await subtaskOf(attachedTo, after, live))) {
+    await clearParentRemaining(ctx, { parentId: attachedTo.id, actor: me, now })
   }
   // -- ONE fan-out for the row itself (diffs only the trigger's column list;
   //    the Archived/Restored line rides the same message as the field changes).
@@ -1641,11 +1674,40 @@ export async function moveIssueCore(
   }
   const w: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
-  // only a reviewer can change hands in a move, so without one the group
-  // flag is never needed
+  const live = projectLiveness(ctx)
+  // Whether the task is a group once it has landed: an active task in the
+  // destination, which is active, counts its active subtasks in active
+  // projects, and a subtask the move carries lands there too. An archived
+  // task keeps counting every subtask.
+  const groupAfter = async (): Promise<boolean> => {
+    if (issue.archived_at !== undefined) return await hasSubtasks(ctx, issue, live)
+    const kids = ctx.db
+      .query('issues')
+      .withIndex('by_parent_archived', (q) =>
+        q.eq('parent_id', issue.id).eq('archived_at', undefined),
+      )
+    for await (const kid of kids) {
+      const carriedAlong = crosses && (await topOf(kid.project_id)) !== dst
+      if (carriedAlong || (await live(kid.project_id))) return true
+    }
+    return false
+  }
+  const holdsOwn = issue.remaining_hours !== undefined || issue.review_at !== undefined
+  // only a reviewer can change hands in a move, and only a group must lose
+  // its own hours, so the group flag is read only for those
   let isGroup = false
+  if (issue.reviewer_id !== undefined || (holdsOwn && issue.archived_at === undefined)) {
+    isGroup = await groupAfter()
+  }
+  // a group holds no hours of its own, so hours the task held as a leaf go,
+  // as on an attach (clearParentRemaining). That happens when a subtask the
+  // move carries leaves an archived project.
+  if (isGroup && holdsOwn && issue.archived_at === undefined) {
+    w.remaining_hours = undefined
+    w.remaining_set_at = undefined
+    w.review_at = undefined
+  }
   if (issue.reviewer_id !== undefined) {
-    isGroup = await hasSubtasks(ctx, issue.id, issue.archived_at !== undefined)
     if (!isGroup) {
       if (!replacedLater(issue, later, 'reviewer_id')) {
         await assertAssigneeRule(ctx, target, issue.reviewer_id, 'reviewer')
@@ -1680,6 +1742,21 @@ export async function moveIssueCore(
   }
   // a group stays with its assignee: clearing its reviewer hands nothing over
   await notifyIssueUpdate(ctx, { before, after, actor: me, now, isGroup })
+  // A task that leaves an archived project counts for its parent again
+  // (countsAsSubtask), so a parent it makes a group loses its own hours, as
+  // on an attach. That is the task's parent, unless the task leaves it or a
+  // later write of this update gives it another, and each carried subtask's.
+  const regrouped = new Set(carried.map(({ row }) => row.parent_id))
+  if (!detach && a.machine?.laterParent === undefined) regrouped.add(issue.parent_id)
+  regrouped.delete(issue.id) // its own hours went with the move's patch
+  for (const parentId of regrouped) {
+    const parent = parentId === undefined ? null : await byId(ctx, 'issues', parentId)
+    if (parent === null || parent.archived_at !== undefined) continue
+    if (parent.remaining_hours === undefined && parent.review_at === undefined) continue
+    if (await hasSubtasks(ctx, parent, live)) {
+      await clearParentRemaining(ctx, { parentId: parent.id, actor: me, now })
+    }
+  }
   // snapshot.ts isUnrecordedProjectMove recognizes older rows by this wording
   const moved = `to the ${target.name} sub-project${source ? ` (from ${source.name})` : ''}${
     carried.length > 0 ? ' with its subtasks' : ''
@@ -1831,7 +1908,8 @@ export async function archiveIssueCore(
 /* -------------------------------------------------------- unarchive core
  * Restore branch (0071:66-75): the whole ancestor chain surfaces, each
  * restored parent also loses its own hours (it has sub-issues again — 0066,
- * like attach) with the stamp pairing kept and any review hand-off, and a
+ * like attach, when the task below counts for it, lib/liveTasks.ts
+ * countsAsSubtask) with the stamp pairing kept and any review hand-off, and a
  * restored still-done row's done_at restarts (0071 fix 1). No ancestor's
  * dates change, because a restored group's span is calculated from its
  * leaves.
@@ -1850,6 +1928,7 @@ async function restoreAncestors(
 ): Promise<Doc<'issues'>[]> {
   const { actor, now } = a
   const editable = editableBy(ctx, actor)
+  const live = projectLiveness(ctx)
   const restored: Doc<'issues'>[] = []
   let cur: Doc<'issues'> = a.row
   const seen = new Set<string>([a.row.id])
@@ -1861,16 +1940,21 @@ async function restoreAncestors(
     if (parent === null) break
     seen.add(parent.id)
     const wasArchived = parent.archived_at !== undefined
-    // own hours, or a review hand-off from its leaf days: a group has neither
+    // own hours, or a review hand-off from its leaf days: a group has
+    // neither. They go only when the restored task makes the parent a group
+    // once both are active (countsAsSubtask), so a task in an archived
+    // project leaves the hours of a parent in an active one alone.
     const hadOwn = parent.remaining_hours !== undefined || parent.review_at !== undefined
-    if (!wasArchived && !hadOwn) break
+    const clears = hadOwn && (await subtaskOf({ ...parent, archived_at: undefined }, cur, live))
+    if (!wasArchived && !clears) break
     if (!(await editable(parent.project_id))) throw rule(RESTORE_CASCADE_RULE)
     const pBefore = { ...parent }
+    const ownHours = clears
+      ? { remaining_hours: undefined, remaining_set_at: undefined, review_at: undefined }
+      : {}
     await ctx.db.patch(parent._id, {
       archived_at: undefined,
-      remaining_hours: undefined,
-      remaining_set_at: undefined,
-      review_at: undefined,
+      ...ownHours,
       done_at: doneStampUpdate(parent, { status: parent.status, archived_at: undefined }, now),
       updated_at: now,
     })

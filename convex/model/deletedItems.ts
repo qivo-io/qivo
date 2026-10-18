@@ -119,6 +119,7 @@ import {
   type TrashPhase,
 } from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
+import { countsAsSubtask } from '../lib/liveTasks'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { ACTIVITY_CAP, insertActivity, logActivity, requestActivityTrim } from './activity'
 import { storageIdInUse } from './attachments'
@@ -2170,8 +2171,9 @@ type HomedTask = StoredTask & { home: Doc<'projects'> }
  * whose parent is in the item keeps it. A task whose parent is outside the
  * item goes back without it, and deleted_item_parents keeps that parent
  * for attachParents, which applies the parent table after the reveal, by
- * the state then (design 5.2). Writing the parent now would make it a group
- * before the reveal (model/issues.ts hasSubtasks counts every child). A
+ * the state then (design 5.2). Writing the parent now could make it a group
+ * before the reveal, as a parent in an archived project counts every active
+ * subtask (lib/liveTasks.ts countsAsSubtask). A
  * deleted_tasks row whose stored task is gone is deleted, so the reveal,
  * which sends the item back here while the item has one, always moves on. */
 const restoreTasks = (run: Run): Promise<boolean> =>
@@ -2600,10 +2602,11 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * project since the delete fails it, as can a subtask stored before the
  * rule. An active parent stays when the restorer may change it, within 20
  * levels; an archived one only for an archived task, within the same depth.
- * `grouped`: the attach makes the parent a group (an active task under an
- * active parent, any task under an archived one), so the parent loses its
- * own remaining hours as on a reparent (model/issues.ts
- * clearParentRemaining). An archived parent that holds hours of its own
+ * `grouped`: the attach makes the parent a group (lib/liveTasks.ts
+ * countsAsSubtask: any task under an archived parent, and an active task
+ * under an active parent unless the task's project is archived while the
+ * parent's is not), so the parent loses its own remaining hours as on a
+ * reparent (model/issues.ts clearParentRemaining). An archived parent that holds hours of its own
  * therefore needs the restorer's Edit too, so a restore never changes a
  * task in a project the restorer cannot edit.
  *
@@ -2643,7 +2646,12 @@ async function keptParent(
   if (workers === null) return undefined
   const sees = await allSee(run, reads, task, workers, chain.projects)
   if (sees === 'later') return 'later'
-  return sees ? { id: outside.parent.id, grouped: !active || taskActive } : undefined
+  // the attach makes the parent a group only when the task counts for it
+  const grouped = countsAsSubtask(
+    { archived: !active, projectLive: outside.project.archived_at === undefined },
+    { archived: !taskActive, projectLive: home.archived_at === undefined },
+  )
+  return sees ? { id: outside.parent.id, grouped } : undefined
 }
 
 /** The chain from a live task to the top: how many levels it holds and the

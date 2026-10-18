@@ -134,7 +134,7 @@ describe('parent task status', () => {
     expect(snapshot?.issues.map((i) => i.id).sort()).toEqual([root.id, middle.id, leaf.id].sort())
   })
 
-  it('hidden and archived-project children preserve grouping without revealing child identities', async () => {
+  it('hidden children preserve grouping without revealing child identities; archived-project ones do not', async () => {
     const t = newT()
     const f = await withOrg(t)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
@@ -174,19 +174,51 @@ describe('parent task status', () => {
       'rule',
       /status cannot be set/,
     )
-    // An administrator sees the child until its project leaves the working
-    // set; the group flag still cannot revert to its saved done status.
-    expect(
+    // An administrator sees the child, so nothing is hidden from them
+    const adminFlag = async () =>
       (await as(t, f.admin).query(api.snapshot.forMe, {}))?.issues.find((i) => i.id === parent.id)
-        ?.has_hidden_subtasks,
-    ).toBe(false)
+        ?.has_hidden_subtasks
+    expect(await adminFlag()).toBe(false)
+    // A subtask in an archived project makes a task in an active one no
+    // group, so its project's archive hides nothing and leaves the parent a
+    // group of its visible subtask only
     await t.run(async (ctx) => {
       await ctx.db.patch(hiddenProject._id, { archived_at: NOW })
     })
+    expect(await adminFlag()).toBe(false)
+    const guestFlag = async () =>
+      (await as(t, f.guest).query(api.snapshot.forMe, {}))?.issues.find((i) => i.id === parent.id)
+        ?.has_hidden_subtasks
+    expect(await guestFlag()).toBe(false)
+    // once the visible subtask is archived too, the parent is a task again
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: visibleChild.id })
     expect(
-      (await as(t, f.admin).query(api.snapshot.forMe, {}))?.issues.find((i) => i.id === parent.id)
-        ?.has_hidden_subtasks,
-    ).toBe(true)
+      await t.query(internal.machine.rest.getIssue, {
+        callerId: f.guest.id,
+        access: 'read',
+        now: NOW,
+        ref: parent.id,
+      }),
+    ).toMatchObject({ is_group: false, status: 'done' })
+    await as(t, f.guest).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: parent.id,
+      patch: { status: 'todo', start_week: '2026-09-07', end_week: '2026-09-14' },
+    })
+    // and restoring the subtask's project makes it a group again
+    await t.run(async (ctx) => {
+      await ctx.db.patch(hiddenProject._id, { archived_at: undefined })
+    })
+    expect(await guestFlag()).toBe(true)
+    await expectRefusal(
+      as(t, f.guest).mutation(api.issues.update, {
+        org_id: f.org.id,
+        id: parent.id,
+        patch: { status: 'done' },
+      }),
+      'rule',
+      /status cannot be set/,
+    )
   })
 
   it('groups contribute no independent planning load regardless of stored status', async () => {

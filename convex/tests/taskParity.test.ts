@@ -29,6 +29,7 @@ import {
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
+import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
@@ -337,13 +338,23 @@ describe('a single-task read walks only the subtasks that can count', () => {
           .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
           .collect(),
       )
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
+        .collect()
+      const live = liveIn(new Map(projects.map((p) => [p.id, p])))
       const org = await byId(ctx, 'organizations', issue.org_id)
       const forecast = taskForecaster(ctx, me, delayClock(org, NOW))
       const row =
         surface === 'rest'
-          ? await issueOut(ctx, issue, { surface, me, project, children, forecast })
-          : await issueOut(ctx, issue, { surface, me, project, children, forecast })
-      const detail = await taskDetail(ctx, me, issue, { project, isGroup: row.is_group, children })
+          ? await issueOut(ctx, issue, { surface, me, project, children, live, forecast })
+          : await issueOut(ctx, issue, { surface, me, project, children, live, forecast })
+      const detail = await taskDetail(ctx, me, issue, {
+        project,
+        isGroup: row.is_group,
+        children,
+        live,
+      })
       const whole = { ...row, ...detail, attachments: await taskAttachments(ctx, me, issue) }
       return { out, whole, metrics }
     })

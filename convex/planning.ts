@@ -4,7 +4,8 @@
  *
  * Shared fence (both walks):
  *   scheduled (start_week set — the 0037 envelope CHECK means end_week too),
- *   ordinary task (no active subtasks), status <> done (0073), not paused
+ *   ordinary task (no subtask that makes it a group, lib/liveTasks.ts
+ *   countsAsSubtask), status <> done (0073), not paused
  *   (#310: its owner is free for other work; a paused Review task drops out
  *   too), issue not archived (0070), project not archived (0106), owner
  *   (lib/review.ts: the reviewer while In Review with one set, else the
@@ -26,10 +27,11 @@ import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
 import { authedQuery } from './lib/functions'
+import { groupTest, liveIn, liveTasksOf, ownedLiveTasks } from './lib/liveTasks'
 import { taskOwnerId } from './lib/review'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
-import { subtaskParentIds } from './model/issues'
+import { hasSubtasks, topLevelOf } from './model/issues'
 import { roundTenths } from './model/taskValues'
 
 /* rows.orgLoad element, field names verbatim (planner.ts:90): `remaining`,
@@ -60,8 +62,10 @@ export type AssigneeLoadRow = {
 
 /* plan_org_load for one org. orgProfileIds = ALL profile ids of the org
  * (active + inactive + agents) — the 0065 owner fence. The snapshot passes
- * its active org task read so planning and grouping do not scan it again.
- * The REST and MCP delay verdicts (lib/machineDelay.ts) pass the machine
+ * its live task read (lib/liveTasks.ts liveTasksOf) so planning and grouping
+ * do not scan it again. A task's group state comes from those rows, which
+ * hold every subtask that makes a task in an active project a group. The
+ * REST and MCP delay verdicts (lib/machineDelay.ts) pass the machine
  * catalogue and access flags as `view`, the same projects and rule. */
 export function orgLoadRows(
   me: Doc<'profiles'>,
@@ -71,9 +75,9 @@ export function orgLoadRows(
 ): OrgLoadRow[] {
   const staff = isOrgStaff(me)
   const rows: OrgLoadRow[] = []
-  const groupIds = subtaskParentIds(issues)
+  const isGroup = groupTest(issues, liveIn(view.byUuid))
   for (const i of issues) {
-    if (groupIds.has(i.id)) continue
+    if (isGroup(i)) continue
     // groups are skipped above, so the rule's isGroup default holds
     const owner = taskOwnerId(i)
     if (owner === undefined) continue
@@ -99,6 +103,10 @@ export function orgLoadRows(
   return rows
 }
 
+/* plan_assignee_load: the person's own live tasks (lib/liveTasks.ts
+ * ownedLiveTasks, two index ranges), never the organization's. A task that
+ * passes every other test is checked for subtasks on its own (hasSubtasks),
+ * so a group is left out as in orgLoadRows. */
 async function assigneeLoadRows(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -107,21 +115,15 @@ async function assigneeLoadRows(
 ): Promise<AssigneeLoadRow[]> {
   const staff = isOrgStaff(me)
   const rows: AssigneeLoadRow[] = []
-  const issues = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
-    .collect()
-  const groupIds = subtaskParentIds(issues)
-  for (const i of issues) {
-    if (groupIds.has(i.id)) continue
-    if (taskOwnerId(i) !== assigneeId) continue
+  const live = liveIn(view.byUuid)
+  for (const i of await ownedLiveTasks(ctx, assigneeId, live)) {
     if (i.start_week === undefined || i.end_week === undefined) continue
     if (i.status === 'done' || i.paused) continue
-    if (i.archived_at !== undefined) continue
     const project = view.byUuid.get(i.project_id)
-    if (project === undefined || project.archived_at !== undefined) continue
+    if (project === undefined) continue // ownedLiveTasks keeps only active projects
     const vis = view.visible(i.project_id)
     if (!(staff || vis || assigneeId === me.id)) continue
+    if (await hasSubtasks(ctx, i, live)) continue
     rows.push({
       issue_id: vis ? i.id : null,
       title: vis ? i.title : null,
@@ -192,7 +194,9 @@ export type WorkloadJson = {
  * up, so the work follows the window. `project`, a project `me` can see,
  * limits the hours to it and its visible sub-projects, which leaves no
  * hidden hours. Lists every active member of the organization and every
- * inactive one with hours in the window, ordered by name.
+ * inactive one with hours in the window, ordered by name. It reads the live
+ * tasks of the organization, or with `project` of its top-level project,
+ * one index range per active project (lib/liveTasks.ts liveTasksOf).
  */
 export async function workloadCore(
   ctx: QueryCtx,
@@ -205,13 +209,16 @@ export async function workloadCore(
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
     .collect()
-  const [view, issues] = await Promise.all([
-    orgProjectView(ctx, me),
-    ctx.db
-      .query('issues')
-      .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
-      .collect(),
-  ])
+  const view = await orgProjectView(ctx, me)
+  // a project's hours need the group state of its tasks, which only subtasks
+  // in the same top-level project can change, so a scoped read takes that
+  // top-level project's live tasks and an unscoped one the organization's
+  const family = o.project === null ? null : topLevelOf(o.project)
+  const issues = await liveTasksOf(
+    ctx,
+    view.projects,
+    family === null ? undefined : (p) => topLevelOf(p) === family,
+  )
   const scope =
     o.project === null
       ? null

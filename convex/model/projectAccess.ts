@@ -38,6 +38,7 @@ import { assertOrgWritable } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
+import { liveIn } from '../lib/liveTasks'
 import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
 import { loadNotifyPreload } from './messages'
@@ -346,9 +347,10 @@ async function removeAndFindLost(
   const sees = (levels: Map<string, OrgProjectLevels>, h: Lost) =>
     (levels.get(h.profile_id)?.levelOf(h.project) ?? null) !== null
   const lost: Lost[] = []
+  const live = liveIn(new Map(orgProjects.map((p) => [p.id, p])))
   for (const h of candidates) {
     if (!sees(before, h) || sees(after, h)) continue
-    if (h.role === 'reviewer' && (await hasSubtasks(ctx, h.task.id))) continue
+    if (h.role === 'reviewer' && (await hasSubtasks(ctx, h.task, live))) continue
     lost.push(h)
   }
   return { lost, orgProjects }

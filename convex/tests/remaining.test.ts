@@ -179,7 +179,7 @@ describe('remaining time', () => {
     // The machine refusal identifies the field; both surfaces say task/subtasks.
     const machine = await expectRefusal(
       t.run(async (ctx) => {
-        await assertNoSubtasks(ctx, parent.id)
+        await assertNoSubtasks(ctx, parent)
       }),
       'bad_request',
     )

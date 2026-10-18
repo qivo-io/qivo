@@ -414,6 +414,23 @@ describe('restoring a task item', () => {
     ).toEqual([['Remaining cleared (was 6 h)', f.user.id]])
   })
 
+  it('brings an archived sub-project back under a live parent, which keeps its own hours', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const child = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: parent.id })
+    await as(t, f.user).mutation(api.projects.archive, { org_id, id: f.sub2.id })
+    // a subtask in an archived sub-project makes it no group, so it holds hours of its own
+    await patch(t, 'issues', parent.id, { remaining_hours: 6, remaining_set_at: NOW })
+    await deleteProject(t, f, f.sub2.id)
+    await restore(t, f.user, [(await itemFor(t, f.sub2.id)).id])
+    await runSteps(t)
+    expect((await liveProject(t, f.sub2.id))?.archived_at).toBeDefined()
+    expect((await liveTask(t, child.id))?.parent_id).toBe(parent.id)
+    expect((await liveTask(t, parent.id))?.remaining_hours).toBe(6)
+  })
+
   it('brings a subtask back top-level when the restorer cannot edit its parent', async () => {
     const t = newT()
     const f = await withOrg(t)

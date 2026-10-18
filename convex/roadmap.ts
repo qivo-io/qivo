@@ -229,8 +229,7 @@ export const change = authedMutation({
         if ('start_week' in patch || 'end_week' in patch) {
           // A group takes its dates from its subtasks. Refused before the
           // no-op skip, so a group's date operation never passes silently.
-          if (await hasSubtasks(ctx, row.id, row.archived_at !== undefined))
-            throw rule(GROUP_DATES_RULE)
+          if (await hasSubtasks(ctx, row)) throw rule(GROUP_DATES_RULE)
           const start = 'start_week' in patch ? (patch.start_week ?? undefined) : row.start_week
           const end = 'end_week' in patch ? (patch.end_week ?? undefined) : row.end_week
           assertWeekPair(start, end)
@@ -407,7 +406,7 @@ async function restoreStep(ctx: Context, changes: Change[], now: string) {
     if (!after) throw stale()
     assertWeekPair(after.start_week, after.end_week)
     if (change.fields.includes('remaining_hours') && after.remaining_hours !== undefined)
-      await assertOwnRemaining(ctx, after.id)
+      await assertOwnRemaining(ctx, after)
     await notifyIssueUpdate(ctx, { before, after, actor: me, now })
     await logActivity(ctx, {
       org_id: after.org_id,

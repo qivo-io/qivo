@@ -5120,13 +5120,12 @@ export const PLANNER = {
       const r = rows.projects.get(pid)
       if (r) r.archived_at = stamp
     })
-    issueIds.forEach((iid) => {
-      // A project archive hides its tasks; it does not archive the tasks.
-      // Preserve grouping for parents that remain visible in other projects.
-      const parentId = rows.issues.get(iid)?.parent_id
-      if (parentId) rows.hiddenSubtaskParents.add(parentId)
-      rows.issues.delete(iid)
-    })
+    // A project archive hides its tasks; it does not archive the tasks. A
+    // subtask in an archived project no longer makes a task in an active
+    // one a group (convex/lib/liveTasks.ts countsAsSubtask), so a parent left
+    // in another project keeps only its other subtasks, as the next delivery
+    // says.
+    for (const iid of issueIds) rows.issues.delete(iid)
     // and a child left in another project now has its parent outside this
     // view, as the next delivery says
     for (const r of rows.issues.values()) {
