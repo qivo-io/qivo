@@ -3854,10 +3854,15 @@ export const PLANNER = {
     }).then(
       () => {
         /* The delivery that drops the task usually lands first. When it has
-           not, mirror it, and keep the root so that a rollback from the stale
-           snapshot after another refused write applies it again. */
-        if (epoch !== storeEpoch || !rows.issues.has(uuid)) return true
-        pendingArchiveIssueIds.set(uuid, { keepSubtasks })
+           not, mirror it. Keep the root only while the server's last snapshot
+           still holds it, so that a rollback or held paint from that stale
+           snapshot applies the archive again. A snapshot that already dropped
+           it needs no marker, and one would hide the task if it is restored
+           before the held paint lands. */
+        if (epoch !== storeEpoch) return true
+        if (serverSnap?.issues.some((issue) => issue.id === uuid))
+          pendingArchiveIssueIds.set(uuid, { keepSubtasks })
+        if (!rows.issues.has(uuid)) return true
         mirrorArchive(uuid, keepSubtasks)
         rebuild()
         emit()
