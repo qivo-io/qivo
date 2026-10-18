@@ -7,6 +7,8 @@
  *      blaming the tasks.
  *   2. The preload and the passed checks (model/issues.ts BulkUpdate) change
  *      nothing a follower reads or follows.
+ *   3. Deleting a task with many direct subtasks detaches and announces them
+ *      all inside those limits (model/deletedItems.ts moveTasksToTrash).
  *
  * convex-test enforces the deployment's limits with transactionLimits: true
  * and counts every index range a function reads, where a deployment counts a
@@ -342,5 +344,67 @@ describe('a bulk update', () => {
       }),
       'rule',
     )
+  })
+})
+
+describe('deleting a task with many subtasks', () => {
+  it('detaches 300 subtasks inside one transaction, and tells their followers', async () => {
+    const fx = await crowded(0)
+    const parent = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub2.id,
+      title: 'Parent',
+      assignee_id: fx.user.id,
+    })
+    const followers = (i: number) => [1, 2].map((k) => fx.crowd[(i * 2 + k) % CROWD])
+    const kids = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 300; i++) {
+        const id = uuid()
+        await ctx.db.insert('issues', {
+          id,
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          num: 2000 + i,
+          title: `Subtask ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          parent_id: parent.id,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        for (const follower of followers(i))
+          await ctx.db.insert('issue_subscriptions', {
+            issue_id: id,
+            profile_id: follower.id,
+            created_at: NOW,
+          })
+        ids.push(id)
+      }
+      return ids
+    })
+    await as(fx.t, fx.user).mutation(api.issues.deleteDeep, { org_id: fx.org.id, id: parent.id })
+    const { rows, messages } = await fx.t.run(async (ctx) => ({
+      rows: await ctx.db
+        .query('issues')
+        .withIndex('by_project', (q) => q.eq('project_id', fx.sub.id))
+        .collect(),
+      messages: await ctx.db.query('messages').collect(),
+    }))
+    expect(rows.filter((r) => r.parent_id === undefined)).toHaveLength(300)
+    const told = new Map<string, string[]>()
+    for (const m of messages) {
+      expect(m.detail).toBe('Detached from its parent')
+      told.set(m.issue_id, [...(told.get(m.issue_id) ?? []), m.recipient_id].sort())
+    }
+    kids.forEach((id, i) => {
+      expect(told.get(id)).toEqual(
+        followers(i)
+          .map((p) => p.id)
+          .sort(),
+      )
+    })
   })
 })
