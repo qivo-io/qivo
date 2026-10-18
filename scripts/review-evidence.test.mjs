@@ -106,6 +106,14 @@ describe('CodeRabbit evidence', () => {
     expect(review([status('Review completed')], [summary(coverage(SHA), limited)]).reason).toBe(
       'shows a notice this check does not know: "rate limited"',
     )
+    // Names with punctuation or capitals are notices too.
+    for (const name of ['rate-limited', 'Review paused', 'skip review v2'])
+      expect(
+        review([status('Review completed')], [summary(coverage(SHA), notice(name, '> ...'))]),
+      ).toMatchObject({
+        complete: false,
+        reason: `shows a notice this check does not know: "${name}"`,
+      })
   })
 
   it('refuses missing, foreign and malformed evidence', () => {

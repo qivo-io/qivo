@@ -67,8 +67,11 @@ export function codeRabbitReview({ sha, statuses, comments }) {
   const comment = summaryComment(comments, CODERABBIT, CODERABBIT_SUMMARY)
   if (!comment) return incomplete(name, 'has no summary comment written by CodeRabbit itself')
   const body = comment.body
+  // Capture every notice name, whatever its spelling, so an unknown one cannot slip past.
   const notices = [
-    ...body.matchAll(/<!-- This is an auto-generated comment: ([a-z ]+?) by coderabbit\.ai -->/g),
+    ...body.matchAll(
+      /<!--\s*This is an auto-generated comment:\s*(.+?)\s+by coderabbit\.ai\s*-->/gi,
+    ),
   ]
     .map((match) => match[1])
     .filter((notice) => notice !== 'summarize')

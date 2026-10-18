@@ -181,6 +181,16 @@ describe('configuration', () => {
     expect(configuration(branch).context).toBe(REHEARSAL_CONTEXT)
   })
 
+  it('accepts run IDs of any length', () => {
+    // Run IDs already have eleven digits.
+    const run = { ...env, GITHUB_RUN_ID: '39109520217' }
+    expect(configuration(run)).toMatchObject({
+      runId: 39109520217,
+      runUrl: 'https://github.com/qivo-io/qivo/actions/runs/39109520217',
+    })
+    expect(() => configuration({ ...env, GITHUB_RUN_ID: '0123' })).toThrow()
+  })
+
   it('refuses other repositories, events, workflows and malformed inputs', () => {
     expect(() => configuration({ ...env, GITHUB_REPOSITORY: 'someone/qivo' })).toThrow()
     expect(() => configuration({ ...env, GITHUB_EVENT_NAME: 'push' })).toThrow()
@@ -435,6 +445,16 @@ describe('workflow policy', () => {
     expect(build).toMatch(/cache-mode: read\n/)
     expect(build).not.toMatch(/secrets:/)
     expect(start).toMatch(/\ncache-mode: none\n/)
+    // A called workflow that asks for more than read access would not start at all.
+    expect(workflows['ci.yml']).not.toMatch(/^\s*cache-mode:\s*(write|write-only)\s*$/m)
+  })
+
+  it('runs one Start CI run per commit at a time and queues the next', () => {
+    // Overlapping runs for one commit would race for its single status.
+    expect(start).toMatch(
+      /\nconcurrency:\n {2}group: reviewed-ci-.+\n {2}cancel-in-progress: false\n/,
+    )
+    expect(start.split('\njobs:\n')[1]).not.toMatch(/concurrency:/)
   })
 
   it('lets only the Start CI controller write statuses or name a check reviewed-ci', () => {
@@ -444,21 +464,19 @@ describe('workflow policy', () => {
     }
   })
 
-  it('cancels the build group Start CI uses for runs from main', () => {
-    // Evaluate both groups for a main run building pull request 7 at OLDER and a push
-    // that replaced OLDER, as GitHub would.
+  it('cancels the group Start CI uses for runs from main', () => {
+    // Evaluate both groups for a main run building OLDER and a push that replaced OLDER,
+    // as GitHub would.
     const values = {
       'github.ref': 'refs/heads/main',
-      'inputs.pr': '7',
       'inputs.sha': OLDER,
-      'github.event.pull_request.number': '7',
       'github.event.before || github.event.pull_request.head.sha': OLDER,
     }
     const group = (text) =>
-      /group: (reviewed-ci-build-.+)$/m
+      /group: (reviewed-ci-.+)$/m
         .exec(text)[1]
         .replace(/\$\{\{ (.+?) \}\}/g, (_, expression) => values[expression] ?? '?')
-    expect(group(start)).toBe(`reviewed-ci-build-refs/heads/main-7-${OLDER}`)
+    expect(group(start)).toBe(`reviewed-ci-refs/heads/main-${OLDER}`)
     expect(group(workflows['reviewed-ci-cancel.yml'])).toBe(group(start))
   })
 })

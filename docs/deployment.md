@@ -10,17 +10,13 @@ repository.
 | Source event | Destination |
 | --- | --- |
 | Feature branch push | Vercel branch preview, website included, with its own Convex preview deployment |
-| **Start CI** run by hand after a pull request's reviews finish | Full CI of that pull request commit and its `reviewed-ci` status. Deploys nothing |
 | Successful main CI and secret scanning | Staging website, docs and app at `preview.qivo.io` |
 | **Deploy staging** run by hand from main | The same, for example after a provider failure |
 | **Prepare release** run by hand from main | A draft GitHub Release for the commit staging serves. Deploys nothing |
 | Publishing that draft (a stable release) | Website, docs and app at `qivo.io`, and the public demo |
 
 ```text
- feature branch ──► reviews + secret scan, branch preview (own empty Convex backend)
-       │
-       ▼ reviews finished
- Start CI ──► full CI of the reviewed commit, reviewed-ci status
+ feature branch ──► CI + secret scan, branch preview (own empty Convex backend)
        │
        ▼ pull request merged
  main ─────► CI + secret scan ──► Deploy staging
@@ -48,9 +44,8 @@ into staging or reuse production service credentials there.
 
 Website, docs and app changes all ship the same way.
 
-1. Merge the pull request to main once its reviews are finished and Start CI
-   passed for its head commit, as `AGENTS.md` describes. CI runs on main, then
-   **Deploy staging** updates `preview.qivo.io`, normally within five minutes.
+1. Merge the reviewed pull request to main. CI runs, then **Deploy staging**
+   updates `preview.qivo.io`, normally within five minutes.
 2. Review the change at `https://preview.qivo.io` with a synthetic account.
 3. In GitHub Actions, run **Prepare release** from main. Leave the version
    empty for the next patch version, or enter one such as `v1.2.0`. It refuses

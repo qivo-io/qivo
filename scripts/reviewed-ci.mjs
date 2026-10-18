@@ -15,7 +15,8 @@
  * changed workflow can be tested before it merges. Reviewer-specific parsing is in
  * review-evidence.mjs. */
 import { execFileSync } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { apiClient } from './deploy-environment.mjs'
 import { REVIEWERS } from './review-evidence.mjs'
 
@@ -24,6 +25,8 @@ const WORKFLOW = '.github/workflows/reviewed-ci.yml'
 const ACTIONS_BOT = 'github-actions[bot]'
 const COMMIT = /^[0-9a-f]{40}$/
 const NUMBER = /^[1-9]\d{0,9}$/
+// Run IDs already have eleven digits and keep growing.
+const RUN_ID = /^[1-9]\d*$/
 const WRITERS = new Set(['admin', 'maintain', 'write'])
 const ACTIVE = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending'])
 const prefix = `/repos/${REPOSITORY}`
@@ -63,7 +66,7 @@ export function configuration(env) {
   if (!NUMBER.test(pr)) throw new Error('The pull request number must be a positive integer.')
   if (!COMMIT.test(sha)) throw new Error('The commit must be a full 40-character SHA.')
   const runId = need('GITHUB_RUN_ID')
-  if (!NUMBER.test(runId)) throw new Error('GITHUB_RUN_ID is not a run ID.')
+  if (!RUN_ID.test(runId)) throw new Error('GITHUB_RUN_ID is not a run ID.')
   return {
     pr: Number(pr),
     sha,
@@ -395,7 +398,8 @@ async function check(pr, sha) {
     )
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Compare real paths, so symlinks, spaces and Windows paths still run the command.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [command, ...args] = process.argv.slice(2)
   if (command === 'check') {
     const [pr, sha] = args

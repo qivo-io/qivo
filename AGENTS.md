@@ -74,6 +74,11 @@ its reviews are finished and publishes the `reviewed-ci` status. Branch
 protection on main requires `reviewed-ci`, `secrets` and `Greptile Review` on the
 head commit, a branch that is up to date with main and resolved conversations.
 
+**Transition.** Start CI is being rolled out. Until a change removes the pull
+request triggers from `ci.yml`, pull requests still run full CI on every push,
+and branch protection still requires `quality` instead of `reviewed-ci`. Follow
+the steps below anyway.
+
 **Reviewers.** CodeRabbit and Greptile are both required on every pull request.
 `.coderabbit.yaml` and `.greptile/config.json` make them review every push and
 rebase. Do not edit those files to skip or narrow a review. No formal approval
@@ -122,8 +127,9 @@ status. It then builds the commit in the `Build and test / quality` job, which
 runs the same checks as main CI with a read-only token, no secrets and
 read-only cache access. Only when that job succeeded and every check still
 holds does it set `reviewed-ci` to success on the commit. Watch that status, not
-the dispatch run: a duplicate request for a commit that is building or already
-passed ends at once without building.
+the dispatch run. Start CI runs one request per commit at a time: a second
+request waits for the first to finish, then starts nothing if it passed and
+builds again if it failed.
 
 **4. Retry and new commits.** A push to the pull request cancels the build of
 the replaced commit, and a new commit has no `reviewed-ci` status until its own

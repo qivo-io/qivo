@@ -27,6 +27,14 @@ on:
 
 permissions: {}
 
+# One run per commit at a time, because the commit has one reviewed-ci status. A second
+# request waits for the first run to finish, then finds its result: it starts nothing
+# after a success and builds again after a failure. A push that replaces the commit
+# cancels the run (reviewed-ci-cancel.yml).
+concurrency:
+  group: reviewed-ci-${{ github.ref }}-${{ inputs.sha }}
+  cancel-in-progress: false
+
 # Only the build job reads the cache. Nothing in this workflow saves one.
 cache-mode: none
 
@@ -66,11 +74,6 @@ jobs:
     needs: authorize
     # A re-run would reuse the first attempt's authorization, so it never builds.
     if: needs.authorize.outputs.build == 'true' && github.run_attempt == '1'
-    # A newer build of the same commit cancels this one, and so does a push that replaces
-    # the commit (reviewed-ci-cancel.yml).
-    concurrency:
-      group: reviewed-ci-build-${{ github.ref }}-${{ inputs.pr }}-${{ inputs.sha }}
-      cancel-in-progress: true
     permissions:
       contents: read
     cache-mode: read
