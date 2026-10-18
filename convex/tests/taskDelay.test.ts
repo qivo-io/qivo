@@ -26,7 +26,7 @@ import { DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf } from '../../
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
-import { type DelayJson, delayClock, ownerLoadSpans } from '../lib/machineDelay'
+import { type DelayJson, delayClock, OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
 import { taskOwnerId } from '../lib/review'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
@@ -409,9 +409,18 @@ describe('a single read’s load is the list’s load', () => {
                   remainingSet:
                     r.remaining_set_at === null ? null : grid.ofInstant(r.remaining_set_at),
                 }))
-              // in the same order too, as each week's hours add up in order
+              // in the same order too, as each week's hours add up in order,
+              // whether it checks each task for subtasks or reads them all
               const fromOwner = await ownerLoadSpans(ctx, me, owner, grid, view)
               expect(fromOwner, `${owner.name} for ${me.name}`).toEqual(fromList)
+              const checks = OWNER_LOAD_CHECKS.reads
+              OWNER_LOAD_CHECKS.reads = 0
+              try {
+                const bulk = await ownerLoadSpans(ctx, me, owner, grid, view)
+                expect(bulk, `${owner.name} for ${me.name}, read at once`).toEqual(fromList)
+              } finally {
+                OWNER_LOAD_CHECKS.reads = checks
+              }
             }
           })
         }
@@ -510,6 +519,30 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       remaining_set_at: NOW,
     })
     await expect(single(fx, estimated.id)).rejects.toThrow()
+  })
+
+  it('checks a busy owner’s tasks for subtasks in one read past OWNER_LOAD_CHECKS', async () => {
+    // 300 subtask checks would take more index ranges than the read may
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 200 } }))
+    await busy(fx, fx.user)
+    const estimated = await task(fx, {
+      assignee_id: fx.user.id,
+      start_week: W(0),
+      end_week: W(0),
+      remaining_hours: 10,
+      remaining_set_at: NOW,
+    })
+    const checks = OWNER_LOAD_CHECKS.reads
+    OWNER_LOAD_CHECKS.reads = 100
+    try {
+      // the 300 tasks fill the user's next three weeks
+      expect((await single(fx, estimated.id)).delay).toEqual({
+        status: 'behind',
+        projected_end_week: W(3),
+      })
+    } finally {
+      OWNER_LOAD_CHECKS.reads = checks
+    }
   })
 
   it('reads none for a task with neither a planned end nor a due date', async () => {
