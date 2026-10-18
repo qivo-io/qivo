@@ -8,8 +8,8 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
 
 /* The snapshot notice on the real store. The network double delivers the
-   first snapshot and keeps each snapshot subscription's error callback, so a
-   test can fail the live query mid-session. */
+   first snapshot and keeps each snapshot subscription's callbacks, so a test
+   can fail the live query or deliver a later result mid-session. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -23,6 +23,7 @@ vi.mock('../lib/auth', () => ({
 let notice: typeof import('./SnapshotNotice')
 let store: typeof import('../store/planner')
 let fail: (error: Error) => void
+let deliverLater: (snap: Snapshot | null) => void
 let subscribed: number
 let container: HTMLDivElement
 let root: Root
@@ -46,6 +47,7 @@ beforeEach(async () => {
     if (getFunctionName(ref) === 'snapshot:forMe') {
       subscribed++
       fail = onError
+      deliverLater = deliver
       if (subscribed === 1) deliver(structuredClone(snap))
     }
     return () => {}
@@ -124,6 +126,18 @@ describe('SnapshotNotice', () => {
     expect(shown()?.textContent).toContain('You’re signed out')
     expect(shown()?.textContent).toContain(
       'Reload Qivo to sign in again. Text you haven’t saved will be lost.',
+    )
+    expect(button('Reload')).toBeDefined()
+    expect(button('Try again')).toBeUndefined()
+    expect(button('Details')).toBeUndefined()
+  })
+
+  it('says access ended and offers a reload once every seat is gone', async () => {
+    await act(async () => deliverLater(null))
+    expect(shown()?.dataset.snapshotNotice).toBe('no_access')
+    expect(shown()?.textContent).toContain('You no longer have access to this workspace')
+    expect(shown()?.textContent).toContain(
+      'You’re seeing your workspace as of 14:32. Reload Qivo to continue. Text you haven’t saved will be lost.',
     )
     expect(button('Reload')).toBeDefined()
     expect(button('Try again')).toBeUndefined()

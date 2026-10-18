@@ -28,7 +28,7 @@ type Subscription = {
   fail: (error: Error) => void
   unsubscribe: ReturnType<typeof vi.fn>
 }
-type Sent = { name: string; resolve: (value: unknown) => void }
+type Sent = { name: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
 
 const QUERY_FAILURE =
   '[CONVEX Q(snapshot:forMe)] [Request ID: 3f9c2a71] Server Error\n  Called by client'
@@ -107,7 +107,7 @@ describe('snapshot trouble', () => {
     network.mutation.mockImplementation((ref) => {
       const name = getFunctionName(ref)
       if (name === 'identity:claimMySeats') return Promise.resolve(null)
-      return new Promise((resolve) => sent.push({ name, resolve }))
+      return new Promise((resolve, reject) => sent.push({ name, resolve, reject }))
     })
   })
   afterEach(() => {
@@ -342,15 +342,71 @@ describe('snapshot trouble', () => {
     live().deliver(null)
     sent[0].resolve(null)
     await settle()
-    expect(P.snapshotTrouble()?.kind).toBe('failed')
+    expect(P.snapshotTrouble()?.kind).toBe('no_access')
     expect(showToast).not.toHaveBeenCalledWith('Qivo is up to date again.', 'success')
   })
 
-  it('keeps the last view without trouble when every seat is gone', async () => {
+  it('keeps the last view and pauses every write but appearance when every seat is gone', async () => {
+    await boot()
+    const { P } = store
+    live().deliver(null)
+    expect(P.snapshotTrouble()).toMatchObject({
+      kind: 'no_access',
+      asOf: snapshot.delivered_at,
+      retrying: false,
+      detail: '',
+    })
+    expect(P.issues).toHaveLength(1)
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    P.markMessagesRead(['message-a'])
+    P.saveUI({ view: 'kanban' })
+    P.removeUser(snapshot.profiles[0].id)
+    P.setAppearance({ mode: 'dark', image_source: 'none' })
+    vi.advanceTimersByTime(600)
+    await settle()
+    // without a seat the server refuses the rest, so only appearance goes out
+    expect(sentNames()).toEqual(['appearance:save'])
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
+    expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+    expect(showToast).not.toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
+    // a retry cannot bring a seat back
+    P.retrySnapshot()
+    expect(subscriptions).toHaveLength(1)
+  })
+
+  it('reverts an edit the server refuses after every seat is gone', async () => {
+    await boot()
+    const { P } = store
+    const [task] = P.issues
+    P.updateIssue(task.id, { status: 'progress' })
+    expect(sentNames()).toEqual(['issues:update'])
+    live().deliver(null)
+    sent[0].reject(
+      new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
+    )
+    await settle()
+    expect(P.issueById[task.id].status).toBe('todo')
+    expect(P.snapshotTrouble()?.kind).toBe('no_access')
+  })
+
+  it('ends lost access when a seat comes back', async () => {
+    await boot()
+    const { P } = store
+    live().deliver(null)
+    live().deliver(structuredClone(snapshot))
+    expect(P.snapshotTrouble()).toBeNull()
+    expect(showToast).toHaveBeenCalledWith('Qivo is up to date again.', 'success')
+  })
+
+  it('lets the demo end itself when its seat is gone', async () => {
+    demo.on = true
     await boot()
     live().deliver(null)
+    expect(demo.ended).toHaveBeenCalled()
     expect(store.P.snapshotTrouble()).toBeNull()
-    expect(store.P.issues).toHaveLength(1)
+    store.disposeDemoStore()
   })
 
   it('lets the demo end itself instead of reporting trouble', async () => {

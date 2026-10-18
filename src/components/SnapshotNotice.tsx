@@ -2,7 +2,7 @@ import { useId, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { fmtDateYear, fmtTime } from '../lib/dates'
 import { floatSlot } from '../lib/floatStack'
-import { P } from '../store/planner'
+import { P, type SnapshotTrouble } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { Icon } from './qivo'
 import { Button } from './ui/button'
@@ -17,11 +17,11 @@ export function asOfText(asOf: string, now = new Date()): string {
 }
 
 /** The floating notice shown while the live workspace snapshot is stale,
-    because the query failed mid-session or the sign-in ended. It says when
-    the view was last current and that editing is paused, and offers Try
-    again (or Reload when signed out). It cannot be hidden while editing is
-    paused. Mounted once at the root, and the floating column places it
-    (lib/floatStack). */
+    because the query failed mid-session, the sign-in ended or every seat is
+    gone. It says when the view was last current and that editing is paused,
+    and offers Try again, or Reload when only a reload can help. It cannot be
+    hidden while editing is paused. Mounted once at the root, and the
+    floating column places it (lib/floatStack). */
 export function SnapshotNotice() {
   usePlannerVersion('health')
   const trouble = P.snapshotTrouble()
@@ -30,14 +30,26 @@ export function SnapshotNotice() {
   const details = trouble !== null && detailsFor === trouble.since
   const detailsId = useId()
 
-  const signedOut = trouble?.kind === 'signed_out'
-  const line = !trouble
-    ? ''
-    : signedOut
-      ? 'Reload Qivo to sign in again. Text you haven’t saved will be lost.'
-      : trouble.asOf
-        ? `You’re seeing your workspace as of ${asOfText(trouble.asOf)}. Editing is paused until it loads again. Qivo keeps trying.`
-        : 'Editing is paused until your workspace loads again. Qivo keeps trying.'
+  const asOf = trouble?.asOf ? `You’re seeing your workspace as of ${asOfText(trouble.asOf)}. ` : ''
+  // Each kind's title and line. A lost sign-in or seat does not end by
+  // retrying, so those two offer Reload instead of Try again and Details.
+  const words: Record<SnapshotTrouble['kind'], { title: string; line: string }> = {
+    failed: {
+      title: 'Qivo can’t load the latest changes',
+      line: asOf
+        ? `${asOf}Editing is paused until it loads again. Qivo keeps trying.`
+        : 'Editing is paused until your workspace loads again. Qivo keeps trying.',
+    },
+    signed_out: {
+      title: 'You’re signed out',
+      line: 'Reload Qivo to sign in again. Text you haven’t saved will be lost.',
+    },
+    no_access: {
+      title: 'You no longer have access to this workspace',
+      line: `${asOf}Reload Qivo to continue. Text you haven’t saved will be lost.`,
+    },
+  }
+  const reloadOnly = trouble !== null && trouble.kind !== 'failed'
 
   // Like the update notice, the live region stays mounted outside the app
   // root, so a screen reader hears the notice even over a modal layer.
@@ -55,10 +67,10 @@ export function SnapshotNotice() {
           <div className="min-w-0 flex-1 basis-60 text-sm">
             <div className="flex items-center gap-2 font-semibold">
               <Icon name="alert" size={16} color="var(--warn)" />
-              {signedOut ? 'You’re signed out' : 'Qivo can’t load the latest changes'}
+              {words[trouble.kind].title}
             </div>
-            <div className="mt-1 text-muted-foreground">{line}</div>
-            {details && !signedOut && (
+            <div className="mt-1 text-muted-foreground">{words[trouble.kind].line}</div>
+            {details && !reloadOnly && (
               <div
                 id={detailsId}
                 className="mt-2 max-h-[min(160px,25dvh)] overflow-y-auto rounded-sm bg-surface-3 px-2 py-1.5 font-mono text-xs leading-normal whitespace-pre-wrap text-text-2 [overflow-wrap:anywhere]"
@@ -74,7 +86,7 @@ export function SnapshotNotice() {
             // would replace. The Details text stays selectable.
             onMouseDown={(event) => event.preventDefault()}
           >
-            {signedOut ? (
+            {reloadOnly ? (
               <Button variant="outline" onClick={() => window.location.reload()}>
                 Reload
               </Button>
