@@ -270,10 +270,11 @@ export function MentionCtl({
   // a note on its way to the server. The window locks it until the answer.
   const [sending, setSending] = useState(false)
   // The note stays when the window closes while it is sent, or after a
-  // refusal, so reopening shows it again. A save or Cancel lets it go.
-  const keep = useRef(false)
+  // refusal, so reopening shows it again. A save or Cancel lets it go. A
+  // kept note holds back an app update even while the window is closed.
+  const [kept, setKept] = useState(false)
   const close = useMobileBackLayer(open, () => setOpen(false))
-  useUpdateBlocker(open && text.trim() !== '')
+  useUpdateBlocker((open || kept) && text.trim() !== '')
   const canWrite = P.canWrite(it.project)
   // the people who can see the task (a mention of anyone else notifies no
   // one), humans only, never the writer
@@ -287,18 +288,18 @@ export function MentionCtl({
     // The window closes once the server saves the note. A refused one (the
     // store toasts why, such as the task's comment cap or a body over the
     // length cap once escaped) keeps the window open, so the note is not lost.
-    keep.current = true
+    setKept(true)
     setSending(true)
     void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {
       setSending(false)
       if (!saved) return
-      keep.current = false
+      setKept(false)
       close()
       onSent()
     })
   }
   const cancel = () => {
-    keep.current = false
+    setKept(false)
     close()
   }
   return (
@@ -306,7 +307,7 @@ export function MentionCtl({
       open={open}
       onOpenChange={(next) => {
         if (!next) return close()
-        if (!keep.current) {
+        if (!kept) {
           setWho(initial && people.some((u) => u.id === initial) ? initial : null)
           setText('')
         }

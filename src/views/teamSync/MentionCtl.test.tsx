@@ -10,7 +10,8 @@ import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 /* The Team sync @ window on the real store. Its note is a comment, so the
    window waits for the server with the note locked: it closes once the
    comment is saved and keeps the note after a refusal, also through closing
-   and reopening it. Each comment write is answered by hand. */
+   and reopening it, and a kept note holds back an app update. Each comment
+   write is answered by hand. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
@@ -31,6 +32,7 @@ const CAP = 'this task has 400 comments, the most a task can have; start a new t
 
 let P: Planner
 let card: typeof import('./SyncCard')
+let safety: typeof import('../../lib/updateSafety')
 let container: HTMLDivElement
 let root: Root
 let writes: Answer[]
@@ -72,6 +74,7 @@ async function load() {
   P = store.P
   await store.initStore()
   card = await import('./SyncCard')
+  safety = await import('../../lib/updateSafety')
 }
 
 beforeEach(async () => {
@@ -172,11 +175,14 @@ describe('the Team sync @ window', () => {
     await toggle()
     expect(windowOpen()).toBe(false)
     await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
+    // the closed window's note still holds back an app update's reload
+    expect(safety.isUpdateBlocked()).toBe(true)
     await toggle()
     expect(note()?.value).toBe('Can you check the soak report?')
     expect(note()?.readOnly).toBe(false)
     // Cancel lets the note go
     await act(async () => button('Cancel').click())
+    expect(safety.isUpdateBlocked()).toBe(false)
     await toggle()
     expect(note()?.value).toBe('')
     expect(onSent).not.toHaveBeenCalled()
@@ -193,6 +199,7 @@ describe('the Team sync @ window', () => {
     await act(async () => writes[0].resolve(null))
     expect(windowOpen()).toBe(false)
     expect(onSent).toHaveBeenCalledTimes(1)
+    expect(safety.isUpdateBlocked()).toBe(false)
     await toggle()
     expect(note()?.value).toBe('')
   })

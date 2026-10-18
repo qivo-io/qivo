@@ -171,14 +171,18 @@ async function open() {
 
 /* The open edit-in-place editor, or null. */
 const editing = () => document.querySelector('[role="textbox"][aria-label="Edit comment"]')
-/* The editor labelled `label`, once its lazy module has loaded. */
+/* The editor labelled `label`, once its lazy module has loaded. The first
+   load can take seconds on a busy worker, past waitFor's 1 s default. */
 function editorOf(label: string) {
-  return vi.waitFor(() => {
-    const selector = `[role="textbox"][aria-label="${label}"]`
-    const found = document.querySelector<TiptapEditorHTMLElement>(selector)?.editor
-    if (!found) throw new Error(`missing the ${label} editor`)
-    return found
-  })
+  return vi.waitFor(
+    () => {
+      const selector = `[role="textbox"][aria-label="${label}"]`
+      const found = document.querySelector<TiptapEditorHTMLElement>(selector)?.editor
+      if (!found) throw new Error(`missing the ${label} editor`)
+      return found
+    },
+    { timeout: 10_000 },
+  )
 }
 function button(name: string) {
   const found = [...document.querySelectorAll('button')].find((b) => b.textContent === name)
