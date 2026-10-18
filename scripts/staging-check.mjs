@@ -10,18 +10,22 @@
  * succeed over REST and MCP, that writes succeed only where allowed, that
  * refusals carry the documented status and sentence, and that activity rows
  * name the credential. It uploads, downloads and deletes attachments, checks
- * the text, name and request size limits, unknown arguments, comment paging
- * and the archived task lists. With --comment-cap it also fills one task to
- * its 400 comments. Every task, comment, grant and file lives in projects the
- * run creates and names with its run tag. It revokes every credential in the
- * app, checks that the next call is refused, and removes everything it made,
- * also after a failure (try/finally, and --cleanup for a later sweep).
+ * the text, name and request size limits, unknown arguments, comment paging,
+ * the archived task lists, task progress, last comment times, delay and
+ * project completion, and the live group rule. It opens the Settings page
+ * Archived tasks in the browser. With --comment-cap it also fills one task
+ * to its 400 comments and pages them in the task window. Every task,
+ * comment, grant and file lives in projects the run creates and names with
+ * its run tag. It revokes every credential in the app, checks that the next
+ * call is refused, and removes everything it made, also after a failure
+ * (try/finally, and --cleanup for a later sweep).
  *
- * Checks for features that have not merged yet sit behind feature probes, so
- * a deployment without them reports SKIP. --require turns a SKIP into a FAIL,
- * and --force runs a feature's checks even when its probe does not find it.
- * --invert flips the expectation of a refusal group, so its checks must
- * fail; that proves they can catch a wrong permission.
+ * The billing pause checks need an organization whose billing pauses
+ * editing. Staging runs without billing, so they report SKIP there. A local
+ * run given its backend's admin key in QIVO_LOCAL_ADMIN_KEY pauses billing
+ * for those checks and lifts the pause again. --require turns that SKIP into
+ * a FAIL. --invert flips the expectation of a refusal group, so its checks
+ * must fail; that proves they can catch a wrong permission.
  *
  * Secrets (passwords, tokens, keys, OAuth codes, upload and download links,
  * the Vercel bypass value) stay in this process's memory. They are never
@@ -33,7 +37,8 @@
  *     "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
  *       node scripts/staging-check.mjs --staging --comment-cap
  *     ... node scripts/staging-check.mjs --staging --cleanup
- *   local:
+ *   local, with QIVO_LOCAL_ADMIN_KEY in the environment for the billing
+ *   pause checks:
  *     node scripts/staging-check.mjs --local --app-url http://localhost:5241 \
  *       --convex-url http://127.0.0.1:3236 --api-url http://127.0.0.1:3237 \
  *       --deployment local-name-3236
@@ -64,15 +69,9 @@ const COMMENT_MAX = 400
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
 const BODY_MAX = 1024 * 1024
 
-/** Features that have not merged on main yet, each behind a probe. */
-export const FEATURES = [
-  'task-progress',
-  'last-comment-at',
-  'project-completion',
-  'task-delay',
-  'live-tasks',
-  'billing-pause-leave',
-]
+/** Checks that need a condition the run cannot create everywhere, which
+ *  report SKIP without it, or FAIL when --require names them. */
+export const PROBES = ['billing-pause-leave']
 export const INVERT_GROUPS = [
   'read-token',
   'viewer-agent',
@@ -98,7 +97,6 @@ const unknownArgument = (arg) =>
 export function parseArgs(argv) {
   const o = {
     require: new Set(),
-    force: new Set(),
     invert: new Set(),
     cleanup: false,
     commentCap: false,
@@ -110,7 +108,6 @@ export function parseArgs(argv) {
     '--api-url',
     '--deployment',
     '--require',
-    '--force',
     '--invert',
     '--run',
     '--shots',
@@ -125,8 +122,8 @@ export function parseArgs(argv) {
     else if (takes.has(arg)) {
       const value = argv[++i]
       if (!value || value.startsWith('--')) throw new UsageError(`${arg} needs a value.`)
-      if (arg === '--require' || arg === '--force' || arg === '--invert') {
-        const known = arg === '--invert' ? INVERT_GROUPS : FEATURES
+      if (arg === '--require' || arg === '--invert') {
+        const known = arg === '--invert' ? INVERT_GROUPS : PROBES
         const names = value === 'all' ? known : value.split(',')
         for (const name of names) {
           if (!known.includes(name))
@@ -1441,6 +1438,7 @@ const NOT_SAME_FAMILY =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
 const UNKNOWN_PROJECT = 'project must name a project by uuid, number or key'
+const GROUP_STATUS = 'status cannot be set on a task with subtasks — update its subtasks instead'
 
 /** The state the checks share. */
 const run = {}
@@ -2727,8 +2725,8 @@ async function listOrderChecks() {
   })
 }
 
-/** A subtask stays in its parent's top-level project (#129). Leaves a
- *  parent in Alpha with its subtask in Zulu for the live-tasks probe. */
+/** A subtask stays in its parent's top-level project (#129). Makes the
+ *  run's second project, which the facts checks use. */
 async function subtaskRuleChecks() {
   const w = run.creds.writeToken
   const { A, Z } = run.projects
@@ -2754,6 +2752,7 @@ async function subtaskRuleChecks() {
     const N = await restOk(w, 'POST', '/projects', { name: `${run.tag} second project` })
     run.projects.N = N
     const N1 = await restOk(w, 'POST', '/projects', { name: `${run.tag} second sub`, parent: N.id })
+    run.projects.N1 = N1
     await restRefusal(
       w,
       'POST',
@@ -2787,6 +2786,59 @@ async function subtaskRuleChecks() {
   })
 }
 
+/** The Settings page Archived tasks opens with its search as the first
+ *  control, focused, and the server search finds `target`, a task the run
+ *  archived in its project (#143). Its key is the search, because a key
+ *  matches no other task of the run's project. */
+async function archivedTasksPageCheck(target) {
+  await check('ui/archived-tasks-page', async () => {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-archived-tasks`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const page = app.locator('[data-archived-tasks]')
+    await page.waitFor({ timeout: 45_000 })
+    const box = page.locator('[data-archive-search]')
+    await box.waitFor()
+    expect(
+      await page.evaluate((el) => {
+        const first = el.querySelector('input, select, textarea, button, a[href]')
+        return first?.hasAttribute('data-archive-search') === true
+      }),
+      'the search is not the first control',
+    )
+    expect(
+      await box.evaluate((el) => el === document.activeElement),
+      'the search does not have focus when the page opens',
+    )
+    await page.locator('[data-archive-project]').selectOption(run.projects.M.id)
+    // without a search the newest archived tasks are listed
+    await page.locator(`[data-archive-row="${target.id}"]`).waitFor()
+    expect(
+      (await page.locator('[data-archive-row]').count()) > 1,
+      'the project lists only one archived task without a search',
+    )
+    await box.fill(target.key)
+    expect(
+      await until(async () => {
+        const rows = await page
+          .locator('[data-archive-row]')
+          .evaluateAll((els) => els.map((el) => el.getAttribute('data-archive-row')))
+        return rows.length === 1 && rows[0] === target.id
+      }),
+      `the search for ${target.key} did not list exactly that task`,
+    )
+    eq(
+      (await page.locator('[data-archive-count]').textContent())?.trim(),
+      '1 found',
+      'the count line',
+    )
+    const nothing = `${run.tag} no such task`
+    await box.fill(nothing)
+    await page.getByText(`No archived tasks match “${nothing}”.`).waitFor()
+    return `found ${target.key} by search`
+  })
+}
+
 /** Archived task lists need a project and page with a cursor; archived
  *  projects are listed first (#128). Archives the run's project at the end. */
 async function archiveChecks() {
@@ -2794,6 +2846,7 @@ async function archiveChecks() {
   const { M, A, Z } = run.projects
   // three archived tasks across both sub-projects
   const archived = []
+  const archivedTasks = []
   for (const [p, n] of [
     [A, 1],
     [Z, 2],
@@ -2806,6 +2859,7 @@ async function archiveChecks() {
     run.created.push(t)
     await restOk(w, 'PATCH', `/tasks/${t.key}`, { archived: true })
     archived.push(t.id)
+    archivedTasks.push(t)
   }
   await check('archived-lists/rest/refusals', async () => {
     await restRefusal(
@@ -2920,6 +2974,7 @@ async function archiveChecks() {
     for (const id of archived)
       expect(!mcpRows.some((t) => t.id === id), 'MCP lists an archived task')
   })
+  await archivedTasksPageCheck(archivedTasks[2])
 
   // Archive the project, find it among archived projects, then read its tasks.
   await check('archived-projects/archive', async () => {
@@ -3166,6 +3221,8 @@ async function commentCapFullChecks(task, posted) {
     )
     return '8 pages of 50, the same thread by 37 and over MCP'
   })
+  if (thread.length === COMMENT_MAX) await earlierCommentsCheck(task, thread)
+  else skip('comment-cap/ui/earlier-comments', 'the thread could not be read')
   await check('comment-cap/delete-makes-room', async () => {
     const oldest = thread[0]?.id ?? posted[0]
     eq((await restOk(w, 'DELETE', `/comments/${oldest}`)).deleted, true, 'deleted')
@@ -3191,211 +3248,677 @@ async function commentCapFullChecks(task, posted) {
   })
 }
 
-/* ------------------------------------------------------ unmerged features
- * Each probe answers whether the deployment has the feature; without it the
- * checks report SKIP, or FAIL under --require. The expected shapes come from
- * the plans the branches implement, so a check may need adjusting once its
- * branch exists. */
-
-/** Runs a feature's checks when its probe finds it, or when --force names
- *  it, which shows what the checks report on a deployment without it. */
-async function feature(name, probe, body, absent = 'not on this deployment yet') {
-  let present = false
-  try {
-    present = await probe()
-  } catch (error) {
-    say('NOTE', `feature/${name}`, `probe failed: ${describe(error)}`)
-  }
-  if (!present && cfg.force.has(name)) {
-    say('NOTE', `feature/${name}`, 'not found by its probe; checking anyway (--force)')
-    await body()
-    return
-  }
-  if (!present) {
-    if (cfg.require.has(name)) {
-      results.fail.push(`feature/${name}`)
-      say('FAIL', `feature/${name}`, `required, but ${absent}`)
-    } else skip(`feature/${name}`, absent)
-    return
-  }
-  say('NOTE', `feature/${name}`, 'present')
-  await body()
+/** The task window opens the full task at its newest 50 comments, and
+ *  "Show earlier comments" loads the rest 50 at a time, oldest first, until
+ *  it goes once the first comment is in (#140). `thread` holds the task's
+ *  comments in order, as REST pages them. */
+async function earlierCommentsCheck(task, thread) {
+  await check('comment-cap/ui/earlier-comments', async () => {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const more = app.locator('[data-earlier-comments="more"] button')
+    await more.waitFor({ timeout: 45_000 })
+    const shown = () =>
+      app
+        .locator('[data-comment]')
+        .evaluateAll((els) => els.map((el) => el.getAttribute('data-comment')))
+    const ids = thread.map((c) => c.id)
+    same(await shown(), ids.slice(-50), 'the comments the task opens with')
+    let clicks = 0
+    while ((await shown()).length < COMMENT_MAX) {
+      expect(clicks < COMMENT_MAX / 50, 'Show earlier comments did not reach the first comment')
+      const before = (await shown()).length
+      await more.click()
+      clicks++
+      expect(
+        await until(async () => (await shown()).length > before, 20_000),
+        `Show earlier comments loaded nothing after ${before} comments`,
+      )
+      same(
+        await shown(),
+        ids.slice(-Math.min(before + 50, COMMENT_MAX)),
+        `the thread after click ${clicks}`,
+      )
+    }
+    await app.locator('[data-earlier-comments]').waitFor({ state: 'detached' })
+    // leave the task, so its thread is not open while the run changes it
+    await app.goto(`${cfg.appOrigin}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+    await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
+    return `50 at first, then ${clicks} clicks of 50 to the first comment`
+  })
 }
 
-/** progress, last_comment_at and completion (branch t3code/task-facts),
- *  delay (t3code/task-delay), the live group rule (t3code/live-tasks) and
- *  leave during a billing pause (t3code/billing-pause-access). */
-async function unmergedFeatureChecks() {
-  const w = run.creds.writeToken
-  const { A, Z, M } = run.projects
-  const row0 = async () => (await restOk(w, 'GET', `/tasks?project=${A.id}&limit=1`))[0] ?? {}
-  await feature(
-    'task-progress',
-    async () => 'progress' in (await row0()),
-    async () => {
-      const group = await restOk(w, 'POST', '/tasks', { project: A.id, title: `${run.tag} group` })
-      run.created.push(group)
-      for (const [title, status] of [
-        ['done child', 'done'],
-        ['open child', 'todo'],
-      ])
-        await restOk(w, 'POST', '/tasks', {
-          project: A.id,
-          title: `${run.tag} group ${title}`,
-          parent: group.key,
-          status,
-        })
-      const expected = { done: 1, total: 2, percent: 50, partial: false }
-      await check('task-progress/rest', async () => {
-        same((await restOk(w, 'GET', `/tasks/${group.key}`)).progress, expected, 'group progress')
-        const rows = await restOk(w, 'GET', `/tasks?project=${A.id}&limit=200`)
-        same(rows.find((t) => t.id === group.id)?.progress, expected, 'list row progress')
-        eq(rows.find((t) => t.id === run.t0.id)?.progress, null, 'leaf progress')
-      })
-      await check('task-progress/mcp', async () => {
-        same((await toolOk(w, 'get_task', { ref: group.key })).progress, expected, 'group progress')
-        const rows = await toolOk(w, 'list_tasks', { project: A.id, limit: 200 })
-        same(rows.find((t) => t.id === group.id)?.progress, expected, 'list row progress')
-      })
-    },
-  )
-  await feature(
-    'last-comment-at',
-    async () => 'last_comment_at' in (await row0()),
-    async () => {
-      await check('last-comment-at/rest-and-mcp', async () => {
-        const newest = (await restOk(w, 'GET', `/tasks/${run.t0.key}/comments?limit=1`))[0]
-        expect(newest, 'the fixture task has no comment')
-        eq(
-          (await restOk(w, 'GET', `/tasks/${run.t0.key}`)).last_comment_at,
-          newest.created_at,
-          'REST',
-        )
-        eq(
-          (await toolOk(w, 'get_task', { ref: run.t0.key })).last_comment_at,
-          newest.created_at,
-          'MCP',
-        )
-        const rows = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
-        eq(rows.find((t) => t.id === run.t0.id)?.last_comment_at, newest.created_at, 'list row')
-        eq(rows.find((t) => t.id === run.tz.id)?.last_comment_at, null, 'without comments')
-      })
-    },
-  )
-  await feature(
-    'project-completion',
-    async () => 'completion' in (await restOk(w, 'GET', `/projects/${A.id}`)),
-    async () => {
-      await check('project-completion/rest-and-mcp', async () => {
-        const rows = await restOk(w, 'GET', `/tasks?project=${A.id}&limit=200`)
-        const leaves = rows.filter((t) => !t.is_group)
-        const done = leaves.filter((t) => t.status === 'done').length
-        const want = {
-          done,
-          total: leaves.length,
-          percent: leaves.length ? Math.round((done / leaves.length) * 100) : 0,
-        }
-        same((await restOk(w, 'GET', `/projects/${A.id}`)).completion, want, 'REST completion')
-        same((await toolOk(w, 'get_project', { project: A.id })).completion, want, 'MCP completion')
-      })
-    },
-  )
-  await feature(
-    'task-delay',
-    async () => 'delay' in (await row0()),
-    async () => {
-      const late = await restOk(w, 'POST', '/tasks', {
-        project: A.id,
-        title: `${run.tag} past due`,
-        due_date: '2026-01-05',
-        remaining_hours: 4,
-      })
-      run.created.push(late)
-      await check('task-delay/rest-and-mcp', async () => {
-        same(
-          (await restOk(w, 'GET', `/tasks/${late.key}`)).delay,
-          { status: 'late', projected_end_week: null },
-          'REST past due',
-        )
-        eq((await toolOk(w, 'get_task', { ref: late.key })).delay?.status, 'late', 'MCP past due')
-        eq((await restOk(w, 'GET', `/tasks/${run.tz.key}`)).delay, null, 'no plan and no due date')
-      })
-      await check('task-delay/track-delay-off', async () => {
-        await restOk(w, 'PATCH', `/projects/${A.id}`, { track_delay: false })
-        try {
-          eq((await restOk(w, 'GET', `/tasks/${late.key}`)).delay, null, 'a project without delay')
-        } finally {
-          await restOk(w, 'PATCH', `/projects/${A.id}`, { track_delay: true })
-        }
-      })
-    },
-  )
-  // A parent whose only subtask sits in an archived sibling sub-project is
-  // no group under the live rule. The probe runs that case and restores Zulu.
-  if (run.parent && run.child) {
-    let live = null
-    await feature(
-      'live-tasks',
-      async () => {
-        await restOk(w, 'PATCH', `/projects/${Z.id}`, { archived: true })
-        live = await restOk(w, 'GET', `/tasks/${run.parent.key}`)
-        if (live.is_group) await restOk(w, 'PATCH', `/projects/${Z.id}`, { archived: false })
-        return live.is_group === false
-      },
-      async () => {
-        await check('live-tasks/archived-sibling', async () => {
-          eq(live?.is_group, false, 'REST is_group')
-          eq((await toolOk(w, 'get_task', { ref: run.parent.key })).is_group, false, 'MCP is_group')
-          const t = await restOk(w, 'PATCH', `/tasks/${run.parent.key}`, {
-            status: 'progress',
-            remaining_hours: 5,
-          })
-          eq(t.remaining_hours, 5, 'a leaf takes its own hours')
-        })
-        await check('live-tasks/restore-regroups', async () => {
-          await restOk(w, 'PATCH', `/projects/${Z.id}`, { archived: false })
-          const parent = await restOk(w, 'GET', `/tasks/${run.parent.key}`)
-          eq(parent.is_group, true, 'is_group after the restore')
-          expect(
-            await until(
-              async () =>
-                (await restOk(w, 'GET', `/tasks/${run.parent.key}`)).remaining_hours === null,
-            ),
-            "the restore did not clear the parent's own hours",
-          )
-        })
-      },
-      'not on this deployment yet; a parent whose only subtask is in an archived sub-project is still a group',
-    )
-    const z = await restOk(w, 'GET', `/projects/${Z.id}`)
-    if (z.archived) await restOk(w, 'PATCH', `/projects/${Z.id}`, { archived: false })
+/* ------------------------------------------------- task and project facts
+ * Group progress, last comment times and project completion (#142), the
+ * projected delay (#147) and the live group rule (#149), in the run's second
+ * project, whose every task the run makes, so each number is known. */
+
+/** `{done, total, percent}` with the rounding REST and MCP use. */
+const completion = (done, total) => ({
+  done,
+  total,
+  percent: total === 0 ? 0 : Math.round((done / total) * 100),
+})
+/** A group's `progress`, which adds whether some of it is hidden. */
+const progress = (done, total, partial = false) => ({ ...completion(done, total), partial })
+
+/** The first day (YYYY-MM-DD) of the planning week that holds `day`, in an
+ *  organization whose weeks start on `weekStart` (0 Sunday to 6 Saturday). */
+export function weekOf(day, weekStart) {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() - weekStart + 7) % 7))
+  return d.toISOString().slice(0, 10)
+}
+
+/** `day` moved by `n` days. */
+export function addDays(day, n) {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+/** The server judges delay by today's UTC date. */
+const todayUtc = () => new Date().toISOString().slice(0, 10)
+
+/** Reads the REST and MCP task lists of `project` once and answers a
+ *  finder for a task's row in each. */
+async function rowsOf(cred, project) {
+  const viaRest = await restOk(cred, 'GET', `/tasks?project=${project.id}&limit=200`)
+  const viaMcp = await toolOk(cred, 'list_tasks', { project: project.id, limit: 200 })
+  return (task) => {
+    const r = viaRest.find((t) => t.id === task.id)
+    const m = viaMcp.find((t) => t.id === task.id)
+    expect(r && m, `the lists of ${project.name} lack ${task.key}`)
+    return { rest: r, mcp: m }
   }
-  // Staging runs without billing, so the probe finds no pause and skips.
-  await feature(
-    'billing-pause-leave',
-    async () => (await restOk(w, 'GET', '/me')).billing.read_only === true,
-    async () => {
-      const viewer = run.agents.viewer
-      await check('billing-pause-leave/keep-as-viewer-waits', async () => {
-        const r = await rest(w, 'DELETE', `/projects/${M.id}/access/users/${viewer.id}`, {
-          on_held_tasks: 'keep_as_viewer',
-        })
-        eq(r.status, 403, 'keep_as_viewer during a pause')
+}
+
+/** Checks that one field of `task` is `want` in the REST and MCP single
+ *  reads and in both lists of its project. */
+async function sameEverywhere(cred, task, project, field, want) {
+  const row = (await rowsOf(cred, project))(task)
+  same(row.rest[field], want, `${task.key} ${field} in the REST list`)
+  same(row.mcp[field], want, `${task.key} ${field} in list_tasks`)
+  same(
+    (await restOk(cred, 'GET', `/tasks/${task.key}`))[field],
+    want,
+    `${task.key} ${field} over REST`,
+  )
+  same(
+    (await toolOk(cred, 'get_task', { ref: task.key }))[field],
+    want,
+    `${task.key} ${field} in get_task`,
+  )
+}
+
+/** The run's second project with two sub-projects and the tasks the facts
+ *  checks read. Answers null when it could not be made. */
+async function factsFixture() {
+  const w = run.creds.writeToken
+  let fixture = null
+  await check('facts/setup', async () => {
+    if (!run.projects.N) {
+      run.projects.N = await restOk(w, 'POST', '/projects', { name: `${run.tag} second project` })
+      run.projects.N1 = await restOk(w, 'POST', '/projects', {
+        name: `${run.tag} second sub`,
+        parent: run.projects.N.id,
       })
-      await check('billing-pause-leave/leave-removes', async () => {
-        const r = await rest(w, 'DELETE', `/projects/${M.id}/access/users/${viewer.id}`, {
+    }
+    const { N, N1 } = run.projects
+    const N2 = await toolOk(w, 'create_project', { name: `${run.tag} second Zulu`, parent: N.id })
+    run.projects.N2 = N2
+    const me = await restOk(w, 'GET', '/me')
+    const week = weekOf(todayUtc(), me.organization.week_start)
+    const past = addDays(week, -70)
+    const make = async (project, title, fields = {}) => {
+      const t = await restOk(w, 'POST', '/tasks', {
+        project: project.id,
+        title: `${run.tag} ${title}`,
+        ...fields,
+      })
+      eq(t.assignee_id, null, `${title} has no assignee, so no projection`)
+      run.created.push(t)
+      return t
+    }
+    const f = { week, past }
+    // a group with a Done and an open subtask here and an open one in N2
+    f.g = await make(N1, 'facts group', { remaining_hours: 5 })
+    f.c1 = await make(N1, 'facts done subtask', { parent: f.g.key, status: 'done', due_date: past })
+    f.c2 = await make(N1, 'facts open subtask', { parent: f.g.key, remaining_hours: 3 })
+    f.c3 = await make(N2, 'facts subtask in Zulu', {
+      parent: f.g.key,
+      remaining_hours: 4,
+      due_date: past,
+    })
+    // a parent whose only subtask is in N2, and a plain task
+    f.p = await make(N1, 'live parent', { remaining_hours: 6 })
+    f.q = await make(N2, 'live subtask', { parent: f.p.key, remaining_hours: 2 })
+    f.l = await make(N1, 'facts leaf')
+    // delay: due long ago, planned long ago, planned ahead, and both
+    f.late = await make(N1, 'delay past due', { due_date: past, remaining_hours: 4 })
+    f.behind = await make(N1, 'delay planned in the past', {
+      start_week: addDays(week, -56),
+      end_week: addDays(week, -49),
+    })
+    f.ok = await make(N1, 'delay planned ahead', {
+      start_week: addDays(week, 28),
+      end_week: addDays(week, 35),
+    })
+    f.lateAhead = await make(N1, 'delay past due planned ahead', {
+      due_date: past,
+      start_week: addDays(week, 28),
+      end_week: addDays(week, 35),
+    })
+    // the leaves of each sub-project while both are active; p and g are groups
+    f.leaves1 = [f.c1, f.c2, f.l, f.late, f.behind, f.ok, f.lateAhead]
+    f.leaves2 = [f.c3, f.q]
+    fixture = f
+    // a new project answers zeros on REST and MCP, because it holds no tasks
+    same(N.completion, completion(0, 0), 'completion in the POST answer')
+    same(N2.completion, completion(0, 0), 'completion in the create_project answer')
+    return `${N.name} with ${N1.name} and ${N2.name}, 11 tasks`
+  })
+  return fixture
+}
+
+/** Done leaves among `tasks`. */
+const doneIn = (tasks) => tasks.filter((t) => t.status === 'done').length
+
+async function progressChecks(f) {
+  const w = run.creds.writeToken
+  const { N1 } = run.projects
+  await check('task-progress/group', async () => {
+    await sameEverywhere(w, f.g, N1, 'progress', progress(1, 3))
+    return '1 of 3 done, 33 percent, over REST and MCP, single reads and lists'
+  })
+  await check('task-progress/leaf-is-null', async () => {
+    await sameEverywhere(w, f.c1, N1, 'progress', null)
+    await sameEverywhere(w, f.l, N1, 'progress', null)
+  })
+  // The Standard agent sees N1 alone, so the subtask in N2 is hidden from it.
+  await check('task-progress/partial', async () => {
+    const s = run.creds.stdKey
+    await restOk(w, 'PUT', `/projects/${N1.id}/access/users/${run.agents.std.id}`, {
+      level: 'viewer',
+    })
+    same(
+      (await restOk(s, 'GET', `/tasks/${f.g.key}`)).progress,
+      progress(1, 2, true),
+      'REST progress with a hidden subtask',
+    )
+    same(
+      (await toolOk(s, 'get_task', { ref: f.g.key })).progress,
+      progress(1, 2, true),
+      'MCP progress with a hidden subtask',
+    )
+    return '1 of the 2 it can read, partial'
+  })
+}
+
+async function lastCommentChecks(f) {
+  const w = run.creds.writeToken
+  const { N1 } = run.projects
+  await check('last-comment-at/rules', async () => {
+    const t = f.c2
+    await sameEverywhere(w, t, N1, 'last_comment_at', null)
+    const first = await restOk(w, 'POST', `/tasks/${t.key}/comments`, {
+      body: `${run.tag} first comment`,
+    })
+    await sameEverywhere(w, t, N1, 'last_comment_at', first.created_at)
+    const made = await toolOk(w, 'add_comment', { ref: t.key, body: `${run.tag} second comment` })
+    const second = (await restOk(w, 'GET', `/tasks/${t.key}/comments`)).find(
+      (c) => c.id === made.id,
+    )
+    expect(second, 'the second comment is missing')
+    expect(second.created_at > first.created_at, 'the second comment is not newer')
+    await sameEverywhere(w, t, N1, 'last_comment_at', second.created_at)
+    // editing does not move it; deleting the newest makes the one before newest
+    await restOk(w, 'PATCH', `/comments/${second.id}`, {
+      body: `${run.tag} second comment, edited`,
+    })
+    await sameEverywhere(w, t, N1, 'last_comment_at', second.created_at)
+    await restOk(w, 'DELETE', `/comments/${second.id}`)
+    await sameEverywhere(w, t, N1, 'last_comment_at', first.created_at)
+    await toolOk(w, 'delete_comment', { comment: first.id })
+    await sameEverywhere(w, t, N1, 'last_comment_at', null)
+    return 'null, the newest, unchanged by an edit, the one before after a delete, null again'
+  })
+}
+
+async function completionChecks(f) {
+  const w = run.creds.writeToken
+  const { N, N1, N2 } = run.projects
+  const all = [...f.leaves1, ...f.leaves2]
+  const wantN = completion(doneIn(all), all.length)
+  const want1 = completion(doneIn(f.leaves1), f.leaves1.length)
+  await check('project-completion/reads', async () => {
+    for (const [p, want] of [
+      [N, wantN],
+      [N1, want1],
+      [N2, completion(0, f.leaves2.length)],
+    ]) {
+      same((await restOk(w, 'GET', `/projects/${p.id}`)).completion, want, `${p.name} over REST`)
+      same(
+        (await toolOk(w, 'get_project', { project: p.id })).completion,
+        want,
+        `${p.name} in get_project`,
+      )
+    }
+    const row = (await restOk(w, 'GET', '/projects')).find((p) => p.id === N.id)
+    expect(row && !('completion' in row), 'a list row carries completion')
+    return `${wantN.done} of ${wantN.total} in the project, ${want1.done} of ${want1.total} in ${N1.name}`
+  })
+  await check('project-completion/write-answers', async () => {
+    same(
+      (await restOk(w, 'PATCH', `/projects/${N1.id}`, { description: `${run.tag} facts` }))
+        .completion,
+      want1,
+      'the PATCH answer',
+    )
+    same(
+      (await toolOk(w, 'update_project', { project: N.id, description: `${run.tag} facts` }))
+        .completion,
+      wantN,
+      'the update_project answer',
+    )
+  })
+  // the agent reads N1 only, where p's subtask is hidden: p stays a group
+  await check('project-completion/hidden-subtask', async () => {
+    same(
+      (await restOk(run.creds.stdKey, 'GET', `/projects/${N1.id}`)).completion,
+      want1,
+      'a parent whose only subtask is hidden still counts as a group',
+    )
+  })
+}
+
+async function delayChecks(f) {
+  const w = run.creds.writeToken
+  const { N1 } = run.projects
+  const end = addDays(f.week, 35)
+  const cases = [
+    [f.late, { status: 'late', projected_end_week: null }],
+    [f.behind, { status: 'behind', projected_end_week: f.week }],
+    [f.ok, { status: 'ok', projected_end_week: end }],
+    [f.lateAhead, { status: 'late', projected_end_week: end }],
+    [f.c1, null],
+    [f.l, null],
+  ]
+  await check('task-delay/verdicts', async () => {
+    eq((await restOk(w, 'GET', `/projects/${N1.id}`)).track_delay, true, 'delay tracking')
+    for (const [task, want] of cases) await sameEverywhere(w, task, N1, 'delay', want)
+    return 'late without a projection, behind, on track and late with one; null when Done or with nothing to judge'
+  })
+  await check('task-delay/track-delay-off', async () => {
+    eq(
+      (await restOk(w, 'PATCH', `/projects/${N1.id}`, { track_delay: false })).track_delay,
+      false,
+      'delay tracking off',
+    )
+    const rows = await rowsOf(w, N1)
+    for (const [task] of cases) {
+      eq(rows(task).rest.delay, null, `${task.key} in the REST list`)
+      eq(rows(task).mcp.delay, null, `${task.key} in list_tasks`)
+    }
+    eq((await restOk(w, 'GET', `/tasks/${f.late.key}`)).delay, null, 'the single read')
+    eq(
+      (await toolOk(w, 'update_project', { project: N1.id, track_delay: true })).track_delay,
+      true,
+      'delay tracking back on',
+    )
+    same(
+      (await restOk(w, 'GET', `/tasks/${f.late.key}`)).delay,
+      cases[0][1],
+      'the verdict once tracking is back',
+    )
+  })
+  await check('task-delay/archived-task', async () => {
+    await restOk(w, 'PATCH', `/tasks/${f.behind.key}`, { archived: true })
+    eq((await restOk(w, 'GET', `/tasks/${f.behind.key}`)).delay, null, 'an archived task')
+    await restOk(w, 'PATCH', `/tasks/${f.behind.key}`, { archived: false })
+    same((await restOk(w, 'GET', `/tasks/${f.behind.key}`)).delay, cases[1][1], 'restored')
+  })
+}
+
+/** The live group rule (#149): a subtask in an archived project makes no
+ *  task in an active project a group, and a restore or a move out of the
+ *  archived project makes it one again and clears its own hours. */
+async function liveTaskChecks(f) {
+  const w = run.creds.writeToken
+  const { N, N1, N2 } = run.projects
+  const read = async (t) => restOk(w, 'GET', `/tasks/${t.key}`)
+  const inProgress = async () =>
+    (await restOk(w, 'GET', `/tasks?project=${N1.id}&status=progress&limit=200`)).map((t) => t.id)
+  await check('live-tasks/active-sibling', async () => {
+    const p = await read(f.p)
+    eq(p.is_group, true, 'a parent with a subtask in an active sub-project')
+    eq(p.remaining_hours, null, 'its own hours, cleared by the attach')
+    eq(p.group_remaining_hours, 2, 'its group hours')
+    await restRefusal(w, 'PATCH', `/tasks/${f.p.key}`, { status: 'progress' }, 400, GROUP_STATUS)
+    eq((await read(f.g)).group_remaining_hours, 7, "the group's hours")
+  })
+  await check('live-tasks/archive-sibling', async () => {
+    const answer = await restOk(w, 'PATCH', `/projects/${N2.id}`, { archived: true })
+    eq(answer.completion, null, 'an archived project has no completion')
+  })
+  await check('live-tasks/archived-sibling', async () => {
+    await sameEverywhere(w, f.p, N1, 'is_group', false)
+    const p = await read(f.p)
+    same(
+      p.subtasks.map((s) => s.id),
+      [f.q.id],
+      'the single read still lists the subtask in the archived project',
+    )
+    eq(p.group_remaining_hours, null, 'a task without a live subtask has no group hours')
+    const g = await read(f.g)
+    same(g.progress, progress(1, 2), 'the group leaves out its subtask in the archived project')
+    eq(g.group_remaining_hours, 3, "the group's hours leave it out too")
+    eq((await read(f.c3)).delay, null, 'a task in an archived project has no delay')
+    const leaves = [...f.leaves1, f.p]
+    for (const p of [N, N1])
+      same(
+        (await restOk(w, 'GET', `/projects/${p.id}`)).completion,
+        completion(doneIn(leaves), leaves.length),
+        `${p.name} completion counts the parent as a task`,
+      )
+    return 'is_group false on REST and MCP, the subtask still listed, progress, hours and completion follow'
+  })
+  await check('live-tasks/leaf-edits', async () => {
+    const t = await restOk(w, 'PATCH', `/tasks/${f.p.key}`, {
+      status: 'progress',
+      remaining_hours: 5,
+    })
+    eq(t.status, 'progress', 'status')
+    eq(t.remaining_hours, 5, 'its own hours')
+    const start = addDays(f.week, 7)
+    await toolOk(w, 'update_task', { ref: f.p.key, start_week: start, end_week: start })
+    eq((await toolOk(w, 'get_task', { ref: f.p.key })).start_week, start, 'dates over MCP')
+    expect((await inProgress()).includes(f.p.id), 'the status filter leaves the parent out')
+  })
+  await check('live-tasks/restore-regroups', async () => {
+    const answer = await toolOk(w, 'update_project', { project: N2.id, archived: false })
+    same(answer.completion, completion(0, f.leaves2.length), 'the restore answer')
+    const p = await read(f.p)
+    eq(p.is_group, true, 'a group again')
+    eq(p.start_week, null, 'group dates come from its unscheduled subtask')
+    expect(!(await inProgress()).includes(f.p.id), 'the status filter lists a group')
+    // background steps clear the own hours moments later
+    expect(
+      await until(async () => (await read(f.p)).remaining_hours === null, 30_000),
+      "the restore did not clear the parent's own hours within 30 seconds",
+    )
+    same((await read(f.g)).progress, progress(1, 3), 'the group counts its subtask again')
+    const all = [...f.leaves1, ...f.leaves2]
+    same(
+      (await restOk(w, 'GET', `/projects/${N.id}`)).completion,
+      completion(doneIn(all), all.length),
+      'completion',
+    )
+  })
+  await check('live-tasks/move-out-of-archived', async () => {
+    await restOk(w, 'PATCH', `/projects/${N2.id}`, { archived: true })
+    eq(
+      (await restOk(w, 'PATCH', `/tasks/${f.p.key}`, { remaining_hours: 4 })).remaining_hours,
+      4,
+      'a leaf again',
+    )
+    const q = await restOk(w, 'PATCH', `/tasks/${f.q.key}`, { project: N1.id })
+    eq(q.project_id, N1.id, "the subtask's project")
+    const p = await read(f.p)
+    eq(p.is_group, true, 'a group once its subtask is in an active project')
+    eq(p.remaining_hours, null, 'the move clears its own hours at once')
+    await restOk(w, 'PATCH', `/projects/${N2.id}`, { archived: false })
+  })
+}
+
+/* ------------------------------------------------------- billing pause */
+
+/** The sentence every write gets while billing pauses editing
+ *  (convex/lib/billingAccess.ts BILLING_READ_ONLY). */
+const BILLING_READ_ONLY =
+  'This organization is read-only. An organization admin can subscribe or update payment details in Billing.'
+
+/** One request to the local backend's admin API, as the Convex CLI makes
+ *  it. Local runs only; the key never leaves this process. */
+async function localAdmin(path, body) {
+  expect(
+    cfg.target.target === 'local' && cfg.localAdminKey,
+    'only a local run with its admin key may change backend settings',
+  )
+  const r = await request(new URL(path, cfg.target.url), {
+    method: 'POST',
+    headers: { Authorization: `Convex ${cfg.localAdminKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const text = await r.text()
+  expect(r.ok, `the local backend answered HTTP ${r.status} to ${path}`)
+  return parseJson(text)
+}
+
+/** The local backend's BILLING_ENABLED, or null when it is not set. */
+async function localBilling() {
+  const r = await localAdmin('/api/query', {
+    path: '_system/cli/queryEnvironmentVariables:get',
+    args: { name: 'BILLING_ENABLED' },
+    format: 'json',
+  })
+  expect(r?.status === 'success', 'the local backend did not say whether billing is on')
+  return r.value?.value ?? null
+}
+
+/** Sets the local backend's BILLING_ENABLED, or removes it with null, as
+ *  `npx convex env set` does. */
+const setLocalBilling = (value) =>
+  localAdmin('/api/update_environment_variables', {
+    changes: [{ name: 'BILLING_ENABLED', value }],
+  })
+
+/** Whether `/me` says billing pauses editing. */
+const paused = async () =>
+  (await restOk(run.creds.writeToken, 'GET', '/me')).billing.read_only === true
+
+/** Pauses editing in the local organization the way the backend tests do:
+ *  billing on, and no subscription. */
+async function pauseBilling() {
+  run.billingBefore = await localBilling()
+  expect(run.billingBefore !== 'true', 'billing is already on in the local backend')
+  run.billingPaused = true
+  await setLocalBilling('true')
+  expect(await until(paused, 30_000), 'the organization did not become read-only')
+}
+
+/** Lifts a pause this run made, and waits until writes are allowed. */
+async function liftBillingPause() {
+  if (!run.billingPaused) return
+  await setLocalBilling(run.billingBefore ?? null)
+  expect(await until(async () => !(await paused()), 30_000), 'the organization stayed read-only')
+  run.billingPaused = false
+}
+
+/** While billing pauses editing, an organization admin can still remove
+ *  project access and team members when the open tasks are left, over REST
+ *  and MCP, and nothing else (#146). Needs a pause, which only a local run
+ *  with its backend's admin key can make. */
+async function billingPauseChecks() {
+  const name = 'billing-pause-leave'
+  if (!cfg.localAdminKey) {
+    const reason =
+      cfg.target.target === 'staging'
+        ? 'billing is off on staging and this run cannot pause it; a local run with QIVO_LOCAL_ADMIN_KEY checks it'
+        : 'set QIVO_LOCAL_ADMIN_KEY to the local backend admin key to pause billing for these checks'
+    if (cfg.require.has(name)) {
+      results.fail.push(name)
+      say('FAIL', name, `required, but ${reason}`)
+    } else skip(name, reason)
+    return
+  }
+  const w = run.creds.writeToken
+  const { N1 } = run.projects
+  const viewer = run.agents.viewer
+  const std = run.agents.std
+  const team = run.team
+  const grants = async () =>
+    (await restOk(w, 'GET', `/projects/${N1.id}`)).grants.users.map((g) => g.id).sort()
+  const members = async () =>
+    team ? (await restOk(w, 'GET', `/teams/${team.id}`)).members.map((m) => m.id).sort() : []
+  let before = null
+  await check(`${name}/setup`, async () => {
+    for (const id of [viewer.id, std.id])
+      await restOk(w, 'PUT', `/projects/${N1.id}/access/users/${id}`, { level: 'viewer' })
+    if (team)
+      for (const id of [viewer.id, std.id])
+        await restOk(w, 'PUT', `/teams/${team.id}/members/${id}`, {})
+    before = { grants: await grants(), members: await members() }
+    await pauseBilling()
+    return team
+      ? 'two grants and two team members, then billing paused'
+      : 'two grants, then billing paused'
+  })
+  if (!before) return
+  try {
+    const refusedRest = (r, what) =>
+      expect(
+        r.status === 403 && r.json?.error === BILLING_READ_ONLY,
+        `${what}: wanted 403 with the billing sentence, got ${r.status} ${short(r.json?.error)}`,
+      )
+    const refusedTool = async (cred, toolName, args, what) =>
+      eq(await toolRefusal(cred, toolName, args), BILLING_READ_ONLY, what)
+    await check(`${name}/me`, async () => {
+      for (const me of [await restOk(w, 'GET', '/me'), await toolOk(w, 'get_me')]) {
+        eq(me.billing.read_only, true, 'read_only')
+        eq(me.billing.reason, BILLING_READ_ONLY, 'reason')
+      }
+    })
+    await check(`${name}/other-writes-refused`, async () => {
+      refusedRest(
+        await rest(w, 'POST', '/tasks', { project: N1.id, title: `${run.tag} paused` }),
+        'POST /tasks',
+      )
+      await refusedTool(
+        w,
+        'create_task',
+        { project: N1.id, title: `${run.tag} paused` },
+        'create_task',
+      )
+      refusedRest(
+        await rest(w, 'PUT', `/projects/${N1.id}/access/users/${viewer.id}`, { level: 'user' }),
+        'giving access',
+      )
+    })
+    await check(`${name}/keep-and-reassign-refused`, async () => {
+      const path = `/projects/${N1.id}/access/users/${viewer.id}`
+      refusedRest(
+        await rest(w, 'DELETE', path, { on_held_tasks: 'keep_as_viewer' }),
+        'keep_as_viewer',
+      )
+      refusedRest(
+        await rest(w, 'DELETE', path, { on_held_tasks: { reassign_to: null } }),
+        'reassign',
+      )
+      await refusedTool(
+        w,
+        'set_project_access',
+        { project: N1.id, user_id: viewer.id, level: null, on_held_tasks: 'keep_as_viewer' },
+        'set_project_access keep_as_viewer',
+      )
+      if (team)
+        refusedRest(
+          await rest(w, 'DELETE', `/teams/${team.id}/members/${viewer.id}`, {
+            on_held_tasks: 'keep_as_viewer',
+          }),
+          'team keep_as_viewer',
+        )
+      same(await grants(), before.grants, 'grants')
+      same(await members(), before.members, 'team members')
+    })
+    await check(`${name}/not-an-admin`, async () => {
+      const s = run.creds.stdKey
+      refusedRest(
+        await rest(s, 'DELETE', `/projects/${N1.id}/access/users/${viewer.id}`),
+        'the Standard agent',
+      )
+      await refusedTool(
+        s,
+        'set_project_access',
+        { project: N1.id, user_id: viewer.id, level: null },
+        'the Standard agent over MCP',
+      )
+      // a read-only credential meets its own refusal first
+      await restRefusal(
+        run.creds.readToken,
+        'DELETE',
+        `/projects/${N1.id}/access/users/${viewer.id}`,
+        undefined,
+        403,
+        PERSON_READ_ONLY,
+      )
+      same(await grants(), before.grants, 'grants')
+    })
+    await check(`${name}/leave-removes`, async () => {
+      const r = await restOk(w, 'DELETE', `/projects/${N1.id}/access/users/${viewer.id}`)
+      eq(r.removed, true, 'REST removed')
+      same(r.stranded, [], 'stranded')
+      const m = await toolOk(run.creds.oauthWrite, 'set_project_access', {
+        project: N1.id,
+        user_id: std.id,
+        level: null,
+        on_held_tasks: 'leave',
+      })
+      eq(m.level, null, 'MCP level')
+      eq(m.changed, true, 'MCP changed')
+      same(await grants(), [], 'grants left')
+      if (team) {
+        const t = await restOk(w, 'DELETE', `/teams/${team.id}/members/${viewer.id}`, {
           on_held_tasks: 'leave',
         })
-        eq(r.status, 200, 'leave during a pause')
-        eq(r.json?.removed, true, 'removed')
-      })
-    },
-    'billing does not pause editing on this deployment',
-  )
+        eq(t.removed, true, 'team member removed over REST')
+        const tm = await toolOk(w, 'set_team_member', {
+          team_id: team.id,
+          user_id: std.id,
+          member: false,
+        })
+        eq(tm.changed, true, 'team member removed over MCP')
+        same(await members(), [], 'team members left')
+      }
+      return team ? 'two grants and two team members removed, REST and MCP' : 'two grants removed'
+    })
+    await check(`${name}/gone-still-refused`, async () => {
+      // the pause refuses keep_as_viewer before it looks for a grant
+      refusedRest(
+        await rest(w, 'DELETE', `/projects/${N1.id}/access/users/${viewer.id}`, {
+          on_held_tasks: 'keep_as_viewer',
+        }),
+        'keep_as_viewer on a grant that is gone',
+      )
+    })
+  } finally {
+    await check(`${name}/lift`, async () => {
+      await liftBillingPause()
+      eq((await restOk(w, 'GET', '/me')).billing.read_only, false, 'read_only after the pause')
+    })
+  }
+}
+
+/** Every check of the merged task and project facts, the live group rule
+ *  and the billing pause. */
+async function factChecks() {
+  const f = await factsFixture()
+  if (!f) {
+    skip('facts', 'the fixture for the facts checks could not be made')
+  } else {
+    await progressChecks(f)
+    await lastCommentChecks(f)
+    await completionChecks(f)
+    await delayChecks(f)
+    await liveTaskChecks(f)
+  }
+  if (run.projects.N1) await billingPauseChecks()
+  else skip('billing-pause-leave', 'the second project could not be made')
   say(
     'NOTE',
-    'feature/subtask-audit',
-    'internal audit and backfill only (branch t3code/subtask-audit); nothing to check over REST or MCP',
+    'subtask-audit',
+    'the subtask audit and backfill (#144) are internal functions an operator runs; nothing to check over REST or MCP',
   )
 }
 
@@ -3709,19 +4232,19 @@ async function main() {
   await subtaskRuleChecks()
   if (cfg.commentCap) await commentCapChecks()
   else skip('comment-cap', 'pass --comment-cap to fill a task to 400 comments')
-  // features that have not merged yet
-  await unmergedFeatureChecks()
+  // task and project facts, the live group rule and the billing pause
+  await factChecks()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
     await deleteProjectInApp(c.writeToken, run.projects.M)
+    if (run.projects.N) await deleteProjectInApp(c.writeToken, run.projects.N)
     for (const t of run.created)
       eq(
         (await rest(c.writeToken, 'GET', `/tasks/${t.id}`)).status,
         404,
-        `task ${t.key} after the project went`,
+        `task ${t.key} after its project went`,
       )
-    if (run.projects.N) await deleteProjectInApp(c.writeToken, run.projects.N)
   })
   if (run.team)
     await check('cleanup/app/delete-team', async () => {
@@ -3831,6 +4354,11 @@ async function start() {
     delete cfg.target.key
     delete process.env.CONVEX_DEPLOY_KEY
     delete process.env.QIVO_STAGING_PROTECTION_BYPASS
+    // A local run may pause billing on its own backend for the billing pause
+    // checks. A staging run never reads the key.
+    if (cfg.target.target === 'local' && process.env.QIVO_LOCAL_ADMIN_KEY)
+      cfg.localAdminKey = keep(process.env.QIVO_LOCAL_ADMIN_KEY)
+    delete process.env.QIVO_LOCAL_ADMIN_KEY
   } catch (error) {
     // The fixture CLI's own refusals are written to be safe to print.
     const safe = error instanceof UsageError || error?.constructor?.name === 'DemoCliError'
@@ -3913,6 +4441,15 @@ async function start() {
     await shot(app, 'failure-app')
     await shot(consent, 'failure-consent')
   } finally {
+    // the sweep needs writes, so a pause this run made goes first
+    if (run.billingPaused)
+      try {
+        await liftBillingPause()
+        say('NOTE', 'billing-pause', 'lifted the pause this run made')
+      } catch (error) {
+        results.fail.push('billing-pause/lift')
+        say('FAIL', 'billing-pause/lift', describe(error))
+      }
     if (!cfg.cleanup && verified) {
       let swept = { removed: 0, problems: [] }
       try {

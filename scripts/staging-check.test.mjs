@@ -1,12 +1,12 @@
 import { createServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import { parseArgs, redact, request, resolveConfig } from './staging-check.mjs'
+import { addDays, parseArgs, redact, request, resolveConfig, weekOf } from './staging-check.mjs'
 
 describe('staging check arguments', () => {
   it('takes the target, the comment cap and the cleanup options', () => {
     expect(parseArgs(['--staging', '--comment-cap']).commentCap).toBe(true)
     expect(parseArgs(['--staging', '--cleanup', '--run', 'a1b2c3']).run).toBe('a1b2c3')
-    expect([...parseArgs(['--local', '--require', 'all']).require]).toContain('task-delay')
+    expect([...parseArgs(['--local', '--require', 'all']).require]).toEqual(['billing-pause-leave'])
   })
   it('refuses unknown arguments, values that could be secrets and odd combinations', () => {
     for (const argv of [
@@ -17,6 +17,9 @@ describe('staging check arguments', () => {
       ['--staging', '--cleanup', '--run', 'xyz'],
       ['--staging', '--cleanup', '--comment-cap'],
       ['--staging', '--require', 'text-caps'],
+      // merged features are checked for real, not behind a probe
+      ['--staging', '--require', 'task-delay'],
+      ['--staging', '--force', 'billing-pause-leave'],
       ['--staging', '--invert', 'everything'],
     ])
       expect(() => parseArgs(argv)).toThrow()
@@ -34,6 +37,22 @@ describe('staging check arguments', () => {
         }),
       )
     expect(() => parseArgs(['--staging', '--tokn'])).toThrow('Unknown argument --tokn.')
+  })
+})
+
+describe('staging check weeks', () => {
+  it('finds the first day of the planning week for any week start', () => {
+    // 2026-10-18 is a Sunday
+    expect(weekOf('2026-10-18', 1)).toBe('2026-10-12')
+    expect(weekOf('2026-10-18', 0)).toBe('2026-10-18')
+    expect(weekOf('2026-10-19', 1)).toBe('2026-10-19')
+    expect(weekOf('2026-10-17', 6)).toBe('2026-10-17')
+    expect(weekOf('2026-01-01', 1)).toBe('2025-12-29')
+    expect(weekOf('2026-10-18', 1)).not.toBe('2026-10-19')
+  })
+  it('moves a day across months and years', () => {
+    expect(addDays('2026-10-12', 35)).toBe('2026-11-16')
+    expect(addDays('2026-01-05', -70)).toBe('2025-10-27')
   })
 })
 

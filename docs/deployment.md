@@ -100,20 +100,25 @@ Northstar fixture admin with a password, creates two personal tokens, a
 Standard and a Viewer agent with their keys, and two OAuth connections on the
 consent screen, one with **Allow changes** and one without. With each it
 checks reads, writes, refusals, attachments, activity attribution and
-revocation, and the text, name, comment and request size limits. Everything
-it creates carries a run tag such as `stgchk-1a2b3c`, and its tasks live in
-projects it creates. It deletes all of it at the end, also after a failure.
-Its deleted projects and tasks then wait in Deleted items for 30 days, and
-OAuth client registrations stay, because they cannot be deleted. Run it from
-the application checkout through the private staging helper, which supplies
-the deployment, the fixture credentials and the protection bypass:
+revocation, and the text, name, comment and request size limits. It also
+checks task progress, last comment times, delay and project completion, the
+rule that a subtask in an archived project makes no group, and in the browser
+the search on **Settings → Projects → Archived tasks**. Everything it creates
+carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
+creates. It deletes all of it at the end, also after a failure. Its deleted
+projects and tasks then wait in Deleted items for 30 days, where an admin can
+delete them for good, and OAuth client registrations stay, because they
+cannot be deleted. Run it from the application checkout through the private
+staging helper, which supplies the deployment, the fixture credentials and
+the protection bypass:
 
 ```sh
 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
   node scripts/staging-check.mjs --staging --comment-cap
 ```
 
-`--comment-cap` also fills one task to its 400 comments. The script keeps
+`--comment-cap` also fills one task to its 400 comments and pages through
+them with **Show earlier comments** in the task window. The script keeps
 each person and agent under 200 requests a minute, so a run with
 `--comment-cap` takes 4 to 8 minutes against a local backend and an
 estimated 8 to 15 minutes on staging. A tool that stops a foreground command
@@ -142,8 +147,16 @@ of its tag removes what it left, and `--cleanup` alone removes every run's
 leftovers. Cleanup removes the run's tokens, agent keys and OAuth connections
 first, through the app alone, so they go even when the REST API fails, and it
 reports `FAIL cleanup/sweep` with what is left whenever anything remains.
-Checks for features that have not merged yet report `SKIP`. Run it once per
-release candidate, not in a loop, because each run writes to staging.
+Run it once per release candidate, not in a loop, because each run writes to
+staging.
+
+The checks that an organization admin can still remove access while billing
+pauses editing need a pause. Staging runs without billing, so they report
+`SKIP` there. A local run given its backend's admin key in
+`QIVO_LOCAL_ADMIN_KEY` turns billing on in that backend for those checks,
+which pauses the fixture organization because it has no subscription, and
+turns it off again. `--require billing-pause-leave` makes the `SKIP` a
+failure.
 
 ## Production release
 
