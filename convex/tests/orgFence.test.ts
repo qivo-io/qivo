@@ -646,6 +646,24 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       answer: { code: 'not_found', message: 'task not found' },
     },
     {
+      name: 'snapshot.commentThread',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id: ref }),
+      answer: { code: 'not_found', message: 'task not found' },
+    },
+    {
+      name: 'snapshot.commentsBefore',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.snapshot.commentsBefore, {
+          org_id: f.org.id,
+          issue_id: ref,
+          before: uuid(),
+        }),
+      answer: { code: 'not_found', message: 'task not found' },
+    },
+    {
       name: 'tokens.revokeAgentKey',
       ref: () => otherKeyId,
       call: (ref) =>
@@ -1042,13 +1060,25 @@ describe('0056 §D — guest write-probes into the hidden pair of their own org'
     expect(hidden).toEqual(unknown)
     expect(hidden).toEqual({ resolved: false, code: 'not_found', message: 'task not found' })
 
-    const thread = (issue_id: string) =>
-      as(t, f.guest).query(api.snapshot.commentsForIssue, { org_id: f.org.id, issue_id })
-    unknownRef = uuid()
-    hidden = await capture(thread(hiddenIssue.id), hiddenIssue.id)
-    unknown = await capture(thread(unknownRef), unknownRef)
-    expect(hidden).toEqual(unknown)
-    expect(hidden).toEqual({ resolved: false, code: 'not_found', message: 'task not found' })
+    const threads = [
+      (issue_id: string) =>
+        as(t, f.guest).query(api.snapshot.commentsForIssue, { org_id: f.org.id, issue_id }),
+      (issue_id: string) =>
+        as(t, f.guest).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id }),
+      (issue_id: string) =>
+        as(t, f.guest).query(api.snapshot.commentsBefore, {
+          org_id: f.org.id,
+          issue_id,
+          before: uuid(),
+        }),
+    ]
+    for (const thread of threads) {
+      unknownRef = uuid()
+      hidden = await capture(thread(hiddenIssue.id), hiddenIssue.id)
+      unknown = await capture(thread(unknownRef), unknownRef)
+      expect(hidden).toEqual(unknown)
+      expect(hidden).toEqual({ resolved: false, code: 'not_found', message: 'task not found' })
+    }
   })
 
   it('move: every destination the guest cannot write answers like a nonexistent one', async () => {

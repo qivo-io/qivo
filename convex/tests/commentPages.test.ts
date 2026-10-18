@@ -1,10 +1,13 @@
 /* Paged comment reads (model/comments.ts newestComments). REST
  * GET /v1/tasks/{ref}/comments and MCP list_comments answer the newest
- * comments, oldest first, with `limit` and `before`, and the app's
- * snapshot.commentsForIssue loads the newest COMMENT_PAGE_MAX.
+ * comments, oldest first, with `limit` and `before`. The app's task window
+ * subscribes to snapshot.commentThread, the newest COMMENT_PAGE_MAX and
+ * whether earlier ones exist, and reads earlier pages with
+ * snapshot.commentsBefore (model/comments.ts threadPage).
  *
  *   1. Paging: a long thread walks back page by page to an empty page on
- *      both surfaces, a short one answers whole, and the input rules.
+ *      both surfaces, a short one answers whole, and the input rules. The
+ *      app's pages say exactly when the start of the thread is loaded.
  *   2. Bytes: comments near Convex's 1 MiB document limit fill a page by
  *      size, and every read stays within the transaction's read limit,
  *      where reading the whole thread did not.
@@ -23,7 +26,7 @@ import type { QueryCtx } from '../_generated/server'
 import { BEFORE_NOT_A_COMMENT } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { sha256hex } from '../machine/auth'
-import { COMMENT_PAGE_BYTES, COMMENT_PAGE_MAX, newestComments } from '../model/comments'
+import { COMMENT_PAGE_BYTES, COMMENT_PAGE_MAX, newestComments, threadPage } from '../model/comments'
 import {
   as,
   expectRefusal,
@@ -97,6 +100,23 @@ const mcpPage = async (fx: Fx, page: { limit?: number; before?: string } = {}) =
     }),
   ) as { id: string; body: string }[]
 
+/* The app's live thread and, with `before`, an earlier page, as bodies
+ * and whether the thread holds earlier comments. */
+async function appPage(fx: Fx, before?: string) {
+  const page =
+    before === undefined
+      ? await as(fx.t, fx.guest).query(api.snapshot.commentThread, {
+          org_id: fx.org.id,
+          issue_id: fx.task.id,
+        })
+      : await as(fx.t, fx.guest).query(api.snapshot.commentsBefore, {
+          org_id: fx.org.id,
+          issue_id: fx.task.id,
+          before,
+        })
+  return { ...page, bodies: page.comments.map((c) => c.body) }
+}
+
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
   const e = await expectRefusal(p, code)
   expect((e.data as Refusal).message).toBe(sentence)
@@ -154,6 +174,83 @@ describe('paging a thread', () => {
     for (const before of [elsewhere?.id ?? '', uuid(), 'xyz', '']) {
       await refused(restPage(fx, { before }), 'bad_request', BEFORE_NOT_A_COMMENT)
       await refused(mcpPage(fx, { before }), 'bad_request', BEFORE_NOT_A_COMMENT)
+    }
+  })
+
+  it("the app's thread walks back to its start, and says when it is loaded", async () => {
+    const fx = await setup()
+    await plantThread(fx, 120)
+    const expected = [
+      { bodies: bodies(70, 120), earlier: true },
+      { bodies: bodies(20, 70), earlier: true },
+      { bodies: bodies(0, 20), earlier: false },
+    ]
+    let before: string | undefined
+    for (const want of expected) {
+      const page = await appPage(fx, before)
+      expect({ bodies: page.bodies, earlier: page.earlier }).toEqual(want)
+      // pure app rows, without Convex's system fields
+      expect(Object.keys(page.comments[0]).sort()).toEqual(
+        ['author', 'body', 'created_at', 'id', 'issue_id'].sort(),
+      )
+      before = page.comments[0].id
+    }
+    // before the first comment, there is nothing
+    expect(await appPage(fx, before)).toMatchObject({ comments: [], earlier: false })
+  })
+
+  it("the app's thread is complete at exactly COMMENT_PAGE_MAX comments, and not at one more", async () => {
+    const fx = await setup()
+    await plantThread(fx, COMMENT_PAGE_MAX)
+    expect(await appPage(fx)).toMatchObject({ earlier: false })
+    await plantThread(fx, 1)
+    const newest = await appPage(fx)
+    expect(newest.earlier).toBe(true)
+    const rest = await appPage(fx, newest.comments[0].id)
+    expect(rest).toMatchObject({ bodies: ['#0'], earlier: false })
+    const empty = await setup()
+    expect(await appPage(empty)).toMatchObject({ comments: [], earlier: false })
+  })
+
+  it("the app's pages keep the thread's order, so the first comment is the next before", async () => {
+    const fx = await setup()
+    // posted in this order, with created_at running backwards
+    await fx.t.run(async (ctx) => {
+      for (let n = 0; n < COMMENT_PAGE_MAX + 2; n++) {
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: fx.task.id,
+          author: fx.guest.id,
+          body: `#${n}`,
+          created_at: new Date(Date.parse(NOW) - n * 1000).toISOString(),
+        })
+      }
+    })
+    const newest = await appPage(fx)
+    expect(newest.bodies).toEqual(bodies(2, COMMENT_PAGE_MAX + 2))
+    expect((await appPage(fx, newest.comments[0].id)).bodies).toEqual(['#0', '#1'])
+  })
+
+  it('an earlier page refuses a before that is not a comment on this task, deleted ones included', async () => {
+    const fx = await setup()
+    await plantThread(fx, 2)
+    const other = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await plantThread(fx, 1, { task: other })
+    const [elsewhere, gone] = await fx.t.run(async (ctx) => {
+      const foreign = await ctx.db
+        .query('comments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', other.id))
+        .first()
+      const first = await ctx.db
+        .query('comments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', fx.task.id))
+        .first()
+      if (first === null || foreign === null) throw new Error('missing comments')
+      await ctx.db.delete(first._id)
+      return [foreign.id, first.id]
+    })
+    for (const before of [elsewhere, gone, uuid(), 'xyz']) {
+      await refused(appPage(fx, before), 'bad_request', BEFORE_NOT_A_COMMENT)
     }
   })
 
@@ -228,6 +325,22 @@ describe('pages bounded by bytes', () => {
     expect(bytesRead).toBeLessThan(COMMENT_PAGE_BYTES + 2 * 1024 * 1024)
   })
 
+  it("the app's pages walk to the start within the read limit, each comment once", async () => {
+    const fx = await largeThread()
+    const seen: string[] = []
+    let before: string | undefined
+    for (;;) {
+      const page = await appPage(fx, before)
+      expect(page.comments.length).toBeGreaterThan(0)
+      expect(page.comments.length).toBeLessThan(20)
+      seen.unshift(...page.comments.map((c) => c.id))
+      if (!page.earlier) break
+      before = page.comments[0].id
+    }
+    expect(seen).toHaveLength(20)
+    expect(new Set(seen).size).toBe(20)
+  })
+
   it("the app's thread loads the newest comments that fit", async () => {
     const fx = await largeThread()
     const thread = await as(fx.t, fx.guest).query(api.snapshot.commentsForIssue, {
@@ -284,10 +397,14 @@ function threadCtx(thread: Doc<'comments'>[]): { ctx: QueryCtx; read: () => numb
           (lte === undefined || c._creationTime <= lte),
       )
       return {
-        order: () => ({
-          take: async (n: number) => answer(rows.slice(0, n)),
-          collect: async () => answer(rows),
-        }),
+        order: (direction: 'asc' | 'desc') => {
+          const ordered = direction === 'asc' ? [...rows].reverse() : rows
+          return {
+            take: async (n: number) => answer(ordered.slice(0, n)),
+            collect: async () => answer(ordered),
+            first: async () => answer(ordered.slice(0, 1))[0] ?? null,
+          }
+        },
       }
     },
   })
@@ -354,6 +471,21 @@ describe('comments that share a _creationTime', () => {
     })
     expect(page.map((c) => c._id)).toEqual(['c03'])
     expect(earlier.read()).toBeLessThan(tiedBytes + 1024 * 1024)
+  })
+
+  it("the app's thread has earlier comments when they share the time of its first", async () => {
+    // the first three comments share one instant, and the newest page
+    // stops at the third of them
+    const thread = Array.from({ length: COMMENT_PAGE_MAX + 2 }, (_, n) =>
+      fakeComment(n, 1_000 + Math.max(0, n - 2)),
+    )
+    const { ctx } = threadCtx(thread)
+    const newest = await threadPage(ctx, 'task')
+    expect(newest.comments[0]._id).toBe('c02')
+    expect(newest.earlier).toBe(true)
+    const rest = await threadPage(ctx, 'task', newest.comments[0])
+    expect(rest.comments.map((c) => c._id)).toEqual(['c00', 'c01'])
+    expect(rest.earlier).toBe(false)
   })
 })
 
