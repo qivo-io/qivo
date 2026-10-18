@@ -92,6 +92,38 @@ staging and has preview deployment creation disabled. Private operators can
 provision synthetic data deliberately using the private setup instructions.
 A later deployment preserves it.
 
+### End-to-end API check
+
+`scripts/staging-check.mjs` checks the REST API, MCP and OAuth consent on
+staging with a real browser and real credentials. It signs in as the
+Northstar fixture admin with a password, creates two personal tokens, a
+Standard and a Viewer agent with their keys, and two OAuth connections on the
+consent screen, one with **Allow changes** and one without. With each it
+checks reads, writes, refusals, attachments, activity attribution and
+revocation, and the text, name, comment and request size limits. Everything
+it creates carries a run tag such as `stgchk-1a2b3c`, and its tasks live in
+projects it creates. It deletes all of it at the end, also after a failure.
+Its deleted projects and tasks then wait in Deleted items for 30 days, and
+OAuth client registrations stay, because they cannot be deleted. Run it from
+the application checkout through the private staging helper, which supplies
+the deployment, the fixture credentials and the protection bypass:
+
+```sh
+"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-staging" \
+  node scripts/staging-check.mjs --staging --comment-cap
+```
+
+`--comment-cap` also fills one task to its 400 comments, which adds about
+two minutes. With `--staging` the script refuses any environment but staging,
+any app other than `preview.qivo.io` and any backend other than the one that
+app uses. `--local` runs it against a disposable local backend instead, with
+loopback addresses only. It prints status lines only, never a secret. If a
+run is killed before it cleans up, `--cleanup --run <hex>` with the six digits
+of its tag removes what it left, and `--cleanup` alone removes every run's
+leftovers. Checks for features that have not merged yet report `SKIP`. Run it
+once per release candidate, not in a loop, because each run writes to
+staging.
+
 ## Production release
 
 `.github/workflows/release.yml` calls the shared deployment workflow, whose
