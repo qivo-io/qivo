@@ -6,16 +6,19 @@
  * Both are platform actions that page through the data with bounded
  * internal queries. Each runQuery is its own transaction, so no read grows
  * with the deployment. A page reads at most its STATS_PAGE rows and
- * STATS_PAGE.bytes of its range, plus the members, grants, milestones or
- * links of each team, project or task on it. The answer is built from many snapshots, so a write during a
+ * STATS_PAGE.bytes of its range, plus at most STATS_PAGE.children members,
+ * grants, milestones or links of each team, project or task on it. A longer
+ * list is paged on its own (childPage). The answer is built from many snapshots, so a write during a
  * load can be counted in one table and not yet in another. The console
  * loads on demand and shows when, so that is accepted.
  *
  * A load reads every row it counts, about one round trip per page,
  * CONCURRENCY organizations or tables at a time. One organization's pages
  * follow each other, so its largest table sets the time. Convex caches each
- * page's result until a row in its range changes, so a repeat load re-reads
- * only the pages whose data changed. If a load ever takes more than about
+ * page's result for the same arguments until a row in its range changes, so
+ * a repeat load re-reads only the pages whose data changed. The totals'
+ * 30-day and 84-day windows start on the hour for that reason, so reloads
+ * within an hour reuse those pages too. If a load ever takes more than about
  * 30 seconds, keep the numbers in a table that a periodic job refreshes
  * instead.
  *
@@ -25,19 +28,20 @@
  * also holds each organization's org_counters row and the copies of those
  * tables that Deleted items keeps in deleted_rows. */
 
-import { v } from 'convex/values'
+import { type Infer, v } from 'convex/values'
 import { literals } from 'convex-helpers/validators'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
-import type { ActionCtx } from './_generated/server'
+import type { ActionCtx, QueryCtx } from './_generated/server'
 import { internalQuery } from './_generated/server'
 import { subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import type { StoredTable } from './lib/enums'
-import { platformAction } from './lib/functions'
+import { badRequest, platformAction, require } from './lib/functions'
 import { countersRow } from './model/orgs'
 
-const DAY = 86_400_000
+const HOUR = 3_600_000
+const DAY = 24 * HOUR
 
 /** Rows per internal page, and the bytes one page's range may read. Tests
  * lower them. */
@@ -47,13 +51,18 @@ export const STATS_PAGE = {
   /** An organization's profiles, activity or Deleted items rows per page.
    * They read nothing per row. */
   rows: 2000,
+  /** Rows of one child table read per team, project or task on a page. A
+   * parent with more is left out of the page and its rows are paged on
+   * their own, so the page sizes below keep a page under about 16,000
+   * documents. */
+  children: 50,
   /** Tasks per page, each with one read of the links it is the source of. */
-  issues: 500,
+  issues: 300,
   /** Teams per page, each with one read of its members. */
   teams: 200,
   /** Projects per page, each with three reads: grants, team grants and
    * milestones. */
-  projects: 200,
+  projects: 100,
   /** Rows per page of one table for the platform totals. */
   table: 4000,
   /** Bytes the paged range of one page may read. */
@@ -171,13 +180,59 @@ export const orgHead = internalQuery({
   },
 })
 
+/* The rows that belong to one team, project or task, each table read
+ * through the index on its parent. */
+const CHILD_TABLES = [
+  'team_members',
+  'project_access',
+  'project_team_access',
+  'milestones',
+  'issue_links',
+] as const
+type ChildRange = { table: (typeof CHILD_TABLES)[number]; parent_id: string }
+
+/** The rows of one child range: a team's members, a project's grants,
+ * team grants or milestones, or the links a task is the source of. Each link
+ * is read once, through its source task. */
+function childQuery(ctx: QueryCtx, { table, parent_id }: ChildRange) {
+  switch (table) {
+    case 'team_members':
+      return ctx.db.query(table).withIndex('by_team', (q) => q.eq('team_id', parent_id))
+    case 'project_access':
+    case 'project_team_access':
+    case 'milestones':
+      return ctx.db.query(table).withIndex('by_project', (q) => q.eq('project_id', parent_id))
+    case 'issue_links':
+      return ctx.db.query(table).withIndex('by_source', (q) => q.eq('source_id', parent_id))
+  }
+}
+
+type ChildPage = { bytes: number; next: string | null }
+
+/** One page of a child range too long for its parent's page. */
+export const childPage = internalQuery({
+  args: { table: literals(...CHILD_TABLES), parent_id: v.string(), cursor: vCursor },
+  handler: async (ctx, { table, parent_id, cursor }): Promise<ChildPage> => {
+    const page = await childQuery(ctx, { table, parent_id }).paginate({
+      cursor,
+      numItems: STATS_PAGE.rows,
+      maximumBytesRead: STATS_PAGE.bytes,
+    })
+    let bytes = 0
+    for (const row of page.page) bytes += sizeOf(row)
+    return { bytes, next: nextOf(page) }
+  },
+})
+
 const ORG_PARTS = ['profiles', 'teams', 'projects', 'issues', 'activity', 'deleted'] as const
 type OrgPart = (typeof ORG_PARTS)[number]
 
 /** Counts of one part of an organization. `rows` counts the part's own
  * table; members, guests and logins come from profiles alone. */
 type PartCounts = { rows: number; bytes: number; members: number; guests: number; logins: number }
-type PartPage = PartCounts & { next: string | null }
+/** A page also names the child ranges it left out for being longer than
+ * STATS_PAGE.children rows. */
+type PartPage = PartCounts & { deferred: ChildRange[]; next: string | null }
 
 /** One page of one part of an organization: its profiles, teams with their
  * members, projects with their grants, team grants and milestones, tasks
@@ -187,11 +242,20 @@ export const orgPart = internalQuery({
   handler: async (ctx, { org_id, part, cursor }): Promise<PartPage> => {
     const opts = (numItems: number) => ({ cursor, numItems, maximumBytesRead: STATS_PAGE.bytes })
     const counts: PartCounts = { rows: 0, bytes: 0, members: 0, guests: 0, logins: 0 }
+    const deferred: ChildRange[] = []
     const done = (page: { page: unknown[]; isDone: boolean; continueCursor: string }) => ({
       ...counts,
       rows: page.page.length,
+      deferred,
       next: nextOf(page),
     })
+    // Counts a child range of at most STATS_PAGE.children rows, and leaves a
+    // longer one to childPage.
+    const children = async (range: ChildRange) => {
+      const rows = await childQuery(ctx, range).take(STATS_PAGE.children + 1)
+      if (rows.length > STATS_PAGE.children) deferred.push(range)
+      else for (const row of rows) counts.bytes += sizeOf(row)
+    }
     switch (part) {
       case 'profiles': {
         const page = await ctx.db
@@ -214,11 +278,7 @@ export const orgPart = internalQuery({
           .paginate(opts(STATS_PAGE.teams))
         for (const team of page.page) {
           counts.bytes += sizeOf(team)
-          const members = await ctx.db
-            .query('team_members')
-            .withIndex('by_team', (q) => q.eq('team_id', team.id))
-            .collect()
-          for (const row of members) counts.bytes += sizeOf(row)
+          await children({ table: 'team_members', parent_id: team.id })
         }
         return done(page)
       }
@@ -229,19 +289,8 @@ export const orgPart = internalQuery({
           .paginate(opts(STATS_PAGE.projects))
         for (const project of page.page) {
           counts.bytes += sizeOf(project)
-          const grants = await ctx.db
-            .query('project_access')
-            .withIndex('by_project', (q) => q.eq('project_id', project.id))
-            .collect()
-          const teamGrants = await ctx.db
-            .query('project_team_access')
-            .withIndex('by_project', (q) => q.eq('project_id', project.id))
-            .collect()
-          const milestones = await ctx.db
-            .query('milestones')
-            .withIndex('by_project', (q) => q.eq('project_id', project.id))
-            .collect()
-          for (const row of [...grants, ...teamGrants, ...milestones]) counts.bytes += sizeOf(row)
+          for (const table of ['project_access', 'project_team_access', 'milestones'] as const)
+            await children({ table, parent_id: project.id })
         }
         return done(page)
       }
@@ -250,17 +299,11 @@ export const orgPart = internalQuery({
           .query('issues')
           .withIndex('by_org', (q) => q.eq('org_id', org_id))
           .paginate(opts(STATS_PAGE.issues))
-        // each link once, through its source task
-        const links = await Promise.all(
-          page.page.map((issue) =>
-            ctx.db
-              .query('issue_links')
-              .withIndex('by_source', (q) => q.eq('source_id', issue.id))
-              .collect(),
-          ),
-        )
         for (const issue of page.page) counts.bytes += sizeOf(issue)
-        for (const row of links.flat()) counts.bytes += sizeOf(row)
+        // concurrent, as one read per task is most of a page's time
+        await Promise.all(
+          page.page.map((issue) => children({ table: 'issue_links', parent_id: issue.id })),
+        )
         return done(page)
       }
       case 'activity': {
@@ -285,9 +328,11 @@ export const orgPart = internalQuery({
 
 type Runner = Pick<ActionCtx, 'runQuery'>
 
-/** Every page of one part of an organization, summed. */
+/** Every page of one part of an organization, with the child ranges its
+ * pages left out, summed. */
 async function partCounts(ctx: Runner, org_id: string, part: OrgPart): Promise<PartCounts> {
   const sum: PartCounts = { rows: 0, bytes: 0, members: 0, guests: 0, logins: 0 }
+  const deferred: ChildRange[] = []
   let cursor: string | null = null
   do {
     const page: PartPage = await ctx.runQuery(internal.adminStats.orgPart, {
@@ -300,8 +345,20 @@ async function partCounts(ctx: Runner, org_id: string, part: OrgPart): Promise<P
     sum.members += page.members
     sum.guests += page.guests
     sum.logins += page.logins
+    deferred.push(...page.deferred)
     cursor = page.next
   } while (cursor !== null)
+  for (const range of deferred) {
+    let childCursor: string | null = null
+    do {
+      const page: ChildPage = await ctx.runQuery(internal.adminStats.childPage, {
+        ...range,
+        cursor: childCursor,
+      })
+      sum.bytes += page.bytes
+      childCursor = page.next
+    } while (childCursor !== null)
+  }
   return sum
 }
 
@@ -447,16 +504,24 @@ class Weeks {
   }
 }
 
+const vWindow = v.object({ cutoff30: v.string(), cutoff84: v.string() })
+type Window = Infer<typeof vWindow>
+
+/* The tables whose pages count rows by time. Only their pages get the
+ * window, so the other tables' pages keep the same arguments from load to
+ * load and Convex can answer them from its cache. */
+const WINDOWED: ReadonlySet<TotalTable> = new Set<TotalTable>(['profiles', 'activity_events'])
+
 /** One page of one table for the platform totals. Profiles created and
- * activity recorded after `cutoff84` land in week buckets. */
+ * activity recorded after `window.cutoff84` land in week buckets; profiles
+ * and activity_events pages need the window. */
 export const tablePage = internalQuery({
-  args: {
-    table: literals(...TOTAL_TABLES),
-    cursor: vCursor,
-    cutoff30: v.string(),
-    cutoff84: v.string(),
-  },
-  handler: async (ctx, { table, cursor, cutoff30, cutoff84 }): Promise<TablePage> => {
+  args: { table: literals(...TOTAL_TABLES), cursor: vCursor, window: v.optional(vWindow) },
+  handler: async (ctx, { table, cursor, window }): Promise<TablePage> => {
+    require(window !== undefined || !WINDOWED.has(table), badRequest(
+      `a ${table} page needs the time window`,
+    ))
+    const { cutoff30, cutoff84 } = window ?? { cutoff30: '', cutoff84: '' }
     const opts = { cursor, numItems: STATS_PAGE.table, maximumBytesRead: STATS_PAGE.bytes }
     const counts: TableCounts = { rows: 0, bytes: 0, logins: 0, activity_30d: 0, weekly: [] }
     const weeks = new Weeks()
@@ -490,12 +555,7 @@ export const tablePage = internalQuery({
 })
 
 /** Every page of one table, summed. */
-async function tableCounts(
-  ctx: Runner,
-  table: TotalTable,
-  cutoff30: string,
-  cutoff84: string,
-): Promise<TableCounts> {
+async function tableCounts(ctx: Runner, table: TotalTable, window: Window): Promise<TableCounts> {
   const sum = { rows: 0, bytes: 0, logins: 0, activity_30d: 0 }
   const weeks = new Weeks()
   let cursor: string | null = null
@@ -503,8 +563,7 @@ async function tableCounts(
     const page: TablePage = await ctx.runQuery(internal.adminStats.tablePage, {
       table,
       cursor,
-      cutoff30,
-      cutoff84,
+      ...(WINDOWED.has(table) ? { window } : {}),
     })
     sum.rows += page.rows
     sum.bytes += page.bytes
@@ -516,42 +575,49 @@ async function tableCounts(
   return { ...sum, weekly: weeks.list() }
 }
 
+/** platformStats' answer, read through `ctx.runQuery`. The 30-day and
+ * 84-day windows start on the hour, so loads within one hour send the same
+ * page arguments. Exported for tests that read those arguments. */
+export async function platformTotals(ctx: Runner): Promise<AdminPlatformStats> {
+  const hour = Math.floor(Date.now() / HOUR) * HOUR
+  const window: Window = {
+    cutoff30: new Date(hour - 30 * DAY).toISOString(),
+    cutoff84: new Date(hour - 84 * DAY).toISOString(),
+  }
+  const tables = await inParallel(TOTAL_TABLES, (table) => tableCounts(ctx, table, window))
+  const of = (table: TotalTable): TableCounts => tables[TOTAL_TABLES.indexOf(table)]
+  const weeks = new Weeks()
+  let bytes = 0
+  for (const counts of tables) {
+    bytes += counts.bytes
+    weeks.merge(counts.weekly)
+  }
+  return {
+    totals: {
+      orgs: of('organizations').rows,
+      members: of('profiles').rows,
+      logins: of('profiles').logins,
+      teams: of('teams').rows,
+      projects: of('projects').rows,
+      issues: of('issues').rows,
+      activity_30d: of('activity_events').activity_30d,
+      db_total_bytes: bytes,
+    },
+    weekly: weeks.list(),
+  }
+}
+
 /* admin_platform_stats. totals.members counts EVERY profile (guests and
  * agents included, as the SQL did). weekly merges profile created_at counts
  * with activity counts over the last 84 days into sparse week-Monday
  * buckets, ascending. The SQL aggregated actual rows, so a week with
- * neither members nor activity is absent, exactly as before.
- * db_total_bytes was pg_database_size(current_database()). The port sums
- * the JSON footprint of every row in the measured tables, so the dashboard
- * tile says the size is approximate. */
+ * neither members nor activity is absent, exactly as before. Both windows
+ * start on the hour (platformTotals), so activity_30d counts from up to an
+ * hour more than 30 days ago. db_total_bytes was
+ * pg_database_size(current_database()). The port sums the JSON footprint of
+ * every row in the measured tables, so the dashboard tile says the size is
+ * approximate. */
 export const platformStats = platformAction({
   args: {},
-  handler: async (ctx): Promise<AdminPlatformStats> => {
-    const nowMs = Date.now()
-    const cutoff30 = new Date(nowMs - 30 * DAY).toISOString()
-    const cutoff84 = new Date(nowMs - 84 * DAY).toISOString()
-    const tables = await inParallel(TOTAL_TABLES, (table) =>
-      tableCounts(ctx, table, cutoff30, cutoff84),
-    )
-    const of = (table: TotalTable): TableCounts => tables[TOTAL_TABLES.indexOf(table)]
-    const weeks = new Weeks()
-    let bytes = 0
-    for (const counts of tables) {
-      bytes += counts.bytes
-      weeks.merge(counts.weekly)
-    }
-    return {
-      totals: {
-        orgs: of('organizations').rows,
-        members: of('profiles').rows,
-        logins: of('profiles').logins,
-        teams: of('teams').rows,
-        projects: of('projects').rows,
-        issues: of('issues').rows,
-        activity_30d: of('activity_events').activity_30d,
-        db_total_bytes: bytes,
-      },
-      weekly: weeks.list(),
-    }
-  },
+  handler: async (ctx): Promise<AdminPlatformStats> => await platformTotals(ctx),
 })
