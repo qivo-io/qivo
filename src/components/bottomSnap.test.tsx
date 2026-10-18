@@ -87,6 +87,15 @@ describe('useBottomSnap', () => {
     expect(scroller.scrollTop).toBe(100)
   })
 
+  it('leaves a reader who scrolled up before the scroll event of a snap where they are', () => {
+    imageLoads()
+    // the reader moves up from the snapped end before its scroll event runs
+    scroller.scrollTop = 900
+    scroller.dispatchEvent(new Event('scroll'))
+    imageLoads()
+    expect(scroller.scrollTop).toBe(900)
+  })
+
   it('leaves a reader who started a wheel or touch scroll where they are', () => {
     scroller.dispatchEvent(new Event('wheel'))
     imageLoads()

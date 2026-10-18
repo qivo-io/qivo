@@ -842,13 +842,17 @@ function useBottomSnap(ref: RefObject<HTMLElement>, key: string | null) {
     // inline images load after the snap and grow the content below the
     // viewport — chase them (img load doesn't bubble; capture catches it)
     // for a few seconds, then leave the user's scroll alone. A reader who
-    // scrolls meanwhile is left alone at once: a wheel or touch scroll, or
-    // any move up, which the snap itself never makes. Otherwise the avatars
-    // of earlier comments loaded above would pull them back to the end.
+    // scrolls meanwhile is left alone at once, after a wheel or touch scroll
+    // or any move up, which the snap itself never makes. Otherwise the
+    // avatars of earlier comments loaded above would pull them back to the end.
     let chasing = true
     let top = el.scrollTop
+    // `top` is where the last scroll left the reader. Each snap sets it
+    // too, since its own scroll event can run after the reader has moved.
     const onLoad = () => {
-      if (chasing) el.scrollTop = el.scrollHeight
+      if (!chasing) return
+      el.scrollTop = el.scrollHeight
+      top = el.scrollTop
     }
     const onScroll = () => {
       if (el.scrollTop < top) chasing = false
