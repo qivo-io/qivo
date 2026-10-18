@@ -414,6 +414,24 @@ origins. Public CORS applies only to those four machine endpoints, which
 ignore session cookies and return no credentialed CORS headers. Browser
 sign-in, consent and operator routes retain the app-origin restrictions.
 
+Dynamic client registration needs no credentials, so Qivo limits it. Each
+source address may send **60 registration requests per hour**, and the whole
+server accepts **600 per hour**. An IPv6 address counts as its /64 network,
+and each IPv6 /48 network may send at most **120 per hour** over all of its
+/64 networks. All limits use fixed hourly windows. Past any limit, registration
+returns HTTP `429` with `Retry-After` set to the seconds left in the hour.
+When Qivo cannot check the limits, it refuses the registration with HTTP
+`503` and `Retry-After: 60`. Client metadata may be at most 8 KiB of JSON;
+larger registrations get HTTP `400` with `invalid_client_metadata`. Register
+once and keep the client ID. A daily cleanup deletes a client that nobody
+approved on its first run after the client turns three days old, which is
+three to four days after it registered. A client stays while a consent, a
+token, an approved connection or a pending authorization refers to it. After
+the cleanup deletes a client, its next authorization request fails with
+`invalid_client` and the client must register again. Qivo serves no other
+client management endpoints, so a client cannot be changed after it
+registered.
+
 The MCP endpoint advertises its protected-resource metadata in
 `WWW-Authenticate` on HTTP 401, and serves
 `/.well-known/oauth-protected-resource/mcp` plus the root alias. The metadata

@@ -7,6 +7,7 @@ import { hashPassword } from 'better-auth/crypto'
 import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it } from 'vitest'
 import { api, components, internal } from '../_generated/api'
+import { createAuth } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { NAME_MAX } from '../lib/textLimits'
 import { sha256hex } from '../machine/auth'
@@ -936,18 +937,20 @@ describe('OAuth organization selection', () => {
 describe('OAuth revocation, replay and live account checks', () => {
   it('uses Basic client identity consistently when replay also carries a different body client_id', async () => {
     const f = await fixture()
-    const registered = await http(f.t, '/api/auth/oauth2/create-client', {
-      ...body({
-        client_name: 'Confidential client',
-        redirect_uris: [REDIRECT],
-        token_endpoint_auth_method: 'client_secret_basic',
-        scope: WRITE,
-        grant_types: ['authorization_code', 'refresh_token'],
+    // Qivo serves no client management endpoints (auth.ts disabledPaths), so
+    // the person creates the confidential client through the server API.
+    const client: Json = await f.t.run((ctx) =>
+      createAuth(ctx).api.createOAuthClient({
+        body: {
+          client_name: 'Confidential client',
+          redirect_uris: [REDIRECT],
+          token_endpoint_auth_method: 'client_secret_basic',
+          scope: WRITE,
+          grant_types: ['authorization_code', 'refresh_token'],
+        },
+        headers: new Headers({ cookie: f.cookie }),
       }),
-      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': f.cookie },
-    })
-    const client = await json(registered)
-    expect(registered.status, JSON.stringify(client)).toBe(200)
+    )
     expect(client.client_secret).toBeTypeOf('string')
     const authorizationRequest = await authorization(f, client.client_id as string)
     const c = {
