@@ -24,7 +24,7 @@
  * remain, and no app reader uses a group's own hours. */
 
 import { makeFunctionReference } from 'convex/server'
-import { type ObjectType, v } from 'convex/values'
+import { type Infer, type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { byId } from './lib/db'
@@ -44,6 +44,12 @@ import { loadNotifyPreload, type NotifyPreload } from './model/messages'
  * these. */
 export const RESTORE_REGROUP = { tasks: 200, bytes: 4 * 1024 * 1024, clears: 50, room: 0.5 }
 
+/* Where an earlier step stopped in a page, as the creation time of the last
+ * task it finished and the ids of every finished task with that time.
+ * Tasks can share a creation time, so the ids tell those apart. */
+const vPosition = v.object({ time: v.number(), ids: v.array(v.string()) })
+type Position = Infer<typeof vPosition>
+
 const restoredStepArgs = {
   /** every project the restore brought back, in the order they are read */
   projects: v.array(v.string()),
@@ -51,12 +57,34 @@ const restoredStepArgs = {
   at: v.optional(v.number()),
   /** where its page starts, a pagination cursor, absent for its first page */
   cursor: v.optional(v.string()),
-  /** the creation time of the last page task an earlier step finished, so
-   * this one starts after it, absent for a fresh page */
-  after: v.optional(v.number()),
+  /** where an earlier step stopped in this page, absent for a fresh page */
+  after: v.optional(vPosition),
   restorer_id: v.string(),
 }
 type RestoredStep = ObjectType<typeof restoredStepArgs>
+
+/** Whether an earlier step finished this page task, by where it stopped. */
+export function finishedBefore(
+  task: Pick<Doc<'issues'>, '_creationTime' | 'id'>,
+  after: Position | undefined,
+): boolean {
+  if (after === undefined) return false
+  return (
+    task._creationTime < after.time ||
+    (task._creationTime === after.time && after.ids.includes(task.id))
+  )
+}
+
+/** Where a step stands once it has finished `task`, the next page task
+ * after `at`. */
+export function positionAfter(
+  at: Position | undefined,
+  task: Pick<Doc<'issues'>, '_creationTime' | 'id'>,
+): Position {
+  return at?.time === task._creationTime
+    ? { time: at.time, ids: [...at.ids, task.id] }
+    : { time: task._creationTime, ids: [task.id] }
+}
 
 /* This module's own step, referenced by name, as model/messages.ts
  * references its steps, to keep the module's `internal` type out of its own
@@ -122,16 +150,14 @@ export const restoredStep = internalMutation({
     // tasks this step has looked at, as page tasks or parents; a page row
     // of one it cleared still holds the old hours
     const checked = new Set<string>()
-    // the creation time of the last page task this step finished
-    let finished: number | undefined
+    // where this step stands in the page, and whether it finished a task
+    let position = a.after
+    let finishedOne = false
     for (const task of page.page) {
-      if (a.after !== undefined && task._creationTime <= a.after) continue
+      if (finishedBefore(task, a.after)) continue
       // a step always finishes one task, so the walk moves on
-      if (
-        finished !== undefined &&
-        (cleared >= RESTORE_REGROUP.clears || (await stepIsFull(ctx)))
-      ) {
-        await schedule({ ...a, after: finished })
+      if (finishedOne && (cleared >= RESTORE_REGROUP.clears || (await stepIsFull(ctx)))) {
+        await schedule({ ...a, after: position })
         return null
       }
       // the task itself, when subtasks restored before it make it a group
@@ -154,7 +180,8 @@ export const restoredStep = internalMutation({
           await clear(parent)
         }
       }
-      finished = task._creationTime
+      position = positionAfter(position, task)
+      finishedOne = true
     }
     await next(page.isDone ? undefined : page.continueCursor)
     return null

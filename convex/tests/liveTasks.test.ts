@@ -18,7 +18,7 @@ import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
 import { ASSIGNEE_LOAD_CHECKS, assigneeLoad, workloadCore } from '../planning'
-import { RESTORE_REGROUP, restoredStep } from '../regroup'
+import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
 import { invokeSnapshot } from './backendPerformance.setup'
 import {
   as,
@@ -481,7 +481,11 @@ describe('writes that change which subtasks count', () => {
     expect(await cleared()).toBe(4)
     // the next step reads the same page from the task after the fourth
     expect(first.next).toEqual([
-      { projects: [fx.shelf.id], restorer_id: fx.user.id, after: expect.any(Number) },
+      {
+        projects: [fx.shelf.id],
+        restorer_id: fx.user.id,
+        after: { time: expect.any(Number), ids: [expect.any(String)] },
+      },
     ])
     // 47 profiles, read once, not for each of the 4 tasks it cleared
     expect(first.read).toBeLessThan(120)
@@ -518,6 +522,19 @@ describe('writes that change which subtasks count', () => {
       ),
     )
     expect(steps).toHaveLength(3)
+  })
+
+  it('a stopped regroup step resumes at a task that shares the last creation time', () => {
+    const at = (time: number, id: string) => ({ _creationTime: time, id })
+    const [a, b, c, d] = [at(1, 'a'), at(2, 'b'), at(2, 'c'), at(3, 'd')]
+    // stopped after b, which shares its creation time with c
+    const stop = positionAfter(positionAfter(undefined, a), b)
+    expect(stop).toEqual({ time: 2, ids: ['b'] })
+    expect([a, b, c, d].map((t) => finishedBefore(t, stop))).toEqual([true, true, false, false])
+    // the next step finishes c and still counts b as finished
+    const next = positionAfter(stop, c)
+    expect(next).toEqual({ time: 2, ids: ['b', 'c'] })
+    expect([a, b, c, d].map((t) => finishedBefore(t, next))).toEqual([true, true, true, false])
   })
 
   it('a task moved out of an archived project clears its parent’s own hours', async () => {
