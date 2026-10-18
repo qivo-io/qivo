@@ -21,23 +21,36 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 /** A baseline that cannot be used, with a sentence that says what to do. */
 export class BaselineError extends Error {}
 
-/** Runs git in the checkout and resolves its trimmed output. */
+/** Runs git in the checkout and resolves its trimmed output. A failure
+    carries git's exit status as `code`, or a string such as ENOENT when git
+    could not run. */
 async function runGit(args) {
   const { stdout } = await promisify(execFile)('git', args, { cwd: root, encoding: 'utf8' })
   return stdout.trim()
 }
 
+/** `run`'s output, or '' when git exits with one of `statuses`. Any other
+    failure, such as git missing or a checkout that is not a repository,
+    rejects as it was. */
+const unlessStatus = (run, statuses) =>
+  run.catch((error) => {
+    if (statuses.includes(error?.code)) return ''
+    throw error
+  })
+
 /** The commit to compare with, and how it was chosen. The first argument
     that is not a flag names it, and it must resolve to a commit in this
     checkout. Without one, it is the merge base of HEAD and origin/main, or
     HEAD when there is no origin/main. `git` runs a git command and resolves
-    its trimmed output, rejecting when git fails. Rejects with a
-    BaselineError for a revision that does not resolve, and for an
-    origin/main that shares no history with HEAD, as in a shallow clone. */
+    its trimmed output, rejecting with git's exit status as `code` when git
+    fails. Rejects with a BaselineError for a revision that does not
+    resolve, and for an origin/main that shares no history with HEAD, as in
+    a shallow clone. */
 export async function resolveBaseline(args, git = runGit) {
   const named = args.find((arg) => !arg.startsWith('--'))
+  // --verify --quiet exits 1 for a revision that is not a commit
   const commitOf = (revision) =>
-    git(['rev-parse', '--verify', '--quiet', `${revision}^{commit}`]).catch(() => '')
+    unlessStatus(git(['rev-parse', '--verify', '--quiet', `${revision}^{commit}`]), [1])
   if (named !== undefined) {
     const commit = await commitOf(named)
     if (!commit)
@@ -46,7 +59,8 @@ export async function resolveBaseline(args, git = runGit) {
       )
     return { commit, chosen: named }
   }
-  const base = await git(['merge-base', 'HEAD', 'origin/main']).catch(() => '')
+  // merge-base exits 1 without shared history and 128 without origin/main
+  const base = await unlessStatus(git(['merge-base', 'HEAD', 'origin/main']), [1, 128])
   if (base) return { commit: base, chosen: 'merge base of HEAD and origin/main' }
   if (await commitOf('origin/main'))
     throw new BaselineError(
@@ -130,5 +144,9 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
   await main(process.argv.slice(2))
   // The activity writes schedule a trim minutes ahead on a real timer, which
   // would keep the process alive and then fail against the closed Vite runner.
+  // process.exit drops output still queued for a pipe, so that goes out first.
+  await Promise.all(
+    [process.stdout, process.stderr].map((stream) => new Promise((done) => stream.write('', done))),
+  )
   process.exit()
 }

@@ -3,15 +3,17 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
 
-/** A git double. `answers` maps a joined command to its output, and any
-    other command fails as git does. It records the commands it ran. */
-function fakeGit(answers) {
+/** A git double. `answers` maps a joined command to its output, `failures`
+    maps one to the exit status it fails with, and any other command fails
+    with status 1, as git does for a revision it cannot find. It records the
+    commands it ran. */
+function fakeGit(answers, failures = {}) {
   const ran = []
   const git = async (args) => {
     const command = args.join(' ')
     ran.push(command)
     if (command in answers) return answers[command]
-    throw new Error(`git ${command} failed`)
+    throw Object.assign(new Error(`git ${command} failed`), { code: failures[command] ?? 1 })
   }
   return { git, ran }
 }
@@ -44,7 +46,10 @@ describe('the backend benchmark baseline', () => {
   })
 
   it('falls back to HEAD in a checkout without origin/main', async () => {
-    const { git } = fakeGit({ 'rev-parse --verify --quiet HEAD^{commit}': '31e3096' })
+    const { git } = fakeGit(
+      { 'rev-parse --verify --quiet HEAD^{commit}': '31e3096' },
+      { 'merge-base HEAD origin/main': 128 },
+    )
     await expect(resolveBaseline([], git)).resolves.toEqual({
       commit: '31e3096',
       chosen: 'HEAD, since there is no origin/main',
@@ -60,6 +65,13 @@ describe('the backend benchmark baseline', () => {
     await expect(resolveBaseline([], git)).rejects.toThrow(
       'HEAD shares no history with origin/main in this checkout',
     )
+  })
+
+  it('passes on a git that could not run instead of calling the revision missing', async () => {
+    const { git } = fakeGit({}, { 'rev-parse --verify --quiet main^{commit}': 'ENOENT' })
+    const failed = resolveBaseline(['main'], git)
+    await expect(failed).rejects.toThrow('git rev-parse --verify --quiet main^{commit} failed')
+    await expect(failed).rejects.not.toThrow(BaselineError)
   })
 
   it('resolves commits, and refuses what is not one, with real git', async () => {

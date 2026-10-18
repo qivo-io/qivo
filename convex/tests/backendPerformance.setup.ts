@@ -153,7 +153,6 @@ export async function benchmarkBackend(baseline: Baseline) {
         ms: Math.round(performance.now() - started),
       })
     }
-    if (baseline.currentOnly) continue
     // Guard cases retain 1% of tasks in the visible working set. Relation
     // rows stay populated so accidentally scanning their archive is measured.
     const taskRows = await t.run((ctx) => ctx.db.query('issues').collect())
