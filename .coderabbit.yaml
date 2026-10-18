@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews each change with its CLI before the pull request opens
+# (AGENTS.md, "Reviews before a pull request"), so it does nothing on GitHub:
+# no automatic review, no status, no progress message and no chat replies.
+# Settings that only shape a review are left at their defaults, since the CLI
+# may read this file too.
+reviews:
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+    description_keyword: ""
+    labels: []
+  review_status: false
+  review_progress: false
+  commit_status: false
+chat:
+  auto_reply: false

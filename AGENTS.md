@@ -64,6 +64,36 @@ leaves it out. Only `demo.qivo.io` redirects `/` to `/app`. Run
 Changes to application access control must fail closed.
 Do not create or modify GitHub issues; Qivo work items are tasks.
 
+## Reviews before a pull request
+
+CodeRabbit and Greptile do not review pull requests on GitHub.
+`.coderabbit.yaml` and `.greptile/config.json` turn their pull request reviews
+off, and they stay off. Every change instead gets these reviews on this
+machine before its pull request opens, one after another, each on the
+committed branch after the fixes of the step before:
+
+1. GPT 6 Astra at `ultra`, as a T3 `delegate_task` child with provider
+   `codex`, model `gpt-6-astra` and `reasoningEffort: ultra`. It is a normal
+   task with the reviewer prompt, not `codex exec review`.
+2. Fix the valid findings and commit.
+3. Claude Opus 5.5 at `ultracode`, as a `delegate_task` child with provider
+   `claudeAgent`, model `claude-opus-5-5` and `effort: ultracode`, with the
+   prompt's multi-agent workflow section.
+4. Fix the valid findings and commit.
+5. The CodeRabbit and Greptile CLIs, side by side, with
+   `cr review --agent --committed --base-commit BASE` and
+   `greptile review -b BASE --json`.
+6. Fix the valid findings and commit.
+7. Push and open the pull request. Merge it once `quality` and `secrets`
+   pass, if the task says to merge.
+
+`${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/README.md`
+has the exact steps, the reviewer prompt and how to record each step. Read it
+before step 1. A reviewer gets the prompt and the committed branch, never how
+the change was written. Check every finding against the code before you fix
+or reject it. Record every step, because choosing and paying for these
+reviewers depends on what each one finds.
+
 ## Deployment and version control
 
 Work on implementation branches.
