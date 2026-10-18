@@ -892,20 +892,22 @@ same rows as an active list:
 
 ```json
 {
-  "next_cursor": "1~1760583600000.123~k57…~2026-10-16T03:00:00.000Z",
+  "next_cursor": "2~9c41e07a…",
   "tasks": [{ "id": "…uuid…", "key": "QN-3", "archived": true, "…": "…" }]
 }
 ```
 
 Pass `next_cursor` unchanged, URL-encoded like any query value, as `cursor`
-for the next page, and stop when it is `null`. A page can hold fewer than
-`limit` tasks, or none, while `next_cursor` is set, because each page reads a
-bounded amount however large the archive is. Tasks archived after you start
-paging appear at the start of the list, so start again to see them. If an
-archived group has more tasks under it than one request can read, such as
-thousands of subtasks or hundreds with very long descriptions, its row has
-`start_week` and `end_week` set to `null` and a `progress` of `0` of `0`
-with `partial: true`, so paging still moves past it.
+for the next page, and stop when it is `null`. The cursor is encrypted and has
+no readable parts. Older cursors that start with `1~` are refused, so start
+again from the first page. A page can hold fewer than `limit` tasks, or none,
+while `next_cursor` is set, because each page reads a bounded amount however
+large the archive is. Tasks archived after you start paging appear at the
+start of the list, so start again to see them. If an archived group has more
+tasks under it than one request can read, such as thousands of subtasks or
+hundreds with very long descriptions, its row has `start_week` and `end_week`
+set to `null` and a `progress` of `0` of `0` with `partial: true`, so paging
+still moves past it.
 
 To find every archived task you can read, take two steps. First list
 projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.

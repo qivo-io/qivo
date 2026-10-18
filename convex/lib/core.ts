@@ -819,7 +819,7 @@ export type TaskListRequest =
  * the archived flag in its refusals. `project` is already resolved and
  * readable.
  */
-export function taskListRequest(
+export async function taskListRequest(
   view: Pick<ListView, 'cat' | 'readable'>,
   a: {
     flag: 'archived=true' | 'archived: true'
@@ -828,7 +828,7 @@ export function taskListRequest(
     offset: number
     cursor: string | undefined
   },
-): TaskListRequest {
+): Promise<TaskListRequest> {
   if (!a.archived) {
     if (a.cursor !== undefined) throw badRequest(`cursor works only with ${a.flag}`)
     const scope =
@@ -843,7 +843,7 @@ export function taskListRequest(
   if (a.offset !== 0) {
     throw badRequest('offset does not apply to archived tasks; pass next_cursor as cursor')
   }
-  const cursor = a.cursor === undefined ? null : parseArchiveCursor(a.cursor)
+  const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor)
   if (cursor === null && a.cursor !== undefined) {
     throw badRequest('cursor must be the next_cursor of an earlier page')
   }

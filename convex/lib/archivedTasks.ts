@@ -8,6 +8,8 @@
  * so tasks that share both keys follow the indexes' last key, the document
  * id, which sorts like its text. A cursor names a position in that order, so
  * a page reads only what follows it, whatever the size of the archive.
+ * Callers get the position sealed (archiveCursorText), since it can be a task
+ * of a project they cannot see.
  *
  * Both surfaces page through archivedTasksPage, under one read budget, and
  * search with archivedTaskMatcher, the task search rule (lib/search.ts
@@ -20,6 +22,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { canSeeProject } from './access'
+import { openCursorText, sealCursorText } from './archiveCursorSeal'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import { issueKey, STATUS_NAMES } from './taskRefs'
 
@@ -38,22 +41,43 @@ export const cursorAfter = (task: ArchivedTask): ArchiveCursor => ({
   archived_at: task.archived_at,
 })
 
-/** A cursor as callers see it, `1~<_creationTime>~<_id>~<archived_at>`.
- * Plain text, with the timestamp last and verbatim, so any stored format
- * pages correctly. It holds only a position, so a forged one shows nothing.
- * Every task still comes from the caller's readable projects. */
-export const archiveCursorText = (c: ArchiveCursor): string =>
-  `1~${c.created}~${c.id}~${c.archived_at}`
+/* A position as text, `<_creationTime>~<_id>~<archived_at>`, with the
+ * timestamp last and verbatim, so any stored format pages correctly. */
+const positionText = (c: ArchiveCursor): string => `${c.created}~${c.id}~${c.archived_at}`
 
-const CURSOR_TEXT = /^1~(\d+(?:\.\d+)?)~([0-9a-z]{1,64})~(.{1,64})$/s
+const POSITION_TEXT = /^(\d+(?:\.\d+)?)~([0-9a-z]{1,64})~(.{1,64})$/s
 
-/** The cursor `text` names, or null when it is not one archiveCursorText
- * wrote. */
-export function parseArchiveCursor(text: string): ArchiveCursor | null {
-  const m = CURSOR_TEXT.exec(text)
+/* The longest `2~` cursor archiveCursorText writes: a position of at most
+ * 26 + 1 + 64 + 1 + 192 bytes, since the 64 UTF-16 code units POSITION_TEXT
+ * allows an archive time take up to 192 bytes as UTF-8, and the 16-byte tag,
+ * as hex. */
+const SEALED_MAX = 2 + 2 * (284 + 16)
+
+/** A cursor as callers see it, `2~` and the position sealed
+ * (lib/archiveCursorSeal.ts). The position is the last task a page looked
+ * at, which in a read of the organization's whole archive can belong to a
+ * project the caller cannot see, so callers never see its id or times. */
+export const archiveCursorText = async (c: ArchiveCursor): Promise<string> =>
+  `2~${await sealCursorText(positionText(c))}`
+
+const positionOf = (text: string): ArchiveCursor | null => {
+  const m = POSITION_TEXT.exec(text)
   if (m === null) return null
   const created = Number(m[1])
   return Number.isFinite(created) ? { created, id: m[2], archived_at: m[3] } : null
+}
+
+/** The position `text` names, or null when it is not a cursor
+ * archiveCursorText wrote. Only sealed cursors page. A position the caller
+ * could choose, such as a plain `1~<position>` cursor from before sealing,
+ * would let it probe the organization's whole archive: whether a page from
+ * that position ends inside its task budget tells it how many hidden tasks
+ * follow, and so their archive times. A list paged across the change starts
+ * again. */
+export async function parseArchiveCursor(text: string): Promise<ArchiveCursor | null> {
+  if (!text.startsWith('2~') || text.length > SEALED_MAX) return null
+  const opened = await openCursorText(text.slice(2))
+  return opened === null ? null : positionOf(opened)
 }
 
 /* Whether `a` comes before `b` in archive order. */

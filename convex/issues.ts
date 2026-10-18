@@ -161,7 +161,7 @@ export const archivedPage = authedQuery({
     if (search.length > ARCHIVED_SEARCH_MAX) {
       throw badRequest(`search must be at most ${ARCHIVED_SEARCH_MAX} characters`)
     }
-    const cursor = a.cursor === undefined ? null : parseArchiveCursor(a.cursor)
+    const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor)
     if (a.cursor !== undefined && cursor === null) {
       throw badRequest('cursor must be the next_cursor of an earlier page')
     }
@@ -173,7 +173,7 @@ export const archivedPage = authedQuery({
     const page = await archivedPageCore(ctx, me, project, { cursor, search, limit })
     return {
       rows: page.rows,
-      next_cursor: page.next === null ? null : archiveCursorText(page.next),
+      next_cursor: page.next === null ? null : await archiveCursorText(page.next),
       scanned: page.scanned,
     }
   },

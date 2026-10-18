@@ -1691,7 +1691,7 @@ export const listIssues = internalQuery({
     // sub-project archived out of it stays out; naming an archived one asks
     // for it as it was put away, and everything under it comes (0106).
     // Archived tasks come one project at a time (taskListScope).
-    const req = taskListRequest(view, {
+    const req = await taskListRequest(view, {
       flag: 'archived: true',
       archived: a.archived === true,
       project,
@@ -1716,7 +1716,7 @@ export const listIssues = internalQuery({
     )
     // the cursor first, so a truncated tool result still shows it
     return pretty({
-      next_cursor: page.next === null ? null : archiveCursorText(page.next),
+      next_cursor: page.next === null ? null : await archiveCursorText(page.next),
       tasks: page.rows,
     })
   },
