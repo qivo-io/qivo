@@ -358,7 +358,11 @@ export type StoragePage = { bytes: number; next: string | null } | { split: numb
  * rows a restore from Deleted items writes back, which would otherwise be
  * counted a second time if their earlier copies were counted before the
  * task was deleted. Each page is its own snapshot, so a file removed while
- * the sample runs may count or not.
+ * the sample runs may count or not. The phases run in this order on
+ * purpose. internal/attachmentScopeBackfill can give a row without org_id
+ * its organization during a sample. Once the 'own' phase has passed the
+ * row's place it is in neither range and is missed, which can only lower
+ * the sample. The other order would count such a row twice.
  *
  * Returns the bytes the page counts and the cursor of the next one, or
  * `split` with a smaller size when the tasks it read pass
