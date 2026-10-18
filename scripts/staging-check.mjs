@@ -2239,14 +2239,23 @@ async function uploadChecks() {
       )
     })
   // delete every file, each with the credential and surface that made it
+  // Every file is tried, so one failed delete does not keep the others on
+  // the task, and a file that is already gone, such as one whose delete
+  // answer was lost, counts as deleted.
   await check('uploads/delete', async () => {
-    for (const { att, cred, surface } of made) {
-      const r =
-        surface === 'rest'
-          ? await restOk(cred, 'DELETE', `/tasks/${task.key}/attachments/${att.id}`)
-          : await toolOk(cred, 'delete_attachment', { ref: task.key, attachment: att.id })
-      eq(r.deleted, true, `deleted ${att.name}`)
-    }
+    const failed = []
+    for (const { att, cred, surface } of made)
+      try {
+        const r =
+          surface === 'rest'
+            ? await restOk(cred, 'DELETE', `/tasks/${task.key}/attachments/${att.id}`)
+            : await toolOk(cred, 'delete_attachment', { ref: task.key, attachment: att.id })
+        eq(r.deleted, true, `deleted ${att.name}`)
+      } catch (error) {
+        const left = await readOk(w, `/tasks/${task.key}/attachments`)
+        if (left.some((a) => a.id === att.id)) failed.push(`${att.name}: ${describe(error)}`)
+      }
+    expect(failed.length === 0, `not deleted: ${failed.join('; ')}`)
     eq((await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).length, 0, 'files left')
     if (made[0]) eq((await download(made[0].att.url)).status, 404, 'a deleted file downloads')
     return `${made.length} files deleted`
