@@ -230,7 +230,7 @@ describe('snapshot trouble', () => {
     void P.revokeApiCredential('oauth_connections', 'connection-a')
     void P.revokeOAuthConnection('connection-b')
     expect(P.updateUser('seat-a', { active: false })).toBe(true)
-    P.removeUser('seat-b')
+    expect(P.removeUser('seat-b')).toBe(true)
     // a role change or a new credential is an ordinary edit and pauses
     expect(P.updateUser('seat-a', { orgRole: 'viewer' })).toBe(false)
     await expect(P.createMcpToken('Laptop', { access: 'read' })).resolves.toBeNull()
@@ -346,7 +346,20 @@ describe('snapshot trouble', () => {
     expect(showToast).not.toHaveBeenCalledWith('Qivo is up to date again.', 'success')
   })
 
-  it('keeps the last view and pauses every write but appearance when every seat is gone', async () => {
+  it('keeps the last view and pauses every write but the login’s own when every seat is gone', async () => {
+    const [org] = snapshot.orgs
+    for (const id of ['seat-a', 'seat-b'])
+      snapshot.profiles.push({
+        id,
+        org_id: org.id,
+        name: `Member ${id}`,
+        initials: 'ME',
+        color: '#557733',
+        org_role: 'user',
+        active: true,
+        kind: 'person',
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
     await boot()
     const { P } = store
     live().deliver(null)
@@ -361,14 +374,22 @@ describe('snapshot trouble', () => {
     P.updateIssue(task.id, { status: 'progress' })
     P.markMessagesRead(['message-a'])
     P.saveUI({ view: 'kanban' })
-    P.removeUser(snapshot.profiles[0].id)
+    // the writes that take access away or change a seat answer that they
+    // were not sent, so their callers announce nothing
+    expect(P.updateUser('seat-a', { active: false })).toBe(false)
+    expect(P.removeUser('seat-b')).toBe(false)
+    expect(P.setMessageRetention(30)).toBe(false)
+    void P.revokeMcpToken('token-a')
     P.setAppearance({ mode: 'dark', image_source: 'none' })
+    void P.revokeOAuthConnection('connection-a')
     vi.advanceTimersByTime(600)
     await settle()
-    // without a seat the server refuses the rest, so only appearance goes out
-    expect(sentNames()).toEqual(['appearance:save'])
+    // without a seat the server refuses the rest, so only the login's
+    // appearance and connected apps go out
+    expect(sentNames()).toEqual(['appearance:save', 'oauthConnections:revoke'])
     expect(P.issueById[task.id].status).toBe('todo')
     expect(P.messages.find((message) => message.id === 'message-a')?.read).toBeFalsy()
+    expect(P.users.map((user) => user.id)).toEqual(expect.arrayContaining(['seat-a', 'seat-b']))
     expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
     expect(showToast).not.toHaveBeenCalledWith(store.PAUSED_TEXT, 'error')
     // a retry cannot bring a seat back

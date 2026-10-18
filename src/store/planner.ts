@@ -8,7 +8,12 @@
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
 
-import { type FunctionArgs, type FunctionReturnType, getFunctionName } from 'convex/server'
+import {
+  type FunctionArgs,
+  type FunctionReference,
+  type FunctionReturnType,
+  getFunctionName,
+} from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
@@ -947,12 +952,13 @@ const asSentence = (m: string) =>
    other shared write before it is sent, the backstop for a mutator that
    does not check first. Personal state (read marks, preferences,
    appearance, following) still saves, and so do the writes that only take
-   access away (UNPAUSED_WRITES). Without a seat those need one too, so only
-   the account's own appearance still saves. Panels that call Convex directly
-   (organization deletion and its export record, billing) act on their own
-   live queries, not on the snapshot, so they do not pause. Convex reruns a
-   failed query when the data it read changes, so a later delivery ends the
-   trouble without a reload, a seat made active again included. */
+   access away (UNPAUSED_WRITES). Without a seat most of those need one too,
+   so only the login's appearance and connected apps still save. Panels that
+   call Convex directly (organization deletion and its export record,
+   billing) act on their own live queries, not on the snapshot, so they do
+   not pause. Convex reruns a failed query when the data it read changes, so
+   a later delivery ends the trouble without a reload, a seat made active
+   again included. */
 
 /** The sentence every paused edit shows. */
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
@@ -1008,11 +1014,13 @@ const UNPAUSED_WRITES = new Set([
   'profiles:deactivate',
   'profiles:remove',
 ])
-/* Whether `name` still goes out during `trouble`. Without a seat the server
-   refuses every write but the account's appearance, so the rest pause. */
+/* Whether `name` still goes out during `trouble`. Without a seat only the
+   login's own settings go out: its appearance and deleting a connected app,
+   which need no seat. The rest act on seats the person can no longer use,
+   and the server refuses them, so they pause. */
 const isUnpausedWrite = (name: string, trouble: SnapshotTrouble) =>
   trouble.kind === 'no_access'
-    ? name.startsWith('appearance:')
+    ? name.startsWith('appearance:') || name === 'oauthConnections:revoke'
     : /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
 
 /** The sentence a paused edit shows during the current trouble. */
@@ -1036,6 +1044,16 @@ function toastPaused() {
     paused save keeps the text in its field and claims nothing. */
 function refusePausedEdit(): boolean {
   if (!snapshotTrouble) return false
+  toastPaused()
+  return true
+}
+
+/** Toasts the pause and answers true when write() would refuse `mutation`
+    now. A mutator whose write goes on while the snapshot is stale calls it
+    before its paint, because without a seat most of those writes pause too,
+    and a caller that announces success must not announce a paused one. */
+function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
+  if (!snapshotTrouble || isUnpausedWrite(getFunctionName(mutation), snapshotTrouble)) return false
   toastPaused()
   return true
 }
@@ -4766,10 +4784,11 @@ export const PLANNER = {
   /* How long this person keeps a message they have read (0110); null = for
      ever. Fans out across every seat of this login server-side (auth +
      address arms); the optimistic mirror walks the auth arm, exactly as the
-     old echo did — the delivery trues any invited-seat stragglers. */
-  setMessageRetention: (days: number | null) => {
+     old echo did — the delivery trues any invited-seat stragglers. Answers
+     whether the change was sent. */
+  setMessageRetention: (days: number | null): boolean => {
     const me = rows.profiles.get(CURRENT_USER)
-    if (!me) return
+    if (!me || refusePausedWrite(api.profiles.setMessageRetention)) return false
     ;[...rows.profiles.values()]
       .filter((p) => p.auth_user_id && p.auth_user_id === me.auth_user_id)
       .forEach((p) => {
@@ -4778,6 +4797,7 @@ export const PLANNER = {
     rebuild()
     emit()
     run(write(api.profiles.setMessageRetention, { days }))
+    return true
   },
 
   /* Account appearance stays separate from the navigation prefs blob and the
@@ -5632,9 +5652,11 @@ export const PLANNER = {
       put the stored value back. */
   updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
-    // deactivation alone only takes access away, so it goes on while paused
+    // deactivation alone only takes access away, so it goes on while paused,
+    // unless every seat is gone
     const deactivation = Object.keys(patch).length === 1 && patch.active === false
-    if (!row || (!deactivation && refusePausedEdit())) return false
+    const paused = deactivation ? refusePausedWrite(api.profiles.deactivate) : refusePausedEdit()
+    if (!row || paused) return false
     /* The client-predicted refusals stay audible first (the server states
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
@@ -5857,14 +5879,17 @@ export const PLANNER = {
      copy names the id until they do. Archived tasks, comments, messages and
      the removed profile's subscriptions are cleared later in the background,
      and this client holds only its own subscriptions. The server also owns
-     the avatar bytes, so there is no client-side reap. */
-  removeUser: (id: string) => {
-    if (id === CURRENT_USER) return
+     the avatar bytes, so there is no client-side reap. Answers whether the
+     removal was sent. */
+  removeUser: (id: string): boolean => {
+    if (id === CURRENT_USER) return false
     const target = rows.profiles.get(id)
-    if (!target) return
+    if (!target) return false
     const admins = [...rows.profiles.values()].filter((u) => u.org_role === 'admin')
-    // removal only takes access away, so it goes on while edits are paused
-    if (target.org_role === 'admin' && admins.length <= 1) return
+    if (target.org_role === 'admin' && admins.length <= 1) return false
+    // removal only takes access away, so it goes on while edits are paused,
+    // unless every seat is gone
+    if (refusePausedWrite(api.profiles.remove)) return false
     ;[...rows.issues.values()].forEach((i) => {
       if (
         i.assignee_id !== id &&
@@ -5891,6 +5916,7 @@ export const PLANNER = {
     rebuild()
     emit()
     run(write(api.profiles.remove, { org_id: target.org_id, id }))
+    return true
   },
 
   /* Roles are viewer / user / lead; exactly one lead per project (the
