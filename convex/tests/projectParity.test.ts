@@ -243,6 +243,7 @@ describe('creating projects and sub-projects', () => {
       review_hours: null,
       effective_review_hours: 2,
       track_delay: true,
+      completion: { done: 0, total: 0, percent: 0 },
       milestones: [],
       grants: { users: [], teams: [] },
     })
@@ -651,7 +652,13 @@ describe('changing a project', () => {
         teams: [],
       },
     }
-    expect(archived).toEqual({ ...tbed, archived: true, archived_at: stored?.archived_at })
+    // an archived project's tasks are outside the plan, so it has no completion
+    expect(archived).toEqual({
+      ...tbed,
+      archived: true,
+      archived_at: stored?.archived_at,
+      completion: null,
+    })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBe(archived.archived_at)
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'archived',
@@ -659,7 +666,13 @@ describe('changing a project', () => {
     })
     // one call restores first, so the rename lands on the active project
     const back = await update({ archived: false, name: 'Back' })
-    expect(back).toEqual({ ...tbed, name: 'Back', archived: false, archived_at: null })
+    expect(back).toEqual({
+      ...tbed,
+      name: 'Back',
+      archived: false,
+      archived_at: null,
+      completion: { done: 0, total: 0, percent: 0 },
+    })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
     const verbs = (await activityFor(fx.t, fx.org.id)).slice(-2).map((e) => e.verb)
     expect(verbs).toEqual(['restored', 'renamed'])

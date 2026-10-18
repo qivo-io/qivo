@@ -132,8 +132,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '1cbde0a73604d3b8fd94377c9c1ca4bfec688a67e7b6662ea8d80b5a27218aba'
-const SHA_TOOLS_MODERN = '1b272a08ba20b172fac13ead05d702a1753bd51793219bf06e5fb557fee39e2e'
+const SHA_TOOLS_LEGACY = 'c98ecfdbcdab33498f4168a0d324849aceab98351e2efe4a06462fb09874b944'
+const SHA_TOOLS_MODERN = 'c979de8093db352552311963ac72fc495c3a6f348f313e6d25f698bef7a079e3'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1332,9 +1332,11 @@ describe('read tools', () => {
       'remaining_hours',
       'remaining_set_at',
       'paused',
+      'progress',
       'archived_at',
       'created_at',
       'updated_at',
+      'last_comment_at',
       'url',
     ])
     expect(row.key).toBe(`QN-${i1.num}`)
@@ -1349,6 +1351,8 @@ describe('read tools', () => {
     expect(row.due_date).toBeNull()
     expect(row.remaining_hours).toBeNull()
     expect(row.archived_at).toBeNull()
+    expect(row.progress).toBeNull()
+    expect(row.last_comment_at).toBeNull()
     void i3
   })
 

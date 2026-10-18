@@ -70,6 +70,7 @@ import {
   loadCatalogue,
   type MeJson,
   meCore,
+  projectCompletion,
   projectJson,
   type RestCommentJson,
   type RestIssueJson,
@@ -392,14 +393,20 @@ export const listProjects = internalQuery({
 /* GET /v1/projects/{ref} — an explicit ref resolves an archived project too;
  * unknown OR unreadable answer the one 404 (NO oracle on GET, rest:341-347).
  * The list row gains the single read's fields: lead, review time, delay
- * tracking, milestones and grants (machine/projects.ts projectDetailJson). */
+ * tracking, completion, milestones and grants (machine/projects.ts
+ * projectDetailJson). */
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectDetailJson> => {
-    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
+    const { me, cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
     if (p === undefined || !readable(p.id)) throw notFound('project not found')
-    return await projectDetailJson(ctx, p, flags.get(p.id) ?? { read: false, write: false })
+    return await projectDetailJson(
+      ctx,
+      p,
+      flags.get(p.id) ?? { read: false, write: false },
+      await projectCompletion(ctx, me, p, { cat, readable }),
+    )
   },
 })
 

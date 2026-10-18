@@ -203,14 +203,16 @@ describe('task search reads only the labels it can match', () => {
         await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: `Spare ${n}` }),
       )
     }
+    // each listed row also reads its newest comment, one range and, as no
+    // task here has comments, no document, which the ranges leave out
     const reads = (search: string) =>
       fx.t.run(async (ctx) => {
         const before = await ctx.meta.getTransactionMetrics()
-        await activeList(ctx, fx, search)
+        const rows = await activeList(ctx, fx, search)
         const after = await ctx.meta.getTransactionMetrics()
         return {
           documents: after.documentsRead.used - before.documentsRead.used,
-          ranges: after.databaseQueries.used - before.databaseQueries.used,
+          ranges: after.databaseQueries.used - before.databaseQueries.used - rows.length,
         }
       })
     const missBefore = await reads('zzz')

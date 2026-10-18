@@ -697,7 +697,7 @@ describe('archived task lists page one project with a cursor', () => {
     expect(page.next_cursor).toBeNull()
   })
 
-  it('lists a group too large for one request without its plan weeks, and moves on', async () => {
+  it('lists a group too large for one request without its plan weeks or progress, and moves on', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 200 } }))
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -717,7 +717,12 @@ describe('archived task lists page one project with a cursor', () => {
       project: 'FW',
     })
     expect(first.tasks.map((t) => t.id)).toEqual([group.id])
-    expect(first.tasks[0]).toMatchObject({ is_group: true, start_week: null, end_week: null })
+    expect(first.tasks[0]).toMatchObject({
+      is_group: true,
+      start_week: null,
+      end_week: null,
+      progress: { done: 0, total: 0, percent: 0, partial: true },
+    })
     expect(first.next_cursor).not.toBeNull()
     const all = await everyPage(fx, fx.agent.id, { project: 'FW' })
     expect(all.rest).toEqual([group.id, ...[...kids].reverse()])

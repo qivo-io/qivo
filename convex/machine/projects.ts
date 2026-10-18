@@ -41,9 +41,12 @@ import {
   accessFlags,
   asMachineCaller,
   type Caller,
+  type CompletionJson,
   findProject,
   issueKey,
   loadCatalogue,
+  NO_TASKS,
+  projectCompletion,
   projectJson,
   UUID,
 } from '../lib/core'
@@ -115,6 +118,8 @@ type ProjectDetailJson = {
   review_hours: number | null
   effective_review_hours: number
   track_delay: boolean
+  /** the app Overview's Completion, null for an archived project */
+  completion: CompletionJson | null
   milestones: MilestoneJson[]
   grants: { users: GrantJson[]; teams: GrantJson[] }
 }
@@ -133,12 +138,17 @@ const byName = (a: { name: string; id: string }, b: { name: string; id: string }
 /**
  * The fields a single-project read adds: the lead (a sub-project without its
  * own is led by its parent's), the review time it sets and the one its tasks
- * get, delay tracking, the milestones of the top-level project that stores
+ * get, delay tracking, its `completion` (lib/core.ts projectCompletion, which
+ * the caller reads), the milestones of the top-level project that stores
  * them, by date, and the project's own grants, as the app's project settings
  * show them to anyone who can read the project. A sub-project also inherits
  * its parent's grants.
  */
-async function projectDetail(ctx: QueryCtx, project: Doc<'projects'>): Promise<ProjectDetailJson> {
+async function projectDetail(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+  completion: CompletionJson | null,
+): Promise<ProjectDetailJson> {
   const root = await rootMetaOf(ctx, project)
   const leadId = project.lead_id ?? root.lead_id
   const lead = leadId === undefined ? null : await byId(ctx, 'profiles', leadId)
@@ -172,6 +182,7 @@ async function projectDetail(ctx: QueryCtx, project: Doc<'projects'>): Promise<P
     review_hours: project.review_hours ?? null,
     effective_review_hours: await reviewHoursFor(ctx, project),
     track_delay: project.track_delay,
+    completion,
     milestones: milestones.map(milestoneJson),
     grants: { users: users.sort(byName), teams: teams.sort(byName) },
   }
@@ -179,29 +190,37 @@ async function projectDetail(ctx: QueryCtx, project: Doc<'projects'>): Promise<P
 
 /** The single-project read of REST GET /v1/projects/{ref} and MCP
  * get_project, which is the list row with the caller's `flag` plus the
- * single read's fields (projectDetail). */
+ * single read's fields (projectDetail) with the caller's `completion`. */
 export async function projectDetailJson(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   flag: AccessFlag,
+  completion: CompletionJson | null,
 ): Promise<ReturnType<typeof projectJson> & ProjectDetailJson> {
-  return { ...projectJson(project, flag), ...(await projectDetail(ctx, project)) }
+  return { ...projectJson(project, flag), ...(await projectDetail(ctx, project, completion)) }
 }
 
 /* projectDetailJson for one project the caller resolved itself, such as one
  * it just changed, with the caller's flags read over the organization's
- * catalogue, which a sub-project's flags need for its parent. */
+ * catalogue, which a sub-project's flags need for its parent. A project
+ * the call `created` holds no tasks, so its completion reads none. */
 async function projectOut(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
   access: CredentialAccess,
+  o: { created?: boolean } = {},
 ) {
-  const flags = await accessFlags(ctx, me, await loadCatalogue(ctx, me), access)
+  const cat = await loadCatalogue(ctx, me)
+  const flags = await accessFlags(ctx, me, cat, access)
+  const readable = (id: string) => flags.get(id)?.read === true
+  const completion =
+    o.created === true ? NO_TASKS : await projectCompletion(ctx, me, project, { cat, readable })
   return await projectDetailJson(
     ctx,
     project,
     flags.get(project.id) ?? { read: false, write: false },
+    completion,
   )
 }
 
@@ -419,7 +438,7 @@ export const mcpCreateProject = internalMutation({
     const lead_id = await mcpLead(ctx, me, a.lead_id)
     const input = { name: a.name, parent, lead_id, description: a.description }
     const project = await createFrom(ctx, me, input, MCP_PROVENANCE)
-    return pretty(await projectOut(ctx, me, project, a.access))
+    return pretty(await projectOut(ctx, me, project, a.access, { created: true }))
   },
 })
 
@@ -657,7 +676,7 @@ export const restCreateProject = internalMutation({
       description: restDescription(b),
     }
     const project = await createFrom(ctx, me, input, restProvenance(a.keyName))
-    return await projectOut(ctx, me, project, a.access)
+    return await projectOut(ctx, me, project, a.access, { created: true })
   },
 })
 
@@ -908,7 +927,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'get_project',
       title: 'Get project',
       description:
-        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its milestones (kept on the top-level project) and the users and teams given access to it.',
+        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks), its milestones (kept on the top-level project) and the users and teams given access to it.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,

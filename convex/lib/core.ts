@@ -34,7 +34,13 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { type AttachmentJson, taskAttachments } from '../model/attachments'
-import { commentAnchor, newestComments, postArchiveReason } from '../model/comments'
+import {
+  commentAnchor,
+  DOCUMENT_MAX_BYTES,
+  latestComment,
+  newestComments,
+  postArchiveReason,
+} from '../model/comments'
 import type { Via } from '../model/deletedItems'
 import {
   assertLive,
@@ -479,9 +485,11 @@ const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
  * One page of the active tasks a list asks for, as list rows, oldest first
  * by creation with ties by number, so `offset` pages through them. It reads
  * the organization's active tasks once (by_org_archived), never an archived
- * one. That read also decides which rows are groups, their plan weeks and
- * their parents, because an active task's subtasks that count and its
- * parent are active too.
+ * one. That read also decides which rows are groups, their plan weeks,
+ * their progress and their parents, because an active task's subtasks that
+ * count and its parent are active too. Each row's newest comment is one
+ * more read (lastCommentTimes), and a page whose comments do not fit in
+ * what the request has left is refused with PAGE_TOO_LARGE.
  *
  * In a search, each fragment may match any field of the app's task filter
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
@@ -548,11 +556,13 @@ export async function listActiveIssuesCore(
     found.push(i)
   }
   found.sort(byCreation)
+  const page = found.slice(o.offset, o.offset + o.limit)
   const tasks = new Map(active.map((t) => [t.id, t]))
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
   const projectOf = (id: string) => cat.byUuid.get(id)
+  const lastComments = await lastCommentTimes(ctx, page)
   return await Promise.all(
-    found.slice(o.offset, o.offset + o.limit).map((task) =>
+    page.map((task) =>
       listRow(ctx, task, {
         surface: view.surface,
         me,
@@ -562,10 +572,48 @@ export async function listActiveIssuesCore(
         names,
         orgSlug,
         tasks,
+        lastComments,
         children,
       }),
     ),
   )
+}
+
+/** What an active page's newest-comment reads leave of the request's
+ * limits, for the one comment a read may take past its room. Tests lower
+ * these. */
+export const COMMENT_READS_RESERVE = { ranges: 16, documents: 16, bytes: DOCUMENT_MAX_BYTES }
+
+/** The refusal for an active page whose tasks' newest comments do not fit
+ * in what the request has left to read. */
+export const PAGE_TOO_LARGE =
+  'this page of tasks is too large to read at once; ask for a smaller limit'
+
+/* When the newest comment on each of `tasks` was posted, or null for a task
+ * without comments (model/comments.ts latestComment), by task id. Each read
+ * is one index range and at most one comment, and they run a few at a time,
+ * never more than the request's unspent room could hold at Convex's
+ * document size limit, so they pass that room by one comment at most and
+ * the request stays inside its limits. When the room runs out first, the
+ * page is refused with PAGE_TOO_LARGE, never answered with a wrong null. */
+async function lastCommentTimes(
+  ctx: QueryCtx,
+  tasks: readonly Doc<'issues'>[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>()
+  for (let at = 0; at < tasks.length; ) {
+    const m = await ctx.meta.getTransactionMetrics()
+    const ranges = m.databaseQueries.remaining - COMMENT_READS_RESERVE.ranges
+    const documents = m.documentsRead.remaining - COMMENT_READS_RESERVE.documents
+    const bytes = m.bytesRead.remaining - COMMENT_READS_RESERVE.bytes
+    if (ranges <= 0 || documents <= 0 || bytes <= 0) throw badRequest(PAGE_TOO_LARGE)
+    const fits = Math.max(1, Math.floor(bytes / DOCUMENT_MAX_BYTES))
+    const batch = tasks.slice(at, at + Math.min(fits, ranges, documents))
+    const latest = await Promise.all(batch.map((task) => latestComment(ctx, task.id)))
+    for (const [i, task] of batch.entries()) out.set(task.id, latest[i]?.created_at ?? null)
+    at += batch.length
+  }
+  return out
 }
 
 /** What one page of archived tasks may read, counted from the page's start
@@ -587,8 +635,11 @@ export const ARCHIVE_PAGE = {
 /** What an archived page keeps back from the request's limits, for the
  * reads of a row after its subtree walk, of the walk past its last check
  * and of the page's end. The first task a page looks at may walk the rest.
- * Tests lower these. */
-export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 1 << 20 }
+ * Past its last check a row reads at most four documents: the subtask the
+ * walk read last, the first subtask of a group too large to walk, its
+ * parent and its newest comment. The bytes hold four documents at Convex's
+ * size limit. Tests lower these. */
+export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 4 * DOCUMENT_MAX_BYTES }
 
 /* The first subtask stored under `task`, whoever can read it. */
 const firstSubtask = (ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'issues'> | null> =>
@@ -615,8 +666,9 @@ export type ArchivedPage<Row> = { rows: Row[]; next: ArchiveCursor | null }
  * tasks instead. A walk that does not fit the rest of the page ends the page
  * before that task, so the next page starts with it. The first task a page
  * looks at may walk everything the request has left. A group whose subtree
- * does not fit even that is listed with null plan weeks, so every page
- * moves on.
+ * does not fit even that is listed with null plan weeks and a partial
+ * progress that counts nothing, so every page moves on. Each row's newest
+ * comment is one more read, which ARCHIVE_RESERVE leaves room for.
  */
 export async function listArchivedIssuesCore(
   ctx: QueryCtx,
@@ -718,6 +770,7 @@ export async function listArchivedIssuesCore(
           // the walk does not fit this page, so the next page starts with it
           if (last !== null) return { rows, next: last }
           // nor any page, so the group is listed without its plan weeks
+          // and progress
           const kid = await firstSubtask(ctx, task)
           children = new Map(kid === null ? [] : [[task.id, [kid]]])
           partial = true
@@ -960,16 +1013,26 @@ type IssueOutCommon = {
   remaining_hours: number | null
   remaining_set_at: string | null
   paused: boolean
+  /** a group's done and total leaves, null for a task without subtasks */
+  progress: ProgressJson | null
   archived_at: string | null
   created_at: string
   updated_at: string
+  /** when the newest comment was posted, null without comments */
+  last_comment_at: string | null
   /** the app's Copy link address, null when SITE_URL is unset */
   url: string | null
 }
 
+/** A group's Progress as the app's task window shows it (src/lib/issueGroups.ts
+ * groupProgress): `done` of `total` leaves under it that the reader is
+ * shown, `percent` rounded and 0 without leaves, and `partial` the app's
+ * "Completion unknown" (GroupFacts). */
+export type ProgressJson = { done: number; total: number; percent: number; partial: boolean }
+
 /* REST issueJson (rest:240-254): superset minus project_name, plus the
- * `archived` boolean. A group's plan weeks are calculated (groupWeeks) on
- * both surfaces, never its dormant stored pair. */
+ * `archived` boolean. A group's plan weeks and progress are calculated
+ * (groupFacts) on both surfaces, never from its dormant stored fields. */
 export type RestIssueJson = IssueOutCommon & { archived: boolean }
 
 /* MCP issueOut (mcp:93-102): superset minus the boolean (archived_at only);
@@ -1000,6 +1063,9 @@ export type IssueOutPre = {
   orgSlug?: string
   /** tasks by id a list already read; a parent found here is not read again */
   tasks?: ReadonlyMap<string, Doc<'issues'>>
+  /** each task's newest comment time a list already read (lastCommentTimes);
+   *  a task missing here is read on its own */
+  lastComments?: ReadonlyMap<string, string | null>
 }
 
 /** Tasks keyed by parent id, from whatever rows the caller read. */
@@ -1206,8 +1272,8 @@ type GroupCounter = (task: Doc<'issues'>) => Promise<boolean>
 
 /**
  * The one rule for which tasks under `group` count toward its calculated
- * plan weeks and remaining hours, for `me`. A task counts when the caller
- * can read its project. Like is_group, an active group counts only active
+ * plan weeks, progress and remaining hours, for `me`. A task counts when the
+ * caller can read its project. Like is_group, an active group counts only active
  * subtasks and an archived one its whole subtree. Under a group in an active
  * project, subtasks in archived projects do not count. The totals' walks
  * never enter a task that does not count, so nothing under it counts either.
@@ -1244,23 +1310,51 @@ function groupCounter(
   }
 }
 
+/** What a group's subtree says about it to one reader: its calculated plan
+ * weeks (the app's groupSpan) and how many of its leaves are done (the
+ * app's groupProgress), over the tasks groupCounter counts. `partial` is the
+ * app's "Completion unknown": a subtask that makes a task a group does not
+ * count for the reader (hidden from it, or in an archived project while the
+ * group's project is active), the walk meets a task twice (a cycle), or it
+ * stops at the depth assertParentChain allows. */
+export type GroupFacts = {
+  start_week: string | null
+  end_week: string | null
+  done: number
+  total: number
+  partial: boolean
+}
+
+/* The facts of a group whose subtree is too large to read (Subtree.partial). */
+const UNREAD_SUBTREE: GroupFacts = {
+  start_week: null,
+  end_week: null,
+  done: 0,
+  total: 0,
+  partial: true,
+}
+
 /* On REST and MCP a group's plan weeks run from the earliest start to the
  * latest end of the scheduled leaves under it that count (groupCounter), at
- * any depth. A nested group counts only through its own leaves; its stored
- * dates are dormant. A leaf without an end counts as its start week. Done
- * leaves count. Both weeks are null when no such leaf is scheduled.
- * `children` holds the group's subtree by parent. An active list passes the
- * index of the active tasks it already read, and an archived list and a
- * single-task read pass the row's subtreeIndex. Each visited task's children
- * decide whether it is a group (hasSubtasks' rule, whoever can read them) and
- * what the walk enters next. */
-async function groupWeeks(
+ * any depth, and its progress counts those leaves, scheduled or not, and the
+ * Done ones among them. A nested group counts only through its own leaves;
+ * its stored dates and status are dormant. A leaf without an end counts as
+ * its start week. Done leaves count. Both weeks are null when no such leaf
+ * is scheduled. `children` holds the group's subtree by parent. An active
+ * list passes the index of the active tasks it already read, and an
+ * archived list and a single-task read pass the row's subtreeIndex. Each
+ * visited task's children decide whether it is a group (hasSubtasks' rule,
+ * whoever can read them) and what the walk enters next. */
+async function groupFacts(
   group: Doc<'issues'>,
   children: ChildIndex,
   counts: GroupCounter,
-): Promise<{ start_week: string | null; end_week: string | null }> {
+): Promise<GroupFacts> {
   let start: string | undefined
   let end: string | undefined
+  let done = 0
+  let total = 0
+  let partial = false
   const seen = new Set<string>([group.id])
   let frontier: Doc<'issues'>[] = [group]
   // assertParentChain bounds chains at 20 tasks, so the walk stops there
@@ -1268,23 +1362,39 @@ async function groupWeeks(
     const next: Doc<'issues'>[] = []
     for (const task of frontier) {
       if (task !== group && !hasSubtasksIn(children, task)) {
+        total++
+        if (task.status === 'done') done++
         if (task.start_week === undefined) continue
         const leafEnd = task.end_week ?? task.start_week
         if (start === undefined || task.start_week < start) start = task.start_week
         if (end === undefined || leafEnd > end) end = leafEnd
         continue
       }
-      // a group, the root included, counts only through its subtasks
+      // a group, the root included, counts only through its subtasks. One
+      // that makes it a group (hasSubtasksIn) and is not entered leaves
+      // part of it unknown to the reader, as a hidden subtask does in the app
       for (const c of children.get(task.id) ?? []) {
-        if (seen.has(c.id) || !(await counts(c))) continue
+        if (seen.has(c.id) || !(await counts(c))) {
+          if (task.archived_at !== undefined || c.archived_at === undefined) partial = true
+          continue
+        }
         seen.add(c.id)
         next.push(c)
       }
     }
     frontier = next
   }
-  return { start_week: start ?? null, end_week: end ?? null }
+  if (frontier.length > 0) partial = true
+  return { start_week: start ?? null, end_week: end ?? null, done, total, partial }
 }
+
+/* A group's facts as the Progress the rows send. */
+const progressOf = (facts: GroupFacts): ProgressJson => ({
+  done: facts.done,
+  total: facts.total,
+  percent: facts.total === 0 ? 0 : Math.round((facts.done / facts.total) * 100),
+  partial: facts.partial,
+})
 
 /** Who reads a task, and through which surface's shape. `readable` is the
  * caller's project flags when the surface already holds them. */
@@ -1299,7 +1409,7 @@ type Reader = {
  * single-task read the task's subtreeIndex with the groupCounter that walk
  * used, which the totals then share. `partial` says the subtree was too
  * large to read and `children` holds only a subtask of the root, so a group
- * answers null plan weeks. */
+ * answers null plan weeks and a partial progress that counts nothing. */
 type Subtree = { children: ChildIndex; counts?: GroupCounter; partial?: boolean }
 
 export async function issueOut(
@@ -1323,19 +1433,27 @@ export async function issueOut(
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
-  const weeks = !is_group
-    ? { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
+  const facts = !is_group
+    ? null
     : opts.partial === true
-      ? { start_week: null, end_week: null }
-      : await groupWeeks(
+      ? UNREAD_SUBTREE
+      : await groupFacts(
           issue,
           opts.children,
           opts.counts ?? groupCounter(ctx, opts.me, issue, project, opts.readable, opts.projectOf),
         )
+  const weeks =
+    facts === null
+      ? { start_week: issue.start_week ?? null, end_week: issue.end_week ?? null }
+      : { start_week: facts.start_week, end_week: facts.end_week }
+  const progress = facts === null ? null : progressOf(facts)
   const parent = await parentOut(ctx, opts.me, issue, opts.readable, opts.tasks)
   const owner_id = taskOwnerId(issue, is_group) ?? null
   const orgSlug = opts.orgSlug ?? (await byId(ctx, 'organizations', issue.org_id))?.slug ?? '~'
   const url = taskUrl(orgSlug, issue.num)
+  const last_comment_at = opts.lastComments?.has(issue.id)
+    ? (opts.lastComments.get(issue.id) ?? null)
+    : ((await latestComment(ctx, issue.id))?.created_at ?? null)
   if (opts.surface === 'rest') {
     return {
       id: issue.id,
@@ -1364,10 +1482,12 @@ export async function issueOut(
       remaining_hours: issue.remaining_hours ?? null,
       remaining_set_at: issue.remaining_set_at ?? null,
       paused: issue.paused,
+      progress,
       archived: issue.archived_at !== undefined,
       archived_at: issue.archived_at ?? null,
       created_at: issue.created_at,
       updated_at: issue.updated_at,
+      last_comment_at,
       url,
     }
   }
@@ -1399,9 +1519,11 @@ export async function issueOut(
     remaining_hours: issue.remaining_hours ?? null,
     remaining_set_at: issue.remaining_set_at ?? null,
     paused: issue.paused,
+    progress,
     archived_at: issue.archived_at ?? null,
     created_at: issue.created_at,
     updated_at: issue.updated_at,
+    last_comment_at,
     url,
   }
 }
@@ -1712,6 +1834,52 @@ export const projectJson = (
   archived_at: p.archived_at ?? null,
   access: { read: access.read, write: access.write },
 })
+
+/** A project's Completion as REST and MCP send it: `done` of `total` tasks,
+ * `percent` rounded and 0 without tasks. */
+export type CompletionJson = { done: number; total: number; percent: number }
+
+/** The completion of a project that holds no tasks, such as a new one. */
+export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
+
+/**
+ * The Completion the app's Overview shows for `project` (src/store/planner.ts
+ * progressIn over scopeInfo's sub-projects), as the caller sees it: how
+ * many of the active tasks without active subtasks are Done, in the
+ * project, or for a top-level project in its sub-projects that the caller
+ * can read (`view.readable`) and that are not archived. A task with an
+ * active subtask anywhere is a group and does not count, even when the
+ * caller cannot read the subtask, as in the app. Null for an archived
+ * project, whose tasks are outside the working plan. Reads the
+ * organization's active tasks once, the read an active task list makes.
+ */
+export async function projectCompletion(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+  view: Pick<ListView, 'cat' | 'readable'>,
+): Promise<CompletionJson | null> {
+  if (project.archived_at !== undefined) return null
+  const subs =
+    project.type === 'meta'
+      ? view.cat.projects.filter((c) => c.parent_id === project.id && c.archived_at === undefined)
+      : [project]
+  const scope = new Set(subs.filter((p) => view.readable(p.id)).map((p) => p.id))
+  if (scope.size === 0) return NO_TASKS
+  const active = await ctx.db
+    .query('issues')
+    .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
+    .collect()
+  const groups = subtaskParentIds(active)
+  let done = 0
+  let total = 0
+  for (const task of active) {
+    if (!scope.has(task.project_id) || groups.has(task.id)) continue
+    total++
+    if (task.status === 'done') done++
+  }
+  return { done, total, percent: total === 0 ? 0 : Math.round((done / total) * 100) }
+}
 
 /* REST userJson (rest:229-234) == the MCP list_users row: NO email, auth id
  * or avatar. plannable_hours is null for an agent — never 0, which would read
