@@ -123,14 +123,14 @@ function Roadmap({
   useUpdateBlocker(!!session)
   const sessionRef = useRefR<PlanSession | null>(null)
   const planRequest = useRefR(0)
-  // whether a date change of the planning session's task was refused, so
-  // Confirm does not say it was planned
-  const planRefused = useRefR(false)
-  /* Sends a task's new dates, and notes a refusal of the session's task. */
-  const sendDates = (id, patch) =>
-    void P.updateIssue(id, patch).then((saved) => {
-      if (!saved && sessionRef.current?.issueId === id) planRefused.current = true
-    })
+  /* The planning session's task and the answers to its date changes, so
+     Confirm says it was planned only once every change saved. */
+  const planned = useRefR<{ id: string; writes: Promise<boolean>[] } | null>(null)
+  /* Sends a task's new dates, and keeps the answer when it is the session's. */
+  const sendDates = (id, patch) => {
+    const saved = P.updateIssue(id, patch)
+    if (planned.current?.id === id) planned.current.writes.push(saved)
+  }
   sessionRef.current = session
   useEffectR(
     () => () => {
@@ -731,11 +731,17 @@ function Roadmap({
     const s = sessionRef.current
     sessionRef.current = null
     setSession(null)
-    if (s && !planRefused.current) window.showToast?.(`Planned ${s.issueId}`)
+    const plan = planned.current
+    planned.current = null
+    if (!s || plan?.id !== s.issueId) return
+    void Promise.all(plan.writes).then((saved) => {
+      if (saved.every(Boolean)) window.showToast?.(`Planned ${s.issueId}`)
+    })
   }
   const cancelPlanning = () => {
     const s = sessionRef.current
     sessionRef.current = null
+    planned.current = null
     // a task that became a group has calculated dates, so nothing to restore
     if (s && P.issueById[s.issueId] && !P.isGroup(s.issueId))
       P.updateIssue(s.issueId, restoreWeekDates(s.orig))
@@ -865,17 +871,14 @@ function Roadmap({
     openTo(it)
     const wasUnscheduled = it.start == null
     const orig = captureWeekDates(it)
-    planRefused.current = false
+    planned.current = { id: it.id, writes: [] }
     // give an unscheduled issue a provisional bar to plan (due-capped, like the
     // Plan pickers); auto-fit refines its end once the workload arrives
     if (wasUnscheduled) {
       const dueWeek = it.due ? P.isoToWeek(it.due) : null
       let end = P.TODAY_WEEK + 1
       if (dueWeek != null) end = Math.min(end, dueWeek)
-      // the session starts after this write, so its refusal is noted here
-      void P.updateIssue(it.id, { start: Math.min(P.TODAY_WEEK, end), end }).then((saved) => {
-        if (!saved && request === planRequest.current) planRefused.current = true
-      })
+      sendDates(it.id, { start: Math.min(P.TODAY_WEEK, end), end })
     }
     setSession({
       issueId: it.id,

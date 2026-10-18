@@ -856,7 +856,9 @@ type RoadmapVisit = {
 }
 let roadmapVisit: RoadmapVisit | null = null
 let roadmapDetailOpen = false
-let roadmapBatch: RoadmapOperation[] | null = null
+/* The operations batchRoadmapChanges collects, and the answers waiting for
+   their one submission. */
+let roadmapBatch: { operations: RoadmapOperation[]; saved: ((ok: boolean) => void)[] } | null = null
 
 // View state is deliberately memory-only. A new visit gets a fresh server
 // journal, so a late reply from an earlier visit cannot repopulate history.
@@ -889,33 +891,46 @@ function expireRoadmapHistory() {
   }
 }
 
-function submitRoadmapChanges(operations: RoadmapOperation[]) {
+/* Sends operations to the visit's journal. Resolves whether the server
+   accepted them; a refusal is toasted and rolled back by run(). */
+function submitRoadmapChanges(operations: RoadmapOperation[]): Promise<boolean> {
   const visit = roadmapVisit
-  if (!visit || !operations.length) return
+  if (!visit || !operations.length) return Promise.resolve(true)
   visit.pending++
-  run(
-    write(api.roadmap.change, { session_id: visit.id, operations }).then((result) => {
-      // A clamped or rounded no-op emits no snapshot. Re-adopt the saved
-      // values anyway so speculative dates, hours and touch time disappear.
-      if (result.count <= visit.count) snapDirty = true
-      if (roadmapVisit === visit && !visit.disabled)
-        visit.count = Math.max(visit.count, result.count)
-    }),
-    undefined,
-    () => {
-      visit.pending--
-      emit()
-    },
+  let saved = false
+  const answer = new Promise<boolean>((resolve) =>
+    run(
+      write(api.roadmap.change, { session_id: visit.id, operations }).then((result) => {
+        // A clamped or rounded no-op emits no snapshot. Re-adopt the saved
+        // values anyway so speculative dates, hours and touch time disappear.
+        if (result.count <= visit.count) snapDirty = true
+        if (roadmapVisit === visit && !visit.disabled)
+          visit.count = Math.max(visit.count, result.count)
+      }),
+      () => {
+        saved = true
+      },
+      () => {
+        visit.pending--
+        emit()
+        resolve(saved)
+      },
+    ),
   )
   emit()
+  return answer
 }
 
-function recordRoadmapChange(operation: RoadmapOperation): boolean {
+/* Records an operation in the open Roadmap visit's journal, in the open
+   batch when there is one. Returns null when no visit records it, so the
+   caller writes it directly, or else the server's answer. */
+function recordRoadmapChange(operation: RoadmapOperation): Promise<boolean> | null {
   expireRoadmapHistory()
-  if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return false
-  if (roadmapBatch) roadmapBatch.push(operation)
-  else submitRoadmapChanges([operation])
-  return true
+  if (!roadmapVisit || roadmapVisit.disabled || roadmapDetailOpen) return null
+  const batch = roadmapBatch
+  if (!batch) return submitRoadmapChanges([operation])
+  batch.operations.push(operation)
+  return new Promise((resolve) => batch.saved.push(resolve))
 }
 
 // Reads (including marking a task's messages read) keep history. Task content
@@ -2636,13 +2651,15 @@ export const PLANNER = {
       change()
       return
     }
-    roadmapBatch = []
+    const batch: NonNullable<typeof roadmapBatch> = { operations: [], saved: [] }
+    roadmapBatch = batch
     try {
       change()
     } finally {
-      const operations = roadmapBatch
       roadmapBatch = null
-      submitRoadmapChanges(operations)
+      void submitRoadmapChanges(batch.operations).then((ok) =>
+        batch.saved.forEach((answer) => answer(ok)),
+      )
     }
   },
   undoRoadmap: (all = false) => {
@@ -3958,9 +3975,8 @@ export const PLANNER = {
       ['start', 'end', 'remaining'].includes(key),
     )
     const saved =
-      planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire })
-        ? Promise.resolve(true)
-        : runSaved(write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }))
+      (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire })) ||
+      runSaved(write(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }))
     // inline description images are hidden attachments; when neither the new
     // text nor the text it just replaced references one any more, reap the
     // row + bytes. Keeping the replaced text's refs for one more save gives

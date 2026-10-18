@@ -323,6 +323,30 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
+  it("answers a recorded date change, alone or in a batch, with the server's answer", async () => {
+    const [first, second] = P.issues
+    let alone: boolean | undefined
+    void P.updateIssue(first.id, { start: first.start + 1, end: first.end + 1 }).then((saved) => {
+      alone = saved
+    })
+    await Promise.resolve()
+    // nothing is claimed before the server answers
+    expect(alone).toBeUndefined()
+    latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    await settled()
+    expect(alone).toBe(false)
+    let batched: Promise<boolean>[] = []
+    P.batchRoadmapChanges(() => {
+      batched = [
+        P.updateIssue(first.id, { remaining: 12 }),
+        P.updateIssue(second.id, { remaining: 16 }),
+      ]
+    })
+    expect(requests).toHaveLength(2)
+    latest().resolve({ count: 1 })
+    expect(await Promise.all(batched)).toEqual([true, true])
+  })
+
   it('groups a planning action into one step and waits for all saves before undo or revert all', async () => {
     const [first, second] = P.issues
     P.batchRoadmapChanges(() => {
