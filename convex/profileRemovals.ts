@@ -99,8 +99,11 @@ const connectionsOf = (ctx: MutationCtx, profileId: string) =>
 
 /* A connection is deleted after its replay hashes, which grow by one row per
  * refresh. removeProfile revoked only the newest REVOKE_AT_ONCE connections,
- * so older ones are deleted here unrevoked, which is safe because every
- * OAuth path already refuses once the profile row is gone. */
+ * so older ones are deleted here unrevoked. That is safe because consent
+ * (oauthConnections.ensure), token issuance and refresh (claimIssuance) and
+ * every token use (lookupAccess) refuse once the profile row is gone.
+ * registerCode does not look at the profile, but a code it records only
+ * becomes a token through claimIssuance. */
 const oauthEdge: Edge = {
   sweep: async (ctx, profileId, budget) => {
     while (!budgetSpent(budget)) {

@@ -24,19 +24,20 @@ request, such as a coding agent with a shell. Chat assistants that cannot
 make HTTP requests can still attach text they write with `attach_text_file`,
 such as meeting notes or a CSV table of up to 256 KiB.
 
-Both can also edit and delete comments, follow tasks and work through the
-inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
-`update_comment`, `delete_comment`, `set_following`, `list_inbox` and
-`update_inbox`. REST uses `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
+Both can also read, add, edit and delete comments, follow tasks and work
+through the inbox ([Your inbox](./working-together.md#your-inbox)). MCP uses
+`list_comments`, `add_comment`, `update_comment`, `delete_comment`,
+`set_following`, `list_inbox` and `update_inbox`. REST uses
+`/v1/tasks/{ref}/comments`, `/v1/comments/{id}`, `/v1/tasks/{ref}/following`
 and `/v1/inbox`. A Standard user agent reads and clears its own inbox this
 way. A Viewer agent gets no new inbox messages and cannot follow tasks or
 clear its inbox, but it can still read messages it received before. An
 Inactive agent can neither read nor clear its inbox.
 
-For projects, MCP offers `get_project`, `create_project`, `update_project`,
-`set_project_access`, `set_milestone` and `delete_milestone`, and REST uses
-`/v1/projects`, `/v1/projects/{ref}/access` and
-`/v1/projects/{ref}/milestones`. Both create projects and sub-projects,
+For projects, MCP offers `list_projects`, `get_project`, `create_project`,
+`update_project`, `set_project_access`, `set_milestone` and
+`delete_milestone`, and REST uses `/v1/projects`, `/v1/projects/{ref}/access`
+and `/v1/projects/{ref}/milestones`. Both create projects and sub-projects,
 change their settings, archive and restore them, add and change milestones
 and change sharing one user or team at a time, by the same rules as the app
 ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
@@ -53,6 +54,11 @@ leaders by the same rules as the app
 ([Planning hours and teams](./organization-and-team-settings.md#planning-hours-and-teams)).
 Only a person changes a team's members. Removing a member takes the same
 choice for their open tasks.
+
+To learn who a credential acts as and find people, MCP offers `get_me`,
+`list_users` and `list_project_users`, and `update_user` sets a person's
+plannable weekly hours. REST uses `/v1/me`, `/v1/users` and
+`/v1/projects/{ref}/users`.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the

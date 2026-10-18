@@ -73,12 +73,11 @@ own comments need only read access to the task.
   array; increment `offset` by the page size until a shorter page arrives.
   `archived=true` needs `project` and returns `{next_cursor, tasks}`; pass
   `next_cursor` back as `cursor` until it is null, even after an empty page.
-- **Browser:** Use it for images inside descriptions, guest invitations,
-  deleting a project, restoring work from Deleted items, and other actions
-  absent from the machine interfaces.
-  Attach files through MCP or REST instead. Enter at `https://qivo.io/app` and
-  use the user's signed-in session. Follow an explicitly requested interface
-  when it supports the work.
+- **Browser:** Use it for the actions under
+  [Stays in the app](#stays-in-the-app), which no MCP tool or REST route
+  offers. Enter at `https://qivo.io/app` and use the user's signed-in
+  session. Follow an explicitly requested interface when it supports the
+  work.
 
 Task operations use these names (REST paths are relative to `https://api.qivo.io`):
 
@@ -499,6 +498,33 @@ connection. Removing another owner's subscription needs a credential that can
 make changes: a personal token with change access, or an OAuth connection with
 `qivo:write`. Use these routes to reclaim shared quota when the original owner
 cannot remove a callback.
+
+## Stays in the app
+
+These actions have no REST route or MCP tool. Do them in the browser at
+`https://qivo.io/app` with the user's signed-in session, or ask the user to
+do them there.
+
+- Deleting a project, a team or a label.
+- Restoring what is in Deleted items, or deleting it for good.
+- Inviting a guest to a project by email.
+- Adding or removing other people as followers of a task. A credential
+  changes only its own follow.
+- Creating or deleting an organization, changing its settings, such as the
+  name, address, calendar, attachment limit, default planning hours and who
+  can create projects, and exporting its data.
+- Billing, subscriptions and payment details.
+- Inviting people, adding agents, changing a user's name, email, role or
+  **Can create projects**, making a user Inactive and removing a user.
+  Plannable weekly hours are the exception (`PATCH /v1/users/{id}`,
+  `update_user`).
+- Creating, revoking or deleting agent keys, and revoking credentials on
+  **API access**.
+- A person's own name, picture, appearance, inbox retention and other
+  preferences, and their personal access tokens and connected apps.
+- Images inside task descriptions. Attach other files through REST or MCP.
+- The **Last sync** time on the Team sync page. Changes over REST and MCP do
+  not update it.
 
 ## Archives, access, and browser links
 

@@ -147,7 +147,7 @@ export const avatarUploadUrl = authedMutation({
  * oversize refusal-return happens before the row insert — the committed
  * transaction then carries exactly one effect, the byte delete. The name and
  * type limits, the cap, the byte fence, the row and the activity row are
- * model/attachments.ts attachFileCore, which REST uploads run too. */
+ * model/attachments.ts attachFileCore, which REST and MCP uploads run too. */
 export const attach = orgMutation({
   args: {
     id: v.string(), // client-generated attachment uuid
@@ -339,8 +339,8 @@ export const gatewayAvatar = internalQuery({
 })
 
 /* ------------------------------------------------------------ reapOrphans
- * Deletes bytes nothing references: an app upload never attached, a REST
- * upload never confirmed, and the private backgrounds of a login that no
+ * Deletes bytes nothing references: an app upload never attached, a REST or
+ * MCP upload never confirmed, and the private backgrounds of a login that no
  * longer exists. The references are issue_attachments.storage_id, the
  * attachments held in Deleted items (deleted_rows.storage_id),
  * profiles.avatar_storage_id and the panorama_images and custom_backgrounds
@@ -375,7 +375,7 @@ export const gatewayAvatar = internalQuery({
  * a removed login, its cleanup. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
-/* A sweep never deletes a file younger than this when its run starts. REST
+/* A sweep never deletes a file younger than this when its run starts. Upload
  * tickets live exactly this long (model/attachments.ts
  * UPLOAD_TICKET_TTL_MS), so no sweep deletes a file while the ticket it was
  * uploaded for can still confirm it. */
@@ -410,7 +410,7 @@ export const reapOrphans = internalMutation({
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
       // Tickets own no bytes until the receiver commits the completed upload,
-      // and an expired REST ticket's unconfirmed bytes fall to the files phase.
+      // and an expired upload ticket's unconfirmed bytes fall to the files phase.
       let more = false
       for (const table of ['background_uploads', 'attachment_uploads'] as const) {
         const expired = await ctx.db
