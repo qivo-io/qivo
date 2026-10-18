@@ -84,7 +84,9 @@ the output of `git merge-base origin/main HEAD` after `git fetch origin`.
 4. Fix the valid findings and commit.
 5. The CodeRabbit and Greptile CLIs, side by side, with
    `cr review --agent --committed --base-commit BASE` and
-   `greptile review -b BASE --json`.
+   `greptile review -b BASE --json`. When the change touches `AGENTS.md`, add
+   `--include AGENTS.md` to the Greptile command. Without it Greptile leaves
+   that file's changes out and reviews an empty diff.
 6. Fix the valid findings and commit.
 7. Push and open the pull request. Merge it once its `quality`, `secrets`
    and `Vercel – qivo` checks pass on the head commit, if the task says to
@@ -101,8 +103,28 @@ gets steps 1 to 6 on its head before it merges.
 has the exact steps, the reviewer prompt and how to record each step. Read it
 before step 1. A reviewer gets the prompt and the committed branch, never how
 the change was written. Check every finding against the code before you fix
-or reject it. Record every step, because choosing and paying for these
-reviewers depends on what each one finds.
+or reject it.
+
+Save the review statistics in qivo-internal, because choosing and paying for
+these reviewers depends on what each one finds. Every branch gets one record
+in `${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/records/`
+with:
+
+- The branch name and the pull request number, or no number if the flow
+  stopped before step 7 opened one.
+- Every step, including one that failed, timed out or was skipped, and every
+  follow-up review.
+- Each reviewer's findings, with your verdict on each one and your severity
+  for each correct one.
+- Each Greptile finding that reports the same problem as a CodeRabbit
+  finding, so the findings that only one of them reported can be counted.
+
+Check the record with
+`python3 "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/evaluations/pr-reviews/pre-pr/check_records.py" RECORD`
+and commit it to qivo-internal before your session ends, once step 7 has
+opened the pull request or a step has stopped the flow. Update and commit it
+again after each follow-up review and when you merge the pull request. The
+README above has the record format and the commands.
 
 ## Deployment and version control
 
