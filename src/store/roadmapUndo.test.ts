@@ -226,7 +226,10 @@ describe('roadmap undo through the client store', () => {
     latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
     expect(task().remaining).toBe(12)
-    expect(showToast).toHaveBeenCalledWith("You don't have permission for that — reverted", 'error')
+    expect(showToast).toHaveBeenCalledWith(
+      "You don't have permission for that. Change reverted.",
+      'error',
+    )
     expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
 
     P.updateIssue(task().id, { remaining: 24 })
@@ -311,7 +314,7 @@ describe('roadmap undo through the client store', () => {
     await settled()
 
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
-      "You don't have permission for that — reverted",
+      "You don't have permission for that. Change reverted.",
       'error',
     )
     expect(requests).toHaveLength(1)

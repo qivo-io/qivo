@@ -1057,7 +1057,7 @@ function App() {
     // The rule follows the TARGET, not just the scope — a sentinel scope gives
     // every project a lane and a track, and their + buttons name them.
     if (proj && proj.type === 'meta' && proj.children.length === 0) {
-      window.showToast?.('Create a sub-project first — tasks live in sub-projects', 'info')
+      window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'info')
       setModal({ kind: 'subproject', init: { parent: proj.id } })
       return
     }
@@ -1066,7 +1066,7 @@ function App() {
     // TopBar button already disables here; the palette's doesn't, so say why
     // rather than opening a dialog that could never be submitted.
     if (!target && !(P.scopeInfo(scope) || { subIds: [] }).subIds.length) {
-      window.showToast?.('Create a sub-project first — tasks live in sub-projects', 'error')
+      window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'error')
       return
     }
     setModal({ kind: 'issue', init: { ...init, project: target } })
@@ -1330,7 +1330,7 @@ function App() {
       () => setOpenIssue((cur) => (cur === key ? null : cur)),
     )
     if (!key) {
-      window.showToast?.('That sub-project is gone — task not created', 'error')
+      window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
       return false
     }
     // Replace the phone create layer with the task's URL. Retiring its marker

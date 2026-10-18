@@ -2112,7 +2112,7 @@ try {
 
   await pageA.waitForSelector(`text=${TITLE}`, { timeout: 10000 })
   const revertedA = await pageA.locator('text=reverted').count()
-  if (revertedA) await fail('a "— reverted" toast fired during the create')
+  if (revertedA) await fail('a "Change reverted" toast fired during the create')
   await noDisabledCopy(pageA, 'A after create')
   await pageA.screenshot({ path: `${SHOTS}/smoke-board.png` })
   log('A: created task window — screenshot smoke-board.png')

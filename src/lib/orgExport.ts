@@ -56,7 +56,7 @@ const EXCLUSIONS = [
   'External images linked in descriptions and Gravatar images (uploaded files are included)',
 ]
 
-const README = `Qivo organization export — format version 2
+const README = `Qivo organization export, format version 2
 
 manifest.json identifies the organization, export times, table counts, exclusions,
 and the archive path of each uploaded file. data/<table>.json contains JSON arrays

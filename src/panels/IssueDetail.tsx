@@ -1506,7 +1506,7 @@ function IssueDetail({
   // Copy task ID shares this failure toast, since the open task's address
   // also contains its key.
   const copyFailed = () =>
-    window.showToast?.("Couldn't copy — copy the address bar instead", 'error')
+    window.showToast?.("Couldn't copy. Copy the address bar instead.", 'error')
   const copyLink = () => {
     // issueLink names the task's OWN organization in the path — its number
     // alone would be ambiguous for the recipient, since numbers are per-org
@@ -1570,7 +1570,7 @@ function IssueDetail({
       (e) =>
         e.targetType === 'issue' && e.targetId === it.id && unreadTs !== null && e.ts >= unreadTs,
     )
-      ? 'New activity on this task — see All.'
+      ? 'New activity on this task. See All.'
       : 'New activity on this task.'
   const canLead = !!it && P.levelOn(it.project) === 'lead'
   const postComment = (text: string) => {
@@ -2592,9 +2592,9 @@ function IssueDetail({
                           const tip = delay
                             ? P.DELAY_LABELS[delay.status] +
                               (overdue
-                                ? ' — the due date has passed'
+                                ? ', the due date has passed'
                                 : delay.fin != null
-                                  ? ' — projected to finish in the week of ' +
+                                  ? ', projected to finish in the week of ' +
                                     P.fmtDate(P.weekToDate(delay.fin))
                                   : '')
                             : undefined

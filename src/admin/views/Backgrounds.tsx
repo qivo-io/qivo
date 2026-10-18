@@ -598,8 +598,8 @@ function DefaultBackground() {
           <p className="mt-1 text-sm text-text-2">
             {current?.title ||
               (data.default_image_id
-                ? 'Default image unavailable — choose another image'
-                : 'No default selected — solid background')}
+                ? 'Default image unavailable. Choose another image.'
+                : 'No default selected, so the background is solid.')}
           </p>
           <p className="mt-1 text-sm text-text-2">
             Used in weeks without an available calendar image.

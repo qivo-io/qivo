@@ -285,7 +285,7 @@ function Roadmap({
     P.saveUINow({ roadmapWinDefault: w })
     window.showToast?.(
       P.sameWin(w, P.DEFAULT_WIN)
-        ? `Your default window is the standard one again — ${P.winLabel(w)}`
+        ? `Your default window is the standard one again, ${P.winLabel(w)}`
         : `The Roadmap will open on ${P.winLabel(w)} from now on`,
     )
   }
@@ -547,7 +547,7 @@ function Roadmap({
     // would silently write dates the user never saw — discard the gesture
     // (pickers/modals don't need this: they re-render their dates live)
     if (epoch !== undefined && epoch !== P.gridEpoch) {
-      window.showToast?.('The week grid changed mid-drag — reschedule discarded', 'error')
+      window.showToast?.('The week grid changed mid-drag. Reschedule discarded.', 'error')
       return
     }
     const it = P.issueById[id]
@@ -596,7 +596,7 @@ function Roadmap({
     setMsLive({})
     // same mid-drag grid-re-anchor guard as the bar commit above
     if (epoch !== undefined && epoch !== P.gridEpoch) {
-      window.showToast?.('The week grid changed mid-drag — move discarded', 'error')
+      window.showToast?.('The week grid changed mid-drag. Move discarded.', 'error')
       return
     }
     if (w != null) P.setMilestone(id, w)
@@ -1390,10 +1390,10 @@ function Roadmap({
       state = iss.due < P.TODAY_ISO ? 'overdue' : 'projected to finish after the due date'
     } else if (di && di.fin != null && di.fin === P.isoToWeek(iss.due)) {
       color = 'var(--warn)'
-      state = 'tight — projected to finish in the due week'
+      state = 'tight, projected to finish in the due week'
     } else if (di) {
       color = 'var(--success)'
-      state = 'on track — projected to finish before the due date'
+      state = 'on track, projected to finish before the due date'
     } else if (iss.due < P.TODAY_ISO) {
       color = 'var(--danger)'
       state = 'overdue'
@@ -1402,7 +1402,7 @@ function Roadmap({
       state = 'planned end is after the due date'
     } else if (wkEnd != null && dueT <= wkEnd) {
       color = 'var(--warn)'
-      state = 'tight — due falls in the final planned week'
+      state = 'tight, due falls in the final planned week'
     } else if (P.isGroup(iss) && P.progressOf(iss).unknown) {
       // subtasks outside this view may end later, so the visible plan cannot
       // show the group finishing before its due date
@@ -1410,7 +1410,7 @@ function Roadmap({
       state = 'some subtasks are outside your view'
     } else {
       color = 'var(--success)'
-      state = 'on track — plan ends before the due date'
+      state = 'on track, plan ends before the due date'
     }
     return { x, color, state }
   }
@@ -1715,7 +1715,7 @@ function Roadmap({
                           wk.num +
                           ' of ' +
                           wk.year +
-                          ' — starts ' +
+                          ', starts ' +
                           P.fmtFull(d) +
                           (curWeek ? `, today: ${P.fmtISO(P.TODAY_ISO)}` : '')
                         }

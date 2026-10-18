@@ -588,14 +588,14 @@ function OvAtRiskRow({
     : 0
   const finNote =
     delay && delay.fin != null
-      ? ` — projected to finish in the week of ${P.fmtDate(P.weekToDate(delay.fin))}`
+      ? `, projected to finish in the week of ${P.fmtDate(P.weekToDate(delay.fin))}`
       : ''
   return (
     <Button
       type="button"
       data-atrisk={it.id}
       onClick={() => onOpen(it.id)}
-      title={`${it.title} — due ${P.fmtISO(it.due)}${finNote}`}
+      title={`${it.title}, due ${P.fmtISO(it.due)}${finNote}`}
       className="[display:flex] [align-items:center] [gap:8px] [width:100%] [text-align:left] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)] [cursor:pointer]"
       onMouseEnter={(e) => {
         e.currentTarget.style.background = 'var(--hover)'
@@ -1110,7 +1110,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
               <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
                 {wide
                   ? 'No milestones in any of your projects yet.'
-                  : 'No milestones yet — add one with the + button.'}
+                  : 'No milestones yet. Add one with the + button.'}
               </div>
             )}
           </div>

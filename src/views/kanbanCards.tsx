@@ -50,7 +50,7 @@ function DueDate({ it, inButton = false }: { it: IssueVM; inButton?: boolean }) 
   const warning = dueMiss && !P.delayColor(it)
   return (
     <HoverTooltip
-      content={`Due ${P.fmtISO(it.due)}${overdue ? ' — overdue' : dueMiss ? ' — projected to be missed' : ''}`}
+      content={`Due ${P.fmtISO(it.due)}${overdue ? ', overdue' : dueMiss ? ', projected to be missed' : ''}`}
     >
       <span
         tabIndex={inButton ? -1 : 0}

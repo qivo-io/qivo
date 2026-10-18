@@ -1762,7 +1762,7 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
     const ok = await P.createOrg(name.trim())
     setBusy(false)
     if (ok) {
-      window.showToast?.(`“${name.trim()}” is yours — you're its first admin`)
+      window.showToast?.(`“${name.trim()}” is yours. You're its first admin.`)
       onClose()
     }
   }
