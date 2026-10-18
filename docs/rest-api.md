@@ -876,7 +876,8 @@ comment. When those comments do not fit in one request beside the rest of
 the page, the request is a `400` (`this page of tasks is too large to read
 at once; ask for a smaller limit`); ask again with a smaller `limit`. A list
 also reads every active task in the organization's active projects, or every
-active task of the organization when it names an archived project. When
+active task of the organization when it names an archived project or the
+organization has more than 1,000 active projects. When
 those alone leave no room for a single comment, the request is a `400` with
 `this organization's active tasks are too large to list in one request`, and
 a smaller `limit` does not help.

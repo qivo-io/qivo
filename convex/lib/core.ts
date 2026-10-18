@@ -477,6 +477,12 @@ async function listRow(
 const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
   a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.num - b.num
 
+/** How many active projects an active list reads one index range each
+ * (listedActiveTasks) before it reads the organization's active tasks in
+ * one range instead, so an organization with thousands of projects stays
+ * far below Convex's 4,096 ranges. Tests lower `reads`. */
+export const LIVE_PROJECT_READS = { reads: 1000 }
+
 /* The active tasks an active list reads (listActiveIssuesCore,
  * projectCompletion), oldest first by creation. Those of the active
  * projects (lib/liveTasks.ts liveTasksOf) hold every subtask that makes a
@@ -484,7 +490,8 @@ const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
  * the active tasks that archived projects keep forever are never read. A
  * list that names an archived project reads all the organization's active
  * tasks (by_org_archived), because a task there counts every active
- * subtask, in any project (countsAsSubtask). */
+ * subtask, in any project (countsAsSubtask), and so does a list in an
+ * organization with more active projects than LIVE_PROJECT_READS. */
 async function listedActiveTasks(
   ctx: QueryCtx,
   me: Caller,
@@ -492,7 +499,8 @@ async function listedActiveTasks(
   scope: readonly string[] | null,
 ): Promise<Doc<'issues'>[]> {
   const archived = scope?.some((id) => cat.byUuid.get(id)?.archived_at !== undefined) ?? false
-  if (!archived) return await liveTasksOf(ctx, cat.projects)
+  const live = cat.projects.filter((p) => p.archived_at === undefined)
+  if (!archived && live.length <= LIVE_PROJECT_READS.reads) return await liveTasksOf(ctx, live)
   return await ctx.db
     .query('issues')
     .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
@@ -1205,9 +1213,10 @@ export const SUBTREE_WALK = { reads: 1000 }
 
 /** What a single-task read of an archived task keeps back from the
  * request's limits for the reads after its subtree walk, which stops short
- * of them. They are the task's parent, people, newest comment, links,
- * labels, followers and attachments, and the access to the projects they
- * name. Tests lower these. */
+ * of them. They are the task's parent, people and newest comment, and the
+ * access to the projects of the task, its parent and its subtasks. Its
+ * links, labels, followers and attachments, which have no fixed count, are
+ * read before the walk (taskRelations). Tests lower these. */
 export const TASK_READ_RESERVE = {
   ranges: 1024,
   documents: 4096,
@@ -1630,18 +1639,62 @@ export const taskRefOf = (t: Doc<'issues'>): TaskRefJson => ({
 /* Orders tasks by number, lowest first. */
 const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
 
+/* The single-task read's fields that do not depend on the subtree: the
+ * links and labels `me` can see and the followers. */
+export type TaskRelations = Pick<TaskDetailJson, 'labels' | 'links'> & {
+  followers: Doc<'profiles'>[]
+}
+
+/* The links, labels and followers of `issue` as `me` reads them. A
+ * single-task read takes them before its subtree walk (taskOut), because
+ * none of them has a fixed count. */
+export async function taskRelations(
+  ctx: QueryCtx,
+  me: Caller,
+  issue: Doc<'issues'>,
+  readable?: (projectId: string) => boolean,
+): Promise<TaskRelations> {
+  const reads = projectReader(ctx, me, readable)
+  const links: TaskDetailJson['links'] = []
+  const linked: { link: Doc<'issue_links'>; other: Doc<'issues'> }[] = []
+  for (const link of await linksOf(ctx, issue.id)) {
+    const other = await byId(
+      ctx,
+      'issues',
+      link.source_id === issue.id ? link.target_id : link.source_id,
+    )
+    if (other !== null) linked.push({ link, other })
+  }
+  const linkSees = await machineShown([issue, ...linked.map((l) => l.other)], me, reads)
+  for (const { link, other } of linked.sort((a, b) => byNum(a.other, b.other))) {
+    if (!linkShown(link, linkSees)) continue
+    links.push({ kind: linkKindFrom(link, issue.id), ...taskRefOf(other) })
+  }
+  const labels: Doc<'labels'>[] = []
+  const attached = ctx.db
+    .query('issue_labels')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+  for await (const row of attached) {
+    const label = await byId(ctx, 'labels', row.label_id)
+    if (label !== null && label.org_id === issue.org_id) labels.push(label)
+  }
+  labels.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
+  return { labels: labels.map(labelJson), links, followers: await followersOf(ctx, issue) }
+}
+
 /**
- * The single-task read's extra fields for `issue`, read by `me`. `isGroup`,
- * `project`, `children` (its subtreeIndex), `live`, `counts` (the
- * groupCounter that walk used) and `partial` (the subtree was too large to
- * read) are what taskOut already holds. The group total counts what
- * groupCounter counts, as the plan weeks do, and is null when the subtree
- * went unread.
+ * The single-task read's extra fields for `issue`, read by `me`, with the
+ * `relations` taskOut read first. `isGroup`, `project`, `children` (its
+ * subtreeIndex), `live`, `counts` (the groupCounter that walk used) and
+ * `partial` (the subtree was too large to read) are what taskOut already
+ * holds. The group total counts what groupCounter counts, as the plan weeks
+ * do, and is null when the subtree went unread.
  */
 export async function taskDetail(
   ctx: QueryCtx,
   me: Caller,
   issue: Doc<'issues'>,
+  relations: TaskRelations,
   o: {
     project: Doc<'projects'>
     isGroup: boolean
@@ -1670,34 +1723,10 @@ export async function taskDetail(
     }
     group_remaining_hours = groupRemainingHours(issue, childrenOf, (id) => counted.has(id), o.live)
   }
-  const links: TaskDetailJson['links'] = []
-  const linked: { link: Doc<'issue_links'>; other: Doc<'issues'> }[] = []
-  for (const link of await linksOf(ctx, issue.id)) {
-    const other = await byId(
-      ctx,
-      'issues',
-      link.source_id === issue.id ? link.target_id : link.source_id,
-    )
-    if (other !== null) linked.push({ link, other })
-  }
-  const linkSees = await machineShown([issue, ...linked.map((l) => l.other)], me, reads)
-  for (const { link, other } of linked.sort((a, b) => byNum(a.other, b.other))) {
-    if (!linkShown(link, linkSees)) continue
-    links.push({ kind: linkKindFrom(link, issue.id), ...taskRefOf(other) })
-  }
-  const labels: Doc<'labels'>[] = []
-  const attached = ctx.db
-    .query('issue_labels')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-  for await (const row of attached) {
-    const label = await byId(ctx, 'labels', row.label_id)
-    if (label !== null && label.org_id === issue.org_id) labels.push(label)
-  }
-  labels.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
-  const followers = await followersOf(ctx, issue)
+  const { labels, links, followers } = relations
   return {
     group_remaining_hours,
-    labels: labels.map(labelJson),
+    labels,
     subtasks,
     links,
     following: followers.some((p) => p.id === me.id),
@@ -1733,6 +1762,10 @@ export async function taskOut(
 ): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson & TaskAttachmentsJson> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
+  // what does not depend on the subtree is read first, so an archived
+  // task's walk takes only the room those reads leave (taskSubtree)
+  const relations = await taskRelations(ctx, opts.me, issue, opts.readable)
+  const attachments = await taskAttachments(ctx, opts.me, issue)
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, opts.readable)
@@ -1749,12 +1782,12 @@ export async function taskOut(
     opts.surface === 'rest'
       ? await issueOut(ctx, issue, { ...opts, ...read, surface: 'rest' })
       : await issueOut(ctx, issue, { ...opts, ...read, surface: 'mcp' })
-  const detail = await taskDetail(ctx, opts.me, issue, {
+  const detail = await taskDetail(ctx, opts.me, issue, relations, {
     ...subtree,
     isGroup: row.is_group,
     readable: opts.readable,
   })
-  return { ...row, ...detail, attachments: await taskAttachments(ctx, opts.me, issue) }
+  return { ...row, ...detail, attachments }
 }
 
 /* ------------------------------------------------------------ destinations
