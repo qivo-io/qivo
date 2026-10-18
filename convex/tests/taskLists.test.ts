@@ -1365,6 +1365,63 @@ describe('a single-task read of an archived group', () => {
     expect(rest).toMatchObject({ progress: { total: 100, partial: false } })
   })
 
+  it('reads a group whose subtasks span 150 sub-projects without checking each one alone', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 400 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    // one archived subtask in each of 150 sub-projects of TBED, which the
+    // agent reads through its grant on TBED
+    const kids = await fx.t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 150; i++) {
+        const project_id = uuid()
+        await ctx.db.insert('projects', {
+          id: project_id,
+          org_id: fx.org.id,
+          type: 'project',
+          parent_id: fx.meta.id,
+          key: `W${i}`,
+          name: `Wide ${i}`,
+          description: '',
+          sort_order: 500 + i,
+          num: 500 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+        const id = uuid()
+        await ctx.db.insert('issues', {
+          id,
+          org_id: fx.org.id,
+          project_id,
+          num: bulkNum++,
+          title: `Wide ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          parent_id: group.id,
+          archived_at: day(9),
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    const { rest, mcp } = await reads(fx, group.id)
+    expect(rest).toMatchObject({
+      is_group: true,
+      progress: { done: 150, total: 150, percent: 100, partial: false },
+    })
+    expect(new Set(rest.subtasks.map((t) => t.id))).toEqual(new Set(kids))
+    expect((mcp.subtasks as unknown[]).length).toBe(150)
+  })
+
   it('refuses a group whose own subtasks do not fit in one request', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })

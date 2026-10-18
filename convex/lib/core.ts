@@ -1235,10 +1235,10 @@ export const SUBTREE_WALK = { reads: 1000 }
 
 /** What a single-task read of an archived task keeps back from the
  * request's limits for the reads after its subtree walk, which stops short
- * of them. They are the task's parent, people and newest comment, and the
- * access to the projects of the task, its parent and its subtasks. Its
- * links, labels, followers and attachments, which have no fixed count, are
- * read before the walk (taskRelations). Tests lower these. */
+ * of them. They are the task's parent, people and newest comment. What has
+ * no fixed count is read before the walk: the access to every project of
+ * the organization, answered at once (orgReach), and the task's links,
+ * labels, followers and attachments (taskRelations). Tests lower these. */
 export const TASK_READ_RESERVE = {
   ranges: 1024,
   documents: 4096,
@@ -1827,15 +1827,24 @@ export async function taskOut(
 ): Promise<(RestIssueJson | McpIssueOut) & TaskDetailJson & TaskAttachmentsJson> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
+  // an archived task's walk can meet many projects, so their access is
+  // answered for the whole organization at once, and the walk and the reads
+  // after it check none of them one at a time
+  const reach =
+    issue.archived_at !== undefined && opts.readable === undefined
+      ? await orgReach(ctx, opts.me)
+      : undefined
+  const readable = opts.readable ?? reach?.readable
+  const projectOf = opts.projectOf ?? reach?.projectOf
   // what does not depend on the subtree is read first, so an archived
   // task's walk takes only the room those reads leave (taskSubtree)
-  const relations = await taskRelations(ctx, opts.me, issue, opts.readable)
+  const relations = await taskRelations(ctx, opts.me, issue, readable)
   const attachments = await taskAttachments(ctx, opts.me, issue)
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
-  const counts = groupCounter(ctx, opts.me, issue, project, opts.readable)
+  const counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
   const { children, partial } = await taskSubtree(ctx, issue, counts, opts.write === true)
-  const live = await indexLiveness(ctx, issue, children, opts.projectOf)
+  const live = await indexLiveness(ctx, issue, children, projectOf)
   const subtree = { project, children, live, counts, partial }
   const org = await byId(ctx, 'organizations', issue.org_id)
   const read = {
@@ -1845,14 +1854,36 @@ export async function taskOut(
   }
   const row =
     opts.surface === 'rest'
-      ? await issueOut(ctx, issue, { ...opts, ...read, surface: 'rest' })
-      : await issueOut(ctx, issue, { ...opts, ...read, surface: 'mcp' })
+      ? await issueOut(ctx, issue, { ...opts, readable, projectOf, ...read, surface: 'rest' })
+      : await issueOut(ctx, issue, { ...opts, readable, projectOf, ...read, surface: 'mcp' })
   const detail = await taskDetail(ctx, opts.me, issue, relations, {
     ...subtree,
     isGroup: row.is_group,
-    readable: opts.readable,
+    readable,
   })
   return { ...row, ...detail, attachments }
+}
+
+/* Which projects `me` can read, and each of the organization's projects by
+ * id, from one read of its projects and the caller's grants and team
+ * shares (projectLevelsForOrg), the read flag accessFlags gives lists. */
+async function orgReach(
+  ctx: QueryCtx,
+  me: Caller,
+): Promise<{
+  readable: (projectId: string) => boolean
+  projectOf: (projectId: string) => Doc<'projects'> | undefined
+}> {
+  const cat = await loadCatalogue(ctx, me)
+  const { levelOf } = await projectLevelsForOrg(ctx, me, cat.projects)
+  const projectOf = (projectId: string) => cat.byUuid.get(projectId)
+  return {
+    readable: (projectId) => {
+      const p = projectOf(projectId)
+      return p !== undefined && levelOf(p) !== null
+    },
+    projectOf,
+  }
 }
 
 /* ------------------------------------------------------------ destinations
