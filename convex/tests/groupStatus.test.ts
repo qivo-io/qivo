@@ -34,6 +34,7 @@ describe('parent task status', () => {
       })
       const getParent = () =>
         t.query(internal.machine.rest.getIssue, {
+          now: NOW,
           callerId: f.admin.id,
           access: 'read',
           ref: parent.id,
@@ -90,6 +91,7 @@ describe('parent task status', () => {
     })
     const mcp = JSON.parse(
       await t.query(internal.machine.mcp.listIssues, {
+        now: NOW,
         callerId: f.admin.id,
         access: 'read',
         status: 'review',
@@ -100,6 +102,7 @@ describe('parent task status', () => {
     expect(
       JSON.parse(
         await t.query(internal.machine.mcp.getIssue, {
+          now: NOW,
           callerId: f.admin.id,
           access: 'read',
           ref: root.id,
@@ -156,6 +159,7 @@ describe('parent task status', () => {
     expect(snapshot?.issues.map((i) => i.id)).not.toContain(hiddenChild.id)
     expect(
       await t.query(internal.machine.rest.getIssue, {
+        now: NOW,
         callerId: f.guest.id,
         access: 'read',
         ref: parent.id,
@@ -219,6 +223,7 @@ describe('parent task status', () => {
     expect(archived.find((i) => i.id !== parent.id)?.is_group).toBe(false)
     expect(
       await t.query(internal.machine.rest.getIssue, {
+        now: NOW,
         callerId: f.admin.id,
         access: 'read',
         ref: parent.id,

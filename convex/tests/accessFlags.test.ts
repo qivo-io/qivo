@@ -320,11 +320,11 @@ describe('accessFlags', () => {
       )
       const task = await plantIssue(t, { org_id: f.org.id, project_id: p.id })
       await expectRefusal(
-        t.query(internal.machine.rest.getIssue, { ...as_, ref: task.id }),
+        t.query(internal.machine.rest.getIssue, { now: NOW, ...as_, ref: task.id }),
         'not_found',
       )
       await expectRefusal(
-        t.query(internal.machine.mcp.getIssue, { ...as_, ref: task.id }),
+        t.query(internal.machine.mcp.getIssue, { now: NOW, ...as_, ref: task.id }),
         'not_found',
       )
     }

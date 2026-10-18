@@ -323,14 +323,21 @@ export async function matchingLabels(
   return out
 }
 
-/** Profile uuid to name over the organization's roster, for list rows and
- * search. */
-export async function rosterNames(ctx: QueryCtx, orgId: string): Promise<Map<string, string>> {
-  const profiles = await ctx.db
+/** The organization's roster, people and agents alike, for list rows. */
+export const rosterOf = (ctx: QueryCtx, orgId: string): Promise<Doc<'profiles'>[]> =>
+  ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .collect()
-  return new Map(profiles.map((p) => [p.id, p.name]))
+
+/** Profile uuid to name over a roster, for list rows and search. */
+export const namesOf = (profiles: readonly Doc<'profiles'>[]): Map<string, string> =>
+  new Map(profiles.map((p) => [p.id, p.name]))
+
+/** Profile uuid to name over the organization's roster, for list rows and
+ * search. */
+export async function rosterNames(ctx: QueryCtx, orgId: string): Promise<Map<string, string>> {
+  return namesOf(await rosterOf(ctx, orgId))
 }
 
 /** The search fields of a task, without its labels and with its status line

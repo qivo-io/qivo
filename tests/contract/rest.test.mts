@@ -63,6 +63,7 @@ const ISSUE_KEYS = [
   'assignee_id',
   'assignee_name',
   'created_at',
+  'delay',
   'description',
   'due_date',
   'end_week',

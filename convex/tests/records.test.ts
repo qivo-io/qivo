@@ -278,6 +278,7 @@ describe('attachments in the single-task read', () => {
     const first = await plantAttachment(fx, issue, { created_at: '2026-01-01T00:00:00.000Z' })
     const before = Math.floor(Date.now() / 1000)
     const got = await fx.t.query(internal.machine.rest.getIssue, {
+      now: NOW,
       callerId: fx.agent.id,
       access: 'read',
       ref: `QN-${issue.num}`,
@@ -314,6 +315,7 @@ describe('attachments in the single-task read', () => {
     // MCP get_task and the REST list carry the same list
     const viaMcp = JSON.parse(
       await fx.t.query(internal.machine.mcp.getIssue, {
+        now: NOW,
         callerId: fx.agent.id,
         access: 'read',
         ref: issue.id,

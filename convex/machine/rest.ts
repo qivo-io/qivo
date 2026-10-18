@@ -501,11 +501,13 @@ export const updateUser = internalMutation({
  * → 100, limit -5 → 1, offset NaN → 0, `archived=maybe` → 400. Active tasks
  * answer an array paged with `offset`. Archived tasks need `project` and
  * answer `{next_cursor, tasks}`, paged with `cursor` (lib/core.ts
- * listArchivedIssuesCore), and refuse any `offset` but 0, `abc` and -5 too. */
+ * listArchivedIssuesCore), and refuse any `offset` but 0, `abc` and -5 too.
+ * `now` is the HTTP action's clock, which active rows' delay is judged by. */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
+    now: v.string(),
     project: v.optional(v.string()),
     status: v.optional(v.string()),
     priority: v.optional(v.string()),
@@ -567,7 +569,7 @@ export const listIssues = internalQuery({
       return await listActiveIssuesCore(
         ctx,
         me,
-        { ...filters, scope: req.scope, offset: req.offset },
+        { ...filters, scope: req.scope, offset: req.offset, now: a.now },
         view,
       )
     }
@@ -586,14 +588,15 @@ export const listIssues = internalQuery({
 
 /* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. The
  * single-task shape adds labels, subtasks, links, a group's remaining
- * hours, followers and attachments (lib/core.ts taskOut). */
+ * hours, followers and attachments (lib/core.ts taskOut). `now` is the HTTP
+ * action's clock, which the task's delay is judged by. */
 export const getIssue = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  args: { callerId: v.string(), access: vCredentialAccess, now: v.string(), ref: v.string() },
   handler: async (ctx, a): Promise<RestTaskJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
-    return await taskOut(ctx, issue, { surface: 'rest', me })
+    return await taskOut(ctx, issue, { surface: 'rest', me, now: a.now })
   },
 })
 
@@ -669,7 +672,7 @@ export const createIssue = internalMutation({
         parent_id: parent ?? undefined,
       },
     })
-    return await taskOut(ctx, issue, { surface: 'rest', me, readable, project: target })
+    return await taskOut(ctx, issue, { surface: 'rest', me, readable, project: target, now })
   },
 })
 
@@ -693,6 +696,7 @@ export const updateIssue = internalMutation({
     body: v.string(),
   },
   handler: async (ctx, a): Promise<RestTaskJson> => {
+    const now = new Date().toISOString()
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
@@ -749,7 +753,7 @@ export const updateIssue = internalMutation({
       destination !== undefined || parent !== undefined || 'add_labels' in b || 'remove_labels' in b
     if (Object.keys(fields).length === 0 && !toggles && !other) {
       // archived matching the current state is a clean no-op, not an error
-      if ('archived' in b) return await taskOut(ctx, issue, { surface: 'rest', me })
+      if ('archived' in b) return await taskOut(ctx, issue, { surface: 'rest', me, now })
       throw badRequest('no recognized fields to update')
     }
     // machine pre-check twin — fires on any non-null value; null clear passes
@@ -763,10 +767,10 @@ export const updateIssue = internalMutation({
       archive,
       labels,
       reason,
-      now: new Date().toISOString(),
+      now,
       provenance: provenanceOf(a.keyName),
     })
-    return await taskOut(ctx, task, { surface: 'rest', me })
+    return await taskOut(ctx, task, { surface: 'rest', me, now })
   },
 })
 
@@ -1145,6 +1149,7 @@ export const ROUTES: RestRoute[] = [
       r.runQuery(internal.machine.rest.listIssues, {
         callerId,
         access,
+        now: new Date().toISOString(),
         project: query('project'),
         status: query('status'),
         priority: query('priority'),
@@ -1171,7 +1176,12 @@ export const ROUTES: RestRoute[] = [
     access: 'read',
     status: 200,
     run: (r, { callerId, access, param }) =>
-      r.runQuery(internal.machine.rest.getIssue, { callerId, access, ref: param('ref') }),
+      r.runQuery(internal.machine.rest.getIssue, {
+        callerId,
+        access,
+        now: new Date().toISOString(),
+        ref: param('ref'),
+      }),
   }),
   route({
     method: 'PATCH',

@@ -393,7 +393,12 @@ describe('subtaskFamilyBackfill start', () => {
     const t = newT()
     const s = await scene(t)
     const getTask = (ref: string) =>
-      t.query(internal.machine.rest.getIssue, { callerId: s.f.admin.id, access: 'read', ref })
+      t.query(internal.machine.rest.getIssue, {
+        now: NOW,
+        callerId: s.f.admin.id,
+        access: 'read',
+        ref,
+      })
     expect(await getTask(s.lone.id)).toMatchObject({ is_group: true })
     expect(await getTask(s.parent.id)).toMatchObject({ is_group: true })
 

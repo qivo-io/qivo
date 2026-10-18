@@ -343,7 +343,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_tasks',
       title: 'List tasks',
       description:
-        "Tasks you can see, optionally filtered, oldest first by creation. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. A group's `progress` counts the done and total tasks without subtasks under it that you can see, and `last_comment_at` is when a task was last commented on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default. `archived: true` lists archived tasks instead and needs `project`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that `list_projects` returns with and without `archived: true`. That answer is `{next_cursor, tasks}`, most recently archived first; pass `next_cursor` back as `cursor` until it is null, because a page may hold fewer than `limit` tasks, even none. Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
+        "Tasks you can see, optionally filtered, oldest first by creation. `is_group: true` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. A group's `progress` counts the done and total tasks without subtasks under it that you can see, `delay` is the app's projected delay when the task's project tracks it, and `last_comment_at` is when a task was last commented on. `project` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. `status` takes one status or a list. `search` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. `offset` skips that many results. Active tasks only by default. `archived: true` lists archived tasks instead and needs `project`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that `list_projects` returns with and without `archived: true`. That answer is `{next_cursor, tasks}`, most recently archived first; pass `next_cursor` back as `cursor` until it is null, because a page may hold fewer than `limit` tasks, even none. Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -407,6 +407,7 @@ export const TOOLS: McpTool[] = [
       r.runQuery(internal.machine.mcp.listIssues, {
         callerId,
         access,
+        now: new Date().toISOString(),
         ...(args as {
           project?: string
           status?: Doc<'issues'>['status'] | Doc<'issues'>['status'][]
@@ -427,7 +428,7 @@ export const TOOLS: McpTool[] = [
       name: 'get_task',
       title: 'Get task',
       description:
-        "One task with its full description, labels, subtasks, links and attachments (with 10-minute download links), and for a group (`is_group: true`, whose stored status is dormant) `group_remaining_hours`. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them). It also has `progress` for a group and `last_comment_at`.",
+        "One task with its full description, labels, subtasks, links and attachments (with 10-minute download links), and for a group (`is_group: true`, whose stored status is dormant) `group_remaining_hours`. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them). It also has `progress` for a group, `delay` (the projected delay when its project tracks it) and `last_comment_at`.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -440,7 +441,12 @@ export const TOOLS: McpTool[] = [
       },
     },
     run: (r, { callerId, access, args }) =>
-      r.runQuery(internal.machine.mcp.getIssue, { callerId, access, ...(args as { ref: string }) }),
+      r.runQuery(internal.machine.mcp.getIssue, {
+        callerId,
+        access,
+        now: new Date().toISOString(),
+        ...(args as { ref: string }),
+      }),
   },
   {
     access: 'read',
@@ -1640,6 +1646,7 @@ export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
     access: vCredentialAccess,
+    now: v.string(),
     project: v.optional(v.string()),
     status: v.optional(v.union(vIssueStatus, v.array(vIssueStatus))),
     priority: v.optional(vIssuePriority),
@@ -1687,7 +1694,7 @@ export const listIssues = internalQuery({
         await listActiveIssuesCore(
           ctx,
           me,
-          { ...filters, scope: req.scope, offset: req.offset },
+          { ...filters, scope: req.scope, offset: req.offset, now: a.now },
           view,
         ),
       )
@@ -1708,13 +1715,14 @@ export const listIssues = internalQuery({
 
 /* get_task answers the single-task shape, the list row plus labels,
  * subtasks, links, a group's remaining hours, followers and attachments
- * (lib/core.ts taskOut). */
+ * (lib/core.ts taskOut). `now` is the HTTP action's clock, which the task's
+ * delay is judged by. */
 export const getIssue = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, { callerId, access, ref }) => {
+  args: { callerId: v.string(), access: vCredentialAccess, now: v.string(), ref: v.string() },
+  handler: async (ctx, { callerId, access, now, ref }) => {
     const me = await asMachineCaller(ctx, callerId, access)
     const issue = await mustFindIssue(ctx, me, ref)
-    return pretty(await taskOut(ctx, issue, { surface: 'mcp', me }))
+    return pretty(await taskOut(ctx, issue, { surface: 'mcp', me, now }))
   },
 })
 

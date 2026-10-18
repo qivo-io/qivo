@@ -61,7 +61,7 @@ const activeList = async (ctx: MutationCtx, fx: Fx, search: string) =>
   await listActiveIssuesCore(
     ctx,
     fx.admin,
-    { scope: null, search, stars: true, limit: 1000, offset: 0 },
+    { now: NOW, scope: null, search, stars: true, limit: 1000, offset: 0 },
     { surface: 'rest', cat: await loadCatalogue(ctx, fx.admin), readable: () => true },
   )
 
@@ -85,7 +85,12 @@ const found = (fx: Fx, c: SearchCase) =>
             view,
           )
         ).rows
-      : await listActiveIssuesCore(ctx, fx.admin, { ...filters, scope: null, offset: 0 }, view)
+      : await listActiveIssuesCore(
+          ctx,
+          fx.admin,
+          { now: NOW, ...filters, scope: null, offset: 0 },
+          view,
+        )
     return rows.map((i) => i.id).sort()
   })
 
@@ -179,6 +184,7 @@ describe('task search reads only the labels it can match', () => {
       (
         JSON.parse(
           await fx.t.query(internal.machine.mcp.listIssues, {
+            now: NOW,
             callerId: fx.admin.id,
             access: 'read',
             search,

@@ -61,6 +61,8 @@ due date.
   outlines Due in red.
 - **Overview** includes projected misses in **Overdue & at risk** and counts
   **Delayed** and **Slipping** tasks in the health table.
+- **REST and MCP** task results carry the same verdict as `delay`, judged on
+  today's date in UTC. See [Automation & AI](./automation-ai-the-rest-api-and-the-mcp-server.md).
 
 ## Turning it on and off
 
