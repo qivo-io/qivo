@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { profileCanSeeProject } from '../lib/access'
+import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
-import { deleteIssueDeep } from '../model/cascade'
+import { moveTasksToTrash, restoreItems } from '../model/deletedItems'
 import { notifyCommentInsert, notifyIssueInsert, notifyIssueUpdate } from '../model/messages'
 import {
   as,
@@ -47,7 +48,7 @@ async function fixture() {
   })
   const issue = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
   const subscribe = async (
-    name: 'task.updated' | 'task.created' | 'task.deleted' | 'comment.created',
+    name: 'task.updated' | 'task.created' | 'task.deleted' | 'task.restored' | 'comment.created',
     filters: { task_id?: string; project_id?: string } = {},
     expires_at: number | null = Date.now() + 60_000,
   ) => {
@@ -107,9 +108,14 @@ describe('durable task events', () => {
     expect(rows[0].payload).not.toContain('encrypted-test-key')
   })
 
-  it('emits create, comment and delete through the shared model hooks', async () => {
+  it('emits create, comment, delete and restore through the shared model hooks', async () => {
     const f = await fixture()
-    for (const name of ['task.created', 'comment.created', 'task.deleted'] as const)
+    for (const name of [
+      'task.created',
+      'comment.created',
+      'task.deleted',
+      'task.restored',
+    ] as const)
       await f.subscribe(name)
     await f.t.run(async (ctx) => {
       const a = { issue: f.issue, actor: f.fx.user, now: new Date().toISOString() }
@@ -118,14 +124,42 @@ describe('durable task events', () => {
     })
     await flushWebhookEvents(f.t)
     await f.t.run((ctx) =>
-      deleteIssueDeep(ctx, { issue: f.issue, actor: f.fx.user, now: new Date().toISOString() }),
+      moveTasksToTrash(ctx, {
+        actor: f.fx.user,
+        root: f.issue,
+        subtasks: [],
+        now: new Date().toISOString(),
+      }),
     )
     await flushWebhookEvents(f.t)
     const rows = await f.rows()
     expect(rows.map((row) => row.name)).toEqual(['task.created', 'comment.created', 'task.deleted'])
     expect(rows[1].payload).not.toContain('private content')
+    // while the task waits in Deleted items, only task.deleted still delivers
     expect(await f.t.mutation(internal.webhooks.claim, { id: rows[0].id })).toBeNull()
     expect(await f.t.mutation(internal.webhooks.claim, { id: rows[2].id })).not.toBeNull()
+    await f.t.run(async (ctx) => {
+      const item = await ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', f.issue.id))
+        .unique()
+      if (item === null) throw new Error('the task is not in Deleted items')
+      const result = await restoreItems(ctx, {
+        me: f.fx.user,
+        items: [item],
+        now: new Date().toISOString(),
+      })
+      expect(result.restored).toEqual([item.id])
+      expect(await byId(ctx, 'issues', f.issue.id)).not.toBeNull()
+    })
+    await flushWebhookEvents(f.t)
+    const restored = (await f.rows()).filter((row) => row.name === 'task.restored')
+    expect(restored).toHaveLength(1)
+    expect(JSON.parse(restored[0].payload)).toMatchObject({
+      name: 'task.restored',
+      data: { task_id: f.issue.id, actor_id: f.fx.user.id, changed_fields: [] },
+    })
+    expect(await f.t.mutation(internal.webhooks.claim, { id: restored[0].id })).not.toBeNull()
   })
 
   it('refuses unreadable filters and another credential cannot delete a subscription', async () => {

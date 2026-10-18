@@ -212,13 +212,15 @@ async function trimUnreadMessages(
 }
 
 /* ---------------------------------------------------------------- preload
- * Rows a bulk writer already holds, handed to notifyIssueInsert and
- * notifyCommentInsert so each call need not read them again. A preload is a
- * snapshot: it is valid only while nothing in the transaction changes
- * profiles, projects, grants or teams, so it must never be passed from an
- * interactive mutation. Only the Northstar seed (demoSeed.ts's
- * writeNorthstarWork) passes one; interactive mutations pass nothing and
- * every row is read fresh. */
+ * Rows a bulk writer already holds, handed to notifyIssueInsert,
+ * notifyIssueUpdate and notifyCommentInsert so each call need not read them
+ * again. A preload is a snapshot: it is valid only while nothing in the
+ * transaction changes profiles, projects, grants or teams after it was read,
+ * so it must never be passed from an interactive mutation's own writes. Two
+ * writers pass one: the Northstar seed (demoSeed.ts's writeNorthstarWork) and
+ * a Deleted items step (model/deletedItems.ts), which reads it after any
+ * project rows moved and then only detaches tasks. Everything else passes
+ * nothing and every row is read fresh. */
 export type NotifyPreload = {
   /* Every profile of the issue's org, as stored now (after any patch). */
   orgProfiles: Doc<'profiles'>[]
@@ -1143,25 +1145,31 @@ export async function notifyIssueInsert(
  * `isGroup` marks a task with active subtasks, which always stays with its
  * assignee, so no write hands it over. The writers that can clear a group's
  * dormant reviewer (updateIssueCore, moveIssueCore) pass it; every other
- * caller changes neither the status nor the reviewer. */
+ * caller changes neither the status nor the reviewer.
+ *
+ * `actor` is absent only for a Deleted items step whose deleter is gone
+ * (model/deletedItems.ts), which also passes the step's `preload`. */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
     before: Doc<'issues'>
     after: Doc<'issues'>
-    actor: Doc<'profiles'>
+    actor: Doc<'profiles'> | undefined
     now: string
     suppressNotify?: boolean
     skipTaskEvent?: boolean
     isGroup?: boolean
+    preload?: NotifyPreload
   },
 ): Promise<void> {
-  const { before, after, actor, now } = a
+  const { before, after, actor, now, preload } = a
   if (!a.skipTaskEvent)
     await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before, actor, now })
   const isGroup = a.isGroup === true
-  const project = await byId(ctx, 'projects', after.project_id)
-  const orgProfiles = await orgProfilesOf(ctx, after.org_id)
+  const project =
+    preload?.projects.get(after.project_id) ?? (await byId(ctx, 'projects', after.project_id))
+  const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, after.org_id))
+  const visibility = preload?.visibility
 
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into
@@ -1183,11 +1191,12 @@ export async function notifyIssueUpdate(
       issue_id: after.id,
       kind: 'mention',
       body: 'Mentioned you in the description',
-      actor_id: actor.id,
+      actor_id: actor?.id,
       now,
       issue: after,
       project: project ?? undefined,
       recipient: m,
+      visibility,
     })
   }
 
@@ -1202,6 +1211,7 @@ export async function notifyIssueUpdate(
         org_id: after.org_id,
         project,
         now,
+        visibility,
       })
     }
   }
@@ -1219,6 +1229,7 @@ export async function notifyIssueUpdate(
         org_id: after.org_id,
         project,
         now,
+        visibility,
       })
     }
   }
@@ -1377,11 +1388,12 @@ export async function notifyIssueUpdate(
       issue_id: after.id,
       kind: 'change',
       body: mine.join('. '),
-      actor_id: actor.id,
+      actor_id: actor?.id,
       now,
       issue: after,
       project: project ?? undefined,
       recipient,
+      visibility,
     })
   }
 }

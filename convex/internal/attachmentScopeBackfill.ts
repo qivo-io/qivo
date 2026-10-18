@@ -18,7 +18,12 @@
  * (model/archiveMarks.ts), as every archive does. A row that named another
  * organization is logged by id. A row whose task is gone is logged by id,
  * counted in `orphans` and left alone, because deleting it would delete
- * bytes and is a separate decision. While one without org_id remains,
+ * bytes and is a separate decision. That includes a row of a task in
+ * Deleted items while its move or restore runs, or while a move that got
+ * stuck waits for an admin's Delete now, because the task is out of issues
+ * until then (model/deletedItems.ts). The backfill reads no deleted_rows,
+ * so a stored row keeps what it held, and a restore gives it its task's
+ * project (writeRowBack). While one without org_id remains,
  * storageUsage reads it on every call and the snapshot keeps reading
  * attachments task by task.
  *

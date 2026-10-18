@@ -33,6 +33,7 @@ import { PROJECT_DESCRIPTION_MAX } from '../lib/projectLimits'
 import { REVIEW_HOURS_MAX, resolveReviewHours, roundReviewHours } from '../lib/review'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
+import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleArchivedReads } from './messages'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
 
@@ -90,29 +91,42 @@ function cleanKey(raw: string): string {
   return raw
 }
 
-/** The project holding `key` in the organization, archived or not. */
+/** The project holding `key` in the organization, archived or not, or
+ * 'trash' when a project in Deleted items holds it: its key stays reserved
+ * until it is purged, so a restore gets it back (deleted_rows.by_org_key). */
 async function keyHolder(
   ctx: QueryCtx,
   orgId: string,
   key: string,
-): Promise<Doc<'projects'> | null> {
-  return await ctx.db
+): Promise<Doc<'projects'> | 'trash' | null> {
+  const live = await ctx.db
     .query('projects')
     .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('key', key))
     .first()
+  if (live !== null) return live
+  const trashed = await ctx.db
+    .query('deleted_rows')
+    .withIndex('by_org_key', (q) => q.eq('org_id', orgId).eq('project_key', key))
+    .first()
+  return trashed === null ? null : 'trash'
 }
 
 /* An explicit key change (update) is refused when another project holds the
  * key. The REST API already admits that a key exists (rest.ts's one
- * deliberate 403 oracle), so this sentence discloses nothing new. */
+ * deliberate 403 oracle), so this sentence discloses nothing new. A key held
+ * in Deleted items reads the same for everyone but organization admins, who
+ * see every deleted item and so learn nothing from their own sentence. */
 async function assertKeyFree(
   ctx: QueryCtx,
-  orgId: string,
+  me: Doc<'profiles'>,
   key: string,
   self: string,
 ): Promise<void> {
-  const holder = await keyHolder(ctx, orgId, key)
-  if (holder !== null && holder.id !== self) {
+  const holder = await keyHolder(ctx, me.org_id, key)
+  if (holder === 'trash' && me.org_role === 'admin') {
+    throw badRequest('A project in Deleted items has that key.')
+  }
+  if (holder !== null && (holder === 'trash' || holder.id !== self)) {
     throw badRequest('a project with that key already exists in this organization')
   }
 }
@@ -494,7 +508,7 @@ export async function updateProjectCore(
   if (patch.review_hours !== undefined) db.review_hours = cleanReviewHours(patch.review_hours)
   if (patch.key !== undefined) {
     const key = cleanKey(patch.key)
-    await assertKeyFree(ctx, me.org_id, key, id)
+    await assertKeyFree(ctx, me, key, id)
     db.key = key
   }
   const editsOwnLead = nextLead === me.id || (prevLead === me.id && nextLead === undefined)
@@ -713,3 +727,76 @@ export async function unarchiveProjectCore(
   })
   return true
 }
+
+/** What a removal summary reads of one project tree: at most `cap` tasks
+ * and `bytes` of task documents (estimated), whichever comes first. The
+ * bytes stay at half of Convex's 16 MiB read limit, which leaves room for
+ * the query's other reads and the one task read past either limit. A
+ * mutable object, so tests can lower it. */
+export const REMOVAL_COUNT = { cap: 5000, bytes: 8 * 1024 * 1024 }
+
+/** Tasks counted in a project or a tree. `more`: the count stopped at a
+ * limit before it read all of them. Where it stopped it read one more task
+ * than it counted, so there are more than `tasks`; it counts nothing in the
+ * projects after that one. */
+export type RemovalCount = { tasks: number; archived_tasks: number; more: boolean }
+
+/**
+ * What archiving or deleting `project` takes along, for the app's Archive
+ * or delete window (projects.removalSummary): every sub-project, archived
+ * ones included, and the tasks of the whole tree, archived ones included,
+ * which the client cannot count from what its snapshot holds. Convex has no
+ * count, so the tasks are read within REMOVAL_COUNT for the whole tree,
+ * which keeps a very large tree, or one of long descriptions, within a
+ * query's limits. A count cut short says `more` ("more than 5,000 tasks").
+ */
+export async function removalSummaryOf(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+): Promise<RemovalCount & { sub_projects: (RemovalCount & SubProjectName)[] }> {
+  let tasksLeft = REMOVAL_COUNT.cap
+  let bytesLeft = REMOVAL_COUNT.bytes
+  let stopped = false
+  const count = async (id: string): Promise<RemovalCount> => {
+    let tasks = 0
+    let archived_tasks = 0
+    if (stopped) return { tasks, archived_tasks, more: true }
+    const range = ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', id))
+    for await (const task of range) {
+      const bytes = estimateDocumentBytes(task)
+      // the task past a limit is read but not counted, and shows that more remain
+      if (tasksLeft === 0 || bytes > bytesLeft) {
+        stopped = true
+        return { tasks, archived_tasks, more: true }
+      }
+      tasksLeft -= 1
+      bytesLeft -= bytes
+      tasks += 1
+      if (task.archived_at !== undefined) archived_tasks += 1
+    }
+    return { tasks, archived_tasks, more: false }
+  }
+  const own = await count(project.id)
+  const subs = await ctx.db
+    .query('projects')
+    .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
+    .collect()
+  const sub_projects: (RemovalCount & SubProjectName)[] = []
+  for (const sub of subs.sort((a, b) => a.sort_order - b.sort_order))
+    sub_projects.push({
+      id: sub.id,
+      name: sub.name,
+      key: sub.key,
+      archived: sub.archived_at !== undefined,
+      ...(await count(sub.id)),
+    })
+  const counted = [own, ...sub_projects]
+  return {
+    tasks: counted.reduce((n, c) => n + c.tasks, 0),
+    archived_tasks: counted.reduce((n, c) => n + c.archived_tasks, 0),
+    more: stopped,
+    sub_projects,
+  }
+}
+
+type SubProjectName = { id: string; name: string; key: string; archived: boolean }

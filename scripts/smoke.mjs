@@ -8,7 +8,9 @@
    reloading (realtime + fire-and-forget delete ordering). Cleanup deletes the
    smoke issue. A Team sync leg then edits the Remaining of a second
    temporary task, held by a temporary agent, from the agents step (the edit
-   stamps only that agent) and deletes both; both contexts sign out.
+   stamps only that agent) and deletes both; both contexts sign out. Deleted
+   tasks wait in Deleted items, so the final cleanup deletes both tasks for
+   good there (browser-demo.mjs purgeDeletedTasks).
    Auto-fail on any console/page output
    matching /saving is disabled|uploads are disabled/i, any uncaught page
    exception, or the old disabled copy in the DOM. Exits non-zero on the
@@ -36,6 +38,9 @@ const TITLE = `Smoke ${STAMP}`
 const PNG_NAME = `smoke-${STAMP}.png`
 const AGENT_KEY_NAME = `Smoke key ${STAMP}`
 const SYNC_AGENT = `Smoke agent ${STAMP}`
+// the temporary tasks' uuids, for the final cleanup in Deleted items
+const syncTaskId = randomUUID()
+let smokeTaskId = null
 
 // ---- deterministic small PNG (16x16 opaque red, < 16 KiB so compressImage's
 // MIN_BYTES floor passes it through BYTE-IDENTICAL — known exact size e2e)
@@ -1854,6 +1859,9 @@ try {
     })
     if (!boxed) await fail('Project settings Sub-projects and Project access are not named boxes')
   }
+  // TODO(Deleted items UI): the UI change replaces the Danger zone with the
+  // project settings section that opens "Archive or delete…". Move this
+  // assertion to that section in the same change.
   const dangerZone = projectSettings.locator('fieldset.settings-danger-zone')
   if ((await dangerZone.count()) !== 1 || !(await dangerZone.locator('legend').textContent()))
     await fail('Project settings has no Danger zone box')
@@ -2384,9 +2392,14 @@ try {
   await pageA.screenshot({ path: `${SHOTS}/smoke-export.png` })
   log('A: organization ZIP contains task JSON and exact uploaded bytes; personal data excluded')
 
-  // ---- 8. cleanup: A deletes the smoke issue (cascade reaps the attachment's
-  // bytes); B watches it leave WITHOUT reload — the delete is fire-and-forget
-  // on the client, so B's removal doubles as the ordering proof
+  // ---- 8. cleanup: A deletes the smoke issue, which moves it with its
+  // attachment to Deleted items (the final cleanup deletes it for good); B
+  // watches it leave WITHOUT reload — the delete is fire-and-forget on the
+  // client, so B's removal doubles as the ordering proof
+  smokeTaskId = await pageA.evaluate(
+    (k) => window.PLANNER.issues.find((i) => i.key === k)?.id ?? null,
+    key,
+  )
   const gone = await pageA.evaluate((k) => window.PLANNER.deleteIssue(k), key)
   void gone
   await pageB.waitForFunction((t) => !document.body.innerText.includes(t), TITLE, {
@@ -2410,7 +2423,6 @@ try {
   // which sits On it on the agents step. The first smoke task is gone, so
   // this one reuses TITLE; after a failure the finally cleanup deletes it
   // with the other temporaries and removes the agent by its run-unique name.
-  const syncTaskId = randomUUID()
   const syncAgentId = randomUUID()
   const stampsBefore = await pageA.evaluate(
     async ({ id, agent, name, title, project }) => {
@@ -2587,6 +2599,7 @@ try {
       issueTitle: TITLE,
       agentKeyName: AGENT_KEY_NAME,
       agentName: SYNC_AGENT,
+      taskIds: [smokeTaskId, syncTaskId],
     })
     const after = await inspectBrowserDemo(demo)
     if (JSON.stringify(after) !== JSON.stringify(before)) {
@@ -2594,7 +2607,7 @@ try {
       console.error('[smoke] Northstar counts or anchor changed after cleanup')
     } else {
       log(
-        'temporary tasks, attachment, agent key and agent removed; Northstar counts and dates preserved',
+        'temporary tasks, attachment, agent key and agent removed, also from Deleted items; Northstar counts and dates preserved',
       )
     }
   } catch (e) {

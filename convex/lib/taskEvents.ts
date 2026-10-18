@@ -11,6 +11,7 @@ export const EVENT_NAMES = [
   'task.created',
   'task.updated',
   'task.deleted',
+  'task.restored',
   'comment.created',
 ] as const
 export type EventName = (typeof EVENT_NAMES)[number]
@@ -38,7 +39,10 @@ export const EVENT_CATALOG = EVENT_NAMES.map((name) => ({
     'task.created': 'A task was created in a project you can read.',
     'task.updated':
       'Stored task fields changed, including scheduling, assignment, archiving and restoration.',
-    'task.deleted': 'A task was deleted. Deleting its project does not deliver task.deleted.',
+    'task.deleted':
+      'A task was moved to Deleted items. Deleting its project does not deliver task.deleted.',
+    'task.restored':
+      'A task came back from Deleted items. Restoring its project does not deliver task.restored.',
     'comment.created': 'A comment was added to a task. Use list_comments to read the discussion.',
   }[name],
   delivery: ['webhook'],

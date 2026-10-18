@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { INBOX_LIMIT, loadInbox } from '../lib/inbox'
+import { startPurge } from '../model/deletedItems'
 import { invokeSnapshot } from './backendPerformance.setup'
 import {
   as,
@@ -1309,7 +1310,11 @@ describe('activity', () => {
     expect(await taskRows(f.guest)).toEqual([created, back, there].sort())
   })
 
-  it('a task that moved out of a deleted project keeps its earlier history', async () => {
+  /* Activity rows keep a deleted project's id while it is in Deleted items,
+   * so a restore finds them filed under it again. Members who cannot see a
+   * project lose its rows meanwhile, and get the moved task's earlier rows
+   * back once the purge clears that id (model/deletedItems.ts). */
+  it('a task that moved out of a deleted project gets its earlier history back once the project is purged', async () => {
     const destinationOnly = await seatOn(f.sub.id)
     const taskId = uuid()
     await as(t, f.user).mutation(api.issues.create, {
@@ -1331,6 +1336,16 @@ describe('activity', () => {
     expect(await taskRows(destinationOnly)).toEqual([])
 
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
+    for (const p of [destinationOnly, f.guest, f.user]) expect(await taskRows(p)).toEqual([])
+    expect(await taskRows(f.admin)).toEqual(['created', 'moved'])
+    await t.run(async (ctx) => {
+      const item = await ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', f.sub2.id))
+        .unique()
+      if (item === null) throw new Error('the project did not move to Deleted items')
+      await startPurge(ctx, item, { inline: true })
+    })
     for (const p of [destinationOnly, f.guest, f.user]) {
       expect(await taskRows(p)).toEqual(['created', 'moved'])
     }

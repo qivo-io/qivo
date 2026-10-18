@@ -15,13 +15,13 @@
  * methods are served outside it. Shared RULES live in model/issues.ts
  * (cleanTitle, pairRule, metaNeedsSub, assertLive, assertAssignable,
  * assertAssignableChange, assertNoSubtasks, assertNoGroupDates,
- * assertWeekPair, SUB_MUST_NAME, deleteIssueCore), model/comments.ts
- * (postComment, newestComments) and model/orgs.ts (setPlannableHoursCore);
- * the task search text is lib/search.ts taskSearchText, as in the app. This
- * file adds only what the model does not own: the caller shape, the ref
- * grammar, the catalogue, the access flags, the shared list reads, the wire
- * projections and applyTaskUpdate, the write order of a task update on both
- * surfaces.
+ * assertWeekPair, SUB_MUST_NAME), model/deletedItems.ts (moveTasksToTrash,
+ * the task delete), model/comments.ts (postComment, newestComments) and
+ * model/orgs.ts (setPlannableHoursCore); the task search text is
+ * lib/search.ts taskSearchText, as in the app. This file adds only what the
+ * model does not own: the caller shape, the ref grammar, the catalogue, the
+ * access flags, the shared list reads, the wire projections and
+ * applyTaskUpdate, the write order of a task update on both surfaces.
  *
  * Refusal grammar: helpers here throw the shipped ConvexError {code, message,
  * reason?} values (lib/functions.ts). REST maps code → status (not_found 404,
@@ -35,6 +35,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { type AttachmentJson, taskAttachments } from '../model/attachments'
 import { newestComments, postArchiveReason } from '../model/comments'
+import type { Via } from '../model/deletedItems'
 import {
   assertLive,
   type IssuePatch,
@@ -85,6 +86,7 @@ import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { ISSUE_PREFIX, issueKey } from './taskRefs'
+import { cutName } from './textLimits'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
@@ -1801,6 +1803,36 @@ const CREDENTIAL_KIND = {
   oauth_connections: 'oauth',
 } as const satisfies Record<EventOwner['credential_table'], string>
 
+/* A credential's name: a key's or token's own, or the connected app's. */
+const credentialName = (row: Doc<EventOwner['credential_table']>): string =>
+  'client_name' in row ? row.client_name : row.name
+
+/**
+ * The credential a REST or MCP delete came through, as Deleted items records
+ * it (`via`): its table, uuid and current name. A name longer than NAME_MAX,
+ * which only a key, token or connection named before that cap has, is cut
+ * as restProvenance cuts a key's name (lib/textLimits.ts cutName), so every
+ * item the credential deletes does not repeat it. `credential` names the
+ * exact row that authenticated the request. One revoked or expired since then
+ * still names itself, because a request already accepted may finish; one
+ * deleted since then, or of another profile, answers like a caller gone
+ * between lookup and dispatch.
+ */
+export async function credentialVia(
+  ctx: QueryCtx,
+  me: Caller,
+  credential: EventOwner,
+): Promise<Via> {
+  const row = await byId(ctx, credential.credential_table, credential.credential_id)
+  if (row === null || row._id !== credential.credential_row_id || row.profile_id !== me.id)
+    throw callerGone()
+  return {
+    table: credential.credential_table,
+    id: credential.credential_id,
+    name: cutName(credentialName(row)),
+  }
+}
+
 /**
  * Who the caller is acting as, through which credential, with what access.
  * `credential` names the exact row that authenticated the request, in the
@@ -1840,7 +1872,7 @@ export async function meCore(
       kind: CREDENTIAL_KIND[credential.credential_table],
       access: machineAccess(me, access),
       expires_at: 'token_hash' in row ? (row.expires_at ?? null) : null,
-      name: 'client_name' in row ? row.client_name : row.name,
+      name: credentialName(row),
     },
   }
 }

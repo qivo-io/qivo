@@ -3476,8 +3476,8 @@ export const PLANNER = {
     if (!row || !uuid) return Promise.resolve(false)
     const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
     const gone = new Set([uuid, ...subtaskIds])
-    // local FK-cascade mirror; the server (model/cascade) owns rows AND
-    // attachment bytes in one transaction, so no reap-before-delete here
+    // local mirror of the delete; the server moves the rows to Deleted items
+    // (convex/model/deletedItems.ts) and keeps the attachment bytes there
     const mirror = () => {
       rows.issues.forEach((r) => {
         // the SET NULL cascade fires the touch server-side — mirror both

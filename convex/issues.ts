@@ -45,11 +45,11 @@ import { byId } from './lib/db'
 import { vIssuePriority, vIssueStatus, vLinkType } from './lib/enums'
 import { authedQuery, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
 import { postArchiveReason } from './model/comments'
+import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import {
   archiveIssueCore,
   assertCanEdit,
   createIssueCore,
-  deleteIssueCore,
   hasSubtasks,
   moveIssueCore,
   subtasksWouldMove,
@@ -283,15 +283,29 @@ export const moveCarriesSubtasks = orgQuery({
  * optional early-archive reason posted as a normal comment — author pinned
  * to the actor, sharing the archive's `now` (0111: the 'New comment' and
  * 'Archived' messages land at the same instant; the prune tie-break falls to
- * id). Archiving an already-archived row is a no-op and posts no reason. */
+ * id). Archiving an already-archived row is a no-op and posts no reason.
+ * `keep_subtasks` is the archive window's choice to keep the subtasks: each
+ * active direct child is detached first, exactly as a delete detaches it,
+ * and becomes a top-level task; the task is archived alone and its archived
+ * children stay attached (model/issues.ts archiveIssueCore). REST and MCP
+ * always archive the subtree. */
 export const archive = orgMutation({
-  args: { id: v.string(), reason: v.optional(v.string()) },
-  handler: async (ctx, { id, reason }) => {
+  args: {
+    id: v.string(),
+    reason: v.optional(v.string()),
+    keep_subtasks: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { id, reason, keep_subtasks }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const wasActive = issue.archived_at === undefined
-    const after = await archiveIssueCore(ctx, { me: ctx.me, issue, now })
+    const after = await archiveIssueCore(ctx, {
+      me: ctx.me,
+      issue,
+      now,
+      keepSubtasks: keep_subtasks === true,
+    })
     if (wasActive) await postArchiveReason(ctx, { issue: after, author: ctx.me, reason, now })
     return { issue: await pubFor(ctx, ctx.me, after) }
   },
@@ -312,11 +326,13 @@ export const unarchive = orgMutation({
 })
 
 /* ------------------------------------------------------------- deleteDeep
- * P.deleteIssue, one model/issues deleteIssueCore per task. model/cascade
- * owns the FK edges (children detached + touched + notified, links/labels/
- * subscriptions/comments/messages/attachment rows AND bytes). Activity rows
- * survive, because history outlives its subjects. The 'deleted' row matches
- * the old client's, with no detail.
+ * P.deleteIssue: the task and the chosen subtasks move to Deleted items as
+ * one item (model/deletedItems.ts moveTasksToTrash), where a person can
+ * restore them. Their messages are deleted, children left behind are
+ * detached, touched and notified, and each task writes the 'deleted'
+ * activity row the old client wrote, with no detail. `reason` is shown in
+ * Deleted items, trimmed and refused past DELETE_REASON_MAX
+ * (lib/textLimits.ts, 500 characters).
  *
  * `subtask_ids` names the subtasks the caller chose to delete with it, as
  * the delete window listed them. Each must still be an active task under one
@@ -325,15 +341,21 @@ export const unarchive = orgMutation({
  * window showed.
  * They go deepest first, so every subtask left behind (archived, in a
  * project the caller cannot edit or see, or not chosen) is detached from the
- * task above it and becomes a top-level task, keeping its own subtasks. */
+ * task above it and becomes a top-level task, keeping its own subtasks. A
+ * chosen subtask keeps its parent in Deleted items. */
 export const SUBTASKS_CHANGED =
   'the subtasks changed while the window was open; check them and delete again'
 export const deleteDeep = orgMutation({
-  args: { id: v.string(), subtask_ids: v.optional(v.array(v.string())) },
-  handler: async (ctx, { id, subtask_ids }) => {
+  args: {
+    id: v.string(),
+    subtask_ids: v.optional(v.array(v.string())),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, { id, subtask_ids, reason }) => {
     const now = new Date().toISOString()
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
+    const why = cleanReason(reason)
     const chosen = new Set(subtask_ids ?? [])
     const doomed: Doc<'issues'>[] = []
     for (let i = -1; i < doomed.length && chosen.size; i++) {
@@ -352,9 +374,13 @@ export const deleteDeep = orgMutation({
       }
     }
     if (chosen.size) throw rule(SUBTASKS_CHANGED)
-    for (const gone of [...doomed.reverse(), issue]) {
-      await deleteIssueCore(ctx, { me: ctx.me, issue: gone, now })
-    }
+    await moveTasksToTrash(ctx, {
+      actor: ctx.me,
+      root: issue,
+      subtasks: doomed.reverse(),
+      now,
+      reason: why,
+    })
     return null
   },
 })

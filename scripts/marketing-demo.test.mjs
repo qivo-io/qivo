@@ -472,23 +472,27 @@ describe('resumable seed execution', () => {
 
   // Each command sends exactly its own apply modes: a seed must not wipe a
   // ready demo's manual edits, a wipe must not reseed, and a reset is two
-  // transactions, wipe then seed, for the same anchor.
+  // transactions, wipe then seed, for the same anchor. A wipe and a reset
+  // first empty Deleted items, which the wipe requires.
   it.each([
     ['seed', ['seed'], 'No local credentials file'],
-    ['wipe', ['wipe'], 'Demo work removed'],
-    ['reset', ['wipe', 'seed'], 'No local credentials file'],
+    ['wipe', ['purge', 'wipe'], 'Demo work removed'],
+    ['reset', ['purge', 'wipe', 'seed'], 'No local credentials file'],
   ])(
-    'runs %s on a ready demo as apply %j without new credentials or portraits',
+    'runs %s on a ready demo as %j without new credentials or portraits',
     async (command, modes, message) => {
       const cwd = folder()
       const client = {
         setAdminAuth: vi.fn(),
         query: vi.fn(async () => ({
           state: 'ready',
+          org_id: 'northstar-org',
           people: [{ key: 'nora', avatar_storage_id: 'existing' }],
           counts: { users: 8 },
         })),
-        mutation: vi.fn(async () => null),
+        mutation: vi.fn(async (reference) =>
+          getFunctionName(reference) === 'deletedItems:purgeOrg' ? { done: true } : null,
+        ),
       }
       const log = vi.fn()
       await runMarketingDemo([command, '--dev', '--confirm', 'northstar-labs'], {
@@ -498,19 +502,62 @@ describe('resumable seed execution', () => {
         clientFactory: () => client,
         log,
       })
+      const calls = client.mutation.mock.calls.map(([reference, args]) => [
+        getFunctionName(reference),
+        args,
+      ])
       expect(
-        client.mutation.mock.calls.map(([reference, args]) => [
-          getFunctionName(reference),
-          args.mode,
-        ]),
-      ).toEqual(modes.map((mode) => ['internal/marketingDemo:apply', mode]))
-      expect(client.mutation.mock.calls.every(([, args]) => args.anchor === '2026-08-31')).toBe(
-        true,
-      )
+        calls.map(([name, args]) => (name === 'deletedItems:purgeOrg' ? 'purge' : args.mode)),
+      ).toEqual(modes)
+      for (const [name, args] of calls) {
+        if (name === 'deletedItems:purgeOrg') expect(args).toEqual({ org_id: 'northstar-org' })
+        else {
+          expect(name).toBe('internal/marketingDemo:apply')
+          expect(args.anchor).toBe('2026-08-31')
+        }
+      }
       expect(existsSync(join(cwd, '.local'))).toBe(false)
       expect(JSON.stringify(log.mock.calls)).toContain(message)
     },
   )
+
+  it('purges Deleted items batch by batch before the wipe, and stops when they will not empty', async () => {
+    const run = async (batches) => {
+      let left = batches
+      const client = {
+        setAdminAuth: vi.fn(),
+        query: vi.fn(async () => ({
+          state: 'ready',
+          org_id: 'northstar-org',
+          people: PERSON_KEYS.map((key) => ({ key, avatar_storage_id: 'existing-avatar' })),
+        })),
+        mutation: vi.fn(async (reference) => {
+          if (getFunctionName(reference) !== 'deletedItems:purgeOrg') return null
+          left -= 1
+          return { done: left <= 0 }
+        }),
+      }
+      const outcome = await runMarketingDemo(['wipe', '--dev', '--confirm', 'northstar-labs'], {
+        cwd: folder(),
+        env: DEV_ENV,
+        clientFactory: () => client,
+        log: vi.fn(),
+      }).catch((error) => error)
+      return { outcome, names: client.mutation.mock.calls.map(([ref]) => getFunctionName(ref)) }
+    }
+    const three = await run(3)
+    expect(three.outcome).toMatchObject({ kind: 'complete' })
+    expect(three.names).toEqual([
+      'deletedItems:purgeOrg',
+      'deletedItems:purgeOrg',
+      'deletedItems:purgeOrg',
+      'internal/marketingDemo:apply',
+    ])
+    // a trash that never empties stops the command before anything is wiped
+    const endless = await run(Number.POSITIVE_INFINITY)
+    expect(endless.outcome.message).toContain('Re-run the same command')
+    expect(endless.names).not.toContain('internal/marketingDemo:apply')
+  })
 
   it('says the demo may be empty and to re-run reset only when the seed fails after the wipe', async () => {
     const run = async (failing) => {
@@ -520,7 +567,8 @@ describe('resumable seed execution', () => {
           state: 'ready',
           people: PERSON_KEYS.map((key) => ({ key, avatar_storage_id: 'existing-avatar' })),
         })),
-        mutation: vi.fn(async (_reference, args) => {
+        mutation: vi.fn(async (reference, args) => {
+          if (getFunctionName(reference) === 'deletedItems:purgeOrg') return { done: true }
           if (args.mode === failing)
             throw new Error(`Request included ${DEV_ENV.CONVEX_DEPLOY_KEY}`)
           return null
@@ -538,13 +586,13 @@ describe('resumable seed execution', () => {
       return { error, modes: client.mutation.mock.calls.map(([, args]) => args.mode) }
     }
     const seedFailed = await run('seed')
-    expect(seedFailed.modes).toEqual(['wipe', 'seed'])
+    expect(seedFailed.modes).toEqual([undefined, 'wipe', 'seed'])
     expect(seedFailed.error.message).toContain('demo work seed')
     expect(seedFailed.error.message).toContain('the demo may now be empty')
     expect(seedFailed.error.message).toContain('Re-run the same reset command')
     // a refused wipe changed nothing: no seed attempt and no empty-demo claim
     const wipeFailed = await run('wipe')
-    expect(wipeFailed.modes).toEqual(['wipe'])
+    expect(wipeFailed.modes).toEqual([undefined, 'wipe'])
     expect(wipeFailed.error.message).toContain('demo work wipe')
     expect(wipeFailed.error.message).not.toContain('empty')
   })
@@ -629,7 +677,7 @@ describe('resumable seed execution', () => {
 
   it.each([
     ['runInternalQueries', 'inspection', 'query'],
-    ['runInternalMutations', 'demo work wipe', 'mutation'],
+    ['runInternalMutations', 'Deleted items purge', 'mutation'],
   ])(
     'reports the missing %s permission without adjacent secrets',
     async (action, stage, method) => {

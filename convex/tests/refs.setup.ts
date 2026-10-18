@@ -15,7 +15,15 @@ import type { TableNames } from '../_generated/dataModel'
 import schema from '../schema'
 import type { T } from './helpers.setup'
 
-type RefEdge = { table: TableNames; field: string; target: TableNames; targetKey?: '_id' }
+/* `trashed` also accepts a target held in Deleted items: a deleted_rows row
+ * of the target table with that row_id (model/deletedItems.ts). */
+type RefEdge = {
+  table: TableNames
+  field: string
+  target: TableNames
+  targetKey?: '_id'
+  trashed?: true
+}
 
 export const REF_EDGES: readonly RefEdge[] = [
   { table: 'billing_settings', field: 'default_plan_id', target: 'billing_plans' },
@@ -66,7 +74,8 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'milestones', field: 'project_id', target: 'projects' },
   { table: 'activity_events', field: 'org_id', target: 'organizations' },
   { table: 'activity_events', field: 'actor_id', target: 'profiles' },
-  { table: 'activity_events', field: 'project_id', target: 'projects' },
+  // A project in Deleted items keeps its activity rows until it is purged.
+  { table: 'activity_events', field: 'project_id', target: 'projects', trashed: true },
   { table: 'comments', field: 'issue_id', target: 'issues' },
   { table: 'comments', field: 'author', target: 'profiles' },
   { table: 'comments', field: 'edited_by', target: 'profiles' },
@@ -98,6 +107,13 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'panorama_library', field: 'default_image_id', target: 'panorama_images' },
   { table: 'panorama_submissions', field: 'key_id', target: 'panorama_curation_keys' },
   { table: 'panorama_submissions', field: 'image_id', target: 'panorama_images' },
+  { table: 'deleted_items', field: 'org_id', target: 'organizations' },
+  { table: 'deleted_item_jobs', field: 'item_id', target: 'deleted_items' },
+  { table: 'deleted_item_parents', field: 'item_id', target: 'deleted_items' },
+  { table: 'deleted_rows', field: 'org_id', target: 'organizations' },
+  { table: 'deleted_rows', field: 'item_id', target: 'deleted_items' },
+  { table: 'deleted_tasks', field: 'org_id', target: 'organizations' },
+  { table: 'deleted_tasks', field: 'item_id', target: 'deleted_items' },
 ]
 
 /* Ref-shaped fields that are deliberately NOT integrity edges. */
@@ -198,6 +214,27 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // Better Auth actor identity retained with historical refill/audit records,
   // even after the account or its platform-operator enrollment is removed.
   'panorama_refills.actor_auth_id',
+  // Deleted items name what they hold by id while those rows are absent from
+  // the live tables: the root, its project and parent, a stored row's owner
+  // and own id, a stored project's lead, a stored task and its project.
+  // Restore and the list check each again (model/deletedItems.ts
+  // sameReference). The bytes are a _storage id like issue_attachments'.
+  'deleted_items.target_id',
+  'deleted_items.project_id',
+  'deleted_items.parent_project_id',
+  'deleted_rows.owner_id',
+  'deleted_rows.row_id',
+  'deleted_rows.storage_id',
+  'deleted_rows.lead_id',
+  'deleted_tasks.task_id',
+  'deleted_tasks.project_id',
+  'deleted_tasks.cross_project_id',
+  'deleted_item_jobs.scheduled_id',
+  // a task a restore wrote back without its parent, and that parent, which
+  // the attach after the reveal reads again (model/deletedItems.ts
+  // attachParent); either may be gone or moved by then
+  'deleted_item_parents.task_id',
+  'deleted_item_parents.parent_id',
   // the platform audit log survives its subjects on purpose
   'platform_audit_log.actor_auth_id',
   'platform_audit_log.target_org_id',
@@ -242,11 +279,15 @@ export async function assertNoDanglingRefs(t: T, label: string): Promise<void> {
       }
       live.set(table, ids)
     }
+    const trashed = new Set<string>()
+    for (const row of await ctx.db.query('deleted_rows').collect())
+      if (row.row_id !== undefined) trashed.add(`${row.table}:${row.row_id}`)
     const dangling: string[] = []
     for (const edge of REF_EDGES) {
       for (const row of await ctx.db.query(edge.table).collect()) {
         const value = (row as unknown as Record<string, unknown>)[edge.field]
         if (value === undefined) continue
+        if (edge.trashed && trashed.has(`${edge.target}:${String(value)}`)) continue
         if (!live.get(edge.target)?.[edge.targetKey ?? 'id'].has(value as string)) {
           dangling.push(
             `${label}: ${edge.table}.${edge.field} → ${edge.target} dangles (${String(value)})`,

@@ -74,8 +74,12 @@ import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { issueChanges, logActivity, machineDetail } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
-import { deleteIssueDeep } from './cascade'
-import { notifyIssueInsert, notifyIssueUpdate, scheduleArchivedReads } from './messages'
+import {
+  type NotifyPreload,
+  notifyIssueInsert,
+  notifyIssueUpdate,
+  scheduleArchivedReads,
+} from './messages'
 import { nextIssueNum } from './orgs'
 import { reviewHoursFor } from './projects'
 import { emitTaskEvent } from './taskEvents'
@@ -487,6 +491,15 @@ export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause it
 export const topLevelOf = (project: Pick<Doc<'projects'>, 'id' | 'parent_id'>): string =>
   project.parent_id ?? project.id
 
+/** Whether projects `child` and `parent` are in the same top-level project,
+ * so that a task in `child` may be a subtask of a task in `parent`.
+ * parentChainCheck and the restore from Deleted items (model/deletedItems.ts
+ * keptParent) share it. */
+export const sameTopLevel = (
+  child: Pick<Doc<'projects'>, 'id' | 'parent_id'>,
+  parent: Pick<Doc<'projects'>, 'id' | 'parent_id'>,
+): boolean => topLevelOf(child) === topLevelOf(parent)
+
 /* Refused by assertParentChain for a parent in another top-level project. */
 export const SUBTASK_PROJECT_RULE =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
@@ -505,10 +518,10 @@ export type ParentProblem =
   | 'too_deep'
 
 /** Checks a proposed parent link without throwing, for writers that adapt
- * instead of refusing (a restore clears a parent that no longer qualifies).
- * `child.project_id` is the project the child will be in after the write.
- * Checks the cheapest facts first, and a parent the actor cannot see is
- * `not_found` before anything else describes it. */
+ * instead of refusing; assertParentChain throws from it. `child.project_id`
+ * is the project the child will be in after the write. Checks the cheapest
+ * facts first, and a parent the actor cannot see is `not_found` before
+ * anything else describes it. */
 export async function parentChainCheck(
   ctx: QueryCtx,
   child: { id: string; org_id: string; project_id: string },
@@ -531,7 +544,7 @@ export async function parentChainCheck(
   }
   if (!(await hasProjectLevel(ctx, actor, parentProject.id, 'user'))) return no('no_write')
   const childProject = await byId(ctx, 'projects', child.project_id)
-  if (childProject === null || topLevelOf(childProject) !== topLevelOf(parentProject)) {
+  if (childProject === null || !sameTopLevel(childProject, parentProject)) {
     return no('other_project')
   }
   // upward walk: bound the chain above the attach point
@@ -684,6 +697,27 @@ export async function clearParentRemaining(
   })
   const after = (await ctx.db.get(parent._id)) as Doc<'issues'>
   await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now })
+}
+
+/* ------------------------------------------------------------- detaching
+ * A subtask its parent leaves behind: when the parent moves to Deleted
+ * items (model/deletedItems.ts) or is archived alone (archiveIssueCore with
+ * keepSubtasks). The child becomes a top-level task with the SET NULL's
+ * touch, and its followers read 'Detached from its parent' with
+ * task.updated, as model/cascade.ts deleteIssueDeep does. The child's
+ * project needs no Edit: only the link to the parent goes, as a delete has
+ * always detached such children. */
+export async function detachChild(
+  ctx: MutationCtx,
+  child: Doc<'issues'>,
+  actor: Doc<'profiles'> | undefined,
+  now: string,
+  preload?: NotifyPreload,
+): Promise<void> {
+  await ctx.db.patch(child._id, { parent_id: undefined, updated_at: now })
+  const after = await ctx.db.get(child._id)
+  if (after === null) return
+  await notifyIssueUpdate(ctx, { before: child, after, actor, now, preload })
 }
 
 /* ------------------------------------------------------- browser narration
@@ -892,7 +926,8 @@ export async function browserVerbDetail(
  *           tasks a row names through namedTaskNums, which knows only the
  *           browser wording
  *   move    detail = the browser's destination sentence plus the provenance
- *   delete  deleteIssueCore's `provenance` is the 'deleted' row's detail
+ *   delete  model/deletedItems.ts moveTasksToTrash's `provenance` is the
+ *           'deleted' row's detail
  *   move's and update's `later` name the people a later write of the same
  *           machine update sets (LaterPeople)
  *   move's `laterParent` is the parent the same machine update sets after
@@ -1707,14 +1742,25 @@ async function archiveSubtree(
  * projects some readers of the root cannot access. The Archived notice is
  * stored read, and the messages already stored about the root and the
  * subtree are marked read in the background (model/messages.ts
- * scheduleArchivedReads). */
+ * scheduleArchivedReads).
+ * keepSubtasks (the app's archive window only; REST and MCP archive the
+ * subtree): every active direct child is detached first, as a delete
+ * detaches it (detachChild), so the cascade finds only archived children,
+ * which stay attached, and the task is archived alone. */
 export async function archiveIssueCore(
   ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string },
+  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string; keepSubtasks?: boolean },
 ): Promise<Doc<'issues'>> {
   const { me, issue, now } = a
   await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at !== undefined) return issue
+  if (a.keepSubtasks === true) {
+    const kids = await ctx.db
+      .query('issues')
+      .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
+      .collect()
+    for (const kid of kids) if (kid.archived_at === undefined) await detachChild(ctx, kid, me, now)
+  }
   const before = { ...issue }
   await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })
   const descendants = await archiveSubtree(ctx, issue.id, now, me)
@@ -1830,33 +1876,4 @@ export async function unarchiveIssueCore(
   }
   await logActivity(ctx, event)
   return rootAfter
-}
-
-/* ----------------------------------------------------------- delete core
- * One task deleted with its 'deleted' activity row, shared by the app's
- * delete (each chosen subtask, then the task) and the machine deletes.
- * model/cascade.ts deleteIssueDeep does the deleting. It detaches, touches
- * and notifies the direct subtasks and removes the task's links, labels,
- * follows, comments, messages and attachments. Activity rows stay. The
- * row's detail is the machine provenance, or none for the app.
- * deleteIssueDeep itself stays ungated, because a project delete runs it
- * for every task after checking the project. */
-export async function deleteIssueCore(
-  ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string; provenance?: string },
-): Promise<void> {
-  const { me, issue, now } = a
-  await assertCanEdit(ctx, me, issue.project_id)
-  await deleteIssueDeep(ctx, { issue, actor: me, now })
-  await logActivity(ctx, {
-    org_id: issue.org_id,
-    actor_id: me.id,
-    verb: 'deleted',
-    target_type: 'issue',
-    target_id: issue.id,
-    label: issue.title,
-    detail: a.provenance,
-    project_id: issue.project_id,
-    ts: now,
-  })
 }

@@ -109,24 +109,37 @@ export async function trimActivity(
   return unsettled.length > room ? 'later' : 'done'
 }
 
+/** One activity row as its writers describe it. */
+export type ActivityEntry = {
+  org_id: string
+  actor_id: string | undefined
+  verb: string
+  target_type: ActivityTarget
+  target_id: string
+  label: string
+  detail?: string
+  ts: string
+  project_id?: string
+  related_project_id?: string
+  team_id?: string
+}
+
 // Activity commits with the mutation it describes. Retention runs later in
 // the background (requestActivityTrim), so a write never reads the feed.
-export async function logActivity(
-  ctx: MutationCtx,
-  e: {
-    org_id: string
-    actor_id: string | undefined
-    verb: string
-    target_type: ActivityTarget
-    target_id: string
-    label: string
-    detail?: string
-    ts: string
-    project_id?: string
-    related_project_id?: string
-    team_id?: string
-  },
-): Promise<void> {
+export async function logActivity(ctx: MutationCtx, e: ActivityEntry): Promise<void> {
+  await insertActivity(ctx, e)
+  // A read only. The organization row changes rarely (settings, the slug,
+  // an export record), so this check seldom makes a write retry.
+  const org = await byId(ctx, 'organizations', e.org_id)
+  if (org === null) throw notFound('organization not found')
+  await requestActivityTrim(ctx, e.org_id)
+}
+
+/** Inserts one activity row, without logActivity's organization check and
+ * trim request. A mutation that writes a row for each of many tasks inserts
+ * them with this and calls requestActivityTrim once afterwards, so it reads
+ * the retention row once rather than once per row. */
+export async function insertActivity(ctx: MutationCtx, e: ActivityEntry): Promise<void> {
   await ctx.db.insert('activity_events', {
     id: newUuid(),
     org_id: e.org_id,
@@ -141,11 +154,6 @@ export async function logActivity(
     related_project_id: e.related_project_id,
     team_id: e.team_id,
   })
-  // A read only. The organization row changes rarely (settings, the slug,
-  // an export record), so this check seldom makes a write retry.
-  const org = await byId(ctx, 'organizations', e.org_id)
-  if (org === null) throw notFound('organization not found')
-  await requestActivityTrim(ctx, e.org_id)
 }
 
 /* Task rows that name other tasks by key: a parent change written by

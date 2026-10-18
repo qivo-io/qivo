@@ -387,7 +387,7 @@ describe('activity retention, newest 500 shown and older rows trimmed in the bac
     expect(await trims(t)).toEqual([])
   })
 
-  it('project deletion and profile removal stay within limits with a trim backlog', async () => {
+  it('a project purge and profile removal stay within limits with a trim backlog', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // More rows about one project by one agent than a transaction may write
@@ -415,8 +415,35 @@ describe('activity retention, newest 500 shown and older rows trimmed in the bac
             .length,
       )
     await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
-    // the rows readers show lose the project; older ones wait for the trim
-    expect(await naming('project_id', f.sub2.id)).toBe(count - ACTIVITY_CAP)
+    // Deleted items keep the project, so its rows keep naming it
+    expect(await naming('project_id', f.sub2.id)).toBe(count)
+    const item = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', f.sub2.id))
+        .unique(),
+    )
+    if (item === null) throw new Error('the project is not in Deleted items')
+    // Delete now, its steps run one by one so that no trim runs yet
+    const job = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('deleted_item_jobs')
+          .withIndex('by_item', (q) => q.eq('item_id', item.id))
+          .unique(),
+      )
+    const stepThrough = async () => {
+      while ((await job()) !== null)
+        await t.mutation(internal.deletedItems.step, { item_id: item.id })
+    }
+    await stepThrough()
+    await as(t, f.admin).mutation(api.deletedItems.purge, { org_id: f.org.id, ids: [item.id] })
+    await stepThrough()
+    expect(await t.run((ctx) => ctx.db.get(item._id))).toBeNull()
+    // the rows readers show lose the project. They are the delete's own
+    // row, filed under the parent, and the newest 499 of the backlog. Older
+    // ones wait for the trim
+    expect(await naming('project_id', f.sub2.id)).toBe(count - (ACTIVITY_CAP - 1))
     await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.agent.id })
     expect(await naming('actor_id', f.agent.id)).toBe(count - ACTIVITY_CAP)
     const shown = await t.run((ctx) =>

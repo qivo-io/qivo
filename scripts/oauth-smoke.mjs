@@ -11,6 +11,7 @@ import {
   cleanupDemoArtifacts,
   inspectBrowserDemo,
   loadBrowserDemo,
+  purgeDeletedTasks,
   signInBrowser,
 } from './browser-demo.mjs'
 
@@ -238,6 +239,9 @@ try {
   stage = 'deleting the temporary planning task'
   await toolData(writeConnection.access_token, 'delete_task', { ref: task.id })
   taskAttempted = false
+  // delete_task moved it to Deleted items; delete it for good there
+  stage = 'deleting the temporary planning task from Deleted items'
+  await purgeDeletedTasks(demo, [task.id])
   log('Default approval reads, creates, updates and deletes a temporary planning task')
 
   stage = 'approval and read-only MCP access'
