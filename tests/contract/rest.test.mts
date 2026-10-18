@@ -70,11 +70,13 @@ const ISSUE_KEYS = [
   'id',
   'is_group',
   'key',
+  'last_comment_at',
   'num',
   'owner_id',
   'parent_id',
   'paused',
   'priority',
+  'progress',
   'project_id',
   'project_key',
   'project_num',
@@ -310,6 +312,8 @@ describe('serializer over the real wire (seeded QN-2)', () => {
     expect(typeof body.project_num).toBe('number')
     expect(body.status).toBe('progress')
     expect(body.is_group).toBe(true) // its two subtasks are live
+    // a group counts its subtasks, so its progress is an object, never null
+    expect(body.progress).toMatchObject({ total: expect.any(Number) })
     expect(body.priority).toBe('high')
     expect(body.assignee_name).toBe('Leo Martins')
     expect(body.reporter_name).toBe('Leo Martins')

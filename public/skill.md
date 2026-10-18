@@ -201,6 +201,15 @@ Useful field rules:
 - `owner_id` names whose work a task is. Filter with `owner_id` (MCP) or
   `owner` (REST) to find someone's work including their reviews. `status`
   takes a list on MCP and comma-separated values on REST.
+- A group's `progress` is the app's Progress, the done and total tasks
+  without subtasks under it that you can read; `partial: true` means some
+  are hidden from you, so its completion is unknown. `last_comment_at` is
+  when the task was last commented on, or `null`. `get_project` and
+  `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
+  tasks. If a task list asks for a smaller limit, its rows' newest comments
+  were too large to read at once; retry with a smaller `limit`. If it says
+  the organization's active tasks are too large to list, a smaller `limit`
+  does not help.
 
 ## Subtasks, moves, links and labels
 

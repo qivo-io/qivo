@@ -12,7 +12,9 @@ MCP offers `list_tasks`, `get_task`, `create_task`, `update_task`,
 IDs, and both can create subtasks, move tasks between sub-projects, link
 tasks, add or remove labels, upload, list and delete attachments, read a
 task's history and read planned hours per person by the same rules as the
-app. Images inside descriptions stay in the app.
+app. Both also read a group's progress, a project's completion and when a
+task was last commented on, as the app shows them. Images inside
+descriptions stay in the app.
 
 Uploading a file takes three steps on either interface. The first answers a
 one-time upload link, the client sends the file there, and the last attaches
