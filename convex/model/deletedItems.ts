@@ -2103,9 +2103,26 @@ const restoreLinks = (run: Run): Promise<boolean> =>
  * two items restoring together would trade their links for ever. */
 async function placeLink(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const link = docOf(row, 'issue_links')
+  // An end can be a legacy task near 1 MiB, so the step pays for what it
+  // reads about both ends and its drain stops between links once spent.
+  const cost: Cost = { ranges: 0, bytes: 0 }
+  const read = measured(run.ctx, cost)
+  try {
+    await placeLinkBy(run, read, row, link)
+  } finally {
+    run.budget.bytes -= cost.bytes
+  }
+}
+
+async function placeLinkBy(
+  run: Run,
+  read: MutationCtx,
+  row: Doc<'deleted_rows'>,
+  link: Stored<'issue_links'>,
+): Promise<void> {
   let away: { item: Item; end: string } | null = null
   for (const end of [link.source_id, link.target_id]) {
-    const where = await whereIsTask(run.ctx, end)
+    const where = await whereIsTask(read, end)
     const kept =
       where.where === 'live'
         ? sameReference(where.issue, run.item)

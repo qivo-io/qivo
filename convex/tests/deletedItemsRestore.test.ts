@@ -814,6 +814,37 @@ describe('restoring a task item', () => {
     expect((await itemById(t, item.id))?.state).toBe('ready')
   })
 
+  it('restores a task linked to 30 legacy tasks of 950 KiB in steps, within the real limits', async () => {
+    const t = newT({ transactionLimits: true })
+    chargeFilteredReads()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // descriptions from before the 20,000-character cap
+    const description = 'Old notes. '.repeat(90_000).slice(0, 950 * 1024)
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const ends: string[] = []
+    for (let i = 0; i < 30; i++)
+      ends.push((await plantIssue(t, { org_id, project_id: f.sub.id, description })).id)
+    await t.run(async (ctx) => {
+      for (const end of ends)
+        await ctx.db.insert('issue_links', {
+          org_id,
+          id: uuid(),
+          source_id: task.id,
+          target_id: end,
+          type: 'blocks',
+          pair_key: [task.id, end].sort().join(':'),
+          created_at: NOW,
+        })
+    })
+    await deleteTask(t, f, task.id)
+
+    await restore(t, f.user, [(await itemFor(t, task.id)).id])
+    await runSteps(t)
+    expect(await liveTask(t, task.id)).not.toBeNull()
+    expect((await liveRowsOf(t, task.id)).issue_links).toHaveLength(30)
+  }, 120_000)
+
   it('moves a link to the item that holds its other end, and drops one whose end is gone', async () => {
     const t = newT()
     const f = await withOrg(t)
