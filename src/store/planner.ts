@@ -2,13 +2,20 @@
    across organizations; display keys are org-scoped QN numbers. Relationships,
    project access and week-indexed schedules are derived from the raw rows.
 
-   Snapshots always update serverSnap. During optimistic writes, run() holds
-   their paint until the last write settles; refusal restores server truth.
+   Every non-null snapshot updates serverSnap. A later null (no seat left)
+   keeps the last one as the rollback anchor. During optimistic writes, run()
+   holds their paint until the last write settles; refusal restores server
+   truth.
    Comments and Team sync have separate subscriptions and update channels.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
 
-import { type FunctionArgs, type FunctionReturnType, getFunctionName } from 'convex/server'
+import {
+  type FunctionArgs,
+  type FunctionReference,
+  type FunctionReturnType,
+  getFunctionName,
+} from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
@@ -346,10 +353,12 @@ function dropComment(id: string) {
    so a server echo cannot erase an optimistic comment before its write
    settles. A failed query keeps the comments delivered before it and shows
    as P.commentsFailure. Convex reruns it when the data it read changes, and
-   the next delivery ends the failure. Two refusals empty the thread instead,
-   so they fail closed. not_found (the task is gone or hidden) loads it
-   empty, and forbidden (my access is gone) empties it and shows the
-   failure. */
+   the next delivery ends the failure. not_found (the task is gone or hidden)
+   loads the thread empty instead, so it fails closed. forbidden (the
+   sign-in or every seat in this organization is gone) is a failure like
+   the rest. The snapshot notice says access ended, and the comments on
+   screen stay, like the rest of the last snapshot. A task that leaves the
+   snapshot closes its window, which drops the thread. */
 function subscribeThread(issueUuid: string, orgId: string) {
   commentsUnsub?.()
   const subscription = ++threadSubscription
@@ -368,7 +377,7 @@ function subscribeThread(issueUuid: string, orgId: string) {
     console.error('[qivo] comments subscription failed:', err)
     const code = errData(err).code
     PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
-    if (code !== 'not_found' && code !== 'forbidden') {
+    if (code !== 'not_found') {
       // nothing to adopt. What is on screen stays, with the failure under it.
       emit('comments')
       return
@@ -822,11 +831,12 @@ export const TEXT_TOO_LONG = {
    not contain our effects, and adopting it would wipe the optimistic patch,
    flicker the pre-write state, then repaint when our write's own delivery
    lands. So both subscription handlers ALWAYS record the delivery (serverSnap
-   / commentsSnap) but defer adopt/rebuild/emit while inFlight > 0; the last
-   settle flushes the newest held delivery. Convergence is guaranteed —
-   Convex redelivers snapshots that include our own completed mutations —
-   and rollback stays trivially correct: a failed write's effects never
-   existed server-side, so re-adopting the newest serverSnap is the truth. */
+   / commentsSnap; a later null snapshot keeps the last serverSnap) but defer
+   adopt/rebuild/emit while inFlight > 0; the last settle flushes the newest
+   held delivery. Convergence is guaranteed — Convex redelivers snapshots
+   that include our own completed mutations — and rollback stays trivially
+   correct: a failed write's effects never existed server-side, so
+   re-adopting the newest serverSnap is the truth. */
 let inFlight = 0
 let storeEpoch = 0
 let demoDisposed = false
@@ -935,7 +945,9 @@ const asSentence = (m: string) =>
 
 /* --- snapshot health ---------------------------------------------------------
    The live snapshot (snapshot.forMe) can stop loading mid-session, after a
-   size limit as an organization grows, a lost sign-in or a faulty deploy.
+   size limit as an organization grows, a lost sign-in or a faulty deploy. It
+   can also come back empty (null) when the person loses every seat: an admin
+   removed or deactivated them, or their organization's deletion began.
    The last good snapshot stays on screen and the snapshot notice says so.
    While it is stale, edits to shared data pause. An edit made from stale
    data can overwrite newer work, and run()'s rollback would re-adopt the
@@ -945,21 +957,26 @@ const asSentence = (m: string) =>
    other shared write before it is sent, the backstop for a mutator that
    does not check first. Personal state (read marks, preferences,
    appearance, following) still saves, and so do the writes that only take
-   access away (UNPAUSED_WRITES). Panels that call Convex directly
-   (organization deletion and its export record, billing) act on their own
-   live queries, not on the snapshot, so they do not pause. Convex reruns a
-   failed query when the data it read changes, so a later delivery ends the
-   trouble without a reload. */
+   access away (UNPAUSED_WRITES). Without a seat most of those need one too,
+   so only the login's appearance and connected apps still save. Panels that
+   call Convex directly (organization deletion and its export record,
+   billing) act on their own live queries, not on the snapshot, so they do
+   not pause. Convex reruns a failed query when the data it read changes, so
+   a later delivery ends the trouble without a reload, a seat made active
+   again included. */
 
 /** The sentence every paused edit shows. */
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
+/** The sentence a paused edit shows after every seat is gone. */
+export const NO_ACCESS_TEXT = 'You no longer have access to this workspace.'
 
-/** Why the live snapshot is not current, while it is not. `asOf` is the last
-    good delivery's server time, null before any. `detail` is the error text
-    for support. `retrying` holds for one RETRY_GAP_MS window after Try again,
+/** Why the live snapshot is not current, while it is not. `no_access` means
+    a delivery found no seat left. `asOf` is the last good delivery's server
+    time, null before any. `detail` is the error text for support, empty for
+    `no_access`. `retrying` holds for one RETRY_GAP_MS window after Try again,
     or until a delivery ends the trouble. */
 export type SnapshotTrouble = {
-  kind: 'failed' | 'signed_out'
+  kind: 'failed' | 'signed_out' | 'no_access'
   since: number
   asOf: string | null
   retrying: boolean
@@ -1002,8 +1019,17 @@ const UNPAUSED_WRITES = new Set([
   'profiles:deactivate',
   'profiles:remove',
 ])
-const isUnpausedWrite = (name: string) =>
-  /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
+/* Whether `name` still goes out during `trouble`. Without a seat only the
+   login's own settings go out: its appearance and deleting a connected app,
+   which need no seat. The rest act on seats the person can no longer use,
+   and the server refuses them, so they pause. */
+const isUnpausedWrite = (name: string, trouble: SnapshotTrouble) =>
+  trouble.kind === 'no_access'
+    ? name.startsWith('appearance:') || name === 'oauthConnections:revoke'
+    : /^(messages|appearance):/.test(name) || UNPAUSED_WRITES.has(name)
+
+/** The sentence a paused edit shows during the current trouble. */
+const pausedText = () => (snapshotTrouble?.kind === 'no_access' ? NO_ACCESS_TEXT : PAUSED_TEXT)
 
 /* One action can reach several mutators. The pause toast shows once for it. */
 const PAUSED_TOAST_GAP_MS = 1000
@@ -1014,7 +1040,7 @@ function toastPaused() {
   const now = Date.now()
   if (now - pausedToastAt < PAUSED_TOAST_GAP_MS) return
   pausedToastAt = now
-  toast(PAUSED_TEXT)
+  toast(pausedText())
 }
 
 /** Toasts the pause and answers true while shared edits are paused. Every
@@ -1027,14 +1053,25 @@ function refusePausedEdit(): boolean {
   return true
 }
 
+/** Toasts the pause and answers true when write() would refuse `mutation`
+    now. A mutator whose write goes on while the snapshot is stale calls it
+    before its paint, because without a seat most of those writes pause too,
+    and a caller that announces success must not announce a paused one. */
+function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
+  if (!snapshotTrouble || isUnpausedWrite(getFunctionName(mutation), snapshotTrouble)) return false
+  toastPaused()
+  return true
+}
+
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
    wording says "reverted", never "reloading", because rollback is a repaint,
    not a refetch. A paused write never left the browser, so its sentence is
-   the pause itself. */
+   the pause itself. A write that was in flight when the last seat went is
+   refused as forbidden, and it reads like the writes paused after it. */
 function toastWriteError(e: unknown) {
   const d = errData(e)
-  if (d.code === 'paused') {
+  if (d.code === 'paused' || (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')) {
     toastPaused()
     return
   }
@@ -1054,7 +1091,7 @@ function toastWriteError(e: unknown) {
    sentence is quoted, forbidden reads the fixed permission line. */
 function restoreErrorText(e: unknown): string {
   const d = errData(e)
-  if (d.code === 'paused') return PAUSED_TEXT
+  if (d.code === 'paused') return pausedText()
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
@@ -1067,7 +1104,7 @@ function restoreErrorText(e: unknown): string {
    Anything else (offline, a server fault) asks for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
   const d = errData(e)
-  if (d.code === 'paused') return PAUSED_TEXT
+  if (d.code === 'paused') return pausedText()
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that."
@@ -1197,8 +1234,8 @@ const write: typeof convex.mutation = (mutation, args, options) => {
   if (DEMO_MODE && demoDisposed)
     return Promise.reject(new ConvexError({ code: 'forbidden', message: 'Your demo has expired.' }))
   const name = getFunctionName(mutation)
-  if (snapshotTrouble && !isUnpausedWrite(name))
-    return Promise.reject(new ConvexError({ code: 'paused', message: PAUSED_TEXT }))
+  if (snapshotTrouble && !isUnpausedWrite(name, snapshotTrouble))
+    return Promise.reject(new ConvexError({ code: 'paused', message: pausedText() }))
   const releaseUpdate = beginUpdateBlock()
   const visit = roadmapVisit
   const clearsHistory = visit && !visit.disabled && isTaskContentWrite(name)
@@ -4753,10 +4790,11 @@ export const PLANNER = {
   /* How long this person keeps a message they have read (0110); null = for
      ever. Fans out across every seat of this login server-side (auth +
      address arms); the optimistic mirror walks the auth arm, exactly as the
-     old echo did — the delivery trues any invited-seat stragglers. */
-  setMessageRetention: (days: number | null) => {
+     old echo did — the delivery trues any invited-seat stragglers. Answers
+     whether the change was sent. */
+  setMessageRetention: (days: number | null): boolean => {
     const me = rows.profiles.get(CURRENT_USER)
-    if (!me) return
+    if (!me || refusePausedWrite(api.profiles.setMessageRetention)) return false
     ;[...rows.profiles.values()]
       .filter((p) => p.auth_user_id && p.auth_user_id === me.auth_user_id)
       .forEach((p) => {
@@ -4765,6 +4803,7 @@ export const PLANNER = {
     rebuild()
     emit()
     run(write(api.profiles.setMessageRetention, { days }))
+    return true
   },
 
   /* Account appearance stays separate from the navigation prefs blob and the
@@ -4847,7 +4886,7 @@ export const PLANNER = {
       sentence = await write(api.profiles.setDisplayName, { name: next })
     } catch (e) {
       console.error('[qivo] rename failed:', e)
-      return errData(e).code === 'paused' ? PAUSED_TEXT : 'That name could not be saved'
+      return errData(e).code === 'paused' ? pausedText() : 'That name could not be saved'
     }
     if (sentence) return sentence.charAt(0).toUpperCase() + sentence.slice(1)
     return null
@@ -5619,9 +5658,11 @@ export const PLANNER = {
       put the stored value back. */
   updateUser: (id: string, patch: UserPatch): boolean => {
     const row = rows.profiles.get(id)
-    // deactivation alone only takes access away, so it goes on while paused
+    // deactivation alone only takes access away, so it goes on while paused,
+    // unless every seat is gone
     const deactivation = Object.keys(patch).length === 1 && patch.active === false
-    if (!row || (!deactivation && refusePausedEdit())) return false
+    const paused = deactivation ? refusePausedWrite(api.profiles.deactivate) : refusePausedEdit()
+    if (!row || paused) return false
     /* The client-predicted refusals stay audible first (the server states
        the same rules); a refusal here aborts the whole patch, matching the
        server's all-or-nothing mutation. */
@@ -5844,14 +5885,17 @@ export const PLANNER = {
      copy names the id until they do. Archived tasks, comments, messages and
      the removed profile's subscriptions are cleared later in the background,
      and this client holds only its own subscriptions. The server also owns
-     the avatar bytes, so there is no client-side reap. */
-  removeUser: (id: string) => {
-    if (id === CURRENT_USER) return
+     the avatar bytes, so there is no client-side reap. Answers whether the
+     removal was sent. */
+  removeUser: (id: string): boolean => {
+    if (id === CURRENT_USER) return false
     const target = rows.profiles.get(id)
-    if (!target) return
+    if (!target) return false
     const admins = [...rows.profiles.values()].filter((u) => u.org_role === 'admin')
-    // removal only takes access away, so it goes on while edits are paused
-    if (target.org_role === 'admin' && admins.length <= 1) return
+    if (target.org_role === 'admin' && admins.length <= 1) return false
+    // removal only takes access away, so it goes on while edits are paused,
+    // unless every seat is gone
+    if (refusePausedWrite(api.profiles.remove)) return false
     ;[...rows.issues.values()].forEach((i) => {
       if (
         i.assignee_id !== id &&
@@ -5878,6 +5922,7 @@ export const PLANNER = {
     rebuild()
     emit()
     run(write(api.profiles.remove, { org_id: target.org_id, id }))
+    return true
   },
 
   /* Roles are viewer / user / lead; exactly one lead per project (the
@@ -6179,11 +6224,13 @@ export const PLANNER = {
    gate). Its error callback fires when the query itself fails, not for
    network drops, which only delay results until Convex reconnects and
    resubscribes. A failure after the first result is snapshot trouble (see
-   snapshot health). The last snapshot stays on screen and shared edits pause
-   until a later result succeeds and reaches the screen. */
+   snapshot health), and so is a later null result, which means no seat is
+   left. The last snapshot stays on screen and shared edits pause until a
+   later snapshot arrives and reaches the screen. */
 
-/* The last snapshot the server delivered — run()'s rollback anchor
-   (rollback = re-adopt serverSnap + rebuild + emit; no refetch, no reload). */
+/* The last snapshot the server delivered, never a later null. It is run()'s
+   rollback anchor (rollback = re-adopt serverSnap + rebuild + emit; no
+   refetch, no reload). */
 let serverSnap: Snapshot | null = null
 let snapUnsub: (() => void) | null = null
 let cancelDemoBoot: (() => void) | null = null
@@ -6211,23 +6258,35 @@ function resetSnapshotTrouble() {
   retryTimer = null
 }
 
-/** Records a failed snapshot query after the first delivery. A lost sign-in
-    (the server's `forbidden('not signed in')`) is `signed_out`; anything
-    else is `failed`. Keeps when the trouble began and a running retry. */
-function snapshotFailed(err: unknown) {
-  const d = errData(err)
-  const text = err instanceof Error ? err.message : String(err)
+/** Records snapshot trouble of `kind` after the first delivery. Keeps when
+    the trouble began and a running retry. */
+function beginTrouble(kind: SnapshotTrouble['kind'], detail: string) {
   snapshotTrouble = {
-    kind: d.code === 'forbidden' && d.message === 'not signed in' ? 'signed_out' : 'failed',
+    kind,
     since: snapshotTrouble?.since ?? Date.now(),
     asOf: lastDeliveryAt,
     retrying: snapshotTrouble?.retrying ?? false,
-    // Convex appends where the call came from; support needs the rest
-    detail: text.replace(/\s*Called by client\s*$/, '').trim(),
+    detail,
   }
-  // a held delivery from before this failure no longer ends the trouble
+  // a held delivery from before this trouble no longer ends it
   recoveryHeld = false
   emit('health')
+}
+
+/** Records a failed snapshot query after the first delivery. A lost sign-in
+    (the server's `forbidden('not signed in')`) is `signed_out`; anything
+    else is `failed`, except after every seat is gone. A fault says nothing
+    about access, so `no_access` holds until a snapshot brings a seat back. */
+function snapshotFailed(err: unknown) {
+  const d = errData(err)
+  const signedOut = d.code === 'forbidden' && d.message === 'not signed in'
+  if (!signedOut && snapshotTrouble?.kind === 'no_access') return
+  const text = err instanceof Error ? err.message : String(err)
+  beginTrouble(
+    signedOut ? 'signed_out' : 'failed',
+    // Convex appends where the call came from; support needs the rest
+    text.replace(/\s*Called by client\s*$/, '').trim(),
+  )
 }
 
 /** Ends snapshot trouble when a delivery succeeds, and says so. */
@@ -6255,21 +6314,26 @@ function subscribeSnapshot(
     {},
     (snap) => {
       if (!stillCurrent() || bootFailed) return
-      serverSnap = snap
-      if (snap) pruneAcceptedRemovals(snap)
       if (!settled) {
         settled = true
+        serverSnap = snap
+        if (snap) pruneAcceptedRemovals(snap)
         first?.resolve(snap)
         return
       }
-      // a later delivery of null = every seat vanished mid-session; keep the
-      // last paint rather than tearing the app down under the user. A held
+      // A later delivery of null means every seat vanished mid-session. The
+      // last snapshot stays on screen and stays run()'s rollback anchor, so a
+      // refused edit still reverts, and the notice says access ended. A held
       // recovering delivery is gone with it, so it ends no trouble.
       if (snap === null) {
-        recoveryHeld = false
-        if (DEMO_MODE) notifyDemoEnded()
+        if (DEMO_MODE) {
+          recoveryHeld = false
+          notifyDemoEnded()
+        } else beginTrouble('no_access', '')
         return
       }
+      serverSnap = snap
+      pruneAcceptedRemovals(snap)
       // Gate the paint, never the data. While our own writes are in flight
       // the optimistic patches own the screen. serverSnap is recorded above,
       // and run()'s last settle flushes the newest held delivery. Snapshot

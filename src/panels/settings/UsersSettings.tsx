@@ -404,8 +404,8 @@ export function OrgUsersPage({
                     onClick={() => {
                       if (blocked) return
                       confirm.press(`u:${u.id}`, () => {
-                        P.removeUser(u.id)
-                        window.showToast?.(`${u.name} removed from the organization`)
+                        if (P.removeUser(u.id))
+                          window.showToast?.(`${u.name} removed from the organization`)
                       })
                     }}
                   >
@@ -568,8 +568,8 @@ export function OrgUsersPage({
                     }
                     onClick={() =>
                       confirm.press(`g:${g.id}`, () => {
-                        P.removeUser(g.id)
-                        window.showToast?.(`${g.email || g.name} no longer has access`)
+                        if (P.removeUser(g.id))
+                          window.showToast?.(`${g.email || g.name} no longer has access`)
                       })
                     }
                   >

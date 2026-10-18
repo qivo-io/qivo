@@ -166,7 +166,7 @@ function RetentionField({ me }: { me: Pick<UserVM, 'messageRetentionDays'> }) {
         aria-label="Remove read messages"
         onChange={(e) => {
           const v = e.target.value === 'never' ? null : Number(e.target.value)
-          P.setMessageRetention(v)
+          if (!P.setMessageRetention(v)) return
           window.showToast?.(
             v == null
               ? 'Read messages are kept until you remove them'
