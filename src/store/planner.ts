@@ -2657,9 +2657,9 @@ export const PLANNER = {
       change()
     } finally {
       roadmapBatch = null
-      void submitRoadmapChanges(batch.operations).then((ok) =>
-        batch.saved.forEach((answer) => answer(ok)),
-      )
+      void submitRoadmapChanges(batch.operations).then((ok) => {
+        for (const answer of batch.saved) answer(ok)
+      })
     }
   },
   undoRoadmap: (all = false) => {
