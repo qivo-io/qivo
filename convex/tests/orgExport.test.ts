@@ -528,10 +528,11 @@ describe('organization export', () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // 100 sub-projects with descriptions from before the 500-character cap,
-    // 200 KiB each, and one small task in each. A page of 100 tasks that read
-    // their projects would read 20 MiB.
-    const description = 'Project notes. '.repeat(14_000).slice(0, 200 * 1024)
+    // 900 KiB each, and one small task in each. A page of tasks, or of links
+    // to them, that read their projects would pass the 16 MiB limit.
+    const description = 'Project notes. '.repeat(64_000).slice(0, 900 * 1024)
     const tasks: string[] = []
+    const projects: string[] = []
     for (let i = 0; i < 100; i++) {
       const project = await plantProject(t, {
         org_id: f.org.id,
@@ -539,10 +540,31 @@ describe('organization export', () => {
         parent_id: f.meta.id,
         description,
       })
+      projects.push(project.id)
       tasks.push((await plantIssue(t, { org_id: f.org.id, project_id: project.id })).id)
     }
     const exported = await readAll(as(t, f.admin), f.org.id, 'issues')
     expect(tasks.every((id) => exported.some((row) => row.id === id))).toBe(true)
+
+    // nor does a page of links read their targets' projects, here targets
+    // with legacy 900 KiB descriptions of their own in those projects
+    const source = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const targets: string[] = []
+    for (const project of projects.slice(0, 20))
+      targets.push((await plantIssue(t, { org_id: f.org.id, project_id: project, description })).id)
+    await t.run(async (ctx) => {
+      for (const target of targets)
+        await ctx.db.insert('issue_links', {
+          org_id: f.org.id,
+          id: uuid(),
+          source_id: source.id,
+          target_id: target,
+          type: 'blocks',
+          pair_key: [source.id, target].sort().join(':'),
+          created_at: NOW,
+        })
+    })
+    expect(await readAll(as(t, f.admin), f.org.id, 'issue_links', source.id)).toHaveLength(20)
   }, 120_000)
 
   it('requires owned parents and refuses malformed section scopes', async () => {

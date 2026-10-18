@@ -32,10 +32,10 @@ const PAGE_SIZE = 100
  * related documents at Convex's 1 MiB document cap stay inside its 16 MiB
  * read limit with the page itself. */
 const JOINED_PAGE_SIZE = 10
-/* An issues page read while a project item is in flight. Each row can also
- * read its project, its parent task and the parent's project, each up to
- * Convex's 1 MiB document limit, so 4 rows plus the page's own rows stay
- * under the 16 MiB read limit. */
+/* An issues or issue_links page read while a project item is in flight.
+ * Each row can also read a task's project, a parent or target task and its
+ * project, each up to Convex's 1 MiB document limit, so 4 rows plus the
+ * page's own rows stay under the 16 MiB read limit. */
 const IN_FLIGHT_ISSUES_PAGE_SIZE = 4
 const PAGE_BYTES = 1024 * 1024
 const JOINED_SECTIONS: ReadonlySet<OrgExportSection> = new Set([
@@ -169,15 +169,17 @@ async function readPage(
 }
 
 /* Model writers enforce these second endpoints too. Recheck them at this
- * boundary so a damaged join cannot disclose another organization's IDs. A
- * link's target must also be a task the export includes, one under a live
- * project (`liveProject`), so no exported link names a skipped task. */
+ * boundary so a damaged join cannot disclose another organization's IDs.
+ * While a deleted item is in flight (`liveProject` given), a link's target
+ * must also be a task the export includes, one under a live project, so no
+ * exported link names a skipped task. Otherwise every task's project is
+ * live and the link reads no project. */
 async function hasOwnedEndpoint(
   ctx: QueryCtx,
   section: OrgExportSection,
   row: OrgExportRow,
   orgId: string,
-  liveProject: (id: string) => Promise<boolean>,
+  liveProject: ((id: string) => Promise<boolean>) | undefined,
 ): Promise<boolean> {
   switch (section) {
     case 'team_members':
@@ -187,7 +189,8 @@ async function hasOwnedEndpoint(
       return (await byId(ctx, 'teams', row.team_id as string))?.org_id === orgId
     case 'issue_links': {
       const target = await byId(ctx, 'issues', row.target_id as string)
-      return target?.org_id === orgId && (await liveProject(target.project_id))
+      if (target?.org_id !== orgId) return false
+      return liveProject === undefined || (await liveProject(target.project_id))
     }
     case 'issue_labels':
       return (await byId(ctx, 'labels', row.label_id as string))?.org_id === orgId
@@ -302,8 +305,10 @@ export const page = orgQuery({
     // a parent reference, so an issues page reads tasks' projects and parents
     // only then, on a small page, because a project or a parent can carry a
     // large description. Otherwise every task's project and parent are live.
-    const checkParents = section === 'issues' && (await hasItemInFlight(ctx, orgId))
-    const pageSize = checkParents
+    const inFlight =
+      (section === 'issues' || section === 'issue_links') && (await hasItemInFlight(ctx, orgId))
+    const checkParents = section === 'issues' && inFlight
+    const pageSize = inFlight
       ? IN_FLIGHT_ISSUES_PAGE_SIZE
       : JOINED_SECTIONS.has(section)
         ? JOINED_PAGE_SIZE
@@ -317,7 +322,8 @@ export const page = orgQuery({
       const row = exportRow(doc, section)
       if (checkParents && typeof row.parent_id === 'string' && !(await liveParent(row.parent_id)))
         delete row.parent_id
-      if (await hasOwnedEndpoint(ctx, section, row, orgId, liveProject)) rows.push(row)
+      if (await hasOwnedEndpoint(ctx, section, row, orgId, inFlight ? liveProject : undefined))
+        rows.push(row)
     }
     return { rows, continueCursor: result.continueCursor, isDone: result.isDone }
   },
