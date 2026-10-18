@@ -658,15 +658,16 @@ const readOnly = (d: ErrData) =>
    While it is stale, edits to shared data pause. An edit made from stale
    data can overwrite newer work, and run()'s rollback would re-adopt the
    stale snapshot over edits that did save, read marks included. So every
-   optimistic mutator calls refusePausedEdit() before its paint, and the
-   refusal never reaches that rollback. write() refuses any other shared
-   write before it is sent, the backstop for a mutator that does not check
-   first. Personal state (read marks, preferences, appearance, following)
-   still saves, and so do the writes that only take access away. Panels that call Convex directly (organization
-   deletion and its export record, billing) act on their own live queries,
-   not on the snapshot, so they do not pause. Convex reruns a failed query
-   when the data it read changes, so a later delivery ends the trouble
-   without a reload. */
+   optimistic mutator of shared data calls refusePausedEdit() before its
+   paint, and the refusal never reaches that rollback. write() refuses any
+   other shared write before it is sent, the backstop for a mutator that
+   does not check first. Personal state (read marks, preferences,
+   appearance, following) still saves, and so do the writes that only take
+   access away (UNPAUSED_WRITES). Panels that call Convex directly
+   (organization deletion and its export record, billing) act on their own
+   live queries, not on the snapshot, so they do not pause. Convex reruns a
+   failed query when the data it read changes, so a later delivery ends the
+   trouble without a reload. */
 
 /** The sentence every paused edit shows. */
 export const PAUSED_TEXT = 'Editing is paused until Qivo loads the latest changes.'
