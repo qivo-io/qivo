@@ -1,5 +1,5 @@
-/* Uuid-key lookup and the race-free unique insert. Serializable mutations
- * make check-then-insert safe: two
+/* Uuid-key lookup, the race-free unique insert and the room check of bulk
+ * writers. Serializable mutations make check-then-insert safe: two
  * concurrent insertUnique calls on the same key conflict and one retries,
  * re-running the check. */
 
@@ -7,6 +7,7 @@ import type {
   GenericDatabaseReader,
   GenericDatabaseWriter,
   IndexRange,
+  QueryMeta,
   WithoutSystemFields,
 } from 'convex/server'
 import type { ConvexError, Value } from 'convex/values'
@@ -28,6 +29,18 @@ export type UuidTables = {
 
 type ReaderCtx = { db: GenericDatabaseReader<DataModel> }
 type WriterCtx = { db: GenericDatabaseWriter<DataModel> }
+
+/** Whether the transaction has used more than the share `room` of any of
+ * Convex's limits for one transaction, as the deployment reports them
+ * (ctx.meta.getTransactionMetrics). A bulk writer whose items have no fixed
+ * cost checks it before each one, and stops or refuses once it is true. */
+export async function usedMoreThan(
+  ctx: { meta: Pick<QueryMeta, 'getTransactionMetrics'> },
+  room: number,
+): Promise<boolean> {
+  const metrics = await ctx.meta.getTransactionMetrics()
+  return Object.values(metrics).some(({ used, remaining }) => used > (used + remaining) * room)
+}
 
 /* Look up a row by its application uuid through the table's by_uuid index. */
 export function byId<T extends UuidTables>(

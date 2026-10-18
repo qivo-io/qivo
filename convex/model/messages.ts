@@ -226,7 +226,9 @@ async function trimUnreadMessages(
  *     at the first detach of a transaction that changes only tasks, their
  *     rows and activity;
  *   - the reassign loop of an access removal (projectAccess.ts
- *     removeAndSettle), which builds it after the access is gone.
+ *     removeAndSettle), which builds it after the access is gone;
+ *   - a roadmap save or undo (roadmap.ts), which changes only tasks,
+ *     milestones and activity, one preload per organization.
  * A write that changes one task passes none, so every row is read fresh. */
 export type NotifyPreload = {
   /* Every profile of the issue's org, as stored now (after any patch). */

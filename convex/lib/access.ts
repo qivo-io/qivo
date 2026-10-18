@@ -451,11 +451,7 @@ export async function projectLevelsForProfiles(
 
 /* The profile ids of team `teamId`, or none when the team is gone or belongs
  * to another organization than `orgId`, the teams teamGrantOn skips. */
-async function sameOrgTeamMembers(
-  ctx: QueryCtx,
-  teamId: string,
-  orgId: string,
-): Promise<string[]> {
+async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string): Promise<string[]> {
   const team = await ctx.db
     .query('teams')
     .withIndex('by_uuid', (q) => q.eq('id', teamId))

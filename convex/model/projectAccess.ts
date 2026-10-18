@@ -35,7 +35,7 @@ import {
   rootMetaOf,
 } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
-import { byId } from '../lib/db'
+import { byId, usedMoreThan } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
@@ -263,25 +263,8 @@ export const REASSIGN_ROOM = 0.95
 export const reassignTooLarge = (canKeep: boolean): string =>
   `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when they have many followers, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
 
-/* The counts removalIsFull compares, each public count of
- * TransactionMetrics. */
-const LIMITED = [
-  'databaseQueries',
-  'documentsRead',
-  'bytesRead',
-  'documentsWritten',
-  'bytesWritten',
-  'functionsScheduled',
-  'scheduledFunctionArgsBytes',
-] as const
-
-/* Whether the transaction has used more than REASSIGN_ROOM of any limit. */
-async function removalIsFull(ctx: MutationCtx): Promise<boolean> {
-  const m = await ctx.meta.getTransactionMetrics()
-  return LIMITED.some((k) => m[k].used > (m[k].used + m[k].remaining) * REASSIGN_ROOM)
-}
-
-/* Thrown by a reassignment's guard once removalIsFull, and turned into
+/* Thrown by a reassignment's guard once the transaction has used more than
+ * REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and turned into
  * reassignTooLarge by removeAndSettle. It is no ConvexError, so settling
  * passes it on without HELD_TASKS_REFUSED. */
 class RemovalFull extends Error {}
@@ -524,7 +507,7 @@ export async function removeAndSettle(
     const tooLarge = rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
     if (byTask.size > REASSIGN_MAX) throw tooLarge
     const full = async () => {
-      if (await removalIsFull(ctx)) throw new RemovalFull()
+      if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
     }
     // The access is gone and the loop below writes only tasks, follows,
     // messages and activity, so one preload serves every task update.
