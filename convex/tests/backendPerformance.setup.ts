@@ -16,13 +16,29 @@ export const invokeSnapshot = (ctx: QueryCtx, snapshot = forMe): Promise<Snapsho
     }
   )._handler(ctx, {})
 
+/** What scripts/benchmark-backend.mjs compares the working tree with: a
+    baseline revision's forMe and logActivity, or with `currentOnly` nothing,
+    when only the working tree is measured. */
 type Baseline = {
-  snapshot: typeof forMe
-  activity: typeof logActivity
   assertEqual: (actual: unknown, expected: unknown) => void
   report: (row: unknown) => void
   guardsOnly?: boolean
-  currentOnly?: boolean
+} & (
+  | { currentOnly: true }
+  | { currentOnly?: false; snapshot: typeof forMe; activity: typeof logActivity }
+)
+
+/** `result` without what may differ between two deliveries of the same data:
+    the delivery time, and fields an older baseline returned that the
+    snapshot no longer does. Applied to both sides of a comparison. */
+function comparable(result: Snapshot) {
+  if (result === null) return result
+  const legacy = result as Snapshot & { orgs: { activity_count?: number }[] }
+  for (const row of legacy.orgs) delete row.activity_count
+  for (const rows of [result.links, result.issueLabels, result.attachments]) {
+    for (const row of rows) delete (row as { org_id?: string }).org_id
+  }
+  return { ...result, delivered_at: '' }
 }
 
 export async function benchmarkBackend(baseline: Baseline) {
@@ -95,14 +111,7 @@ export async function benchmarkBackend(baseline: Baseline) {
     const compare = async (operation: string, identity = authed) => {
       const old = baseline.currentOnly ? null : await snapshot(baseline.snapshot, identity)
       const current = await snapshot(forMe, identity)
-      if (old !== null && old.result !== null) {
-        for (const row of old.result.orgs)
-          delete (row as { activity_count?: number }).activity_count
-        for (const rows of [old.result.links, old.result.issueLabels, old.result.attachments]) {
-          for (const row of rows) delete (row as { org_id?: string }).org_id
-        }
-      }
-      if (old !== null) baseline.assertEqual(current.result, old.result)
+      if (old !== null) baseline.assertEqual(comparable(current.result), comparable(old.result))
       const row = {
         operation,
         tasks: count,
@@ -117,10 +126,12 @@ export async function benchmarkBackend(baseline: Baseline) {
       baseline.report(row)
     }
     if (!baseline.guardsOnly) await compare('snapshot')
-    for (const [name, write] of [
-      ['baseline', baseline.activity],
-      ['optimized', logActivity],
-    ] as const) {
+    // only a comparison has a baseline write to time
+    const writes = [
+      ...(baseline.currentOnly ? [] : [['baseline', baseline.activity] as const]),
+      ['optimized', logActivity] as const,
+    ]
+    for (const [name, write] of writes) {
       const started = performance.now()
       const metrics = await t.run(async (ctx) => {
         await write(ctx, {
@@ -142,7 +153,6 @@ export async function benchmarkBackend(baseline: Baseline) {
         ms: Math.round(performance.now() - started),
       })
     }
-    if (baseline.currentOnly) continue
     // Guard cases retain 1% of tasks in the visible working set. Relation
     // rows stay populated so accidentally scanning their archive is measured.
     const taskRows = await t.run((ctx) => ctx.db.query('issues').collect())
