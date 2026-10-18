@@ -74,11 +74,6 @@ its reviews are finished and publishes the `reviewed-ci` status. Branch
 protection on main requires `reviewed-ci`, `secrets` and `Greptile Review` on the
 head commit, a branch that is up to date with main and resolved conversations.
 
-**Transition.** Start CI is being rolled out. Until a change removes the pull
-request triggers from `ci.yml`, pull requests still run full CI on every push,
-and branch protection still requires `quality` instead of `reviewed-ci`. Follow
-the steps below anyway.
-
 **Reviewers.** CodeRabbit and Greptile are both required on every pull request.
 `.coderabbit.yaml` and `.greptile/config.json` make them review every push and
 rebase. Do not edit those files to skip or narrow a review. No formal approval
@@ -135,7 +130,10 @@ builds again if it failed.
 the replaced commit, and a new commit has no `reviewed-ci` status until its own
 reviews are finished and Start CI passes. To retry after a failure, fix the
 cause or wait out the infrastructure problem, then dispatch Start CI again.
-Re-running a Start CI run in the Actions interface is refused.
+Re-running a Start CI run in the Actions interface is refused. GitHub deletes
+checks and statuses, the reviewers' included, after this repository's 7-day
+Actions retention, so a pull request that waits longer needs new reviews and a
+new Start CI run.
 
 **5. Merge** only when your task says to. Successful CI permits merging; it does
 not authorize it. Recheck the reviews of the head first.
