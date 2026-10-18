@@ -41,7 +41,9 @@ Done tasks keep their assignee and are not listed.
 
 A team leader who cannot share those projects and edit their tasks removes
 the member at once. A message then says who can no longer see how many of
-their tasks, so a project lead can reassign them.
+their tasks, so a project lead can reassign them. An organization admin
+removes access the same way while billing or a pending deletion pauses
+editing ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
 
 Only organization admins and the named project lead can manage sharing and
 invitations, and only people can change sharing, never agents. Renaming,

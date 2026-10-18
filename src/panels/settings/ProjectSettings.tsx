@@ -520,6 +520,8 @@ function ProjectSettingsFields({
   const removeOrAsk = (change: AccessRemoval) => {
     if (P.startRemoval(change)) setRemoval(change)
   }
+  // a read-only organization's admin removes without the window
+  React.useEffect(() => P.watchWriteBlock(proj.org), [proj.org])
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
   useUpdateBlocker(!!inviteEmail || inviting)

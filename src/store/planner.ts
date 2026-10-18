@@ -2210,6 +2210,36 @@ function grantsOn(projectId: string): Record<string, GrantLevel> {
   })
   return access
 }
+/* The organization whose project or team a removal changes. */
+const removalOrg = (change: AccessRemoval) =>
+  'projectId' in change
+    ? rows.projects.get(change.projectId)?.org_id
+    : rows.teams.get(change.teamId)?.org_id
+/* Whether an organization refuses writes because of a billing pause or a
+   pending deletion, from billing.status (`writable` matches
+   lib/billingAccess.ts orgWriteBlock), for each organization whose settings
+   page can start a removal (P.watchWriteBlock), with how many pages watch
+   it. The snapshot leaves it out, because forMe would then read the billing
+   row that the billing sync rewrites every minute and rerun for every
+   member. `refused` records a read-only refusal the status has not caught up
+   with (see removeAtOnce) until the status answers again. */
+const writeBlocks = new Map<
+  string,
+  { readOnly: boolean; refused: boolean; watchers: number; stop: () => void }
+>()
+/* Whether a removal can only leave the tasks it hides with their holders.
+   While billing or a pending deletion makes the organization read-only, the
+   server lets an organization admin take access away with 'leave' and
+   refuses keeping people as Viewers or reassigning their tasks
+   (model/projectAccess.ts removeProjectGrantCore, model/teams.ts
+   removeTeamMemberCore). Deleting a team is not such a removal and waits
+   like every other change. */
+function leavesHeldTasks(change: AccessRemoval): boolean {
+  if (change.kind === 'deleteTeam') return false
+  const orgId = removalOrg(change)
+  const block = orgId ? writeBlocks.get(orgId) : undefined
+  return !!block && (block.readOnly || block.refused) && actorIn(orgId)?.orgRole === 'admin'
+}
 /* Removes a person's or a team's grant on one project, or a member from a
    team, in one server write that settles the tasks it hides by `choice`
    (projects.removeAccess, teams.removeMember), and paints the outcome at
@@ -2221,10 +2251,7 @@ function removeAtOnce(
   items: Holder[],
   stays: string,
 ): Promise<boolean> {
-  const orgId =
-    change.kind === 'teamMember'
-      ? rows.teams.get(change.teamId)?.org_id
-      : rows.projects.get(change.projectId)?.org_id
+  const orgId = removalOrg(change)
   if (!orgId) return Promise.resolve(false)
   const people = [...new Set(items.map((i) => i.uid))]
   const held =
@@ -2294,6 +2321,12 @@ function removeAtOnce(
       () => resolve(true),
       undefined,
       (error) => {
+        // A read-only refusal can say what billing.status does not say yet.
+        // The server works the status out again only when data it read
+        // changes, not when access ends at a set time. Until it does, the
+        // next removal leaves the tasks (leavesHeldTasks).
+        const block = readOnly(errData(error)) ? writeBlocks.get(orgId) : undefined
+        if (block) block.refused = true
         // only a refused reassignment or Viewer grant (model/projectAccess.ts
         // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
         // pause or a lost connection says so itself
@@ -3137,14 +3170,49 @@ export const PLANNER = {
     removal.projects.every((pid) =>
       removal.people.every((uid) => PLANNER.canManageProjectUser(pid, uid)),
     ),
+  /* Whether the removal can only leave the tasks it hides, because the
+     organization turned read-only for its admin (leavesHeldTasks). An open
+     removal window then hands over to startRemoval. */
+  removalLeavesTasks: (change: AccessRemoval): boolean => leavesHeldTasks(change),
+  /* Follows whether `orgId` refuses writes while a settings page that can
+     start a removal there is open, so an admin's removal can go ahead
+     without the window (leavesHeldTasks). Until billing.status answers, or
+     when it fails, the organization counts as editable and the window asks.
+     Returns the stop. */
+  watchWriteBlock: (orgId: string | undefined): (() => void) => {
+    if (DEMO_MODE || !orgId) return () => {}
+    let block = writeBlocks.get(orgId)
+    if (!block) {
+      const fresh = { readOnly: false, refused: false, watchers: 0, stop: () => {} }
+      writeBlocks.set(orgId, fresh)
+      fresh.stop = convex.onUpdate(
+        api.billing.status,
+        { org_id: orgId },
+        (status) => Object.assign(fresh, { readOnly: !status.writable, refused: false }),
+        () => {
+          fresh.readOnly = false
+        },
+      )
+      block = fresh
+    }
+    const watched = block
+    watched.watchers++
+    return () => {
+      if (--watched.watchers > 0) return
+      watched.stop()
+      writeBlocks.delete(orgId)
+    }
+  },
   /* Start a removal. Returns true when the removal window should ask first:
      someone would lose sight of their tasks and I can settle them. Otherwise
      the removal goes ahead now, and once the server accepts it, a notice says
-     who lost sight of how many tasks. */
+     who lost sight of how many tasks. An organization admin's removal while
+     the organization is read-only goes ahead too, because it can only leave
+     the tasks (leavesHeldTasks). */
   startRemoval: (change: AccessRemoval): boolean => {
     const removal = PLANNER.accessRemoval(change)
     const { people, items } = removal
-    if (items.length && PLANNER.canSettleRemoval(removal)) return true
+    if (items.length && PLANNER.canSettleRemoval(removal) && !leavesHeldTasks(change)) return true
     void PLANNER.removeAccess(change, { to: null }, []).then((removed) => {
       if (!removed || !items.length) return
       const who = andList(people.map((id) => PLANNER.user(id)?.name || 'Someone'))
