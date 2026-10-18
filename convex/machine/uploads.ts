@@ -22,13 +22,12 @@ import { internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import { httpAction, internalMutation } from '../_generated/server'
 import { verifyFileToken } from '../lib/fileTokens'
-import type { Refusal } from '../lib/functions'
-import { badRequest } from '../lib/functions'
+import { badRequest, type Refusal } from '../lib/functions'
 import {
+  ATTACHMENT_TYPE_MAX,
   abandonTicketUpload,
   beginTicketUpload,
   finishTicketUpload,
-  ATTACHMENT_TYPE_MAX,
   UPLOAD_CLAIM_MS,
   UPLOAD_TICKET_MISSING,
   uploadSizeWrong,
