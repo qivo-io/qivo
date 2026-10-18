@@ -267,7 +267,11 @@ export function MentionCtl({
   const [open, setOpen] = useState(false)
   const [who, setWho] = useState<string | null>(null)
   const [text, setText] = useState('')
+  // a note on its way to the server. The window locks it until the answer.
   const [sending, setSending] = useState(false)
+  // The note stays when the window closes while it is sent, or after a
+  // refusal, so reopening shows it again. A save or Cancel lets it go.
+  const keep = useRef(false)
   const close = useMobileBackLayer(open, () => setOpen(false))
   useUpdateBlocker(open && text.trim() !== '')
   const canWrite = P.canWrite(it.project)
@@ -283,21 +287,29 @@ export function MentionCtl({
     // The window closes once the server saves the note. A refused one (the
     // store toasts why, such as the task's comment cap or a body over the
     // length cap once escaped) keeps the window open, so the note is not lost.
+    keep.current = true
     setSending(true)
     void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {
       setSending(false)
       if (!saved) return
+      keep.current = false
       close()
       onSent()
     })
+  }
+  const cancel = () => {
+    keep.current = false
+    close()
   }
   return (
     <PopoverRoot
       open={open}
       onOpenChange={(next) => {
         if (!next) return close()
-        setWho(initial && people.some((u) => u.id === initial) ? initial : null)
-        setText('')
+        if (!keep.current) {
+          setWho(initial && people.some((u) => u.id === initial) ? initial : null)
+          setText('')
+        }
         setOpen(true)
       }}
     >
@@ -335,10 +347,11 @@ export function MentionCtl({
               type="button"
               variant="unstyled"
               data-sync-mention-person={u.id}
+              disabled={sending}
               onClick={() => setWho(u.id)}
               aria-label={u.name}
               aria-pressed={who === u.id}
-              className="grid size-8 cursor-pointer place-items-center rounded-sm border-none bg-transparent p-0 aria-pressed:shadow-[0_0_0_2px_var(--primary)]"
+              className="grid size-8 cursor-pointer place-items-center rounded-sm border-none bg-transparent p-0 aria-pressed:shadow-[0_0_0_2px_var(--primary)] disabled:cursor-not-allowed disabled:opacity-55"
             >
               <Avatar id={u.id} size={28} />
             </Button>
@@ -349,6 +362,7 @@ export function MentionCtl({
           aria-label="Note"
           placeholder="A short note…"
           maxLength={TEXT_MAX}
+          readOnly={sending}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -371,7 +385,7 @@ export function MentionCtl({
               'Pick who gets it'
             )}
           </span>
-          <Button type="button" variant="ghost" size="sm" onClick={close}>
+          <Button type="button" variant="ghost" size="sm" disabled={sending} onClick={cancel}>
             Cancel
           </Button>
           <Button

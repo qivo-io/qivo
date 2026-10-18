@@ -16,8 +16,8 @@ vi.mock('../lib/auth', () => ({
 
 type Page = { comments: Row<'comments'>[]; earlier: boolean }
 type Deferred = { resolve: (value: null) => void; reject: (reason: unknown) => void }
-/* One commentThread subscription: its two callbacks and whether it was
-   unsubscribed. */
+/* One commentThread subscription: the server's answers to it and whether
+   it was unsubscribed. */
 type Thread = { deliver: (page: Page) => void; fail: (e: unknown) => void; closed: boolean }
 
 const START = Date.parse('2026-09-14T08:00:00.000Z')
@@ -26,13 +26,18 @@ const CAP = 'this task has 400 comments, the most a task can have; start a new t
 
 /* What a comment's writer learns from the store, and what the thread shows
    when its subscription fails. Writes and thread deliveries are answered by
-   hand. Comment #n is posted n minutes after START. */
+   hand. The server answers a new subscription after a round trip (`later`).
+   Comment #n is posted n minutes after START. */
 describe('comment drafts and a failed thread in the store', () => {
   let store: typeof import('./planner')
   let author: string
   let threads: Thread[]
   let writes: { name: string; answer: Deferred }[]
   let toast: ReturnType<typeof vi.fn>
+  // The failure the client still holds for the thread. ConvexClient keeps a
+  // query's last result until the server answers the next subscription to
+  // it, and hands it to a new listener on a 0 ms timer.
+  let held: unknown
 
   const comment = (n: number): Row<'comments'> => ({
     id: `comment-${n}`,
@@ -48,6 +53,8 @@ describe('comment drafts and a failed thread in the store', () => {
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
+  // after the timers queued so far, such as a held result's redelivery
+  const later = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
   beforeEach(async () => {
     vi.resetModules()
@@ -74,6 +81,7 @@ describe('comment drafts and a failed thread in the store', () => {
     })
     threads = []
     writes = []
+    held = null
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation(
       (ref) =>
@@ -86,8 +94,23 @@ describe('comment drafts and a failed thread in the store', () => {
     network.onUpdate.mockImplementation((ref, _args, receive, onError) => {
       if (getFunctionName(ref) === 'snapshot:forMe') receive(structuredClone(snap))
       else if (getFunctionName(ref) === 'snapshot:commentThread') {
-        const thread: Thread = { deliver: receive, fail: onError, closed: false }
+        const thread: Thread = {
+          deliver: (page) => {
+            held = null
+            receive(page)
+          },
+          fail: (e) => {
+            held = e
+            onError(e)
+          },
+          closed: false,
+        }
         threads.push(thread)
+        const cached = held
+        if (cached !== null)
+          setTimeout(() => {
+            if (!thread.closed) onError(cached)
+          }, 0)
         return () => {
           thread.closed = true
         }
@@ -97,6 +120,7 @@ describe('comment drafts and a failed thread in the store', () => {
     store = await import('./planner')
     await store.initStore()
     store.P.watchComments('task-a')
+    await later()
   })
 
   afterEach(() => {
@@ -207,7 +231,7 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(bodies()).toEqual([])
     })
 
-    it('retries with a fresh subscription and keeps the comments meanwhile', () => {
+    it('retries with a fresh subscription and keeps the comments meanwhile', async () => {
       const { P } = store
       live().deliver({ comments: range(1, 4), earlier: false })
       const first = live()
@@ -216,10 +240,15 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(first.closed).toBe(true)
       expect(threads).toHaveLength(2)
       expect(P.commentsFailure).toBe('retrying')
+      // the client hands the new subscription the old failure first. It is
+      // not the server's answer, so the retry goes on.
+      await later()
+      expect(P.commentsFailure).toBe('retrying')
       expect(bodies()).toEqual(['#1', '#2', '#3'])
       live().fail(new Error('Server Error'))
       expect(P.commentsFailure).toBe('failed')
       P.retryComments()
+      await later()
       live().deliver({ comments: range(1, 5), earlier: false })
       expect(P.commentsFailure).toBe('none')
       expect(bodies()).toEqual(['#1', '#2', '#3', '#4'])
@@ -239,14 +268,19 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(bodies()).toEqual(['#1', '#2', '#3'])
     })
 
-    it('forgets the failure when the window moves to another task', () => {
+    it('forgets the failure when the window moves to another task', async () => {
       const { P } = store
       live().fail(new Error('Server Error'))
       P.watchComments(null)
       expect(P.commentsFailure).toBe('none')
       P.watchComments('task-a')
       expect(P.commentsFailure).toBe('none')
+      // opened again at once, the task waits for the server, not the old run
+      await later()
+      expect(P.commentsFailure).toBe('none')
       expect(P.commentsLoaded).toBe(false)
+      live().fail(new Error('Server Error'))
+      expect(P.commentsFailure).toBe('failed')
     })
   })
 })

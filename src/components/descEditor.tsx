@@ -42,7 +42,7 @@ import Underline from '@tiptap/extension-underline'
 import { Dropcursor, Gapcursor, Placeholder, UndoRedo } from '@tiptap/extensions'
 import type { Node as PMDocNode } from '@tiptap/pm/model'
 import { Fragment, Slice } from '@tiptap/pm/model'
-import { EditorState, TextSelection } from '@tiptap/pm/state'
+import { EditorState, Plugin, TextSelection } from '@tiptap/pm/state'
 import {
   EditorContent,
   NodeViewWrapper,
@@ -537,6 +537,15 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         suggestion: mentionSuggestion,
       }),
       Extension.create({
+        name: 'commentLock',
+        // A comment commit waits for the server with the draft locked (see
+        // commit). setEditable stops typing and paste, not commands, so this
+        // refuses every change meanwhile: toolbar, link and mention picks.
+        addProseMirrorPlugins() {
+          return [new Plugin({ filterTransaction: (tr) => !tr.docChanged || !sendingRef.current })]
+        },
+      }),
+      Extension.create({
         name: 'descKeys',
         addKeyboardShortcuts() {
           return {
@@ -758,6 +767,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       // access, a deleted task) keeps it dirty for another try.
       sendingRef.current = true
       setSending(true)
+      setLinkPop(null)
+      setHeadMenu(false)
       ed.setEditable(false, false)
       void cm.onCommit(text).then((saved) => {
         sendingRef.current = false
@@ -1191,6 +1202,7 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       aria-label={title}
       aria-pressed={!!on}
       tabIndex={-1}
+      disabled={sending}
       onMouseDown={swallow}
       onClick={onClick}
     >

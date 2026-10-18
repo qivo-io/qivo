@@ -11,8 +11,9 @@ import type { Row } from '../store/rows'
 
 /* The comment composer and the thread's failed state in the task window, on
    the real store and the real editor. Comment writes and the commentThread
-   subscription are answered by hand. Comment #n is posted n minutes after
-   START. */
+   subscription are answered by hand, and the server answers a new
+   subscription after a round trip (`later`). Comment #n is posted n minutes
+   after START. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -43,6 +44,10 @@ let deliver: (page: Page) => void
 let fail: (e: unknown) => void
 let subscriptions: number
 let writes: { name: string; answer: Answer }[]
+// The failure the client still holds for the thread. ConvexClient keeps a
+// query's last result until the server answers the next subscription to it,
+// and hands it to a new listener on a 0 ms timer.
+let held: unknown
 
 const comment = (n: number): Row<'comments'> => ({
   id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -75,13 +80,29 @@ async function load() {
   })
   subscriptions = 0
   writes = []
+  held = null
   network.onUpdate.mockImplementation((ref, _args, next, onError) => {
     const name = getFunctionName(ref)
     if (name === 'snapshot:forMe') next(structuredClone(snap))
     else if (name === 'snapshot:commentThread') {
       subscriptions++
-      deliver = next
-      fail = onError
+      let closed = false
+      deliver = (page) => {
+        held = null
+        next(page)
+      }
+      fail = (e) => {
+        held = e
+        onError(e)
+      }
+      const cached = held
+      if (cached !== null)
+        setTimeout(() => {
+          if (!closed) onError(cached)
+        }, 0)
+      return () => {
+        closed = true
+      }
     }
     return () => {}
   })
@@ -127,6 +148,10 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
+/* Runs the timers queued so far, such as a held result's redelivery, so
+   what the test answers next is the server's. */
+const later = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+
 async function open() {
   const task = P.issues.find((it) => it.uuid === 'task-a')
   if (!task) throw new Error('missing the task')
@@ -137,6 +162,7 @@ async function open() {
       </TooltipProvider>,
     ),
   )
+  await later()
 }
 
 /* The open edit-in-place editor, or null. */
@@ -209,6 +235,37 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     expect(window.showToast).not.toHaveBeenCalled()
   })
 
+  it('refuses formatting and link changes to the comment it is sending', async () => {
+    await load()
+    await open()
+    await act(async () => deliver({ comments: range(1, 4), earlier: false }))
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Soak run finished'))
+    await click('Comment')
+    const sent = composer.getJSON()
+    const field = composer.view.dom.closest('.mdwrap')
+    const toolbar = [...(field?.querySelectorAll('[data-mdtoolbar] button') ?? [])]
+    expect(toolbar.length).toBeGreaterThan(0)
+    expect(toolbar.every((b) => b instanceof HTMLButtonElement && b.disabled)).toBe(true)
+    // what a toolbar button, the link popover and a mention pick run
+    await act(async () => {
+      composer.chain().toggleBulletList().run()
+      composer
+        .chain()
+        .insertContent({
+          type: 'text',
+          text: ' report',
+          marks: [{ type: 'link', attrs: { href: 'https://example.com/soak' } }],
+        })
+        .run()
+    })
+    expect(composer.getJSON()).toEqual(sent)
+    await act(async () => writes[0].answer.resolve(null))
+    expect(composer.getText()).toBe('')
+    expect(toolbar.every((b) => b instanceof HTMLButtonElement && !b.disabled)).toBe(true)
+    expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3', 'Soak run finished'])
+  })
+
   it('keeps an edit open with its text when the server refuses it', async () => {
     await load()
     await open()
@@ -242,6 +299,9 @@ describe('a failed thread in the task window', { timeout: 20_000 }, () => {
     expect(spineText()).not.toContain('Loading comments…')
     await click('Retry')
     expect(subscriptions).toBe(2)
+    expect(failure()?.textContent).toBe('Loading comments…')
+    // the old failure the client hands the new subscription is not its answer
+    await later()
     expect(failure()?.textContent).toBe('Loading comments…')
     await act(async () => deliver({ comments: range(1, 4), earlier: false }))
     expect(failure()).toBeNull()

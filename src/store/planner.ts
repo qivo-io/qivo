@@ -285,7 +285,7 @@ export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
 
 /** Whether the watched thread's subscription failed (P.commentsFailure):
     'failed' until a later delivery or Retry, 'retrying' from Retry until the
-    next result, else 'none'. */
+    server answers the new subscription, else 'none'. */
 export type CommentsFailure = 'none' | 'failed' | 'retrying'
 
 /* Re-adopt the watched thread from its last delivery and the comments loaded
@@ -351,6 +351,13 @@ function subscribeThread(issueUuid: string, orgId: string) {
   commentsUnsub?.()
   const subscription = ++threadSubscription
   const current = () => watchedComments === issueUuid && threadSubscription === subscription
+  /* ConvexClient holds a query's last result until the server answers the
+     next subscription to it, and hands a held result to a new listener on a
+     0 ms timer that onUpdate queues. This store's one listener to the thread
+     was just dropped, so an error before the timer queued below runs is the
+     dropped run's, never the server's answer to this subscription. It is
+     skipped, so Retry, or a task opened again at once, waits for the rerun. */
+  let held = true
   commentsUnsub = convex.onUpdate(
     api.snapshot.commentThread,
     { org_id: orgId, issue_id: issueUuid },
@@ -370,7 +377,7 @@ function subscribeThread(issueUuid: string, orgId: string) {
       emit('comments')
     },
     (err) => {
-      if (!current()) return
+      if (!current() || held) return
       console.error('[qivo] comments subscription failed:', err)
       const code = errData(err).code
       PLANNER.commentsFailure = code === 'not_found' ? 'none' : 'failed'
@@ -391,6 +398,9 @@ function subscribeThread(issueUuid: string, orgId: string) {
       emit('comments')
     },
   )
+  setTimeout(() => {
+    held = false
+  }, 0)
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -4326,8 +4336,9 @@ export const PLANNER = {
     subscribeThread(issueUuid, row.org_id)
   },
 
-  /** Retry. A fresh subscription runs the watched thread's failed query
-      again (Convex never caches a failed run). The comments on screen stay
+  /** Retry. A fresh subscription makes the server run the watched thread's
+      failed query again (it never caches a failed run), and 'retrying'
+      lasts until the server answers it. The comments on screen stay
       meanwhile. Does nothing unless the thread failed. */
   retryComments: () => {
     const row = watchedComments ? rows.issues.get(watchedComments) : undefined

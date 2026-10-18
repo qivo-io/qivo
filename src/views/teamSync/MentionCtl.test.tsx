@@ -8,9 +8,9 @@ import { TooltipProvider } from '../../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* The Team sync @ window on the real store. Its note is a comment, so the
-   window waits for the server: it closes once the comment is saved and stays
-   open with the note after a refusal. Each comment write is answered by
-   hand. */
+   window waits for the server with the note locked: it closes once the
+   comment is saved and keeps the note after a refusal, also through closing
+   and reopening it. Each comment write is answered by hand. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', () => ({ convex: network }))
@@ -130,6 +130,16 @@ function note() {
   return document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Note"]')
 }
 const send = () => document.querySelector<HTMLButtonElement>('[data-sync-mention-send]')
+function button(name: string) {
+  const found = [...document.querySelectorAll('button')].find((b) => b.textContent === name)
+  if (!(found instanceof HTMLButtonElement)) throw new Error(`missing ${name}`)
+  return found
+}
+const aisha = () => document.querySelector<HTMLButtonElement>('[data-sync-mention-person="aisha"]')
+/* The @ glyph opens a closed window and closes an open one. */
+async function toggle() {
+  await act(async () => document.querySelector<HTMLElement>('[data-sync-mention]')?.click())
+}
 
 describe('the Team sync @ window', () => {
   it('keeps the window and its note when the server refuses the comment', async () => {
@@ -137,7 +147,11 @@ describe('the Team sync @ window', () => {
     await write('Can you check the soak report?', onSent)
     await act(async () => send()?.click())
     expect(writes).toHaveLength(1)
-    expect(send()?.disabled).toBe(true) // one send at a time
+    // one send at a time, and nothing in the window changes meanwhile
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    expect(aisha()?.disabled).toBe(true)
+    expect(button('Cancel').disabled).toBe(true)
     await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
     expect(window.showToast).toHaveBeenCalledWith(
       expect.stringContaining('This task has 400 comments'),
@@ -146,7 +160,41 @@ describe('the Team sync @ window', () => {
     expect(windowOpen()).toBe(true)
     expect(note()?.value).toBe('Can you check the soak report?')
     expect(send()?.disabled).toBe(false)
+    expect(note()?.readOnly).toBe(false)
+    expect(button('Cancel').disabled).toBe(false)
     expect(onSent).not.toHaveBeenCalled()
+  })
+
+  it('keeps the note when the server refuses it after the window closed', async () => {
+    const onSent = vi.fn()
+    await write('Can you check the soak report?', onSent)
+    await act(async () => send()?.click())
+    await toggle()
+    expect(windowOpen()).toBe(false)
+    await act(async () => writes[0].reject(new ConvexError({ code: 'rule', message: CAP })))
+    await toggle()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(note()?.readOnly).toBe(false)
+    // Cancel lets the note go
+    await act(async () => button('Cancel').click())
+    await toggle()
+    expect(note()?.value).toBe('')
+    expect(onSent).not.toHaveBeenCalled()
+  })
+
+  it('shows the note being sent when the window opens again, and closes once it is saved', async () => {
+    const onSent = vi.fn()
+    await write('Can you check the soak report?', onSent)
+    await act(async () => send()?.click())
+    await toggle()
+    await toggle()
+    expect(note()?.value).toBe('Can you check the soak report?')
+    expect(note()?.readOnly).toBe(true)
+    await act(async () => writes[0].resolve(null))
+    expect(windowOpen()).toBe(false)
+    expect(onSent).toHaveBeenCalledTimes(1)
+    await toggle()
+    expect(note()?.value).toBe('')
   })
 
   it('closes once the server saves the comment', async () => {
