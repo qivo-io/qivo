@@ -322,12 +322,6 @@ export const auditLog = platformQuery({
  * production:
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     TARGET npx convex run admin:addOperator '{"email":"…"}'
- * The demo backend's stored key cannot run internal functions, so on the
- * demo the private with-temp-deploy-key helper runs it with a short-lived key
- * (qivo-internal docs/public-demo-operations.md):
- *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key" \
- *     demo --allow deployment:functions:runInternalMutations --purpose operator -- \
- *     npx convex run admin:addOperator '{"email":"…"}'
  * Two writes, both required: the platform_admins row our wrappers gate on,
  * AND role 'admin' on the Better Auth user — adminMiddleware gates ban/unban
  * on the CALLER's BA role, so an operator without it opens the console but
