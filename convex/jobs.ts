@@ -33,7 +33,7 @@
  * its last leg when it changed something. Duration is deliberately NOT
  * recorded, because Convex freezes Date.now() at mutation start. */
 
-import { makeFunctionReference } from 'convex/server'
+import { makeFunctionReference, type TransactionMetrics } from 'convex/server'
 import { getDocumentSize, type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
@@ -66,8 +66,9 @@ export const ARCHIVE_LIMITS = {
    * set a leg's execution time, as in internal/subtaskFamilyBackfill.ts
    * FAMILY_PAGE.checks. */
   checks: 400,
-  /** The share of each of Convex's limits for one transaction a leg may have
-   * used before it archives another task. */
+  /** The share of what is left of each of Convex's limits for one
+   * transaction, once the leg's reads are done, that its archiving may use
+   * before it archives another task. */
   room: 0.5,
 }
 
@@ -221,10 +222,11 @@ async function afterArchive(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg
  * leg writes nothing and the next leg reads the same page at half the size.
  * Each archived task sends a task.updated event, whose subscriber checks
  * cost time the transaction metrics do not show. So before each task after
- * its first, a leg stops when the task would take its checks past
- * ARCHIVE_LIMITS.checks, or once it has used ARCHIVE_LIMITS.room of any
- * transaction limit. The next leg then reads the same page again, without
- * the tasks archived here, which have left its range.
+ * its first, a leg skips a task that would take its checks past
+ * ARCHIVE_LIMITS.checks, and stops once its archiving has used
+ * ARCHIVE_LIMITS.room of what was left of any transaction limit. When it
+ * skipped or stopped, the next leg reads the same page again, without the
+ * tasks archived here, which have left its range.
  * Returns the next leg, or null when the chain is done. */
 async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
   const projects = await ctx.db
@@ -276,15 +278,24 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
 
   // A leg always archives one task, so the chain moves on.
   const fanOut = (await eventSubscriptions(ctx, a.org_id, 'task.updated')).length
+  const before = await ctx.meta.getTransactionMetrics()
   const projectsMet = new Set<string>()
   const patched: Doc<'issues'>[] = []
   let checks = 0
   let full = false
   for (const task of batch) {
     const cost = projectsMet.has(task.project_id) ? 0 : fanOut
-    if (patched.length > 0 && (checks + cost > ARCHIVE_LIMITS.checks || (await legIsFull(ctx)))) {
-      full = true
-      break
+    if (patched.length > 0) {
+      if (await legIsFull(ctx, before)) {
+        full = true
+        break
+      }
+      // A task of a project the leg has not met waits for the next leg.
+      // Tasks of the projects it met cost no new checks and go on.
+      if (checks + cost > ARCHIVE_LIMITS.checks) {
+        full = true
+        continue
+      }
     }
     await ctx.db.patch(task._id, { archived_at: a.now })
     await emitTaskEvent(ctx, {
@@ -305,12 +316,14 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
   return { ...a, cutoff, cursor: page.continueCursor, size: undefined, archived }
 }
 
-/* Whether the transaction has used more than ARCHIVE_LIMITS.room of any of
- * Convex's limits for one transaction. */
-async function legIsFull(ctx: MutationCtx): Promise<boolean> {
-  const metrics = await ctx.meta.getTransactionMetrics()
-  return Object.values(metrics).some(
-    ({ used, remaining }) => used > (used + remaining) * ARCHIVE_LIMITS.room,
+/* Whether the leg's archiving has used more than ARCHIVE_LIMITS.room of what
+ * was left of any of Convex's limits when it began (`before`). The leg's
+ * reads before that do not count, so a heavy page still archives more than
+ * one task. */
+async function legIsFull(ctx: MutationCtx, before: TransactionMetrics): Promise<boolean> {
+  const now = await ctx.meta.getTransactionMetrics()
+  return (Object.keys(now) as Array<keyof TransactionMetrics>).some(
+    (key) => now[key].used - before[key].used > before[key].remaining * ARCHIVE_LIMITS.room,
   )
 }
 
@@ -387,7 +400,7 @@ export const archiveOrg = internalMutation({
   args: archiveOrgArgs,
   handler: async (ctx, a): Promise<null> => {
     if ((await byId(ctx, 'organizations', a.org_id)) === null) return null
-    if (await deletionBegun(ctx, a.org_id)) return null
+    if (await deletionBegun(ctx, a.org_id)) return finishChain(a)
     const next = a.phase === 'archive' ? await archiveLeg(ctx, a) : await repairLeg(ctx, a)
     if (next !== null) await ctx.scheduler.runAfter(0, archiveOrgRef, next)
     return null

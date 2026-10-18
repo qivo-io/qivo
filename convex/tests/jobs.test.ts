@@ -711,20 +711,18 @@ async function archiveByHand(
 
 describe('archiveDoneIssues budgets the events of a leg', () => {
   /* withOrg with two subscribers and three due Done tasks in each of its
-   * two sub-projects, Firmware's done first. */
-  async function scene() {
+   * two sub-projects, Firmware's done first, or the two projects' tasks
+   * taking turns. */
+  async function scene(order: 'grouped' | 'alternating' = 'grouped') {
     const t = newT()
     const f = await withOrg(t)
     await plantSubscribers(t, f.org.id, [f.sub.id, f.sub2.id], 2)
     const tasks: string[] = []
-    for (const [i, project_id] of [
-      f.sub.id,
-      f.sub.id,
-      f.sub.id,
-      f.sub2.id,
-      f.sub2.id,
-      f.sub2.id,
-    ].entries()) {
+    const projects =
+      order === 'grouped'
+        ? [f.sub.id, f.sub.id, f.sub.id, f.sub2.id, f.sub2.id, f.sub2.id]
+        : [f.sub.id, f.sub2.id, f.sub.id, f.sub2.id, f.sub.id, f.sub2.id]
+    for (const [i, project_id] of projects.entries()) {
       const task = await plantIssue(t, {
         org_id: f.org.id,
         project_id,
@@ -756,6 +754,31 @@ describe('archiveDoneIssues budgets the events of a leg', () => {
     // the second leg reads the first leg's page again
     expect(legs[1].archived).toBe(3)
     expect(legs[1].cursor).toBe(legs[0].cursor)
+    expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
+    expect(await updatedTasks(t)).toEqual(tasks)
+  })
+
+  it('skips the tasks of a project past the budget and still archives the projects it met', async () => {
+    const { t, f, tasks } = await scene('alternating')
+    ARCHIVE_LIMITS.checks = 3
+    const legs = await archiveByHand(t, f.org.id)
+    // Firmware's three tasks in the first leg, Board rev's in the second
+    expect(legs).toHaveLength(2)
+    expect(legs[1].archived).toBe(3)
+    expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
+    expect(await updatedTasks(t)).toEqual(tasks)
+  })
+
+  it('reads the same later page again after a stop', async () => {
+    const { t, f, tasks } = await scene()
+    // Pages of two: Firmware, Firmware, then Firmware and Board rev, where
+    // the second leg's budget lets only the Firmware task through.
+    ARCHIVE_LIMITS.tasks = 2
+    ARCHIVE_LIMITS.checks = 3
+    const legs = await archiveByHand(t, f.org.id)
+    expect(legs[2].cursor).toEqual(expect.any(String))
+    expect(legs[2].cursor).toBe(legs[1].cursor)
+    expect(legs[2].archived).toBe(3)
     expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
     expect(await updatedTasks(t)).toEqual(tasks)
   })
@@ -799,6 +822,41 @@ describe('archiveDoneIssues and organization deletion', () => {
     expect(await runArchive(t)).toBe(1)
     expect((await issueRow(t, deleting.id))?.archived_at).toBeUndefined()
     expect((await issueRow(t, readOnly.id))?.archived_at).toBeDefined()
+  })
+
+  it('logs what a chain archived before the deletion began', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        phase: 'profiles',
+        created_at: NOW,
+      })
+    })
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    try {
+      const now = new Date().toISOString()
+      await t.mutation(internal.jobs.archiveOrg, {
+        org_id: f.org.id,
+        now,
+        phase: 'archive',
+        cursor: undefined,
+        archived: 4,
+        flagged: 0,
+      })
+      expect(info).toHaveBeenCalledWith('Auto-archive finished', {
+        org_id: f.org.id,
+        archived: 4,
+        flagged: 0,
+        now,
+      })
+    } finally {
+      info.mockRestore()
+    }
   })
 })
 

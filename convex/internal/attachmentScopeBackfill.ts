@@ -2,9 +2,11 @@
  * its task's organization and project (schema.ts issue_attachments). The
  * oldest rows may lack org_id, and every row stored before this backfill
  * existed lacks project_id. No reader depends on it for correctness.
- * model/billing.ts storageUsage resolves a row without its project or its
- * organization through its task, and reads the deployment's rows without
- * an organization on every call. While any such row exists anywhere,
+ * model/billing.ts storageUsage, behind the Billing page, and storagePage,
+ * behind each billing period's storage sample (billingSync.ts
+ * storageStep), resolve a row without its project or its organization
+ * through its task, and read the deployment's rows without an organization
+ * on every call. While any such row exists anywhere,
  * lib/snapshotRelations.ts reads the app snapshot's attachments task by
  * task. The backfill only makes those reads cheaper.
  *
@@ -24,8 +26,8 @@
  * until then (model/deletedItems.ts). The backfill reads no deleted_rows,
  * so a stored row keeps what it held, and a restore gives it its task's
  * project (writeRowBack). While one without org_id remains,
- * storageUsage reads it on every call and the snapshot keeps reading
- * attachments task by task.
+ * storageUsage and storagePage read it on every call and the snapshot keeps
+ * reading attachments task by task.
  *
  * Tasks are the larger documents, as their descriptions hold up to about
  * 60 KB and older ones up to the 1 MiB document limit. A step stops before
@@ -65,8 +67,8 @@
  * The command returns once the first step is scheduled. Follow the progress
  * in the deployment's logs. On the demo, `npx convex logs` also needs a
  * temporary key, with deployment:logs:view. After every deployment has run
- * it and reported `orphans: 0`, a later change may remove storageUsage's
- * read of rows without org_id. */
+ * it and reported `orphans: 0`, a later change may remove the read of rows
+ * without org_id from storageUsage and storagePage together. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'

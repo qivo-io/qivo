@@ -11,7 +11,7 @@
  * Env: better-auth's context wants a secret at first api call, and auth.ts
  * reads SITE_URL/CONVEX_SITE_URL — planted before any action runs. */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'

@@ -4,14 +4,20 @@
  * their response shapes match what the views destructure, field by field.
  *
  * Both are platform actions that page through the data with bounded internal
- * queries, as adminStats.ts does, so no read grows with the deployment or the
- * organization. A page reads at most its PEOPLE_PAGE rows and
+ * queries, as adminStats.ts does, so no transaction reads the whole
+ * deployment or organization. A page reads at most its PEOPLE_PAGE rows and
  * PEOPLE_PAGE.bytes of its range, and up to one more than PEOPLE_PAGE.invites
  * audit rows of each pending seat or PEOPLE_PAGE.children members and
  * projects of each team on it. A longer list is paged on its own. The answer
  * is built from many snapshots, so a write during a load can show in one
  * page and not yet in another. The console loads on demand, so that is
  * accepted.
+ *
+ * Two costs still grow. The action holds and returns one row per matching
+ * profile, so the Users page with an empty search returns every profile in
+ * the deployment, and Convex's limits on an action's memory and result size
+ * bound it. A login's sessions are all read for its newest sign-in, inside
+ * a loginPage query with PEOPLE_PAGE.logins logins.
  *
  * Two auth.users columns the SQL joined have no Better Auth twin:
  * - last_sign_in_at is about the newest session.createdAt for the login.

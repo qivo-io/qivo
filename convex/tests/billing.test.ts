@@ -768,7 +768,7 @@ describe('provider state, retries and billing snapshots', () => {
     Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
   })
 
-  it('counts each row once when tasks are archived or restored during the sample', async () => {
+  it('counts each row once when tasks are archived, restored or brought back from Deleted items during the sample', async () => {
     const { t, f } = await fixture()
     const storage_id = await t.run((ctx) => ctx.storage.store(new Blob()))
     const rows: Id<'issue_attachments'>[] = []
@@ -804,6 +804,15 @@ describe('provider state, retries and billing snapshots', () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(rows[0], { task_archived: true })
       await ctx.db.patch(rows[2], { task_archived: undefined })
+    })
+    // the first task goes to Deleted items and comes back, which writes its
+    // row again as a new document
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(rows[0])
+      if (row === null) throw new Error('fixture row vanished')
+      const { _id, _creationTime, ...copy } = row
+      await ctx.db.delete(_id)
+      await ctx.db.insert('issue_attachments', copy)
     })
     await sample(t)
     expect(await periodAt(t, START)).toMatchObject({

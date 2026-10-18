@@ -275,7 +275,9 @@ async function startStorageSample(ctx: MutationCtx, period: Id<'billing_periods'
  * organization's attachment rows. Each step counts one page of them
  * (model/billing.ts storagePage), first the organization's own rows and then
  * the rows stored before rows carried their organization, and schedules the
- * next step with the running total. The last step records the bytes and the
+ * next step with the running total. It counts the rows stored before the
+ * renewal recorded the period, so a file stored later, or a restore's rows
+ * written back, waits for the next period. The last step records the bytes and the
  * blocks over the plan's allowance for the period's seats. When there are
  * blocks and the period starts after any complimentary grant, it also adds
  * the storage charge, which is collected with the period's metered usage on
@@ -286,13 +288,11 @@ export const storageStep = internalMutation({
   handler: async (ctx, a): Promise<null> => {
     const period = await ctx.db.get(a.period)
     if (period === null || period.storage_run !== a.run) return null
-    const page = await storagePage(
-      ctx,
-      period.org_id,
-      a.phase,
-      a.cursor ?? null,
-      a.size ?? STORAGE_PAGE.rows,
-    )
+    const page = await storagePage(ctx, period.org_id, a.phase, {
+      cursor: a.cursor ?? null,
+      size: a.size ?? STORAGE_PAGE.rows,
+      before: period._creationTime,
+    })
     let next: StorageStep | undefined
     if ('split' in page) next = { ...a, size: page.split }
     else {

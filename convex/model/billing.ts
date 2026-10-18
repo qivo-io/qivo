@@ -332,8 +332,8 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
  * reads at most `rows` attachment rows and `bytes` of their range, one task
  * for each row that does not carry its project, and one project for each
  * project it meets. When the tasks it read pass `taskBytes`, it stops and
- * the step after it reads the same page at half the size. Tests lower
- * them. */
+ * the step after it reads the same page again, only as far as the rows
+ * before the one that passed. Tests lower them. */
 export const STORAGE_PAGE = { rows: 1000, bytes: 4 * 1024 * 1024, taskBytes: 4 * 1024 * 1024 }
 
 /** The two ranges a storage sample pages through, in order. 'own' is the
@@ -350,10 +350,15 @@ export type StoragePage = { bytes: number; next: string | null } | { split: numb
  * phase a row counts in its project, or its task's project when it carries
  * none. In the 'unscoped' phase a row counts in its task's project when the
  * task belongs to `orgId`. Either way the project must still exist in the
- * organization. Each page is its own snapshot, so a file stored or removed
- * while the sample runs may count or not. Pages follow the order rows were
- * stored, so archiving or restoring a task during the sample moves none of
- * them.
+ * organization.
+ *
+ * Pages follow the order rows were stored, so archiving a task or restoring
+ * an archived one during the sample moves none of them. Rows stored after
+ * `before` (a _creationTime, the period row's) are left out. Those include the
+ * rows a restore from Deleted items writes back, which would otherwise be
+ * counted a second time if their earlier copies were counted before the
+ * task was deleted. Each page is its own snapshot, so a file removed while
+ * the sample runs may count or not.
  *
  * Returns the bytes the page counts and the cursor of the next one, or
  * `split` with a smaller size when the tasks it read pass
@@ -363,11 +368,8 @@ export async function storagePage(
   ctx: QueryCtx,
   orgId: string,
   phase: StoragePhase,
-  cursor: string | null,
-  size: number,
+  { cursor, size, before }: { cursor: string | null; size: number; before: number },
 ): Promise<StoragePage> {
-  // by_org keeps each row in place while its task is archived or restored,
-  // so a page never meets a row it counted before or skips one.
   const page = await ctx.db
     .query('issue_attachments')
     .withIndex('by_org', (q) => q.eq('org_id', phase === 'own' ? orgId : undefined))
@@ -376,7 +378,8 @@ export async function storagePage(
   const live = new Map<string, boolean>()
   let taskBytes = 0
   let bytes = 0
-  for (const file of page.page) {
+  for (const [i, file] of page.page.entries()) {
+    if (file._creationTime > before) continue
     let projectId = phase === 'own' ? file.project_id : undefined
     if (projectId === undefined) {
       let task = tasks.get(file.issue_id)
@@ -384,8 +387,9 @@ export async function storagePage(
         task = await byId(ctx, 'issues', file.issue_id)
         tasks.set(file.issue_id, task)
         if (task !== null) taskBytes += estimateDocumentBytes(task)
+        // the rows before this one fit, and a page of one always completes
         if (taskBytes > STORAGE_PAGE.taskBytes && page.page.length > 1)
-          return { split: Math.ceil(page.page.length / 2) }
+          return { split: Math.max(1, i) }
       }
       if (task === null || (phase === 'unscoped' && task.org_id !== orgId)) continue
       projectId = task.project_id
