@@ -3,8 +3,10 @@
  *
  *   1. An access removal that reassigns its held tasks
  *      (model/projectAccess.ts removeAndSettle) stays inside Convex's limits
- *      for one transaction up to REASSIGN_MAX tasks and refuses more, without
- *      blaming the tasks.
+ *      for one transaction up to REASSIGN_MAX tasks with a few followers
+ *      each. It refuses more tasks, or fewer whose followers would fill the
+ *      transaction (REASSIGN_ROOM), without blaming the tasks, and suggests
+ *      keeping the people as Viewers only to a remover who could.
  *   2. The preload and the passed checks (model/issues.ts BulkUpdate) change
  *      nothing a follower reads or follows.
  *   3. Deleting a task with many direct subtasks detaches and announces them
@@ -20,16 +22,20 @@
  * each follower. Index ranges ran out first. Without the preload it managed
  * 44 tasks, at about 93 ranges each. A local Convex backend reassigned 400
  * tasks of the same shape, with 92 more people in Northstar, using 3,422 of
- * its 4,096 reads, so the cap leaves room for larger organizations. */
+ * its 4,096 reads. A task costs more with more followers, most of all ones
+ * the transaction has not checked yet. On a local backend, 120 tasks used
+ * 1,316 index ranges with 4 followers each among 97 people and 3,664 with 10
+ * among 504 people, and passed the limit with 20 among 1,504 people, which
+ * REASSIGN_ROOM turns into the same refusal. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
-import { type BulkUpdate, holderKey, updateIssueCore } from '../model/issues'
+import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { loadNotifyPreload } from '../model/messages'
-import { REASSIGN_MAX, REASSIGN_TOO_LARGE } from '../model/projectAccess'
+import { REASSIGN_MAX, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -59,10 +65,14 @@ type Crowd = OrgFixture & {
 /* withOrg grown to 100 profiles. Hardware (led by `user`) and a second team,
  * Platform, each hold User on TBED, and the crowd is split between them, so
  * every person sees TBED only through a team grant. Emil, in Hardware, holds
- * `n` open tasks in Firmware, each followed by him and three of the crowd.
- * Every third one is a subtask of a task in Board rev, and every fifth is In
- * Review with Emil as its reviewer. Leo, in Platform, can take them all. */
-async function crowded(n: number, t: T = newT({ transactionLimits: true })): Promise<Crowd> {
+ * `n` open tasks in Firmware, each followed by him and `followers` of the
+ * crowd. Every third one is a subtask of a task in Board rev, and every fifth
+ * is In Review with Emil as its reviewer. Leo, in Platform, can take them
+ * all. */
+async function crowded(
+  n: number,
+  { followers = 3, t = newT({ transactionLimits: true }) }: { followers?: number; t?: T } = {},
+): Promise<Crowd> {
   const f = await withOrg(t)
   const { emil, leo, crowd } = await t.run(async (ctx) => {
     const platform = uuid()
@@ -137,7 +147,11 @@ async function crowded(n: number, t: T = newT({ transactionLimits: true })): Pro
             updated_at: NOW,
           })
           const task = (await ctx.db.get(_id)) as Doc<'issues'>
-          for (const follower of [emil, ...[1, 2, 3].map((k) => crowd[(i * 3 + k) % CROWD])])
+          const others = Array.from(
+            { length: followers },
+            (_, k) => crowd[(i * followers + k + 1) % CROWD],
+          )
+          for (const follower of [emil, ...others])
             await ctx.db.insert('issue_subscriptions', {
               issue_id: task.id,
               profile_id: follower.id,
@@ -200,7 +214,7 @@ describe('reassigning the tasks of an access removal', () => {
     const fx = await crowded(REASSIGN_MAX + 1)
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(REASSIGN_TOO_LARGE)
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
     // the app quotes the sentence rather than blaming the tasks
     expect((e.data as Refusal).reason).toBeUndefined()
     expect(await membership(fx)).not.toBeNull()
@@ -226,7 +240,7 @@ describe('reassigning the tasks of an access removal', () => {
       }),
       'rule',
     )
-    expect((e.data as Refusal).message).toBe(REASSIGN_TOO_LARGE)
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
     const grant = await fx.t.run((ctx) =>
       ctx.db
         .query('project_team_access')
@@ -236,6 +250,38 @@ describe('reassigning the tasks of an access removal', () => {
         .unique(),
     )
     expect(grant?.level).toBe('user')
+  })
+
+  it('suggests Viewers only to a remover who could keep them', async () => {
+    const fx = await crowded(REASSIGN_MAX + 1)
+    // `user` still leads Hardware but no longer leads TBED, so cannot give
+    // Viewer grants on it
+    await fx.t.run((ctx) => ctx.db.patch(fx.meta._id, { lead_id: fx.admin.id }))
+    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(false))
+    await expectRefusal(
+      as(fx.t, fx.user).mutation(api.teams.removeMember, {
+        org_id: fx.org.id,
+        team_id: fx.team.id,
+        profile_id: fx.emil.id,
+        on_held_tasks: 'keep_as_viewer',
+      }),
+      'forbidden',
+    )
+  })
+
+  it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
+    // Without the room check, 100 tasks with 21 followers each exceed the
+    // limit of 4,096 index ranges here, at the 97th task
+    const fx = await crowded(100, { followers: 20 })
+    const before = await holders(fx)
+    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
+    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
+    expect((e.data as Refusal).reason).toBeUndefined()
+    // the tasks reassigned before the check refused are rolled back too
+    expect(await membership(fx)).not.toBeNull()
+    expect(await holders(fx)).toEqual(before)
+    expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
   })
 
   it('still refuses, changing nothing, when the new holder cannot take a task', async () => {
@@ -282,31 +328,53 @@ describe('reassigning the tasks of an access removal', () => {
 })
 
 describe('a bulk update', () => {
-  /* One reassignment of each planted task to Leo, with a preload or without,
-   * answering every message and follow it wrote. Nora follows every task
-   * but sees no project, so she must hear nothing either way. */
+  /* One update of each planted task, with a preload or without, answering
+   * every message and follow it wrote. Each task goes to Leo. Of the tasks
+   * that are not subtasks yet, one in two is also attached under a task in
+   * Board rev, and the other mentions p50, who sees Firmware but follows
+   * none of them, and Pia, who sees no project. Nora follows every task but
+   * sees no project either. Neither must hear anything or follow a task.
+   * Olga follows every task and sees Firmware through her own grant but not
+   * Board rev, so she must read the attach line without the parent's key. */
   async function handOver(withBulk: boolean) {
-    const fx = await crowded(6, newT())
+    const fx = await crowded(6, { t: newT() })
     const nora = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Nora', accepted_at: NOW })
+    const olga = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Olga', accepted_at: NOW })
+    const pia = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Pia', accepted_at: NOW })
+    await fx.t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: fx.sub.id,
+        profile_id: olga.id,
+        level: 'user',
+      }),
+    )
     for (const task of fx.tasks)
-      await plantSubscription(fx.t, { issue_id: task.id, profile_id: nora.id })
+      for (const p of [nora, olga])
+        await plantSubscription(fx.t, { issue_id: task.id, profile_id: p.id })
+    const parent = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub2.id,
+      num: 900,
+      title: 'Board parent',
+    })
+    const p50 = fx.crowd[50]
     await fx.t.run(async (ctx) => {
       const bulk: BulkUpdate | undefined = withBulk
         ? { preload: await loadNotifyPreload(ctx, fx.org.id), checked: new Set() }
         : undefined
-      for (const task of fx.tasks) {
+      for (const [i, task] of fx.tasks.entries()) {
         const role = task.reviewer_id === fx.emil.id ? 'reviewer_id' : 'assignee_id'
-        await updateIssueCore(ctx, {
-          me: fx.user,
-          issue: task,
-          patch: { [role]: fx.leo.id },
-          now: NOW,
-          bulk,
-        })
+        const patch: IssuePatch = { [role]: fx.leo.id }
+        if (i % 3 === 1) patch.parent_id = parent.id
+        if (i % 3 === 2)
+          patch.description = `@[p50](user:${p50.id}) and @[Pia](user:${pia.id}), please look`
+        await updateIssueCore(ctx, { me: fx.user, issue: task, patch, now: NOW, bulk })
       }
     })
     return await fx.t.run(async (ctx) => {
-      const name = new Map([fx.emil, fx.leo, nora, ...fx.crowd].map((p) => [p.id, p.name] as const))
+      const name = new Map(
+        [fx.emil, fx.leo, nora, olga, pia, ...fx.crowd].map((p) => [p.id, p.name] as const),
+      )
       const at = new Map(fx.tasks.map((task, i) => [task.id, i] as const))
       const messages = (await ctx.db.query('messages').collect())
         .map((m) => `${at.get(m.issue_id)} ${name.get(m.recipient_id)}: ${m.detail}`)
@@ -320,13 +388,20 @@ describe('a bulk update', () => {
 
   it('writes the same messages and follows as single updates', async () => {
     const single = await handOver(false)
-    expect(single.messages.length).toBeGreaterThan(12)
-    expect(single.messages.some((m) => m.includes('Nora'))).toBe(false)
+    const { messages, follows } = single
+    expect(messages.some((m) => m.includes('Nora') || m.includes('Pia'))).toBe(false)
+    // each branch the preload answers ran: the attach line with and without
+    // the parent's key, and the mention of someone who sees the task
+    expect(messages).toContain('4 Olga: Assigned to Leo. Attached under a task in another project')
+    expect(messages).toContain('4 p13: Assigned to Leo. Attached under QN-900')
+    expect(messages).toContain('2 p50: Mentioned you in the description')
+    expect(follows).toContain('2 p50')
+    expect(follows.some((f) => f.includes('Pia'))).toBe(false)
     expect(await handOver(true)).toEqual(single)
   })
 
   it('skips only a check it already passed for that holder and project', async () => {
-    const fx = await crowded(2, newT())
+    const fx = await crowded(2, { t: newT() })
     // a passed rule for Leo does not cover the viewer, who cannot hold work
     await expectRefusal(
       fx.t.run(async (ctx) => {

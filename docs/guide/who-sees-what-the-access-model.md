@@ -30,13 +30,14 @@ to one person who keeps User or Lead access to those tasks, or to
 **Unassigned**, and removes the access. Removing a person's or a team's grant,
 or a member from a team, saves the removal and the choice together. If a task
 cannot be reassigned or a Viewer grant cannot be given, nothing changes and
-the window lists the tasks again. Such a removal reassigns at most 120 tasks.
-With more, choose Keep as Viewer and hand the tasks over later, or reassign
-some of them first. Deleting a team saves each task and Viewer
-grant first; if one cannot be saved, the team stays, tasks already saved keep
-their new assignee, and the window lists what remains. Removing a person's
-grant that is already Viewer offers only the reassignment. Done tasks keep
-their assignee and are not listed.
+the window lists the tasks again. Such a removal reassigns at most 120 tasks,
+and fewer when the tasks have many followers. With more, keep the people as
+Viewers and hand the tasks over later, or reassign some of the tasks first.
+The message says which of these you can choose. Deleting a team saves each
+task and Viewer grant first; if one cannot be saved, the team stays, tasks
+already saved keep their new assignee, and the window lists what remains.
+Removing a person's grant that is already Viewer offers only the reassignment.
+Done tasks keep their assignee and are not listed.
 
 A team leader who cannot share those projects and edit their tasks removes
 the member at once. A message then says who can no longer see how many of

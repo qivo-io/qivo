@@ -232,12 +232,45 @@ type Lost = Holding & { project: Doc<'projects'> }
  * runs every rule of a task update and notifies its followers inside the
  * removal's one transaction, so a larger handover would pass Convex's limits
  * for one transaction. Set at about 60% of the largest count that passed the
- * measurement behind tests/bulkReassign.test.ts (196 tasks in an organization
- * of 100 people). */
+ * measurement behind tests/bulkReassign.test.ts (196 tasks with four
+ * followers each, in an organization of 100 people). */
 export const REASSIGN_MAX = 120
 
-/** The refusal of a reassignment above REASSIGN_MAX. */
-export const REASSIGN_TOO_LARGE = `a removal can reassign at most ${REASSIGN_MAX} tasks at once, so keep the people as Viewers or reassign some of the tasks first`
+/** The share of each of Convex's limits for one transaction that a removal
+ * may have used before it reassigns another task. A task costs more the more
+ * followers it has, most of all followers the transaction has not checked
+ * yet, so a handover under REASSIGN_MAX can still be too large. The
+ * deployment reports what the transaction used (ctx.meta.getTransactionMetrics),
+ * so the check holds whatever the tasks look like. The rest of each limit is
+ * room for one more task and the removal's own writes. In
+ * tests/bulkReassign.test.ts, REASSIGN_MAX tasks with four followers each
+ * use about 70% of the index ranges. */
+export const REASSIGN_ROOM = 0.8
+
+/** The refusal of a handover too large for one removal: more than
+ * REASSIGN_MAX tasks, or fewer whose followers fill REASSIGN_ROOM. It
+ * suggests keeping the people as Viewers only when the removal would accept
+ * that choice (`canKeep`). */
+export const reassignTooLarge = (canKeep: boolean): string =>
+  `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when they have many followers, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
+
+/* The counts removalIsFull compares, each public count of
+ * TransactionMetrics. */
+const LIMITED = [
+  'databaseQueries',
+  'documentsRead',
+  'bytesRead',
+  'documentsWritten',
+  'bytesWritten',
+  'functionsScheduled',
+  'scheduledFunctionArgsBytes',
+] as const
+
+/* Whether the transaction has used more than REASSIGN_ROOM of any limit. */
+async function removalIsFull(ctx: MutationCtx): Promise<boolean> {
+  const m = await ctx.meta.getTransactionMetrics()
+  return LIMITED.some((k) => m[k].used > (m[k].used + m[k].remaining) * REASSIGN_ROOM)
+}
 
 /**
  * Runs `remove` and answers the open tasks in `projects` that someone in
@@ -346,6 +379,26 @@ async function assertCanTakeOver(
   }
 }
 
+/* Whether the removal in `a` would accept 'keep_as_viewer' for `lost`: it
+ * has no keepRefusal, and `a.me` may manage the users of each project the
+ * Viewer grants would go to, as the keep branch of removeAndSettle checks. */
+async function canKeepAsViewers(
+  ctx: QueryCtx,
+  a: {
+    me: Doc<'profiles'>
+    viewerOn: (project: Doc<'projects'>) => Promise<Doc<'projects'>>
+    keepRefusal?: string
+  },
+  lost: readonly Lost[],
+): Promise<boolean> {
+  if (a.keepRefusal !== undefined) return false
+  const projects = new Map(lost.map((h) => [h.project.id, h.project]))
+  for (const project of projects.values()) {
+    if (!(await canManageProjectUsers(ctx, a.me, await a.viewerOn(project)))) return false
+  }
+  return true
+}
+
 /** The reason a refusal carries when it comes from settling a removal's
  * held tasks (a Viewer grant or a reassignment), so the app can say the
  * access stays because of the tasks rather than because the removal itself
@@ -379,13 +432,14 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * `keepRefusal`, when set, refuses that choice instead. `reassign_to` hands
  * each of those tasks, by role, to that user or to nobody, with every rule of
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
- * Edit access and sight of every task above once the access is gone. More
- * than REASSIGN_MAX tasks are refused with REASSIGN_TOO_LARGE, which blames
- * the number rather than the tasks. Any refusal throws, so the removal and
- * its settlement land together or not at all, and one while settling the
- * tasks carries HELD_TASKS_REFUSED. Project grant removal and team member
- * removal (model/teams.ts) both run through this, as the app, REST and MCP
- * do.
+ * Edit access and sight of every task above once the access is gone. A
+ * handover of more than REASSIGN_MAX tasks, or one that fills REASSIGN_ROOM
+ * of the transaction before its last task, is refused with reassignTooLarge,
+ * which blames its size rather than the tasks. Any refusal throws, so the
+ * removal and its settlement land together or not at all, and one while
+ * settling the tasks carries HELD_TASKS_REFUSED. Project grant removal and
+ * team member removal (model/teams.ts) both run through this, as the app,
+ * REST and MCP do.
  */
 export async function removeAndSettle(
   ctx: MutationCtx,
@@ -441,19 +495,23 @@ export async function removeAndSettle(
     const to = held.reassign_to
     const byTask = new Map<string, Holding[]>()
     for (const h of stranded) byTask.set(h.task.id, [...(byTask.get(h.task.id) ?? []), h])
-    // the number of tasks is at fault, not one of them, so no HELD_TASKS_REFUSED
-    if (byTask.size > REASSIGN_MAX) throw rule(REASSIGN_TOO_LARGE)
-    await settling(async () => {
-      // The access is gone and the loop below writes only tasks, follows,
-      // messages and activity, so one preload serves every task update.
-      const bulk = {
-        preload: await loadNotifyPreload(ctx, me.org_id, orgProjects),
-        checked: new Set<string>(),
-      }
-      if (to !== null) await assertCanTakeOver(ctx, lost, to, bulk.checked)
-      for (const holdings of byTask.values()) {
-        const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
-        for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
+    // The size of the handover is at fault, not one of its tasks, so these
+    // refusals carry no HELD_TASKS_REFUSED, and a refusal after some tasks
+    // were reassigned rolls them back with the removal.
+    const tooLarge = async () => rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
+    if (byTask.size > REASSIGN_MAX) throw await tooLarge()
+    // The access is gone and the loop below writes only tasks, follows,
+    // messages and activity, so one preload serves every task update.
+    const bulk = {
+      preload: await loadNotifyPreload(ctx, me.org_id, orgProjects),
+      checked: new Set<string>(),
+    }
+    if (to !== null) await settling(() => assertCanTakeOver(ctx, lost, to, bulk.checked))
+    for (const holdings of byTask.values()) {
+      if (await removalIsFull(ctx)) throw await tooLarge()
+      const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
+      for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
+      await settling(async () => {
         await updateIssueCore(ctx, {
           me,
           issue: holdings[0].task,
@@ -462,8 +520,8 @@ export async function removeAndSettle(
           machine: a.provenance === undefined ? undefined : { provenance: a.provenance },
           bulk,
         })
-      }
-    })
+      })
+    }
     result.stranded = []
     result.reassigned = stranded
   }

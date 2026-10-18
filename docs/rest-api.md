@@ -527,9 +527,9 @@ is refused with `400`, such as `unknown field "on_held_task"; this request
 takes on_held_tasks`, so a misspelled choice never falls back to `leave`.
 
 The removal and its choice land together or not at all. If any task cannot
-be reassigned, the access stays and nothing changes. At most 120 tasks can be
-reassigned in one removal. Above that the removal is a `400` and nothing
-changes. The answer is
+be reassigned, the access stays and nothing changes. One removal reassigns at
+most 120 tasks, and fewer when the tasks have many followers. A larger
+handover is a `400` and nothing changes. The answer is
 `{"project_id", "user" | "team", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, where `stranded` and `reassigned` list `{"id", "key",
 "title", "user_id", "role"}`, and `kept_as_viewer` the user uuids given a
@@ -634,9 +634,9 @@ access](#project-access):
 access. Any other field is refused with `400`, such as `unknown field
 "leadr"; this request takes leader`, and the request changes nothing.
 
-The removal and its choice land together or not at all. At most 120 tasks can
-be reassigned in one removal. Above that the removal is a `400` and nothing
-changes. The answer is
+The removal and its choice land together or not at all. One removal
+reassigns at most 120 tasks, and fewer when the tasks have many followers. A
+larger handover is a `400` and nothing changes. The answer is
 `{"team_id", "user", "removed", "stranded", "kept_as_viewer",
 "reassigned"}`, shaped as for project access; removing someone who is not a
 member answers `removed: false`. Each change writes the app's activity row

@@ -217,12 +217,17 @@ async function trimUnreadMessages(
  * again. A preload is a snapshot. It is valid only while nothing in the
  * transaction changes profiles, projects, grants, teams or team memberships
  * after it is built, because its visibility answers would then be stale. A
- * bulk writer that meets this may pass one: the Northstar seed (demoSeed.ts
- * writeNorthstarWork), a Deleted items step (model/deletedItems.ts), which
- * reads it after any project rows moved and then only detaches tasks, and the
- * reassign loop of an access removal (projectAccess.ts removeAndSettle),
- * which builds it after the access is gone. A single interactive write
- * passes none, so every row is read fresh. */
+ * bulk writer that meets this may pass one:
+ *   - the Northstar seed (demoSeed.ts writeNorthstarWork);
+ *   - a Deleted items step (model/deletedItems.ts), which reads it after any
+ *     project rows moved and then only detaches tasks;
+ *   - the detach loop of a task delete (model/deletedItems.ts
+ *     moveTasksToTrash), the app's, REST's and MCP's delete, which reads it
+ *     at the first detach of a transaction that changes only tasks, their
+ *     rows and activity;
+ *   - the reassign loop of an access removal (projectAccess.ts
+ *     removeAndSettle), which builds it after the access is gone.
+ * A write that changes one task passes none, so every row is read fresh. */
 export type NotifyPreload = {
   /* Every profile of the issue's org, as stored now (after any patch). */
   orgProfiles: Doc<'profiles'>[]
@@ -303,7 +308,7 @@ async function recipientCanSee(
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
  * are read by uuid. `visibility` is a bulk writer's memo (NotifyPreload),
- * never passed by a single interactive write. The issue_title snapshot is
+ * never passed by a write that changes one task. The issue_title snapshot is
  * the issue's CURRENT title (the SQL passed new.title). */
 export async function postMessage(
   ctx: MutationCtx,
@@ -365,7 +370,7 @@ export async function postMessage(
  * must not be creatable for someone who could not have received them),
  * idempotent.
  * `visibility` is a bulk writer's memo (NotifyPreload), never passed by a
- * single interactive write. Returns whether a row was inserted. */
+ * write that changes one task. Returns whether a row was inserted. */
 export async function subscribeToIssue(
   ctx: MutationCtx,
   a: {
