@@ -30,6 +30,8 @@ describe('removing someone who has work in the project', () => {
   let refused: Set<string>
   let refusal: unknown
   let work: string
+  // sends the loaded snapshot again, as a new delivery
+  let deliver: () => void
 
   async function load(change?: (snap: Snapshot, task: Task) => void) {
     const snap: Snapshot = plannerFixture()
@@ -87,7 +89,10 @@ describe('removing someone who has work in the project', () => {
     )
     change?.(snap, task)
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:forMe') next(structuredClone(snap))
+      if (getFunctionName(ref) === 'snapshot:forMe') {
+        deliver = () => next(structuredClone(snap))
+        deliver()
+      }
       return () => {}
     })
     const store = await import('./planner')
@@ -509,5 +514,94 @@ describe('removing someone who has work in the project', () => {
       ['teams:removeMember', 'leave'],
       ['teams:removeMember', 'leave'],
     ])
+  })
+
+  /* While billing or a pending deletion makes the organization read-only,
+     the server takes access away for an organization admin only with
+     'leave', and refuses both choices of the window. */
+  const readOnly =
+    (change?: (snap: Snapshot, task: Task) => void) => (snap: Snapshot, task: Task) => {
+      inPlan(false)(snap, task)
+      snap.orgs[0].read_only = true
+      change?.(snap, task)
+    }
+
+  it('removes at once with a notice for an admin while the organization is read-only', async () => {
+    await load(readOnly())
+    expect(P.startRemoval(user('leo'))).toBe(false)
+    await vi.waitFor(() =>
+      expect(window.showToast).toHaveBeenCalledWith(
+        'Leo Person can no longer see 2 tasks they are assigned to or reviewing. A project lead can reassign them.',
+        'info',
+      ),
+    )
+    expect(P.levelOn(work, 'leo')).toBeNull()
+    expect(vm('t1').assignee).toBe('leo')
+    expect(P.startRemoval(leaving('ann'))).toBe(false)
+    await vi.waitFor(() =>
+      expect(window.showToast).toHaveBeenCalledWith(
+        'Ann Person can no longer see a task they are assigned to or reviewing. A project lead can reassign it.',
+        'info',
+      ),
+    )
+    expect(P.user('ann')?.teams).toEqual([])
+    expect(vm('t4').assignee).toBe('ann')
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['projects:removeAccess', 'leave'],
+      ['teams:removeMember', 'leave'],
+    ])
+  })
+
+  it('leaves the tasks once a removal is refused as read-only, until the next delivery', async () => {
+    await load(inPlan(false))
+    refused.add('ann')
+    const ann = P.accessRemoval(leaving('ann'))
+    // a refusal for any other reason says nothing about the organization
+    expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
+    expect(P.startRemoval(user('leo'))).toBe(true)
+    // access ended at a set time, which the delivered snapshot does not say
+    refusal = new ConvexError({
+      code: 'forbidden',
+      reason: 'billing_required',
+      message: 'This organization is read-only.',
+    })
+    expect(await P.removeAccess(leaving('ann'), { keep: true }, ann.items)).toBe(false)
+    expect(P.user('ann')?.teams).toEqual(['crew'])
+    expect(P.startRemoval(user('leo'))).toBe(false)
+    expect(P.levelOn(work, 'leo')).toBeNull()
+    await vi.waitFor(() =>
+      expect(window.showToast).toHaveBeenLastCalledWith(
+        'Leo Person can no longer see 2 tasks they are assigned to or reviewing. A project lead can reassign them.',
+        'info',
+      ),
+    )
+    expect(requests.map((r) => [r.name, r.args.on_held_tasks])).toEqual([
+      ['teams:removeMember', 'keep_as_viewer'],
+      ['teams:removeMember', 'keep_as_viewer'],
+      ['projects:removeAccess', 'leave'],
+    ])
+    // the next delivery says the organization can be edited again
+    deliver()
+    expect(P.startRemoval(user('leo'))).toBe(true)
+  })
+
+  it('still asks while the organization can be edited, a lead who is not an admin, or a team being deleted', async () => {
+    await load(inPlan(false))
+    expect(P.startRemoval(user('leo'))).toBe(true)
+    expect(P.startRemoval(crewGrant('plan'))).toBe(true)
+    // the signed-in Planner leads Plan but is not an admin, so the server
+    // refuses even 'leave'; the window and its refusal stay as they were
+    await load(
+      readOnly((snap) => {
+        snap.profiles[0].org_role = 'user'
+        snap.projects.find((p) => p.id === 'plan')!.lead_id = snap.profiles[0].id
+      }),
+    )
+    expect(P.startRemoval(user('leo'))).toBe(true)
+    await load(
+      readOnly((snap) => snap.teams.push({ ...snap.teams[0], id: 'other', name: 'Other' })),
+    )
+    expect(P.startRemoval(deleteCrew)).toBe(true)
+    expect(requests).toEqual([])
   })
 })

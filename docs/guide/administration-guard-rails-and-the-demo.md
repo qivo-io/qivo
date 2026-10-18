@@ -169,10 +169,13 @@ available. Admins can still take access away while editing is paused. They
 can revoke any credential on [API access](#api-access), revoke or delete agent
 keys, make users **Inactive**, remove users, remove users from teams and
 remove a person's or team's access to a project. The last two also work
-through the REST API and MCP with an admin's own token or connection. A
-removal that asks about open tasks waits, because both of its choices also
-save Viewer grants or reassigned tasks. Reactivating users and every other
-change wait until billing is active again.
+through the REST API and MCP with an admin's own token or connection. Such a
+removal leaves open tasks with the people who hold them, because keeping
+people as Viewers or reassigning their tasks saves more than the removal. In
+the app it therefore does not ask about the tasks. A message says who can no
+longer see how many tasks, so a project lead can reassign them once editing
+resumes. Reactivating users, deleting teams and every other change wait until
+billing is active again.
 
 Each organization keeps its assigned plan version. New plans do not change
 existing prices or allowances. The published plan costs $1 per active billable

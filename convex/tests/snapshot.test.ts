@@ -268,6 +268,33 @@ describe('billing redaction', () => {
   })
 })
 
+describe('read-only state', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('marks an organization read-only for every member while billing or a deletion refuses writes', async () => {
+    const readOnly = async () =>
+      Promise.all([f.admin, f.user, f.guest].map(async (p) => (await snapFor(p)).orgs[0]))
+    for (const org of await readOnly()) expect(org).not.toHaveProperty('read_only')
+    // billing enabled without a subscription pauses editing
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    vi.stubEnv('APP_MODE', '')
+    for (const org of await readOnly()) expect(org?.read_only).toBe(true)
+    vi.unstubAllEnvs()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: '2026-10-01T00:00:00.000Z',
+        created_at: NOW,
+      })
+    })
+    for (const org of await readOnly()) expect(org?.read_only).toBe(true)
+    // the other organization is not affected
+    expect((await snapFor(f.otherAdmin)).orgs[0]).not.toHaveProperty('read_only')
+  })
+})
+
 describe('snapshot size log', () => {
   afterEach(() => vi.restoreAllMocks())
 

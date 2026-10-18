@@ -194,7 +194,8 @@ type Snapshot = NonNullable<FunctionReturnType<typeof api.snapshot.forMe>>
    home org drives display settings, and foreign projects simply appear
    alongside the home ones. */
 const rows = {
-  orgs: new Map<string, Row<'organizations'>>(),
+  // with read_only while billing or a pending deletion refuses its writes
+  orgs: new Map<string, Snapshot['orgs'][number]>(),
   // billing rides the org row, admin-redacted server-side; this slot is the
   // home org's object (the organization_billing table's successor)
   billing: null as Row<'organizations'>['billing'] | null,
@@ -2210,6 +2211,23 @@ function grantsOn(projectId: string): Record<string, GrantLevel> {
   })
   return access
 }
+/* The organization whose project or team a removal changes. */
+const removalOrg = (change: AccessRemoval) =>
+  'projectId' in change
+    ? rows.projects.get(change.projectId)?.org_id
+    : rows.teams.get(change.teamId)?.org_id
+/* Whether a removal can only leave the tasks it hides with their holders.
+   While billing or a pending deletion makes the organization read-only, the
+   server lets an organization admin take access away with 'leave' and
+   refuses keeping people as Viewers or reassigning their tasks
+   (model/projectAccess.ts removeProjectGrantCore, model/teams.ts
+   removeTeamMemberCore). Deleting a team is not such a removal and waits
+   like every other change. */
+function leavesHeldTasks(change: AccessRemoval): boolean {
+  if (change.kind === 'deleteTeam') return false
+  const orgId = removalOrg(change)
+  return !!orgId && rows.orgs.get(orgId)?.read_only === true && actorIn(orgId)?.orgRole === 'admin'
+}
 /* Removes a person's or a team's grant on one project, or a member from a
    team, in one server write that settles the tasks it hides by `choice`
    (projects.removeAccess, teams.removeMember), and paints the outcome at
@@ -2221,10 +2239,7 @@ function removeAtOnce(
   items: Holder[],
   stays: string,
 ): Promise<boolean> {
-  const orgId =
-    change.kind === 'teamMember'
-      ? rows.teams.get(change.teamId)?.org_id
-      : rows.projects.get(change.projectId)?.org_id
+  const orgId = removalOrg(change)
   if (!orgId) return Promise.resolve(false)
   const people = [...new Set(items.map((i) => i.uid))]
   const held =
@@ -2294,6 +2309,13 @@ function removeAtOnce(
       () => resolve(true),
       undefined,
       (error) => {
+        // A read-only refusal says what the snapshot may not say yet: the
+        // server works read_only out again only when data the snapshot read
+        // changes, not when access ends at a set time. Recorded on the
+        // snapshot the rollback re-adopts, so the next removal leaves the
+        // tasks (leavesHeldTasks) until the next delivery replaces it.
+        const org = readOnly(errData(error)) && serverSnap?.orgs.find((o) => o.id === orgId)
+        if (org) org.read_only = true
         // only a refused reassignment or Viewer grant (model/projectAccess.ts
         // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
         // pause or a lost connection says so itself
@@ -3140,11 +3162,13 @@ export const PLANNER = {
   /* Start a removal. Returns true when the removal window should ask first:
      someone would lose sight of their tasks and I can settle them. Otherwise
      the removal goes ahead now, and once the server accepts it, a notice says
-     who lost sight of how many tasks. */
+     who lost sight of how many tasks. An organization admin's removal while
+     the organization is read-only goes ahead too, because it can only leave
+     the tasks (leavesHeldTasks). */
   startRemoval: (change: AccessRemoval): boolean => {
     const removal = PLANNER.accessRemoval(change)
     const { people, items } = removal
-    if (items.length && PLANNER.canSettleRemoval(removal)) return true
+    if (items.length && PLANNER.canSettleRemoval(removal) && !leavesHeldTasks(change)) return true
     void PLANNER.removeAccess(change, { to: null }, []).then((removed) => {
       if (!removed || !items.length) return
       const who = andList(people.map((id) => PLANNER.user(id)?.name || 'Someone'))
