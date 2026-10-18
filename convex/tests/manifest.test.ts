@@ -266,6 +266,7 @@ invites:targets query internal {"type":"object","value":{"invites":{"fieldType":
 issues:addLink mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false},"target_id":{"fieldType":{"type":"string"},"optional":false},"type":{"fieldType":{"type":"union","value":[{"type":"literal","value":"blocks"},{"type":"literal","value":"relates"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:archive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"reason":{"fieldType":{"type":"string"},"optional":true},"keep_subtasks":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:archivedFor query public {"type":"object","value":{"project_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+issues:archivedPage query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":true}}}
 issues:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"status":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"backlog"},{"type":"literal","value":"todo"},{"type":"literal","value":"progress"},{"type":"literal","value":"review"},{"type":"literal","value":"done"}]},{"type":"null"}]},"optional":true},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":true},"assignee_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"reviewer_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"parent_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"due_date":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"paused":{"fieldType":{"type":"union","value":[{"type":"boolean"},{"type":"null"}]},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:deleteDeep mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"subtask_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"reason":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:move mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"detach_parent":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -675,7 +676,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     acceptInvitation: 'authedMutation',
   },
   issues: {
+    // deprecated: tabs from before archivedPage still call it (issues.ts)
     archivedFor: 'authedQuery',
+    // the Archived tasks page, one project family at a time; an unknown or
+    // invisible project answers an empty last page
+    archivedPage: 'authedQuery',
     create: 'orgMutation',
     update: 'orgMutation',
     move: 'orgMutation',
@@ -819,7 +824,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 163
+const PUBLIC_COUNT = 164
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

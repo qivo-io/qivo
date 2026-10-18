@@ -862,10 +862,11 @@ does not help.
 
 `archived=true` lists archived tasks one project at a time and needs
 `project`. Naming a project lists its archived tasks and those of all its
-sub-projects you can read, archived sub-projects included, like the app's
-Archive page. Tasks come most recently archived first, and tasks archived at
-the same moment keep one fixed order across pages. The answer is an object
-instead of an array, with the same rows as an active list:
+sub-projects you can read, archived sub-projects included. The app's Archived
+tasks page leaves out a sub-project archived on its own. Tasks come most
+recently archived first, and tasks archived at the same moment keep one fixed
+order across pages. The answer is an object instead of an array, with the
+same rows as an active list:
 
 ```json
 {
@@ -1149,7 +1150,7 @@ parent task in a project you cannot edit; an organization admin can restore
 it`, and nothing changes. Archived tasks disappear from the default list
 (`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
 stop counting as workload, and in the app leave every normal view for
-the Archive page. A nightly sweep archives tasks that have been `done` for
+the Archived tasks page. A nightly sweep archives tasks that have been `done` for
 30 days, or for a legacy team archive setting's number of days where an older
 project kept one. Restoring a still-`done` task **restarts its auto-archive
 clock** (0071), so a restore holds for the full threshold rather than being

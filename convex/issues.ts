@@ -1,4 +1,4 @@
-/* The issue domain's public surface (phase 4): the archived-list read and
+/* The issue domain's public surface (phase 4): the archived-list reads and
  * the Move window's question, plus the browser client's issue writes — thin
  * wrappers over model/issues, model/messages and model/cascade. Pattern:
  * orgMutation wrapper → resolve by uuid → access check → compose model
@@ -41,9 +41,25 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
+import {
+  ARCHIVED_PAGE_ROWS,
+  ARCHIVED_SEARCH_MAX,
+  type ArchivedPageRow,
+  archiveCursorText,
+  archivedPageCore,
+  parseArchiveCursor,
+} from './lib/archivedTasks'
 import { byId } from './lib/db'
 import { vIssuePriority, vIssueStatus, vLinkType } from './lib/enums'
-import { authedQuery, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
+import {
+  authedQuery,
+  badRequest,
+  forbidden,
+  notFound,
+  orgMutation,
+  orgQuery,
+  rule,
+} from './lib/functions'
 import { postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import {
@@ -105,8 +121,9 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
   assertCanEdit(ctx, ctx.me, projectId)
 
 /* --------------------------------------------------------------- archived
- * Issue reads that live OUTSIDE the snapshot: the Archive page's per-project
- * archived list (P.fetchArchived).
+ * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
+ * paged list (P.fetchArchivedPage) and, deprecated, the whole-archive read
+ * that browser tabs and desktop clients from before it still call.
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
@@ -114,9 +131,59 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
  * invisible project id contributes nothing rather than erroring: RLS filtered
  * silently, and the id must not become an existence oracle. authedQuery
  * rather than orgQuery because the ids may span organizations (a foreign
- * meta's archive page); each project is fenced through the caller's seat in
+ * meta's archived tasks); each project is fenced through the caller's seat in
  * ITS OWN org. */
 
+/** One page of a project family's archived tasks for the app's Archived
+ * tasks page, most recently archived first, then newest created first. A
+ * top-level project includes its visible sub-projects that share its
+ * archived state, as the app's project tree does (lib/archivedTasks.ts
+ * archiveFamily). With `search`, rows are only the matches, and a page may
+ * stop early under the read budget; pass `next_cursor` back until it is
+ * null. `scanned` counts the family's archived tasks the page looked at. An
+ * unknown or invisible project answers an empty last page. */
+export const archivedPage = authedQuery({
+  args: {
+    project_id: v.string(),
+    cursor: v.optional(v.string()),
+    search: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    a,
+  ): Promise<{ rows: ArchivedPageRow[]; next_cursor: string | null; scanned: number }> => {
+    const limit = a.limit ?? ARCHIVED_PAGE_ROWS
+    if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_ROWS) {
+      throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_ROWS}`)
+    }
+    const search = (a.search ?? '').trim()
+    if (search.length > ARCHIVED_SEARCH_MAX) {
+      throw badRequest(`search must be at most ${ARCHIVED_SEARCH_MAX} characters`)
+    }
+    const cursor = a.cursor === undefined ? null : parseArchiveCursor(a.cursor)
+    if (a.cursor !== undefined && cursor === null) {
+      throw badRequest('cursor must be the next_cursor of an earlier page')
+    }
+    const empty = { rows: [], next_cursor: null, scanned: 0 }
+    const project = await byId(ctx, 'projects', a.project_id)
+    if (project === null) return empty
+    const me = ctx.myProfiles.get(project.org_id)
+    if (me === undefined || !(await canSeeProject(ctx, me, project))) return empty
+    const page = await archivedPageCore(ctx, me, project, { cursor, search, limit })
+    return {
+      rows: page.rows,
+      next_cursor: page.next === null ? null : archiveCursorText(page.next),
+      scanned: page.scanned,
+    }
+  },
+})
+
+/** Deprecated: the Archived tasks page reads archivedPage. Kept for one
+ * release, with the same answer, for browser tabs and desktop clients from
+ * before it; remove it with its manifest line once no served build calls
+ * it. It reads every archived task of the named projects at once, which
+ * passes a transaction's limits for a large archive. */
 export const archivedFor = authedQuery({
   args: { project_ids: v.array(v.string()) },
   handler: async (ctx, { project_ids }) => {
@@ -130,15 +197,16 @@ export const archivedFor = authedQuery({
       const me = ctx.myProfiles.get(project.org_id)
       if (me === undefined) continue
       if (!(await canSeeProject(ctx, me, project))) continue
+      // only archived rows, never the project's active tasks
       const projectIssues = await ctx.db
         .query('issues')
-        .withIndex('by_project', (q) => q.eq('project_id', pid))
+        .withIndex('by_project_archived', (q) =>
+          q.eq('project_id', pid).gt('archived_at', undefined),
+        )
         .collect()
-      for (const i of projectIssues) {
-        if (i.archived_at !== undefined) out.push(i)
-      }
+      out.push(...projectIssues)
     }
-    // fetchArchived's order (planner.ts): archived_at desc, num desc
+    // the old client's order: archived_at desc, num desc
     out.sort((a, b) =>
       a.archived_at === b.archived_at
         ? b.num - a.num

@@ -1173,10 +1173,11 @@ large to list in one request`, and a smaller `limit` does not help.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
-its sub-projects you can read, archived sub-projects included, like the app's
-Archive page. Tasks come most recently archived first, and tasks archived at
-the same moment keep one fixed order across pages. The answer is an object,
-cursor first, with the same rows as an active list:
+its sub-projects you can read, archived sub-projects included. The app's
+Archived tasks page leaves out a sub-project archived on its own. Tasks come
+most recently archived first, and tasks archived at the same moment keep one
+fixed order across pages. The answer is an object, cursor first, with the
+same rows as an active list:
 
 ```json
 {
@@ -1658,7 +1659,7 @@ time. Leaving `review` keeps whatever is left, and a call that stays in
 Archived tasks (0070) are a separate axis from `status`: they leave the
 default `list_tasks` result (`archived: true` with `project` pages them, see
 [Task results](#task-results)), stop counting as workload, and in the app live
-on the Archive page. A nightly sweep archives tasks that have been `done`
+on the Archived tasks page. A nightly sweep archives tasks that have been `done`
 for 30 days, or for a legacy team archive setting's number of days where an
 older project kept one. Restoring a still-`done` task restarts its
 auto-archive clock (0071), so a restore holds for the full threshold.
