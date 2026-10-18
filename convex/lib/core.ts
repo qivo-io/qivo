@@ -56,14 +56,14 @@ import { linkKindFrom, linksOf, type TaskLinkKind } from '../model/links'
 import { followersOf } from '../model/messages'
 import { attachmentLimitMb } from '../model/orgs'
 import {
-  canAccessProject,
   canChangeAccess,
+  canHoldWork,
   canSeeProject,
   levelRank,
   liveCredentialRow,
   machineAccess,
-  profileCanBeAssigned,
   projectLevelsForOrg,
+  projectLevelsForProfiles,
   readOnlyRefusal,
 } from './access'
 import {
@@ -905,21 +905,27 @@ export async function listUsersCore(ctx: QueryCtx, me: Caller): Promise<Doc<'pro
  * The caller must already have resolved a project it can read. A parent's
  * people are those with standing on the parent itself; someone who sees it
  * only through a sub-project is listed under that sub-project. A reporter
- * may be anyone listed; an assignee or reviewer needs `assignable`. */
+ * may be anyone listed; an assignee or reviewer needs `assignable`. Listed
+ * and `assignable` are canAccessProject and profileCanBeAssigned, answered
+ * for the whole roster from the project's grants (projectLevelsForProfiles),
+ * so the read costs the same few index ranges however large the
+ * organization is. */
 export async function listProjectUsersCore(
   ctx: QueryCtx,
   me: Caller,
   project: Doc<'projects'>,
 ): Promise<(ReturnType<typeof userJson> & { assignable: boolean })[]> {
-  const out = []
-  for (const profile of await listUsersCore(ctx, me)) {
-    if (!(await canAccessProject(ctx, profile, project))) continue
-    out.push({
-      ...userJson(profile),
-      assignable: await profileCanBeAssigned(ctx, profile, project),
-    })
-  }
-  return out
+  const levelOf = await projectLevelsForProfiles(ctx, project)
+  return (await listUsersCore(ctx, me)).flatMap((profile) => {
+    const level = levelOf(profile)
+    if (level === null) return []
+    return [
+      {
+        ...userJson(profile),
+        assignable: canHoldWork(profile) && levelRank(level) >= LEVEL_RANK.user,
+      },
+    ]
+  })
 }
 
 /* The most comments one REST or MCP read answers, and how many it answers

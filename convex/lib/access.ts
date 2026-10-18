@@ -191,7 +191,8 @@ export async function canSeeProject(
 /* Access for a reason other than read-only navigation, the per-profile
  * counterpart of OrgProjectView.accessible. On a parent it means organization
  * admin, its lead, or an individual or team grant on the parent itself. On a
- * sub-project it equals canSeeProject. */
+ * sub-project it equals canSeeProject. The project user list answers it for
+ * every profile at once through projectLevelsForProfiles. */
 export async function canAccessProject(
   ctx: QueryCtx,
   profile: Doc<'profiles'>,
@@ -388,6 +389,83 @@ export function levelsFrom(
       project.org_id === me.org_id ? (effective.get(project.id) ?? null) : null,
     navigationOnly: (projectId) => navigation.has(projectId),
   }
+}
+
+/** The level every profile of `project`'s organization holds on it, leaving
+ * out the read-only navigation a parent gets from its sub-projects. It is
+ * projectLevel(ctx, profile, project, false) for many profiles at once, so a
+ * profile with a level is one canAccessProject admits, and one at User or
+ * above passes hasProjectLevel 'user'. It reads the individual grants and
+ * team shares on the project and its root, and each sharing team, a few
+ * index ranges however many profiles it answers. The per-profile walk read
+ * each profile's own grants and team memberships, about two ranges per
+ * profile plus one per sharing team, so the project user list of a large
+ * organization passed Convex's 4,096. A profile of another organization, and
+ * every profile on a project whose root is in another organization, gets
+ * null. A missing parent or a cycle throws not found, as in rootMetaOf. */
+export async function projectLevelsForProfiles(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+): Promise<(profile: Doc<'profiles'>) => AccessLevel | null> {
+  const root = await rootMetaOf(ctx, project)
+  if (root.org_id !== project.org_id) return () => null
+  const tree = project.id === root.id ? [project] : [root, project]
+  const grants: Doc<'project_access'>[] = []
+  // each share once for every member of its team, as levelsFrom takes them
+  const shares: (Pick<Doc<'project_team_access'>, 'project_id' | 'level'> & {
+    profile_id: string
+  })[] = []
+  const teamMembers = new Map<string, string[]>()
+  for (const { id } of tree) {
+    grants.push(
+      ...(await ctx.db
+        .query('project_access')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .collect()),
+    )
+    const teamShares = ctx.db
+      .query('project_team_access')
+      .withIndex('by_project', (q) => q.eq('project_id', id))
+    for await (const { team_id, project_id, level } of teamShares) {
+      let members = teamMembers.get(team_id)
+      if (members === undefined) {
+        members = await sameOrgTeamMembers(ctx, team_id, project.org_id)
+        teamMembers.set(team_id, members)
+      }
+      for (const profile_id of members) shares.push({ profile_id, project_id, level })
+    }
+  }
+  const grantsOf = Map.groupBy(grants, (grant) => grant.profile_id)
+  const sharesOf = Map.groupBy(shares, (share) => share.profile_id)
+  return (profile) => {
+    if (profile.org_id !== project.org_id) return null
+    const { levelOf, navigationOnly } = levelsFrom(
+      profile,
+      tree,
+      grantsOf.get(profile.id) ?? [],
+      sharesOf.get(profile.id) ?? [],
+    )
+    return navigationOnly(project.id) ? null : levelOf(project)
+  }
+}
+
+/* The profile ids of team `teamId`, or none when the team is gone or belongs
+ * to another organization than `orgId`, the teams teamGrantOn skips. */
+async function sameOrgTeamMembers(
+  ctx: QueryCtx,
+  teamId: string,
+  orgId: string,
+): Promise<string[]> {
+  const team = await ctx.db
+    .query('teams')
+    .withIndex('by_uuid', (q) => q.eq('id', teamId))
+    .unique()
+  if (team === null || team.org_id !== orgId) return []
+  const members = await ctx.db
+    .query('team_members')
+    .withIndex('by_team', (q) => q.eq('team_id', teamId))
+    .collect()
+  return members.map((member) => member.profile_id)
 }
 
 /* Staff may add organization labels when any meta grants user standing,
