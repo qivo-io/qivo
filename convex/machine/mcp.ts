@@ -1716,7 +1716,7 @@ export const listIssues = internalQuery({
     )
     // the cursor first, so a truncated tool result still shows it
     return pretty({
-      next_cursor: page.next === null ? null : await archiveCursorText(page.next),
+      next_cursor: page.next === null ? null : await archiveCursorText(page.next, req.project),
       tasks: page.rows,
     })
   },

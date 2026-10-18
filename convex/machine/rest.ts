@@ -585,7 +585,7 @@ export const listIssues = internalQuery({
       view,
     )
     return {
-      next_cursor: page.next === null ? null : await archiveCursorText(page.next),
+      next_cursor: page.next === null ? null : await archiveCursorText(page.next, req.project),
       tasks: page.rows,
     }
   },

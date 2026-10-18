@@ -47,18 +47,23 @@ const positionText = (c: ArchiveCursor): string => `${c.created}~${c.id}~${c.arc
 
 const POSITION_TEXT = /^(\d+(?:\.\d+)?)~([0-9a-z]{1,64})~(.{1,64})$/s
 
-/* The longest `2~` cursor archiveCursorText writes: a position of at most
- * 26 + 1 + 64 + 1 + 192 bytes, since the 64 UTF-16 code units POSITION_TEXT
- * allows an archive time take up to 192 bytes as UTF-8, and the 16-byte tag,
- * as hex. */
-const SEALED_MAX = 2 + 2 * (284 + 16)
+/* What a cursor seals, `<project uuid>~<position>`: the project whose list
+ * the cursor came from, and where that list goes on. */
+const SEALED_TEXT = /^([0-9a-z-]{1,64})~(.+)$/s
+
+/* The longest `2~` cursor archiveCursorText writes: a project uuid of at most
+ * 64 bytes and a `~`, a position of at most 26 + 1 + 64 + 1 + 192 bytes, since
+ * the 64 UTF-16 code units POSITION_TEXT allows an archive time take up to 192
+ * bytes as UTF-8, and the 16-byte tag, as hex. */
+const SEALED_MAX = 2 + 2 * (65 + 284 + 16)
 
 /** A cursor as callers see it, `2~` and the position sealed
- * (lib/archiveCursorSeal.ts). The position is the last task a page looked
- * at, which in a read of the organization's whole archive can belong to a
- * project the caller cannot see, so callers never see its id or times. */
-export const archiveCursorText = async (c: ArchiveCursor): Promise<string> =>
-  `2~${await sealCursorText(positionText(c))}`
+ * (lib/archiveCursorSeal.ts) together with `projectId`, the project whose
+ * list it came from. The position is the last task a page looked at, which in
+ * a read of the organization's whole archive can belong to a project the
+ * caller cannot see, so callers never see its id or times. */
+export const archiveCursorText = async (c: ArchiveCursor, projectId: string): Promise<string> =>
+  `2~${await sealCursorText(`${projectId}~${positionText(c)}`)}`
 
 const positionOf = (text: string): ArchiveCursor | null => {
   const m = POSITION_TEXT.exec(text)
@@ -67,17 +72,23 @@ const positionOf = (text: string): ArchiveCursor | null => {
   return Number.isFinite(created) ? { created, id: m[2], archived_at: m[3] } : null
 }
 
-/** The position `text` names, or null when it is not a cursor
- * archiveCursorText wrote. Only sealed cursors page. A position the caller
- * could choose, such as a plain `1~<position>` cursor from before sealing,
- * would let it probe the organization's whole archive: whether a page from
- * that position ends inside its task budget tells it how many hidden tasks
- * follow, and so their archive times. A list paged across the change starts
- * again. */
-export async function parseArchiveCursor(text: string): Promise<ArchiveCursor | null> {
+/** The position `text` names for the list of `projectId`, or null when it
+ * is not a cursor archiveCursorText wrote for that project. Only sealed
+ * cursors page. A position the caller could choose, such as a plain
+ * `1~<position>` cursor from before sealing, would let it probe the
+ * organization's whole archive: whether a page from that position ends inside
+ * its task budget tells it how many hidden tasks follow, and so their archive
+ * times. A list paged across the change starts again. A cursor from another
+ * project's list is refused too, since it would start this list part way and
+ * skip its newer tasks. */
+export async function parseArchiveCursor(
+  text: string,
+  projectId: string,
+): Promise<ArchiveCursor | null> {
   if (!text.startsWith('2~') || text.length > SEALED_MAX) return null
   const opened = await openCursorText(text.slice(2))
-  return opened === null ? null : positionOf(opened)
+  const m = opened === null ? null : SEALED_TEXT.exec(opened)
+  return m === null || m[1] !== projectId ? null : positionOf(m[2])
 }
 
 /* Whether `a` comes before `b` in archive order. */

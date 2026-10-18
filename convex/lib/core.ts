@@ -806,10 +806,11 @@ export function taskListScope(
 /** What a task list reads, either active tasks paged with `offset` or
  * archived ones paged with `cursor`, with the project ids it covers
  * (taskListScope), or null for every readable project that is not
- * archived. */
+ * archived. An archived list also names its project, whose list its cursors
+ * belong to (archiveCursorText). */
 export type TaskListRequest =
   | { archived: false; scope: string[] | null; offset: number }
-  | { archived: true; scope: string[]; cursor: ArchiveCursor | null }
+  | { archived: true; project: string; scope: string[]; cursor: ArchiveCursor | null }
 
 /**
  * A task list's paging arguments, checked by the rule REST and MCP share.
@@ -843,12 +844,13 @@ export async function taskListRequest(
   if (a.offset !== 0) {
     throw badRequest('offset does not apply to archived tasks; pass next_cursor as cursor')
   }
-  const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor)
+  const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor, a.project.id)
   if (cursor === null && a.cursor !== undefined) {
     throw badRequest('cursor must be the next_cursor of an earlier page')
   }
   return {
     archived: true,
+    project: a.project.id,
     scope: taskListScope(view.cat, a.project, view.readable, true),
     cursor,
   }

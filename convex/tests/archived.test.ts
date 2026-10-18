@@ -598,6 +598,25 @@ describe('issues.archivedPage', () => {
     )
   })
 
+  it('refuses a cursor from another project’s list', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let d = 1; d <= 3; d++) {
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(d) })
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(d) })
+    }
+    const first = await pageOf(t, f.admin, { project_id: f.sub.id, limit: 1 })
+    const cursor = first.next_cursor ?? ''
+    expect(cursor).toMatch(/^2~/)
+    await badRequest(
+      pageOf(t, f.admin, { project_id: f.sub2.id, cursor }),
+      'cursor must be the next_cursor of an earlier page',
+    )
+    expect(
+      (await pageOf(t, f.admin, { project_id: f.sub.id, cursor, limit: 1 })).rows,
+    ).toHaveLength(1)
+  })
+
   it('lists only the sub-projects a guest can see under the top-level project', async () => {
     const t = newT()
     const f = await withOrg(t)

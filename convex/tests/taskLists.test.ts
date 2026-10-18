@@ -290,25 +290,28 @@ describe('archived task lists page one project with a cursor', () => {
       id: 'k57c3d4e5f6g7h8',
       archived_at: '2026-10-16T03:00:00.000Z',
     }
-    const text = await archiveCursorText(cursor)
+    const PID = '0b6f2c1e-4d3a-4b5c-9e8f-7a6b5c4d3e2f'
+    const text = await archiveCursorText(cursor, PID)
     // sealed: the task's id and times do not show, and the same position
     // seals to the same text
     expect(text).toMatch(/^2~[0-9a-f]+$/)
     for (const part of ['k57c3d4e5f6g7h8', '1760583600000', '2026-10-16']) {
       expect(text).not.toContain(part)
     }
-    expect(await archiveCursorText(cursor)).toBe(text)
-    expect(await parseArchiveCursor(text)).toEqual(cursor)
+    expect(await archiveCursorText(cursor, PID)).toBe(text)
+    expect(await parseArchiveCursor(text, PID)).toEqual(cursor)
+    // a cursor pages only the project whose list it came from
+    expect(await parseArchiveCursor(text, '1c7e3d2f-5e4b-4c6d-8f9a-8b7c6d5e4f3a')).toBeNull()
     // the archive time is taken verbatim, whatever it holds
     const odd: ArchiveCursor = { created: 5, id: 'k1', archived_at: 'a~b' }
-    expect(await parseArchiveCursor(await archiveCursorText(odd))).toEqual(odd)
+    expect(await parseArchiveCursor(await archiveCursorText(odd, PID), PID)).toEqual(odd)
     // the longest position the parser accepts still reads back
     const longest: ArchiveCursor = {
       created: 1760583600000.1235,
       id: 'k'.repeat(64),
       archived_at: '\u{1F600}'.repeat(32),
     }
-    expect(await parseArchiveCursor(await archiveCursorText(longest))).toEqual(longest)
+    expect(await parseArchiveCursor(await archiveCursorText(longest, PID), PID)).toEqual(longest)
     // a changed hex digit fails the tag
     const flipped = text.slice(0, -1) + (text.endsWith('0') ? '1' : '0')
     for (const bad of [
@@ -332,16 +335,16 @@ describe('archived task lists page one project with a cursor', () => {
       text.toUpperCase(),
       `2~${'ab'.repeat(400)}`,
     ]) {
-      expect(await parseArchiveCursor(bad), bad).toBeNull()
+      expect(await parseArchiveCursor(bad, PID), bad).toBeNull()
     }
     // a cursor sealed under another secret does not open
     vi.stubEnv('BETTER_AUTH_SECRET', 'another-deployment-secret-for-this-test')
     try {
-      expect(await parseArchiveCursor(text)).toBeNull()
+      expect(await parseArchiveCursor(text, PID)).toBeNull()
     } finally {
       vi.unstubAllEnvs()
     }
-    expect(await parseArchiveCursor(text)).toEqual(cursor)
+    expect(await parseArchiveCursor(text, PID)).toEqual(cursor)
   })
 
   it('pages tasks that share both archive times one at a time, by id', async () => {
@@ -661,6 +664,38 @@ describe('archived task lists page one project with a cursor', () => {
     const expected = await archiveOrder(fx, [fx.sub.id, fx.sub2.id])
     expect(all.rest).toEqual(expected)
     expect(all.mcp).toEqual(expected)
+  })
+
+  it('refuses a cursor from another project’s list', async () => {
+    const fx = await setup()
+    for (let d = 1; d <= 3; d++) {
+      await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, archived_at: day(d) })
+      await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id, archived_at: day(d) })
+    }
+    ARCHIVE_PAGE.tasks = 1
+    const caller = { callerId: fx.agent.id, access: 'read' } as const
+    const fw = await restArchivedPage(fx.t, { ...caller, project: 'FW' })
+    const cursor = fw.next_cursor ?? ''
+    expect(cursor).toMatch(/^2~/)
+    const sentence = 'cursor must be the next_cursor of an earlier page'
+    const rest = (project: string) =>
+      fx.t.query(internal.machine.rest.listIssues, {
+        now: NOW,
+        ...caller,
+        archived: 'true',
+        project,
+        cursor,
+      })
+    await refused(rest('PCB'), 'bad_request', sentence)
+    await refused(
+      mcpList(fx, fx.agent.id, { project: 'PCB', archived: true, cursor }),
+      'bad_request',
+      sentence,
+    )
+    // the project it came from still pages with it, on either surface
+    expect(((await rest('FW')) as { tasks: unknown[] }).tasks).toHaveLength(1)
+    const mcp = await mcpList<McpPage>(fx, fx.agent.id, { project: 'FW', archived: true, cursor })
+    expect(mcp.tasks).toHaveLength(1)
   })
 
   it('ends a page before a group whose walk does not fit, and starts the next with it', async () => {
