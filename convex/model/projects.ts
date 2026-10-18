@@ -12,6 +12,7 @@
  * access (grants, sharing, the lead) takes a person (lib/access.ts
  * canChangeAccess). */
 
+import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -36,6 +37,14 @@ import { logActivity, signedDetail } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleArchivedReads } from './messages'
 import { ICON_COLOR_SHAPE, nextProjectNum } from './orgs'
+
+/* The first step of a restore's regroup chain (regroup.ts), referenced by
+ * name as model/messages.ts references its steps. */
+const restoredStepRef = makeFunctionReference<
+  'mutation',
+  { projects: string[]; restorer_id: string },
+  null
+>('regroup:restoredStep')
 
 /** Preserve the supplied text; null/omitted create values mean no description. */
 export function projectDescription(value: string | null | undefined): string {
@@ -685,7 +694,9 @@ export async function archiveProjectCore(
  * an archived parent is a restore of that parent, so it needs lead on the
  * parent as well; a sub-project's own lead cannot bring back a project its
  * lead archived. Not archived is a silent no-op. Returns whether it restored
- * anything.
+ * anything. The restored projects' tasks make the parents they have in
+ * other active projects groups again, which then lose their own remaining
+ * hours in background steps (regroup.ts).
  */
 export async function unarchiveProjectCore(
   ctx: MutationCtx,
@@ -703,17 +714,27 @@ export async function unarchiveProjectCore(
     throw forbidden('requires lead access to the archived parent project')
   }
   await ctx.db.patch(project._id, { archived_at: undefined })
+  // the projects whose tasks come back. Tasks live in sub-projects, but a
+  // task older code stored under a top-level project comes back too
+  // (lib/liveTasks.ts liveTasksOf reads it).
+  const restored = [project.id]
   if (project.parent_id !== undefined) {
-    if (parentArchived) await ctx.db.patch(parent._id, { archived_at: undefined })
+    if (parentArchived) {
+      await ctx.db.patch(parent._id, { archived_at: undefined })
+      restored.push(parent.id)
+    }
   } else {
     const subs = await ctx.db
       .query('projects')
       .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
       .collect()
     for (const s of subs) {
-      if (s.archived_at === stamp) await ctx.db.patch(s._id, { archived_at: undefined })
+      if (s.archived_at !== stamp) continue
+      await ctx.db.patch(s._id, { archived_at: undefined })
+      restored.push(s.id)
     }
   }
+  await ctx.scheduler.runAfter(0, restoredStepRef, { projects: restored, restorer_id: me.id })
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,

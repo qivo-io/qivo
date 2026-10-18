@@ -757,7 +757,7 @@ export const updateIssue = internalMutation({
       throw badRequest('no recognized fields to update')
     }
     // machine pre-check twin — fires on any non-null value; null clear passes
-    if (fields.remaining_hours != null) await assertNoSubtasks(ctx, issue.id)
+    if (fields.remaining_hours != null) await assertNoSubtasks(ctx, issue)
     const task = await applyTaskUpdate(ctx, {
       me,
       issue,

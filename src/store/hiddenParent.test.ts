@@ -60,6 +60,8 @@ describe('a parent outside the working set', () => {
       task('candidate', 2, here),
       task('far-parent', 3, there),
       task('near-child', 4, here, { parent_id: 'far-parent' }),
+      task('near-parent', 5, here),
+      task('far-child', 6, there, { parent_id: 'near-parent' }),
     )
     network.query.mockResolvedValue(null)
     network.mutation.mockImplementation(
@@ -104,6 +106,14 @@ describe('a parent outside the working set', () => {
 
     P.updateIssue(vm('orphan')!.id, { parent: null })
     expect(vm('orphan')).toMatchObject({ parent: null, hasHiddenParent: false })
+  })
+
+  it("archiving a subtask's project leaves its parent in another project without it", () => {
+    const { P } = store
+    expect(vm('near-parent')).toMatchObject({ isGroup: true, hasHiddenSubtasks: false })
+    P.archiveProject(snapshot.projects[1].id)
+    // a subtask in an archived project makes no task in an active one a group
+    expect(vm('near-parent')).toMatchObject({ isGroup: false, hasHiddenSubtasks: false })
   })
 
   it("archiving the parent's project leaves its child with a parent outside this view", () => {

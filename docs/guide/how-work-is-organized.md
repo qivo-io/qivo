@@ -19,8 +19,9 @@ Tasks have these fields:
 
 - **Status**. Backlog, To Do, In Progress, In Review or Done. A task with
   active subtasks acts as a group. Its own status is hidden; progress and
-  completion come from descendants without active subtasks. Removing or
-  archiving the last active subtask, or giving it another parent, restores
+  completion come from descendants without active subtasks. Subtasks in an
+  archived sub-project do not count. Removing or archiving the last active
+  subtask, giving it another parent, or archiving its sub-project restores
   the parent's previous status. To Do, In Progress and In Review tasks can
   also be paused.
 - **Priority**. Urgent, High, Medium or Low.
@@ -139,6 +140,11 @@ access, which organization admins and project leads have.
 Sub-projects archived with a project return with it. A sub-project archived
 separately stays archived when its project returns and then has its own row
 in the archived list.
+
+A task in another sub-project whose subtasks were all in the archived one
+becomes an ordinary task again, with its own status, dates and estimate.
+When the sub-project is restored, the task becomes a group again and loses
+its own estimate, as when it gains a subtask.
 
 If you can access only a sub-project, the archived list shows its archived
 project too, with that sub-project under it. Restoring a sub-project also

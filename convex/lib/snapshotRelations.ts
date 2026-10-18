@@ -13,7 +13,7 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
 }
 
 /** When a view's relation reads go task by task. A view of at most `tasks`
- * tasks that holds under 1 / `ratio` of the organization's active tasks is
+ * tasks that holds under 1 / `ratio` of the organization's live tasks is
  * read wholly task by task. In any other view, a table over its bulk cap is
  * read task by task while the reads task by task so far fit `ranges`, which
  * is Convex's limit per transaction. Tests change these to force a read. */
@@ -67,11 +67,11 @@ const byCreation = <Row extends { _creationTime: number }>(rows: Row[]): Row[] =
  * Reads the relation rows of a member's visible tasks (`tasks`, the working
  * set) in one organization and returns a lookup that gives one task's links
  * as source and as target, label assignments and attachments, each in
- * creation order. `active` is the number of the organization's tasks that are
- * not archived.
+ * creation order. `active` is the number of the organization's live tasks,
+ * the active ones in active projects (lib/liveTasks.ts liveTasksOf).
  *
  * A view of at most RELATION_READ.tasks tasks (512) that holds under half the
- * active tasks is read task by task, four ranges per task, the cheapest read
+ * live tasks is read task by task, four ranges per task, the cheapest read
  * for a restricted view in a large organization.
  *
  * Any other view reads each table in bulk, the organization's rows without

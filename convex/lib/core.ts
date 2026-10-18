@@ -49,7 +49,6 @@ import {
   moveIssueCore,
   pairRule,
   SUB_MUST_NAME,
-  subtaskParentIds,
   updateIssueCore,
 } from '../model/issues'
 import { labelJson, setTaskLabel } from '../model/labels'
@@ -93,6 +92,14 @@ import {
   type ProjectType,
 } from './enums'
 import { badRequest, notFound, type Refusal } from './functions'
+import {
+  countsAsSubtask,
+  groupTest,
+  layerOf,
+  liveIn,
+  type ProjectLive,
+  projectLiveness,
+} from './liveTasks'
 import {
   type DelayJson,
   delayClock,
@@ -512,6 +519,8 @@ export async function listActiveIssuesCore(
     .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
     .collect()
   const children = childIndexOf(active)
+  const live = liveIn(cat.byUuid)
+  const isGroup = (task: Doc<'issues'>): boolean => isGroupIn(children, task, live)
   const profiles = await rosterOf(ctx, me.org_id)
   const names = namesOf(profiles)
   let match: ((i: Doc<'issues'>) => boolean) | null = null
@@ -523,13 +532,12 @@ export async function listActiveIssuesCore(
       matches(
         taskSearchText({
           ...searchFields(i, names),
-          group: hasSubtasksIn(children, i),
+          group: isGroup(i),
           labelNames: labels.get(i.id) ?? [],
         }),
       )
   }
   const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
-  const groupIds = statuses !== null ? subtaskParentIds(active) : null
   const found: Doc<'issues'>[] = []
   for (const i of active) {
     if (!readable(i.project_id)) continue // RLS's successor — always, scope or not
@@ -538,11 +546,11 @@ export async function listActiveIssuesCore(
     } else if (cat.byUuid.get(i.project_id)?.archived_at !== undefined) {
       continue // an archived project's tasks are not the working set (0106)
     }
-    if (statuses !== null && (groupIds?.has(i.id) || !statuses.includes(i.status))) continue
+    if (statuses !== null && (isGroup(i) || !statuses.includes(i.status))) continue
     if (o.priority && i.priority !== o.priority) continue
     if (o.assignee && i.assignee_id !== o.assignee) continue
     // a group stays with its assignee, as in the app
-    if (o.owner && taskOwnerId(i, hasSubtasksIn(children, i)) !== o.owner) continue
+    if (o.owner && taskOwnerId(i, isGroup(i)) !== o.owner) continue
     if (match !== null && !match(i)) continue
     found.push(i)
   }
@@ -573,6 +581,7 @@ export async function listActiveIssuesCore(
         lastComments,
         children,
         forecast,
+        live,
       }),
     ),
   )
@@ -676,6 +685,7 @@ export async function listArchivedIssuesCore(
   const names = await rosterNames(ctx, me.org_id)
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
   const projectOf = (id: string) => cat.byUuid.get(id)
+  const live = liveIn(cat.byUuid)
   const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
   const matches = o.search
     ? await archivedTaskMatcher(ctx, me.org_id, o.search, {
@@ -727,6 +737,7 @@ export async function listArchivedIssuesCore(
           names,
           orgSlug,
           children,
+          live,
           counts,
           partial,
           // an archived task has no delay
@@ -1019,11 +1030,50 @@ export function childIndexOf(rows: Iterable<Doc<'issues'>>): ChildIndex {
   return index
 }
 
-/** hasSubtasks over an index: an archived task also counts archived ones. */
-const hasSubtasksIn = (index: ChildIndex, task: Doc<'issues'>): boolean =>
-  (index.get(task.id) ?? []).some(
-    (kid) => task.archived_at !== undefined || kid.archived_at === undefined,
-  )
+/** model/issues.ts hasSubtasks over an index (lib/liveTasks.ts
+ * countsAsSubtask). An active task needs its active subtasks in the index,
+ * an archived one all of them. */
+const isGroupIn = (index: ChildIndex, task: Doc<'issues'>, live: ProjectLive): boolean => {
+  const parent = layerOf(task, live)
+  return (index.get(task.id) ?? []).some((kid) => countsAsSubtask(parent, layerOf(kid, live)))
+}
+
+/* How many projects taskOut reads one by one to tell which are live, before
+ * it reads the organization's projects at once instead. */
+const LIVENESS_POINT_READS = 16
+
+/* Which projects are live, for the tasks of a single-task read's subtree
+ * index and its root. It answers from `projectOf` when the caller holds the
+ * organization's projects, else from each project read once, or from the
+ * organization's projects at once when the index names more than
+ * LIVENESS_POINT_READS of them, as the index of a subtree too large to walk
+ * does. */
+async function indexLiveness(
+  ctx: QueryCtx,
+  root: Doc<'issues'>,
+  children: ChildIndex,
+  projectOf?: (projectId: string) => Doc<'projects'> | undefined,
+): Promise<ProjectLive> {
+  if (projectOf !== undefined) {
+    return (id) => {
+      const project = projectOf(id)
+      return project !== undefined && project.archived_at === undefined
+    }
+  }
+  const ids = new Set([root.project_id])
+  for (const kids of children.values()) for (const kid of kids) ids.add(kid.project_id)
+  if (ids.size > LIVENESS_POINT_READS) {
+    const projects = await ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
+      .collect()
+    return liveIn(new Map(projects.map((p) => [p.id, p])))
+  }
+  const reads = projectLiveness(ctx)
+  const known = new Map<string, boolean>()
+  for (const id of ids) known.set(id, await reads(id))
+  return (id) => known.get(id) ?? false
+}
 
 /* --------------------------------------------- what a read says of others
  * A machine read is shown the tasks whose project the caller can read
@@ -1121,7 +1171,7 @@ export const SUBTREE_WALK = { reads: 1000 }
  * at a time and stops at the depth assertParentChain allows; past
  * SUBTREE_WALK reads it reads the organization's tasks once instead. An
  * active task's walk enters only active tasks, and each decision about one
- * needs only its active subtasks (hasSubtasksIn), so the organization's
+ * needs only its active subtasks (isGroupIn), so the organization's
  * active tasks are all it needs.
  *
  * With a `ceiling` it never reads the organization's tasks. It checks the
@@ -1196,7 +1246,9 @@ type GroupCounter = (task: Doc<'issues'>) => Promise<boolean>
  * caller can read its project. Like is_group, an active group counts only active
  * subtasks and an archived one its whole subtree. Under a group in an active
  * project, subtasks in archived projects do not count. The totals' walks
- * never enter a task that does not count, so nothing under it counts either.
+ * never enter a task that does not count, so nothing under it counts either,
+ * and they also enter only subtasks that make the task above them a group
+ * (lib/liveTasks.ts countsAsSubtask).
  * `readable` is the caller's project flags when the surface already holds
  * them, and `projectOf` its catalogue. Each project is read once.
  */
@@ -1234,10 +1286,10 @@ function groupCounter(
  * groupCounter counts. It holds the calculated plan weeks (the app's
  * groupSpan) and how many of its leaves are done (the app's groupProgress).
  * `partial` is the app's "Completion unknown". It is set when a subtask that
- * makes a task a group does not count for the reader (hidden from it, or in
- * an archived project while the group's project is active), when the walk
- * meets a task twice (a cycle), or when it stops at the depth
- * assertParentChain allows. */
+ * makes a task a group does not count for the reader (hidden from it), when
+ * the walk meets a task twice (a cycle), or when it stops at the depth
+ * assertParentChain allows. A subtask in an archived project under a task in
+ * an active one makes it no group, so it leaves nothing unknown. */
 export type GroupFacts = {
   start_week: string | null
   end_week: string | null
@@ -1265,11 +1317,13 @@ const UNREAD_SUBTREE: GroupFacts = {
  * list passes the index of the active tasks it already read, and an
  * archived list and a single-task read pass the row's subtreeIndex. Each
  * visited task's children decide whether it is a group (hasSubtasks' rule,
- * whoever can read them) and what the walk enters next. */
+ * whoever can read them, with `live` telling which projects are active)
+ * and what the walk enters next. */
 async function groupFacts(
   group: Doc<'issues'>,
   children: ChildIndex,
   counts: GroupCounter,
+  live: ProjectLive,
 ): Promise<GroupFacts> {
   let start: string | undefined
   let end: string | undefined
@@ -1282,7 +1336,7 @@ async function groupFacts(
   for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
     const next: Doc<'issues'>[] = []
     for (const task of frontier) {
-      if (task !== group && !hasSubtasksIn(children, task)) {
+      if (task !== group && !isGroupIn(children, task, live)) {
         total++
         if (task.status === 'done') done++
         if (task.start_week === undefined) continue
@@ -1291,12 +1345,14 @@ async function groupFacts(
         if (end === undefined || leafEnd > end) end = leafEnd
         continue
       }
-      // a group, the root included, counts only through its subtasks. One
-      // that makes it a group (hasSubtasksIn) and is not entered leaves
-      // part of it unknown to the reader, as a hidden subtask does in the app
+      // a group, the root included, counts only through the subtasks that
+      // make it one. One that is not entered leaves part of it unknown to
+      // the reader, as a hidden subtask does in the app
+      const above = layerOf(task, live)
       for (const c of children.get(task.id) ?? []) {
+        if (!countsAsSubtask(above, layerOf(c, live))) continue
         if (seen.has(c.id) || !(await counts(c))) {
-          if (task.archived_at !== undefined || c.archived_at === undefined) partial = true
+          partial = true
           continue
         }
         seen.add(c.id)
@@ -1328,10 +1384,16 @@ type Reader = {
 /** The tasks by parent that a row's group facts come from. An active list
  * passes the organization's active tasks, and an archived list and a
  * single-task read the task's subtreeIndex with the groupCounter that walk
- * used, which the totals then share. `partial` says the subtree was too
- * large to read and `children` holds only a subtask of the root, so a group
- * answers null plan weeks and a partial progress that counts nothing. */
-type Subtree = { children: ChildIndex; counts?: GroupCounter; partial?: boolean }
+ * used, which the totals then share. `live` tells which of their projects
+ * are active. `partial` says the subtree was too large to read and
+ * `children` holds only a subtask of the root, so a group answers null plan
+ * weeks and a partial progress that counts nothing. */
+type Subtree = {
+  children: ChildIndex
+  live: ProjectLive
+  counts?: GroupCounter
+  partial?: boolean
+}
 
 /** How a row gets its delay verdict, from its group facts (lib/machineDelay.ts). */
 type Forecast = { forecast: Forecaster }
@@ -1353,7 +1415,7 @@ export async function issueOut(
 ): Promise<RestIssueJson | McpIssueOut> {
   const project = opts.project ?? (await byId(ctx, 'projects', issue.project_id))
   if (project === null) throw notFound('task not found') // unreachable: every issue joins a project
-  const is_group = hasSubtasksIn(opts.children, issue)
+  const is_group = isGroupIn(opts.children, issue, opts.live)
   const assignee_name = await profileName(ctx, issue.assignee_id, opts.names)
   const reviewer_name = await profileName(ctx, issue.reviewer_id, opts.names)
   const reporter_name = await profileName(ctx, issue.reporter_id, opts.names)
@@ -1365,6 +1427,7 @@ export async function issueOut(
           issue,
           opts.children,
           opts.counts ?? groupCounter(ctx, opts.me, issue, project, opts.readable, opts.projectOf),
+          opts.live,
         )
   const weeks =
     facts === null
@@ -1495,9 +1558,9 @@ const byNum = (a: Doc<'issues'>, b: Doc<'issues'>): number => a.num - b.num
 
 /**
  * The single-task read's extra fields for `issue`, read by `me`. `isGroup`,
- * `project`, `children` (its subtreeIndex) and `counts` (the groupCounter
- * that walk used) are what taskOut already holds. The group total counts
- * what groupCounter counts, as the plan weeks do.
+ * `project`, `children` (its subtreeIndex), `live` and `counts` (the
+ * groupCounter that walk used) are what taskOut already holds. The group
+ * total counts what groupCounter counts, as the plan weeks do.
  */
 export async function taskDetail(
   ctx: QueryCtx,
@@ -1507,6 +1570,7 @@ export async function taskDetail(
     project: Doc<'projects'>
     isGroup: boolean
     children: ChildIndex
+    live: ProjectLive
     counts?: GroupCounter
     readable?: (projectId: string) => boolean
   },
@@ -1527,7 +1591,7 @@ export async function taskDetail(
     for (const task of [...o.children.values()].flat()) {
       if (await counts(task)) counted.add(task.id)
     }
-    group_remaining_hours = groupRemainingHours(issue, childrenOf, (id) => counted.has(id))
+    group_remaining_hours = groupRemainingHours(issue, childrenOf, (id) => counted.has(id), o.live)
   }
   const links: TaskDetailJson['links'] = []
   const linked: { link: Doc<'issue_links'>; other: Doc<'issues'> }[] = []
@@ -1596,11 +1660,11 @@ export async function taskOut(
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, opts.readable)
   const children = await subtreeIndex(ctx, issue, counts)
+  const live = await indexLiveness(ctx, issue, children, opts.projectOf)
+  const subtree = { project, children, live, counts }
   const org = await byId(ctx, 'organizations', issue.org_id)
   const read = {
-    project,
-    children,
-    counts,
+    ...subtree,
     orgSlug: opts.orgSlug ?? org?.slug,
     forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.now)),
   }
@@ -1609,10 +1673,8 @@ export async function taskOut(
       ? await issueOut(ctx, issue, { ...opts, ...read, surface: 'rest' })
       : await issueOut(ctx, issue, { ...opts, ...read, surface: 'mcp' })
   const detail = await taskDetail(ctx, opts.me, issue, {
-    project,
+    ...subtree,
     isGroup: row.is_group,
-    children,
-    counts,
     readable: opts.readable,
   })
   return { ...row, ...detail, attachments: await taskAttachments(ctx, opts.me, issue) }
@@ -1785,11 +1847,11 @@ export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
 /**
  * The Completion the app's Overview shows for `project` (src/store/planner.ts
  * progressIn over scopeInfo's sub-projects), as the caller sees it. It
- * counts how many of the active tasks without active subtasks are Done, in
- * the project, or for a top-level project in its sub-projects that the
- * caller can read (`view.readable`) and that are not archived. A task with an
- * active subtask anywhere is a group and does not count, even when the
- * caller cannot read the subtask, as in the app. Null for an archived
+ * counts how many of the active tasks without subtasks are Done, in the
+ * project, or for a top-level project in its sub-projects that the caller
+ * can read (`view.readable`) and that are not archived. A task with an
+ * active subtask in an active project is a group and does not count, even
+ * when the caller cannot read the subtask, as in the app. Null for an archived
  * project, whose tasks are outside the working plan. Reads the
  * organization's active tasks once, the read an active task list makes.
  */
@@ -1810,11 +1872,11 @@ export async function projectCompletion(
     .query('issues')
     .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
     .collect()
-  const groups = subtaskParentIds(active)
+  const isGroup = groupTest(active, liveIn(view.cat.byUuid))
   let done = 0
   let total = 0
   for (const task of active) {
-    if (!scope.has(task.project_id) || groups.has(task.id)) continue
+    if (!scope.has(task.project_id) || isGroup(task)) continue
     total++
     if (task.status === 'done') done++
   }

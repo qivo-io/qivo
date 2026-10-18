@@ -230,7 +230,7 @@ export const archivedFor = authedQuery({
           .collect()
         return {
           ...(await pubFor(ctx, me, issue, seen)),
-          is_group: await hasSubtasks(ctx, issue.id, true),
+          is_group: await hasSubtasks(ctx, issue),
           label_ids: issueLabels.map((label) => label.label_id),
         }
       }),

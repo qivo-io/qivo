@@ -1102,10 +1102,17 @@ their stored `status` is dormant and must not be displayed or counted as
 their own workflow status. Status filters return ordinary tasks only, and a
 PATCH containing `status` on a group returns `400` with
 `status cannot be set on a task with subtasks — update its subtasks instead`.
-When its last active subtask is detached, deleted or archived, the task
-resumes its saved status. Archived parents retain `is_group: true` while
-they have attached subtasks. Child visibility does not change grouping;
-this flag reveals no child identities.
+For a task in an active project, only active subtasks in active projects
+count. A subtask in an archived project, such as a sub-project archived on
+its own, does not make it a group. A task in an archived project counts
+every active subtask. When its last such subtask is detached, deleted or
+archived, or that subtask's project is archived, the task resumes its saved
+status. Restoring that project makes it a group again, and background steps
+clear its own `remaining_hours` moments later, as attaching a subtask does.
+They do the same for a task that is still a group when its own project is
+restored after its subtasks' project. Archived parents retain `is_group: true` while they have attached subtasks.
+Child visibility does not change grouping; this flag reveals no child
+identities.
 
 **Group dates.** A group's `start_week` and `end_week` are calculated from
 the subtasks the caller can read, at any depth. `start_week` is the earliest
@@ -1125,7 +1132,8 @@ task with subtasks; its dates come from its subtasks`, and the other fields
 in that request remain unchanged. Change the subtasks' dates instead.
 
 A task **with active subtasks** has no remaining time of its own (0066;
-archived subtasks stopped counting in 0070): a PATCH
+archived subtasks stopped counting in 0070, and subtasks in archived
+projects do not count for a task in an active project): a PATCH
 sending a non-null `remaining_hours` for one is a `400`
 (`remaining_hours cannot be set on a task with subtasks — it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
@@ -1231,7 +1239,8 @@ caller cannot read is not mistaken for a top-level task.
 
 The single-task fields name only tasks the caller can read. `subtasks` lists
 the direct subtasks it can read, by number. An active task lists its active
-ones, and an archived task lists all of them. `links` lists the task's links
+ones, also those in an archived project, which do not make it a group while
+its own project is active, and an archived task lists all of them. `links` lists the task's links
 whose other task it can read, with `kind` as seen from this task (`blocks`,
 `blocked_by` or `relates`). `labels` are ordered by name.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
@@ -1254,9 +1263,8 @@ subtasks under it, at any depth, that the caller can read:
 It counts the same subtasks as the group's dates, scheduled or not, and
 `done` counts those that are Done. `percent` is rounded, and `0` when
 `total` is `0`. `partial` is `true` when some of the group is hidden from
-the caller, such as a subtask it cannot read or, while the group's project
-is active, one in an archived project, so the true completion is unknown.
-The app then says "Completion unknown".
+the caller, such as a subtask it cannot read, so the true completion is
+unknown. The app then says "Completion unknown".
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:

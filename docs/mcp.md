@@ -1168,9 +1168,8 @@ subtasks under it, at any depth, that you can read, for example `{"done": 2,
 "total": 3, "percent": 67, "partial": true}`. It counts the same subtasks
 as the group's dates, scheduled or not, and `done` counts those that are
 Done. `percent` is rounded, and `0` when `total` is `0`. `partial` is `true`
-when some of the group is hidden from you, such as a subtask you cannot read
-or, while the group's project is active, one in an archived project, so the
-true completion is unknown. The app then says "Completion unknown".
+when some of the group is hidden from you, such as a subtask you cannot read,
+so the true completion is unknown. The app then says "Completion unknown".
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show, for example `{"status": "behind", "projected_end_week":
@@ -1213,7 +1212,9 @@ who does, by name, as the app's follower list shows them. `attachments`
 lists the task's files, described under [Attachments](#attachments).
 
 `subtasks` are the direct subtasks you can read, by number. An active task
-lists its active ones, and an archived task lists all of them. `links` are the
+lists its active ones, also those in an archived project, which do not make
+it a group while its own project is active, and an archived task lists all
+of them. `links` are the
 task's links whose other task you can read, `kind` as seen from this task.
 `group_remaining_hours` is `null` for a task without subtasks. For a group it
 is the remaining time the app shows, which is the sum over its unfinished
@@ -1677,8 +1678,15 @@ Tasks with active subtasks are groups. `list_tasks` and `get_task` include
 or counted as their own workflow status. Status filters exclude groups.
 `update_task` with `status` on a group refuses with
 `status cannot be set on a task with subtasks — update its subtasks instead`.
-Removing, detaching or archiving the last active subtask restores the
-parent's saved status. Archived parents retain `is_group: true` while they
+For a task in an active project, only active subtasks in active projects
+count. A subtask in an archived project, such as a sub-project archived on
+its own, does not make it a group. A task in an archived project counts
+every active subtask. Removing, detaching or archiving the last such
+subtask, or archiving its project, restores the parent's saved status.
+Restoring that project makes the parent a group again, and background steps
+clear its own `remaining_hours` moments later, as attaching a subtask does.
+They do the same for a task that is still a group when its own project is
+restored after its subtasks' project. Archived parents retain `is_group: true` while they
 have attached subtasks. This boolean also covers inaccessible children
 without disclosing their identities. A group has no reviewer of its own:
 setting a new non-null `reviewer_id` on one refuses with `a task with
@@ -1695,7 +1703,8 @@ longer in the `create_task`/`update_task` schemas. A client still sending
 `estimate_hours` is refused with `Unrecognized key`, and the call changes
 nothing. Update the client. A task **with
 active subtasks** has no remaining time of its own (0066; archived
-subtasks stopped counting in 0070). `update_task` with a non-null
+subtasks stopped counting in 0070, and subtasks in archived projects do not
+count for a task in an active project). `update_task` with a non-null
 `remaining_hours` for one is refused with `remaining_hours cannot be set on a
 task with subtasks — it is the sum of their remaining time`, also when you
 cannot read the subtasks. `null` passes as a no-op. The hours live on the

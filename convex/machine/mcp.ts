@@ -1983,7 +1983,7 @@ export const updateIssue = internalMutation({
     // machine pre-check: fires on ANY non-null value, not only on change —
     // and BEFORE the write gate, as deployed (assertNoSubtasks ran ahead of
     // the RLS-refused UPDATE)
-    if (patch.remaining_hours != null) await assertNoSubtasks(ctx, issue.id)
+    if (patch.remaining_hours != null) await assertNoSubtasks(ctx, issue)
     await mustWrite(ctx, me, issue.project_id)
     // a group's dates come from its subtasks, so any date key on one is
     // refused, null and unchanged values included

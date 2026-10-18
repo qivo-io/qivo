@@ -81,7 +81,7 @@ async function tree(fx: Fx) {
   // only a subtask the guest cannot see
   const g3 = await task(fx, { title: 'G3' })
   await task(fx, { parent_id: g3.id, project_id: sib, status: 'todo' })
-  // a subtask in an archived project, hidden from everyone
+  // a subtask in an archived project, which makes no task in an active one a group
   const g4 = await task(fx, { project_id: pcb, title: 'G4' })
   await task(fx, { parent_id: g4.id, project_id: pcb, status: 'done' })
   await task(fx, { parent_id: g4.id, project_id: fx.archivedSub.id, status: 'todo' })
@@ -183,19 +183,20 @@ describe('a group’s progress is the app task window’s Progress', () => {
         [g1, p(2, 3, 67, true)],
         [g2, p(1, 1, 100, true)],
         [g3, p(0, 0, 0, true)],
-        [g4, p(1, 1, 100, true)],
+        [g4, p(1, 1, 100, false)],
         [g5, p(2, 2, 100, false)],
         [g6, p(1, 2, 50, false)],
         [g7, p(1, 1, 100, false)],
         [ga, p(1, 1, 100, true)],
         [l13, null],
       ],
-      // the admin sees l4, so only G4's subtask in ARC stays unknown
+      // the admin sees l4, so nothing stays unknown; G4's subtask in ARC
+      // leaves out nothing, because it does not count
       admin: [
         [g1, p(2, 4, 50, false)],
         [g2, p(1, 2, 50, false)],
         [g3, p(0, 1, 0, false)],
-        [g4, p(1, 1, 100, true)],
+        [g4, p(1, 1, 100, false)],
         [ga, p(1, 2, 50, false)],
       ],
     } as const

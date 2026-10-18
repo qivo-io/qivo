@@ -16,11 +16,13 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { hasSubtasks } from '../model/issues'
 import { orgLoadRows } from '../planning'
 import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
 import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf, delayProjector } from './delay'
 import { ISSUE_STATUSES } from './enums'
+import { liveIn, liveTasksOf } from './liveTasks'
 import { taskOwnerId } from './review'
 import { type OrgProjectView, orgProjectView } from './visibility'
 import {
@@ -218,10 +220,9 @@ export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Fo
 /* The statuses of tasks that can carry load, as orgLoadRows skips Done ones. */
 const LOAD_STATUSES = ISSUE_STATUSES.filter((status) => status !== 'done')
 
-/* How many of an owner's tasks a delay verdict checks for an active
- * subtask, one by_parent_archived read each, before it reads the
- * organization's active tasks once instead, the read an active list makes
- * anyway. With the single read's subtree walk (lib/core.ts SUBTREE_WALK)
+/* How many of an owner's tasks a delay verdict checks for subtasks, one
+ * by_parent_archived read each, before it reads the organization's live
+ * tasks once instead, about the read an active list makes anyway. With the single read's subtree walk (lib/core.ts SUBTREE_WALK)
  * that keeps the read's index ranges far below Convex's 4,096. Tests lower
  * `reads`. */
 export const OWNER_LOAD_CHECKS = { reads: 500 }
@@ -231,11 +232,12 @@ export const OWNER_LOAD_CHECKS = { reads: 500 }
  * them. These are orgLoadRows' rows owned by `owner`, read through the
  * owner's own open tasks (those assigned to them that are not Done, and
  * those In Review that they review) rather than the organization's active
- * ones. A task with an active subtask is a group, which carries no load, so
- * each candidate that orgLoadRows would keep is checked for one. Past
- * OWNER_LOAD_CHECKS candidates it reads the organization's active tasks
- * instead, where orgLoadRows finds the groups itself. Empty for an owner
- * outside `me`'s organization, as orgLoadRows gives such an owner no rows.
+ * ones. A group carries no load, so each candidate that orgLoadRows would
+ * keep is checked for a subtask that makes it one (model/issues.ts
+ * hasSubtasks). Past OWNER_LOAD_CHECKS candidates it reads the
+ * organization's live tasks instead (lib/liveTasks.ts liveTasksOf), where
+ * orgLoadRows finds the groups itself. Empty for an owner outside `me`'s
+ * organization, as orgLoadRows gives such an owner no rows.
  */
 export async function ownerLoadSpans(
   ctx: QueryCtx,
@@ -262,6 +264,7 @@ export async function ownerLoadSpans(
   ]
   const tasks = new Map<string, Doc<'issues'>>()
   for (const range of held) for await (const task of range) tasks.set(task.id, task)
+  const live = liveIn(view.byUuid)
   // what orgLoadRows drops anyway needs no subtask read
   const candidates = [...tasks.values()].filter(
     (task) =>
@@ -270,23 +273,15 @@ export async function ownerLoadSpans(
       task.start_week !== undefined &&
       task.status !== 'done' &&
       !task.paused &&
-      (task.remaining_hours ?? 0) > 0,
+      (task.remaining_hours ?? 0) > 0 &&
+      live(task.project_id),
   )
   let rows: Doc<'issues'>[] = []
   if (candidates.length > OWNER_LOAD_CHECKS.reads) {
-    rows = await ctx.db
-      .query('issues')
-      .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
-      .collect()
+    rows = await liveTasksOf(ctx, [...view.byUuid.values()])
   } else {
     for (const task of candidates) {
-      const kid = await ctx.db
-        .query('issues')
-        .withIndex('by_parent_archived', (q) =>
-          q.eq('parent_id', task.id).eq('archived_at', undefined),
-        )
-        .first()
-      if (kid === null) rows.push(task)
+      if (!(await hasSubtasks(ctx, task, live))) rows.push(task)
     }
     // in the organization's active order (by_org_archived), which the
     // list's load and the app's follow, so each week's hours add up in the

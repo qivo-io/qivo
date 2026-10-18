@@ -4,7 +4,10 @@
  *
  * forMe reads every seat in one transaction, so the sum must stay within
  * Convex's limits of 4,096 index ranges, 32,000 documents and 16 MiB. Besides
- * one range for the caller's seats, each seat reads 13 ranges plus:
+ * one range for the caller's seats, each seat reads 12 ranges plus:
+ * - one per active project of the organization, its active tasks
+ *   (lib/liveTasks.ts liveTasksOf), so the tasks of archived projects are
+ *   never read;
  * - one per team (its members), and two per team the seat belongs to
  *   (lib/access.ts projectLevelsForOrg);
  * - up to three per visible project, archived ones included (grants, team
@@ -17,21 +20,22 @@
  *   carry archive marks (model/archiveMarks.ts), its own relation reads and
  *   follow. Background steps clear the marks moments after the restore;
  * - one per task an activity row is about, or names by number, that is not
- *   among the active tasks. The snapshot reads the organization's newest 500
+ *   among the live tasks. The snapshot reads the organization's newest 500
  *   rows (model/activity.ts ACTIVITY_CAP), so that is at most 500 for an
  *   admin, who reads the task each row is about, and at most 1,000 for a
  *   member, who reads up to two numbered tasks a row names.
  * A seat whose relation tables stay in bulk therefore reads at most about
- * 1,020 ranges plus three per team and per visible project, and a person's
- * seats add up. Teams and projects are few beside tasks. A view read task by
- * task adds its 4 ranges per task, as the rule this replaced did, which a
- * view of about 1,000 tasks or more cannot afford. Documents read follow the
- * active tasks and their unmarked relation rows (model/archiveMarks.ts marks
- * the rows of archived tasks), the organization's people, projects, teams and
- * labels, at most 500 activity rows, and at most 3,002 messages per seat
- * (lib/inbox.ts). A read that uses half of any of these limits is logged
- * (the end of forMe), so a growing organization shows in the deployment logs
- * before its members' app stops loading. */
+ * 1,020 ranges plus one per active project and three per team and per
+ * visible project, and a person's seats add up. Teams and projects are few
+ * beside tasks. A view read task by task adds its 4 ranges per task, as the
+ * rule this replaced did, which a view of about 1,000 tasks or more cannot
+ * afford. Documents read follow the live tasks and the unmarked relation
+ * rows of the active tasks (model/archiveMarks.ts marks the rows of archived
+ * tasks, and a project archive marks none), the organization's people,
+ * projects, teams and labels, at most 500 activity rows, and at most 3,002
+ * messages per seat (lib/inbox.ts). A read that uses half of any of these
+ * limits is logged (the end of forMe), so a growing organization shows in
+ * the deployment logs before its members' app stops loading. */
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
@@ -40,6 +44,7 @@ import { memberSeesActivity, withoutLegacySubtaskCount } from './lib/activityVis
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { INBOX_LIMIT, loadInbox } from './lib/inbox'
+import { liveTasksOf } from './lib/liveTasks'
 import { snapshotRelations } from './lib/snapshotRelations'
 import { orgProjectView } from './lib/visibility'
 import { aboutShownTasks, linkShown, parentLink, workingSetOf } from './lib/workingSet'
@@ -151,8 +156,8 @@ export const forMe = authedQuery({
     let unreadTruncated = false
     let readTruncated = false
     const seenLinkIds = new Set<string>()
-    /* Active tasks and project rows fill these caches below. Only an admin's
-     * activity row about a task outside the active set needs a lookup; never
+    /* Live tasks and project rows fill these caches below. Only an admin's
+     * activity row about a task outside the live set needs a lookup; never
      * walk the whole archive just to exclude it. Cache promises too so
      * concurrent references to the same task share one read. */
     const archivedProjects = new Map<string, Promise<boolean>>()
@@ -221,24 +226,17 @@ export const forMe = authedQuery({
         orgProfileIds.add(p.id)
       }
 
-      // Archived project metadata remains available for navigation.
-      const [view, activeOrgIssues] = await Promise.all([
-        orgProjectView(ctx, me),
-        ctx.db
-          .query('issues')
-          .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
-          .collect(),
-      ])
+      // Archived project metadata remains available for navigation. Every
+      // seat reads the active tasks of every active project, its own or not,
+      // because a parent's group state and the anonymized load rows depend
+      // on tasks the member cannot see.
+      const view = await orgProjectView(ctx, me)
+      const liveOrgIssues = await liveTasksOf(ctx, view.projects)
       for (const p of view.projects) {
         archivedProjects.set(p.id, Promise.resolve(p.archived_at !== undefined))
       }
       const visibleProjects = view.projects.filter((p) => view.visible(p.id))
-      for (const issue of activeOrgIssues) {
-        archivedIssues.set(
-          issue.id,
-          Promise.resolve(view.byUuid.get(issue.project_id)?.archived_at !== undefined),
-        )
-      }
+      for (const issue of liveOrgIssues) archivedIssues.set(issue.id, Promise.resolve(false))
       /* The working set is the active tasks of visible, active projects
        * (lib/workingSet.ts). Every task id this query sends (task rows,
        * parent ids, links, own subscriptions, inbox messages and activity
@@ -248,8 +246,10 @@ export const forMe = authedQuery({
        * detaching/deleting the last one immediately restores normal status.
        * Archived issues are deliberately absent from the working set; their
        * detail rows are fetched only by the archive/read paths that
-       * explicitly ask for one. */
-      const workingSet = workingSetOf(activeOrgIssues, view)
+       * explicitly ask for one. A subtask in an archived project makes no
+       * task here a group (lib/liveTasks.ts countsAsSubtask), so the live
+       * tasks are all has_hidden_subtasks needs. */
+      const workingSet = workingSetOf(liveOrgIssues, view)
       const fenceIssues = workingSet.tasks
       for (const issue of fenceIssues) {
         // relations_marked only steers the relation reads below
@@ -290,7 +290,7 @@ export const forMe = authedQuery({
       const relatedRows = await snapshotRelations(ctx, {
         orgId,
         tasks: fenceIssues,
-        active: activeOrgIssues.length,
+        active: liveOrgIssues.length,
       })
       for (const issue of fenceIssues) {
         const [asSource, asTarget, ils, atts] = await relatedRows(issue.id)
@@ -357,10 +357,11 @@ export const forMe = authedQuery({
         .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
         .order('desc')
         .take(ACTIVITY_CAP)
-      // Task numbers resolve to projects from the active set, else one cached
-      // indexed read (archived or deleted tasks).
+      // Task numbers resolve to projects from the live set, else one cached
+      // indexed read (archived or deleted tasks, and tasks in archived
+      // projects).
       const taskProjects = new Map<number, Promise<string | undefined>>(
-        activeOrgIssues.map((i) => [i.num, Promise.resolve(i.project_id)]),
+        liveOrgIssues.map((i) => [i.num, Promise.resolve(i.project_id)]),
       )
       const taskProject = (num: number): Promise<string | undefined> => {
         let result = taskProjects.get(num)
@@ -410,7 +411,7 @@ export const forMe = authedQuery({
       readTruncated ||= inbox.readTruncated
 
       // Hidden workload remains anonymized by orgLoadRows.
-      orgLoad.push(...orgLoadRows(me, view, orgProfileIds, activeOrgIssues))
+      orgLoad.push(...orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
     }
 
     // One newest-first cap across all organizations.
