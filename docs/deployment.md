@@ -52,15 +52,20 @@ Website, docs and app changes all ship the same way.
    until staging has verified the current main commit. If **Deploy staging**
    failed, run it again by hand from main, or fix the cause on main first.
 4. Open the draft release it links. Its first section names the commit and
-   links the changes since what `qivo.io` serves now. Do not change the
-   draft's tag or target. To ship something else, run **Prepare release**
-   again. Once the new draft exists, it deletes the older drafts it made. The
-   Actions run summary repeats these instructions. The release text leaves
-   them out, because a published release keeps its text. Delete any draft you
-   made yourself and will not publish, because publishing it later deploys its
-   own, older commit.
-5. Publish the draft. **Production release** deploys it in about two minutes.
-   Check `https://qivo.io/version.json` for the commit.
+   links the changes since what `qivo.io` serves now. If `qivo.io` already
+   serves that commit, the run warns that publishing only redeploys it and
+   uses up the version. That is still allowed, for example to redeploy a demo
+   whose last deploy failed. Do not change the draft's tag or target. To ship
+   something else, run **Prepare release** again. Once the new draft exists,
+   it deletes the older drafts it made. The Actions run summary repeats these
+   instructions. The release text leaves them out, because a published release
+   keeps its text. Delete any draft you made yourself and will not publish,
+   because publishing it later deploys its own, older commit.
+5. Check that `https://preview.qivo.io/version.json` still names the draft's
+   commit, because each new main commit replaces what staging serves. If it
+   names a newer commit, run **Prepare release** again. Otherwise review the
+   change there and publish the draft. **Production release** deploys it in
+   about two minutes. Check `https://qivo.io/version.json` for the commit.
 6. If the release adds a one-time backfill, such as
    `internal/attachmentScopeBackfill`, run it on each hosted deployment once
    that deployment serves the release, with the owner's approval for each
