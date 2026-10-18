@@ -125,7 +125,12 @@ import { storageIdInUse } from './attachments'
 import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
-import { type NotifyPreload, postMessage, scheduleArchivedReads } from './messages'
+import {
+  loadNotifyPreload,
+  type NotifyPreload,
+  postMessage,
+  scheduleArchivedReads,
+} from './messages'
 import { newUuid } from './orgs'
 import { emitTaskEvent } from './taskEvents'
 
@@ -3818,6 +3823,10 @@ export async function moveTasksToTrash(
     },
   })
   const tally = emptyTally(item)
+  // This transaction changes no profile, project, grant or team, so one
+  // preload, read at the first detach, serves every detach notice
+  // (NotifyPreload). Without it each notice reads every profile again.
+  let preload: NotifyPreload | undefined
   for (const task of tasks) {
     await assertCanEdit(counted, actor, task.project_id)
     const messages = counted.db
@@ -3828,7 +3837,11 @@ export async function moveTasksToTrash(
       .query('issues')
       .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
       .collect()
-    for (const kid of kids) if (!doomed.has(kid.id)) await detachChild(counted, kid, actor, now)
+    for (const kid of kids) {
+      if (doomed.has(kid.id)) continue
+      preload ??= await loadNotifyPreload(counted, actor.org_id)
+      await detachChild(counted, kid, actor, now, preload)
+    }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })
     if (dropped.has(task.id)) {
       // deleted as before, with every row that would have travelled with it

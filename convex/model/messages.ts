@@ -214,21 +214,62 @@ async function trimUnreadMessages(
 /* ---------------------------------------------------------------- preload
  * Rows a bulk writer already holds, handed to notifyIssueInsert,
  * notifyIssueUpdate and notifyCommentInsert so each call need not read them
- * again. A preload is a snapshot: it is valid only while nothing in the
- * transaction changes profiles, projects, grants or teams after it was read,
- * so it must never be passed from an interactive mutation's own writes. Two
- * writers pass one: the Northstar seed (demoSeed.ts's writeNorthstarWork) and
- * a Deleted items step (model/deletedItems.ts), which reads it after any
- * project rows moved and then only detaches tasks. Everything else passes
- * nothing and every row is read fresh. */
+ * again. A preload is a snapshot. It is valid only while nothing in the
+ * transaction changes profiles, projects, grants, teams or team memberships
+ * after it is built, because its visibility answers would then be stale. A
+ * bulk writer that meets this may pass one:
+ *   - the Northstar seed (demoSeed.ts writeNorthstarWork);
+ *   - a Deleted items step (model/deletedItems.ts), which reads it after any
+ *     project rows moved and then only detaches tasks;
+ *   - the detach loop of a task delete (model/deletedItems.ts
+ *     moveTasksToTrash), the app's, REST's and MCP's delete, which reads it
+ *     at the first detach of a transaction that changes only tasks, their
+ *     rows and activity;
+ *   - the reassign loop of an access removal (projectAccess.ts
+ *     removeAndSettle), which builds it after the access is gone.
+ * A write that changes one task passes none, so every row is read fresh. */
 export type NotifyPreload = {
   /* Every profile of the issue's org, as stored now (after any patch). */
   orgProfiles: Doc<'profiles'>[]
-  /* The org's projects by uuid, as stored now; a miss is read by uuid. */
+  /* The org's projects by uuid, as stored now. A miss is read by uuid and
+   * kept. */
   projects: Map<string, Doc<'projects'>>
   /* Recipient visibility answers by `${profile}:${project}` uuid, filled as
    * they are asked. */
   visibility: Map<string, boolean>
+  /* Run by notifyIssueUpdate before each mention and each follower it
+   * notifies. A bulk writer throws from it to stop before the transaction
+   * passes Convex's limits (projectAccess.ts removeAndSettle). */
+  guard?: () => Promise<void>
+}
+
+/** Builds a preload for `orgId` from its profiles as stored now, with the
+ * `projects` the caller already read. Call it only once the transaction will
+ * change no profile, project, grant, team or team membership (NotifyPreload). */
+export async function loadNotifyPreload(
+  ctx: MutationCtx,
+  orgId: string,
+  projects: readonly Doc<'projects'>[] = [],
+): Promise<NotifyPreload> {
+  return {
+    orgProfiles: await orgProfilesOf(ctx, orgId),
+    projects: new Map(projects.map((p) => [p.id, p])),
+    visibility: new Map(),
+  }
+}
+
+/* A project by uuid, from the preload when one is given. A miss is read and
+ * kept in the preload, so a bulk writer reads each project once. */
+async function preloadedProject(
+  ctx: MutationCtx,
+  preload: NotifyPreload | undefined,
+  projectId: string,
+): Promise<Doc<'projects'> | null> {
+  const known = preload?.projects.get(projectId)
+  if (known !== undefined) return known
+  const project = await byId(ctx, 'projects', projectId)
+  if (project !== null) preload?.projects.set(projectId, project)
+  return project
 }
 
 /* profileCanSeeProject, answered from a preload's visibility memo when one
@@ -270,9 +311,9 @@ async function recipientCanSee(
  * restore, so it arrives unread.
  *
  * `issue` / `project` / `recipient` are optional preloads; when absent they
- * are read by uuid. `visibility` is a seed's memo (NotifyPreload), never
- * passed interactively. The issue_title snapshot is the issue's CURRENT
- * title (the SQL passed new.title). */
+ * are read by uuid. `visibility` is a bulk writer's memo (NotifyPreload),
+ * never passed by a write that changes one task. The issue_title snapshot is
+ * the issue's CURRENT title (the SQL passed new.title). */
 export async function postMessage(
   ctx: MutationCtx,
   m: {
@@ -332,8 +373,8 @@ export async function postMessage(
  * inbox and visibility — a subscription row decides who gets messages, so it
  * must not be creatable for someone who could not have received them),
  * idempotent.
- * `visibility` is a seed's memo (NotifyPreload), never passed interactively.
- * Returns whether a row was inserted. */
+ * `visibility` is a bulk writer's memo (NotifyPreload), never passed by a
+ * write that changes one task. Returns whether a row was inserted. */
 export async function subscribeToIssue(
   ctx: MutationCtx,
   a: {
@@ -1032,8 +1073,7 @@ export async function notifyIssueInsert(
 ): Promise<void> {
   const { issue, actor, now, preload } = a
   if (!a.skipTaskEvent) await emitTaskEvent(ctx, { name: 'task.created', issue, actor, now })
-  const project =
-    preload?.projects.get(issue.project_id) ?? (await byId(ctx, 'projects', issue.project_id))
+  const project = await preloadedProject(ctx, preload, issue.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, issue.org_id))
   const visibility = preload?.visibility
   const mentioned = extractMentions(issue.description, orgProfiles)
@@ -1148,7 +1188,12 @@ export async function notifyIssueInsert(
  * caller changes neither the status nor the reviewer.
  *
  * `actor` is absent only for a Deleted items step whose deleter is gone
- * (model/deletedItems.ts), which also passes the step's `preload`. */
+ * (model/deletedItems.ts), which also passes the step's `preload`.
+ *
+ * `preload` is a bulk writer's NotifyPreload, which answers the
+ * organization's profiles, the projects and the recipients' sight from
+ * memory, and whose `guard` runs before each mention and follower. Without
+ * one every row is read fresh. */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
@@ -1166,8 +1211,7 @@ export async function notifyIssueUpdate(
   if (!a.skipTaskEvent)
     await emitTaskEvent(ctx, { name: 'task.updated', issue: after, before, actor, now })
   const isGroup = a.isGroup === true
-  const project =
-    preload?.projects.get(after.project_id) ?? (await byId(ctx, 'projects', after.project_id))
+  const project = await preloadedProject(ctx, preload, after.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, after.org_id))
   const visibility = preload?.visibility
 
@@ -1178,12 +1222,14 @@ export async function notifyIssueUpdate(
     (p) => !oldMentions.some((o) => o.id === p.id),
   )
   for (const m of newMentions) {
+    await preload?.guard?.()
     await subscribeToIssue(ctx, {
       issue_id: after.id,
       profile: m,
       org_id: after.org_id,
       project,
       now,
+      visibility,
     })
     await postMessage(ctx, {
       org_id: after.org_id,
@@ -1305,7 +1351,7 @@ export async function notifyIssueUpdate(
       const parent = await byId(ctx, 'issues', after.parent_id)
       if (parent !== null) {
         parentProjectId = parent.project_id
-        parentProject = await byId(ctx, 'projects', parent.project_id)
+        parentProject = await preloadedProject(ctx, preload, parent.project_id)
         parentKey = `QN-${parent.num}`
       }
       parts.push(ATTACH_SLOT)
@@ -1349,6 +1395,7 @@ export async function notifyIssueUpdate(
   // one message per follower. postMessage drops the actor's own copy, anyone
   // who has left the org, and anyone who can no longer see the project.
   for (const s of subs) {
+    await preload?.guard?.()
     const recipient = orgProfiles.find((p) => p.id === s.profile_id)
     let mine = [...parts]
     if (newMentions.some((m) => m.id === s.profile_id)) {
@@ -1360,7 +1407,7 @@ export async function notifyIssueUpdate(
       const canSee =
         recipient !== undefined &&
         parentProject !== null &&
-        (await profileCanSeeProject(ctx, recipient, parentProject))
+        (await recipientCanSee(ctx, recipient, parentProject, visibility))
       // Keep the hidden parent anonymous while using the same task wording
       // as the inbox and the machine surfaces.
       mine = mine.map((x) =>
@@ -1417,8 +1464,7 @@ export async function notifyCommentInsert(
 ): Promise<void> {
   const { comment, issue, actor, now, preload } = a
   if (!a.skipTaskEvent) await emitTaskEvent(ctx, { name: 'comment.created', issue, actor, now })
-  const project =
-    preload?.projects.get(issue.project_id) ?? (await byId(ctx, 'projects', issue.project_id))
+  const project = await preloadedProject(ctx, preload, issue.project_id)
   const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, issue.org_id))
   const visibility = preload?.visibility
   const mentioned = extractMentions(comment.body, orgProfiles)
