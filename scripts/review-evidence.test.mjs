@@ -151,13 +151,13 @@ const check = (change = {}) => ({
   },
   ...change,
 })
-const greptileSummary = (reviewed, change = {}) => ({
+const greptileSummary = (reviewed, change = {}, title = 'fix(web): keep it') => ({
   author: GREPTILE,
   editor: GREPTILE,
   url: 'https://github.com/qivo-io/qivo/pull/1#issuecomment-2',
   body:
     '<!-- greptile_summary -->\n\n<h2>Confidence Score: 5/5</h2>\n\n<!-- greptile_confidence_score:5 -->\n\n' +
-    `<sub>Reviews (2) · Last reviewed commit: ["fix(web): keep it"](https://github.com/qivo-io/qivo/commit/${reviewed}) · ` +
+    `<sub>Reviews (2) · Last reviewed commit: ["${title}"](https://github.com/qivo-io/qivo/commit/${reviewed}) · ` +
     '[Reviewed by Greptile](https://www.greptile.com/)</sub>',
   ...change,
 })
@@ -190,6 +190,16 @@ describe('Greptile evidence', () => {
     expect(review([older, newer], [greptileSummary(SHA)]).complete).toBe(false)
     const impostor = check({ app: { id: 1, slug: 'greptile-apps' } })
     expect(review([impostor], [greptileSummary(SHA)]).complete).toBe(false)
+  })
+
+  it('reads the commit link whatever brackets the commit title contains', () => {
+    for (const title of [
+      'fix: handle [archived] tasks',
+      'fix: keep \\[a\\] and ]x(',
+      '[skip ci] ]]',
+    ])
+      expect(review([check()], [greptileSummary(SHA, {}, title)]).complete, title).toBe(true)
+    expect(review([check()], [greptileSummary(OLDER, {}, 'fix: [x](y)')]).complete).toBe(false)
   })
 
   it('refuses a summary of another commit or one someone else edited', () => {
