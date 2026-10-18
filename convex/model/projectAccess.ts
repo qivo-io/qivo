@@ -36,7 +36,7 @@ import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
-import { ITEM_UNREAD_CAP, loadNotifyPreload } from './messages'
+import { loadNotifyPreload } from './messages'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
 /** The one person or team whose access a write changes, already resolved in
@@ -237,19 +237,22 @@ type Lost = Holding & { project: Doc<'projects'> }
 export const REASSIGN_MAX = 120
 
 /** The share of each of Convex's limits for one transaction that a removal
- * may reach with its next task. A task costs more the more followers it has,
- * most of all followers the transaction has not checked yet, so a handover
- * under REASSIGN_MAX can still be too large. Before each task the removal
- * adds what it used so far, as the deployment reports it
- * (ctx.meta.getTransactionMetrics), to the most the task's followers may add
- * (PER_FOLLOWER), so the check holds whatever the tasks look like. The rest
- * of each limit is room for the task's own reads and writes and the
- * removal's narration. In tests/bulkReassign.test.ts, REASSIGN_MAX tasks
- * with four followers each use about 72% of the index ranges. */
-export const REASSIGN_ROOM = 0.9
+ * may have used before it reassigns another task or notifies another
+ * follower. A task costs more the more followers it has, most of all
+ * followers whose sight the transaction has not checked yet, and a sight
+ * check costs more the more teams share the project. So a handover under
+ * REASSIGN_MAX can still be too large, and no fixed cost per task or
+ * follower bounds it. The removal checks what the transaction used, as the
+ * deployment reports it (ctx.meta.getTransactionMetrics), before each task
+ * and, through the preload's guard (model/messages.ts NotifyPreload), before
+ * each follower it notifies. The rest of each limit is room for one
+ * follower or one task's own reads and writes and the removal's narration.
+ * In tests/bulkReassign.test.ts, REASSIGN_MAX tasks with four followers each
+ * use about 70% of the index ranges. */
+export const REASSIGN_ROOM = 0.95
 
 /** The refusal of a handover too large for one removal: more than
- * REASSIGN_MAX tasks, or fewer whose followers would pass REASSIGN_ROOM. It
+ * REASSIGN_MAX tasks, or fewer whose followers fill REASSIGN_ROOM. It
  * suggests keeping the people as Viewers only when the removal would accept
  * that choice (`canKeep`). */
 export const reassignTooLarge = (canKeep: boolean): string =>
@@ -267,40 +270,16 @@ const LIMITED = [
   'scheduledFunctionArgsBytes',
 ] as const
 
-/** The most one follower of a task adds to its reassignment: a first check
- * of the follower's sight of the project (lib/access.ts projectLevel), and
- * the message (model/messages.ts postMessage), which reads the follower's
- * inbox item for the task, clears a snooze on each of its rows (a read and a
- * write each), prunes it and trims it. An item holds at most ITEM_UNREAD_CAP
- * unread rows and one read row, except one that grew past the cap before
- * the cap existed. Each bound also covers its share of the task's own reads
- * and writes once a task has a few followers. */
-export const PER_FOLLOWER: Partial<Record<(typeof LIMITED)[number], number>> = {
-  databaseQueries: 16,
-  documentsRead: 2 * ITEM_UNREAD_CAP + 20,
-  bytesRead: 128 * 1024,
-  documentsWritten: ITEM_UNREAD_CAP + 6,
-  bytesWritten: 64 * 1024,
-}
-
-/* Whether reassigning a task with `followers` could take the transaction
- * past REASSIGN_ROOM of any limit. */
-async function removalIsFull(ctx: MutationCtx, followers: number): Promise<boolean> {
+/* Whether the transaction has used more than REASSIGN_ROOM of any limit. */
+async function removalIsFull(ctx: MutationCtx): Promise<boolean> {
   const m = await ctx.meta.getTransactionMetrics()
-  return LIMITED.some(
-    (k) =>
-      m[k].used + followers * (PER_FOLLOWER[k] ?? 0) > (m[k].used + m[k].remaining) * REASSIGN_ROOM,
-  )
+  return LIMITED.some((k) => m[k].used > (m[k].used + m[k].remaining) * REASSIGN_ROOM)
 }
 
-/* How many people follow the task `issueId`. */
-const followerCount = async (ctx: QueryCtx, issueId: string): Promise<number> =>
-  (
-    await ctx.db
-      .query('issue_subscriptions')
-      .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
-      .collect()
-  ).length
+/* Thrown by a reassignment's guard once removalIsFull, and turned into
+ * reassignTooLarge by removeAndSettle. It is no ConvexError, so settling
+ * passes it on without HELD_TASKS_REFUSED. */
+class RemovalFull extends Error {}
 
 /**
  * Runs `remove` and answers the open tasks in `projects` that someone in
@@ -463,8 +442,8 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * each of those tasks, by role, to that user or to nobody, with every rule of
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
  * Edit access and sight of every task above once the access is gone. A
- * handover of more than REASSIGN_MAX tasks, or one whose next task and its
- * followers could pass REASSIGN_ROOM of the transaction, is refused with
+ * handover of more than REASSIGN_MAX tasks, or one that fills REASSIGN_ROOM
+ * of the transaction before its last task or follower, is refused with
  * reassignTooLarge, which blames its size rather than the tasks. Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
@@ -530,28 +509,32 @@ export async function removeAndSettle(
     // were reassigned rolls them back with the removal.
     const tooLarge = async () => rule(reassignTooLarge(await canKeepAsViewers(ctx, a, lost)))
     if (byTask.size > REASSIGN_MAX) throw await tooLarge()
+    const full = async () => {
+      if (await removalIsFull(ctx)) throw new RemovalFull()
+    }
     // The access is gone and the loop below writes only tasks, follows,
     // messages and activity, so one preload serves every task update.
-    const bulk = {
-      preload: await loadNotifyPreload(ctx, me.org_id, orgProjects),
-      checked: new Set<string>(),
-    }
+    const preload = await loadNotifyPreload(ctx, me.org_id, orgProjects)
+    const bulk = { preload: { ...preload, guard: full }, checked: new Set<string>() }
     if (to !== null) await settling(() => assertCanTakeOver(ctx, lost, to, bulk.checked))
-    for (const holdings of byTask.values()) {
-      const task = holdings[0].task
-      if (await removalIsFull(ctx, await followerCount(ctx, task.id))) throw await tooLarge()
-      const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
-      for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
-      await settling(async () => {
-        await updateIssueCore(ctx, {
-          me,
-          issue: task,
-          patch,
-          now,
-          machine: a.provenance === undefined ? undefined : { provenance: a.provenance },
-          bulk,
+    try {
+      for (const holdings of byTask.values()) {
+        await full()
+        const patch: { assignee_id?: string | null; reviewer_id?: string | null } = {}
+        for (const h of holdings) patch[h.role === 'assignee' ? 'assignee_id' : 'reviewer_id'] = to
+        await settling(async () => {
+          await updateIssueCore(ctx, {
+            me,
+            issue: holdings[0].task,
+            patch,
+            now,
+            machine: a.provenance === undefined ? undefined : { provenance: a.provenance },
+            bulk,
+          })
         })
-      })
+      }
+    } catch (e) {
+      throw e instanceof RemovalFull ? await tooLarge() : e
     }
     result.stranded = []
     result.reassigned = stranded

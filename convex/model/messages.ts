@@ -237,6 +237,10 @@ export type NotifyPreload = {
   /* Recipient visibility answers by `${profile}:${project}` uuid, filled as
    * they are asked. */
   visibility: Map<string, boolean>
+  /* Run by notifyIssueUpdate before each mention and each follower it
+   * notifies. A bulk writer throws from it to stop before the transaction
+   * passes Convex's limits (projectAccess.ts removeAndSettle). */
+  guard?: () => Promise<void>
 }
 
 /** Builds a preload for `orgId` from its profiles as stored now, with the
@@ -1188,7 +1192,8 @@ export async function notifyIssueInsert(
  *
  * `preload` is a bulk writer's NotifyPreload, which answers the
  * organization's profiles, the projects and the recipients' sight from
- * memory. Without one every row is read fresh. */
+ * memory, and whose `guard` runs before each mention and follower. Without
+ * one every row is read fresh. */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
@@ -1217,6 +1222,7 @@ export async function notifyIssueUpdate(
     (p) => !oldMentions.some((o) => o.id === p.id),
   )
   for (const m of newMentions) {
+    await preload?.guard?.()
     await subscribeToIssue(ctx, {
       issue_id: after.id,
       profile: m,
@@ -1389,6 +1395,7 @@ export async function notifyIssueUpdate(
   // one message per follower. postMessage drops the actor's own copy, anyone
   // who has left the org, and anyone who can no longer see the project.
   for (const s of subs) {
+    await preload?.guard?.()
     const recipient = orgProfiles.find((p) => p.id === s.profile_id)
     let mine = [...parts]
     if (newMentions.some((m) => m.id === s.profile_id)) {
