@@ -29,6 +29,18 @@
  *   "$H" staging npx convex run internal/guestTeams:repair '{"dry_run": false}'
  * Record each check and run in qivo-internal docs/verification.md.
  *
+ * The demo backend's stored key cannot run internal functions, so on the
+ * demo the private with-temp-deploy-key helper runs each command with a
+ * short-lived key that allows only the listed actions, then deletes it
+ * (qivo-internal docs/public-demo-operations.md). `check` needs
+ * deployment:functions:runInternalQueries, and `repair`, an internal
+ * action, needs deployment:functions:runInternalActions:
+ *   T="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key"
+ *   "$T" demo --allow deployment:functions:runInternalQueries --purpose guest-teams -- \
+ *     npx convex run internal/guestTeams:check '{"cursor": null}'
+ *   "$T" demo --allow deployment:functions:runInternalActions --purpose guest-teams -- \
+ *     npx convex run internal/guestTeams:repair '{"dry_run": true}'
+ *
  * The results hold counts only. Re-running the repair is safe, and a clean
  * deployment reports zeros. Like leaveAllTeams it writes no activity. A team
  * whose only leader was a guest is left without one; its organization's
