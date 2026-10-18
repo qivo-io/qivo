@@ -153,6 +153,24 @@ describe('archiving and deleting from the Archive or delete window', () => {
     expect(vm('c')?.title).toBe('c')
   })
 
+  it('keeps an accepted archive gone when another write paints a delivery held from before it', async () => {
+    let saved: (value: null) => void = () => {}
+    answers['issues:update'] = () => new Promise((resolve) => (saved = resolve))
+    P.updateIssue(handle('c'), { title: 'renamed' })
+    // while that write is in flight, a delivery that still holds the task is held
+    await deliverSnap((snap) => {
+      const c = snap.issues.find((issue) => issue.id === 'c')
+      if (c) c.title = 'renamed on the server'
+    })
+    accept('issues:archive')
+    expect(await P.archiveIssue(handle('root'), '')).toBe(true)
+    expect(vm('root')).toBeUndefined()
+    // the write settles, and the held delivery is painted
+    saved(null)
+    await vi.waitFor(() => expect(vm('c')?.title).toBe('renamed on the server'))
+    expect(['root', 'a', 'b', 'aa'].map(vm)).toEqual([undefined, undefined, undefined, undefined])
+  })
+
   it('archives the whole subtree otherwise, and keeps it gone through a rollback', async () => {
     accept('issues:archive')
     expect(await P.archiveIssue(handle('root'), '')).toBe(true)

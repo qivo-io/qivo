@@ -1147,7 +1147,11 @@ function flushHeldPaint() {
   snapDirty = false
   commentsDirty = false
   if (!snapHeld && !comHeld) return
-  if (snapHeld && serverSnap) adopt(serverSnap)
+  if (snapHeld && serverSnap) {
+    adopt(serverSnap)
+    // the held delivery can predate an archive or delete accepted meanwhile
+    reapplyAcceptedRemovals()
+  }
   if (comHeld) adoptComments()
   if (snapHeld) rebuild()
   else rebuildComments()
