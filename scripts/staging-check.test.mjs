@@ -45,7 +45,7 @@ describe('staging check arguments', () => {
     ])
       expect(() => parseArgs(argv)).toThrow(
         expect.objectContaining({
-          message: expect.not.stringContaining('0123456789abcdef'),
+          message: expect.not.stringContaining(secret.slice(4)),
         }),
       )
     expect(() => parseArgs(['--staging', '--tokn'])).toThrow('Unknown argument --tokn.')
