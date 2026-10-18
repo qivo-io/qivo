@@ -234,8 +234,8 @@ export async function workloadCore(
   const org = await byId(ctx, 'organizations', me.org_id)
   const grid = weekGrid(org?.week_start ?? 1)
   const first = grid.ofDay(o.fromDay)
-  // the week holding 0000-01-01 starts in year -1, and a late 9999 window
-  // runs past year 9999, where week_starts would not be YYYY-MM-DD
+  // the week holding 0000-01-01 can start in year -1, and a late 9999
+  // window can run past year 9999, where week_starts would not be YYYY-MM-DD
   if (
     !DAY_SHAPE.test(grid.firstDay(first)) ||
     !DAY_SHAPE.test(grid.firstDay(first + o.weeks - 1))

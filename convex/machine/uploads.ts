@@ -28,6 +28,7 @@ import {
   abandonTicketUpload,
   beginTicketUpload,
   finishTicketUpload,
+  ATTACHMENT_TYPE_MAX,
   UPLOAD_CLAIM_MS,
   UPLOAD_TICKET_MISSING,
   uploadSizeWrong,
@@ -42,6 +43,10 @@ const READ_MS = UPLOAD_CLAIM_MS / 3
 
 /** The answer for a body that took longer than READ_MS to arrive. */
 export const UPLOAD_TOO_SLOW = 'the upload took too long; send it again'
+
+/** The answer for a Content-Type longer than ATTACHMENT_TYPE_MAX, the
+ * confirm's sentence for it. */
+export const MEDIA_TYPE_TOO_LONG = `the file's media type must be at most ${ATTACHMENT_TYPE_MAX} characters`
 
 /* The Convex runtime's Blob, timers and crypto, which convex/tsconfig's
  * ESNext lib does not declare. */
@@ -168,6 +173,12 @@ const receive = httpAction(async (ctx, request) => {
   ) {
     return answer(404, { error: UPLOAD_TICKET_MISSING })
   }
+  // the confirm refuses a longer media type, and the URL would be spent by
+  // then, so this POST is refused before it claims anything
+  const type = request.headers.get('Content-Type') ?? ''
+  if (type.length > ATTACHMENT_TYPE_MAX) {
+    return answer(400, { error: MEDIA_TYPE_TOO_LONG })
+  }
   // this POST's own claim, so cleanup never frees another POST's claim
   const attempt = crypto.randomUUID()
   let storageId: Id<'_storage'> | undefined
@@ -179,7 +190,6 @@ const receive = httpAction(async (ctx, request) => {
     })
     const chunks = await readExactly(request, size)
     if (chunks === null) throw badRequest(uploadSizeWrong(size))
-    const type = request.headers.get('Content-Type') ?? ''
     storageId = await ctx.storage.store(new Blob(chunks, { type }))
     const kept = await ctx.runMutation(internal.machine.uploads.finish, {
       ticket,
@@ -192,14 +202,16 @@ const receive = httpAction(async (ctx, request) => {
     return answer(200, { storageId })
   } catch (e) {
     // also when begin's answer was lost after it committed the claim
-    await ctx
+    const stored = await ctx
       .runMutation(internal.machine.uploads.abandon, {
         ticket,
         minter,
         attempt,
         storage_id: storageId,
       })
-      .catch(() => {})
+      .catch(() => null)
+    // finish committed but its answer was lost: the file is the ticket's
+    if (stored !== null) return answer(200, { storageId: stored })
     if (!(e instanceof ConvexError)) return answer(500, { error: internalError(e) })
     const refusal = e.data as Refusal
     const status = refusal.code === 'not_found' ? 404 : refusal.code === 'conflict' ? 409 : 400

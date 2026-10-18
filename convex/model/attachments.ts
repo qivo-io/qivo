@@ -272,9 +272,10 @@ export async function removeAttachmentCore(
 
 /* --------------------------------------------------------------- uploads */
 
-/** How long an upload ticket and its upload URL stay usable, matching
- * the lifetime Convex gives the URL. It stays within the 60 minutes
- * reapOrphans waits before reaping unreferenced bytes. */
+/** How long an upload ticket and its signed upload URL stay usable. It must
+ * not exceed the 60 minutes reapOrphans waits before reaping unreferenced
+ * bytes (files.ts REAP_FLOOR_MS), or the sweep could take a file a ticket
+ * still holds. */
 export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
 
 /** How many of a caller's expired tickets one new upload deletes, keeping
@@ -415,13 +416,23 @@ export async function finishTicketUpload(
  * Undoes the POST `attempt` after it failed: deletes `storageId`, when given,
  * unless the ticket or anything else holds it, and frees the URL for another
  * try if that POST still holds it and the ticket holds no file. Safe to run
- * whether or not beginTicketUpload claimed the URL for this POST.
+ * whether or not beginTicketUpload claimed the URL for this POST. Answers
+ * the ticket's file when this POST stored it after all, such as when the
+ * answer of finishTicketUpload was lost, else null.
  */
 export async function abandonTicketUpload(
   ctx: MutationCtx,
   a: { ticketId: string; minter: string; attempt: string; storageId?: Id<'_storage'> },
-): Promise<void> {
+): Promise<Id<'_storage'> | null> {
   const ticket = await byId(ctx, 'attachment_uploads', a.ticketId)
+  if (
+    ticket !== null &&
+    ticket.profile_id === a.minter &&
+    ticket.upload_attempt === a.attempt &&
+    ticket.storage_id !== undefined
+  ) {
+    return ticket.storage_id
+  }
   if (
     a.storageId !== undefined &&
     ticket?.storage_id !== a.storageId &&
@@ -437,6 +448,7 @@ export async function abandonTicketUpload(
   ) {
     await ctx.db.patch(ticket._id, { upload_started_at: undefined, upload_attempt: undefined })
   }
+  return null
 }
 
 /** The confirm's answer for a ticket whose upload URL has stored no file,

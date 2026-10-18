@@ -271,6 +271,13 @@ describe('the single-task read names only tasks the caller can read', () => {
     expect(viaMcp).toMatchObject({ ...ownHours, ...expected })
     // a leaf still shows its own hours
     expect(await restGet(fx, `QN-${a.num}`)).toMatchObject({ is_group: false, remaining_hours: 3 })
+    // an archived task counts its archived subtasks as a group, but keeps the
+    // hours it had as a leaf for its restore, so both surfaces show them
+    const shelved = await task(fx, { archived_at: NOW, remaining_hours: 6, remaining_set_at: NOW })
+    await task(fx, { parent_id: shelved.id, archived_at: NOW, remaining_hours: 2 })
+    const kept = { is_group: true, remaining_hours: 6, remaining_set_at: NOW }
+    expect(await restGet(fx, `QN-${shelved.num}`)).toMatchObject(kept)
+    expect(await mcp(fx, internal.machine.mcp.getIssue, { ref: shelved.id })).toMatchObject(kept)
     expect(Object.keys(viaMcp).slice(-8)).toEqual([
       'url',
       'group_remaining_hours',

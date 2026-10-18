@@ -1445,12 +1445,14 @@ Uploading a file takes three steps, the same as on REST:
 
 The file goes straight to storage, so it never passes through an MCP call or
 the model's context, and the upload URL needs no credential. The ticket and
-its upload URL expire after an hour. The upload URL stores one file. A
-second `POST` answers `409` with `this upload URL has already been used;
-start a new upload` and stores nothing, and a body of another size than
-declared answers `400` with `the upload must be exactly the 48213 bytes
-declared`, after which the URL can be tried again (see
-[REST attachments](rest-api.md#attachments)). Only the user that started
+its upload URL expire after an hour. The upload URL stores one file. While
+a `POST` is storing the file, and once it has, another `POST` answers `409`
+with `this upload URL has already been used; start a new upload` and stores
+nothing. A body of another size than declared answers `400` with `the upload
+must be exactly the 48213 bytes declared` and stores nothing, after which
+the URL can be tried again. Once the upload is confirmed, its URL answers
+`404` like an expired one (see [REST attachments](rest-api.md#attachments)
+for every answer). Only the user that started
 the upload can confirm it, only for the same task, and only once. A ticket
 belongs to the user, not the credential, so a ticket started over MCP can be
 confirmed over REST by the same user, and the reverse. The confirm follows

@@ -29,6 +29,7 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
+import { MEDIA_TYPE_TOO_LONG } from '../machine/uploads'
 import {
   UPLOAD_CLAIM_MS,
   UPLOAD_NOT_SENT,
@@ -812,6 +813,61 @@ describe('the REST upload', () => {
       status: 404,
       json: { error: UPLOAD_TICKET_MISSING },
     })
+  })
+
+  it('answers a POST whose stored file lost its answer, and refuses a long type before it claims', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.bin', size: 3 })
+    const minter = fx.agent.id
+    // finish committed, but its answer never reached the POST: the POST's
+    // cleanup keeps the file and hands it back
+    await fx.t.mutation(internal.machine.uploads.begin, { ticket, minter, attempt: 'a' })
+    const stored = await storeFile(fx.t, 3)
+    const args = { ticket, minter, attempt: 'a', storage_id: stored }
+    expect(await fx.t.mutation(internal.machine.uploads.finish, args)).toBe(true)
+    expect(await fx.t.mutation(internal.machine.uploads.abandon, args)).toBe(stored)
+    expect(await storageExists(fx.t, stored)).toBe(true)
+    // another POST's cleanup gets nothing back
+    expect(
+      await fx.t.mutation(internal.machine.uploads.abandon, { ...args, attempt: 'b' }),
+    ).toBeNull()
+    // a media type the confirm would refuse is refused first, and the URL
+    // stays usable
+    const other = await start(fx, issue.id, { name: 'b.bin', size: 3 })
+    expect(
+      await send(fx.t, other.upload_url, 3, { type: `application/${'x'.repeat(244)}` }),
+    ).toEqual({ status: 400, json: { error: MEDIA_TYPE_TOO_LONG } })
+    expect((await send(fx.t, other.upload_url, 3)).status).toBe(200)
+    expect(await send(fx.t, upload_url, 3)).toEqual({
+      status: 409,
+      json: { error: UPLOAD_URL_USED },
+    })
+  })
+
+  it('stores an empty file and answers a browser preflight', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'empty.txt', size: 0 })
+    const empty = await upload(fx.t, upload_url, 0)
+    expect(await confirm(fx, issue.id, ticket, { storage_id: empty })).toMatchObject({
+      attachment: { name: 'empty.txt', size_bytes: 0 },
+    })
+    const url = new URL(upload_url)
+    const res = await (
+      fx.t as unknown as {
+        fetch(
+          path: string,
+          init: { method: string; headers: Record<string, string> },
+        ): Promise<{ status: number; headers: { get(name: string): string | null } }>
+      }
+    ).fetch(`${url.pathname}${url.search}`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://agent.example', 'Access-Control-Request-Method': 'POST' },
+    })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type')
   })
 
   it('tells a confirm that comes before any file to send it first', async () => {

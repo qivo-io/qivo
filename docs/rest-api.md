@@ -230,6 +230,8 @@ JSON`). A string or field name holding an unpaired surrogate, such as a lone
 (`request body holds an unpaired surrogate, which UTF-8 cannot encode`). Such
 text cannot be stored, so the request changes nothing. A request that takes
 no body, such as `DELETE /v1/tasks/{ref}`, ignores one it is sent.
+`POST /v1/webhooks` checks its body by its own rules (see
+[Generic webhooks](#generic-webhooks)).
 
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
@@ -1707,27 +1709,32 @@ Uploading takes three requests:
    "…" }`, which answers `201` with the attachment.
 
 The ticket and its upload URL expire after an hour. The upload URL stores
-one file. While a `POST` to it is storing the file, and once it has, another
-`POST` answers `409` (`this upload URL has already been used; start a new
-upload`) and stores nothing. A body of another size than declared answers
-`400` (`the upload must be exactly the 48213 bytes declared`) and stores
-nothing. After that, or any other failed `POST`, the URL can be tried again.
-A `POST` that ends without an answer, for example when the connection
-drops, holds the URL for at most 15 minutes, and one whose body takes more
-than 5 minutes to arrive answers `400` (`the upload took too long; send it
-again`). An expired or altered upload URL answers `404` (`upload not found
-or expired; start a new upload`). Only the user that started the upload can
-confirm it, only for the same task, and only once. Any other ticket,
-including an expired one, answers `404` (`upload not found or expired; start
-a new upload`). A confirm before the upload URL has stored a file answers
-`400` (`no file has been sent to this upload URL; send it there, or start a
-new upload`). `storage_id` must be the `storageId` the upload URL answered,
-and any other value answers `400` (`storage_id must be the storageId the
-upload answered`).
-Without a
-`content_type`, the attachment takes the upload's `Content-Type`, and one
-over 255 characters answers `400` (`the file's media type must be at most 255
-characters`). If the organization lowered its per-file limit after the upload
+one file:
+
+- While a `POST` to it is storing the file, and once it has, another `POST`
+  answers `409` (`this upload URL has already been used; start a new
+  upload`) and stores nothing. If the answer of the `POST` that stored the
+  file was lost, start a new upload.
+- A body of another size than declared answers `400` (`the upload must be
+  exactly the 48213 bytes declared`), a `Content-Type` over 255 characters
+  answers `400` (`the file's media type must be at most 255 characters`),
+  and a body that takes more than 5 minutes to arrive answers `400` (`the
+  upload took too long; send it again`). These store nothing, and the URL
+  can be tried again, as after any other failed `POST`. A `POST` that ends
+  without an answer and without storing a file, for example when the
+  connection drops, holds the URL for at most 15 minutes.
+- An expired or altered upload URL, and one whose upload was confirmed,
+  answers `404` (`upload not found or expired; start a new upload`).
+
+Only the user that started the upload can confirm it, only for the same
+task, and only once. Any other ticket, including an expired one, answers
+`404` (`upload not found or expired; start a new upload`). A confirm before
+the upload URL has stored a file answers `400` (`no file has been sent to
+this upload URL; send it there, or start a new upload`). `storage_id` must
+be the `storageId` the upload URL answered, and any other value answers
+`400` (`storage_id must be the storageId the upload answered`). Without a
+`content_type`, the attachment takes the upload's `Content-Type`.
+If the organization lowered its per-file limit after the upload
 started and the file now exceeds it, Qivo deletes the file, answers `400` and
 spends the ticket.
 Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
@@ -2004,9 +2011,10 @@ authenticated request.
   when an organization admin revoked it on API access. The same row serves
   MCP and REST.
 - `attachment_uploads` holds one row per upload in progress: the ticket,
-  the user that started it, the task, the declared name, type and size, and
-  its expiry. Confirming deletes it; the weekly storage sweep deletes
-  expired ones.
+  the user that started it, the task, the declared name, type and size, its
+  expiry, the `POST` to its upload URL that holds the URL and when it began,
+  and the one file that URL stored, which the confirm must name. Confirming
+  deletes it; the weekly storage sweep deletes expired ones.
 - What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through
