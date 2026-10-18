@@ -430,6 +430,15 @@ describe('workflow policy', () => {
   )
   const start = workflows['reviewed-ci.yml']
 
+  it('gives every run the title runName() matches', () => {
+    // Unquoted, " #" would start a YAML comment and cut the title to "Start CI for".
+    const title = /^run-name: '(.+)'$/m.exec(start)?.[1] ?? ''
+    const values = { 'inputs.pr': '7', 'inputs.sha': SHA }
+    expect(title.replace(/\$\{\{ (.+?) \}\}/g, (_, expression) => values[expression])).toBe(
+      runName(7, SHA),
+    )
+  })
+
   it('names the build job as REQUIRED_JOBS expects', () => {
     // The jobs API names a called workflow's job "<caller name> / <called job>".
     expect(start).toMatch(/\n {2}build:\n {4}name: Build and test\n/)

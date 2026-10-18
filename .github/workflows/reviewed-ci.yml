@@ -11,7 +11,8 @@ name: Start CI
 # read-only token, no secrets and read-only cache access. Dispatched from another branch,
 # this workflow is a rehearsal of that branch's version and publishes
 # "reviewed-ci (rehearsal)", which branch protection ignores.
-run-name: Start CI for #${{ inputs.pr }} at ${{ inputs.sha }}
+# Quoted, because an unquoted " #" starts a YAML comment. linkedRun() compares this title.
+run-name: 'Start CI for #${{ inputs.pr }} at ${{ inputs.sha }}'
 
 on:
   workflow_dispatch:
