@@ -33,9 +33,11 @@
  * Refusal mapping: ConvexError e.data.code → {not_found:404, forbidden:403,
  * bad_request:400, rule:400}, body {"error": message}; the CALLER_GONE /
  * CALLER_DEACTIVATED race reasons map back to the caller's own 401 sentences
- * BEFORE the code map; anything else → 500 {"error": "internal error"},
- * with the error itself only in the deployment's log (shared.ts
- * internalError). */
+ * BEFORE the code map, and a write that kept conflicting (WRITE_CONFLICT,
+ * machine/registry.ts retryConflicts) is a 503 with Retry-After; anything
+ * else → 500 {"error": "internal error"}, with the error itself only in the
+ * deployment's log (shared.ts internalError). Every mutation the handler
+ * runs, before dispatch too, retries write conflicts (conflictRetrying). */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
@@ -140,7 +142,7 @@ import { authenticateSecret, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
 import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
-import { type MachineEntry, type Principal, runEntry } from './registry'
+import { conflictRetrying, type MachineEntry, type Principal, runEntry } from './registry'
 import {
   REST_CALLER as CALLER,
   internalError,
@@ -148,6 +150,9 @@ import {
   restProvenance as provenanceOf,
   readBody,
   vKeyName,
+  WRITE_CONFLICT,
+  WRITE_CONFLICT_MESSAGE,
+  WRITE_CONFLICT_RETRY_AFTER,
   wholeParam,
 } from './shared'
 import { TEAM_ROUTES } from './teams'
@@ -1015,6 +1020,18 @@ const rateLimited = (): Response =>
     headers: { ...CORS, 'Content-Type': 'application/json', 'Retry-After': '60' },
   })
 
+/* The 503 for a write that kept conflicting with other writes and changed
+ * nothing (WRITE_CONFLICT), which the caller can send again. */
+const writeConflict = (): Response =>
+  new Response(JSON.stringify({ error: WRITE_CONFLICT_MESSAGE }), {
+    status: 503,
+    headers: {
+      ...CORS,
+      'Content-Type': 'application/json',
+      'Retry-After': String(WRITE_CONFLICT_RETRY_AFTER),
+    },
+  })
+
 /* hex-valid-but-non-UTF-8 sequences (e.g. %C0) make decodeURIComponent throw;
  * fall back to the raw segment, which then just fails to match anything (404). */
 function safeDecode(s: string): string {
@@ -1332,9 +1349,10 @@ const STATUS_OF: Partial<Record<string, number>> = {
 }
 
 /* The REST response for an error a route threw. A caller gone or
- * deactivated since auth gets its own 401 sentence, a refusal whose code
- * STATUS_OF maps gets that status and its message, and anything else is a
- * 500 with INTERNAL_ERROR, because its own text can hold a stack trace. */
+ * deactivated since auth gets its own 401 sentence, a write that kept
+ * conflicting gets the retryable 503, a refusal whose code STATUS_OF maps
+ * gets that status and its message, and anything else is a 500 with
+ * INTERNAL_ERROR, because its own text can hold a stack trace. */
 function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>
@@ -1342,6 +1360,7 @@ function refusalResponse(e: unknown, kind: ProfileKind): Response {
     // dispatch, so answer the caller's own 401 sentence BEFORE the code map
     if (data.reason === CALLER_GONE) return err(CALLER[kind].gone, 401)
     if (data.reason === CALLER_DEACTIVATED) return err(CALLER[kind].deactivated, 401)
+    if (data.reason === WRITE_CONFLICT) return writeConflict()
     const status = data.code !== undefined ? STATUS_OF[data.code] : undefined
     if (status !== undefined && data.message !== undefined) return err(data.message, status)
   }
@@ -1356,6 +1375,7 @@ async function webhookResponse(
   seg: string[],
   secret: string,
 ): Promise<Response> {
+  const runMutation = conflictRetrying(ctx)
   let owner: EventOwner
   if (secret.startsWith('qvo_')) {
     const credential = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
@@ -1364,7 +1384,7 @@ async function webhookResponse(
     })
     if (
       !credential ||
-      !(await ctx.runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
+      !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
     )
       return err('OAuth connection is invalid, expired or disconnected', 401)
     if (
@@ -1375,7 +1395,7 @@ async function webhookResponse(
     )
       return err('OAuth connection does not have the required scope', 403)
     if (
-      !(await ctx.runMutation(internal.billingMetering.oauthCall, {
+      !(await runMutation(internal.billingMetering.oauthCall, {
         connection_id: credential.connectionId,
       }))
     )
@@ -1391,7 +1411,7 @@ async function webhookResponse(
     if (authenticated.ok === false) return err('Webhook credential is invalid or inactive', 401)
     const credential = authenticated.cred
     const table = credential.isAgent ? 'agent_keys' : 'mcp_tokens'
-    const allowed = await ctx.runMutation(internal.machine.auth.touchCredential, {
+    const allowed = await runMutation(internal.machine.auth.touchCredential, {
       table,
       tokenId: credential.tokenId,
       rowId: credential.rowId,
@@ -1411,7 +1431,7 @@ async function webhookResponse(
   if (seg.length === 3 && seg[2] === 'organization' && req.method === 'GET')
     return json(await ctx.runQuery(internal.webhooks.listOrganization, { owner }), 200)
   if (seg.length === 4 && seg[2] === 'organization' && req.method === 'DELETE') {
-    await ctx.runMutation(internal.webhooks.removeOrganization, { owner, id: safeDecode(seg[3]) })
+    await runMutation(internal.webhooks.removeOrganization, { owner, id: safeDecode(seg[3]) })
     return new Response(null, { status: 204, headers: CORS })
   }
   if (seg.length === 2 && req.method === 'GET')
@@ -1440,7 +1460,7 @@ async function webhookResponse(
     return json(reply.result, 201)
   }
   if (seg.length === 3 && req.method === 'DELETE') {
-    await ctx.runMutation(internal.webhooks.remove, { owner, id: safeDecode(seg[2]) })
+    await runMutation(internal.webhooks.remove, { owner, id: safeDecode(seg[2]) })
     return new Response(null, { status: 204, headers: CORS })
   }
   return err('unknown webhook route', 404)
@@ -1450,8 +1470,9 @@ const restHandler = httpAction(async (ctx, req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   // who the credential acts as, once it is known; the race sentences use it
   let kind: ProfileKind = 'agent'
+  const runMutation = conflictRetrying(ctx)
   try {
-    if (!(await ctx.runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
+    if (!(await runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
     // ---- authenticate the agent key (qva_) or personal token (qvt_) --------
     const auth = req.headers.get('Authorization') ?? ''
     const secret = auth.startsWith('Bearer ')
@@ -1471,7 +1492,7 @@ const restHandler = httpAction(async (ctx, req) => {
     const table = res.cred.isAgent ? 'agent_keys' : 'mcp_tokens'
     // per-call last_used_at stamp — before any routing/work, even requests
     // that then 404 or 400 (the published contract; no throttle)
-    const allowed = await ctx.runMutation(internal.machine.auth.touchCredential, {
+    const allowed = await runMutation(internal.machine.auth.touchCredential, {
       table,
       tokenId: res.cred.tokenId,
       rowId: res.cred.rowId,

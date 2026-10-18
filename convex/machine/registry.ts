@@ -23,10 +23,24 @@
  * a raw ctx to an entry's `run` does not compile and runEntry is the way to
  * dispatch. Every check fails closed. Only an exact 'write' flag gets the
  * write runner, and anything but an exact 'read' flag needs write access from
- * the credential (needsWrite). */
+ * the credential (needsWrite).
+ *
+ * The write runner's runMutation retries write conflicts (retryConflicts).
+ * Every write entry makes exactly one write call, one mutation or one
+ * action, and registry.test.ts holds every entry to that. So a conflict
+ * that outlasts the retries means the request changed nothing, and its
+ * WRITE_CONFLICT refusal tells the caller so. The surfaces run the mutations
+ * they make before dispatch, such as the per-call stamp, through
+ * conflictRetrying for the same reason. */
 
+import { ConvexError } from 'convex/values'
 import type { ActionCtx } from '../_generated/server'
 import type { CredentialAccess } from '../lib/enums'
+import { conflict } from '../lib/functions'
+import { WRITE_CONFLICT, WRITE_CONFLICT_MESSAGE } from './shared'
+
+/* convex/tsconfig's lib is ESNext only; the Convex runtime has it. */
+declare function setTimeout(callback: () => void, delay: number): unknown
 
 /** Whether a machine action only reads data or may change it. */
 export type MachineAccess = 'read' | 'write'
@@ -64,14 +78,83 @@ export function readRunner(ctx: Pick<ActionCtx, 'runQuery'>): ReadRunner {
   return { runQuery: ctx.runQuery.bind(ctx), [brand]: 'read' }
 }
 
-/** A runner holding runQuery, runMutation and runAction, bound to `ctx`. */
+/** A runner holding runQuery, runMutation and runAction, bound to `ctx`.
+ * Its runMutation retries write conflicts (conflictRetrying). runAction does
+ * not, because an action may have committed mutations before it failed. */
 export function writeRunner(ctx: Runners): WriteRunner {
   return {
     runQuery: ctx.runQuery.bind(ctx),
-    runMutation: ctx.runMutation.bind(ctx),
+    runMutation: conflictRetrying(ctx),
     runAction: ctx.runAction.bind(ctx),
     [brand]: 'write',
   }
+}
+
+/* What ctx.runMutation rejects with once a mutation's transaction kept
+ * conflicting with other writes and Convex stopped retrying it. It is a
+ * plain Error whose message is the backend's optimistic concurrency failure,
+ * ErrorMetadata::user_occ in convex-backend's errors crate, or OCC_ERROR_MSG
+ * for a conflict on a system table. A user_occ message reads, for example,
+ * `Documents read from or written to the "comment_counts" table changed
+ * while this mutation was being run and on every subsequent retry. Another
+ * call to this mutation changed the document with ID "…". See
+ * https://docs.convex.dev/error#1`. Such a transaction never committed. The
+ * message is the only sign of it, so both patterns are anchored at the
+ * start, and an error that only quotes one does not match. */
+const CONFLICT_FAILURES = [
+  /^Documents read from or written to .+ changed while this mutation was being run and on every subsequent retry\./,
+  /^Data read or written in this mutation changed while it was being run\./,
+]
+
+/** Whether `e` is Convex's report of a mutation that gave up on a write
+ * conflict, which committed nothing. */
+export function isWriteConflict(e: unknown): boolean {
+  return (
+    e instanceof Error &&
+    !(e instanceof ConvexError) &&
+    CONFLICT_FAILURES.some((failure) => failure.test(e.message))
+  )
+}
+
+/** How many more times retryConflicts runs a write that conflicted. */
+export const CONFLICT_RETRIES = 2
+
+/**
+ * Runs `write`, one mutation call, and runs it again up to CONFLICT_RETRIES
+ * times, after a random wait, while it fails with a write conflict. A
+ * conflicted mutation committed nothing, so a retry cannot apply it twice.
+ * Any other failure is rethrown at once, because it may have come after a
+ * commit. A conflict that outlasts the retries is logged and becomes the
+ * WRITE_CONFLICT refusal.
+ */
+export async function retryConflicts<T>(write: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await write()
+    } catch (e) {
+      if (!isWriteConflict(e)) throw e
+      if (attempt === CONFLICT_RETRIES) {
+        console.error(e)
+        throw conflict(WRITE_CONFLICT_MESSAGE, WRITE_CONFLICT)
+      }
+    }
+    // 100 to 300 ms before the first retry and 200 to 600 ms before the
+    // second, random so that writers that collided do not collide again
+    const wait = (attempt + 1) * (100 + Math.random() * 200)
+    await new Promise<void>((resolve) => setTimeout(resolve, wait))
+  }
+}
+
+/**
+ * `ctx.runMutation`, with every call run through retryConflicts. Like the
+ * bound runners above, it passes on the reference its caller names. Name
+ * the result runMutation and call it with an `internal.…` reference, so the
+ * credential access walk (convex/tests/credentialAccess.test.ts) reads and
+ * checks each call where it is made.
+ */
+export function conflictRetrying(ctx: Pick<ActionCtx, 'runMutation'>): ActionCtx['runMutation'] {
+  const run = ctx.runMutation.bind(ctx)
+  return (mutation, ...args) => retryConflicts(() => run(mutation, ...args))
 }
 
 /**

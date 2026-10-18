@@ -136,13 +136,22 @@ import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
 import { PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
-import { type MachineEntry, needsWrite, type Principal, runEntry } from './registry'
+import {
+  conflictRetrying,
+  type MachineEntry,
+  needsWrite,
+  type Principal,
+  runEntry,
+} from './registry'
 import {
   internalError,
   MCP_NO_WRITE,
   MCP_PROVENANCE as PROVENANCE,
   pretty,
   readBody,
+  WRITE_CONFLICT,
+  WRITE_CONFLICT_MESSAGE,
+  WRITE_CONFLICT_RETRY_AFTER,
 } from './shared'
 import { TEAM_TOOLS } from './teams'
 
@@ -2185,6 +2194,19 @@ const rateLimited = (): Response =>
     headers: withCors({ 'Content-Type': 'application/json', 'Retry-After': '60' }),
   })
 
+/* The 503 for a write before dispatch, such as the per-call stamp, that kept
+ * conflicting with other writes (WRITE_CONFLICT). No tool ran, so the
+ * request changed nothing and can be sent again. A tool's own write that
+ * kept conflicting answers WRITE_CONFLICT_MESSAGE as its error result. */
+const writeConflict = (): Response =>
+  new Response(JSON.stringify({ error: WRITE_CONFLICT_MESSAGE }), {
+    status: 503,
+    headers: withCors({
+      'Content-Type': 'application/json',
+      'Retry-After': String(WRITE_CONFLICT_RETRY_AFTER),
+    }),
+  })
+
 /* The OAuth step-up before dispatch. It answers HTTP 403 insufficient_scope
  * when the grant lacks qivo:read, or lacks qivo:write while any call in the
  * body names a tool whose registry entry is a write; null lets it through. */
@@ -2250,8 +2272,28 @@ const oauthOwner = (live: {
   credential_row_id: live.connectionRowId,
 })
 
+/* The MCP POST handler. Every failure that mcpResponse does not answer
+ * itself, from the ingress count on, gets a JSON body with CORS. A write
+ * that kept conflicting (WRITE_CONFLICT) gets the retryable 503, and
+ * anything else a 500 with INTERNAL_ERROR, because its own text can hold a
+ * stack trace. */
 const mcpPost = httpAction(async (ctx, request) => {
-  if (!(await ctx.runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
+  try {
+    return await mcpResponse(ctx, request)
+  } catch (e) {
+    if (e instanceof ConvexError && (e.data as Refusal).reason === WRITE_CONFLICT)
+      return writeConflict()
+    return jsonRes(500, { error: internalError(e) })
+  }
+})
+
+/* Answers an MCP POST. It counts the request at ingress, authenticates it,
+ * stamps the call and then dispatches it. Every mutation it runs retries
+ * write conflicts (conflictRetrying). It answers the auth-to-dispatch race
+ * itself and throws every other failure to mcpPost. */
+async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> {
+  const runMutation = conflictRetrying(ctx)
+  if (!(await runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
   // Bearer only — no X-Api-Key on MCP; the 'Bearer ' prefix match is
   // case-sensitive with one space (a lowercase `bearer` falls to `missing`)
   const auth = request.headers.get('Authorization') ?? ''
@@ -2265,11 +2307,11 @@ const mcpPost = httpAction(async (ctx, request) => {
     })
     if (
       !credential ||
-      !(await ctx.runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
+      !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
     )
       return unauthorized('OAuth connection is invalid, expired or disconnected')
     if (
-      !(await ctx.runMutation(internal.billingMetering.oauthCall, {
+      !(await runMutation(internal.billingMetering.oauthCall, {
         connection_id: credential.connectionId,
       }))
     )
@@ -2328,7 +2370,7 @@ const mcpPost = httpAction(async (ctx, request) => {
         [CALLER_GONE, CALLER_DEACTIVATED].includes((error.data as Refusal).reason || '')
       )
         return unauthorized('OAuth connection is invalid, expired or disconnected')
-      return jsonRes(500, { error: internalError(error) })
+      throw error
     }
   }
   const res = await authenticateSecret(ctx, secret)
@@ -2339,7 +2381,7 @@ const mcpPost = httpAction(async (ctx, request) => {
   const cred = res.cred
   // per-call last_used_at stamp — every authenticated request, before any
   // routing or work, even ones that then answer 400
-  const allowed = await ctx.runMutation(internal.machine.auth.touchCredential, {
+  const allowed = await runMutation(internal.machine.auth.touchCredential, {
     table: cred.isAgent ? 'agent_keys' : 'mcp_tokens',
     tokenId: cred.tokenId,
     rowId: cred.rowId,
@@ -2380,9 +2422,9 @@ const mcpPost = httpAction(async (ctx, request) => {
         return unauthorized(cred.isAgent ? MCP_AUTH_401.agent : MCP_AUTH_401.person)
       }
     }
-    return jsonRes(500, { error: internalError(e) })
+    throw e
   }
-})
+}
 
 export function registerMcpRoutes(http: HttpRouter): void {
   http.route({ path: '/mcp', method: 'POST', handler: mcpPost })

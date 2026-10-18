@@ -830,9 +830,19 @@ replaces the former tool names; clients
 with a cached tool catalogue must refresh discovery or reconnect.
 
 A refused tool call answers its refusal sentence as the tool's error result
-(`isError: true`). A failure that is not a refusal, such as a server limit,
-answers `internal error` there instead, and outside a tool call it is an HTTP
-`500` with the same error. Qivo keeps its details in its own logs.
+(`isError: true`). A call whose change keeps conflicting with changes other
+calls make to the same data at that moment, such as many comments posted to
+one task at once, answers `the request conflicted with other changes made at
+the same time and changed nothing; send it again` there. Qivo first retries
+the change itself, twice at most, and answers this only when none of it was
+saved, so wait a second and make the same call again. A conflict before the
+tool runs, while Qivo counts or authenticates the request, is an HTTP `503`
+with `Retry-After: 1` and that sentence as `error`, and the request is safe
+to send again in the same way. A failure that is not a refusal, such as a
+server limit, answers `internal error` there instead, and outside a tool call
+it is an HTTP `500` with the same error. Qivo keeps its details in its own
+logs. `internal error` does not say whether a change was saved, so read the
+task or list before you make a changing call again.
 
 Qivo checks the arguments against the tool's schema before the tool runs.
 An argument the schema does not know is refused, and the call changes

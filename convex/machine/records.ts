@@ -70,6 +70,7 @@ import { newUuid } from '../model/orgs'
 import { calendarDay } from '../model/taskValues'
 import { type WorkloadJson, workloadCore } from '../planning'
 import type { TOOLS } from './mcp'
+import { conflictRetrying } from './registry'
 import type { ROUTES, route as restRoute } from './rest'
 import {
   MCP_NO_WRITE,
@@ -371,8 +372,11 @@ export async function storeThenAttach<Out>(
 }
 
 /* attach_text_file stores `text` as a UTF-8 file and attaches it to the
- * task. The check runs first, so a refused call stores nothing. Answers the
- * attachment as get_task lists it. */
+ * task. The check runs first, so a refused call stores nothing. Both
+ * mutations retry write conflicts (machine/registry.ts conflictRetrying), as
+ * the write runner does for every other tool, and an attach that kept
+ * conflicting deletes the stored file with its WRITE_CONFLICT refusal.
+ * Answers the attachment as get_task lists it. */
 export const mcpAttachTextFile = internalAction({
   args: {
     callerId: v.string(),
@@ -383,11 +387,12 @@ export const mcpAttachTextFile = internalAction({
     content_type: v.optional(v.string()),
   },
   handler: async (ctx, { text, content_type = TEXT_FILE_TYPE, ...a }): Promise<string> => {
+    const runMutation = conflictRetrying(ctx)
     const file = new Blob([text], { type: content_type })
     const target = { ...a, content_type, size: file.size }
-    await ctx.runMutation(internal.machine.records.mcpCheckTextFile, target)
+    await runMutation(internal.machine.records.mcpCheckTextFile, target)
     const out = await storeThenAttach(ctx.storage, file, (storage_id) =>
-      ctx.runMutation(internal.machine.records.mcpAttachStoredText, { ...target, storage_id }),
+      runMutation(internal.machine.records.mcpAttachStoredText, { ...target, storage_id }),
     )
     // the refusal's byte delete has committed, and an action rolls nothing back
     if ('refused' in out) throw badRequest(out.refused)

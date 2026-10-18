@@ -102,9 +102,18 @@ A request without a recognizable credential cannot be told apart, so it keeps
 the agent key's sentence. A `qvo_` OAuth token on these routes gets that
 sentence too. `403` means the credential is valid but the user lacks the
 required role, the credential can only read, or organization editing is
-paused for billing. Unreadable objects come back as `404`. A failure that is
-not a refusal, such as a server limit, is a `500` with `{"error": "internal
-error"}`, and Qivo keeps its details in its own logs.
+paused for billing. Unreadable objects come back as `404`.
+
+A request that keeps conflicting with changes other requests make to the
+same data at that moment, such as many comments posted to one task at once,
+is a `503` with `Retry-After: 1` and `{"error": "the request conflicted with
+other changes made at the same time and changed nothing; send it again"}`.
+Qivo first retries such a conflict itself, twice at most. The `503` means
+the request saved nothing, so wait the `Retry-After` seconds and send the
+same request again. A failure that is not a refusal, such as a server limit,
+is a `500` with `{"error": "internal error"}`, and Qivo keeps its details in
+its own logs. A `500` does not say whether a change was saved, so read the
+task or list before you send a change again.
 
 An agent may hold several keys at once, and a person several tokens, which is
 how one is rotated without going dark: mint the new one, move the client over,
