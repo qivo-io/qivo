@@ -332,7 +332,7 @@ async function clearWork(
  * reset by running 'wipe' and then 'seed' (scripts/marketing-demo.mjs,
  * the explicit fixture CLI). A wipe call deletes one bounded batch, marks
  * the demo empty and answers `wipe_done`, and the CLI calls it again until
- * that is true. The demo is empty between the two steps, a failed seed
+ * that is true. Only the last call answers the inspection as well. The demo is empty between the two steps, a failed seed
  * leaves it as the wipe left it, and repeating the reset is safe (a seed
  * alone refuses work added after a wipe, Deleted items included, and work a
  * wipe left half done). A wipe refuses while the organization holds Deleted
@@ -345,7 +345,10 @@ export const apply = internalMutation({
     anchor: v.string(),
     mode: v.union(v.literal('seed'), v.literal('wipe')),
   },
-  handler: async (ctx, args): Promise<DemoState & { wipe_done?: boolean }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<(DemoState & { wipe_done?: true }) | { state: 'empty'; wipe_done: false }> => {
     site(args.expected_site_url)
     try {
       assertMarketingAnchor(args.anchor)
@@ -485,7 +488,9 @@ export const apply = internalMutation({
     const now = new Date().toISOString()
     if (args.mode === 'wipe') {
       await ctx.db.patch(record._id, { state: 'empty', anchor: undefined, updated_at: now })
-      return { ...(await inspectCore(ctx, args.expected_site_url)), wipe_done: cleared }
+      // While work remains, inspecting it would read all of it again.
+      if (!cleared) return { state: 'empty', wipe_done: false }
+      return { ...(await inspectCore(ctx, args.expected_site_url)), wipe_done: true }
     }
     require(cleared, rule('marketing demo: work was added after wipe; use reset to replace it'))
     await writeNorthstarWork(ctx, { org, profiles, namespace: KEY, anchor: args.anchor, now })

@@ -332,8 +332,8 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
 }
 
 /** Sizes of one step of a period's storage sample (storagePage). A step
- * reads at most `rows` attachment rows, or `tasks` tasks in the 'tasks'
- * phase, and `bytes` of their range. It reads one task for each row that
+ * reads at most `rows` attachment rows and `bytes` of their range, and in
+ * the 'tasks' phase at most `tasks` tasks as well. It reads one task for each row that
  * does not carry its project, and one project for each project it meets.
  * When the tasks it read pass `taskBytes`, it stops and the step after it
  * reads the same page again, only as far as the rows before the one that
@@ -436,28 +436,7 @@ export async function storagePage(
   { cursor, size, before }: { cursor: string | null; size?: number; before: number },
 ): Promise<StoragePage> {
   const counter = projectCounter(ctx, orgId)
-  if (phase === 'tasks') {
-    const page = await ctx.db
-      .query('issues')
-      .withIndex('by_org', (q) => q.eq('org_id', orgId))
-      .paginate({
-        cursor,
-        numItems: Math.max(1, size ?? STORAGE_PAGE.tasks),
-        maximumBytesRead: STORAGE_PAGE.bytes,
-      })
-    for (const task of page.page) {
-      for (const archived of [undefined, true] as const) {
-        const files = ctx.db
-          .query('issue_attachments')
-          .withIndex('by_org_task_archived_issue', (q) =>
-            q.eq('org_id', undefined).eq('task_archived', archived).eq('issue_id', task.id),
-          )
-        for await (const file of files)
-          if (file._creationTime <= before) await counter.add(task.project_id, file.size_bytes)
-      }
-    }
-    return { ...counter.counted(), next: page.isDone ? null : page.continueCursor }
-  }
+  if (phase === 'tasks') return await legacyTaskPage(ctx, counter, orgId, { cursor, size, before })
   const page = await ctx.db
     .query('issue_attachments')
     .withIndex('by_org', (q) => q.eq('org_id', phase === 'own' ? orgId : undefined))
@@ -487,6 +466,73 @@ export async function storagePage(
     await counter.add(projectId, file.size_bytes)
   }
   return { ...counter.counted(), next: page.isDone ? null : page.continueCursor }
+}
+
+/* Where a 'tasks' phase page starts: the cursor of its tasks and, when the
+ * page before it stopped inside a task's rows, that task, its range (the
+ * task's archived rows or the others) and the _creationTime of the last row
+ * counted. Convex gives every document of a table its own _creationTime. */
+type TasksCursor = {
+  tasks: string | null
+  within?: { issue: string; archived: boolean; after: number | null }
+}
+
+/* A 'tasks' phase page of storagePage. It reads the rows without org_id of
+ * the organization's tasks, task by task, and at most STORAGE_PAGE.rows of
+ * them. When that runs out at a task after the page's first, the page splits
+ * before that task. When it runs out inside the first task, the next page is
+ * that task again from the row after the last one counted, so a task with
+ * more rows than a page takes several pages. Its cursor is a TasksCursor in
+ * JSON. A function may run one paginated query, so the rows are read with
+ * take. */
+async function legacyTaskPage(
+  ctx: QueryCtx,
+  counter: ReturnType<typeof projectCounter>,
+  orgId: string,
+  { cursor, size, before }: { cursor: string | null; size?: number; before: number },
+): Promise<StoragePage> {
+  const at: TasksCursor = cursor === null ? { tasks: null } : JSON.parse(cursor)
+  const page = await ctx.db
+    .query('issues')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .paginate({
+      cursor: at.tasks,
+      numItems: at.within ? 1 : Math.max(1, size ?? STORAGE_PAGE.tasks),
+      maximumBytesRead: STORAGE_PAGE.bytes,
+    })
+  let rows = 0
+  for (const [i, task] of page.page.entries()) {
+    // A task moved to Deleted items since took its rows along, so the task
+    // in its place starts from its first row.
+    const from = at.within?.issue === task.id ? at.within : { archived: false, after: null }
+    for (const archived of [false, true]) {
+      if (from.archived && !archived) continue
+      const after = archived === from.archived ? from.after : null
+      const room = STORAGE_PAGE.rows - rows
+      const stop = (last: number | null): StoragePage => {
+        if (i > 0) return { split: i }
+        const within = { issue: task.id, archived, after: last }
+        return { ...counter.counted(), next: JSON.stringify({ tasks: at.tasks, within }) }
+      }
+      if (room <= 0) return stop(after)
+      const files = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_org_task_archived_issue', (q) => {
+          const range = q
+            .eq('org_id', undefined)
+            .eq('task_archived', archived ? true : undefined)
+            .eq('issue_id', task.id)
+          return after === null ? range : range.gt('_creationTime', after)
+        })
+        .take(room + 1)
+      for (const file of files.slice(0, room))
+        if (file._creationTime <= before) await counter.add(task.project_id, file.size_bytes)
+      rows += Math.min(files.length, room)
+      if (files.length > room) return stop(files[room - 1]._creationTime)
+    }
+  }
+  const next: TasksCursor | null = page.isDone ? null : { tasks: page.continueCursor }
+  return { ...counter.counted(), next: next && JSON.stringify(next) }
 }
 
 /** The plan usage allowances follow (the subscription's, else the default

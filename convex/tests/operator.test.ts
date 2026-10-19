@@ -324,7 +324,8 @@ describe('Northstar wipe', () => {
     })
 
     // the first batch leaves work behind, which a seed refuses
-    expect(await apply(t, 'wipe')).toMatchObject({ state: 'empty', wipe_done: false })
+    // a step that leaves work answers without inspecting it all again
+    expect(await apply(t, 'wipe')).toEqual({ state: 'empty', wipe_done: false })
     await expect(apply(t, 'seed')).rejects.toThrow(/work was added after wipe/)
     let steps = 1
     while (!(await apply(t, 'wipe')).wipe_done) expect(++steps).toBeLessThan(50)

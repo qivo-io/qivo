@@ -435,4 +435,36 @@ describe("the Billing page's paged report", () => {
     expect(await report(t, f)).toMatchObject({ storage_bytes: 4500, projects: [FW(f, 4500)] })
     await expect(oneQuery(t, f)).rejects.toThrow(/Scanned too many documents/)
   })
+
+  it('reads a task with more rows without org_id than a page, a page at a time', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 1000 } })
+    const f = await withOrg(t)
+    const sid = await storedFile(t)
+    const plant = (task: Pick<Doc<'issues'>, 'id'>, n: number, task_archived?: true) =>
+      t.run(async (ctx) => {
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('issue_attachments', {
+            id: uuid(),
+            issue_id: task.id,
+            name: 'file.bin',
+            size_bytes: 3,
+            storage_id: sid,
+            inline: false,
+            created_at: NOW,
+            ...(task_archived ? { task_archived } : {}),
+          })
+      })
+    // a small task first, so the page splits before the large one
+    const small = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const large = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plant(small, 5)
+    await plant(large, 1200)
+    await plant(large, 300, true)
+    UNSCOPED_READ.lookups = 2
+    STORAGE_PAGE.rows = 400
+    expect(await report(t, f)).toMatchObject({ storage_bytes: 4515, projects: [FW(f, 4515)] })
+    // a page boundary on the last row of the task's other rows
+    STORAGE_PAGE.rows = 300
+    expect(await report(t, f)).toMatchObject({ storage_bytes: 4515, projects: [FW(f, 4515)] })
+  })
 })
