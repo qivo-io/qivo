@@ -1551,13 +1551,14 @@ Roadmap's Team strip and the planning panel count them:
 
 ### Comments, inbox and following
 
-`list_comments` answers a task's newest comments, oldest first. It holds at
-most `limit` comments (50 by default and at most), and fewer when they are
-long, because one call reads at most about 8 MiB of comments. To read
-further back, pass the `id` of the first comment in the result as `before`,
-and repeat until the result is an empty list. Only an empty list means there
-are no earlier comments. A `before` that is not the id of a comment on this
-task is refused with `before must be the id of a comment on this task`.
+`list_comments` answers a task's newest comments, oldest first in the order
+they were posted. It holds at most `limit` comments (50 by default and at
+most), and fewer when they are long, because one call reads at most about 8
+MiB of comments. To read further back, pass the `id` of the first comment in
+the result as `before`, and repeat until the result is an empty list. Only
+an empty list means there are no earlier comments. A `before` that is not
+the id of a comment on this task is refused with `before must be the id of a
+comment on this task`.
 
 `update_comment` and `delete_comment` take the comment's `id` from
 `list_comments`. As in the app, the comment's author may edit or delete it,

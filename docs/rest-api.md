@@ -1425,14 +1425,15 @@ DELETE /v1/comments/{id}                                           (write)
 }
 ```
 
-`GET` answers a JSON array of the task's newest comments, oldest first. It
-holds at most `limit` comments, and fewer when they are long, because one
-call reads at most about 8 MiB of comments. To read further back, pass the
-`id` of the first comment in the array as `before`, and repeat until the
-array is empty. Only an empty array means there are no earlier comments. A
-`limit` that is not a whole number from 1 to 50 is a `400` (`limit must be
-a whole number from 1 to 50`), and so is a `before` that is not the id of a
-comment on this task (`before must be the id of a comment on this task`).
+`GET` answers a JSON array of the task's newest comments, oldest first in
+the order they were posted. It holds at most `limit` comments, and fewer
+when they are long, because one call reads at most about 8 MiB of comments.
+To read further back, pass the `id` of the first comment in the array as
+`before`, and repeat until the array is empty. Only an empty array means
+there are no earlier comments. A `limit` that is not a whole number from 1
+to 50 is a `400` (`limit must be a whole number from 1 to 50`), and so is a
+`before` that is not the id of a comment on this task (`before must be the
+id of a comment on this task`).
 
 A comment created here is authored by **the caller**, which is the agent
 itself for an agent key and the person for a personal token. An agent is a

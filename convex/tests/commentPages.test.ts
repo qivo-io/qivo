@@ -231,6 +231,36 @@ describe('paging a thread', () => {
     expect((await appPage(fx, newest.comments[0].id)).bodies).toEqual(['#0', '#1'])
   })
 
+  it("REST and MCP pages keep the thread's order too, so a walk meets each comment once", async () => {
+    const fx = await setup()
+    // posted in this order, with created_at running backwards, as an
+    // import that set the times could store them
+    await fx.t.run(async (ctx) => {
+      for (let n = 0; n < 5; n++) {
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: fx.task.id,
+          author: fx.guest.id,
+          body: `#${n}`,
+          created_at: new Date(Date.parse(NOW) - n * 1000).toISOString(),
+        })
+      }
+    })
+    for (const page of [
+      async (before?: string) =>
+        (await restPage(fx, { limit: '2', before })) as { id: string; body: string }[],
+      (before?: string) => mcpPage(fx, { limit: 2, before }),
+    ]) {
+      const seen: string[][] = []
+      let before: string | undefined
+      for (let rows = await page(); rows.length > 0; rows = await page(before)) {
+        seen.push(rows.map((c) => c.body))
+        before = rows[0].id
+      }
+      expect(seen).toEqual([['#3', '#4'], ['#1', '#2'], ['#0']])
+    }
+  })
+
   it('an earlier page refuses a before that is not a comment on this task, deleted ones included', async () => {
     const fx = await setup()
     await plantThread(fx, 2)

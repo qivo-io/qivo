@@ -32,12 +32,14 @@ Other people's changes appear automatically. Your edits appear immediately;
 if the server refuses an edit, Qivo restores the previous value and shows an
 error.
 
-A task's **Activity** lists comments and changes from oldest to newest.
-Changes name the person or agent responsible and show old and new field
-values. Description changes include short excerpts. Departed members appear
-as **Someone**. Automated task changes identify **via MCP** or **via the REST
-API**, with the key name in parentheses for an agent key. Comments carry the
-author or agent's name without a separate API label.
+A task's **Activity** lists comments and changes from oldest to newest. Qivo
+keeps an organization's newest 500 changes across all its tasks, so an older
+task's early changes can be missing while its comments stay. Changes name the
+person or agent responsible and show old and new field values. Description
+changes include short excerpts. Departed members appear as **Someone**.
+Automated task changes identify **via MCP** or **via the REST API**, with the
+key name in parentheses for an agent key. Comments carry the author or agent's
+name without a separate API label.
 
 ## Appearance preferences. Themes and the Canvas background
 
@@ -137,11 +139,11 @@ with their assignee and do not hand over ([Task ownership](./how-work-is-organiz
 **Reading messages.** Each task has one inbox row showing its title, age,
 project and sub-project. New updates refresh that row and increase its unread
 counter. Opening the row or the task marks its messages read and leaves only
-the latest message in the inbox. The task's Activity keeps the history.
-Further updates start the unread counter again on the same row. A row keeps
-at most 50 unread updates. Beyond that, Qivo drops the oldest ones but keeps
-the first unread update and the newest mention, comment and change. The Inbox
-loads up to 500 messages, unread ones first.
+the latest message in the inbox. Further updates start the unread counter
+again on the same row. A row keeps at most 50 unread updates. Beyond that,
+Qivo drops the oldest ones but keeps the first unread update and the newest
+mention, comment and change. The Inbox loads up to 500 messages, unread ones
+first.
 
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.
 Read state follows you across devices. Sort by newest or oldest, or filter for unread,
