@@ -1395,11 +1395,9 @@ top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the
 call is refused with `a subtask stays in its parent task's project; to move
 it to another project, detach it from its parent in the same change`. A
-subtask created before this rule in another top-level project than its
-parent can still move within its own top-level project and into its
-parent's. A parent in a project you cannot see counts as being in the
-subtask's own top-level project, so moving such a subtask to another
-top-level project also needs `parent: null` or a new parent there.
+parent in a project you cannot see counts as being in the subtask's own
+top-level project, so moving such a subtask to another top-level project
+also needs `parent: null` or a new parent there.
 
 `parent` (a task ref) makes the task a subtask of that task, and `null`
 detaches it. You need Edit access on the parent's project, because the
