@@ -453,10 +453,15 @@ describe('an older subtask whose parent the mover cannot see', () => {
 
 describe('a move or a parent change too large for one transaction', () => {
   /* Runs `body` with SUBTREE_ROOM lowered so that `every`th read or row of
-   * a walk finds the transaction full. */
-  const crowdedRoom = async (every: number, body: () => Promise<void>) => {
+   * a walk, or the row that brings the sizes read to `bytes`, finds the
+   * transaction full. */
+  const crowdedRoom = async (
+    every: number,
+    body: () => Promise<void>,
+    bytes = SUBTREE_ROOM.bytes,
+  ) => {
     const saved = { ...SUBTREE_ROOM }
-    Object.assign(SUBTREE_ROOM, { room: 0, every })
+    Object.assign(SUBTREE_ROOM, { room: 0, every, bytes })
     try {
       await body()
     } finally {
@@ -517,6 +522,36 @@ describe('a move or a parent change too large for one transaction', () => {
         .collect(),
     )
     expect(moved.map((file) => file.project_id)).toEqual(Array(4).fill(backend.id))
+  })
+
+  it('checks sooner after a subtask with a long description', async () => {
+    const t = newT({ transactionLimits: true })
+    const { f } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const short = await plantIssue(t, base)
+    await plantIssue(t, { ...base, parent_id: short.id, description: 'Notes.' })
+    const long = await plantIssue(t, base)
+    await plantIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(2000) })
+    const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
+    // no check by count, only by size: 6 KiB is past the long subtask's
+    // estimate alone, and short of the short one's
+    await crowdedRoom(
+      1e9,
+      async () => {
+        for (const change of [
+          () => appMove(t, f, long.id, f.sub2.id),
+          () => appUpdate(t, f, long.id, { parent_id: other.id }),
+        ]) {
+          const r = await expectRefusal(change(), 'rule')
+          expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+        }
+        await appMove(t, f, short.id, f.sub2.id)
+        await appUpdate(t, f, short.id, { parent_id: other.id })
+      },
+      6 * 1024,
+    )
+    expect((await row(t, short.id)).parent_id).toBe(other.id)
+    expect((await row(t, long.id)).project_id).toBe(f.sub.id)
   })
 })
 

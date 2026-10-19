@@ -300,31 +300,42 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkU
 }
 
 /** How full a move or a parent change may let its transaction get while it
- * walks a task's subtasks or moves their attachment rows, checked every
- * `every` reads or rows (lib/db.ts usedMoreThan). Neither walk has a fixed
- * bound: a move within one top-level project, or a parent change, reads
- * every subtask, and a task can hold any number of attachments. Past `room`
- * the change is refused with SUBTREE_TOO_LARGE rather than failing on one of
- * Convex's limits for one transaction. Tests lower these. */
-export const SUBTREE_ROOM = { room: 0.9, every: 64 }
+ * walks a task's subtasks or moves their attachment rows (lib/db.ts
+ * usedMoreThan). Neither walk has a fixed bound: a move within one
+ * top-level project, or a parent change, reads every subtask, and a task can
+ * hold any number of attachments. The walk asks every `every` queries or
+ * rows, and sooner once the rows since it last asked may hold `bytes`, so
+ * that a few long descriptions cannot fill the rest of the 16 MiB read
+ * limit between two checks. Past `room` the change is refused with
+ * SUBTREE_TOO_LARGE rather than failing on one of Convex's limits for one
+ * transaction. Tests lower these. */
+export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 
 /** The refusal of a move or a parent change whose task and subtasks are too
  * large for one transaction (SUBTREE_ROOM). */
 export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
-/* A check to run before each read or row of a walk under SUBTREE_ROOM. It
- * asks the transaction's use every `every` calls and refuses once it passes
- * `room`. */
-function roomCheck(ctx: QueryCtx): () => Promise<void> {
+/* A check to run before each query and after each row of a walk under
+ * SUBTREE_ROOM, given the row's size when it may be large (subtaskBytes). It
+ * asks the transaction's use every `every` calls, or once the sizes since
+ * it last asked reach `bytes`, and refuses once it passes `room`. */
+function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
   let calls = 0
-  return async () => {
+  let pending = 0
+  return async (bytes = 0) => {
     calls += 1
-    if (calls % SUBTREE_ROOM.every === 0 && (await usedMoreThan(ctx, SUBTREE_ROOM.room))) {
-      throw rule(SUBTREE_TOO_LARGE)
-    }
+    pending += bytes
+    if (calls % SUBTREE_ROOM.every !== 0 && pending < SUBTREE_ROOM.bytes) return
+    pending = 0
+    if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(SUBTREE_TOO_LARGE)
   }
 }
+
+/* An upper estimate of a task row's size for roomCheck: its title and
+ * description, up to 3 bytes a UTF-16 unit, and 1 KiB for the rest. */
+const subtaskBytes = (task: Doc<'issues'>): number =>
+  3 * (task.title.length + (task.description?.length ?? 0)) + 1024
 
 /* The people working on a task and its active subtasks at any depth: each
  * assignee, and each reviewer of a task that is no group (a group's
@@ -351,6 +362,7 @@ async function holdersUnder(
       await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const c of kids) {
+        await room(subtaskBytes(c))
         if (c.archived_at !== undefined || seen.has(c.id)) continue
         seen.add(c.id)
         next.push(c.id)
@@ -636,7 +648,10 @@ export async function parentChainCheck(
     for (const id of frontier) {
       await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
-      for await (const c of kids) next.push(c.id)
+      for await (const c of kids) {
+        await room(subtaskBytes(c))
+        next.push(c.id)
+      }
     }
     if (next.length === 0) break
     down += 1
@@ -1550,10 +1565,16 @@ async function moveAttachmentRows(
   projectId: string,
   room: () => Promise<void>,
 ): Promise<void> {
-  const files = await ctx.db
+  // read in full before the first patch, so the walk never meets a row it
+  // patched, each row under the room check
+  const files: Doc<'issue_attachments'>[] = []
+  const rows = ctx.db
     .query('issue_attachments')
     .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
-    .collect()
+  for await (const file of rows) {
+    await room()
+    files.push(file)
+  }
   for (const file of files) {
     await room()
     await ctx.db.patch(file._id, { project_id: projectId })
