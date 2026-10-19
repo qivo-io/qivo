@@ -96,7 +96,7 @@ const fromBase64url = (s: string): Uint8Array | null => {
 const resolveSecret = (override?: string): string => {
   const secret = override ?? process.env.BETTER_AUTH_SECRET
   if (secret === undefined || secret === '') {
-    throw new Error('BETTER_AUTH_SECRET is not set — file tokens cannot be minted')
+    throw new Error('BETTER_AUTH_SECRET is not set, so file tokens cannot be minted')
   }
   return secret
 }
@@ -165,7 +165,7 @@ export async function verifyFileToken(p: {
 const siteUrl = (): string => {
   const url = process.env.CONVEX_SITE_URL
   if (url === undefined || url === '') {
-    throw new Error('CONVEX_SITE_URL is not set — file URLs cannot be built')
+    throw new Error('CONVEX_SITE_URL is not set, so file URLs cannot be built')
   }
   return url.endsWith('/') ? url.slice(0, -1) : url
 }

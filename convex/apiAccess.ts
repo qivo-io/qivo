@@ -109,13 +109,27 @@ async function usagePeriods(
   now: number,
 ): Promise<ApiUsagePeriod[]> {
   const current = usagePeriod(sub, now)
-  // One totals row per bucket the organization ever recorded calls in, a few
-  // a year, so this read stays small.
+  // A paid or pending bucket has a totals row. A calendar month keeps none
+  // (model/billingUsage.ts recordApiCall), so its key comes from the usage
+  // rows, one indexed read per bucket: a few a year.
   const totals = await ctx.db
     .query('billing_usage_totals')
     .withIndex('by_org_period', (q) => q.eq('org_id', orgId))
     .collect()
-  const keys = totals.map((row) => row.period_start).filter((key) => key !== current.key)
+  const found = new Set(totals.map((row) => row.period_start))
+  for (let after: string | null = null; ; ) {
+    const from: string | null = after
+    const next = await ctx.db
+      .query('billing_usage')
+      .withIndex('by_org_period', (q) =>
+        from === null ? q.eq('org_id', orgId) : q.eq('org_id', orgId).gt('period_start', from),
+      )
+      .first()
+    if (next === null) break
+    found.add(next.period_start)
+    after = next.period_start
+  }
+  const keys = [...found].filter((key) => key !== current.key)
   const past = (await usageKeyRanges(ctx, orgId, sub, keys))
     .map((range, i) => ({ key: keys[i], ...range, current: false }))
     .sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0))

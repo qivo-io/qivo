@@ -122,6 +122,13 @@ error"}`, and Qivo keeps its details in its own logs. A `500` does not say
 whether a change was saved, so read the task or list before you send a
 change again.
 
+Match a refusal by its HTTP status, not its sentence. In October 2026 the
+sentences lost their em dashes: `that project is archived — restore it
+first` now reads `that project is archived, so restore it first`, for
+example. The activity rows of REST and MCP writes changed the same way (see
+[Side effects and audit trail](#side-effects-and-audit-trail)), and rows
+stored before keep their old text.
+
 An agent may hold several keys at once, and a person several tokens, which is
 how one is rotated without going dark: mint the new one, move the client over,
 revoke the old.
@@ -208,9 +215,11 @@ that project` on that project instead.
 
 Organization REST requests and MCP share a limit of **300 authenticated
 requests per profile per minute**, across that profile's agent keys, personal
-tokens and OAuth connections. A deployment-wide limit of **6,000 requests per
-minute** applies before authentication across both interfaces. These use fixed
-minute windows. CORS preflights do not consume either allowance.
+tokens and OAuth connections. A deployment-wide limit of about **6,000
+requests per minute** applies before authentication across both interfaces.
+It is kept as 16 counters of 375 requests each, and every request counts on
+one picked at random, so a busy minute can be refused a little before 6,000.
+These use fixed minute windows. CORS preflights do not consume either allowance.
 
 An exceeded limit returns HTTP `429` with `Retry-After: 60`; wait 60 seconds
 before retrying. Every authenticated request that passes rate limiting counts
@@ -232,11 +241,24 @@ A request that takes a JSON body needs a JSON object. Anything else, such as
 invalid JSON, an array or a number, is a `400` (`request body must be
 JSON`). A string or field name holding an unpaired surrogate, such as a lone
 `\ud83c` escape left when text is cut in the middle of an emoji, is a `400`
-(`request body holds an unpaired surrogate, which UTF-8 cannot encode`). Such
-text cannot be stored, so the request changes nothing. A request that takes
-no body, such as `DELETE /v1/tasks/{ref}`, ignores one it is sent.
-`POST /v1/webhooks` checks its body by its own rules (see
-[Generic webhooks](#generic-webhooks)).
+(`request body holds an unpaired surrogate, which UTF-8 cannot encode`). A
+body whose bytes are not UTF-8, such as text a client encoded as Latin-1, is
+a `400` (`request body is not valid UTF-8`). Such text cannot be stored as
+sent, so the request changes nothing. These rules hold for
+`POST /v1/webhooks` too.
+
+Every route refuses a body field it does not take with `400`, such as
+`unknown field "parnet"; this request takes project, sub_project, parent,
+…`, so a misspelled field never falls back to a default. A route that takes
+no body, such as `DELETE /v1/tasks/{ref}`, accepts an empty body or `{}` and
+refuses any field (`unknown field "x"; this request takes no body`). Every
+route also refuses a query parameter it does not take, such as `unknown
+query parameter "stauts"; this request takes project, status, …`, or `…;
+this request takes no query parameters`, so a misspelled filter never
+answers an unfiltered list. Fields a route refuses with their own sentence,
+such as `project_id` on a task, keep that sentence. Before October 2026 most
+routes ignored unknown fields and query parameters, and a body that was not
+UTF-8 was stored with U+FFFD in place of each bad byte sequence.
 
 When organization billing is enabled, unpaid or expired access pauses writes
 with a readable HTTP `403` billing refusal. Reading remains subject to the
@@ -458,7 +480,7 @@ read, `access` flags included.
   answers `400` with `parent project not found`, exactly like an unknown one.
 - `lead_id` defaults to the caller. A lead must be an active admin, standard
   user or guest of the organization; a Viewer is refused with `a viewer cannot
-  lead a project — make them a standard user first`. Only a person may name
+  lead a project, so make them a standard user first`. Only a person may name
   someone else, so an agent leads every project it creates and is refused
   with `only people can change who has access, not agents` otherwise. An
   agent that leads projects cannot be made a Viewer until an organization
@@ -476,8 +498,8 @@ read, `access` flags included.
   `give access one user or team at a time, under /v1/projects/{ref}/access`,
   `key` with `a project's key comes from its name and cannot be written`, and
   `parent_id` and `type` with `a project's parent is set when it is created,
-  with parent`. Send `parent` to create a sub-project. Other unknown fields
-  are ignored.
+  with parent`. Send `parent` to create a sub-project. Any other field the
+  route does not take is refused with `400`.
 
 #### Changing a project
 
@@ -514,9 +536,9 @@ project`.
   carries their access.
 - `key`, `access` and `team_access` are refused with the sentences `POST`
   gives them, and `parent`, `parent_id` and `type` with `a project's parent
-  is set when it is created, with parent`. Other unknown fields are ignored,
-  and a body with nothing to change is a `400` (`no recognized fields to
-  update`).
+  is set when it is created, with parent`. Any other field the route does
+  not take is a `400`, and a body with nothing to change is a `400` (`no
+  recognized fields to update`).
 
 Creating, renaming, archiving and restoring a project and handing over its
 lead write the app's activity rows (`created`, `renamed`, `archived`,
@@ -608,7 +630,7 @@ milestone id must belong to the top-level project of `{ref}`, else `404`
 `milestone not found`. Writing a milestone needs Edit (`user`) access on the
 top-level project, so a grant on a sub-project alone is refused with `no
 write access to this project`. An archived project takes no new milestones
-(`that project is archived — restore it first`).
+(`that project is archived, so restore it first`).
 
 `date` is a real calendar day as `YYYY-MM-DD` (`date must be YYYY-MM-DD`,
 `date must be a valid calendar date`), usually the first day of a planning
@@ -750,7 +772,7 @@ user is a `400` that says which condition failed:
 
 ```json
 { "error": "user \"<uuid>\" is switched off and can hold no new work" }
-{ "error": "user \"<uuid>\" is a viewer — a viewer reads the projects they are added to and is never assigned work" }
+{ "error": "user \"<uuid>\" is a viewer, who reads the projects they are added to and is never assigned work" }
 { "error": "user \"<uuid>\" needs Edit permission or higher on this project to be assigned work" }
 ```
 
@@ -806,9 +828,9 @@ subset and the authoritative reporter, assignee and reviewer picker.
 
 **Setting plannable hours.** `PATCH /v1/users/{id}` with
 `{ "plannable_hours": 32 }` sets that person's weekly capacity and answers
-their updated row. It is the one user field the API changes; other fields are
-ignored, and a body without `plannable_hours` is a `400` (`no recognized
-fields to update`). The value is a whole number from 1 to 168, otherwise a
+their updated row. It is the one user field the API changes; any other field
+is a `400` (`unknown field "name"; this request takes plannable_hours`), and
+an empty body is a `400` (`no recognized fields to update`). The value is a whole number from 1 to 168, otherwise a
 `400` with `plannable hours must be a whole number of hours from 1 to 168`.
 Like the app and MCP's `update_user`, it takes an organization admin or a
 leader of a team the person belongs to (migration 0094), and nobody else,
@@ -816,7 +838,7 @@ yourself included. Anyone else gets `403` with `only an organization admin
 or a leader of one of this person's teams can set their plannable hours`,
 whoever the target is. An unknown or foreign id is `404` `user not found`.
 An agent has no plannable week (0103), so naming one is a `400` with `an
-agent has no plannable week — its capacity is unbounded`. The change writes
+agent has no plannable week, because its capacity is unbounded`. The change writes
 no activity row, as in the app.
 
 In practice this route needs a person's token. An agent is **never an
@@ -1039,8 +1061,9 @@ are response fields. POST and PATCH both refuse a body that sends either
 with `400` (`project_id cannot be written; move a task with project and
 sub_project` or `parent_id cannot be written; send parent, or null to
 detach`) rather than ignore it, and nothing is created or changed.
-Other unknown fields are ignored; invalid values are rejected with `400` and
-a message.
+Any other field the route does not take is refused with `400`, so a
+misspelled `parent` cannot create a top-level task; invalid values are
+rejected with `400` and a message.
 
 **Moving a task.** `project` and `sub_project` on PATCH move the task, named
 exactly as on POST. Name the destination sub-project directly as `project`, or
@@ -1136,15 +1159,15 @@ setting, `organization.week_start` in `GET /v1/me`, before calculating week
 dates. `remaining_hours` accepts finite nonnegative
 numbers, rounded to one decimal place, or `null` to clear. Numeric overflow
 (for example `1e309`) is refused. `remaining_hours` was named
-`estimate_hours` until 2026-07-17 (0063 — the field now means hours of work
-*left*); the old name is no longer recognized, so a PATCH still sending
-`estimate_hours` falls under "unknown fields are ignored" — update callers.
+`estimate_hours` until 2026-07-17 (0063; the field now means hours of work
+*left*). The old name is no longer recognized, so a request still sending
+`estimate_hours` is refused as an unknown field. Update callers.
 
 Tasks with active subtasks are groups. Responses include `is_group: true`;
 their stored `status` is dormant and must not be displayed or counted as
 their own workflow status. Status filters return ordinary tasks only, and a
 PATCH containing `status` on a group returns `400` with
-`status cannot be set on a task with subtasks — update its subtasks instead`.
+`status cannot be set on a task with subtasks, so update its subtasks instead`.
 For a task in an active project, only active subtasks in active projects
 count. A subtask in an archived project, such as a sub-project archived on
 its own, does not make it a group. A task in an archived project counts
@@ -1178,7 +1201,7 @@ A task **with active subtasks** has no remaining time of its own (0066;
 archived subtasks stopped counting in 0070, and subtasks in archived
 projects do not count for a task in an active project): a PATCH
 sending a non-null `remaining_hours` for one is a `400`
-(`remaining_hours cannot be set on a task with subtasks — it is the sum
+(`remaining_hours cannot be set on a task with subtasks, because it is the sum
 of their remaining time`; `null` passes as a no-op) — the hours live on the
 subtasks, and clients show the parent's value as the sum over its unfinished
 subtasks at any depth. Such tasks return `remaining_hours: null` and
@@ -1189,8 +1212,8 @@ subtask clears its new parent's own hours.
 Writing `remaining_hours` also stamps the read-only `remaining_set_at`
 (0072): a remaining time is a measurement, and the planning math anchors on
 when it was taken — the server stamps the moment the value *changes* (an
-unchanged value writes nothing), clears the stamp with the hours, and ignores
-any `remaining_set_at` a client sends (unknown-field rule).
+unchanged value writes nothing) and clears the stamp with the hours. A
+request that sends `remaining_set_at` is refused as an unknown field.
 
 **Review time.** A task that enters `review`, whether created there by POST or
 moved there by PATCH, gets its project's review time as `remaining_hours`,
@@ -1449,7 +1472,7 @@ user, so it speaks under its own name instead of landing as the anonymous
 "Someone" an org-level key used to produce. Attribution is still
 server-stamped precisely so it cannot be forged, and passing
 `author`/`author_id` is rejected with `400` (`comments cannot be attributed
-over the API — a comment is always authored by the agent posting it`, or for
+over the API; a comment is always authored by the agent posting it`, or for
 a personal token `comments cannot be attributed over the API; a comment is
 always authored by the person posting it`). You are only ever yourself. `POST` returns `201` with
 the created comment; a blank `body` is a `400`. A comment body is at most
@@ -1738,6 +1761,12 @@ one file:
 - An expired or altered upload URL, and one whose upload was confirmed,
   answers `404` (`upload not found or expired; start a new upload`).
 
+Qivo reads the body of a `POST` to the upload URL in one of its own request
+handlers, which stays busy until the whole file has arrived, for at most the
+5 minutes above. A 20 MiB file therefore needs about 70 KB/s or more. Many
+large uploads at once from one organization share the deployment's handlers
+with every other request, so send them a few at a time.
+
 Only the user that started the upload can confirm it, only for the same
 task, and only once. Any other ticket, including an expired one, answers
 `404` (`upload not found or expired; start a new upload`). A confirm before
@@ -1785,7 +1814,7 @@ GET /v1/tasks/{ref}/activity   the task's history, oldest first (read)
   {
     "id": "…uuid…", "created_at": "…",
     "actor_id": "…uuid…", "actor_name": "Leo Martins",
-    "verb": "changed", "detail": "(status To Do → In Progress) — via MCP"
+    "verb": "changed", "detail": "(status To Do → In Progress), via MCP"
   }
 ]
 ```
@@ -1988,18 +2017,20 @@ organization admins receive. A task `DELETE` also records its credential in
 Deleted items, with its name cut the same way. Everyone who sees the item
 there sees an agent key's name, while a personal token's name shows only to
 organization admins and to the person who deleted. An update's feed
-row names both sides of every changed field before the provenance suffix —
-e.g. `(status To Do → In Progress, remaining 80 h → 40 h) — via the REST API
-(<key name>)`; description edits quote both sides as ~80-char excerpts
+row names both sides of every changed field before the provenance, which
+follows a comma, e.g. `(status To Do → In Progress, remaining 80 h → 40 h),
+via the REST API (<key name>)`; description edits quote both sides as ~80-char excerpts
 (`description “old…” → “new…”`). A reviewer change names both people
 (`reviewer unset → Aisha Rahman`), and a move into `review` lists the review
 time it set (`status In Progress → In Review, remaining 6 h → 2 h`).
 A move reads `moved` `to the <sub-project> sub-project (from <sub-project>)`,
 a parent change `moved` `under QN-<n>` or `detached` `from QN-<n>`, a label
-`labeled` or `removed a label from` `— <label>`, a link `linked` `—
-blocks QN-<n>` or `— relates to QN-<n>`, and a file `attached a file to` or
-`removed an attachment from` with the file name, each followed by the
-provenance.
+`labeled` or `removed a label from` `“<label>”`, a link `linked`
+`(blocks QN-<n>)` or `(relates to QN-<n>)`, and a file `attached a file to`
+or `removed an attachment from` with the file name, each followed by a
+comma and the provenance. Rows written before October 2026 joined the
+provenance with ` — ` and read a label as `— <label>` and a link as
+`— blocks QN-<n>`; they keep that text.
 Comments are the deliberate exception — no activity row is written,
 matching the app, where the comment itself is the feed entry on the
 discussion spine. Removing a link writes no row either, as in the app. Task numbers come from the same

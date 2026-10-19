@@ -76,8 +76,10 @@ import {
   MCP_NO_WRITE,
   MCP_PROVENANCE,
   needJson,
+  optionalJson,
   pretty,
   REST_CALLER,
+  refuseUnknownFields,
   restProvenance,
   vKeyName,
 } from './shared'
@@ -165,7 +167,9 @@ export const restStartUpload = internalMutation({
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
-    const fields = uploadFields(needJson(a.body))
+    const b = needJson(a.body)
+    refuseUnknownFields(b, ['name', 'content_type', 'size'])
+    const fields = uploadFields(b)
     const { ticket, uploadUrl } = await startAttachmentUpload(ctx, {
       me,
       issue,
@@ -199,6 +203,7 @@ export const restConfirmUpload = internalMutation({
     if (issue === null) throw notFound('task not found')
     if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
     const b = needJson(a.body)
+    refuseUnknownFields(b, ['storage_id'])
     if (typeof b.storage_id !== 'string') throw badRequest(UPLOAD_STORAGE_ID)
     const result: AttachResult = await confirmAttachmentUpload(ctx, {
       me,
@@ -411,12 +416,14 @@ export const restDeleteAttachment = internalMutation({
     keyName: vKeyName,
     ref: v.string(),
     id: v.string(),
+    body: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<{ deleted: true; id: string; name: string; key: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     if (!(await canEdit(ctx, me, issue))) throw forbidden(REST_CALLER[me.kind].noWrite)
+    refuseUnknownFields(optionalJson(a.body ?? ''), [])
     const attachment = await attachmentOf(ctx, issue, a.id)
     if (attachment === null) throw notFound('attachment not found')
     if (attachment.inline) throw badRequest(INLINE_STAYS)
@@ -867,13 +874,14 @@ export const RECORD_ROUTES: RestRoute[] = [
     path: 'tasks/:ref/attachments/:id',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, keyName, param }) =>
+    run: (r, { callerId, access, keyName, param, body }) =>
       r.runMutation(internal.machine.records.restDeleteAttachment, {
         callerId,
         access,
         keyName,
         ref: param('ref'),
         id: param('id'),
+        body,
       }),
   }),
   route({
@@ -893,6 +901,7 @@ export const RECORD_ROUTES: RestRoute[] = [
     path: 'workload',
     access: 'read',
     status: 200,
+    query: ['from_week', 'weeks', 'project'],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.records.restWorkload, {
         callerId,

@@ -43,7 +43,7 @@ import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthPro
  * alone (identity.ts does exactly that). */
 const requireSiteUrl = () => {
   const url = process.env.SITE_URL
-  if (!url) throw new Error('SITE_URL is not set — the app origin is unknown')
+  if (!url) throw new Error('SITE_URL is not set, so the app origin is unknown')
   return url
 }
 

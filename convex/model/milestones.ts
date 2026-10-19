@@ -48,7 +48,7 @@ export async function milestoneTarget(
   const home = await rootMetaOf(ctx, named)
   await assertMilestoneWriter(ctx, me, home)
   if (named.archived_at !== undefined || home.archived_at !== undefined) {
-    throw rule('that project is archived — restore it first')
+    throw rule('that project is archived, so restore it first')
   }
   return home
 }

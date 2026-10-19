@@ -972,7 +972,7 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
         title: 'too late',
       }),
       'rule',
-      /^that project is archived — restore it first$/,
+      /^that project is archived, so restore it first$/,
     )
   })
 })

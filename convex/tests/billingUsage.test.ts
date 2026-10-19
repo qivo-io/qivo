@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
-import { consumeMachineRequest, recordApiCall, usageKeyRange } from '../model/billingUsage'
+import {
+  consumeIngress,
+  consumeMachineRequest,
+  ingressKey,
+  ingressShard,
+  MACHINE_INGRESS_LIMIT,
+  MACHINE_INGRESS_SHARDS,
+  recordApiCall,
+  usageKeyRange,
+} from '../model/billingUsage'
 import { as, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
 const PERIOD = '2026-09-15T12:00:00.000Z'
@@ -68,9 +77,18 @@ const call = (t: T, profileId: string, credential = 'key') =>
   )
 const totals = (t: T) => t.run((ctx) => ctx.db.query('billing_usage_totals').collect())
 const events = (t: T) => t.run((ctx) => ctx.db.query('billing_events').collect())
-/* [period_start, calls] for every pooled bucket, sorted. */
-const buckets = async (t: T) =>
-  (await totals(t)).map((row) => [row.period_start, row.calls] as const).sort()
+/* [org_id, period_start, calls] for every bucket, summed over its usage
+ * rows as the Billing and API access pages read them, sorted. */
+const orgBuckets = async (t: T) => {
+  const sums = new Map<string, number>()
+  for (const row of await t.run((ctx) => ctx.db.query('billing_usage').collect())) {
+    const key = `${row.org_id} ${row.period_start}`
+    sums.set(key, (sums.get(key) ?? 0) + row.calls)
+  }
+  return [...sums].map(([key, calls]) => [...key.split(' '), calls] as const).sort()
+}
+/* [period_start, calls] for every bucket, sorted. */
+const buckets = async (t: T) => (await orgBuckets(t)).map(([, period, calls]) => [period, calls])
 /* The admin Billing page's usage report at the mocked clock. */
 const report = (t: T, f: Pick<OrgFixture, 'admin' | 'org'>) =>
   as(t, f.admin).query(api.billing.usage, { org_id: f.org.id })
@@ -233,11 +251,9 @@ describe('pooled API usage', () => {
       [OCTOBER, 1],
       ['month:2026-11', 1],
     ])
-    expect(await totals(t)).toMatchObject([
-      { reported_api_blocks: 0 },
-      { reported_api_blocks: 0 },
-      { reported_api_blocks: 0 },
-    ])
+    // a calendar month keeps no organization total, so parallel calls with
+    // different credentials share no row
+    expect(await totals(t)).toEqual([])
     expect(await events(t)).toHaveLength(0)
   })
 
@@ -248,14 +264,16 @@ describe('pooled API usage', () => {
     for (let n = 0; n < 5; n++) await call(t, f.agent.id)
     await call(t, f.otherAdmin.id)
     expect(await events(t)).toHaveLength(0)
-    expect(
-      (await totals(t)).map((row) => [row.org_id, row.period_start, row.calls]).sort(),
-    ).toEqual(
+    expect(await orgBuckets(t)).toEqual(
       [
         [f.org.id, PERIOD, 5],
         [f.otherOrg.id, SEPTEMBER, 1],
       ].sort(),
     )
+    // only the paid period keeps an organization total
+    expect((await totals(t)).map((row) => [row.org_id, row.period_start, row.calls])).toEqual([
+      [f.org.id, PERIOD, 5],
+    ])
   })
 
   it('shows the included calls metering charges against, from the seats it will bill before the first invoice', async () => {
@@ -487,6 +505,35 @@ describe('machine request limits', () => {
     expect(await t.run((ctx) => ctx.db.query('machine_rate_limits').collect())).toHaveLength(1)
   })
 
+  it('spreads the ingress limit over its shards, each with an equal share', async () => {
+    const t = newT()
+    const share = MACHINE_INGRESS_LIMIT / MACHINE_INGRESS_SHARDS
+    await t.run((ctx) =>
+      ctx.db.insert('machine_rate_limits', {
+        key: ingressKey(3),
+        window_start: NOW,
+        count: share - 1,
+      }),
+    )
+    expect(await t.run((ctx) => consumeIngress(ctx, 3, NOW))).toBe(true)
+    expect(await t.run((ctx) => consumeIngress(ctx, 3, NOW))).toBe(false)
+    // another shard still has room
+    expect(await t.run((ctx) => consumeIngress(ctx, 4, NOW))).toBe(true)
+    // a shard outside the range counts on shard 0
+    expect(await t.run((ctx) => consumeIngress(ctx, 99, NOW))).toBe(true)
+    const rows = await t.run((ctx) => ctx.db.query('machine_rate_limits').collect())
+    expect(rows.map((row) => [row.key, row.count]).sort()).toEqual([
+      [ingressKey(0), 1],
+      [ingressKey(3), share],
+      [ingressKey(4), 1],
+    ])
+    // the shard picker stays in range
+    for (let n = 0; n < 200; n++) {
+      const shard = ingressShard()
+      expect(Number.isInteger(shard) && shard >= 0 && shard < MACHINE_INGRESS_SHARDS).toBe(true)
+    }
+  })
+
   it('commits the global limit and resets its stable row in the next minute', async () => {
     const t = newT()
     expect(await t.run((ctx) => consumeMachineRequest(ctx, 'ingress', 1, NOW))).toBe(true)
@@ -499,9 +546,15 @@ describe('machine request limits', () => {
 
   it('returns consistent REST/MCP 429 responses before lookup once ingress is full', async () => {
     const t = newT()
-    await t.run((ctx) =>
-      ctx.db.insert('machine_rate_limits', { key: 'ingress', window_start: NOW, count: 6_000 }),
-    )
+    await t.run(async (ctx) => {
+      for (let shard = 0; shard < MACHINE_INGRESS_SHARDS; shard++) {
+        await ctx.db.insert('machine_rate_limits', {
+          key: ingressKey(shard),
+          window_start: NOW,
+          count: MACHINE_INGRESS_LIMIT / MACHINE_INGRESS_SHARDS,
+        })
+      }
+    })
     const http = t as unknown as {
       fetch(path: string, init: { method: string; body?: string }): Promise<Response>
     }

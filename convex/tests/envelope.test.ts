@@ -344,10 +344,10 @@ describe('issue scheduling and hierarchy', () => {
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const buried = await plantIssue(t, { ...base, archived_at: NOW })
     const onCreate = await expectRefusal(createAs(t, f, { parent_id: buried.id }), 'rule')
-    expect(onCreate.data.message).toBe('the parent task is archived — restore it first')
+    expect(onCreate.data.message).toBe('the parent task is archived, so restore it first')
     const mine = await plantIssue(t, { ...base })
     const onPatch = await expectRefusal(updateAs(t, f, mine.id, { parent_id: buried.id }), 'rule')
-    expect(onPatch.data.message).toBe('the parent task is archived — restore it first')
+    expect(onPatch.data.message).toBe('the parent task is archived, so restore it first')
 
     // the direction the survey had backwards: archived child under an active
     // parent IS archiving — the cascade makes it, no guard fires

@@ -9,6 +9,36 @@ export const MACHINE_WINDOW_MS = 60_000
 export const MACHINE_PROFILE_LIMIT = 300
 export const MACHINE_INGRESS_LIMIT = 6_000
 
+/** How many counter rows the deployment-wide ingress limit is spread over.
+ * Every REST and MCP request in every organization passes the fence, so one
+ * row would make parallel requests conflict. Each request counts on one
+ * shard picked at random (ingressShard) against an equal share of
+ * MACHINE_INGRESS_LIMIT, so the fence refuses at about that rate. */
+export const MACHINE_INGRESS_SHARDS = 16
+
+/** The ingress counter row of shard `shard`. */
+export const ingressKey = (shard: number): string => `ingress:${shard}`
+
+/** A random ingress shard. Called in the HTTP action, whose Math.random is
+ * not the seeded one of a mutation. */
+export const ingressShard = (): number => Math.floor(Math.random() * MACHINE_INGRESS_SHARDS)
+
+/** Counts one request at the ingress fence on `shard`, false when its share
+ * of the minute is spent. A shard outside the range counts on shard 0. */
+export function consumeIngress(
+  ctx: MutationCtx,
+  shard: number,
+  now = Date.now(),
+): Promise<boolean> {
+  const n = Number.isInteger(shard) && shard >= 0 && shard < MACHINE_INGRESS_SHARDS ? shard : 0
+  return consumeMachineRequest(
+    ctx,
+    ingressKey(n),
+    Math.ceil(MACHINE_INGRESS_LIMIT / MACHINE_INGRESS_SHARDS),
+    now,
+  )
+}
+
 /** The usage bucket an API call made now belongs to, with the dates the
  * Billing page shows for it. `key` is the stored `period_start`.
  * - `paid`: the live provider period, keyed by `current_period_start`.
@@ -190,11 +220,19 @@ export async function consumeMachineRequest(
 
 /** One accepted authenticated HTTP request, including malformed/routing
  * refusals. All credentials belonging to a profile share the request limit;
- * per-key usage and the org's pooled total commit together, in the bucket
- * `usagePeriod` picks. Every active profile's call that passes the limit is
- * counted, with or without a subscription or plan. Only a paid period can
- * create billing events; a calendar-month bucket never does. Nothing here is
- * read by the planner snapshot, and no provider call runs in this transaction. */
+ * per-key usage counts in the bucket `usagePeriod` picks. Every active
+ * profile's call that passes the limit is counted, with or without a
+ * subscription or plan.
+ *
+ * A calendar-month bucket is never charged, so its call writes only the
+ * credential's own usage row, and readers sum those rows. Parallel calls
+ * with different credentials of one organization then touch no shared row.
+ * A paid or pending bucket also counts the organization's total in
+ * billing_usage_totals in the same transaction, which keeps the API block
+ * accounting exact: every call sees the total before it, so each block is
+ * billed once. Only a paid period can create billing events. Nothing here
+ * is read by the planner snapshot, and no provider call runs in this
+ * transaction. */
 export async function recordApiCall(
   ctx: MutationCtx,
   args: { profile_id: string; credential_id: string; credential_name: string },
@@ -230,6 +268,10 @@ export async function recordApiCall(
       calls: 1,
     })
   }
+  // A calendar month has no allowance and is never charged, so it keeps no
+  // organization total (see apiAccess.ts and model/billing.ts, which sum the
+  // usage rows).
+  if (kind === 'month') return true
   const total = await ctx.db
     .query('billing_usage_totals')
     .withIndex('by_org_period', (q) => q.eq('org_id', profile.org_id).eq('period_start', period))
@@ -237,10 +279,9 @@ export async function recordApiCall(
   const calls = (total?.calls ?? 0) + 1
   const alreadyReported = total?.reported_api_blocks ?? 0
   let reported = alreadyReported
-  // A calendar month has no allowance and is never charged, so it skips block
-  // accounting entirely. A paid or pending bucket whose plan row is missing
-  // cannot size its blocks; it only counts.
-  const plan = kind === 'month' || !sub ? null : await byId(ctx, 'billing_plans', sub.plan_id)
+  // A paid or pending bucket whose plan row is missing cannot size its
+  // blocks; it only counts.
+  const plan = sub ? await byId(ctx, 'billing_plans', sub.plan_id) : null
   if (sub && plan) {
     const included = includedApiCalls(plan, allowanceSeats(sub))
     const blocks = Math.ceil(Math.max(0, calls - included) / plan.api_block_size)

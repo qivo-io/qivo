@@ -62,10 +62,12 @@ tool list.
 The text limits added `maxLength` 20,000 to `description` on `create_task`
 and `update_task`, to `archive_reason` on `update_task` and to `body` on
 `add_comment` and `update_comment`. A client holding the older catalogue
-keeps working, and the server refuses a longer value with the schema
-message. Because the schema checks the value as sent, `update_task` refuses
-even the unchanged text of a longer description saved earlier; leave
-`description` out to keep it.
+keeps working. `create_task` refuses a longer description with the schema
+message. Since October 2026 the other four are checked by the server, as for
+REST and the app: a comment body and an archive reason count after trimming,
+and `update_task` takes the unchanged text of a longer description saved
+earlier. Before, the schema checked them as sent, so it refused text padded
+past the limit with spaces and the unchanged longer description.
 
 Comment paging added `limit` and `before` to `list_comments`, which now
 answers a task's newest 50 comments unless asked for fewer, and
@@ -155,6 +157,17 @@ code points like the other names. A client holding the older catalogue keeps
 working, and the server refuses a longer name with the schema message. The
 schema checks the name as sent, so a name of at most 40 characters padded
 with spaces past 40 is now refused before the server trims it.
+
+In October 2026 the server's sentences lost their em dashes. A refusal
+that read `that project is archived — restore it first` now reads `that
+project is archived, so restore it first`, and the activity rows that MCP
+and REST writes sign join their detail and provenance with a comma, such as
+`(status To Do → In Progress), via MCP`. A link row reads `(blocks QN-12)`
+and a label row names the label in quotes, such as `“Bug”`. Rows stored
+before keep their old text. Match a refusal by its error code or HTTP status,
+not its wording. The descriptions of `list_projects`, `list_users` and
+`update_user` changed the same way, and a client holding the older catalogue
+reads the old text until it refreshes its tool list.
 
 Single-use upload URLs changed the `start_attachment_upload` description,
 which now says to send exactly `size` bytes in one POST. The tool takes the
@@ -305,9 +318,9 @@ that fence a bare `QN-482` would be ambiguous — task and project numbers are
 per-organization — and could resolve into whichever one matched first.
 
 Writes leave the app's usual trail: activity feed rows with that user as
-actor and detail `via MCP` — an update's row names both sides of every
+actor and detail `via MCP`. An update's row names both sides of every
 changed field first, e.g. `(status To Do → In Progress, remaining
-80 h → 40 h) — via MCP`; description edits quote both sides as ~80-char
+80 h → 40 h), via MCP`; description edits quote both sides as ~80-char
 excerpts (`description “old…” → “new…”`). Task numbers come from the
 shared per-org counter. Comments are
 the deliberate exception — adding one writes no activity row, matching the
@@ -325,8 +338,11 @@ organization admins and to the person who deleted.
 
 MCP and the organization REST API share **300 authenticated HTTP requests per
 profile per minute**, across that profile's agent keys, personal tokens and
-OAuth connections. A deployment-wide **6,000-request-per-minute** limit applies
-before authentication. Both limits use fixed minute windows. MCP limits apply
+OAuth connections. A deployment-wide limit of about **6,000 requests per
+minute** applies before authentication. It is kept as 16 counters of 375
+requests each, and every request counts on one picked at random, so a busy
+minute can be refused a little before 6,000. Both limits use fixed minute
+windows. MCP limits apply
 to POST requests; CORS preflights do not consume them.
 
 Rate limiting returns HTTP `429` with `Retry-After: 60`. Wait 60 seconds before
@@ -926,7 +942,7 @@ tools that take no arguments, `get_me`, `list_teams`, `list_users` and
 | `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says some messages were not looked at |
 | `update_inbox` | `read`, `unread`, `remove` or `snooze` your items about `tasks`, or with `all: true` mark every item read or remove every read item. `snooze` takes `until` |
 | `set_following` | Follow a task (`following: true`) or stop following it |
-| `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week — its capacity is unbounded"), refused by the tool and by the RPC underneath |
+| `update_user` | Set a user's `plannable_hours`. Allowed for an **organization admin**, or a **leader of a team that person belongs to**. Nobody else may, your own account included. An agent is never an organization admin (0100/0102) and never leads a team (only people do), so a leaked agent key cannot rewrite the organization's capacity plan. The database decides (0094), so a refusal here is the same refusal the app gives; the value is a **whole number of hours**, 1 to 168, and the schema turns a fraction away (0095). It applies to **people only**. An agent has no plannable week and cannot be given one (0103, "an agent has no plannable week, because its capacity is unbounded"), refused by the tool and by the RPC underneath |
 
 ### Stays in the app
 
@@ -1461,7 +1477,10 @@ a `POST` is storing the file, and once it has, another `POST` answers `409`
 with `this upload URL has already been used; start a new upload` and stores
 nothing. A body of another size than declared answers `400` with `the upload
 must be exactly the 48213 bytes declared` and stores nothing, after which
-the URL can be tried again. Once the upload is confirmed, its URL answers
+the URL can be tried again. Qivo reads the body in one of its own request
+handlers, which stays busy until the file has arrived, for at most 5
+minutes, so send large files a few at a time. Once the upload is confirmed,
+its URL answers
 `404` like an expired one (see [REST attachments](rest-api.md#attachments)
 for every answer). Only the user that started
 the upload can confirm it, only for the same task, and only once. A ticket
@@ -1485,6 +1504,9 @@ and an optional `content_type` (`text/plain; charset=utf-8` by default) and
 stores the text as a UTF-8 file in one call. The text may hold at most 256
 KiB once encoded, and the organization's per-file limit applies too. Longer
 text is refused with `text must be at most 256 KiB (262144 bytes) as UTF-8`.
+The request body limit of 1 MiB counts the text as JSON escapes it, so text
+made mostly of control characters, which JSON writes as six bytes each, can
+meet the body limit's `413` first.
 A request that is not valid UTF-8 is refused before anything is stored, as
 [Request limits and billing](#request-limits-and-billing) describes.
 It needs Edit access to the task's project like the upload, answers the
@@ -1502,7 +1524,7 @@ those):
   {
     "id": "…uuid…", "created_at": "…",
     "actor_id": "…uuid…", "actor_name": "Leo Martins",
-    "verb": "changed", "detail": "(status To Do → In Progress) — via MCP"
+    "verb": "changed", "detail": "(status To Do → In Progress), via MCP"
   }
 ]
 ```
@@ -1582,10 +1604,10 @@ task event.
 
 Comment bodies, like task descriptions, hold at most 20,000 characters,
 counted as UTF-16 code units (JavaScript string length), so most emoji count
-as two. The schema checks the value as sent, before trimming, and refuses a
-longer one with `Input validation error: Invalid arguments for tool
-add_comment: body: Too big: expected string to have <=20000 characters` (the
-same form for `update_comment`).
+as two. The server counts the body after trimming, as for REST and the app,
+and refuses a longer one with `a comment must be at most 20,000 characters`.
+Sending the unchanged text of a longer comment saved earlier changes
+nothing.
 
 A task holds at most 400 comments. `add_comment` on a task that has 400 is
 refused with `this task has 400 comments, the most a task can have; start a
@@ -1755,7 +1777,7 @@ Tasks with active subtasks are groups. `list_tasks` and `get_task` include
 `is_group: true`; their stored `status` is dormant and must not be displayed
 or counted as their own workflow status. Status filters exclude groups.
 `update_task` with `status` on a group refuses with
-`status cannot be set on a task with subtasks — update its subtasks instead`.
+`status cannot be set on a task with subtasks, so update its subtasks instead`.
 For a task in an active project, only active subtasks in active projects
 count. A subtask in an archived project, such as a sub-project archived on
 its own, does not make it a group. A task in an archived project counts
@@ -1784,7 +1806,7 @@ active subtasks** has no remaining time of its own (0066; archived
 subtasks stopped counting in 0070, and subtasks in archived projects do not
 count for a task in an active project). `update_task` with a non-null
 `remaining_hours` for one is refused with `remaining_hours cannot be set on a
-task with subtasks — it is the sum of their remaining time`, also when you
+task with subtasks, because it is the sum of their remaining time`, also when you
 cannot read the subtasks. `null` passes as a no-op. The hours live on the
 subtasks, and the app shows the parent's value as the sum over its unfinished
 subtasks; such tasks read back `remaining_hours: null` and
@@ -1900,7 +1922,7 @@ layer looks like the object not existing, matching the app.
   `unknown, expired or revoked MCP token`. They deliberately do not disclose
   the credential's exact state.
 - Any verb but POST and the CORS preflight answers `405` with `Allow: POST,
-  OPTIONS` and the body `stateless MCP server — POST JSON-RPC only`, before
+  OPTIONS` and the body `stateless MCP server, which takes JSON-RPC by POST only`, before
   any authentication or work: an old client probing for the removed GET
   stream costs nothing.
 - **Numbers are numbers.** `remaining_hours` is a finite JSON number from

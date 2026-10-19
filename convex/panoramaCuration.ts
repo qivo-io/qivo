@@ -653,7 +653,7 @@ async function retainUnsplashUpload(
     filename,
     license: 'Unsplash License',
     license_url: 'https://unsplash.com/license',
-    attribution: `${title} — ${creator} on Unsplash. ${source_url} Standard Unsplash license: https://unsplash.com/license. Display may crop to fit.`,
+    attribution: `${title} by ${creator} on Unsplash. ${source_url} Standard Unsplash license: https://unsplash.com/license. Display may crop to fit.`,
     source_metadata: JSON.stringify({
       acquisition: 'operator_upload',
       source_url,

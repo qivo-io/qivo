@@ -151,7 +151,7 @@ describe('profiles.create — the org-seat invitation', () => {
       ),
       'rule',
     )
-    expect(mailed.data.message).toBe('An agent has no email address — its login is a key')
+    expect(mailed.data.message).toBe('An agent has no email address. Its login is a key')
     const promoted = await expectRefusal(
       as(t, f.admin).mutation(
         api.profiles.create,
@@ -160,7 +160,7 @@ describe('profiles.create — the org-seat invitation', () => {
       'rule',
     )
     expect(promoted.data.message).toBe(
-      'an agent cannot be an organization admin — it reaches only the projects it is added to',
+      'an agent cannot be an organization admin, because it reaches only the projects it is added to',
     )
     await expectRefusal(
       as(t, f.admin).mutation(
@@ -178,9 +178,7 @@ describe('profiles.create — the org-seat invitation', () => {
       as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email: null })),
       'rule',
     )
-    expect(needs.data.message).toBe(
-      'A person needs an email address — it is what they sign in with',
-    )
+    expect(needs.data.message).toBe('A person needs an email address. It is what they sign in with')
     await expectRefusal(
       as(t, f.admin).mutation(api.profiles.create, personArgs(f, { email: 'not an address' })),
       'rule',
@@ -315,7 +313,7 @@ describe('profiles.update — the admin door', () => {
       'rule',
     )
     expect(claimed.data.message).toBe(
-      'This seat has been claimed — its address is the one they signed in with',
+      'This seat has been claimed. Its address is the one they signed in with',
     )
     await expectRefusal(
       as(t, f.admin).mutation(api.profiles.update, {
@@ -324,7 +322,7 @@ describe('profiles.update — the admin door', () => {
         patch: { email: 'bot@x.se' },
       }),
       'rule',
-      /^An agent has no email address — its login is a key$/,
+      /^An agent has no email address. Its login is a key$/,
     )
     const invitee = await plantSeat(t, { org_id: f.org.id, email: 'invitee@x.se', name: 'Invitee' })
     await as(t, f.admin).mutation(api.profiles.update, {
@@ -812,7 +810,9 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
     expect((await profileById(t, f.guest.id))?.plannable_hours).toBe(12)
     // the agent check sits AFTER rights: only someone entitled reads it
     const agent = await expectRefusal(set(f.admin, f.agent.id, 10), 'rule')
-    expect(agent.data.message).toBe('an agent has no plannable week — its capacity is unbounded')
+    expect(agent.data.message).toBe(
+      'an agent has no plannable week, because its capacity is unbounded',
+    )
     for (const hours of [0.4, 169, -3]) {
       const r = await expectRefusal(set(f.admin, f.viewer.id, hours), 'rule')
       expect(r.data.message).toBe('plannable hours must be a whole number of hours from 1 to 168')

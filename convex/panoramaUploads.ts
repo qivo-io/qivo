@@ -191,7 +191,7 @@ export const retainFile = internalMutation({
       filename,
       license: 'Permission confirmed by uploader',
       license_url: '',
-      attribution: `${details.title} — ${details.creator}. ${details.source_url ? `${details.source_url}. ` : ''}Display may crop to fit.`,
+      attribution: `${details.title} by ${details.creator}. ${details.source_url ? `${details.source_url}. ` : ''}Display may crop to fit.`,
       source_metadata: JSON.stringify({
         acquisition: 'operator_upload',
         source_url: details.source_url || undefined,

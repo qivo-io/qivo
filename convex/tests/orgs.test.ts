@@ -183,7 +183,7 @@ describe('assertSlugAvailable — the setSlug refusal taxonomy', () => {
       'conflict',
     )
     expect(err.data.reason).toBe('slug_reserved')
-    expect(err.data.message).toBe('That address is reserved — choose another.')
+    expect(err.data.message).toBe('That address is reserved. Choose another.')
   })
 
   it('malformed shapes refuse under slug_shape', async () => {
@@ -194,7 +194,7 @@ describe('assertSlugAvailable — the setSlug refusal taxonomy', () => {
       )
       expect(err.data.reason, bad).toBe('slug_shape')
       expect(err.data.message).toBe(
-        'An address is lowercase letters, digits and single hyphens between them — up to 40 characters.',
+        'An address is up to 40 lowercase letters, digits and single hyphens between them.',
       )
     }
   })
@@ -206,7 +206,7 @@ describe('assertSlugAvailable — the setSlug refusal taxonomy', () => {
       'conflict',
     )
     expect(err.data.reason).toBe('slug_taken')
-    expect(err.data.message).toBe('That address is already taken — choose another.')
+    expect(err.data.message).toBe('That address is already taken. Choose another.')
     await t.run((ctx) => assertSlugAvailable(ctx, 'nimbus', org.id)) // owner passes
     await t.run((ctx) => assertSlugAvailable(ctx, 'nimbus-labs')) // free passes
   })

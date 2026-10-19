@@ -72,7 +72,7 @@ import {
 } from '../model/messages'
 import type { TOOLS } from './mcp'
 import type { ROUTES, route as restRoute } from './rest'
-import { needJson, pretty, wholeParam } from './shared'
+import { needJson, optionalJson, pretty, refuseUnknownFields, wholeParam } from './shared'
 
 type McpTool = (typeof TOOLS)[number]
 type RestRoute = (typeof ROUTES)[number]
@@ -548,6 +548,7 @@ export const restUpdateComment = internalMutation({
     const found = await findComment(ctx, me, a.ref)
     if (found === null) throw notFound('comment not found')
     const b = needJson(a.body)
+    refuseUnknownFields(b, ['body'])
     if (typeof b.body !== 'string') throw badRequest('body must be a non-empty string')
     const now = new Date().toISOString()
     const { comment } = await editComment(ctx, { me, ...found, body: b.body, now })
@@ -555,13 +556,19 @@ export const restUpdateComment = internalMutation({
   },
 })
 
-/* DELETE /v1/comments/{id}. */
+/* DELETE /v1/comments/{id}, which takes no body. */
 export const restDeleteComment = internalMutation({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    body: v.optional(v.string()),
+  },
   handler: async (ctx, a): Promise<{ deleted: true; id: string; task_id: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const found = await findComment(ctx, me, a.ref)
     if (found === null) throw notFound('comment not found')
+    refuseUnknownFields(optionalJson(a.body ?? ''), [])
     await deleteComment(ctx, { me, ...found })
     return { deleted: true, id: found.comment.id, task_id: found.issue.id }
   },
@@ -601,7 +608,9 @@ async function restChangeInbox(
   action: InboxAction,
 ): Promise<InboxChangeJson> {
   const me = await asMachineCaller(ctx, a.callerId, a.access)
-  const req = inboxRequest(action, needJson(a.body))
+  const b = needJson(a.body)
+  refuseUnknownFields(b, ['tasks', 'all', 'until', 'before'])
+  const req = inboxRequest(action, b)
   return await changeInbox(ctx, me, action, req, () =>
     badRequest('tasks must name tasks by key, number or uuid'),
   )
@@ -632,10 +641,15 @@ export const restSnoozeInbox = internalMutation({
 })
 
 /* The arguments of PUT and DELETE /v1/tasks/{ref}/following. */
-const vRestFollowingArgs = { callerId: v.string(), access: vCredentialAccess, ref: v.string() }
+const vRestFollowingArgs = {
+  callerId: v.string(),
+  access: vCredentialAccess,
+  ref: v.string(),
+  body: v.optional(v.string()),
+}
 
 /* Sets the caller following the task `ref` or not, for restFollowTask and
- * restUnfollowTask. */
+ * restUnfollowTask. Neither route takes a body. */
 async function restFollowing(
   ctx: MutationCtx,
   a: ObjectType<typeof vRestFollowingArgs>,
@@ -644,6 +658,7 @@ async function restFollowing(
   const me = await asMachineCaller(ctx, a.callerId, a.access)
   const issue = await findIssue(ctx, me, a.ref)
   if (issue === null) throw notFound('task not found')
+  refuseUnknownFields(optionalJson(a.body ?? ''), [])
   const changed = await setFollowing(ctx, me, issue, following)
   return { id: issue.id, key: issueKey(issue.num), following, changed }
 }
@@ -856,11 +871,12 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
     path: 'comments/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, param }) =>
+    run: (r, { callerId, access, param, body }) =>
       r.runMutation(internal.machine.discussion.restDeleteComment, {
         callerId,
         access,
         ref: param('ref'),
+        body,
       }),
   }),
   route({
@@ -868,6 +884,7 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
     path: 'inbox',
     access: 'read',
     status: 200,
+    query: ['unread_only', 'include_snoozed', 'limit', 'offset'],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.discussion.restListInbox, {
         callerId,
@@ -915,11 +932,12 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
     path: 'tasks/:ref/following',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, param }) =>
+    run: (r, { callerId, access, param, body }) =>
       r.runMutation(internal.machine.discussion.restFollowTask, {
         callerId,
         access,
         ref: param('ref'),
+        body,
       }),
   }),
   route({
@@ -927,11 +945,12 @@ export const DISCUSSION_ROUTES: RestRoute[] = [
     path: 'tasks/:ref/following',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, param }) =>
+    run: (r, { callerId, access, param, body }) =>
       r.runMutation(internal.machine.discussion.restUnfollowTask, {
         callerId,
         access,
         ref: param('ref'),
+        body,
       }),
   }),
 ]

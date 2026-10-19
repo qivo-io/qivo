@@ -457,7 +457,7 @@ export const setMemberRole = platformMutation({
     if (row.org_role === role) return null
     if (row.kind === 'agent' && role === 'admin') {
       throw rule(
-        'an agent cannot be an organization admin — it reaches only the projects it is added to',
+        'an agent cannot be an organization admin, because it reaches only the projects it is added to',
       )
     }
     if (row.org_role === 'admin' && row.active) await assertNotLastAdmin(ctx, row, 'demote')

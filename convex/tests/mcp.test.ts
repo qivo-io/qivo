@@ -108,7 +108,7 @@ const legacyBody = (method: string, params: unknown, id?: number): string =>
 const E401_MISSING = '{"error":"missing credential (Authorization: Bearer qvt_… or qva_…)"}'
 const E401_PERSON = '{"error":"unknown, expired or revoked MCP token"}'
 const E401_AGENT = '{"error":"unknown, revoked or deactivated agent key"}'
-const E405 = '{"error":"stateless MCP server — POST JSON-RPC only"}'
+const E405 = '{"error":"stateless MCP server, which takes JSON-RPC by POST only"}'
 const E32700 =
   '{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON"},"id":null}'
 const E32600_EMPTY =
@@ -132,8 +132,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '2f41bb2435b27e9a853fd53fb5a7aa09c40190465c4e9981fe199b4a18b150d0'
-const SHA_TOOLS_MODERN = '2f5ecbbf45d4f2715e23b6ee9e6dd1f9e3ddf978c354f9af71ef8554094c16a4'
+const SHA_TOOLS_LEGACY = '20e824b82e7803d6b07610986a76de15af883a294f4228ea5691ce26c4bf3763'
+const SHA_TOOLS_MODERN = '1873cc8848e2a0b51c6d786ba1dcda10fcdf5f5516bc658161693803a16a7f5f'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1616,13 +1616,13 @@ describe('write tools', () => {
     await expectRefusal(
       create(fx.agent.id, { project: 'TBED' }),
       'bad_request',
-      /^TBED is a project — tasks live in its sub-projects; pass sub_project \(one of: FW, PCB\)$/,
+      /^TBED is a project, and tasks live in its sub-projects; pass sub_project \(one of: FW, PCB\)$/,
     )
     // archived arg is refused FIRST — before any other validation
     await expectRefusal(
       create(fx.agent.id, { project: 'NOPE', title: '', archived: false }),
       'bad_request',
-      /^tasks are created active — archive with update_task after creating$/,
+      /^tasks are created active, so archive with update_task after creating$/,
     )
     // blank title fires before the project lookup
     await expectRefusal(
@@ -1664,7 +1664,7 @@ describe('write tools', () => {
         sub_project: 'XSUB',
       }),
       'bad_request',
-      /^sub-project XSUB does not belong to project TBED — tasks are never created under another project's sub-project$/,
+      /^sub-project XSUB does not belong to project TBED, and tasks are never created under another project's sub-project$/,
     )
     void sub3
     // an archived meta answers "archived", never "no sub-projects yet"
@@ -1682,14 +1682,14 @@ describe('write tools', () => {
         project: 'ARCM',
       }),
       'bad_request',
-      /^ARCM is archived — restore it in the app before adding tasks to it$/,
+      /^ARCM is archived, so restore it in the app before adding tasks to it$/,
     )
     // assignee guard order: readable machine sentences
     await expectRefusal(
       create(fx.agent.id, { project: 'FW', assignee_id: fx.viewer.id }),
       'bad_request',
       new RegExp(
-        `^user "${fx.viewer.id}" is a viewer — a viewer reads the projects they are added to and is never assigned work$`,
+        `^user "${fx.viewer.id}" is a viewer, who reads the projects they are added to and is never assigned work$`,
       ),
     )
     await expectRefusal(
@@ -1874,7 +1874,7 @@ describe('write tools', () => {
     const events = await activityFor(fx.t, fx.org.id)
     expect(events).toHaveLength(1)
     expect(events[0].verb).toBe('archived')
-    expect(events[0].detail).toBe('(priority Medium → High) — via MCP')
+    expect(events[0].detail).toBe('(priority Medium → High), via MCP')
     expect(events[0].actor_id).toBe(fx.agent.id)
     // ONE message to the subscriber, carrying the field line AND the toggle line
     const inbox = await messagesFor(fx.t, fx.user.id, p1.id)
@@ -2021,7 +2021,7 @@ describe('write tools', () => {
         remaining_hours: 4,
       }),
       'bad_request',
-      /^remaining_hours cannot be set on a task with subtasks — it is the sum of their remaining time$/,
+      /^remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time$/,
     )
     // assignee guard, machine sentences
     await expectRefusal(
@@ -2032,7 +2032,7 @@ describe('write tools', () => {
         assignee_id: fx.viewer.id,
       }),
       'bad_request',
-      /is a viewer — a viewer reads the projects they are added to and is never assigned work$/,
+      /is a viewer, who reads the projects they are added to and is never assigned work$/,
     )
     // the viewer-agent write refusal
     const grantViewer = await plantAgent(fx.t, fx.org.id)
@@ -2197,7 +2197,7 @@ describe('write tools', () => {
       set(fx.admin.id, fx.agent.id, 30),
       'bad_request',
       new RegExp(
-        `^user "${fx.agent.id}" is an agent — an agent has no plannable week, its capacity is unbounded$`,
+        `^user "${fx.agent.id}" is an agent, which has no plannable week because its capacity is unbounded$`,
       ),
     )
     // the whole-hours range rule (wire zod catches 0..168 first; the model

@@ -159,18 +159,24 @@ export async function insertActivity(ctx: MutationCtx, e: ActivityEntry): Promis
 /* Task rows that name other tasks by key: a parent change written by
  * model/issues.ts browserVerbDetail ('moved' under QN-n (from QN-m),
  * 'detached' from QN-m) and a link written by model/links.ts addLinkCore
- * ('linked' — blocks QN-n). A REST or MCP write appends its provenance
+ * ('linked' (blocks QN-n)). A REST or MCP write appends its provenance
  * (machineDetail below), which names no task. Returns the task numbers the
  * row names, [] when it names none, and null when the wording is not one
  * these writers produce, so the reader can fail closed. Keep in step with
- * those two writers. */
+ * those two writers.
+ *
+ * Rows written before October 2026 joined the provenance with ' — ' and
+ * wrote a link as '— blocks QN-n'. Stored rows keep that text, so both
+ * forms are read. */
 const KEY = `${ISSUE_PREFIX}-(\\d+)`
-const SIGNED = '(?: — via (?:MCP|the REST API(?: \\(.*\\))?))?'
+const SIGNED = '(?:(?: —|,) via (?:MCP|the REST API(?: \\(.*\\))?))?'
 const NAMED_PARENT_CHANGE = new RegExp(
   `^under (?:${KEY}|its parent)(?: \\(from ${KEY}\\))?${SIGNED}$`,
 )
 const NAMED_DETACH = new RegExp(`^from (?:${KEY}|its parent)${SIGNED}$`)
-const NAMED_LINK = new RegExp(`^— (?:blocks|relates to) ${KEY}${SIGNED}$`)
+const NAMED_LINK = new RegExp(
+  `^(?:— (?:blocks|relates to) ${KEY}|\\((?:blocks|relates to) ${KEY}\\))${SIGNED}$`,
+)
 export function namedTaskNums(
   ev: Pick<Doc<'activity_events'>, 'target_type' | 'verb' | 'detail'>,
 ): number[] | null {
@@ -216,9 +222,11 @@ const clean = (s: string): string => {
   return cp.length > 80 ? `${cp.slice(0, 79).join('')}…` : t
 }
 
-// Append machine provenance, with or without a field diff.
+/** Appends a machine write's provenance to a detail, after a comma, or is
+ * the provenance alone when there is no detail. namedTaskNums reads the
+ * joined form back. */
 export const machineDetail = (extra: string | undefined, provenance: string): string =>
-  (extra !== undefined && extra !== '' ? `${extra} — ` : '') + provenance
+  (extra !== undefined && extra !== '' ? `${extra}, ` : '') + provenance
 
 /** An activity detail signed with a machine write's provenance, or the
  * detail alone for an app write, which passes none. */

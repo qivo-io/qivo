@@ -122,7 +122,7 @@ export async function addLinkCore(
     badRequest('a link with this id already exists'),
   )
   // model/activity.ts namedTaskNums reads this wording back; keep in step
-  const named = `${type === 'blocks' ? '— blocks' : '— relates to'} ${issueKey(target.num)}`
+  const named = `(${type === 'blocks' ? 'blocks' : 'relates to'} ${issueKey(target.num)})`
   await logActivity(ctx, {
     org_id: source.org_id,
     actor_id: me.id,

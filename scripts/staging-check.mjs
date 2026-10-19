@@ -1497,7 +1497,7 @@ const NOT_SAME_FAMILY =
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
 const UPLOAD_URL_USED = 'this upload URL has already been used; start a new upload'
 const UNKNOWN_PROJECT = 'project must name a project by uuid, number or key'
-const GROUP_STATUS = 'status cannot be set on a task with subtasks — update its subtasks instead'
+const GROUP_STATUS = 'status cannot be set on a task with subtasks, so update its subtasks instead'
 
 /** The state the checks share. */
 const run = {}
@@ -3199,7 +3199,7 @@ async function archiveChecks() {
       '/tasks',
       { project: A.id, title: `${run.tag} into archived` },
       400,
-      `${A.key} is archived — restore it in the app before adding tasks to it`,
+      `${A.key} is archived, so restore it in the app before adding tasks to it`,
     )
     const tasks = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
     expect(!tasks.some((t) => t.title === `${run.tag} into archived`), 'the task was created')

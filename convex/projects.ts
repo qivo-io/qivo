@@ -18,9 +18,9 @@
  * - deleteDeep keeps its P0001 sentence as `rule`, verbatim; inviteGuest
  *   uses the project's explicit user-management permission refusal;
  * - the hierarchy/archive trigger sentences are `rule`, verbatim per surface:
- *   'the project is archived — restore it first' (new sub under an archived
+ *   'the project is archived, so restore it first' (new sub under an archived
  *   meta, 0106:68) is deliberately NOT the issue/milestone arrival sentence
- *   'that project is archived — restore it first' (0106:131/148).
+ *   'that project is archived, so restore it first' (0106:131/148).
  *
  * parent_id / type / org_id are immutable after create. A subtask stays in
  * its parent task's top-level project (model/issues.ts parentChainCheck), so

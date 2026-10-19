@@ -285,7 +285,7 @@ describe('deleteOrphanLogin', () => {
     await expectRefusal(
       t.mutation(internal.adminAuth.deleteOrphanLogin, { email: f.guest.email as string }),
       'conflict',
-      /that login belongs to a member — remove the member instead/,
+      /that login belongs to a member, so remove the member instead/,
     )
     // belt-and-braces: a seat pointing at the user id, email long gone
     const moved = await plantLogin(t, 'old-address@test.local')

@@ -467,7 +467,7 @@ export const deleteOrphanLogin = internalMutation({
       .withIndex('by_auth', (q) => q.eq('auth_user_id', user._id))
       .first()
     if (byEmail !== null || byAuth !== null) {
-      throw conflict('that login belongs to a member — remove the member instead', 'login_in_use')
+      throw conflict('that login belongs to a member, so remove the member instead', 'login_in_use')
     }
     const operator = await ctx.db
       .query('platform_admins')

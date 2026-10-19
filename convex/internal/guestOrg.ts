@@ -242,7 +242,7 @@ export const zzGuestOrg = internalMutation({
     const shared = await byId(ctx, 'issues', ZZ.sharedTask)
     if (shared === null || shared.num !== 1) {
       throw new Error(
-        `ZZ shared task is QN-${shared?.num ?? '?'}, not QN-1 — the fixture must be torn down and rebuilt, not topped up`,
+        `ZZ shared task is QN-${shared?.num ?? '?'}, not QN-1, so the fixture must be torn down and rebuilt, not topped up`,
       )
     }
 

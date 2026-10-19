@@ -64,6 +64,18 @@ function rowOf<D extends { _id: unknown; _creationTime: number }>(
   return row
 }
 
+/* A team or project as the app receives it, without the legacy icon and
+ * its color. Nothing writes or shows them now, and a value stored before
+ * they were dropped has no length limit. */
+type IconFree<T extends 'teams' | 'projects'> = Omit<AppRow<T>, 'icon' | 'icon_color'>
+
+function iconFree<
+  D extends { _id: unknown; _creationTime: number; icon?: string; icon_color?: string },
+>(doc: D) {
+  const { icon: _icon, icon_color: _iconColor, ...row } = rowOf(doc)
+  return row
+}
+
 /* A relation row as the app receives it, without the organization id and
  * the archive mark, which only serve the snapshot's index reads. */
 type RelationRow<T extends TableNames> = Omit<AppRow<T>, 'org_id' | 'task_archived'>
@@ -140,10 +152,10 @@ export const forMe = authedQuery({
     if (ctx.myProfiles.size === 0) return null
 
     const orgs: OrgRow[] = []
-    const teams: AppRow<'teams'>[] = []
+    const teams: IconFree<'teams'>[] = []
     const teamMembers: AppRow<'team_members'>[] = []
     const profiles: AppRow<'profiles'>[] = []
-    const projects: AppRow<'projects'>[] = []
+    const projects: IconFree<'projects'>[] = []
     const access: AppRow<'project_access'>[] = []
     const teamAccess: AppRow<'project_team_access'>[] = []
     const issues: (Omit<AppRow<'issues'>, 'relations_marked'> & {
@@ -210,7 +222,7 @@ export const forMe = authedQuery({
        * rows already in hand; memberSeesActivity restates canLeadTeams */
       const leaderOf = new Map<string, boolean>()
       for (const team of orgTeams) {
-        teams.push(rowOf(team))
+        teams.push(iconFree(team))
         const members = await ctx.db
           .query('team_members')
           .withIndex('by_team', (q) => q.eq('team_id', team.id))
@@ -270,7 +282,7 @@ export const forMe = authedQuery({
         })
       }
       for (const p of visibleProjects) {
-        projects.push(rowOf(p))
+        projects.push(iconFree(p))
 
         // Every grant on a visible project, including other members' grants.
         const [grants, teamGrants] = await Promise.all([

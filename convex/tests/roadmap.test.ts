@@ -371,7 +371,7 @@ describe('roadmap visit undo', () => {
       await expectRefusal(
         user.mutation(api.roadmap.change, { session_id, operations: [create(f.sub.id)] }),
         'rule',
-        /^that project is archived — restore it first$/,
+        /^that project is archived, so restore it first$/,
       )
       await t.run((ctx) => ctx.db.patch(archived._id, { archived_at: undefined }))
     }

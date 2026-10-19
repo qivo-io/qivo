@@ -1411,8 +1411,8 @@ describe('activity', () => {
       B: `moved under ${key(siblingParent)} (from ${key(sameParent)})`,
       C: `moved under ${key(hiddenParent)} (from ${key(siblingParent)})`,
       D: `detached from ${key(hiddenParent)}`,
-      E: `linked — relates to ${key(linkSame)}`,
-      F: `linked — relates to ${key(linkSibling)}`,
+      E: `linked (relates to ${key(linkSame)})`,
+      F: `linked (relates to ${key(linkSibling)})`,
       G: `moved under ${key(hiddenParent)}`,
       H: `moved under ${key(sameParent)} (from ${key(hiddenParent)})`,
     }
@@ -1473,6 +1473,42 @@ describe('activity', () => {
     })
     expect(await seen(f.admin)).toEqual(Object.values(ids).sort())
     for (const p of [f.user, f.guest]) expect(await seen(p)).toEqual([ids.renamed])
+  })
+
+  it('a relation row in the wording before or after October 2026 reaches the same people', async () => {
+    const member = await seatOn(f.sub.id)
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const hiddenTask = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
+    const ids = await t.run(async (ctx) => {
+      const on = { project_id: f.sub.id, target_id: issueVis.id }
+      const rows = {
+        oldLink: ev({ ...on, verb: 'linked', detail: `— blocks QN-${other.num} — via MCP` }),
+        newLink: ev({ ...on, verb: 'linked', detail: `(blocks QN-${other.num}), via MCP` }),
+        oldDetach: ev({
+          ...on,
+          verb: 'detached',
+          detail: `from QN-${other.num} — via the REST API (CI key)`,
+        }),
+        newDetach: ev({
+          ...on,
+          verb: 'detached',
+          detail: `from QN-${other.num}, via the REST API (CI key)`,
+        }),
+        // the other end is a task the member cannot read
+        oldHidden: ev({ ...on, verb: 'linked', detail: `— relates to QN-${hiddenTask.num}` }),
+        newHidden: ev({ ...on, verb: 'linked', detail: `(relates to QN-${hiddenTask.num})` }),
+      }
+      for (const row of Object.values(rows)) await ctx.db.insert('activity_events', row)
+      return rows
+    })
+    expect(await seen(f.admin)).toEqual(
+      Object.values(ids)
+        .map((r) => r.id)
+        .sort(),
+    )
+    expect(await seen(member)).toEqual(
+      [ids.oldLink, ids.newLink, ids.oldDetach, ids.newDetach].map((r) => r.id).sort(),
+    )
   })
 
   it('older task archive rows lose their subtask count for members, not admins', async () => {
@@ -1678,6 +1714,8 @@ describe('navigation-only parents', () => {
         team_id: f.team.id,
         description: 'Parent plans',
       })
+      // a legacy team icon of any length, as stored before icons were dropped
+      await ctx.db.patch(f.team._id, { icon: 'x'.repeat(5000), icon_color: '#335577' })
     })
 
     const snap = await snapFor(subOnly)
@@ -1685,11 +1723,10 @@ describe('navigation-only parents', () => {
     // A new project field reaches navigation-only parents unless it is
     // judged here first.
     const meta = snap.projects.find((p) => p.id === f.meta.id)!
+    // the legacy icon and its color stay on the server
     expect(Object.keys(meta).sort()).toEqual([
       'created_at',
       'description',
-      'icon',
-      'icon_color',
       'id',
       'key',
       'lead_id',
@@ -1702,6 +1739,8 @@ describe('navigation-only parents', () => {
       'track_delay',
       'type',
     ])
+    const team = snap.teams.find((row) => row.id === f.team.id)!
+    expect('icon' in team || 'icon_color' in team).toBe(false)
     expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
     expect(new Set(snap.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
     expect(snap.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)

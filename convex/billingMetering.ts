@@ -1,12 +1,14 @@
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
 import { byId } from './lib/db'
-import { consumeMachineRequest, MACHINE_INGRESS_LIMIT, recordApiCall } from './model/billingUsage'
+import { consumeIngress, recordApiCall } from './model/billingUsage'
 
-/** Shared before-auth fence for REST and MCP. No key/IP material is retained. */
+/** Shared before-auth fence for REST and MCP, counted on the shard the
+ * HTTP action picked (model/billingUsage.ts ingressShard). No key/IP
+ * material is retained. */
 export const ingress = internalMutation({
-  args: {},
-  handler: (ctx): Promise<boolean> => consumeMachineRequest(ctx, 'ingress', MACHINE_INGRESS_LIMIT),
+  args: { shard: v.number() },
+  handler: (ctx, { shard }): Promise<boolean> => consumeIngress(ctx, shard),
 })
 
 /** OAuth grants have their own credential table but share the person's usage

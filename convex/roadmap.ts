@@ -461,7 +461,7 @@ async function restoreStep(ctx: Context, changes: Change[], now: string, batch: 
       } else {
         if (!same(actual, change.after)) throw stale()
         if (change.before && project.archived_at !== undefined)
-          throw rule('that project is archived — restore it first')
+          throw rule('that project is archived, so restore it first')
         if (row) await ctx.db.delete(row._id)
         if (change.before) await ctx.db.insert('milestones', change.before)
         await logMilestone(ctx, actual, change.before, now)

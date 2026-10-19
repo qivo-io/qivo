@@ -317,17 +317,21 @@ describe('creating and renaming teams', () => {
       })
     await refused(patch(fx.admin, { name: ' ' }), 'bad_request', 'a team name cannot be blank')
     expect((await teamRow(fx.t, fx.team.id))?.name).toBe('HW')
-    // names are trimmed, and fields REST does not change are ignored
-    expect(await patch(fx.admin, { name: ' Hardware ', icon: 'zap' })).toMatchObject({
-      name: 'Hardware',
-    })
-    expect((await teamRow(fx.t, fx.team.id))?.icon).toBeUndefined()
+    // a field REST does not change is refused, and the name stays
+    await refused(
+      patch(fx.admin, { name: 'Renamed', icon: 'zap' }),
+      'bad_request',
+      'unknown field "icon"; this request takes name',
+    )
+    expect((await teamRow(fx.t, fx.team.id))?.name).toBe('HW')
+    // names are trimmed
+    expect(await patch(fx.admin, { name: ' Hardware ' })).toMatchObject({ name: 'Hardware' })
     // an agent's leader row grants nothing, so the agent does not lead
     await plantLeaderRow(fx, fx.agent.id)
     for (const who of [fx.emil, fx.agent]) {
       await refused(patch(who, { name: 'Mine' }), 'forbidden', TEAM_RUNS_RULE)
     }
-    await refused(patch(fx.admin, { icon: 'x' }), 'bad_request', 'no recognized fields to update')
+    await refused(patch(fx.admin, {}), 'bad_request', 'no recognized fields to update')
     await refused(patch(fx.admin, { name: 'X' }, uuid()), 'not_found', 'team not found')
     const missing = uuid()
     await refused(
@@ -383,9 +387,9 @@ describe('adding members and leaders', () => {
     })
     const events = await activityFor(fx.t, fx.org.id)
     expect(events.map((e) => [e.verb, e.target_id, e.detail, e.team_id])).toEqual([
-      ['added', fx.pia.id, `to Hardware — ${VIA_REST}`, fx.team.id],
-      ['made', fx.pia.id, `a leader of Hardware — ${VIA_REST}`, fx.team.id],
-      ['demoted', fx.pia.id, 'from leader of Hardware — via MCP', fx.team.id],
+      ['added', fx.pia.id, `to Hardware, ${VIA_REST}`, fx.team.id],
+      ['made', fx.pia.id, `a leader of Hardware, ${VIA_REST}`, fx.team.id],
+      ['demoted', fx.pia.id, 'from leader of Hardware, via MCP', fx.team.id],
     ])
   })
 
@@ -536,7 +540,7 @@ describe('removing a member settles their open tasks', () => {
     expect(await membership(fx.t, fx.team.id, fx.emil.id)).toBeNull()
     expect((await taskRow(fx.t, fx.open.id))?.assignee_id).toBe(fx.emil.id)
     expect((await activityFor(fx.t, fx.org.id)).map((e) => [e.verb, e.detail])).toEqual([
-      ['removed', `from Hardware — ${VIA_REST}`],
+      ['removed', `from Hardware, ${VIA_REST}`],
     ])
     // removing them again changes nothing
     expect(await del(fx, fx.user, undefined)).toMatchObject({ removed: false, stranded: [] })
@@ -567,7 +571,7 @@ describe('removing a member settles their open tasks', () => {
       (await activityFor(fx.t, fx.org.id)).map((e) => [e.verb, e.target_id, e.detail]),
     ).toEqual([
       ['changed access on', fx.meta.id, 'via MCP'],
-      ['removed', fx.emil.id, 'from Hardware — via MCP'],
+      ['removed', fx.emil.id, 'from Hardware, via MCP'],
     ])
   })
 
@@ -810,7 +814,7 @@ describe('team routes over HTTP', () => {
     // a person's REST writes are signed without a token name
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       verb: 'removed',
-      detail: 'from Hardware — via the REST API',
+      detail: 'from Hardware, via the REST API',
     })
   })
 

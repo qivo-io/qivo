@@ -31,7 +31,7 @@ export const REST_CALLER = {
     deactivated: REST_AUTH_401.inactive,
     noWrite: 'this agent has no write access to that project',
     commentAuthor:
-      'comments cannot be attributed over the API — a comment is always authored by the agent posting it',
+      'comments cannot be attributed over the API; a comment is always authored by the agent posting it',
   },
   person: {
     gone: REST_PERSON_AUTH_401.unknown,
@@ -168,18 +168,38 @@ export function wholeParam(
 export const optionalJson = (raw: string): Record<string, unknown> =>
   raw.trim() === '' ? {} : needJson(raw)
 
-/** Refuses the fields of a REST body that `known` does not name. Used where a
- * dropped field would change whose access a request changes, so a misspelled
- * field is refused instead of falling back to a default. Other routes ignore
- * unknown fields, as the REST docs say. */
+/** Refuses the fields of a REST body that `known` does not name, so a
+ * misspelled field is refused instead of being dropped. Every REST route
+ * that reads a body calls it, after the refusals that name a field the body
+ * may not write and say where it goes instead. An empty `known` refuses
+ * every field of a route that takes no body. */
 export function refuseUnknownFields(b: Record<string, unknown>, known: readonly string[]): void {
   const unknown = Object.keys(b).filter((key) => !known.includes(key))
   if (unknown.length === 0) return
   const names = unknown.map((key) => `"${key}"`).join(', ')
-  throw badRequest(
-    `unknown field${unknown.length > 1 ? 's' : ''} ${names}; this request takes ${known.join(', ')}`,
-  )
+  const takes =
+    known.length === 0 ? 'this request takes no body' : `this request takes ${known.join(', ')}`
+  throw badRequest(`unknown field${unknown.length > 1 ? 's' : ''} ${names}; ${takes}`)
 }
+
+/** Refuses the query parameters in `names` that `known` does not name, the
+ * query twin of refuseUnknownFields, so a misspelled filter is refused
+ * instead of answering an unfiltered list. */
+export function refuseUnknownParams(names: Iterable<string>, known: readonly string[]): void {
+  const unknown = [...new Set(names)].filter((name) => !known.includes(name))
+  if (unknown.length === 0) return
+  const list = unknown.map((name) => `"${name}"`).join(', ')
+  const takes =
+    known.length === 0
+      ? 'this request takes no query parameters'
+      : `this request takes ${known.join(', ')}`
+  throw badRequest(`unknown query parameter${unknown.length > 1 ? 's' : ''} ${list}; ${takes}`)
+}
+
+/** REST's refusal for a request body whose bytes are not UTF-8. Decoding it
+ * would store U+FFFD in place of each bad sequence, so it is refused like a
+ * body holding an unpaired surrogate. */
+export const REST_NOT_UTF8 = 'request body is not valid UTF-8'
 
 /** The largest REST or MCP request body, in bytes (1 MiB). A field at the
  * 20,000-character text cap is at most about 120 KB of JSON. Uploaded files
@@ -204,8 +224,8 @@ type BodyStream = {
 
 /** A request body that readBody read. `text` decodes as request.text()
  * would, with each byte sequence that is not UTF-8 replaced by U+FFFD, and
- * `utf8` says whether the bytes held none. MCP refuses a body that is not
- * UTF-8, and REST reads the replaced text. */
+ * `utf8` says whether the bytes held none. REST and MCP both refuse a body
+ * that is not UTF-8. */
 export type RequestBody = { text: string; utf8: boolean }
 
 /**

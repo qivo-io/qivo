@@ -99,16 +99,16 @@ export async function assertSlugAvailable(
 ): Promise<void> {
   if (!SLUG_SHAPE.test(slug) || slug.length > SLUG_MAX) {
     throw conflict(
-      'An address is lowercase letters, digits and single hyphens between them — up to 40 characters.',
+      'An address is up to 40 lowercase letters, digits and single hyphens between them.',
       'slug_shape',
     )
   }
   if (RESERVED_SLUGS.has(slug)) {
-    throw conflict('That address is reserved — choose another.', 'slug_reserved')
+    throw conflict('That address is reserved. Choose another.', 'slug_reserved')
   }
   const holder = await slugHolder(ctx, slug)
   if (holder !== null && holder.id !== owner) {
-    throw conflict('That address is already taken — choose another.', 'slug_taken')
+    throw conflict('That address is already taken. Choose another.', 'slug_taken')
   }
 }
 
@@ -434,7 +434,7 @@ export async function setPlannableHoursCore(
     if (!leads) throw rights
   }
   if (target.kind === 'agent') {
-    throw rule('an agent has no plannable week — its capacity is unbounded')
+    throw rule('an agent has no plannable week, because its capacity is unbounded')
   }
   const h = Math.round(Number(a.hours) || 0)
   if (h < 1 || h > 168) {

@@ -428,10 +428,14 @@ describe('MCP', () => {
     ]).toEqual([20000, 20000, 20000, 20000, 20000])
   })
 
-  it('writes 20,000 characters and refuses 20,001 with the schema text', async () => {
+  it('writes 20,000 characters and refuses 20,001, by the schema or by the server rule', async () => {
     const t = newT()
     await wireOrg(t)
     const issueCount = () => t.run(async (ctx) => (await ctx.db.query('issues').collect()).length)
+    const refusal = (text: string): ToolResult => ({
+      content: [{ type: 'text', text }],
+      isError: true,
+    })
     const made = await tool(t, 'create_task', {
       project: 'FW',
       title: 'At cap',
@@ -444,23 +448,24 @@ describe('MCP', () => {
     ).toMatchObject(tooBig('create_task', 'description'))
     expect(await issueCount()).toBe(1)
 
+    // the server checks these, as for the app and REST
     const updated = await tool(t, 'update_task', { ref: key, description: AT_CAP.slice(1) })
     expect(updated.isError).toBeUndefined()
     expect(await tool(t, 'update_task', { ref: key, description: OVER })).toMatchObject(
-      tooBig('update_task', 'description'),
+      refusal('description must be at most 20,000 characters'),
     )
     expect(
       await tool(t, 'update_task', { ref: key, archived: true, archive_reason: OVER }),
-    ).toMatchObject(tooBig('update_task', 'archive_reason'))
+    ).toMatchObject(refusal('archive_reason must be at most 20,000 characters'))
 
     const commented = await tool(t, 'add_comment', { ref: key, body: AT_CAP })
     expect(commented.isError).toBeUndefined()
     const { id } = JSON.parse(commented.content[0].text) as { id: string }
     expect(await tool(t, 'add_comment', { ref: key, body: OVER })).toMatchObject(
-      tooBig('add_comment', 'body'),
+      refusal('a comment must be at most 20,000 characters'),
     )
     expect(await tool(t, 'update_comment', { comment: id, body: OVER })).toMatchObject(
-      tooBig('update_comment', 'body'),
+      refusal('a comment must be at most 20,000 characters'),
     )
     expect((await tool(t, 'update_comment', { comment: id, body: 'shorter' })).isError).toBe(
       undefined,
@@ -470,5 +475,37 @@ describe('MCP', () => {
     expect(task?.description).toBe(AT_CAP.slice(1))
     expect(task?.archived_at).toBeUndefined()
     expect((await commentsOn(t, taskId)).map((c) => c.body)).toEqual(['shorter'])
+  })
+
+  it('takes text at the cap after trimming and an unchanged longer description, as REST does', async () => {
+    const t = newT()
+    await wireOrg(t)
+    const made = await tool(t, 'create_task', { project: 'FW', title: 'Padded' })
+    const { id: taskId, key } = JSON.parse(made.content[0].text) as { id: string; key: string }
+    const padded = `  ${AT_CAP}\n`
+    const commented = await tool(t, 'add_comment', { ref: key, body: padded })
+    expect(commented.isError).toBeUndefined()
+    const { id } = JSON.parse(commented.content[0].text) as { id: string }
+    expect((await tool(t, 'update_comment', { comment: id, body: ` ${AT_CAP} ` })).isError).toBe(
+      undefined,
+    )
+    // a description saved before the cap may be sent back unchanged
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', taskId))
+        .unique()
+      await ctx.db.patch(row!._id, { description: OVER })
+    })
+    const resent = await tool(t, 'update_task', { ref: key, description: OVER, title: 'Kept' })
+    expect(resent.isError).toBeUndefined()
+    const archived = await tool(t, 'update_task', {
+      ref: key,
+      archived: true,
+      archive_reason: ` ${AT_CAP} `,
+    })
+    expect(archived.isError).toBeUndefined()
+    expect((await issueRow(t, taskId))?.archived_at).toBeDefined()
+    expect((await commentsOn(t, taskId)).map((c) => c.body.length)).toEqual([TEXT_MAX, TEXT_MAX])
   })
 })

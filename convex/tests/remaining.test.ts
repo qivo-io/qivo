@@ -122,7 +122,7 @@ describe('remaining time', () => {
     await plantIssue(t, { ...base, parent_id: parent.id })
     const err = await expectRefusal(updateAs(t, f, parent.id, { remaining_hours: 3 }), 'rule')
     expect(err.data.message).toBe(
-      'a task with subtasks has no remaining time of its own — it shows the sum of its subtasks',
+      'a task with subtasks has no remaining time of its own, because it shows the sum of its subtasks',
     )
     const row = await issueRow(t, parent.id)
     expect(row.remaining_hours).toBeUndefined()
@@ -184,7 +184,7 @@ describe('remaining time', () => {
       'bad_request',
     )
     expect(machine.data.message).toBe(
-      'remaining_hours cannot be set on a task with subtasks — it is the sum of their remaining time',
+      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time',
     )
     const childless = await plantIssue(t, { ...base })
     const neg = await expectRefusal(
