@@ -52,11 +52,11 @@ describe('named lead permission management', () => {
   it('the named lead manages explicit team and individual permissions on either hierarchy level', async () => {
     const { t, f, person } = await fixture()
     for (const id of [f.meta.id, f.sub.id]) {
-      await as(t, f.user).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id,
-        patch: { access: { [person.id]: 'viewer' }, team_access: { [f.team.id]: 'user' } },
-      })
+      for (const subject of [
+        { user_id: person.id, level: 'viewer' as const },
+        { team_id: f.team.id, level: 'user' as const },
+      ])
+        await as(t, f.user).mutation(api.projects.setAccess, { org_id: f.org.id, id, ...subject })
       await t.run(async (ctx) => {
         const project = await ctx.db
           .query('projects')

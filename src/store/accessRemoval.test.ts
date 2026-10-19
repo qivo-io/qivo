@@ -444,10 +444,12 @@ describe('removing someone who has work in the project', () => {
     expect(P.levelOn('specs', 'dan')).toBe('viewer')
     expect(P.levelOn(work, 'ann')).toBe('viewer')
     expect(P.levelOn('specs', 'ann')).toBe('viewer')
-    expect(requests.map((r) => r.name)).toEqual([
-      'projects:update',
-      'projects:update',
-      'teams:deleteDeep',
+    // one grant per write, so none can drop a grant someone else added
+    expect(requests.map((r) => [r.name, r.args.id, r.args.user_id, r.args.level])).toEqual([
+      ['projects:setAccess', work, 'ann', 'viewer'],
+      ['projects:setAccess', 'specs', 'ann', 'viewer'],
+      ['projects:setAccess', 'specs', 'dan', 'viewer'],
+      ['teams:deleteDeep', 'crew', undefined, undefined],
     ])
   })
 
@@ -474,7 +476,7 @@ describe('removing someone who has work in the project', () => {
     expect(P.startRemoval(deleteCrew)).toBe(false)
     expect(window.showToast).toHaveBeenLastCalledWith('This organization is read-only.', 'error')
     expect(P.teams.some((t) => t.id === 'crew')).toBe(true)
-    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(requests.map((r) => r.name)).toEqual(['projects:setAccess'])
   })
 
   it('saves nothing when the team to delete is the last one', async () => {
@@ -500,6 +502,22 @@ describe('removing someone who has work in the project', () => {
     ])
     expect(P.project(work)?.lead).toBe('leo')
     expect(P.project(work)?.access).toEqual({ dan: 'user', leo: 'lead' })
+  })
+
+  it("changes one person's or team's level with that grant alone", async () => {
+    await load()
+    expect(P.levelOn(work, 'leo')).toBe('user')
+    expect(await P.setProjectAccess(work, 'leo', 'viewer')).toBe(true)
+    expect(await P.setProjectTeamAccess(work, 'crew', 'viewer')).toBe(true)
+    // the level a person already has sends nothing
+    expect(await P.setProjectAccess(work, 'leo', 'viewer')).toBe(true)
+    const org = P.orgOf(work)
+    expect(requests.map((r) => [r.name, r.args])).toEqual([
+      ['projects:setAccess', { org_id: org, id: work, user_id: 'leo', level: 'viewer' }],
+      ['projects:setAccess', { org_id: org, id: work, team_id: 'crew', level: 'viewer' }],
+    ])
+    expect(P.levelOn(work, 'leo')).toBe('viewer')
+    expect(P.project(work)?.teamAccess).toEqual({ crew: 'viewer' })
   })
 
   it('tells whether the access is still there to remove', async () => {

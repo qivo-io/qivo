@@ -79,13 +79,20 @@ describe('project team sharing', () => {
     expect(await level()).toBe(true)
     await remove(sharedTeamId)
     expect(await level()).toBe(false)
-    await as(t, f.admin).mutation(api.projects.update, {
+    await as(t, f.admin).mutation(api.projects.setAccess, {
       org_id: f.org.id,
       id: f.meta.id,
-      patch: { access: { [person.id]: 'user' } },
+      user_id: person.id,
+      level: 'user',
     })
     expect(await level()).toBe(true)
-    await share({})
+    for (const team_id of [f.team.id, sharedTeamId])
+      await as(t, f.admin).mutation(api.projects.removeAccess, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        team_id,
+        on_held_tasks: 'leave',
+      })
     expect(await level()).toBe(true)
     const snap = await snapshot()
     expect(snap.teamAccess).toEqual([])
@@ -94,10 +101,11 @@ describe('project team sharing', () => {
       profile_id: person.id,
       level: 'user',
     })
-    await as(t, f.admin).mutation(api.projects.update, {
+    await as(t, f.admin).mutation(api.projects.removeAccess, {
       org_id: f.org.id,
       id: f.meta.id,
-      patch: { access: {} },
+      user_id: person.id,
+      on_held_tasks: 'leave',
     })
     expect((await snapshot()).projects).toEqual([])
     await expectRefusal(

@@ -492,6 +492,7 @@ projects:inviteGuest mutation public {"type":"object","value":{"project_id":{"fi
 projects:removalSummary query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:removeAccess mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":true},"team_id":{"fieldType":{"type":"string"},"optional":true},"on_held_tasks":{"fieldType":{"type":"union","value":[{"type":"literal","value":"leave"},{"type":"literal","value":"keep_as_viewer"},{"type":"object","value":{"reassign_to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:removeMilestone mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projects:setAccess mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":true},"team_id":{"fieldType":{"type":"string"},"optional":true},"level":{"fieldType":{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:unarchive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"key":{"fieldType":{"type":"string"},"optional":true},"track_delay":{"fieldType":{"type":"boolean"},"optional":true},"review_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"access":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},{"type":"literal","value":"lead"}]},"optional":false}},"optional":true},"team_access":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}},"optional":true}}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:updateMilestone mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"week":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -808,6 +809,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   projects: {
     create: 'orgMutation',
     update: 'orgMutation',
+    setAccess: 'orgMutation',
     removeAccess: 'accessRemovalMutation',
     archive: 'orgMutation',
     unarchive: 'orgMutation',
@@ -855,7 +857,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 166
+const PUBLIC_COUNT = 167
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
