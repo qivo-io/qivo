@@ -65,7 +65,7 @@ export const TAG_ANY = /^stgchk-[0-9a-f]{6} /
 export const hasTag = (tag, name) =>
   typeof name === 'string' && (tag instanceof RegExp ? tag.test(name) : name.startsWith(`${tag} `))
 /** Requests per profile and minute. The deployment allows 300. */
-const RATE_BUDGET = 200
+export const RATE_BUDGET = 200
 /** The second click of an in-place confirm must come 0.5 to 3.5 s after the first. */
 const CONFIRM_PAUSE_MS = 800
 const MCP_VERSION = '2026-07-28'
@@ -166,7 +166,7 @@ function origin(value, what) {
 
 /** Whether `url` is a Convex site URL of `deployment`, with or without a
  *  region label. */
-const isSiteOf = (url, deployment) =>
+export const isSiteOf = (url, deployment) =>
   url.protocol === 'https:' &&
   url.hostname.endsWith('.convex.site') &&
   url.hostname.split('.')[0] === deployment
@@ -350,6 +350,27 @@ async function until(fn, ms = 20_000) {
   }
 }
 
+/** `target.evaluate(fn, arg)` on a page or a locator, which fails after `ms`.
+ *  Playwright gives an evaluation no timeout, so a call that never settles,
+ *  such as a fetch that hangs in the page, would otherwise hold up the run
+ *  and its cleanup. */
+export async function evaluate(target, fn, arg, ms = 30_000) {
+  let timer
+  try {
+    return await Promise.race([
+      target.evaluate(fn, arg),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`a call in the page gave no answer in ${ms / 1000} s`)),
+          ms,
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /* ------------------------------------------------------------ HTTP clients */
 
 let cfg
@@ -357,7 +378,7 @@ const windows = new Map()
 
 /** Keeps each profile under RATE_BUDGET requests in any 60 seconds, which
  *  also keeps it under the deployment's fixed minute window. */
-async function pace(profile) {
+export async function pace(profile) {
   for (;;) {
     const now = Date.now()
     const recent = (windows.get(profile) ?? []).filter((t) => now - t < 60_000)
@@ -408,24 +429,29 @@ export async function request(url, init = {}, timeoutMs = 120_000) {
   }
 }
 
-/** One authenticated request. A 429 waits 61 seconds once, which happens
- *  only when something else uses the same profile at the same time or the
- *  deployment's own limit is reached. A read that answers a server error
- *  (5xx) or fails on the network is sent once more after two seconds, with a
- *  NOTE, because a read changes nothing. A write answered with the 503 of a
- *  write conflict or time out, which changed nothing, is sent once more after
- *  a second.
- *  Any other server error of a write is reported as it is. */
-async function send(profile, url, init, { read = false } = {}) {
+/** How many milliseconds send() waits before it sends a request again after
+ *  a 429, after a read's server or network error, and after a write
+ *  conflict or time out. Tests lower them. */
+export const WAITS = { rateLimit: 61_000, readRetry: 2_000, conflictRetry: 1_000 }
+
+/** One authenticated request. A 429 waits WAITS.rateLimit (61 seconds) once,
+ *  which happens only when something else uses the same profile at the same
+ *  time or the deployment's own limit is reached. A read that answers a
+ *  server error (5xx) or fails on the network is sent once more after
+ *  WAITS.readRetry (two seconds), with a NOTE, because a read changes
+ *  nothing. A write answered with the 503 of a write conflict or time out,
+ *  which changed nothing, is sent once more after WAITS.conflictRetry (a
+ *  second). Any other server error of a write is reported as it is. */
+export async function send(profile, url, init, { read = false } = {}) {
   let retried = false
   let waited = false
   const again = async (why) => {
     retried = true
     results.retried++
     say('NOTE', 'server-error', `a read ${why}; sending it once more`)
-    await sleep(2000)
+    await sleep(WAITS.readRetry)
   }
-  for (let attempt = 0; ; attempt++) {
+  for (;;) {
     await pace(profile)
     let response
     try {
@@ -437,9 +463,13 @@ async function send(profile, url, init, { read = false } = {}) {
     }
     if (response.status === 429 && !waited) {
       waited = true
-      say('NOTE', 'rate-limit', `${profile} hit the request limit; waiting 61 seconds`)
+      say(
+        'NOTE',
+        'rate-limit',
+        `${profile} hit the request limit; waiting ${WAITS.rateLimit / 1000} seconds`,
+      )
       await response.arrayBuffer().catch(() => {})
-      await sleep(61_000)
+      await sleep(WAITS.rateLimit)
       continue
     }
     if (response.status >= 500 && read && !retried) {
@@ -464,7 +494,7 @@ async function send(profile, url, init, { read = false } = {}) {
             ? 'a write ran out of time and changed nothing; sending it once more'
             : 'a write conflicted and changed nothing; sending it once more',
         )
-        await sleep(1000)
+        await sleep(WAITS.conflictRetry)
         continue
       }
     }
@@ -767,6 +797,8 @@ let consent
 let callbacks
 let callbackServer
 let redirectUri
+/** The WebSocket URLs the app page opened, which name its Convex backend. */
+let appSockets = []
 
 /** Starts the loopback OAuth callback. Codes stay in memory. */
 async function startCallback() {
@@ -853,6 +885,10 @@ async function openBrowser() {
   app = await context.newPage()
   app.setDefaultTimeout(30_000)
   app.setDefaultNavigationTimeout(90_000)
+  // recorded from the first navigation on, because the app's Convex client
+  // connects as soon as the page loads, before verifyTarget runs
+  appSockets = []
+  app.on('websocket', (ws) => appSockets.push(ws.url()))
 }
 
 /** Screenshot for a failure, only with --shots and never while a secret or
@@ -884,16 +920,39 @@ async function signIn(account) {
   eq(new URL(app.url()).origin, cfg.appOrigin, 'the sign-in page origin')
   await signInBrowser(app, account)
   await app.waitForSelector('[data-all-nav]', { timeout: 60_000 })
-  eq(await app.evaluate(() => window.PLANNER.org?.slug), ORG_SLUG, 'signed-in organization')
+  eq(await evaluate(app, () => window.PLANNER.org?.slug), ORG_SLUG, 'signed-in organization')
+}
+
+/** Whether one of `sockets`, the WebSocket URLs a page opened, is a Convex
+ *  client's sync connection to `backend`: the same host and port, ws: for
+ *  http: or wss: for https:, on /api/<version>/sync. */
+export function syncsWith(sockets, backend) {
+  const want = new URL(backend)
+  const protocol = want.protocol === 'https:' ? 'wss:' : 'ws:'
+  return sockets.some((value) => {
+    let url
+    try {
+      url = new URL(value)
+    } catch {
+      return false
+    }
+    return (
+      url.protocol === protocol &&
+      url.host === want.host &&
+      /^\/api\/[^/]+\/sync$/.test(url.pathname)
+    )
+  })
 }
 
 /** Proves the API origin belongs to the app the run signed in to, before any
  *  credential is sent there. The MCP address the app shows is its own
- *  backend. A staging app must also name itself staging in version.json. */
+ *  backend. A staging app must also name itself staging in version.json. A
+ *  local app must sync with the --convex-url backend, which later gets the
+ *  local admin key. */
 async function verifyTarget() {
   let commit = 'unknown'
   if (cfg.target.target === 'staging') {
-    const manifest = await app.evaluate(async () => {
+    const manifest = await evaluate(app, async () => {
       const r = await fetch('/version.json', { cache: 'no-store' })
       return r.ok ? r.json().catch(() => null) : null
     })
@@ -901,6 +960,23 @@ async function verifyTarget() {
     commit = String(manifest.commit ?? 'unknown').slice(0, 12)
   }
   await openAccountMcp()
+  if (cfg.target.target === 'local' && !syncsWith(appSockets, cfg.target.url)) {
+    // only origins, because a URL's query can hold a token
+    const opened = [
+      ...new Set(
+        appSockets.map((value) => {
+          try {
+            return new URL(value).origin
+          } catch {
+            return 'a URL that does not parse'
+          }
+        }),
+      ),
+    ]
+    fail(
+      `the app at ${cfg.appOrigin} does not sync with ${cfg.target.url}, the backend --convex-url names; ${opened.length ? `it opened WebSockets to ${opened.join(', ')}` : 'it opened no WebSocket'}`,
+    )
+  }
   const shown = (
     (await app.locator('[data-mcp-server-address] span[translate="no"]').first().textContent()) ??
     ''
@@ -1150,7 +1226,7 @@ async function deleteProjectInApp(cred, project) {
     project.id,
     { timeout: 30_000 },
   )
-  await app.evaluate((id) => window.PLANNER.removeProject(id), project.id)
+  await evaluate(app, (id) => window.PLANNER.removeProject(id), project.id)
   await settled()
   expect(
     await until(async () => (await rest(cred, 'GET', `/projects/${project.id}`)).status === 404),
@@ -1163,7 +1239,7 @@ async function deleteProjectInApp(cred, project) {
  *  the first one, because a refusal comes after the server round trip.
  *  Nothing collected is printed, and a secret `call` answers stays in memory. */
 async function appMessages(call, arg) {
-  await app.evaluate(() => {
+  await evaluate(app, () => {
     const hooks = { show: window.showToast, error: console.error, seen: [] }
     window.__stgchk = hooks
     window.showToast = (msg, tone) => {
@@ -1176,13 +1252,13 @@ async function appMessages(call, arg) {
     }
   })
   try {
-    const value = (await app.evaluate(call, arg)) ?? null
+    const value = (await evaluate(app, call, arg)) ?? null
     if (value?.secret) keep(value.secret)
-    await until(async () => (await app.evaluate(() => window.__stgchk.seen.length)) > 0, 15_000)
+    await until(async () => (await evaluate(app, () => window.__stgchk.seen.length)) > 0, 15_000)
     await sleep(500)
-    return { value, seen: await app.evaluate(() => window.__stgchk.seen) }
+    return { value, seen: await evaluate(app, () => window.__stgchk.seen) }
   } finally {
-    await app.evaluate(() => {
+    await evaluate(app, () => {
       window.showToast = window.__stgchk.show
       console.error = window.__stgchk.error
       delete window.__stgchk
@@ -1226,13 +1302,13 @@ async function sweep(tag, label) {
   }
   /** A list the app reads on demand; null (a failed read) is a failure. */
   const appList = async (what, call) => {
-    const rows = await app.evaluate(call)
+    const rows = await evaluate(app, call)
     expect(Array.isArray(rows), `the app could not list ${what}`)
     return rows
   }
   const taggedAgents = async () =>
     (
-      await app.evaluate(() =>
+      await evaluate(app, () =>
         window.PLANNER.users.filter((u) => u.isAgent).map((u) => ({ id: u.id, name: u.name })),
       )
     ).filter((a) => matches(a.name))
@@ -1243,7 +1319,7 @@ async function sweep(tag, label) {
     for (const c of rows.filter((c) => matches(c.clientName)))
       await step(`OAuth connection ${c.clientName}`, async () => {
         expect(
-          await app.evaluate((id) => window.PLANNER.revokeOAuthConnection(id), c.id),
+          await evaluate(app, (id) => window.PLANNER.revokeOAuthConnection(id), c.id),
           'the app could not delete it',
         )
         note(`OAuth connection ${c.clientName}`)
@@ -1270,7 +1346,8 @@ async function sweep(tag, label) {
       const agent = agents.find((a) => a.id === key.agentId)
       await step(`agent key ${key.name} of ${agent.name}`, async () => {
         expect(
-          await app.evaluate(
+          await evaluate(
+            app,
             async ({ id, revoked }) =>
               (revoked || (await window.PLANNER.revokeAgentKey(id))) &&
               (await window.PLANNER.deleteAgentKey(id)),
@@ -1290,7 +1367,8 @@ async function sweep(tag, label) {
   let minted = null
   let cleaner = null
   await step('creating the temporary cleanup token', async () => {
-    minted = await app.evaluate(
+    minted = await evaluate(
+      app,
       async ([name, expiresAt]) =>
         window.PLANNER.createMcpToken(name, { access: 'write', expiresAt }),
       [tokenName, new Date(Date.now() + 86_400_000).toISOString()],
@@ -1331,7 +1409,7 @@ async function sweep(tag, label) {
               timeout: 30_000,
             })
             expect(
-              await app.evaluate((id) => window.PLANNER.removeTeam(id), team.id),
+              await evaluate(app, (id) => window.PLANNER.removeTeam(id), team.id),
               'the app could not delete it',
             )
             note(`team ${team.name}`)
@@ -1345,7 +1423,7 @@ async function sweep(tag, label) {
       for (const agent of await taggedAgents()) {
         agentIds.add(agent.id)
         await step(`agent ${agent.name}`, async () => {
-          await app.evaluate((id) => window.PLANNER.removeUser(id), agent.id)
+          await evaluate(app, (id) => window.PLANNER.removeUser(id), agent.id)
           await settled()
           expect(
             await until(async () =>
@@ -1429,7 +1507,8 @@ async function sweep(tag, label) {
 /** Revokes (unless it already is) and deletes one of Nora's personal
  *  tokens through the app's store. Answers whether both were accepted. */
 async function removeTokenInApp(id, revoked) {
-  return await app.evaluate(
+  return await evaluate(
+    app,
     async ({ id, revoked }) =>
       (revoked || (await window.PLANNER.revokeMcpToken(id))) &&
       (await window.PLANNER.deleteMcpToken(id)),
@@ -1440,11 +1519,14 @@ async function removeTokenInApp(id, revoked) {
 /** Whether the Users page lists an agent after a cold reload. */
 async function agentListedAfterReload(id) {
   await openUsers()
-  return await app.evaluate((agent) => window.PLANNER.users.some((u) => u.id === agent), id)
+  return await evaluate(app, (agent) => window.PLANNER.users.some((u) => u.id === agent), id)
 }
 
-/** Tasks whose title carries the tag, active and archived. Archived tasks
- *  are listed one top-level project at a time, active and archived ones. */
+/** Tasks whose title carries the tag, active and archived. The default
+ *  list holds the active tasks of active projects only, so the active tasks
+ *  of each archived project, a sub-project archived on its own included, are
+ *  read by naming that project. Archived tasks are listed one top-level
+ *  project at a time, active and archived ones. */
 async function findTasks(cred, tag) {
   const fragment = typeof tag === 'string' ? tag : TAG_PREFIX
   const found = new Map()
@@ -1452,15 +1534,23 @@ async function findTasks(cred, tag) {
     for (const row of rows ?? []) if (hasTag(tag, row.title)) found.set(row.id, row)
   }
   const search = encodeURIComponent(fragment)
-  for (let offset = 0; ; offset += 200) {
-    const page = await readList(cred, `/tasks?search=${search}&limit=200&offset=${offset}`)
-    take(page)
-    if (page.length < 200) break
+  /** Pages one active list with offset until a page is short. */
+  const readActive = async (scope) => {
+    for (let offset = 0; ; offset += 200) {
+      const page = await readList(
+        cred,
+        `/tasks?${scope}search=${search}&limit=200&offset=${offset}`,
+      )
+      take(page)
+      if (page.length < 200) break
+    }
   }
-  const projects = [
-    ...(await readList(cred, '/projects')),
-    ...(await readList(cred, '/projects?archived=true')),
-  ].filter((p) => p.parent_id === null)
+  await readActive('')
+  const archivedProjects = await readList(cred, '/projects?archived=true')
+  for (const p of archivedProjects) await readActive(`project=${p.id}&`)
+  const projects = [...(await readList(cred, '/projects')), ...archivedProjects].filter(
+    (p) => p.parent_id === null,
+  )
   for (const p of projects) {
     let cursor = null
     for (let i = 0; i < 200; i++) {
@@ -1486,7 +1576,7 @@ const OAUTH_GONE = 'OAuth connection is invalid, expired or disconnected'
 /** A write that kept conflicting, or kept running out of time, and changed
  *  nothing (convex/machine/shared.ts WRITE_CONFLICT_MESSAGE and
  *  WRITE_TIMEOUT_MESSAGE): REST's 503 error and MCP's tool error. */
-const WRITE_CONFLICT =
+export const WRITE_CONFLICT =
   'the request conflicted with other changes made at the same time and changed nothing; send it again'
 const WRITE_TIMEOUT =
   'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
@@ -2392,16 +2482,26 @@ async function textCapChecks() {
 /** Comment paging with limit and before on a small thread (#118). */
 async function commentPageChecks() {
   const w = run.creds.writeToken
-  const task = await restOk(w, 'POST', '/tasks', {
-    project: run.projects.A.id,
-    title: `${run.tag} comment pages`,
-  })
-  run.created.push(task)
+  let task
   const ids = []
-  for (const n of [1, 2, 3])
-    ids.push(
-      (await restOk(w, 'POST', `/tasks/${task.key}/comments`, { body: `${run.tag} page ${n}` })).id,
-    )
+  const made = await check('comment-pages/setup', async () => {
+    task = await restOk(w, 'POST', '/tasks', {
+      project: run.projects.A.id,
+      title: `${run.tag} comment pages`,
+    })
+    run.created.push(task)
+    for (const n of [1, 2, 3])
+      ids.push(
+        (await restOk(w, 'POST', `/tasks/${task.key}/comments`, { body: `${run.tag} page ${n}` }))
+          .id,
+      )
+    return `${task.key} with 3 comments`
+  })
+  if (!made) {
+    for (const id of ['rest', 'mcp'])
+      skip(`comment-pages/${id}`, 'the task and its three comments could not be made')
+    return
+  }
   const fixtureComment = run.fixtureComment
   await check('comment-pages/rest', async () => {
     const newest = await restOk(w, 'GET', `/tasks/${task.key}/comments?limit=2`)
@@ -2562,16 +2662,19 @@ async function nameCapChecks() {
     )
     eq((await restOk(w, 'GET', '/me')).organization.name, run.orgName, 'the organization name')
     expect(
-      await until(async () => (await app.evaluate(() => window.PLANNER.org?.name)) === run.orgName),
+      await until(
+        async () => (await evaluate(app, () => window.PLANNER.org?.name)) === run.orgName,
+      ),
       'the app did not revert the organization name',
     )
   }).then(async (ok) => {
     // a deployment that took the name gets Northstar's name back at once
     if (ok) return
     const name = async () => (await rest(w, 'GET', '/me')).json?.organization?.name
-    if ((await name()) === run.orgName) return
+    // a failed read goes on to the check, so it cannot end the run
+    if ((await name().catch(() => null)) === run.orgName) return
     await check('name-caps/app/organization-restored', async () => {
-      await app.evaluate((name) => window.PLANNER.setOrg({ name }), run.orgName)
+      await evaluate(app, (name) => window.PLANNER.setOrg({ name }), run.orgName)
       expect(
         await until(async () => (await name()) === run.orgName),
         "Northstar's name was not restored",
@@ -2588,14 +2691,16 @@ async function nameCapChecks() {
       out.seen.some((m) => m.includes('a token name must be at most 80 characters')),
       'the app logged no token name refusal',
     )
-    const made = await app.evaluate(
+    const made = await evaluate(
+      app,
       (name) => window.PLANNER.createMcpToken(name, { access: 'read' }),
       nameOf(80),
     )
     expect(made?.id, 'an 80 character token name was refused')
     keep(made.secret)
     expect(
-      await app.evaluate(
+      await evaluate(
+        app,
         async (id) =>
           (await window.PLANNER.revokeMcpToken(id)) && window.PLANNER.deleteMcpToken(id),
         made.id,
@@ -2613,7 +2718,7 @@ async function nameCapChecks() {
       out.seen.some((m) => m.includes('a key name must be at most 80 characters')),
       'the app logged no key name refusal',
     )
-    const keys = (await app.evaluate(() => window.PLANNER.listAgentKeys())) ?? []
+    const keys = (await evaluate(app, () => window.PLANNER.listAgentKeys())) ?? []
     expect(!keys.some((k) => k.name === over), 'the over-long key exists')
   })
 }
@@ -2774,7 +2879,7 @@ async function unknownArgumentChecks() {
     )
     eq((await restOk(w, 'GET', `/tasks/${run.t0.key}`)).title, run.t0.title, 'the title')
   })
-  await restoreStandardGrant()
+  const granted = await restoreStandardGrant('fixture/standard-grant')
   const team = run.team
   const nora = run.nora.id
   const routes = [
@@ -2819,49 +2924,62 @@ async function unknownArgumentChecks() {
         ]
       : []),
   ]
-  await check('unknown-args/rest/access-routes', async () => {
-    for (const [method, path, body, field, takes] of routes)
+  if (!granted)
+    skip(
+      'unknown-args/rest/access-routes',
+      "the Standard agent's User grant on Alpha could not be restored",
+    )
+  else
+    await check('unknown-args/rest/access-routes', async () => {
+      for (const [method, path, body, field, takes] of routes)
+        await restRefusal(
+          w,
+          method,
+          path,
+          body,
+          400,
+          `unknown field "${field}"; this request takes ${takes}`,
+        )
       await restRefusal(
         w,
-        method,
-        path,
-        body,
+        'PUT',
+        `/projects/${A.id}/access/users/${std.id}`,
+        { level: 'user', aa: 1, bb: 2 },
         400,
-        `unknown field "${field}"; this request takes ${takes}`,
+        'unknown fields "aa", "bb"; this request takes level',
       )
-    await restRefusal(
-      w,
-      'PUT',
-      `/projects/${A.id}/access/users/${std.id}`,
-      { level: 'user', aa: 1, bb: 2 },
-      400,
-      'unknown fields "aa", "bb"; this request takes level',
-    )
-    const project = await restOk(w, 'GET', `/projects/${A.id}`)
-    eq(project.grants.users.find((g) => g.id === std.id)?.level, 'user', "the agent's grant")
-    eq(
-      (await restOk(w, 'GET', `/projects/${M.id}`)).grants.teams.length,
-      0,
-      'team grants on the project',
-    )
-    // without the run's team only the user routes could be checked
-    expect(team, `the run has no team, so only ${routes.length} routes were checked`)
-    eq((await restOk(w, 'GET', `/teams/${team.id}`)).members.length, 0, 'team members')
-    return `${routes.length} routes`
-  })
-  await restoreStandardGrant()
+      const project = await restOk(w, 'GET', `/projects/${A.id}`)
+      eq(project.grants.users.find((g) => g.id === std.id)?.level, 'user', "the agent's grant")
+      eq(
+        (await restOk(w, 'GET', `/projects/${M.id}`)).grants.teams.length,
+        0,
+        'team grants on the project',
+      )
+      // without the run's team only the user routes could be checked
+      expect(team, `the run has no team, so only ${routes.length} routes were checked`)
+      eq((await restOk(w, 'GET', `/teams/${team.id}`)).members.length, 0, 'team members')
+      return `${routes.length} routes`
+    })
+  run.standardGrant = await restoreStandardGrant('fixture/standard-grant-after-routes')
 }
 
 /** Gives the Standard agent its User grant on Alpha back, should a refusal
  *  check on a deployment without the rule have removed it, so later checks
- *  keep their fixture. */
-async function restoreStandardGrant() {
+ *  keep their fixture. Runs as check `id` and answers whether the agent has
+ *  the grant, so a caller can skip the checks that need it. */
+async function restoreStandardGrant(id) {
   const w = run.creds.writeToken
   const { A } = run.projects
-  const grants = (await restOk(w, 'GET', `/projects/${A.id}`)).grants.users
-  if (grants.find((g) => g.id === run.agents.std.id)?.level === 'user') return
-  await restOk(w, 'PUT', `/projects/${A.id}/access/users/${run.agents.std.id}`, { level: 'user' })
-  say('NOTE', 'fixture', "restored the Standard agent's grant on Alpha")
+  return await check(id, async () => {
+    const grants = (await restOk(w, 'GET', `/projects/${A.id}`)).grants.users
+    if (grants.find((g) => g.id === run.agents.std.id)?.level === 'user')
+      return "the Standard agent's grant on Alpha is in place"
+    const r = await restOk(w, 'PUT', `/projects/${A.id}/access/users/${run.agents.std.id}`, {
+      level: 'user',
+    })
+    eq(r.level, 'user', 'the restored level')
+    return "restored the Standard agent's grant on Alpha"
+  })
 }
 
 /** Active lists come in creation order over MCP as over REST (#128). */
@@ -2973,14 +3091,14 @@ async function archivedTasksPageCheck(target) {
     const box = page.locator('[data-archive-search]')
     await box.waitFor()
     expect(
-      await page.evaluate((el) => {
+      await evaluate(page, (el) => {
         const first = el.querySelector('input, select, textarea, button, a[href]')
         return first?.hasAttribute('data-archive-search') === true
       }),
       'the search is not the first control',
     )
     expect(
-      await box.evaluate((el) => el === document.activeElement),
+      await evaluate(box, (el) => el === document.activeElement),
       'the search does not have focus when the page opens',
     )
     await page.locator('[data-archive-project]').selectOption(run.projects.M.id)
@@ -3020,20 +3138,23 @@ async function archiveChecks() {
   // three archived tasks across both sub-projects
   const archived = []
   const archivedTasks = []
-  for (const [p, n] of [
-    [A, 1],
-    [Z, 2],
-    [A, 3],
-  ]) {
-    const t = await restOk(w, 'POST', '/tasks', {
-      project: p.id,
-      title: `${run.tag} archived ${n}`,
-    })
-    run.created.push(t)
-    await restOk(w, 'PATCH', `/tasks/${t.key}`, { archived: true })
-    archived.push(t.id)
-    archivedTasks.push(t)
-  }
+  const made = await check('archived-lists/setup', async () => {
+    for (const [p, n] of [
+      [A, 1],
+      [Z, 2],
+      [A, 3],
+    ]) {
+      const t = await restOk(w, 'POST', '/tasks', {
+        project: p.id,
+        title: `${run.tag} archived ${n}`,
+      })
+      run.created.push(t)
+      await restOk(w, 'PATCH', `/tasks/${t.key}`, { archived: true })
+      archived.push(t.id)
+      archivedTasks.push(t)
+    }
+    return '3 archived tasks in Alpha and Zulu'
+  })
   await check('archived-lists/rest/refusals', async () => {
     await restRefusal(
       w,
@@ -3068,86 +3189,96 @@ async function archiveChecks() {
       'cursor must be the next_cursor of an earlier page',
     )
   })
-  await check('archived-lists/rest/cursor-pages', async () => {
-    const seen = []
-    let cursor = null
-    let pages = 0
-    for (; pages < 60; pages++) {
-      const page = await restOk(
-        w,
-        'GET',
-        `/tasks?archived=true&project=${M.id}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+  if (made) {
+    await check('archived-lists/rest/cursor-pages', async () => {
+      const seen = []
+      let cursor = null
+      let pages = 0
+      for (; pages < 60; pages++) {
+        const page = await restOk(
+          w,
+          'GET',
+          `/tasks?archived=true&project=${M.id}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        )
+        expect(Array.isArray(page.tasks), 'an archived page is an object with tasks')
+        expect(page.tasks.length <= 1, 'a page holds at most limit tasks')
+        for (const t of page.tasks) eq(t.archived, true, 'an archived row')
+        seen.push(...page.tasks.map((t) => t.id))
+        cursor = page.next_cursor
+        if (cursor === null) break
+      }
+      eq(cursor, null, 'paging ends')
+      eq(new Set(seen).size, seen.length, 'no task twice')
+      for (const id of archived)
+        expect(seen.includes(id), 'an archived task is missing from the pages')
+      expect(seen.indexOf(archived[2]) < seen.indexOf(archived[0]), 'most recently archived first')
+      const one = await restOk(w, 'GET', `/tasks?archived=true&project=${Z.id}&limit=200`)
+      same(
+        one.tasks.map((t) => t.id),
+        [archived[1]],
+        "one sub-project's archive",
       )
-      expect(Array.isArray(page.tasks), 'an archived page is an object with tasks')
-      expect(page.tasks.length <= 1, 'a page holds at most limit tasks')
-      for (const t of page.tasks) eq(t.archived, true, 'an archived row')
-      seen.push(...page.tasks.map((t) => t.id))
-      cursor = page.next_cursor
-      if (cursor === null) break
-    }
-    eq(cursor, null, 'paging ends')
-    eq(new Set(seen).size, seen.length, 'no task twice')
-    for (const id of archived)
-      expect(seen.includes(id), 'an archived task is missing from the pages')
-    expect(seen.indexOf(archived[2]) < seen.indexOf(archived[0]), 'most recently archived first')
-    const one = await restOk(w, 'GET', `/tasks?archived=true&project=${Z.id}&limit=200`)
-    same(
-      one.tasks.map((t) => t.id),
-      [archived[1]],
-      "one sub-project's archive",
-    )
-    return `${seen.length} archived tasks in ${pages + 1} pages`
-  })
-  await check('archived-lists/mcp', async () => {
-    eq(
-      await toolRefusal(w, 'list_tasks', { archived: true }),
-      'archived: true needs project, because archived tasks are listed one project at a time',
-      'no project',
-    )
-    eq(
-      await toolRefusal(w, 'list_tasks', { project: M.id, cursor: 'x' }),
-      'cursor works only with archived: true',
-      'cursor without archived',
-    )
-    eq(
-      await toolRefusal(w, 'list_tasks', { archived: true, project: M.id, offset: 1 }),
-      'offset does not apply to archived tasks; pass next_cursor as cursor',
-      'offset',
-    )
-    eq(
-      await toolRefusal(w, 'list_tasks', { archived: true, project: M.id, cursor: 'garbage' }),
-      'cursor must be the next_cursor of an earlier page',
-      'bad cursor',
-    )
-    const seen = []
-    let cursor = null
-    for (let i = 0; i < 60; i++) {
-      const page = await toolOk(w, 'list_tasks', {
-        archived: true,
-        project: M.id,
-        limit: 2,
-        ...(cursor ? { cursor } : {}),
-      })
-      expect(Array.isArray(page.tasks), 'an archived page is an object with tasks')
-      seen.push(...page.tasks.map((t) => t.id))
-      cursor = page.next_cursor
-      if (cursor === null) break
-    }
-    eq(cursor, null, 'paging ends')
-    for (const id of archived) expect(seen.includes(id), 'MCP archived pages miss a task')
-  })
-  await check('task-lists/active-only', async () => {
-    const rows = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
-    for (const id of archived) expect(!rows.some((t) => t.id === id), 'REST lists an archived task')
-    expect(
-      rows.every((t) => t.archived === false),
-      'an active list holds an archived row',
-    )
-    const mcpRows = await toolOk(w, 'list_tasks', { project: M.id, limit: 200 })
-    for (const id of archived)
-      expect(!mcpRows.some((t) => t.id === id), 'MCP lists an archived task')
-  })
-  await archivedTasksPageCheck(archivedTasks[2])
+      return `${seen.length} archived tasks in ${pages + 1} pages`
+    })
+    await check('archived-lists/mcp', async () => {
+      eq(
+        await toolRefusal(w, 'list_tasks', { archived: true }),
+        'archived: true needs project, because archived tasks are listed one project at a time',
+        'no project',
+      )
+      eq(
+        await toolRefusal(w, 'list_tasks', { project: M.id, cursor: 'x' }),
+        'cursor works only with archived: true',
+        'cursor without archived',
+      )
+      eq(
+        await toolRefusal(w, 'list_tasks', { archived: true, project: M.id, offset: 1 }),
+        'offset does not apply to archived tasks; pass next_cursor as cursor',
+        'offset',
+      )
+      eq(
+        await toolRefusal(w, 'list_tasks', { archived: true, project: M.id, cursor: 'garbage' }),
+        'cursor must be the next_cursor of an earlier page',
+        'bad cursor',
+      )
+      const seen = []
+      let cursor = null
+      for (let i = 0; i < 60; i++) {
+        const page = await toolOk(w, 'list_tasks', {
+          archived: true,
+          project: M.id,
+          limit: 2,
+          ...(cursor ? { cursor } : {}),
+        })
+        expect(Array.isArray(page.tasks), 'an archived page is an object with tasks')
+        seen.push(...page.tasks.map((t) => t.id))
+        cursor = page.next_cursor
+        if (cursor === null) break
+      }
+      eq(cursor, null, 'paging ends')
+      for (const id of archived) expect(seen.includes(id), 'MCP archived pages miss a task')
+    })
+    await check('task-lists/active-only', async () => {
+      const rows = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
+      for (const id of archived)
+        expect(!rows.some((t) => t.id === id), 'REST lists an archived task')
+      expect(
+        rows.every((t) => t.archived === false),
+        'an active list holds an archived row',
+      )
+      const mcpRows = await toolOk(w, 'list_tasks', { project: M.id, limit: 200 })
+      for (const id of archived)
+        expect(!mcpRows.some((t) => t.id === id), 'MCP lists an archived task')
+    })
+    await archivedTasksPageCheck(archivedTasks[2])
+  } else
+    for (const id of [
+      'archived-lists/rest/cursor-pages',
+      'archived-lists/mcp',
+      'task-lists/active-only',
+      'ui/archived-tasks-page',
+    ])
+      skip(id, 'the three archived tasks could not be made')
 
   // Archive the project, find it among archived projects, then read its tasks.
   await check('archived-projects/archive', async () => {
@@ -3213,6 +3344,11 @@ async function archiveChecks() {
 async function commentCapChecks() {
   const w = run.creds.writeToken
   const s = run.creds.stdKey
+  // the Standard agent posts half the comments, which needs its grant on Alpha
+  if (run.standardGrant === false) {
+    skip('comment-cap', "the Standard agent's User grant on Alpha could not be restored")
+    return
+  }
   let task
   await check('comment-cap/task', async () => {
     task = await restOk(w, 'POST', '/tasks', {
@@ -4562,7 +4698,7 @@ async function main() {
       await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), run.team.id, {
         timeout: 30_000,
       })
-      expect(await app.evaluate((id) => window.PLANNER.removeTeam(id), run.team.id), 'refused')
+      expect(await evaluate(app, (id) => window.PLANNER.removeTeam(id), run.team.id), 'refused')
       eq((await rest(c.writeToken, 'GET', `/teams/${run.team.id}`)).status, 404, 'the team')
     })
   await check('cleanup/rest/no-tagged-tasks', async () => {
@@ -4828,7 +4964,7 @@ async function start() {
         const signedOut = app
           .waitForResponse((r) => r.url().includes('/sign-out'), { timeout: 10_000 })
           .catch(() => {})
-        await app.evaluate(() => window.PLANNER?.signOut?.()).catch(() => {})
+        await evaluate(app, () => window.PLANNER?.signOut?.()).catch(() => {})
         await signedOut
       }
       await browser?.close()
