@@ -1,6 +1,6 @@
 /* model/billing.ts storageUsage, the attachment bytes an organization
- * stores in total and per project, which billing.usage reads in one query.
- * The admin Billing page reads the same figures page by page
+ * stores in total and per project, read in one transaction. The admin
+ * Billing page reads the same figures page by page
  * (billing.usageReport, through storagePage), as each new billing period's
  * sample does (covered in billing.test.ts).
  *
@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { BillingUsage } from '../lib/billingTypes'
-import { STORAGE_PAGE, storageUsage, UNSCOPED_READ } from '../model/billing'
+import { billingUsageHead, STORAGE_PAGE, storageUsage, UNSCOPED_READ } from '../model/billing'
 import {
   as,
   NOW,
@@ -373,8 +373,13 @@ describe("the Billing page's paged report", () => {
 
   const report = (t: T, f: OrgFixture): Promise<BillingUsage> =>
     as(t, f.admin).action(api.billing.usageReport, { org_id: f.org.id })
+  /* The same report read in one transaction, storageUsage for its storage. */
   const oneQuery = (t: T, f: OrgFixture): Promise<BillingUsage> =>
-    as(t, f.admin).query(api.billing.usage, { org_id: f.org.id })
+    t.run(async (ctx) => {
+      const storage = await storageUsage(ctx, f.org.id)
+      const head = await billingUsageHead(ctx, f.org.id)
+      return { ...head, storage_bytes: storage.bytes, projects: storage.projects }
+    })
 
   it('gives what the one query gives at any page size, rows without org_id included', async () => {
     const { t, f, sid, active, archived, shelved, elsewhere } = await fixture()

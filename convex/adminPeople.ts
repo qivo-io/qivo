@@ -280,31 +280,6 @@ export const userPage = platformAction({
   },
 })
 
-/* Every row of the Users page in one answer, ordered by organization name,
- * then profile name. The console before userPage calls it, so tabs opened
- * before that release keep working (docs/deployment.md, Recovery and
- * compatibility). Its answer grows with the deployment. Remove it once no
- * served console build calls it. */
-export const listUsers = platformAction({
-  args: { search: v.string() },
-  handler: async (ctx, { search }): Promise<AdminUserRow[]> => {
-    const matches = matcher(search)
-    const matched: ListedPerson[] = []
-    let cursor: string | null = null
-    do {
-      const page: ProfilePage = await ctx.runQuery(internal.adminPeople.profilePage, { cursor })
-      matched.push(...page.profiles.filter(matches))
-      cursor = page.next
-    } while (cursor !== null)
-    matched.sort((a, b) => cmp(a.org_name, b.org_name) || cmp(a.name, b.name))
-    const auth = await authColumns(
-      ctx,
-      matched.map((p) => p.auth_user_id),
-    )
-    return matched.map((p) => userRow(p, auth))
-  },
-})
-
 /* ---------------------------------------------------------------- orgDetail */
 
 export type AdminMemberRow = {

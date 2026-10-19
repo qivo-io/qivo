@@ -14,7 +14,6 @@ import { refuseDemoFeature } from './lib/demo'
 import { forbidden, orgAction, orgQuery, require } from './lib/functions'
 import {
   billingSummary,
-  billingUsage,
   billingUsageHead,
   legacyPhase,
   type StoragePage,
@@ -31,19 +30,6 @@ export const summary = orgQuery({
     refuseDemoFeature()
     require(ctx.me.org_role === 'admin', forbidden('admin only'))
     return await billingSummary(ctx, ctx.me.org_id)
-  },
-})
-
-// The report in one query, which reads all the organization's attachment
-// rows at once. Billing pages before usageReport call it, so tabs opened
-// before that release keep working (docs/deployment.md, Recovery and
-// compatibility). Remove it once no served build calls it.
-export const usage = orgQuery({
-  args: {},
-  handler: async (ctx) => {
-    refuseDemoFeature()
-    require(ctx.me.org_role === 'admin', forbidden('admin only'))
-    return await billingUsage(ctx, ctx.me.org_id)
   },
 })
 

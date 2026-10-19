@@ -1,7 +1,7 @@
 /* The operator console's Users page and organization page (adminPeople.ts).
  * Every action refuses every caller but an operator, and refuses a demo
- * deployment. The suite checks the Users page rows (userPage, and listUsers
- * for older console builds) against the fields Users.tsx destructures,
+ * deployment. The suite checks the Users page rows (userPage) against the
+ * fields Users.tsx destructures,
  * including the banned_until mapping from Better Auth's
  * { banned, banExpires } and the newest-session last_sign_in_at, through the
  * real local component. It writes out orgDetail on a small fixture, and
@@ -140,10 +140,9 @@ async function peopleFixture(t: T) {
   return { f, pending, empty, banExpires, sessionCreated }
 }
 
-type PublicName = 'userPage' | 'listUsers' | 'orgDetail'
+type PublicName = 'userPage' | 'orgDetail'
 const CALLS: Record<PublicName, (caller: Pick<T, 'action'>, f: OrgFixture) => Promise<unknown>> = {
   userPage: (caller) => caller.action(api.adminPeople.userPage, { search: '', cursor: null }),
-  listUsers: (caller) => caller.action(api.adminPeople.listUsers, { search: '' }),
   orgDetail: (caller, f) => caller.action(api.adminPeople.orgDetail, { org_id: f.org.id }),
 }
 
@@ -192,7 +191,8 @@ async function userPages(asOp: Operator, search: string) {
   return pages
 }
 
-/** The Users page rows for `search`, ordered as listUsers orders them. */
+/** Every Users page row for `search`, by organization name and then name,
+ * so answers read at different page sizes compare equal. */
 async function allUsers(asOp: Operator, search: string) {
   const rows = (await userPages(asOp, search)).flatMap((page) => page.rows)
   const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
@@ -252,16 +252,6 @@ describe('the Users page', () => {
       const matches = await allUsers(asOp, search)
       expect(matches.map((r) => r.profile_id)).toEqual(ids)
     }
-  })
-
-  it('answers older console builds through listUsers with the same rows, ordered', async () => {
-    const t = newT()
-    await peopleFixture(t)
-    const asOp = await operator(t)
-    for (const search of ['', 'testbed view'])
-      expect(await asOp.action(api.adminPeople.listUsers, { search })).toEqual(
-        await allUsers(asOp, search),
-      )
   })
 
   it('returns fewer than twice PEOPLE_PAGE.users rows a page, and every row once', async () => {
@@ -353,7 +343,6 @@ describe('the Users page', () => {
     const rows = await allUsers(asOp, '')
     expect(rows.map((r) => r.profile_id)).not.toContain(f.otherAdmin.id)
     expect(rows).toHaveLength(5)
-    expect(await asOp.action(api.adminPeople.listUsers, { search: '' })).toEqual(rows)
   })
 
   it('gives the same rows when every page holds one row or one byte', async () => {
@@ -364,7 +353,6 @@ describe('the Users page', () => {
 
     Object.assign(PEOPLE_PAGE, ONE)
     expect(await allUsers(asOp, '')).toEqual(expected)
-    expect(await asOp.action(api.adminPeople.listUsers, { search: '' })).toEqual(expected)
     Object.assign(PEOPLE_PAGE, { ...DEFAULT_PEOPLE, bytes: 1 })
     expect(await allUsers(asOp, '')).toEqual(expected)
   })
