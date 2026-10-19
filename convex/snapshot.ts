@@ -30,7 +30,9 @@
  * team and per visible project, and a person's seats add up. Teams and projects are few
  * beside tasks. A view read task by task adds its 4 ranges per task, as the
  * rule this replaced did, which a view of about 1,000 tasks or more cannot
- * afford. Documents read follow the live tasks and the unmarked relation
+ * afford. Documents read follow the live tasks (past LIVE_PROJECT_READS
+ * active projects, every active task, archived projects' included, as one
+ * range holds them all) and the unmarked relation
  * rows of the active tasks (model/archiveMarks.ts marks the rows of archived
  * tasks, and a project archive marks none), the organization's people,
  * projects, teams and labels, at most 500 activity rows, and at most 3,002

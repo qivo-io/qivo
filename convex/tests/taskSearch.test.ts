@@ -325,6 +325,20 @@ describe('task search reads only the labels it can match', () => {
     ).toHaveLength(1)
   })
 
+  it('checks the request before each matching label, even one without assignments', async () => {
+    const { fx } = await mixed()
+    for (let n = 0; n < 100; n++) await plantLabel(fx.t, fx.org.id, `Therm ${n}`)
+    LABEL_TASK_READS.reads = 0
+    // the reserve leaves the label reads about 40 ranges, fewer than the
+    // labels the search names, none of which holds a row to check after
+    LABEL_READS_RESERVE.ranges = 4096 - 40
+    const e = await expectRefusal(
+      restTasks(fx.t, { callerId: fx.admin.id, access: 'read', search: 'therm' }),
+      'bad_request',
+    )
+    expect((e.data as Refusal).message).toBe(SEARCH_TOO_LARGE)
+  })
+
   it('finds exactly what the matcher found when it read every label', async () => {
     const { fx } = await mixed()
     for (const reads of [DEFAULT_LABEL_READS.reads, 0]) {

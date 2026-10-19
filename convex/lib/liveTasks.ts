@@ -106,7 +106,9 @@ export function groupTest(
 /** How many active projects liveTasksOf reads one index range each before
  * it reads the organization's active tasks in one range instead, so an
  * organization with thousands of projects stays far below Convex's 4,096
- * ranges. Tests lower `reads`. */
+ * ranges. That range also holds the active tasks archived projects keep,
+ * so past it the documents read follow every active task of the
+ * organization. Tests lower `reads`. */
 export const LIVE_PROJECT_READS = { reads: 1000 }
 
 /**

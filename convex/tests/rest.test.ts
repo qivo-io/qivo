@@ -986,6 +986,34 @@ describe('GET /v1/tasks/{ref}', () => {
       /^task "[0-9a-f-]+" not found \(or not visible to you\)$/,
     )
   })
+
+  it('reads a task linked to one in a broken project, leaving that link out', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const orphan = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
+    const stranded = await plantIssue(t, { org_id: f.org.id, project_id: orphan.id })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      const [lo, hi] = [task.id, stranded.id].sort()
+      await ctx.db.insert('issue_links', {
+        id: uuid(),
+        org_id: f.org.id,
+        source_id: task.id,
+        target_id: stranded.id,
+        type: 'blocks',
+        pair_key: `${lo}:${hi}`,
+        created_at: NOW,
+      })
+    })
+    const out = await t.query(internal.machine.rest.getIssue, {
+      today: TODAY,
+      callerId: f.agent.id,
+      access: 'read',
+      ref: task.id,
+    })
+    expect(out.id).toBe(task.id)
+    expect(out.links).toEqual([])
+  })
 })
 
 /* ----------------------------------------------------------- create issue */

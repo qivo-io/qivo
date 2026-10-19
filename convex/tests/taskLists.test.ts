@@ -21,7 +21,14 @@ import {
   cursorAfter,
   parseArchiveCursor,
 } from '../lib/archivedTasks'
-import { PAGE_TOO_LARGE, SUBTASKS_TOO_LARGE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
+import {
+  LABEL_READS_RESERVE,
+  LABEL_TASK_READS,
+  PAGE_TOO_LARGE,
+  SUBTASKS_TOO_LARGE,
+  SUBTREE_WALK,
+  TASK_READ_RESERVE,
+} from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import {
@@ -284,10 +291,23 @@ describe('active task lists read active tasks only', () => {
         task_archived: true,
       })
     })
-    const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', search: 'bug' })
-    expect(rest.map((row) => row.id)).toEqual([plain.id, restored.id])
-    const mcp = await mcpList<{ id: string }[]>(fx, fx.agent.id, { search: 'bug' })
-    expect(mcp.map((row) => row.id)).toEqual([plain.id, restored.id])
+    // each task's own assignments, and each label's active ones, as a
+    // search of many tasks reads them, with a reserve that fits this
+    // request's 100 documents
+    for (const reads of [LABEL_TASK_READS.reads, 0]) {
+      const before = { reads: LABEL_TASK_READS.reads, documents: LABEL_READS_RESERVE.documents }
+      LABEL_TASK_READS.reads = reads
+      LABEL_READS_RESERVE.documents = 16
+      try {
+        const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', search: 'bug' })
+        expect(rest.map((row) => row.id)).toEqual([plain.id, restored.id])
+        const mcp = await mcpList<{ id: string }[]>(fx, fx.agent.id, { search: 'bug' })
+        expect(mcp.map((row) => row.id)).toEqual([plain.id, restored.id])
+      } finally {
+        LABEL_TASK_READS.reads = before.reads
+        LABEL_READS_RESERVE.documents = before.documents
+      }
+    }
   })
 
   it('reads a large group under an active task without the archive', async () => {

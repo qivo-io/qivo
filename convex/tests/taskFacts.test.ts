@@ -19,6 +19,7 @@ import {
   ACTIVE_TASKS_TOO_LARGE,
   COMMENT_READS_RESERVE,
   PAGE_TOO_LARGE,
+  SEARCH_TOO_LARGE,
 } from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import {
@@ -533,5 +534,31 @@ describe('an active page keeps inside the request’s read limits', () => {
       'bad_request',
     )
     expect((e.data as Refusal).message).toBe(ACTIVE_LIST_TOO_WIDE)
+  })
+})
+
+describe("an active list's refusals", () => {
+  it('are the pinned sentences, which the public docs quote', () => {
+    const sentences = {
+      [PAGE_TOO_LARGE]: 'this page of tasks is too large to read at once; ask for a smaller limit',
+      [ACTIVE_TASKS_TOO_LARGE]:
+        "this organization's active tasks are too large to list in one request",
+      [ACTIVE_LIST_TOO_WIDE]:
+        'this organization has too many projects, teams or labels to list its tasks in one request',
+      [SEARCH_TOO_LARGE]:
+        'this search reads too many label assignments to answer in one request; name a project or add a filter',
+    }
+    for (const [sent, pinned] of Object.entries(sentences)) expect(sent).toBe(pinned)
+    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(docs)).toHaveLength(2)
+    for (const [path, text] of Object.entries(docs)) {
+      // a wrapped line reads as one space
+      const prose = text.replace(/\s+/g, ' ')
+      for (const pinned of Object.values(sentences)) expect(prose, path).toContain(pinned)
+    }
   })
 })

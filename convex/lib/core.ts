@@ -245,10 +245,17 @@ export async function findIssue(
   if (issue === null) return null
   const project = await byId(ctx, 'projects', issue.project_id)
   if (project === null) return null
+  return (await seesProject(ctx, me, project)) ? issue : null
+}
+
+/* canSeeProject, with a project whose parent is missing or that sits in a
+ * cycle (lib/access.ts rootMetaOf) not visible rather than refused, as
+ * accessFlags gives such a project no read flag. */
+async function seesProject(ctx: QueryCtx, me: Caller, project: Doc<'projects'>): Promise<boolean> {
   try {
-    return (await canSeeProject(ctx, me, project)) ? issue : null
+    return await canSeeProject(ctx, me, project)
   } catch (e) {
-    if (e instanceof ConvexError && (e.data as Refusal).code === 'not_found') return null
+    if (e instanceof ConvexError && (e.data as Refusal).code === 'not_found') return false
     throw e
   }
 }
@@ -447,6 +454,21 @@ async function labelNamesOf(
   return labels.filter((_, i) => held[i] !== null).map((label) => label.name)
 }
 
+/* The names of `labels` that the task carries, in their order, read through
+ * all the task's own assignments (by_issue) in one index range, archive
+ * marks included, for a task restored so recently that its assignments are
+ * still marked. */
+async function markedLabelNamesOf(
+  ctx: QueryCtx,
+  taskId: string,
+  labels: readonly Doc<'labels'>[],
+): Promise<string[]> {
+  const held = new Set<string>()
+  const rows = ctx.db.query('issue_labels').withIndex('by_issue', (q) => q.eq('issue_id', taskId))
+  for await (const row of rows) held.add(row.label_id)
+  return labels.filter((label) => held.has(label.id)).map((label) => label.name)
+}
+
 /** How many reads of one task's assignment of one matching label
  * (labelNamesOf) a search makes before it reads each matching label's
  * active assignments instead. Tests lower `reads`. */
@@ -454,8 +476,9 @@ export const LABEL_TASK_READS = { reads: 1000 }
 
 /** What a search's label reads keep back from the request's limits for the
  * page after them, its parents and newest comments. They check the request's
- * reads every LABEL_ROWS_PER_CHECK rows, so the documents and bytes also
- * hold that many rows. Tests lower these. */
+ * reads before each index range and every LABEL_ROWS_PER_CHECK rows, so the
+ * documents and bytes also hold that many rows, or one restored task's
+ * assignments. Tests lower these. */
 export const LABEL_READS_RESERVE = { ranges: 416, documents: 1024, bytes: 2 * DOCUMENT_MAX_BYTES }
 
 /* How many label assignments a search reads between two checks of the
@@ -469,9 +492,9 @@ export const SEARCH_TOO_LARGE =
 
 /* The names of `labels` by task, for the active `tasks` a search still
  * needs them for. While the tasks times the labels are at most
- * LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges, each task's
- * assignment of each label is read on its own (labelNamesOf), at most one
- * document each. Past that each label's assignments are read through
+ * LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges and documents, each
+ * task's assignment of each label is read on its own (labelNamesOf), at most
+ * one document each. Past that each label's assignments are read through
  * by_label without the archive mark, so the read follows active work, not
  * every task ever archived with the label (schema.ts taskArchived), within
  * the request's room less LABEL_READS_RESERVE. A search whose assignments do
@@ -491,7 +514,8 @@ async function activeLabelNames(
   const pairs = tasks.length * labels.length
   if (
     pairs <= LABEL_TASK_READS.reads &&
-    pairs < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges
+    pairs < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges &&
+    pairs < m.documentsRead.remaining - LABEL_READS_RESERVE.documents
   ) {
     const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
     for (const [i, task] of tasks.entries()) out.set(task.id, names[i] ?? [])
@@ -503,6 +527,7 @@ async function activeLabelNames(
   const own = new Set(restored.map((task) => task.id))
   let read = 0
   for (const label of labels) {
+    if (!(await readsUnder(ctx, ceiling))) throw badRequest(SEARCH_TOO_LARGE)
     const rows = ctx.db
       .query('issue_labels')
       .withIndex('by_label', (q) => q.eq('label_id', label.id).eq('task_archived', undefined))
@@ -518,7 +543,7 @@ async function activeLabelNames(
   }
   for (const task of restored) {
     if (!(await readsUnder(ctx, ceiling))) throw badRequest(SEARCH_TOO_LARGE)
-    out.set(task.id, await labelNamesOf(ctx, task.id, labels))
+    out.set(task.id, await markedLabelNamesOf(ctx, task.id, labels))
   }
   return out
 }
@@ -540,11 +565,12 @@ const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
 
 export { LIVE_PROJECT_READS } from './liveTasks'
 
-/* The active tasks an active list reads (listActiveIssuesCore,
- * projectCompletion), oldest first by creation. Those of the active
- * projects (lib/liveTasks.ts liveTasksOf) hold every subtask that makes a
- * task in an active project a group and every task that carries load, so
- * the active tasks that archived projects keep forever are never read. A
+/* The active tasks an active list reads (listActiveIssuesCore), oldest
+ * first by creation. Those of the active projects (lib/liveTasks.ts
+ * liveTasksOf) hold every subtask that makes a task in an active project a
+ * group and every task that carries load, so the active tasks that archived
+ * projects keep forever are not read, until the organization has more
+ * active projects than LIVE_PROJECT_READS. A
  * list that names an archived project reads all the organization's active
  * tasks (by_org_archived), because a task there counts every active
  * subtask, in any project (countsAsSubtask). */
@@ -1228,7 +1254,7 @@ type ProjectReach = {
   reads: (projectId: string) => Promise<boolean>
 }
 
-/* A ProjectReach that reads each project and checks canSeeProject on it,
+/* A ProjectReach that reads each project and checks it (seesProject),
  * once each, until it has met ACCESS_POINT_CHECKS projects, and answers the
  * rest from the organization's projects and the caller's levels at once
  * (orgReach), the same rule (accessFlags), which a link or a family with
@@ -1257,7 +1283,7 @@ function lazyReach(ctx: QueryCtx, me: Caller): ProjectReach {
         result = project(projectId).then(async (p) => {
           if (p === null) return false
           if (reach !== undefined) return (await reach).readable(p.id)
-          return await canSeeProject(ctx, me, p)
+          return await seesProject(ctx, me, p)
         })
         reads.set(projectId, result)
       }
@@ -1375,7 +1401,8 @@ type Walk = { children: ChildIndex; whole: boolean }
  * keeps the request's reads under the ceiling before each by_parent read
  * and after each task, since one read can hold many large tasks
  * (lib/archivedTasks.ts ceilingGuard, which needs a `counts` that reads
- * nothing, as the readable flags give it). Once they reach the ceiling, or
+ * nothing, as the readable flags and projectOf together give it). Once they
+ * reach the ceiling, or
  * a level holds more tasks than the ceiling leaves ranges for, it stops,
  * with the subtasks of each task whose read it finished. */
 async function subtreeIndex(

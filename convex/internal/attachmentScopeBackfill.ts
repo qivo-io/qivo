@@ -8,9 +8,10 @@
  * its organization through its task. They read the deployment's rows
  * without an organization on every call while there are at most
  * UNSCOPED_READ.lookups of them, and the organization's own tasks one by one
- * past that. While any such row exists anywhere,
+ * past that. While more than RELATION_READ.legacy such rows exist anywhere,
  * lib/snapshotRelations.ts reads the app snapshot's attachments task by
- * task. The backfill only makes those reads cheaper.
+ * task, and fewer cost it one more index range. The backfill only makes
+ * those reads cheaper.
  *
  * One sequential chain of `start` steps over every attachment row in task
  * order (issue_attachments by_issue), so the last one can log one summary.
@@ -28,8 +29,8 @@
  * until then (model/deletedItems.ts). The backfill reads no deleted_rows,
  * so a stored row keeps what it held, and a restore gives it its task's
  * project (writeRowBack). While one without org_id remains,
- * storageUsage and storagePage read it on every call and the snapshot keeps
- * reading attachments task by task.
+ * storageUsage and storagePage read it on every call and the snapshot reads
+ * it as one of the rows above.
  *
  * Tasks are the larger documents, as their descriptions hold up to about
  * 60 KB and older ones up to the 1 MiB document limit. A step stops before

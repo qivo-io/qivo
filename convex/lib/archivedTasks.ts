@@ -316,8 +316,10 @@ export async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<b
 /** A walk's check of the request's reads against a ceiling (readsUnder)
  * that reads the metrics only when the reads since its last look could
  * have reached the ceiling. It counts each index range as one and each
- * document at Convex's size limit, so it answers no later than readsUnder
- * would, as long as the walk reads nothing between its calls. */
+ * document at Convex's size limit, so as long as the walk reads nothing
+ * between its calls, no range starts once the ceiling's ranges are used
+ * and the documents and bytes stay under the ceiling's. The range that uses
+ * the last of the ceiling's ranges may be read to its end. */
 export type CeilingGuard = {
   /** Whether the walk may start one more index range. */
   range(): Promise<boolean>
