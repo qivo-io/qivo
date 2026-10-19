@@ -3187,7 +3187,7 @@ function IssueDetail({
           isOn={(x) => it.parent === x.id}
           onPick={(x) => upd({ parent: it.parent === x.id ? null : x.id })}
           createLabel="Create new parent task:"
-          onCreate={noParent ? undefined : (title) => void P.createParent(it.id, title)}
+          onCreate={noParent ? undefined : (title) => P.createParent(it.id, title)}
         />
       )}
       {/* stacked ModalShell (like the sub-issue modal): nothing moves until

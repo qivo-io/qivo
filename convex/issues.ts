@@ -72,7 +72,6 @@ import {
   archiveIssueCore,
   assertCanEdit,
   createIssueCore,
-  hasAnySubtask,
   hasSubtasks,
   moveIssueCore,
   subtasksWouldMove,
@@ -308,6 +307,34 @@ export const update = orgMutation({
   },
 })
 
+/* ----------------------------------------------------------- create parent
+ * P.createParent, the Parent picker's Create new parent task: a new
+ * top-level task `parent_id` titled `title` in task `id`'s sub-project, and
+ * task `id` attached under it, in one transaction. A refused attach, such as
+ * for a task with archived subtasks the app cannot see, rolls the new task
+ * back too. Both writes run their usual cores and checks. */
+export const createParent = orgMutation({
+  args: { id: v.string(), parent_id: v.string(), title: v.string() },
+  handler: async (ctx, { id, parent_id, title }) => {
+    const now = new Date().toISOString()
+    const issue = await myIssue(ctx, id)
+    await assertWritable(ctx, issue.project_id)
+    await createIssueCore(ctx, {
+      me: ctx.me,
+      args: { id: parent_id, project_id: issue.project_id, title },
+      now,
+    })
+    const child = (await byId(ctx, 'issues', issue.id)) as Doc<'issues'>
+    const after = await updateIssueCore(ctx, {
+      me: ctx.me,
+      issue: child,
+      patch: { parent_id },
+      now,
+    })
+    return await pubFor(ctx, ctx.me, after)
+  },
+})
+
 /* ------------------------------------------------------------------- move
  * P.moveIssue. REST and MCP move through the same moveIssueCore.
  * 'member' on BOTH ends, checked before moveIssueCore's guards as create
@@ -350,19 +377,6 @@ export const moveCarriesSubtasks = orgQuery({
     const target = await byId(ctx, 'projects', project_id)
     if (target === null || target.org_id !== issue.org_id) return false
     return await subtasksWouldMove(ctx, issue, target)
-  },
-})
-
-/* Whether task `id` can get a parent: it has no subtask, archived ones
- * included (model/issues.ts parentChainCheck). The app's view holds no
- * archived subtasks, so its Parent picker asks before it creates a new
- * parent for the task. A task the caller cannot see is not found, so the
- * answer tells nothing about it. */
-export const takesParent = orgQuery({
-  args: { id: v.string() },
-  handler: async (ctx, { id }) => {
-    const { issue } = await subscriptionTarget(ctx, id)
-    return !(await hasAnySubtask(ctx, issue.id))
   },
 })
 

@@ -168,20 +168,43 @@ describe('one level of subtasks', () => {
     expect((await row(fx.t, lone.id)).parent_id).toBe(parent.id)
   })
 
-  it('tells the app whether a task can take a parent, archived subtasks included', async () => {
+  it('creates a parent and attaches the task in one write, or neither', async () => {
     const fx = await setup()
     const lone = await task(fx)
     const former = await task(fx)
     await task(fx, { parent_id: former.id, archived_at: NOW })
-    const takes = (issue: Doc<'issues'>) =>
-      as(fx.t, fx.admin).query(api.issues.takesParent, { org_id: fx.org.id, id: issue.id })
-    expect(await takes(lone)).toBe(true)
-    expect(await takes(former)).toBe(false)
-    // a task the caller cannot see is not found, with or without subtasks
+    const createParent = (issue: Doc<'issues'>, parent_id = uuid()) =>
+      as(fx.t, fx.admin).mutation(api.issues.createParent, {
+        org_id: fx.org.id,
+        id: issue.id,
+        parent_id,
+        title: 'New parent',
+      })
+    const parent_id = uuid()
+    expect(await createParent(lone, parent_id)).toMatchObject({ parent_id })
+    expect(await row(fx.t, parent_id)).toMatchObject({ title: 'New parent', project_id: fx.sub.id })
+    // the archived subtask refuses the attach, and the new task goes with it
+    const refusedId = uuid()
+    await refused(createParent(former, refusedId), 'rule', SUBTASK_WITH_SUBTASKS)
+    expect(
+      await fx.t.run((ctx) =>
+        ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', refusedId))
+          .unique(),
+      ),
+    ).toBeNull()
+    // a task the caller cannot see is refused as issues.update refuses it
     const hidden = await task(fx, { project_id: fx.hidden.id })
-    await expectRefusal(
-      as(fx.t, fx.guest).query(api.issues.takesParent, { org_id: fx.org.id, id: hidden.id }),
-      'not_found',
+    await refused(
+      as(fx.t, fx.guest).mutation(api.issues.createParent, {
+        org_id: fx.org.id,
+        id: hidden.id,
+        parent_id: uuid(),
+        title: 'Probe',
+      }),
+      'forbidden',
+      'no write access to this project',
     )
   })
 
