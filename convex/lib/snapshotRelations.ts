@@ -146,10 +146,12 @@ function inCreationOrder<Row extends { _creationTime: number }>(
  * The old rule failed for a restricted view of about 1,000 tasks whose three
  * tables are all dense, where those reads alone take about 4,000 ranges.
  * Here the last table that would not fit is read in full instead, so such a
- * view fails only if a full read passes 32,000 documents. Only the table
- * reads' own ranges are kept back. The reads the snapshot makes after these
- * (labels, follows, activity, inbox) are not, so a view whose reads task by
- * task use nearly all the ranges left can still pass the limit after them.
+ * view fails only if a full read passes 32,000 documents. The table reads'
+ * own ranges are kept back, and the snapshot makes its seat's other reads
+ * (labels, follows, inbox) before these, so the ranges left
+ * already count them. A later seat of the same person is not counted: one
+ * whose earlier seat's reads task by task used nearly all the ranges left
+ * can still pass the limit in that later seat's own reads.
  */
 export async function snapshotRelations(
   ctx: QueryCtx,

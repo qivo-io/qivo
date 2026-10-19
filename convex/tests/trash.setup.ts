@@ -16,15 +16,7 @@ import { PURGE_ORG } from '../deletedItems'
 import { byId } from '../lib/db'
 import type { EventOwner } from '../lib/taskEvents'
 import { REMOVAL_BUDGET } from '../model/cascade'
-import {
-  CHAIN_READ,
-  COUNT_READ,
-  EXPIRY,
-  HEIGHT_READ,
-  RETRY,
-  SIGHT_READ,
-  TRASH_BUDGET,
-} from '../model/deletedItems'
+import { COUNT_READ, EXPIRY, RETRY, SIGHT_READ, TRASH_BUDGET } from '../model/deletedItems'
 import { as, NOW, type OrgFixture, plantActivity, type T, uuid } from './helpers.setup'
 
 declare class Blob {
@@ -36,9 +28,7 @@ export const DAY = 86_400_000
 export const HOUR = 3_600_000
 export const DEFAULT_BUDGET = { ...TRASH_BUDGET }
 const DEFAULT_RETRY = { ...RETRY }
-const DEFAULT_CHAIN_READ = { ...CHAIN_READ }
 const DEFAULT_COUNT_READ = { ...COUNT_READ }
-const DEFAULT_HEIGHT_READ = { ...HEIGHT_READ }
 const DEFAULT_SIGHT_READ = { ...SIGHT_READ }
 const DEFAULT_EXPIRY = { ...EXPIRY }
 const DEFAULT_PURGE_ORG = { ...PURGE_ORG }
@@ -54,9 +44,7 @@ export function installTrashTimers(): void {
   })
   afterEach(() => {
     Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
-    Object.assign(CHAIN_READ, DEFAULT_CHAIN_READ)
     Object.assign(COUNT_READ, DEFAULT_COUNT_READ)
-    Object.assign(HEIGHT_READ, DEFAULT_HEIGHT_READ)
     Object.assign(SIGHT_READ, DEFAULT_SIGHT_READ)
     Object.assign(RETRY, DEFAULT_RETRY)
     Object.assign(EXPIRY, DEFAULT_EXPIRY)

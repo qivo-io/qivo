@@ -329,6 +329,12 @@ export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
+/** The refusal of a new parent whose subtasks are too large to count in one
+ * transaction (SUBTREE_ROOM, subtaskCount), such as a task stored before
+ * TEXT_MAX whose subtasks hold very long descriptions. */
+export const PARENT_TOO_LARGE =
+  "the parent task's subtasks are too large to read in one request; choose another parent or shorten their descriptions"
+
 /** The refusal of an archive whose task and active subtasks are too large
  * for one transaction (SUBTREE_ROOM), such as a task stored before the one
  * level of subtasks with thousands of them. */
@@ -628,17 +634,22 @@ export type ParentProblem =
 
 /** How many subtasks `parentId` has, archived ones included, counted up to
  * SUBTASK_MAX. The count reads the subtask rows under SUBTREE_ROOM, because
- * a legacy task can hold larger ones than TEXT_MAX allows today. */
+ * a legacy task can hold larger ones than TEXT_MAX allows today, and refuses
+ * with PARENT_TOO_LARGE past it. A transaction already past the room when
+ * the count starts refuses with SUBTREE_TOO_LARGE, as the earlier work of
+ * the write filled it. */
 export async function subtaskCount(ctx: QueryCtx, parentId: string): Promise<number> {
-  const room = roomCheck(ctx)
+  // a transaction the earlier work of the write filled keeps that sentence
+  await assertRoom(ctx)
+  const room = roomCheck(ctx, PARENT_TOO_LARGE)
   let count = 0
-  await room()
   const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
   for await (const kid of kids) {
     count += 1
     if (count >= SUBTASK_MAX) break
     await room(subtaskBytes(kid))
   }
+  await assertRoom(ctx, PARENT_TOO_LARGE)
   return count
 }
 

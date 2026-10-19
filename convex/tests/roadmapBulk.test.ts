@@ -1,17 +1,18 @@
 /* Roadmap saves and undo that change many tasks in one transaction
  * (roadmap.ts change and undo). Auto-arrange sends every pending move in one
- * save, and undo of the whole visit replays every save in one undo. Each task
- * write notifies the task's followers, and without one preload per
- * organization (model/issues.ts BulkUpdate) each read every profile of the
- * organization and checked each follower's sight again. They stay inside
- * Convex's limits for one transaction up to the measured size below, and
- * refuse a save or undo whose followers would fill it (ROADMAP_ROOM) with a
- * plain sentence instead of an internal error.
+ * save, and undo of the whole visit replays every save in one undo. One
+ * preload per organization (model/issues.ts BulkUpdate) serves every task
+ * write, and the tasks' followers hear from background steps
+ * (model/messages.ts NotifyPreload.deferFollowers), so a save's cost does not
+ * grow with its followers. They stay inside Convex's limits for one
+ * transaction up to the measured size below, and refuse a save or undo that
+ * would fill it (ROADMAP_ROOM) with a plain sentence instead of an internal
+ * error.
  *
  * convex-test enforces the deployment's limits with transactionLimits: true
  * and counts every index range a function reads, where a deployment counts a
  * range it already read once, so these counts are an upper bound. */
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
@@ -139,6 +140,13 @@ const messageCount = (fx: Roadmap) =>
   fx.t.run(async (ctx) => (await ctx.db.query('messages').collect()).length)
 
 describe('roadmap saves and undo of many tasks', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('schedules 120 followed tasks in one save and undoes the visit in one undo', async () => {
     // Without the preload, this save passed the limit of 4,096 index ranges
     // at the 76th task
@@ -146,9 +154,11 @@ describe('roadmap saves and undo of many tasks', () => {
     const session_id = uuid()
     expect(await scheduleAll(fx, session_id, '2026-01-05')).toEqual({ count: 1 })
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => '2026-01-05'))
-    // every follower hears of the new dates
-    const saved = await messageCount(fx)
-    expect(saved).toBe(120 * 4)
+    // every follower hears of the new dates, from background steps; only
+    // those due now run, so the visit's history stays
+    expect(await messageCount(fx)).toBe(0)
+    await fx.t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    expect(await messageCount(fx)).toBe(120 * 4)
     expect(await scheduleAll(fx, session_id, '2026-02-02')).toEqual({ count: 2 })
     expect(await as(fx.t, fx.user).mutation(api.roadmap.undo, { session_id, all: true })).toEqual({
       count: 0,
@@ -156,27 +166,38 @@ describe('roadmap saves and undo of many tasks', () => {
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
   }, 120_000)
 
-  it('refuses a save whose followers would fill the transaction, and changes nothing', async () => {
-    // Under a limit of 1,500 index ranges, 60 tasks with 20 followers each
-    // pass it without the room check, with an internal error
+  it('saves tasks whose followers once filled the transaction, and tells them in steps', async () => {
+    // Under a limit of 1,500 index ranges, telling 60 tasks' 20 followers
+    // each in the save filled it, and ROADMAP_ROOM refused the save
     const fx = await planted(60, 20, newT({ transactionLimits: { databaseQueries: 1500 } }))
+    expect(await scheduleAll(fx, uuid(), '2026-01-05')).toEqual({ count: 1 })
+    expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => '2026-01-05'))
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await messageCount(fx)).toBe(60 * 20)
+  }, 120_000)
+
+  it('refuses a save too large for one transaction, and changes nothing', async () => {
+    // Under a limit of 400 index ranges, a save of 60 tasks passes it
+    // without the room check, with an internal error
+    const fx = await planted(60, 3, newT({ transactionLimits: { databaseQueries: 400 } }))
     const e = await expectRefusal(scheduleAll(fx, uuid(), '2026-01-05'), 'rule')
     expect((e.data as Refusal).message).toBe(ROADMAP_CHANGE_TOO_LARGE)
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await messageCount(fx)).toBe(0)
   }, 120_000)
 
   it('refuses an undo of the whole visit too large for one transaction, and keeps its history', async () => {
-    // Without the room check, this undo passes a limit of 1,500 index
-    // ranges with an internal error
-    const fx = await planted(60, 20, newT({ transactionLimits: { databaseQueries: 1500 } }))
+    // Without the room check, this undo passes a limit of 800 index ranges
+    // with an internal error
+    const fx = await planted(180, 0, newT({ transactionLimits: { databaseQueries: 800 } }))
     const session_id = uuid()
-    // two saves of half the tasks each fit, and undoing both at once does not
-    const halves = [fx.tasks.slice(0, 30), fx.tasks.slice(30)]
-    for (const half of halves)
+    // three saves of a third of the tasks each fit, and undoing all at once does not
+    const thirds = [fx.tasks.slice(0, 60), fx.tasks.slice(60, 120), fx.tasks.slice(120)]
+    for (const third of thirds)
       await as(fx.t, fx.user).mutation(api.roadmap.change, {
         session_id,
-        operations: half.map((task) => ({
+        operations: third.map((task) => ({
           kind: 'task' as const,
           id: task.id,
           patch: { start_week: '2026-01-05', end_week: '2026-01-05' },
@@ -189,7 +210,7 @@ describe('roadmap saves and undo of many tasks', () => {
     expect((e.data as Refusal).message).toBe(ROADMAP_UNDO_TOO_LARGE)
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => '2026-01-05'))
     // one step at a time still undoes the visit
-    for (const count of [1, 0])
+    for (const count of [2, 1, 0])
       expect(
         await as(fx.t, fx.user).mutation(api.roadmap.undo, { session_id, all: false }),
       ).toEqual({ count })
@@ -297,6 +318,7 @@ describe('roadmap saves and undo of many tasks', () => {
       return out
     })
     await scheduleAll(fx, uuid(), '2026-01-05')
+    await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     const told = await fx.t.run(async (ctx) =>
       (await ctx.db.query('messages').collect()).map((m) => m.recipient_id),
     )

@@ -235,26 +235,24 @@ export async function reachedProjects(
 type Lost = Holding & { project: Doc<'projects'> }
 
 /** The share of each of Convex's limits for one transaction that a removal
- * may have used before it reassigns another task or notifies another
- * follower. A task costs more the more followers it has, and a project's
- * first followers cost a read of its grants and team members, up to a
- * bound (model/messages.ts RecipientSight). So a handover under REASSIGN_MAX can
- * still be too large, and no fixed cost per task or follower bounds it. The
- * removal checks what the transaction used, as the deployment reports it
- * (ctx.meta.getTransactionMetrics), before each task
- * and, through the preload's guard (model/messages.ts NotifyPreload), before
- * each follower it notifies. The rest of each limit is room for one
- * follower or one task's own reads and writes and the removal's narration.
- * In tests/bulkReassign.test.ts, REASSIGN_MAX tasks with four followers each
- * use about 40% of the index ranges, and with 21 followers each about 90%. */
+ * may have used before it reassigns another task or checks another webhook
+ * subscription. The tasks' followers hear from background steps
+ * (model/messages.ts NotifyPreload.deferFollowers), so they cost the removal
+ * nothing, but a task update still checks each webhook subscription of the
+ * organization (taskEvents.ts emitTaskEvent), and no fixed cost per task
+ * bounds that. The removal checks what the transaction used, as the
+ * deployment reports it (ctx.meta.getTransactionMetrics), before each task
+ * and, through the preload's guard, before each subscription it checks. The
+ * rest of each limit is room for one task's own reads and writes and the
+ * removal's narration. */
 export const REASSIGN_ROOM = 0.95
 
 /** The refusal of a handover too large for one removal: more than
- * REASSIGN_MAX tasks, or fewer whose followers fill REASSIGN_ROOM. It
- * suggests keeping the people as Viewers only when the removal would accept
- * that choice (`canKeep`). */
+ * REASSIGN_MAX tasks, or fewer that fill REASSIGN_ROOM. It suggests keeping
+ * the people as Viewers only when the removal would accept that choice
+ * (`canKeep`). */
 export const reassignTooLarge = (canKeep: boolean): string =>
-  `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when they have many followers, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
+  `a removal can reassign at most ${REASSIGN_MAX} tasks at once, fewer when the change is too large for one request, so ${canKeep ? 'keep the people as Viewers or ' : ''}reassign some of the tasks first`
 
 /* Thrown by a reassignment's guard once the transaction has used more than
  * REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and turned into
@@ -425,7 +423,7 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * a task update (model/issues.ts updateIssueCore), so the new holder needs
  * Edit access and sight of every task above once the access is gone. A
  * handover of more than REASSIGN_MAX tasks, or one that fills REASSIGN_ROOM
- * of the transaction before its last task or follower, is refused with
+ * of the transaction before its last task, is refused with
  * reassignTooLarge, which blames its size rather than the tasks. Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
@@ -503,9 +501,13 @@ export async function removeAndSettle(
       if (await usedMoreThan(ctx, REASSIGN_ROOM)) throw new RemovalFull()
     }
     // The access is gone and the loop below writes only tasks, follows,
-    // messages and activity, so one preload serves every task update.
+    // messages and activity, so one preload serves every task update. The
+    // followers hear from background steps (NotifyPreload.deferFollowers).
     const preload = newNotifyPreload(orgProjects)
-    const bulk = { preload: { ...preload, guard: full }, checked: new Set<string>() }
+    const bulk = {
+      preload: { ...preload, guard: full, deferFollowers: true as const },
+      checked: new Set<string>(),
+    }
     if (to !== null) await settling(() => assertCanTakeOver(ctx, lost, to, bulk.checked))
     try {
       for (const holdings of byTask.values()) {

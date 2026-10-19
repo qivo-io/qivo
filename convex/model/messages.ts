@@ -24,7 +24,8 @@
  * mark unread and snooze refuse such a task (refuseArchivedItems). */
 
 import { makeFunctionReference } from 'convex/server'
-import type { Doc } from '../_generated/dataModel'
+import { type Infer, v } from 'convex/values'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canSeeProject,
@@ -213,17 +214,20 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * (src/lib/spine.ts firstUnreadTs puts the New divider there), nor the
  * newest unread row of each kind, so the Inbox kind filter still finds the
  * item. A kind whose newest row lies past the first TRIM_READ keeps one more
- * row than it needs to. This is separate from retention, and the nightly
- * sweep still never deletes an unread row. */
+ * row than it needs to. It never deletes `arrival` either, the row the
+ * caller just posted, which woke the item from any snooze. This is separate
+ * from retention, and the nightly sweep still never deletes an unread row. */
 async function trimRows(
   ctx: MutationCtx,
   unread: readonly Pick<Doc<'messages'>, '_id' | 'kind'>[],
+  arrival?: Id<'messages'>,
 ): Promise<void> {
   let excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
   if (excess <= 0) return
   const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
   const kept = new Set([unread[0]._id, ...[...newestOfKind.values()].map((r) => r._id)])
+  if (arrival !== undefined) kept.add(arrival)
   for (const r of unread) {
     if (excess === 0) break
     if (kept.has(r._id)) continue
@@ -280,6 +284,13 @@ export type NotifyPreload = {
    * notifies. A bulk writer throws from it to stop before the transaction
    * passes Convex's limits (projectAccess.ts removeAndSettle). */
   guard?: () => Promise<void>
+  /* Set by a bulk save that changes many tasks at once (a roadmap save or
+   * undo, an access removal's reassignments): notifyIssueUpdate leaves every
+   * follower notice to background steps (FOLLOWER_FANOUT), so a save of
+   * many tasks with many followers stays within one transaction. Those
+   * notices arrive moments later. Mentions and new owners' follows stay in
+   * the save. */
+  deferFollowers?: true
 }
 
 /** Builds an empty preload with the `projects` the caller already read. Use
@@ -500,8 +511,12 @@ export async function postMessage(
     }
   }
   // The prune (pruneReadMessages): the item keeps its newest row, read or
-  // not, and no other read row. Only a row of this same instant can be newer
-  // than the arrival, and only such a row survives it.
+  // not, and no other read row. A read row newer than the arrival survives
+  // it: one of this same instant, or any row newer than a background step's
+  // notice, which keeps its write's time. Such a notice stored read about an
+  // archived task can outlive newer unread rows of its item until the
+  // archive's background step marks them read and prunes the item
+  // (readArchivedTaskMessages).
   let newest: Pick<Doc<'messages'>, 'created_at' | 'id'> = row
   for (const r of read) if (oldestFirst(newest, r) < 0) newest = r
   for (const r of read) if (r !== newest) await ctx.db.delete(r._id)
@@ -512,8 +527,13 @@ export async function postMessage(
   }
   if (m.trims !== undefined) m.trims.inline += 1
   const unread = rows.filter((r) => r.read_at === undefined)
-  // the arrival is the item's newest unread row
-  await trimRows(ctx, row.read_at === undefined ? [...unread, { ...row, _id: inserted }] : unread)
+  // the arrival in its place in the item, which a background step's notice,
+  // stamped with its write's time, may not be at the end of
+  await trimRows(
+    ctx,
+    row.read_at === undefined ? [...unread, { ...row, _id: inserted }].sort(oldestFirst) : unread,
+    inserted,
+  )
   return true
 }
 
@@ -1269,11 +1289,265 @@ async function mentionedIn(
   return out
 }
 
-const subscribersOf = (ctx: MutationCtx, issueId: string): Promise<Doc<'issue_subscriptions'>[]> =>
+/* ------------------------------------------------------- follower notices
+ * What a comment or a change tells a task's followers. The first
+ * FOLLOWER_FANOUT.inline followers hear in the writing transaction, and
+ * background steps of FOLLOWER_FANOUT.step followers tell the rest, in
+ * by_issue_profile order. A bulk save leaves them all to the steps
+ * (NotifyPreload.deferFollowers). A step tells the followers it finds then:
+ * someone who stops following meanwhile hears nothing, and someone who
+ * starts following before their turn hears too. It posts about the task as
+ * it is then, so a task deleted meanwhile tells nobody more and an archived
+ * one stores the notice already read (postMessage). */
+
+/** How many followers one comment or change tells in its own transaction
+ * (`inline`), and how many each background step tells after that (`step`).
+ * A follower costs about two index ranges, a few writes and about a
+ * millisecond, so a task followed by some thousands of people before
+ * FOLLOWER_MAX existed passed Convex's 4,096 ranges, and a bulk save of
+ * tasks with many followers passed its 1 s. A task gains no followers past
+ * FOLLOWER_MAX now, besides owners who still follow, so its followers fit
+ * inline. Tests lower these. */
+export const FOLLOWER_FANOUT = { inline: 128, step: 256 }
+
+/** What a fan-out tells every follower, before each reader's own lines. A
+ * change carries its parts, its assignment and reviewer lines with the
+ * assignee and reviewer they name, whether the reviewer was handed the task
+ * in this write, and the new parent's project and key for the attach line. */
+const vFollowerNote = v.union(
+  v.object({ kind: v.literal('comment') }),
+  v.object({
+    kind: v.literal('change'),
+    parts: v.array(v.string()),
+    assigned: v.optional(v.string()),
+    reviewer: v.optional(v.string()),
+    handed: v.boolean(),
+    assignee_id: v.optional(v.string()),
+    reviewer_id: v.optional(v.string()),
+    parent: v.optional(v.object({ id: v.string(), project_id: v.string(), key: v.string() })),
+  }),
+)
+
+/** The arguments of a fan-out's background step (messages.ts
+ * notifyFollowers): the notice, the people the write mentioned, who heard
+ * of it already, and the last follower told before it (`after`). `task` is
+ * the task's document, so a task deleted and restored meanwhile, or another
+ * task with its uuid since, gets none of it, and `project_id` the task's
+ * project when it was written, which a reader must still see. */
+export const vFollowerStep = {
+  org_id: v.string(),
+  issue_id: v.string(),
+  task: v.id('issues'),
+  project_id: v.string(),
+  actor_id: v.optional(v.string()),
+  now: v.string(),
+  note: vFollowerNote,
+  mentioned: v.array(v.string()),
+  after: v.optional(v.string()),
+}
+const followerStep = v.object(vFollowerStep)
+type FollowerStep = Infer<typeof followerStep>
+type FollowerNotice = Omit<FollowerStep, 'after'>
+
+const notifyFollowersRef = makeFunctionReference<'mutation', FollowerStep, null>(
+  'messages:notifyFollowers',
+)
+
+/* At most `n` of the task's followers after profile `after`, in
+ * by_issue_profile order. */
+const followersFrom = (ctx: QueryCtx, issueId: string, after: string | undefined, n: number) =>
   ctx.db
     .query('issue_subscriptions')
-    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
-    .collect()
+    .withIndex('by_issue_profile', (q) =>
+      after === undefined
+        ? q.eq('issue_id', issueId)
+        : q.eq('issue_id', issueId).gt('profile_id', after),
+    )
+    .take(n)
+
+/* The line follower `profileId` reads of `notice`, or null for none. A
+ * comment's mentioned people read their mention instead, and a fresh
+ * mention replaces the bare description line, as they read it in the
+ * message view. `seesParent` tells whether the reader can see the new
+ * parent. */
+async function followerLine(
+  notice: FollowerNotice,
+  profileId: string,
+  seesParent: () => Promise<boolean>,
+): Promise<string | null> {
+  const { note } = notice
+  const mentioned = notice.mentioned.includes(profileId)
+  if (note.kind === 'comment') return mentioned ? null : 'New comment'
+  let mine = mentioned ? note.parts.filter((x) => x !== 'Description updated') : [...note.parts]
+  if (note.parent !== undefined) {
+    const key = (await seesParent()) ? note.parent.key : 'a task in another sub-project'
+    // Keep the hidden parent anonymous while using the same task wording
+    // as the inbox and the machine surfaces. A subtask shares its parent's
+    // top-level project (model/issues.ts sameTopLevel), so a parent the
+    // reader cannot see is in a sub-project they cannot see. Messages
+    // stored before that rule keep "a task in another project".
+    mine = mine.map((x) => (x === ATTACH_SLOT ? `Attached under ${key}` : x))
+  }
+  // unshifted before the assignment line, so it reads second
+  let reviewLine = note.reviewer
+  if (profileId === note.reviewer_id) {
+    if (note.handed) reviewLine = REVIEW_READY
+    else if (note.reviewer !== undefined) reviewLine = 'Reviewer set to you'
+  }
+  if (reviewLine !== undefined) mine.unshift(reviewLine)
+  if (note.assigned !== undefined) {
+    mine.unshift(profileId === note.assignee_id ? 'Assigned to you' : note.assigned)
+  }
+  return mine.length === 0 ? null : mine.join('. ')
+}
+
+/* Tells each of `subs` of `notice` through postMessage, which drops the
+ * actor's own copy, anyone who has left the organization and anyone who
+ * can no longer see the project. `cx` holds what the caller read already,
+ * and a bulk writer's guard, run before each follower. A reader must also
+ * see each of `cx.also`, and reads the new parent's key only when they see
+ * each of `cx.parent`; an empty `cx.parent` keeps it anonymous. */
+async function tellFollowers(
+  ctx: MutationCtx,
+  notice: FollowerNotice,
+  subs: readonly Doc<'issue_subscriptions'>[],
+  cx: {
+    issue: Doc<'issues'>
+    project: Doc<'projects'> | null
+    also: readonly Doc<'projects'>[]
+    parent: readonly Doc<'projects'>[]
+    profiles: ProfileCache
+    visibility: RecipientSight
+    trims: ItemTrims
+    guard?: () => Promise<void>
+  },
+): Promise<void> {
+  for (const s of subs) {
+    await cx.guard?.()
+    const recipient = await orgProfile(ctx, cx.profiles, notice.org_id, s.profile_id)
+    const seesAll = async (projects: readonly Doc<'projects'>[]) => {
+      if (recipient === undefined) return false
+      for (const p of projects)
+        if (!(await recipientCanSee(ctx, recipient, p, cx.visibility))) return false
+      return true
+    }
+    if (cx.also.length > 0 && !(await seesAll(cx.also))) continue
+    const line = await followerLine(
+      notice,
+      s.profile_id,
+      async () => cx.parent.length > 0 && (await seesAll(cx.parent)),
+    )
+    if (line === null) continue
+    await postMessage(ctx, {
+      org_id: notice.org_id,
+      recipient_id: s.profile_id,
+      issue_id: notice.issue_id,
+      kind: notice.note.kind,
+      body: line,
+      actor_id: notice.actor_id,
+      now: notice.now,
+      issue: cx.issue,
+      project: cx.project ?? undefined,
+      recipient,
+      visibility: cx.visibility,
+      trims: cx.trims,
+    })
+  }
+}
+
+/* Tells the first `inline` of `subs`, read with followersFrom from the
+ * start and one more, and schedules a background step for the rest. */
+async function fanOut(
+  ctx: MutationCtx,
+  notice: FollowerNotice,
+  subs: readonly Doc<'issue_subscriptions'>[],
+  inline: number,
+  cx: Parameters<typeof tellFollowers>[3],
+): Promise<void> {
+  const now = subs.slice(0, inline)
+  await tellFollowers(ctx, notice, now, cx)
+  if (subs.length <= inline) return
+  const after = now.at(-1)?.profile_id
+  await ctx.scheduler.runAfter(
+    0,
+    notifyFollowersRef,
+    after === undefined ? notice : { ...notice, after },
+  )
+}
+
+/** One background step of a fan-out (FOLLOWER_FANOUT): tells the next
+ * FOLLOWER_FANOUT.step followers after profile `after` about the task as it
+ * is now, and schedules the next step while more follow. A reader must see
+ * both the task's project when it was written and its project now, so a
+ * move meanwhile tells nobody what they could not see, and reads the new
+ * parent's key only when they see its project then and now. Anything gone
+ * that the notice names tells nobody, or keeps the parent anonymous. */
+export async function notifyFollowersStep(ctx: MutationCtx, a: FollowerStep): Promise<void> {
+  const { after, ...notice } = a
+  const issue = await ctx.db.get(notice.task)
+  if (issue === null || issue.id !== notice.issue_id || issue.org_id !== notice.org_id) return
+  const project = await byId(ctx, 'projects', issue.project_id)
+  if (project === null) return
+  const then =
+    notice.project_id === project.id ? project : await byId(ctx, 'projects', notice.project_id)
+  if (then === null) return
+  const parent: Doc<'projects'>[] = []
+  const { note } = notice
+  if (note.kind === 'change' && note.parent !== undefined) {
+    const was = await byId(ctx, 'projects', note.parent.project_id)
+    const row = await byId(ctx, 'issues', note.parent.id)
+    const is = row === null ? null : await byId(ctx, 'projects', row.project_id)
+    if (was !== null && is !== null) parent.push(...(was.id === is.id ? [was] : [was, is]))
+  }
+  const trims = newItemTrims()
+  const subs = await followersFrom(ctx, issue.id, after, FOLLOWER_FANOUT.step + 1)
+  await fanOut(ctx, notice, subs, FOLLOWER_FANOUT.step, {
+    issue,
+    project,
+    also: then === project ? [] : [then],
+    parent,
+    profiles: new Map(),
+    visibility: new Map(),
+    trims,
+  })
+  await scheduleItemTrims(ctx, issue.id, trims)
+}
+
+/** Tells the followers of `issue`, in `project`, one change line, `parts`
+ * joined: the first FOLLOWER_FANOUT.inline in this transaction and the rest
+ * in background steps. A restore from Deleted items says 'Restored' this
+ * way (model/deletedItems.ts). */
+export async function notifyFollowersOfChange(
+  ctx: MutationCtx,
+  a: {
+    issue: Doc<'issues'>
+    project: Doc<'projects'>
+    actor: Doc<'profiles'>
+    now: string
+    parts: string[]
+  },
+): Promise<void> {
+  const { issue, project } = a
+  const trims = newItemTrims()
+  const subs = await followersFrom(ctx, issue.id, undefined, FOLLOWER_FANOUT.inline + 1)
+  await fanOut(
+    ctx,
+    {
+      org_id: issue.org_id,
+      issue_id: issue.id,
+      task: issue._id,
+      project_id: issue.project_id,
+      actor_id: a.actor.id,
+      now: a.now,
+      note: { kind: 'change', parts: a.parts, handed: false },
+      mentioned: [],
+    },
+    subs,
+    FOLLOWER_FANOUT.inline,
+    { issue, project, also: [], parent: [], profiles: new Map(), visibility: new Map(), trims },
+  )
+  await scheduleItemTrims(ctx, issue.id, trims)
+}
 
 /* ---------------------------------------------------------- notify: insert
  * notify_issue_insert (0114:167-194): mentions subscribe + hear about it;
@@ -1425,7 +1699,10 @@ export async function notifyIssueInsert(
  * the projects and the recipients' sight it read for the next task, and
  * whose `guard` runs before each mention and follower. Without one each
  * profile the call names is read once, and the recipients' sight is worked
- * out once per project for the call (RecipientSight). */
+ * out once per project for the call (RecipientSight).
+ *
+ * Past FOLLOWER_FANOUT.inline followers, and for every follower of a bulk
+ * save (NotifyPreload.deferFollowers), background steps tell the rest. */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
@@ -1534,8 +1811,10 @@ export async function notifyIssueUpdate(
     reviewerOwns(after, isGroup) &&
     !(reviewerOwns(before, isGroup) && before.reviewer_id === after.reviewer_id)
 
-  // the cheap exit: with nobody following, there is nothing to narrate for
-  const subs = await subscribersOf(ctx, after.id)
+  // the cheap exit: with nobody following, there is nothing to narrate for.
+  // A bulk save tells no follower itself, so one row tells whether any does.
+  const inline = preload?.deferFollowers ? 0 : FOLLOWER_FANOUT.inline
+  const subs = await followersFrom(ctx, after.id, undefined, inline + 1)
   if (subs.length === 0) return await scheduleItemTrims(ctx, after.id, trims)
 
   // narrate what changed (from → to, mirroring the activity feed's rule)
@@ -1591,20 +1870,19 @@ export async function notifyIssueUpdate(
   if (after.project_id !== before.project_id) {
     parts.push(`Moved to ${project?.name ?? 'another project'}`)
   }
-  let parentProjectId: string | undefined
+  // the new parent, for the attach line each reader reads from their side
+  let parent: { id: string; project_id: string; key: string } | undefined
   let parentProject: Doc<'projects'> | null = null
-  let parentKey: string | undefined
   if (after.parent_id !== before.parent_id) {
     if (after.parent_id === undefined) {
       parts.push('Detached from its parent')
     } else {
-      const parent = await byId(ctx, 'issues', after.parent_id)
-      if (parent !== null) {
-        parentProjectId = parent.project_id
-        parentProject = await preloadedProject(ctx, preload, parent.project_id)
-        parentKey = `QN-${parent.num}`
+      const row = await byId(ctx, 'issues', after.parent_id)
+      if (row !== null) {
+        parent = { id: row.id, project_id: row.project_id, key: `QN-${row.num}` }
+        parentProject = await preloadedProject(ctx, preload, row.project_id)
+        parts.push(ATTACH_SLOT)
       }
-      parts.push(ATTACH_SLOT)
     }
   }
   if (after.archived_at !== before.archived_at && a.suppressNotify !== true) {
@@ -1640,61 +1918,41 @@ export async function notifyIssueUpdate(
     return await scheduleItemTrims(ctx, after.id, trims)
   }
 
-  // one message per follower. postMessage drops the actor's own copy, anyone
-  // who has left the org, and anyone who can no longer see the project.
-  for (const s of subs) {
-    await preload?.guard?.()
-    const recipient = await profileOf(s.profile_id)
-    let mine = [...parts]
-    if (newMentions.some((m) => m.id === s.profile_id)) {
-      // a fresh mention supersedes the bare description line — they will
-      // read it in the message view
-      mine = mine.filter((x) => x !== 'Description updated')
-    }
-    if (parentProjectId !== undefined) {
-      const canSee =
-        recipient !== undefined &&
-        parentProject !== null &&
-        (await recipientCanSee(ctx, recipient, parentProject, visibility))
-      // Keep the hidden parent anonymous while using the same task wording
-      // as the inbox and the machine surfaces. A subtask shares its parent's
-      // top-level project (model/issues.ts sameTopLevel), so a parent the
-      // reader cannot see is in a sub-project they cannot see. Messages
-      // stored before that rule keep "a task in another project".
-      mine = mine.map((x) =>
-        x === ATTACH_SLOT
-          ? `Attached under ${canSee ? parentKey : 'a task in another sub-project'}`
-          : x,
-      )
-    } else {
-      mine = mine.filter((x) => x !== ATTACH_SLOT)
-    }
-    // unshifted before the assignment line, so it reads second
-    let reviewLine = reviewerLine
-    if (s.profile_id === after.reviewer_id) {
-      if (handedToReviewer) reviewLine = REVIEW_READY
-      else if (reviewerLine !== undefined) reviewLine = 'Reviewer set to you'
-    }
-    if (reviewLine !== undefined) mine.unshift(reviewLine)
-    if (assignedLine !== undefined) {
-      mine.unshift(s.profile_id === after.assignee_id ? 'Assigned to you' : assignedLine)
-    }
-    if (mine.length === 0) continue
-    await postMessage(ctx, {
+  const note: FollowerNotice['note'] = {
+    kind: 'change',
+    parts,
+    handed: handedToReviewer,
+    ...(assignedLine === undefined ? {} : { assigned: assignedLine }),
+    ...(reviewerLine === undefined ? {} : { reviewer: reviewerLine }),
+    ...(after.assignee_id === undefined ? {} : { assignee_id: after.assignee_id }),
+    ...(after.reviewer_id === undefined ? {} : { reviewer_id: after.reviewer_id }),
+    ...(parent === undefined ? {} : { parent }),
+  }
+  await fanOut(
+    ctx,
+    {
       org_id: after.org_id,
-      recipient_id: s.profile_id,
       issue_id: after.id,
-      kind: 'change',
-      body: mine.join('. '),
-      actor_id: actor?.id,
+      task: after._id,
+      project_id: after.project_id,
+      ...(actor === undefined ? {} : { actor_id: actor.id }),
       now,
+      note,
+      mentioned: newMentions.map((m) => m.id),
+    },
+    subs,
+    inline,
+    {
       issue: after,
-      project: project ?? undefined,
-      recipient,
+      project,
+      also: [],
+      parent: parentProject === null ? [] : [parentProject],
+      profiles,
       visibility,
       trims,
-    })
-  }
+      guard: preload?.guard,
+    },
+  )
   await scheduleItemTrims(ctx, after.id, trims)
 }
 
@@ -1704,7 +1962,8 @@ export async function notifyIssueUpdate(
  * want to hear the reply); every subscriber EXCEPT the mentioned reads
  * 'New comment'. `actor` is the comment's author; of the comment itself
  * only the body is read. The recipients' sight is worked out once per
- * project (RecipientSight). */
+ * project (RecipientSight). Past FOLLOWER_FANOUT.inline followers,
+ * background steps tell the rest. */
 export async function notifyCommentInsert(
   ctx: MutationCtx,
   a: {
@@ -1757,24 +2016,23 @@ export async function notifyCommentInsert(
     cap: 'skip',
     visibility,
   })
-  const subs = await subscribersOf(ctx, issue.id)
-  for (const s of subs) {
-    if (mentioned.some((m) => m.id === s.profile_id)) continue
-    await postMessage(ctx, {
+  const subs = await followersFrom(ctx, issue.id, undefined, FOLLOWER_FANOUT.inline + 1)
+  await fanOut(
+    ctx,
+    {
       org_id: issue.org_id,
-      recipient_id: s.profile_id,
       issue_id: issue.id,
-      kind: 'comment',
-      body: 'New comment',
+      task: issue._id,
+      project_id: issue.project_id,
       actor_id: actor.id,
       now,
-      issue,
-      project: project ?? undefined,
-      recipient: await orgProfile(ctx, profiles, issue.org_id, s.profile_id),
-      visibility,
-      trims,
-    })
-  }
+      note: { kind: 'comment' },
+      mentioned: mentioned.map((m) => m.id),
+    },
+    subs,
+    FOLLOWER_FANOUT.inline,
+    { issue, project, also: [], parent: [], profiles, visibility, trims },
+  )
   await scheduleItemTrims(ctx, issue.id, trims)
 }
 

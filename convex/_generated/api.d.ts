@@ -64,6 +64,7 @@ import type * as lib_access from "../lib/access.js";
 import type * as lib_activityVisibility from "../lib/activityVisibility.js";
 import type * as lib_archiveCursorSeal from "../lib/archiveCursorSeal.js";
 import type * as lib_archivedTasks from "../lib/archivedTasks.js";
+import type * as lib_arrayLimit from "../lib/arrayLimit.js";
 import type * as lib_authData from "../lib/authData.js";
 import type * as lib_avatarColors from "../lib/avatarColors.js";
 import type * as lib_backgroundPreviews from "../lib/backgroundPreviews.js";
@@ -244,6 +245,7 @@ declare const fullApi: ApiFromModules<{
   "lib/activityVisibility": typeof lib_activityVisibility;
   "lib/archiveCursorSeal": typeof lib_archiveCursorSeal;
   "lib/archivedTasks": typeof lib_archivedTasks;
+  "lib/arrayLimit": typeof lib_arrayLimit;
   "lib/authData": typeof lib_authData;
   "lib/avatarColors": typeof lib_avatarColors;
   "lib/backgroundPreviews": typeof lib_backgroundPreviews;

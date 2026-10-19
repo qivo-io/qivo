@@ -26,6 +26,7 @@ import {
   markAllMessagesRead,
   markMessagesRead,
   markMessagesUnread,
+  notifyFollowersStep,
   ownMessages,
   readArchivedProjectMessages,
   readArchivedTaskMessages,
@@ -33,6 +34,7 @@ import {
   removeReadMessages,
   snoozeMessages,
   trimUnreadMessages,
+  vFollowerStep,
   wakeSnoozedItem,
 } from './model/messages'
 
@@ -126,6 +128,17 @@ export const trimItems = internalMutation({
     for (const recipient_id of a.recipients) {
       await trimUnreadMessages(ctx, { recipient_id, issue_id: a.issue_id })
     }
+    return null
+  },
+})
+
+/* One background step of a comment's or a change's follower notices,
+ * scheduled by name from the fan-outs and from itself (model/messages.ts
+ * FOLLOWER_FANOUT). */
+export const notifyFollowers = internalMutation({
+  args: vFollowerStep,
+  handler: async (ctx, a) => {
+    await notifyFollowersStep(ctx, a)
     return null
   },
 })

@@ -22,9 +22,7 @@ import {
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
-  CHAIN_READ,
   COUNT_READ,
-  HEIGHT_READ,
   type RestoreResult,
   restoreItems,
   SIGHT_READ,
@@ -1908,16 +1906,6 @@ describe('parents outside a restored project', () => {
   const parentsOf = (t: T, tasks: Doc<'issues'>[]) =>
     Promise.all(tasks.map(async (task) => (await liveTask(t, task.id))?.parent_id))
 
-  /** How many levels the chain from task `id` to the top holds, itself
-   * included. */
-  const depthOf = (t: T, id: string) =>
-    t.run(async (ctx) => {
-      let depth = 0
-      for (let at: string | undefined = id; at !== undefined && depth < 40; depth++)
-        at = (await byId(ctx, 'issues', at))?.parent_id
-      return depth
-    })
-
   /** 19,000 CJK characters, under TEXT_MAX: about 57 KB of UTF-8. */
   const HEAVY = '漢'.repeat(19_000)
 
@@ -2006,9 +1994,9 @@ describe('parents outside a restored project', () => {
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
 
-  it('brings a project back whole when a task that waits has more under it than a step can check', async () => {
-    // 100 subtasks of 57 KB right under the middle task, 5.6 MB, more than
-    // HEIGHT_READ lets a step read for its check
+  it('brings a project back whole when a task that waits has more under it than a step can read', async () => {
+    // 100 subtasks of 57 KB right under the middle task, 5.6 MB; the check
+    // reads only the first, as one is enough to keep the task from a parent
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
@@ -2030,14 +2018,9 @@ describe('parents outside a restored project', () => {
     expect(await itemById(t, item.id)).toBeNull()
     expect(await liveProject(t, f.sub2.id)).not.toBeNull()
     // the tasks with subtasks stay without their parent, with their
-    // subtasks under them; only the walk under the heavy one stops short
+    // subtasks under them, and no check stopped short
     expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, epic.id])
-    expect(warn.mock.calls).toEqual([
-      [
-        'A deleted item restore cannot check the depth under a task',
-        { item_id: item.id, task_id: heavy.id },
-      ],
-    ])
+    expect(warn.mock.calls).toEqual([])
     expect(await subtaskCount(t, light.id)).toBe(1)
     expect(await subtaskCount(t, heavy.id)).toBe(SUBTASK_MAX)
     expect(await waitingParents(t)).toEqual([])
@@ -2362,7 +2345,7 @@ describe('parents outside a restored project', () => {
     expect(await waitingParents(t)).toEqual([])
   })
 
-  it('counts what the depth check reads against the step budget', async () => {
+  it('counts what the subtask check reads against the step budget', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -2384,9 +2367,10 @@ describe('parents outside a restored project', () => {
     })
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
-    // the check reads the three subtasks of 16 KB under the first task,
-    // which then comes back without its parent, and they spend the step
-    TRASH_BUDGET.bytes = 40_000
+    // the check reads the first of the three subtasks of 16 KB under the
+    // first task, which then comes back without its parent, and it spends
+    // the step
+    TRASH_BUDGET.bytes = 12_000
     await untilAttach(t, f, item.id)
     expect(await parentsOf(t, [heavy, light])).toEqual([undefined, undefined])
     expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([light.id])
@@ -2447,40 +2431,6 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, epic.id, undefined])
     expect(await subtaskCount(t, epic.id)).toBe(SUBTASK_MAX)
     expect(await waitingParents(t)).toEqual([])
-  })
-
-  it('reads no more under a task than HEIGHT_READ allows for its depth check', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const t = newT()
-    const f = await withOrg(t)
-    const org_id = f.org.id
-    const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
-    const tasks = await plantUnder(t, f, [epic, epic, epic, epic])
-    const [fits, wide, large] = tasks
-    const under = (parent_id: string, description = '') =>
-      plantIssue(t, { org_id, project_id: f.sub2.id, parent_id, description })
-    // a legacy chain of three tasks under the first, four subtasks under
-    // the second, one large subtask under the third and none under the last
-    const child = await under(fits.id)
-    for (let i = 0; i < 2; i++) await under(child.id)
-    for (let i = 0; i < 4; i++) await under(wide.id)
-    await under(large.id, 'Spec line. '.repeat(1490))
-    await deleteProject(t, f, f.sub2.id)
-    const item = await itemFor(t, f.sub2.id)
-    HEIGHT_READ.tasks = 3
-    HEIGHT_READ.bytes = 10_000
-
-    await restore(t, f.user, [item.id])
-    await stepThrough(t, item.id)
-    // a task with subtasks comes back without its parent; the walk reads
-    // no level past the first, and warns only where that level does not fit
-    expect(await parentsOf(t, tasks)).toEqual([undefined, undefined, undefined, epic.id])
-    const warning = 'A deleted item restore cannot check the depth under a task'
-    expect(warn.mock.calls).toEqual([
-      [warning, { item_id: item.id, task_id: wide.id }],
-      [warning, { item_id: item.id, task_id: large.id }],
-    ])
-    expect(await depthOf(t, child.id)).toBe(2)
   })
 
   it('attaches 150 tasks under parents in 10 projects that each of 150 people on them can see, within the real limits', async () => {
@@ -2591,33 +2541,6 @@ describe('parents outside a restored project', () => {
     expect(warn.mock.calls).toEqual([])
     expect(await waitingParents(t)).toEqual([])
   }, 300_000)
-
-  it('reads no more for a parent than CHAIN_READ allows, and leaves that task without it', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const t = newT()
-    const f = await withOrg(t)
-    // a top-level task, one of 57 KB, and the lowest of a legacy chain of
-    // three tasks, which is a subtask
-    const light = await chainOf(t, f, 1)
-    const heavy = await chainOf(t, f, 1, HEAVY)
-    const legacy = await chainOf(t, f, 3)
-    const { tasks, item } = await oneUnderEach(t, f, [light, heavy, legacy])
-    CHAIN_READ.bytes = 50_000
-
-    await restore(t, f.user, [item.id])
-    await stepThrough(t, item.id)
-    expect(await itemById(t, item.id)).toBeNull()
-    expect(await parentsOf(t, tasks)).toEqual([light.id, undefined, undefined])
-    // the subtask fails the table before its chain is read, so only the
-    // heavy parent warns
-    expect(warn.mock.calls).toEqual([
-      [
-        'A deleted item restore cannot check the chain above the parent of a task',
-        { item_id: item.id, task_id: tasks[1].id },
-      ],
-    ])
-    expect(await waitingParents(t)).toEqual([])
-  })
 
   it('checks a task again in the next step when its step runs out of reads during the check', async () => {
     const t = newT()

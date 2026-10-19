@@ -361,6 +361,46 @@ describe('moving a task to Deleted items', () => {
     await assertNoDanglingRefs(t, 'after rows too large to store')
   })
 
+  it("deletes a task too large to store with its history, in steps past the move's budget", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const huge = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      description: 'x'.repeat(STORED_ROW_MAX_BYTES),
+    })
+    const other = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const history = async (taskId: string) => (await historyOf(t, taskId)).map((row) => row.ts)
+    await plantHistory(t, huge, { numbered: 40 })
+    await plantHistory(t, other, { numbered: 3 })
+    // the move's own transaction deletes 10 rows, and steps the rest
+    TRASH_BUDGET.rows = 10
+    await deleteTask(t, f, huge.id)
+    const item = await itemFor(t, huge.id)
+    expect(item.state).toBe('moving')
+    expect((await history(huge.id)).length).toBeGreaterThan(0)
+    // a task created since with the freed id keeps its own history
+    const later = '2099-01-01T00:00:00.000Z'
+    await t.run((ctx) =>
+      ctx.db.insert('activity_events', {
+        id: uuid(),
+        org_id,
+        ts: later,
+        verb: 'created',
+        target_type: 'issue',
+        target_id: huge.id,
+        label: 'New task',
+        named_task_nums: [],
+      }),
+    )
+    await runSteps(t)
+    expect(await itemFor(t, huge.id)).toMatchObject({ state: 'ready', dropped_rows: 1 })
+    expect(await history(huge.id)).toEqual([later])
+    expect(await history(other.id)).toHaveLength(3)
+  })
+
   it('counts and lists only the subtasks it stores, so a dropped one gates no restore', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = newT()

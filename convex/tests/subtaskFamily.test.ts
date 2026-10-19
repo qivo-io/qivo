@@ -18,6 +18,7 @@ import {
   MOVE_SUBTREE_HOLDER_RULE,
   MOVE_SUBTREE_MAX,
   MOVE_SUBTREE_TOO_LARGE,
+  PARENT_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
   SUBTREE_ROOM,
@@ -505,8 +506,8 @@ describe('a move or a parent change too large for one transaction', () => {
     const before = await allIssues(t, f.org.id)
     await crowdedRoom(4, async () => {
       // a move within TBED walks the four tasks under the root's three
-      // children for their holders, and a new subtask counts the root's
-      // three children
+      // children for their holders, and a new subtask finds the transaction
+      // full before it counts the root's three children
       for (const change of [
         () => appMove(t, f, root.id, f.sub2.id),
         () => appUpdate(t, f, newKid.id, { parent_id: root.id }),
@@ -594,23 +595,40 @@ describe('a move or a parent change too large for one transaction', () => {
     await crowdedRoom(
       1e9,
       async () => {
-        // a move walks the subtasks for their holders, and a new subtask
-        // counts the parent's subtasks
-        for (const change of [
-          () => appMove(t, f, long.id, f.sub2.id),
-          () => appUpdate(t, f, other.id, { parent_id: long.id }),
-        ]) {
-          const r = await expectRefusal(change(), 'rule')
-          expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
-        }
+        // a move walks the subtasks for their holders
+        const r = await expectRefusal(appMove(t, f, long.id, f.sub2.id), 'rule')
+        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
         await appMove(t, f, short.id, f.sub2.id)
-        await appUpdate(t, f, another.id, { parent_id: short.id })
       },
       6 * 1024,
     )
+    // a new subtask's count of the parent's subtasks is checked the same way
+    // (below, under a real read limit)
+    await appUpdate(t, f, another.id, { parent_id: short.id })
     expect((await row(t, another.id)).parent_id).toBe(short.id)
     expect((await row(t, other.id)).parent_id).toBeUndefined()
     expect((await row(t, long.id)).project_id).toBe(f.sub.id)
+  })
+})
+
+describe('a parent whose subtasks are too large to count', () => {
+  it('refuses with its own sentence under a real read limit, and changes nothing', async () => {
+    // four legacy subtasks of 450 KB, read within a limit of 2 MB: the count
+    // passes the room on the fourth
+    const t = newT({ transactionLimits: { bytesRead: 2_000_000 } })
+    const { f } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const heavy = await plantIssue(t, base)
+    for (let i = 0; i < 4; i++)
+      await plantIssue(t, { ...base, parent_id: heavy.id, description: 'x'.repeat(450_000) })
+    const light = await plantIssue(t, base)
+    await plantIssue(t, { ...base, parent_id: light.id })
+    const other = await plantIssue(t, base)
+    const r = await expectRefusal(appUpdate(t, f, other.id, { parent_id: heavy.id }), 'rule')
+    expect(r.data.message).toBe(PARENT_TOO_LARGE)
+    expect(await row(t, other.id)).toEqual(other)
+    await appUpdate(t, f, other.id, { parent_id: light.id })
+    expect((await row(t, other.id)).parent_id).toBe(light.id)
   })
 })
 
