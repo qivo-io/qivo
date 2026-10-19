@@ -467,4 +467,43 @@ describe("the Billing page's paged report", () => {
     STORAGE_PAGE.rows = 300
     expect(await report(t, f)).toMatchObject({ storage_bytes: 4515, projects: [FW(f, 4515)] })
   })
+
+  it('starts the next task from its first row when the task a page stopped in is gone', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const sid = await storedFile(t)
+    const first = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const next = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // the next task's rows are older than the first task's, so a resume
+    // point carried over to it would skip them
+    for (let i = 0; i < 2; i++) await plantFile(t, sid, next, 5, { legacy: 'scope' })
+    for (let i = 0; i < 6; i++) await plantFile(t, sid, first, 3, { legacy: 'scope' })
+    STORAGE_PAGE.rows = 4
+    const page = (cursor: string | null) =>
+      t.query(internal.billing.storageNowPage, { org_id: f.org.id, phase: 'tasks', cursor })
+    const opening = await page(null)
+    if ('split' in opening || opening.next === null)
+      throw new Error('expected a page inside a task')
+    expect(opening.bytes).toBe(12)
+    // the first task leaves with its rows, as a move to Deleted items takes them
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('issue_attachments').collect())
+        if (row.issue_id === first.id) await ctx.db.delete(row._id)
+      const task = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .filter((q) => q.eq(q.field('id'), first.id))
+        .unique()
+      if (task) await ctx.db.delete(task._id)
+    })
+    let bytes = opening.bytes
+    let cursor: string | null = opening.next
+    while (cursor !== null) {
+      const rest = await page(cursor)
+      if ('split' in rest) throw new Error('a page of one task does not split')
+      bytes += rest.bytes
+      cursor = rest.next
+    }
+    expect(bytes).toBe(22)
+  })
 })

@@ -41,7 +41,7 @@ export function Users() {
     setError('')
     const timer = setTimeout(
       () => {
-        listUsers(search.trim())
+        listUsers(search.trim(), () => active)
           .then((result) => {
             if (active) setRows(result)
           })

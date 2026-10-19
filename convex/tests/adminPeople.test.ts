@@ -264,7 +264,7 @@ describe('the Users page', () => {
       )
   })
 
-  it('returns at most PEOPLE_PAGE.users rows a page, and every row once', async () => {
+  it('returns fewer than twice PEOPLE_PAGE.users rows a page, and every row once', async () => {
     const t = newT()
     await peopleFixture(t)
     const asOp = await operator(t)
@@ -280,7 +280,39 @@ describe('the Users page', () => {
     expect(narrowed.flatMap((page) => page.rows).map((r) => r.org_name)).toEqual(
       Array(6).fill('Testbed Labs'),
     )
-    expect(narrowed.every((page) => page.rows.length <= 2)).toBe(true)
+    expect(narrowed.every((page) => page.rows.length < 4)).toBe(true)
+  })
+
+  it('reads full pages of profiles however few rows a page still needs', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const asOp = await operator(t)
+    // Reads of three profiles: profiles that do not match up to a read's
+    // start, then two matches and seven that do not, then two more matches.
+    await t.run(async (ctx) => {
+      const before = (await ctx.db.query('profiles').collect()).length
+      const pad = Array((3 - (before % 3)) % 3).fill('Hay')
+      const hay = Array(7).fill('Hay')
+      for (const name of [...pad, 'Needle 1', 'Needle 2', ...hay, 'Needle 3', 'Needle 4'])
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: f.org.id,
+          name,
+          initials: 'NH',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+    })
+    Object.assign(PEOPLE_PAGE, { users: 3 })
+    // The fourth read takes the last two matches together. Reads shrunk to
+    // the one row still needed would stop after the third match.
+    const pages = await userPages(asOp, 'needle')
+    expect(pages.map((page) => page.rows.map((row) => row.name))).toEqual([
+      ['Needle 1', 'Needle 2', 'Needle 3', 'Needle 4'],
+    ])
   })
 
   it('reads one session of a login that holds many, the newest', async () => {

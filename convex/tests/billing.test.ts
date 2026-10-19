@@ -919,7 +919,7 @@ describe('provider state, retries and billing snapshots', () => {
     expect(failures).toMatchObject([
       {
         target_org_id: f.org.id,
-        detail: { period_start: START, attempts: STORAGE_ATTEMPTS },
+        detail: { period: stopped?._id, period_start: START, attempts: STORAGE_ATTEMPTS },
       },
     ])
     // a stopped sample stays stopped, and the earlier runs' steps do nothing
@@ -932,6 +932,14 @@ describe('provider state, retries and billing snapshots', () => {
     expect(errors).toHaveBeenCalledTimes(1)
 
     expect(await t.mutation(restartStorage, { period: stopped!._id })).toBe(true)
+    const restarts = await t.run(async (ctx) =>
+      (await ctx.db.query('platform_audit_log').collect()).filter(
+        (row) => row.action === 'billing.storage_sample_restarted',
+      ),
+    )
+    expect(restarts).toMatchObject([
+      { actor_email: 'cli', target_org_id: f.org.id, detail: { period: stopped?._id } },
+    ])
     await sample(t)
     const period = await periodAt(t, START)
     expect(period).toMatchObject({ storage_bytes: 6_000_000_000, storage_blocks: 1 })

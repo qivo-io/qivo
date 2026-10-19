@@ -315,6 +315,7 @@ async function restartStorageSample(
     action: 'billing.storage_sample_failed',
     target_org_id: period.org_id,
     detail: {
+      period: period._id,
       subscription_id: period.subscription_id,
       period_start: period.period_start,
       attempts,
@@ -323,11 +324,17 @@ async function restartStorageSample(
 }
 
 /** Starts a period's storage sample again after it stopped
- * (billing.storage_sample_failed) or while it runs, with its starts counted
- * from one. An operator runs it once the failing step is fixed:
+ * (billing.storage_sample_failed, whose detail names the period) or while it
+ * runs, with its starts counted from one, and writes a
+ * billing.storage_sample_restarted audit row. An operator runs it once the
+ * failing step is fixed:
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     TARGET npx convex run billingSync:restartStorage '{"period":"…"}'
- * A period whose sample finished is left alone. */
+ * A period whose sample finished is left alone. The storage charge a
+ * finished sample records is sent only while the period is still the
+ * subscription's current one and more than 30 seconds from its end
+ * (eventReady), so a restart after that records the bytes but charges
+ * nothing. */
 export const restartStorage = internalMutation({
   args: { period: v.id('billing_periods') },
   handler: async (ctx, { period }): Promise<boolean> => {
@@ -336,6 +343,16 @@ export const restartStorage = internalMutation({
     if (row.storage_bytes !== undefined) return false
     await ctx.db.patch(row._id, { storage_failed_at: undefined })
     await startStorageSample(ctx, row._id)
+    await audit(ctx, {
+      actor_email: 'cli',
+      action: 'billing.storage_sample_restarted',
+      target_org_id: row.org_id,
+      detail: {
+        period: row._id,
+        subscription_id: row.subscription_id,
+        period_start: row.period_start,
+      },
+    })
     return true
   },
 })

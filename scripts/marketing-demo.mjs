@@ -65,6 +65,8 @@ const TRASH_BATCHES = 400
 const WIPE_STEPS = 2000
 /** A loopback HTTP origin, the only kind a --local run talks to. */
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$/
+/** Whether `value` is a loopback HTTP origin with a valid port. */
+const isLoopbackOrigin = (value) => LOOPBACK_ORIGIN.test(value) && URL.canParse(value)
 
 class DemoCliError extends Error {}
 
@@ -184,15 +186,15 @@ function resolveLocal(options, env, requireKey) {
   if (key !== undefined && (/^(prod|dev|preview|project):/.test(key) || !/^\S+$/.test(key)))
     throw new DemoCliError('QIVO_LOCAL_ADMIN_KEY must be a local backend admin key.')
   const deployment = options.deployment
-  if (!/^local-[a-z0-9-]*[0-9]+$/.test(deployment ?? ''))
+  if (!/^local-[a-z0-9][a-z0-9-]*-[0-9]+$/.test(deployment ?? ''))
     throw new DemoCliError(
       '--local needs --deployment local-<name>-<port>, the name its credentials are stored under.',
     )
   const urlValue = (options.url ?? env.VITE_CONVEX_URL ?? '').replace(/\/$/, '')
-  if (!LOOPBACK_ORIGIN.test(urlValue))
+  if (!isLoopbackOrigin(urlValue))
     throw new DemoCliError('--local takes a loopback HTTP backend origin only (--url).')
   const siteUrl = options.siteUrl ?? 'http://localhost:5199'
-  if (!LOOPBACK_ORIGIN.test(siteUrl))
+  if (!isLoopbackOrigin(siteUrl))
     throw new DemoCliError('--local takes a loopback HTTP site origin only (--site-url).')
   return { target: 'local', deployment, url: new URL(urlValue).origin, siteUrl, key }
 }

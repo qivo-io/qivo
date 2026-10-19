@@ -56,15 +56,19 @@ export const listOrgs = (): Promise<OrgRow[]> =>
 /* Every organization's id and name, without the counts listOrgs reads. */
 export const listOrgNames = () => convex.action(api.adminStats.orgNames, {}).catch(mapError)
 /* Every Users page row matching `search`, read one bounded page after
-   another (adminPeople.ts userPage). The view orders them. */
-export async function listUsers(search: string): Promise<UserRow[]> {
+   another (adminPeople.ts userPage). The view orders them. Once `wanted`
+   answers false, no further page is read and the rows read so far return. */
+export async function listUsers(
+  search: string,
+  wanted: () => boolean = () => true,
+): Promise<UserRow[]> {
   const rows: UserRow[] = []
   let cursor: string | null = null
   do {
     const page = await convex.action(api.adminPeople.userPage, { search, cursor }).catch(mapError)
     rows.push(...page.rows)
     cursor = page.next
-  } while (cursor !== null)
+  } while (cursor !== null && wanted())
   return rows
 }
 export const auditLog = (limit = 200): Promise<AuditRow[]> =>

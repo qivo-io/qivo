@@ -150,13 +150,17 @@ help, because the script handles `SIGHUP` itself.
 With `--staging` the script refuses any environment but staging,
 any app other than `preview.qivo.io` and any backend other than the one that
 app uses. `--local` runs it against a disposable local backend instead, with
-loopback addresses only, and before it sends any credential it checks that
-the app it signed in to syncs with the backend `--convex-url` names. Seed
-that backend's Northstar fixture first with
+loopback addresses only. It signs in to the app at `--app-url` with the
+fixture password, then checks that the app syncs with the backend
+`--convex-url` names before it sends the admin key, a token or an agent key.
+Seed that backend's Northstar fixture first with
 `node scripts/marketing-demo.mjs seed --local --deployment local-<name>-<port>`,
-which takes loopback origins only (`--url` and `--site-url`),
-`QIVO_FIXTURE_LOCAL=true` and the backend's admin key in
-`QIVO_LOCAL_ADMIN_KEY`, and give the check the same `--deployment`. It
+which takes loopback origins only, `QIVO_FIXTURE_LOCAL=true` and the
+backend's admin key in `QIVO_LOCAL_ADMIN_KEY`. The check reads the
+credentials the seed stored for exactly its origins, so give the seed's
+`--url` and `--site-url` the same origins as the check's `--convex-url` and
+`--app-url`, spelled the same way (`localhost` and `127.0.0.1` differ), and
+give both the same `--deployment` and `QIVO_FIXTURE_CREDENTIALS_DIR`. It
 prints status lines only, never a secret, and
 refuses to start while `DEBUG`, `PWDEBUG`, `DEBUG_FILE` or `NODE_DEBUG` is
 set, because Playwright's and Node's debug output would bypass that. If a
@@ -263,6 +267,11 @@ production or staging to a deployment of a commit older than v0.1.5
 (`e758e51`). Those deployments fetch the website from Vercel projects that no
 longer exist, so the website and docs on `qivo.io` or `preview.qivo.io` would
 break.
+
+Instant Rollback can also return a frontend that calls Convex functions a
+later release removed. The operator console before v0.1.15 calls
+`admin.listUsers` and `admin.orgDetail`, which later releases removed, so
+after such a rollback its Users and organization pages fail.
 
 ## Environment configuration
 

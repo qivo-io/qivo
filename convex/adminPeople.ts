@@ -13,9 +13,9 @@
  * page and not yet in another. The console loads on demand, so that is
  * accepted.
  *
- * The Users page reads its rows a page at a time too (userPage), at most
- * PEOPLE_PAGE.users rows an action, and the console asks for the pages one
- * after another. An organization's page still returns all its members and
+ * The Users page reads its rows a page at a time too (userPage), fewer
+ * than twice PEOPLE_PAGE.users rows an action, and the console asks for the
+ * pages one after another. An organization's page still returns all its members and
  * teams in one action result.
  *
  * Two auth.users columns the SQL joined have no Better Auth twin:
@@ -50,7 +50,8 @@ export const PEOPLE_PAGE = {
   /** Profiles per page of the Users page. Each reads its organization's
    * name once per page. */
   profiles: 2000,
-  /** Rows of the Users page one userPage action returns. */
+  /** Profiles one userPage read takes. The action reads until this many
+   * rows match, so it returns fewer than twice as many. */
   users: 1000,
   /** An organization's profiles per page. Each pending seat on it reads up
    * to `invites` + 1 audit rows. */
@@ -250,10 +251,12 @@ export type AdminUserPage = { rows: AdminUserRow[]; next: string | null }
 
 /* One page of admin_list_users, the Users page's rows. Cross-organization.
  * An empty search lists everyone, and otherwise every case-insensitive
- * fragment must match the profile name, email or organization name. A page
- * holds at most PEOPLE_PAGE.users rows, in the order profiles were stored,
- * and `next` is the cursor of the page after it, or null after the last
- * one. The console reads every page and orders the rows itself. A profile
+ * fragment must match the profile name, email or organization name. It
+ * reads PEOPLE_PAGE.users profiles at a time until that many rows match, so
+ * a page holds fewer than twice that many, in the order profiles were
+ * stored. Every read is full size, so a search that matches few profiles
+ * still reads the deployment in few steps. `next` is the cursor of the page
+ * after it, or null after the last one. The console reads every page and orders the rows itself. A profile
  * whose organization row is gone drops out. */
 export const userPage = platformAction({
   args: { search: v.string(), cursor: vCursor },
@@ -264,7 +267,7 @@ export const userPage = platformAction({
     do {
       const page: ProfilePage = await ctx.runQuery(internal.adminPeople.profilePage, {
         cursor: next,
-        size: PEOPLE_PAGE.users - matched.length,
+        size: PEOPLE_PAGE.users,
       })
       matched.push(...page.profiles.filter(matches))
       next = page.next
