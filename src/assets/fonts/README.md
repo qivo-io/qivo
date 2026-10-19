@@ -24,11 +24,13 @@ characters, and task text and Markdown code can be in any script.
 | `geist-mono-vietnamese.woff2` | https://fonts.gstatic.com/s/geistmono/v6/or3nQ6H-1_WfwkMZI_qYFrgdmgPn.woff2 | `d39b60889a94a527a7f73c7988a2d6efb6c081614aef683b0b386c02d74c2175` |
 | `geist-mono-symbols2.woff2` | https://fonts.gstatic.com/s/geistmono/v6/or3nQ6H-1_WfwkMZI_qYFg08vz7ehw.woff2 | `5bb66d8319ba1602bb2eb67dce8d79c2b4687be8ce183a0574433e949b3c60ad` |
 
-Both families are used under the SIL Open Font License, in
-`instrument-sans-OFL.txt` and `geist-mono-OFL.txt` beside the fonts.
-License sources:
+Both families are used under the SIL Open Font License. Its texts are in
+`public/fonts/instrument-sans-OFL.txt` and `public/fonts/geist-mono-OFL.txt`,
+which every build publishes at `/fonts/` beside the application, so the
+licence travels with the fonts. License sources:
 https://raw.githubusercontent.com/google/fonts/main/ofl/instrumentsans/OFL.txt
 and https://raw.githubusercontent.com/google/fonts/main/ofl/geistmono/OFL.txt.
 
-`rubik-700-qivo.woff2` sets the "Qivo" wordmark under `rubik-OFL.txt`. Its
-source is listed in `website/public/marketing/README.md`.
+`rubik-700-qivo.woff2` sets the "Qivo" wordmark under
+`public/fonts/rubik-OFL.txt`. Its source is listed in
+`website/public/marketing/README.md`.
