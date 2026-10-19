@@ -123,6 +123,51 @@ with `--appimage-extract-and-run` for diagnostics.
 
 The Linux package command is intentionally build-only.
 
+## Network requests
+
+The window loads the Qivo web app, which makes the same requests as it does
+in a browser. The shell itself contacts only the update feed, and only in a
+packaged build that has one. Local package builds and **Desktop test build**
+artifacts have no feed and never check, unless `QIVO_DESKTOP_UPDATE_URL` is
+set when the app starts.
+
+A packaged build checks at startup and then every 4 hours while it runs. A
+check is an HTTPS `GET` for `latest.yml` on Windows or `latest-linux.yml` on
+Linux at the feed root. electron-updater sends it from its own in-memory
+session, so it carries no Qivo cookies or account data. It contains:
+
+- a `noCache` query parameter holding the current time in base 32
+- `User-Agent: electron-builder` and `Cache-Control: no-cache`
+- `x-user-staging-id: 00000000-0000-0000-0000-000000000000`, the same value
+  on every install
+- Chromium's standard request headers, such as `Accept-Language` from the
+  system locale and `Accept-Encoding`
+
+electron-updater normally creates a random ID, stores it in `.updaterId` in
+the user data folder and sends it in `x-user-staging-id` to place each
+install in a staged rollout. The library always sends the header and has no
+option to turn the ID off. Qivo does not use staged rollouts, so
+`disableStagingUserId` in [privacy.ts](privacy.ts) sets the ID to the nil
+UUID before the first check, and the app never reads or writes the file. If
+release metadata ever sets `stagingPercentage`, every install updates at
+once, and 0 holds back every install.
+
+When the feed lists a newer version, the app downloads the files named in
+that metadata, such as the installer and its blockmap, from the same feed.
+On Windows, a differential download also requests the installed version's
+blockmap unless it is cached, and that URL names the installed version.
+Those downloads carry no staging ID.
+
+Chromium's spellchecker normally downloads a Hunspell dictionary from a
+Google server for every session, including electron-updater's. The shell
+prevents those downloads. Linux has no other spellchecker, so the Linux app
+does not check spelling. On Windows, Chromium uses the Windows spellchecker
+where it supports the language and otherwise falls back to a downloaded
+dictionary. The shell blocks that fallback, so such a language stays
+unchecked. Spellchecking on a Windows build has not been tested. The
+shell never starts Electron's crash reporter, so it uploads no crash
+reports.
+
 ## Build dependency security
 
 The root package overrides `roarr` to `6.0.0` only for `global-agent@3.0.0`,
