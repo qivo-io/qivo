@@ -4,7 +4,7 @@
  * the local CLI with Better Auth's own hashPassword; neither plaintext
  * passwords nor a public reset function reach deployment. Normal deployment
  * never runs this fixture. Seed, reset and wipe are explicit operator commands. */
-import { v } from 'convex/values'
+import { getDocumentSize, v } from 'convex/values'
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -103,6 +103,26 @@ async function owned(ctx: QueryCtx) {
 /** What inspect answers about the owned demo. */
 type DemoState = Awaited<ReturnType<typeof inspectCore>>
 
+/** The most tasks an inspection counts, and the bytes it reads for them. A
+ * copy grown by manual or contract-test work can hold more than one query
+ * may read, and the CLI inspects before it wipes, so past either bound the
+ * count stops and says so (`tasks_partial`). Tests lower them. */
+export const INSPECT_READ = { tasks: 5000, bytes: 6 * 1024 * 1024 }
+
+/* The organization's tasks counted within INSPECT_READ, and whether more
+ * remain. */
+async function countTasks(ctx: QueryCtx, orgId: string) {
+  let tasks = 0
+  let bytes = 0
+  const issues = ctx.db.query('issues').withIndex('by_org', (q) => q.eq('org_id', orgId))
+  for await (const task of issues) {
+    if (tasks >= INSPECT_READ.tasks || bytes >= INSPECT_READ.bytes) return { tasks, partial: true }
+    tasks++
+    bytes += getDocumentSize(task)
+  }
+  return { tasks, partial: false }
+}
+
 async function inspectCore(ctx: QueryCtx, expected: string) {
   site(expected)
   const record = await receipt(ctx)
@@ -136,10 +156,7 @@ async function inspectCore(ctx: QueryCtx, expected: string) {
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
     .collect()
-  const tasks = await ctx.db
-    .query('issues')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
+  const tasks = await countTasks(ctx, org.id)
   return {
     site_url: expected,
     version: record.version,
@@ -164,7 +181,8 @@ async function inspectCore(ctx: QueryCtx, expected: string) {
     counts: {
       projects: projects.filter((p) => p.type === 'meta').length,
       subprojects: projects.filter((p) => p.type === 'project').length,
-      tasks: tasks.length,
+      tasks: tasks.tasks,
+      ...(tasks.partial ? { tasks_partial: true as const } : {}),
       users: profiles.length,
       avatars: profiles.filter((p) => p.avatar_storage_id !== undefined).length,
     },

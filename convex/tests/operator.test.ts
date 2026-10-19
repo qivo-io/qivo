@@ -2,6 +2,7 @@ import { verifyPassword } from 'better-auth/crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
+import { INSPECT_READ } from '../internal/marketingDemo'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { newT, type T, withOrg } from './helpers.setup'
 
@@ -240,7 +241,11 @@ describe('legacy fixture retirement', () => {
 
 describe('Northstar wipe', () => {
   const defaults = { ...REMOVAL_BUDGET }
-  afterEach(() => Object.assign(REMOVAL_BUDGET, defaults))
+  const inspectDefaults = { ...INSPECT_READ }
+  afterEach(() => {
+    Object.assign(REMOVAL_BUDGET, defaults)
+    Object.assign(INSPECT_READ, inspectDefaults)
+  })
 
   const apply = (t: T, mode: 'seed' | 'wipe') =>
     t.mutation(internal.internal.marketingDemo.apply, {
@@ -322,6 +327,19 @@ describe('Northstar wipe', () => {
         })
       }
     })
+
+    // The CLI inspects before it wipes. Past INSPECT_READ the count stops
+    // and says so, so a copy larger than one query may read can be wiped.
+    const inspect = () =>
+      t.query(internal.internal.marketingDemo.inspect, { expected_site_url: SITE })
+    const total = seeded.issues + 500
+    expect((await inspect()).counts).toMatchObject({ tasks: total })
+    expect((await inspect()).counts).not.toHaveProperty('tasks_partial')
+    INSPECT_READ.tasks = 100
+    expect((await inspect()).counts).toMatchObject({ tasks: 100, tasks_partial: true })
+    Object.assign(INSPECT_READ, inspectDefaults, { bytes: 1 })
+    expect((await inspect()).counts).toMatchObject({ tasks: 1, tasks_partial: true })
+    Object.assign(INSPECT_READ, inspectDefaults)
 
     // the first batch leaves work behind, which a seed refuses
     // a step that leaves work answers without inspecting it all again
