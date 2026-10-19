@@ -220,7 +220,9 @@ export function parseIssueRef(ref: string): { uuid: string } | { num: number } |
  * credential's own), then canSeeProject-filtered: the NEW obligation RLS used
  * to carry — without it the machine surface leaks invisible issues. Resolves
  * archived issues too (no archived filter here). null = not found / not
- * visible; each surface phrases that itself. */
+ * visible; each surface phrases that itself. A task whose project has a
+ * missing parent or sits in a cycle (lib/access.ts rootMetaOf) is not
+ * visible, as accessFlags gives such a project no read flag. */
 export async function findIssue(
   ctx: QueryCtx,
   me: Caller,
@@ -241,7 +243,12 @@ export async function findIssue(
   if (issue === null) return null
   const project = await byId(ctx, 'projects', issue.project_id)
   if (project === null) return null
-  return (await canSeeProject(ctx, me, project)) ? issue : null
+  try {
+    return (await canSeeProject(ctx, me, project)) ? issue : null
+  } catch (e) {
+    if (e instanceof ConvexError && (e.data as Refusal).code === 'not_found') return null
+    throw e
+  }
 }
 
 /* Project refs: uuid, per-org project number, or KEY. Digit-only project keys
