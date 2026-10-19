@@ -271,6 +271,9 @@ describe('statusMoveOf', () => {
   })
   it('reads the machine diff', () => {
     expect(statusMoveOf('changed', '(status In Progress → In Review) — via MCP')).toBe('review')
+    // rows written since October 2026 sign after a comma
+    expect(statusMoveOf('changed', '(status In Progress → In Review), via MCP')).toBe('review')
+    expect(statusMoveOf('changed', '(status To Do → Done), via the REST API (CI key)')).toBe('done')
     expect(
       statusMoveOf(
         'changed',
