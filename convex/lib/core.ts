@@ -521,8 +521,8 @@ async function listedActiveTasks(
  * (lib/machineDelay.ts listForecaster), judged on `o.now`. Each row's
  * newest comment is one more read (lastCommentTimes). A page whose comments
  * do not fit in what the request has left is refused with PAGE_TOO_LARGE,
- * and with ACTIVE_TASKS_TOO_LARGE when the reads before them leave no room
- * at all.
+ * and with ACTIVE_TASKS_TOO_LARGE or ACTIVE_LIST_TOO_WIDE when the reads
+ * before them leave no room at all.
  *
  * In a search, each fragment may match any field of the app's task filter
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
@@ -595,12 +595,7 @@ export async function listActiveIssuesCore(
   for (const task of page) {
     if (task.parent_id !== undefined && !tasks.has(task.parent_id)) absent.add(task.parent_id)
   }
-  const parents = await pageReads(
-    ctx,
-    [...absent],
-    (id) => byId(ctx, 'issues', id),
-    ACTIVE_TASKS_TOO_LARGE,
-  )
+  const parents = await pageReads(ctx, [...absent], (id) => byId(ctx, 'issues', id), null)
   for (const parent of parents) if (parent !== null) tasks.set(parent.id, parent)
   const org = await byId(ctx, 'organizations', me.org_id)
   const projectOf = (id: string) => cat.byUuid.get(id)
@@ -611,11 +606,7 @@ export async function listActiveIssuesCore(
     view: { byUuid: cat.byUuid, visible: readable },
     profiles,
   })
-  const lastComments = await lastCommentTimes(
-    ctx,
-    page,
-    absent.size > 0 ? PAGE_TOO_LARGE : ACTIVE_TASKS_TOO_LARGE,
-  )
+  const lastComments = await lastCommentTimes(ctx, page, absent.size > 0 ? PAGE_TOO_LARGE : null)
   return await Promise.all(
     page.map((task) =>
       listRow(ctx, task, {
@@ -647,11 +638,18 @@ export const COMMENT_READS_RESERVE = { ranges: 16, documents: 16, bytes: DOCUMEN
 export const PAGE_TOO_LARGE =
   'this page of tasks is too large to read at once; ask for a smaller limit'
 
-/** The refusal for an active list whose reads before its rows' comments,
- * mostly the organization's active tasks, leave no room for even one, so a
- * smaller limit cannot help. */
+/** The refusal for an active list whose reads before its rows' comments
+ * leave no documents or bytes for even one, which the organization's active
+ * tasks fill, so a smaller limit cannot help. */
 export const ACTIVE_TASKS_TOO_LARGE =
   "this organization's active tasks are too large to list in one request"
+
+/** The refusal for an active list whose reads before its rows' comments
+ * leave no index ranges for even one. Ranges run out through the caller's
+ * team memberships, the labels a search matches and the active projects,
+ * not through the tasks themselves, so a smaller limit cannot help. */
+export const ACTIVE_LIST_TOO_WIDE =
+  'this organization has too many projects, teams or labels to list its tasks in one request'
 
 /* `read` of each of `items`, in order, for an active page. Each read is one
  * index range and at most one document, and they run a few at a time, never
@@ -659,12 +657,14 @@ export const ACTIVE_TASKS_TOO_LARGE =
  * limit, so they pass that room by one document at most and the request
  * stays inside its limits. When the room runs out first, the page is
  * refused with PAGE_TOO_LARGE, or with `first` when no room was left before
- * the first read. */
+ * the first read. A null `first` names what the list read before the page:
+ * ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out, else
+ * ACTIVE_LIST_TOO_WIDE. */
 async function pageReads<T, R>(
   ctx: QueryCtx,
   items: readonly T[],
   read: (item: T) => Promise<R>,
-  first: string,
+  first: string | null,
 ): Promise<R[]> {
   const out: R[] = []
   while (out.length < items.length) {
@@ -673,7 +673,9 @@ async function pageReads<T, R>(
     const documents = m.documentsRead.remaining - COMMENT_READS_RESERVE.documents
     const bytes = m.bytesRead.remaining - COMMENT_READS_RESERVE.bytes
     if (ranges <= 0 || documents <= 0 || bytes <= 0) {
-      throw badRequest(out.length === 0 ? first : PAGE_TOO_LARGE)
+      if (out.length > 0) throw badRequest(PAGE_TOO_LARGE)
+      const filled = documents <= 0 || bytes <= 0 ? ACTIVE_TASKS_TOO_LARGE : ACTIVE_LIST_TOO_WIDE
+      throw badRequest(first ?? filled)
     }
     const fits = Math.max(1, Math.floor(bytes / DOCUMENT_MAX_BYTES))
     const batch = items.slice(out.length, out.length + Math.min(fits, ranges, documents))
@@ -685,13 +687,13 @@ async function pageReads<T, R>(
 /* When the newest comment on each of `tasks` was posted, or null for a task
  * without comments (model/comments.ts latestComment), by task id, read
  * within the request's room (pageReads), never answered with a wrong null.
- * `first` is the refusal when no room was left before the first read:
- * ACTIVE_TASKS_TOO_LARGE, or PAGE_TOO_LARGE once the page read more of its
- * own, such as parents. */
+ * `first` is the refusal when no room was left before the first read: null
+ * for what the list read before (pageReads), or PAGE_TOO_LARGE once the
+ * page read more of its own, such as parents. */
 async function lastCommentTimes(
   ctx: QueryCtx,
   tasks: readonly Doc<'issues'>[],
-  first: string,
+  first: string | null,
 ): Promise<Map<string, string | null>> {
   const latest = await pageReads(ctx, tasks, (task) => latestComment(ctx, task.id), first)
   return new Map(tasks.map((task, i) => [task.id, latest[i]?.created_at ?? null]))

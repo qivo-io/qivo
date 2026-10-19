@@ -14,7 +14,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type GroupIssue, groupProgress, isIssueGroup } from '../../src/lib/issueGroups'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { ACTIVE_TASKS_TOO_LARGE, COMMENT_READS_RESERVE, PAGE_TOO_LARGE } from '../lib/core'
+import {
+  ACTIVE_LIST_TOO_WIDE,
+  ACTIVE_TASKS_TOO_LARGE,
+  COMMENT_READS_RESERVE,
+  PAGE_TOO_LARGE,
+} from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import {
   as,
@@ -513,5 +518,17 @@ describe('an active page keeps inside the request’s read limits', () => {
     expect(
       await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', offset: '1000' }),
     ).toEqual([])
+  })
+
+  it('names projects, teams and labels when the reads before the comments use up the ranges', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 64 } }))
+    // the reserve stands in for team and label reads that leave less unread
+    COMMENT_READS_RESERVE.ranges = 64
+    await task(fx, { title: 'Never discussed' })
+    const e = await expectRefusal(
+      restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
+      'bad_request',
+    )
+    expect((e.data as Refusal).message).toBe(ACTIVE_LIST_TOO_WIDE)
   })
 })

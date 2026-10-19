@@ -1307,7 +1307,10 @@ organization when it names an archived project or the organization has more
 than 1,000 active projects. When those alone leave no
 room for a single comment, the call is refused with `this organization's
 active tasks are too large to list in one request`, and a smaller `limit`
-does not help.
+does not help. When the call instead runs out of index reads, which follow
+the active projects, your team memberships and the labels a search matches,
+it is refused with `this organization has too many projects, teams or labels
+to list its tasks in one request`.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all

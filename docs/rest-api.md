@@ -924,7 +924,10 @@ active task of the organization when it names an archived project or the
 organization has more than 1,000 active projects. When
 those alone leave no room for a single comment, the request is a `400` with
 `this organization's active tasks are too large to list in one request`, and
-a smaller `limit` does not help.
+a smaller `limit` does not help. When the request instead runs out of index
+reads, which follow the active projects, your team memberships and the labels
+a search matches, the `400` says `this organization has too many projects,
+teams or labels to list its tasks in one request`.
 
 #### Archived tasks
 
