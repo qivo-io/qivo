@@ -543,11 +543,18 @@ const pendingProjectDeletes = new Set<string>()
    runs again on rows that may already hold it, so it is safe to repeat and
    skips rows that are gone. The next good delivery holds them all. */
 let acceptedPaints: (() => void)[] = []
+/* Whether the newest snapshot result was a good delivery. Convex hands the
+   query results that hold a write to their callbacks before the write's
+   promise resolves, so a write accepted while this holds is already in
+   serverSnap. Painting it again over that delivery could undo a newer
+   change made elsewhere, such as a message reopened on another device. */
+let snapshotCurrent = false
 
 /** Keeps `paint`, the optimistic paint of a write the server accepted, for
-    rollbacks until the next good delivery (acceptedPaints). */
+    rollbacks until the next good delivery (acceptedPaints), unless the
+    newest delivery already holds the write. */
 function keepAcceptedPaint(paint: () => void) {
-  acceptedPaints.push(paint)
+  if (!snapshotCurrent) acceptedPaints.push(paint)
 }
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused). The pause would refuse their
@@ -4985,16 +4992,21 @@ export const PLANNER = {
     unexaminedUnread = false
     rebuild()
     emit()
-    // A seat's paint is kept once its last batch is saved. The client does
-    // not know which rows an earlier batch marked, so a refused later batch
-    // leaves that seat to the next delivery.
+    /* A seat's paint is kept once its last batch is saved. The client does
+       not know which rows an earlier batch marked, so a refused later batch
+       leaves that seat to the next delivery. Like the server's batches, the
+       kept paint skips rows snoozed meanwhile. */
+    const markSeatRead = (org: string) =>
+      markLoadedMessagesRead(
+        (byOrg.get(org) ?? []).filter((id) => !rows.messages.get(id)?.snoozed_until),
+        at,
+      )
     const operations = orgs.map(async (org) => {
       let before: number | undefined
       while (epoch === storeEpoch) {
         const operation = write(api.messages.markAllRead, { org_id: org, before })
         run(operation, (result) => {
-          if (!result.hasMore)
-            keepAcceptedPaint(() => markLoadedMessagesRead(byOrg.get(org) ?? [], at))
+          if (!result.hasMore) keepAcceptedPaint(() => markSeatRead(org))
         })
         const result = await operation
         if (!result.hasMore) return true
@@ -6717,6 +6729,7 @@ function subscribeSnapshot(
         settled = true
         serverSnap = snap
         acceptedPaints = []
+        snapshotCurrent = snap !== null
         if (snap) pruneAcceptedRemovals(snap)
         first?.resolve(snap)
         return
@@ -6726,6 +6739,7 @@ function subscribeSnapshot(
       // refused edit still reverts, and the notice says access ended. A held
       // recovering delivery is gone with it, so it ends no trouble.
       if (snap === null) {
+        snapshotCurrent = false
         if (DEMO_MODE) {
           recoveryHeld = false
           notifyDemoEnded()
@@ -6735,6 +6749,7 @@ function subscribeSnapshot(
       serverSnap = snap
       // a good delivery holds every write accepted before it
       acceptedPaints = []
+      snapshotCurrent = true
       pruneAcceptedRemovals(snap)
       // Gate the paint, never the data. While our own writes are in flight
       // the optimistic patches own the screen. serverSnap is recorded above,
@@ -6764,6 +6779,7 @@ function subscribeSnapshot(
       // reruns the query when the data it read changes, and a later result
       // ends the trouble. The demo's own ending is handled above.
       console.error('[qivo] snapshot query failed:', err)
+      snapshotCurrent = false
       if (!demoEnded) snapshotFailed(err)
     },
   )
@@ -6850,6 +6866,7 @@ export function disposeDemoStore() {
   pendingTaskDeletes.clear()
   pendingProjectDeletes.clear()
   acceptedPaints = []
+  snapshotCurrent = false
   reapAfterPause.clear()
   roadmapVisit = null
   roadmapBatch = null

@@ -346,6 +346,39 @@ describe('rollback during snapshot trouble', () => {
     expect(message('message-a')?.read).toBe(false)
   })
 
+  it('lets a later batch of mark all as read skip a row snoozed between batches', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    const done = P().markAllMessagesRead()
+    P().snoozeMessages(['message-a'], UNTIL)
+    const [first, snooze] = sent.splice(0)
+    expect([first.name, snooze.name]).toEqual(['messages:markAllRead', 'messages:snooze'])
+    first.resolve({ marked: 0, hasMore: true, before: 1 })
+    await settle()
+    snooze.resolve(null)
+    await settle()
+    // the server's last batch skips the snoozed row
+    sent.pop()!.resolve({ marked: 0, hasMore: false, before: 1 })
+    await done
+    await refuseFollow()
+    expect(message('message-a')?.read).toBe(false)
+    expect(message('message-a')?.snoozedUntil).toBe(Date.parse(UNTIL))
+  })
+
+  it('keeps no paint of a write the newest delivery already holds', async () => {
+    const done = P().deleteReadMessages()
+    expect(message('message-b')).toBeUndefined()
+    // another device reopened the message, so the server kept it
+    deliverTruth((snap) => {
+      snap.messages[1].read_at = undefined
+      snap.readMessageCount = 0
+    })
+    await accept({ removed: 0, hasMore: false })
+    await done
+    expect(message('message-b')?.read).toBe(false)
+    await refuseFollow()
+    expect(message('message-b')?.read).toBe(false)
+  })
+
   it('reverts only the refused write outside trouble', async () => {
     P().markMessagesRead(['message-a'])
     // Convex delivers a write's own snapshot before its promise resolves
