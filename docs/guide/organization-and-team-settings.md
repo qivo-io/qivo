@@ -60,6 +60,8 @@ Organization admins can download a ZIP from
 - Teams, access grants, labels, task relationships, milestones, organization
   settings, legacy billing metadata and agent-key metadata.
 - Uploaded attachments, description images and member pictures.
+- The organization's change history, including changes to the organization
+  itself and to its projects, milestones, teams, people, labels and agent keys.
 
 The manifest lists record counts and file locations. Format version 2 stores
 tasks in `data/tasks.json`, with `task_links.json`, `task_labels.json` and
@@ -134,8 +136,9 @@ Only an organization admin can change the address. Before saving, note:
 - The change takes effect immediately. Old links stop working, with no redirect.
 - The old address becomes available for another organization to claim.
 - Taken or reserved addresses cannot be saved. Qivo explains the refusal.
-- The activity history records the old address, new address and person who
-  changed it.
+- The organization's change history records the old address, new address and
+  person who changed it. Organization admins find it in the
+  [export](#export-data).
 
 If a previously visited address belongs to a different organization, Qivo
 asks you to confirm before opening it.

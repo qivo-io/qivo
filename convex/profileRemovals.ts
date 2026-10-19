@@ -141,8 +141,7 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       large: true,
     }),
   ),
-  // rows older than the newest ACTIVITY_CAP the removal transaction cleared,
-  // which the background trim has not deleted yet
+  // rows older than the newest 500 the removal transaction cleared
   activity: [
     edge({
       range: (ctx, profileId) =>

@@ -4,9 +4,10 @@
  * (tests/refs.setup.ts): after every cascade, NO surviving row anywhere may
  * reference a deleted id, edge by edge off schema.ts. The specifics ride on
  * top: the issues_touch echo (updated_at stamped on unassign/detach), the
- * detach notify, activity rows surviving with refs nulled, cross-project
- * children detached not deleted, inbox messages of a deleted issue gone from
- * every inbox, and storage bytes dying with their row. */
+ * detach notify, activity rows surviving (a deleted profile's actor_id
+ * nulled, a deleted project's rows left for the caller to delete),
+ * cross-project children detached not deleted, inbox messages of a deleted
+ * issue gone from every inbox, and storage bytes dying with their row. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -18,6 +19,7 @@ import {
   removeProfile,
 } from '../model/cascade'
 import {
+  drainActivity,
   messagesFor,
   NOW,
   newT,
@@ -388,7 +390,7 @@ describe('deleteIssueDeep', () => {
 })
 
 describe('deleteProjectDeep', () => {
-  it('takes the subtree, detaches cross-project children, keeps history with project_id nulled', async () => {
+  it('takes the subtree, detaches cross-project children, and leaves the history to its caller', async () => {
     const t = newT()
     const f = await withOrg(t)
     const hiddenSub = await plantProject(t, {
@@ -467,15 +469,21 @@ describe('deleteProjectDeep', () => {
     const news = await messagesFor(t, f.user.id, survivor.id)
     expect(news.map((m) => m.detail)).toEqual(['Detached from its parent'])
 
-    // history survives its subjects: rows KEPT, project_id nulled on doomed
-    // refs only; team_id untouched (the team is alive)
+    // the history stays as it was, project_id included; a caller deletes
+    // it or clears project_id (model/deletedItems.ts purgeActivity)
     const events = await collect(t, 'activity_events')
     const byId = new Map(events.map((e) => [e.id, e]))
-    expect(byId.get(eMeta.id)?.project_id).toBeUndefined()
-    expect(byId.get(eSub.id)?.project_id).toBeUndefined()
+    expect(byId.get(eMeta.id)?.project_id).toBe(f.meta.id)
+    expect(byId.get(eSub.id)?.project_id).toBe(f.sub.id)
     expect(byId.get(eSub.id)?.team_id).toBe(f.team.id)
     expect(byId.get(eControl.id)?.project_id).toBe(f.hidden.id)
+    await expect(assertNoDanglingRefs(t, 'before the activity goes')).rejects.toThrow(
+      /activity_events\.project_id → projects dangles/,
+    )
 
+    // then the organization's activity goes, as the demo wipe deletes it
+    // with the rest of the work (model/orgDeletion.ts wipeWorkStep)
+    await drainActivity(t)
     await assertNoDanglingRefs(t, 'after deleteProjectDeep')
   })
 })

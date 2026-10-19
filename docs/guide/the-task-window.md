@@ -53,14 +53,13 @@ Qivo says the comment was discarded. If the comments cannot load, for example
 after you are signed out or lose access to the organization, the thread says
 so with **Retry** instead of looking empty, and the comments already on screen
 stay. A task that was deleted or hidden from you shows an empty thread
-instead.
+instead. The changes under **All** load with the comments and behave the same
+way.
 **Comments** is the default filter; **All** adds changes such as assignments,
 status moves, dates, labels and attachments. Until the first comment is
-loaded, **All** shows only the changes since the oldest loaded comment. Qivo
-keeps an organization's newest 500 changes, counting changes to projects,
-teams and people as well as tasks, and the app loads at most the newest 500
-across all your organizations. So an older task's early changes can be
-missing from **All** even once every comment is loaded. Field-change entries show before and after
+loaded, **All** shows only the changes since the oldest loaded comment. Each
+task keeps its newest 500 changes, and changes to other tasks never remove
+them. Field-change entries show before and after
 values, including short description excerpts. A **New** line marks unread
 activity, and sits at the top of the loaded comments when the first unread one
 is earlier ([Your inbox](./working-together.md#your-inbox)).

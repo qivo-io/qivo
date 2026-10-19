@@ -109,7 +109,8 @@ tool catalogue. Use deletion only when the user asks to delete a task;
 archiving retains the task and its history. A delete moves the task, with its
 comments, files, links and labels, to Deleted items, and its subtasks stay as
 top-level tasks. Agents cannot restore it. A person can restore it in the
-app within 30 days, after which it is deleted for good. Deleted items names
+app within 30 days, after which it is deleted for good with its history.
+Deleted items names
 the credential that deleted the task.
 
 ## Resolve the work and people
@@ -291,6 +292,8 @@ Useful field rules:
   more than a day ago that the description no longer names.
 - **History:** `list_task_activity` or `GET /v1/tasks/{ref}/activity`
   answers who changed what, oldest first. Comments are in `list_comments`.
+  It holds the task's newest 500 changes. An update that changes nothing adds
+  no row.
 - **Workload:** `get_workload` or `GET /v1/workload` answers each person's
   planned hours per week (`hours`, aligned with `week_starts`) beside their
   `plannable_hours`. Use it before assigning or scheduling work. For

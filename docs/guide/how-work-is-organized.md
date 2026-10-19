@@ -234,7 +234,7 @@ You can restore what you see when you can still edit where it goes back:
 - While the organization is read-only, restoring is paused.
 
 **Delete now…** in a row's menu deletes an item for good at once, with its
-comments and attachments. Only organization admins have it, and only while
+comments, attachments and change history. Only organization admins have it, and only while
 the organization can make changes. It cannot be undone. Deleting a project
 for good also deletes the tasks and sub-projects that were deleted from it
 before it, and its window says so. An item that could not finish moving shows

@@ -1,18 +1,16 @@
-/* Which activity rows a member receives, the app's rule. The snapshot
- * (convex/snapshot.ts) applies it to the organization feed, and REST and MCP
- * apply it to one task's history (taskActivity below). Organization admins
- * receive every row; memberSeesActivity decides for everyone else. */
+/* Which task activity rows a member receives, the app's rule. The snapshot
+ * (convex/snapshot.ts) applies it to the task rows of the organization feed,
+ * and the task window, REST and MCP apply it to one task's history
+ * (taskActivity below). Organization admins receive every task row;
+ * memberSeesActivity decides for everyone else. Rows about anything but a
+ * task reach no client; admins read them in the organization export. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { ACTIVITY_CAP, namedTaskNums } from '../model/activity'
-import { canLeadTeams } from './access'
-import type { ActivityTarget } from './enums'
+import { namedTaskNums, SUBJECT_ACTIVITY_CAP } from '../model/activity'
+import { usedMoreThan } from './db'
 import { type OrgProjectView, orgProjectView } from './visibility'
 import type { Shown } from './workingSet'
-
-// Rows about people, labels and the organization itself, not a project.
-const NON_PROJECT_ACTIVITY = new Set<ActivityTarget>(['user', 'org'])
 
 /* A project move written before related_project_id existed names a
  * destination that cannot be checked (model/issues.ts moveIssueCore writes
@@ -20,17 +18,6 @@ const NON_PROJECT_ACTIVITY = new Set<ActivityTarget>(['user', 'org'])
  * "under"), so only admins receive it. */
 const isUnrecordedProjectMove = (ev: Doc<'activity_events'>): boolean =>
   ev.verb === 'moved' && ev.related_project_id === undefined && !!ev.detail?.startsWith('to the ')
-
-// The verbs teams.ts writes on membership rows, which carry team_id.
-const TEAM_VERBS = new Set(['added', 'removed', 'made', 'demoted'])
-
-/* Deleting a team used to clear team_id on its membership rows. Such a row
- * cannot be told apart from profiles.ts's roster rows ('added' to the
- * organization, 'removed' from it), because a team may carry the same name.
- * Failing closed, every person row with one of these verbs and no team_id
- * reaches admins only. */
-const isUnscopedTeamRow = (ev: Doc<'activity_events'>): boolean =>
-  ev.target_type === 'user' && ev.team_id === undefined && TEAM_VERBS.has(ev.verb)
 
 /* Task archive rows used to say 'with N subtasks', counting subtasks in
  * projects a reader may not access (model/issues.ts archiveIssueCore no
@@ -43,94 +30,90 @@ export function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'acti
   return rest
 }
 
-/* tokens.ts narrates agent key creation and revocation against the agent,
- * naming the key, and apiAccess.ts narrates an admin's revocation of any
- * credential against its owner, naming the token or app. Only admins manage
- * and list other people's credentials, so only admins receive these rows. */
-const REVOKED_CREDENTIAL = ['the key “', 'a personal token “', 'the connection to “']
-const isCredentialRow = (ev: Doc<'activity_events'>): boolean =>
-  ev.target_type === 'user' &&
-  ((ev.verb === 'created' && !!ev.detail?.startsWith('a new key “')) ||
-    (ev.verb === 'revoked' && REVOKED_CREDENTIAL.some((start) => !!ev.detail?.startsWith(start))))
-
-/* Members other than organization admins receive an activity row only if
- * they can access every project it names: the project it was filed under
- * and its related project, such as a move's destination. Seeing a parent
- * only to reach one of its sub-projects is not access. A task row also needs
- * the task in the working set, which keeps out the history of a task that
- * was deleted, archived or moved to a project the member cannot access.
- * Deleting a project clears project_id on its rows (model/cascade.ts). A task
- * that moved out first keeps those rows for everyone who can access it; the
- * other project and milestone rows reach admins only. A row that names
- * another task by key (a parent change or a link) also needs access to that
- * task where it is now; one naming a deleted task reaches admins only. Team
- * rows reach that team's leaders, who are people (lib/access canLeadTeams).
- * A deleted team's rows keep its id and reach admins only, as do person rows
- * that may be older team rows whose id was cleared (isUnscopedTeamRow) and
- * credential rows. The remaining rows reach every member. */
+/* Members other than organization admins receive a task row only if the
+ * task is in their working set, which keeps out the history of a task that
+ * was deleted, archived or moved to a project the member cannot access, and
+ * they can access every project the row names: the project it was filed
+ * under and its related project, such as a move's destination. Seeing a
+ * parent only to reach one of its sub-projects is not access. Deleting a
+ * project clears project_id on its rows (model/deletedItems.ts
+ * purgeActivity), so a task that moved out first keeps those rows. A row that
+ * names another task (a parent change or a link) also needs access to that
+ * task where it is now; one naming a deleted task reaches admins only. Rows
+ * written since numbering list the tasks they name in named_task_nums; one
+ * with a seq but no list fails closed, and older rows are parsed
+ * (model/activity.ts namedTaskNums). Rows about anything but a task never
+ * reach a member. */
 export async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
-    me: Doc<'profiles'>
     view: OrgProjectView
     /* whether the task is in the member's working set */
     inWorkingSet: Shown
-    leaderOf: Map<string, boolean>
     /* the current project of the org's task with this number, if any */
     taskProject: (num: number) => Promise<string | undefined>
   },
 ): Promise<boolean> {
-  if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) {
-    return false
+  if (ev.target_type !== 'issue') return false
+  if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) return false
+  if (!a.inWorkingSet(ev.target_id)) return false
+  if (isUnrecordedProjectMove(ev)) return false
+  if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return false
+  // new rows decide by their stored list; one written without it fails closed
+  const named = ev.named_task_nums ?? (ev.seq === undefined ? namedTaskNums(ev) : null)
+  if (named === null) return false
+  for (const num of named) {
+    const projectId = await a.taskProject(num)
+    if (projectId === undefined || !a.view.accessible(projectId)) return false
   }
-  if (ev.target_type === 'issue') {
-    if (!a.inWorkingSet(ev.target_id)) return false
-    if (isUnrecordedProjectMove(ev)) return false
-    if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return false
-    const named = namedTaskNums(ev)
-    if (named === null) return false
-    for (const num of named) {
-      const projectId = await a.taskProject(num)
-      if (projectId === undefined || !a.view.accessible(projectId)) return false
-    }
-    return true
-  }
-  if (ev.project_id !== undefined) return a.view.accessible(ev.project_id)
-  if (!NON_PROJECT_ACTIVITY.has(ev.target_type)) return false
-  if (isCredentialRow(ev)) return false
-  if (ev.team_id !== undefined) return canLeadTeams(a.me) && a.leaderOf.get(ev.team_id) === true
-  return !isUnscopedTeamRow(ev)
+  return true
 }
 
+/** How full a member's taskActivity read may get while it looks up the
+ * tasks its rows name (lib/db.ts usedMoreThan). Each lookup reads a whole
+ * task, and a row can name two. Past `room`, a row naming a task not yet
+ * looked up is left out, so the read fails closed instead of failing on
+ * Convex's limits. The rest serves the caller: commentThread has read its
+ * comments already, and REST and MCP read one profile per actor next
+ * (machine/records.ts activityOut). Tests may lower it. */
+export const NAMED_TASK_ROOM = { room: 0.8 }
+
 /**
- * The activity rows about `issue` that `me` receives, oldest first, the
- * history the task window shows beside its comments. The caller has already
- * resolved a task `me` can read (lib/core.ts findIssue), which counts as the
- * task being shown, as every machine read counts the tasks it can read,
- * archived ones included. Organization admins receive every row; other
- * members get the rows memberSeesActivity allows, without legacy subtask
- * counts. It reads the organization's newest ACTIVITY_CAP rows, the ones
- * every reader shows (model/activity.ts), so the read is bounded.
+ * The activity rows about `issue` that `me` receives, oldest first by ts,
+ * the history the task window shows beside its comments. The caller has
+ * already resolved a task `me` can read (lib/core.ts findIssue), which counts
+ * as the task being shown, as every machine read counts the tasks it can
+ * read, archived ones included. It reads the task's own newest
+ * SUBJECT_ACTIVITY_CAP rows through by_target, which is every row the task
+ * keeps besides rows stored before numbering beyond that. Organization admins
+ * receive all of them; other members get the rows memberSeesActivity allows,
+ * without legacy subtask counts. For members it also reads the
+ * organization's projects and grants (lib/visibility.ts orgProjectView) and
+ * one task for each distinct number the rows name, until the read passes
+ * NAMED_TASK_ROOM; rows naming a task it could not look up are left out.
  */
 export async function taskActivity(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
 ): Promise<Doc<'activity_events'>[]> {
-  const feed = await ctx.db
+  const newest = await ctx.db
     .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', issue.org_id))
+    .withIndex('by_target', (q) =>
+      q.eq('org_id', issue.org_id).eq('target_type', 'issue').eq('target_id', issue.id),
+    )
     .order('desc')
-    .take(ACTIVITY_CAP)
-  const rows = feed
-    .reverse()
-    .filter((ev) => ev.target_type === 'issue' && ev.target_id === issue.id)
-  if (me.org_role === 'admin') return rows
+    .take(SUBJECT_ACTIVITY_CAP)
+  // oldest first by ts as before; the sort is stable, so ties keep index order
+  const rows = newest.reverse().sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0))
+  if (me.org_role === 'admin' || rows.length === 0) return rows
   const view = await orgProjectView(ctx, me)
   const projects = new Map<number, Promise<string | undefined>>()
-  const taskProject = (num: number): Promise<string | undefined> => {
+  const taskProject = async (num: number): Promise<string | undefined> => {
     let found = projects.get(num)
     if (found === undefined) {
+      // no room to look it up: unknown, so the row is left out
+      if (await usedMoreThan(ctx, NAMED_TASK_ROOM.room)) return undefined
       found = ctx.db
         .query('issues')
         .withIndex('by_org_num', (q) => q.eq('org_id', issue.org_id).eq('num', num))
@@ -138,15 +121,13 @@ export async function taskActivity(
         .then((task) => task?.project_id)
       projects.set(num, found)
     }
-    return found
+    return await found
   }
   const out: Doc<'activity_events'>[] = []
   for (const ev of rows) {
     const sees = await memberSeesActivity(ev, {
-      me,
       view,
       inWorkingSet: (taskId) => taskId === issue.id,
-      leaderOf: new Map(),
       taskProject,
     })
     if (sees) out.push(withoutLegacySubtaskCount(ev))

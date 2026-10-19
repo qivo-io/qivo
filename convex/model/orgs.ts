@@ -6,8 +6,9 @@
  *   slug machinery   the generator, the shape check and the reserved-word
  *                    list (the reserved word is `qivo`)
  *   counters         the per-org issue and project numbers (org_counters),
- *                    and the helpers that insert and delete an organization
- *                    with its org_counters and activity_retention rows
+ *                    and the helpers that insert an organization with its
+ *                    org_counters row and delete that row and any legacy
+ *                    activity_retention row
  *   column defaults  including the organization-wide 20 MiB upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
@@ -26,7 +27,7 @@ import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
-import { ensureActivityRetention, logActivity, retentionRow } from './activity'
+import { logActivity, retentionRow } from './activity'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -195,8 +196,8 @@ export async function countersOf(ctx: QueryCtx, org: Doc<'organizations'>): Prom
 }
 
 /** Whether the organization row still holds a field that moved off it, the
- * legacy counters or the activity_count retention used before
- * model/activity.ts trimmed in the background. */
+ * legacy counters or the activity_count retention used before the
+ * organization activity trim. */
 export const hasLegacyFields = (org: Doc<'organizations'>): boolean =>
   org.next_issue_num !== undefined ||
   org.next_project_num !== undefined ||
@@ -258,8 +259,7 @@ export async function setCounters(
   await ctx.db.patch(row._id, counters)
 }
 
-/** Inserts an organization with its org_counters and activity_retention
- * rows. Every path that creates an organization uses it; `counters` lets a
+/** Inserts an organization with its org_counters row. Every path that creates an organization uses it; `counters` lets a
  * fixture start numbering past rows it plants. */
 export async function insertOrgRows(
   ctx: MutationCtx,
@@ -271,14 +271,13 @@ export async function insertOrgRows(
 ): Promise<Id<'organizations'>> {
   const id = await ctx.db.insert('organizations', row)
   await ctx.db.insert('org_counters', { org_id: row.id, ...counters })
-  await ensureActivityRetention(ctx, row.id)
   return id
 }
 
-/** Deletes the organization's org_counters and activity_retention rows.
- * Every organization delete (model/cascade.ts deleteOrgDeep, the last step of
- * model/orgDeletion.ts, the demo purge) calls it before it deletes the
- * organization row. */
+/** Deletes the organization's org_counters row and the activity_retention
+ * row the former organization trim left, if any. Every organization delete
+ * (model/cascade.ts deleteOrgDeep, the last step of model/orgDeletion.ts,
+ * the demo purge) calls it before it deletes the organization row. */
 export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
   const counters = await countersRow(ctx, orgId)
   if (counters !== null) await ctx.db.delete(counters._id)

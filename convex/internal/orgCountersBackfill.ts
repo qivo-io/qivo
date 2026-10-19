@@ -1,16 +1,14 @@
-/* A one-time backfill for organizations created before org_counters and
- * activity_retention existed. Such an organization keeps its task and
- * project counters (next_issue_num, next_project_num) and the retired
- * activity_count on its own row. The app works without this backfill. The
- * first task or project number an organization receives moves its counters
- * (model/orgs.ts ensureCounters), and its first activity write creates its
- * retention row (model/activity.ts requestActivityTrim). The backfill clears
- * the legacy fields from every organization, which a later change must wait
- * for before it removes them from the schema.
+/* A one-time backfill for organizations created before org_counters
+ * existed. Such an organization keeps its task and project counters
+ * (next_issue_num, next_project_num) and the retired activity_count on its
+ * own row. The app works without this backfill. The first task or project
+ * number an organization receives moves its counters (model/orgs.ts
+ * ensureCounters). The backfill clears the legacy fields from every
+ * organization, which a later change must wait for before it removes them
+ * from the schema.
  *
  * `start` reads one page of organizations. For each one it moves the
- * counters to org_counters, creates a missing activity_retention row without
- * scheduling a trim, and clears the legacy fields. It then schedules the next
+ * counters to org_counters and clears the legacy fields. It then schedules the next
  * page, and the last page logs 'Org counters backfill done' with the number
  * of organizations visited and changed. `remaining` reads one page of
  * organizations and counts those still holding a legacy field, so an
@@ -52,7 +50,6 @@
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { internalMutation, internalQuery } from '../_generated/server'
-import { ensureActivityRetention } from '../model/activity'
 import { countersRow, ensureCounters, hasLegacyFields } from '../model/orgs'
 
 /* Organizations per `start` step. Each one costs a few reads and writes. */
@@ -85,7 +82,6 @@ export const start = internalMutation({
     for (const org of result.page) {
       const unmoved = (await countersRow(ctx, org.id)) === null
       await ensureCounters(ctx, org)
-      const inserted = await ensureActivityRetention(ctx, org.id)
       // ensureCounters leaves activity_count, and legacy counters on an
       // organization whose org_counters row already wins (countersOf).
       if (hasLegacyFields(org)) {
@@ -95,7 +91,7 @@ export const start = internalMutation({
           activity_count: undefined,
         })
       }
-      if (unmoved || inserted || hasLegacyFields(org)) changed++
+      if (unmoved || hasLegacyFields(org)) changed++
     }
     const orgs = (a.orgs ?? 0) + result.page.length
     if (result.isDone) {

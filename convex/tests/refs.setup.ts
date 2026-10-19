@@ -181,9 +181,9 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'marketing_demo.credential_set_id',
   // dangles by design: the feed renders dead issue targets as plain text (0026)
   'activity_events.target_id',
-  // dangles by design: a deleted project keeps the row from members (snapshot.ts)
+  // dangles by design: a deleted project keeps the row from members (lib/activityVisibility.ts)
   'activity_events.related_project_id',
-  // dangles by design: a deleted team keeps its membership rows from members (snapshot.ts)
+  // dangles by design: membership rows outlive their team and reach no client (lib/activityVisibility.ts)
   'activity_events.team_id',
   // Better Auth login ids — not rows in this schema
   'profiles.auth_user_id',

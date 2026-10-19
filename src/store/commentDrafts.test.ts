@@ -14,7 +14,8 @@ vi.mock('../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
-type Page = { comments: Row<'comments'>[]; earlier: boolean }
+// A commentThread delivery. Its changes default to none.
+type Page = { comments: Row<'comments'>[]; earlier: boolean; events?: Row<'activity_events'>[] }
 type Deferred = { resolve: (value: null) => void; reject: (reason: unknown) => void }
 /* One commentThread subscription: the server's answers to it and whether
    it was unsubscribed. */
@@ -27,10 +28,12 @@ const CAP = 'this task has 400 comments, the most a task can have; start a new t
 /* What a comment's writer learns from the store, and what the thread shows
    when its subscription fails. Writes and thread deliveries are answered by
    hand. The server answers a new subscription after a round trip (`later`).
-   Comment #n is posted n minutes after START. */
+   Comment #n is posted n minutes after START, and change(n) moves the task
+   n minutes after START. */
 describe('comment drafts and a failed thread in the store', () => {
   let store: typeof import('./planner')
   let author: string
+  let org: string
   let threads: Thread[]
   let writes: { name: string; answer: Deferred }[]
   let toast: ReturnType<typeof vi.fn>
@@ -49,7 +52,19 @@ describe('comment drafts and a failed thread in the store', () => {
   })
   const range = (from: number, to: number) =>
     Array.from({ length: to - from }, (_, n) => comment(from + n))
+  const change = (n: number): Row<'activity_events'> => ({
+    id: `event-${n}`,
+    org_id: org,
+    ts: new Date(START + n * 60_000).toISOString(),
+    actor_id: author,
+    verb: 'moved',
+    target_type: 'issue',
+    target_id: 'task-a',
+    label: 'QN-1',
+    detail: 'To Do → In Progress',
+  })
   const bodies = () => store.P.comments.map((c) => c.body)
+  const changes = () => store.P.threadEvents.map((e) => e.id)
   const live = () => threads[threads.length - 1]
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
@@ -65,21 +80,27 @@ describe('comment drafts and a failed thread in the store', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const snap: Snapshot = plannerFixture()
     author = snap.profiles[0].id
-    snap.issues.push({
-      id: 'task-a',
-      org_id: snap.orgs[0].id,
-      project_id: snap.projects[0].id,
-      num: 1,
-      title: 'Soak test',
-      description: '',
-      status: 'progress',
-      priority: 'medium',
-      paused: false,
-      created_at: new Date(START).toISOString(),
-      updated_at: new Date(START).toISOString(),
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
-    })
+    org = snap.orgs[0].id
+    for (const [id, num, title] of [
+      ['task-a', 1, 'Soak test'],
+      ['task-b', 2, 'Load test'],
+    ] as const) {
+      snap.issues.push({
+        id,
+        org_id: org,
+        project_id: snap.projects[0].id,
+        num,
+        title,
+        description: '',
+        status: 'progress',
+        priority: 'medium',
+        paused: false,
+        created_at: new Date(START).toISOString(),
+        updated_at: new Date(START).toISOString(),
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      })
+    }
     threads = []
     writes = []
     held = null
@@ -100,7 +121,7 @@ describe('comment drafts and a failed thread in the store', () => {
           deliver: (page) => {
             held = null
             answered = true
-            receive(page)
+            receive({ events: [], ...page })
           },
           fail: (e) => {
             held = e
@@ -187,6 +208,47 @@ describe('comment drafts and a failed thread in the store', () => {
       writes[1].answer.resolve(null)
       expect(await accepted).toBe(true)
       expect(bodies()).toEqual(['#1', 'Edited', '#3'])
+    })
+  })
+
+  describe("the task's changes beside the thread", () => {
+    it('shows the changes the latest delivery holds, oldest first', () => {
+      expect(changes()).toEqual([])
+      live().deliver({ comments: range(1, 4), earlier: false, events: [change(3), change(2)] })
+      expect(changes()).toEqual(['event-2', 'event-3'])
+      expect(store.P.threadEvents[0]).toMatchObject({ targetType: 'issue', targetId: 'QN-1' })
+      live().deliver({ comments: range(1, 4), earlier: false })
+      expect(changes()).toEqual([])
+    })
+
+    it('keeps the delivered changes when the thread fails', () => {
+      live().deliver({ comments: range(1, 4), earlier: false, events: [change(2)] })
+      live().fail(new Error('Server Error'))
+      expect(store.P.commentsFailure).toBe('failed')
+      expect(changes()).toEqual(['event-2'])
+    })
+
+    it('drops the delivered changes for a task that is gone or hidden', () => {
+      live().deliver({ comments: range(1, 4), earlier: false, events: [change(2)] })
+      live().fail(new ConvexError({ code: 'not_found', message: 'task not found' }))
+      expect(store.P.commentsLoaded).toBe(true)
+      expect(changes()).toEqual([])
+    })
+
+    it("drops the changes when the window moves to another task, and ignores the old thread's", async () => {
+      const { P } = store
+      const first = live()
+      first.deliver({ comments: range(1, 4), earlier: false, events: [change(2)] })
+      P.watchComments('task-b')
+      expect(changes()).toEqual([])
+      // the old subscription answers once more before it is gone
+      first.deliver({ comments: range(1, 4), earlier: false, events: [change(3)] })
+      expect(changes()).toEqual([])
+      await later()
+      live().deliver({ comments: [], earlier: false, events: [change(4)] })
+      expect(changes()).toEqual(['event-4'])
+      P.watchComments(null)
+      expect(changes()).toEqual([])
     })
   })
 

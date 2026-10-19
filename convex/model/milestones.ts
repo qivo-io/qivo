@@ -156,9 +156,10 @@ export async function addMilestoneCore(
 /**
  * Renames or moves a milestone the caller may change (changeableMilestone)
  * and narrates it. The verb names what actually CHANGED, so a pure rename
- * does not read as a move (bc022c2:3536-3562, trap T15); a submit that
- * changes nothing still narrates the bare 'updated milestone', as the app's
- * dialog always sends both fields.
+ * does not read as a move (bc022c2:3536-3562, trap T15). A submit that
+ * changes neither the name nor the week is validated, then changes and
+ * narrates nothing, although the app's dialog always sends both fields.
+ * Older rows may say 'updated milestone' for such a submit.
  */
 export async function updateMilestoneCore(
   ctx: MutationCtx,
@@ -176,13 +177,14 @@ export async function updateMilestoneCore(
   if (a.patch.week !== undefined) db.week = cleanMilestoneWeek(a.patch.week)
   const weekChanged = db.week !== undefined && db.week !== milestone.week
   const renamed = db.name !== undefined && db.name !== milestone.name
-  if (Object.keys(db).length > 0) await ctx.db.patch(milestone._id, db)
+  if (!weekChanged && !renamed) return milestone
+  await ctx.db.patch(milestone._id, db)
   const name = db.name ?? milestone.name
   const org = await orgOf(ctx, me)
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,
-    verb: weekChanged ? 'moved milestone' : renamed ? 'renamed milestone' : 'updated milestone',
+    verb: weekChanged ? 'moved milestone' : 'renamed milestone',
     target_type: 'milestone',
     target_id: milestone.id,
     label: name,
@@ -190,9 +192,7 @@ export async function updateMilestoneCore(
       weekChanged
         ? `from ${weekLabel(milestone.week, org)} to ${weekLabel(db.week as string, org)}` +
             (renamed ? ` (renamed from “${milestone.name}”)` : '')
-        : renamed
-          ? `from “${milestone.name}”`
-          : undefined,
+        : `from “${milestone.name}”`,
       a.provenance,
     ),
     project_id: milestone.project_id,

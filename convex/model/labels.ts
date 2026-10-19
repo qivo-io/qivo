@@ -301,6 +301,7 @@ export async function setTaskLabel(
     detail: signedDetail(named, a.provenance),
     project_id: issue.project_id,
     ts: now,
+    named_task_nums: [],
   })
   return true
 }

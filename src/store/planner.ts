@@ -223,6 +223,8 @@ const rows = {
   // comments for ONE issue — the open modal's (watchComments); other issues'
   // comments are never fetched, so this is not org-wide state like activity
   comments: new Map<string, Row<'comments'>>(),
+  // the watched issue's history, delivered with its comments (commentThread)
+  threadEvents: [] as Row<'activity_events'>[],
   // inbox messages (0074) — the snapshot returns only the signed-in user's
   // rows; generation is server-side (notify triggers), clients only mark
   // read/unread, snooze and delete
@@ -277,6 +279,9 @@ const HELD_FAILURE_MS = 5000
    nothing delivered yet for the watched issue. It is the thread's live
    window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
+/* The watched task's history from the same delivery as commentsSnap, oldest
+   first, the task window's changes under All. */
+let eventsSnap: Row<'activity_events'>[] = []
 /* The watched thread's comments older than the live window, oldest first in
    thread order. They are earlier pages (P.loadEarlierComments) and comments
    that left the window as newer ones arrived. Server truth like
@@ -306,6 +311,7 @@ function adoptComments() {
   rows.comments = new Map(
     structuredClone([...olderComments, ...commentsSnap]).map((r) => [r.id, r]),
   )
+  rows.threadEvents = structuredClone(eventsSnap)
   PLANNER.commentsLoaded = true
 }
 
@@ -319,7 +325,11 @@ function adoptComments() {
    (checkSlidOut). When the window no longer meets what was loaded, because
    more comments arrived between two deliveries than it holds, the thread
    starts over from the window. */
-function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
+function receiveThread(page: {
+  comments: Row<'comments'>[]
+  earlier: boolean
+  events: Row<'activity_events'>[]
+}): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
@@ -340,6 +350,7 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
   }
   if (!page.earlier) threadStart = true
   commentsSnap = page.comments
+  eventsSnap = page.events
   return slid
 }
 
@@ -444,6 +455,7 @@ function subscribeThread(issueUuid: string, orgId: string) {
       return
     }
     commentsSnap = []
+    eventsSnap = []
     olderComments = []
     threadStart = true
     if (inFlight > 0) {
@@ -1865,6 +1877,10 @@ function rebuildComments() {
   PLANNER.comments = [...rows.comments.values()]
     .map(shapeComment)
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+  // oldest first, the same order as P.activity
+  PLANNER.threadEvents = rows.threadEvents
+    .map((e) => shapeActivity(e, uuidToKey))
+    .sort((a, b) => a.ts - b.ts)
   PLANNER.commentsEarlier =
     !PLANNER.commentsLoaded || threadStart ? 'none' : earlierLoad === 'idle' ? 'more' : earlierLoad
 }
@@ -2855,6 +2871,8 @@ export const PLANNER = {
   issueById: {} as Record<string, IssueVM>,
   milestones: [] as MilestoneVM[],
   activity: [] as ActivityVM[],
+  // the watched task's history, delivered with its comments (watchComments)
+  threadEvents: [] as ActivityVM[],
   labels: [] as LabelVM[],
   labelById: {} as Record<string, LabelVM>,
   comments: [] as CommentVM[],
@@ -3609,16 +3627,6 @@ export const PLANNER = {
       { org_role: actor.orgRole, can_create_projects: actor.canCreateProjects },
       homeRow()?.project_creators,
     )
-  },
-  canSeeActivity: (e: ActivityVM, uid?: string) => {
-    // no CURRENT_USER default: canSee/isTeamLeader resolve me to the seat I
-    // hold in the row's own organization (0081), which a home profile id
-    // would override with an identity that doesn't live there
-    if (e.projectId) {
-      return PLANNER.canSee(e.projectId, uid)
-    }
-    if (e.team) return PLANNER.isTeamLeader(e.team, uid)
-    return true
   },
   fmtAgo: (ts: number) => {
     const m = Math.round((Date.now() - ts) / 60000)
@@ -4618,7 +4626,9 @@ export const PLANNER = {
       commentsUnsub = null
     }
     rows.comments = new Map()
+    rows.threadEvents = []
     commentsSnap = null // the old thread must not resurrect via a rollback
+    eventsSnap = []
     commentsDirty = false // …nor may a held delivery flush into the new one
     olderComments = []
     threadStart = false
@@ -6140,6 +6150,7 @@ export const PLANNER = {
     ;[...rows.activity.values()].forEach((e) => {
       if (e.actor_id === id) e.actor_id = undefined
     })
+    for (const e of rows.threadEvents) if (e.actor_id === id) e.actor_id = undefined
     rows.profiles.delete(id)
     rebuild()
     emit()
@@ -6675,6 +6686,7 @@ export function disposeDemoStore() {
   commentsUnsub = null
   watchedComments = null
   commentsSnap = null
+  eventsSnap = []
   olderComments = []
   threadStart = false
   earlierLoad = 'idle'

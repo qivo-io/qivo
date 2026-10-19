@@ -642,7 +642,8 @@ unchanged. `POST` answers `201` and `PATCH` `200` with `{"id", "name",
 "date", "project_id"}`, where `project_id` is the top-level project;
 `DELETE` answers `{"deleted": true, "id"}`.
 `GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,
-`renamed milestone`, `moved milestone` or `deleted milestone`.
+`renamed milestone`, `moved milestone` or `deleted milestone`. A `PATCH` that
+changes neither the name nor the date writes no row.
 
 ### Teams
 
@@ -1136,7 +1137,8 @@ removing one it does not have, changes nothing. An unknown label is a `400`
 **Order.** One PATCH may combine all of this. It applies the move first,
 then the parent, then the other fields with the archive toggle, then the
 labels, and finally posts `archive_reason`. All of it lands or none of it
-does, and each step writes its own activity row. `title` is trimmed and capped at 80
+does. Each step that changes something writes its own activity row, and a
+PATCH that changes nothing writes none. `title` is trimmed and capped at 80
 characters (a longer one is a `400`; the same shared rule holds in the app
 and over MCP). `description` is markdown of at most 20,000 characters, on
 POST and PATCH (a longer one is a `400`, `description must be at most 20,000
@@ -1828,14 +1830,14 @@ GET /v1/tasks/{ref}/activity   the task's history, oldest first (read)
 These are the rows the task window's **All** filter shows beside the
 comments, which `GET /v1/tasks/{ref}/comments` lists instead. `actor_id` and
 `actor_name` are `null` once the user who made the change has been removed
-from the organization. The caller receives
-the rows the app's activity feed would give it. Organization admins receive
+from the organization. Organization admins receive
 every row. Other users do not receive a row that names a project they cannot
 access, such as the project the task was in before a move, or one that names
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule; the app shows it
-again once the task is restored. The organization keeps its newest 500
-activity rows, so older history is gone.
+again once the task is restored. Each task keeps its newest 500 activity
+rows, so an answer holds at most 500. Changes to other tasks never remove
+them. Deleting a task for good from Deleted items deletes its history.
 See [Side effects and audit trail](#side-effects-and-audit-trail) for the
 wording.
 
@@ -2018,8 +2020,8 @@ to be rotated. A personal token's writes read `via the REST API` with no
 token name, as MCP's read `via MCP`. The person is the actor, and the feed
 reaches members who cannot see that person's tokens, so the row leaves the
 name out. Only the person and organization admins can see a person's tokens.
-An admin's revocation of a token or connected app is a feed row that only
-organization admins receive. A task `DELETE` also records its credential in
+An admin's revocation of a token or connected app is a history row that only
+organization admins can read, in the organization export. A task `DELETE` also records its credential in
 Deleted items, with its name cut the same way. Everyone who sees the item
 there sees an agent key's name, while a personal token's name shows only to
 organization admins and to the person who deleted. An update's feed

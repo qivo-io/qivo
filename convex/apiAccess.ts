@@ -12,8 +12,8 @@
  * an admin can still revoke while billing has paused editing. A revoked
  * credential is refused at its next request and its webhook subscriptions
  * stop at once (model/taskEvents.ts eventOwner). Each revocation narrates
- * against the credential's owner, and lib/activityVisibility.ts keeps those
- * rows for admins. The owner sees the end in their own lists:
+ * against the credential's owner. Such rows reach no client; admins read
+ * them in the organization export (lib/activityVisibility.ts). The owner sees the end in their own lists:
  * mcp_tokens.revoked_by_admin and oauth_connections.revocation_reason 'admin'. */
 
 import { v } from 'convex/values'
@@ -399,7 +399,7 @@ export const revoke = accessRemovalMutation({
       await ctx.db.patch(row._id, { revoked_at: now, revocation_reason: 'admin' })
       detail = `the connection to “${row.client_name}”`
     }
-    // Narrated against the owner; only admins receive it
+    // Narrated against the owner; only admins read it, in the export
     // (lib/activityVisibility.ts).
     await logActivity(ctx, {
       org_id: profile.org_id,

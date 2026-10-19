@@ -9,6 +9,7 @@ import {
   type OrgExportRow,
   type OrgExportSection,
 } from '../lib/orgExport'
+import { insertActivity } from '../model/activity'
 import { moveTasksToTrash } from '../model/deletedItems'
 import schema from '../schema'
 import {
@@ -100,7 +101,7 @@ const EXCLUDED_TABLES = [
   'machine_rate_limits',
   // Internal counters, exported on the organization row (next_issue_num).
   'org_counters',
-  // Background trim bookkeeping for activity retention.
+  // The former organization activity trim's bookkeeping.
   'activity_retention',
   // Deleted items are not exported: restore an item to include its work.
   'deleted_items',
@@ -322,6 +323,28 @@ describe('organization export', () => {
         label: task.title,
         project_id: f.sub.id,
       })
+      // newer rows, numbered, a task row and a row about a person
+      await insertActivity(ctx, {
+        org_id: f.org.id,
+        actor_id: f.admin.id,
+        ts: NOW,
+        verb: 'linked',
+        target_type: 'issue',
+        target_id: task.id,
+        label: task.title,
+        detail: `(blocks QN-${task.num})`,
+        project_id: f.sub.id,
+        named_task_nums: [task.num],
+      })
+      await insertActivity(ctx, {
+        org_id: f.org.id,
+        actor_id: f.admin.id,
+        ts: NOW,
+        verb: 'renamed',
+        target_type: 'user',
+        target_id: f.user.id,
+        label: 'user',
+      })
       const keyId = uuid()
       await ctx.db.insert('agent_keys', {
         id: keyId,
@@ -363,6 +386,14 @@ describe('organization export', () => {
     expect(exported.organizations).toHaveLength(1)
     expect(exported.organizations[0]).toMatchObject({ id: f.org.id, billing: f.org.billing })
     expect(exported.organizations[0]).not.toHaveProperty('activity_count')
+    // activity rows keep their numbering, and rows about people reach the export
+    expect(exported.activity_events.map((row) => [row.verb, row.seq, row.named_task_nums])).toEqual(
+      [
+        ['created', undefined, undefined],
+        ['linked', 1, [task.num]],
+        ['renamed', 1, undefined],
+      ],
+    )
     expect(exported.projects.find((row) => row.id === f.sub.id)).toMatchObject({ archived_at: NOW })
     expect(exported.issues.find((row) => row.id === task.id)).toMatchObject({
       archived_at: NOW,

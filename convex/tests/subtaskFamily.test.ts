@@ -281,6 +281,11 @@ describe('moving a task to another top-level project', () => {
       ['moved', 'to the Backend sub-project (from Firmware)'],
       ['detached', `from QN-${parent.num}`],
     ])
+    // consecutive numbers, and only the detach names a task
+    expect(rows.map((e) => [e.seq, e.named_task_nums])).toEqual([
+      [1, []],
+      [2, [parent.num]],
+    ])
   })
 
   it('takes the parent change in the same REST or MCP request', async () => {

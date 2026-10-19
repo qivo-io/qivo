@@ -1156,7 +1156,8 @@ created}` and `{deleted: true, id}`.
 
 Creating, renaming, archiving and restoring a project, handing over its lead,
 changing its access and changing its milestones write the app's activity
-rows, signed `via MCP`. Changes to the description, review time or delay
+rows, signed `via MCP`. A `set_milestone` call that changes neither a
+milestone's name nor its date writes none. Changes to the description, review time or delay
 tracking write none, as in the app. A call that renames a project and hands
 over its lead writes only `renamed`.
 
@@ -1420,8 +1421,9 @@ nothing. An unknown label, or one in both lists, is refused.
 
 One call may combine all of it. It applies the move, then the parent, then
 the other fields with the archive toggle, then the labels, then
-`archive_reason`. Everything lands or nothing does, and each step writes its
-own activity row signed `via MCP`.
+`archive_reason`. Everything lands or nothing does. Each step that changes
+something writes its own activity row signed `via MCP`, and a call that
+changes nothing writes none.
 
 ### Attachments
 
@@ -1535,13 +1537,15 @@ those):
 ]
 ```
 
-You receive the rows the app's activity feed would give you. Organization
+You receive the rows the task window's **All** filter shows you. Organization
 admins receive every row. Other users do not receive a row that names a
 project they cannot access, such as where the task was before a move, or
 another task they cannot read, such as the other end of a link. An
 archived task's history is answered too, by the same rule. `actor_id` and
 `actor_name` are `null` once the user who made the change has been removed
-from the organization. The organization keeps its newest 500 activity rows.
+from the organization. Each task keeps its newest 500 activity rows, so an
+answer holds at most 500. Changes to other tasks never remove them. Deleting
+a task for good from Deleted items deletes its history.
 
 ### Workload
 

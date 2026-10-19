@@ -1,4 +1,3 @@
-import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
@@ -8,113 +7,25 @@ import { ISSUE_PREFIX, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { newUuid } from './orgs'
 
 /* ----------------------------------------------------------------- retention
- * Every reader takes an organization's newest ACTIVITY_CAP rows by the
- * by_org_ts index order (ts, then creation time). Writers only insert. A
- * background trim (activityRetention.ts) deletes the older rows a few minutes
- * later, so concurrent writers in one organization never conflict over
- * deleting the oldest row. Storage holds the cap plus about the last
- * ACTIVITY_TRIM_DELAY_MS of writes, or up to ACTIVITY_TRIM_STALE_MS of them
- * when a trim is lost, so code that walks an organization's activity in one
- * transaction reads only the newest ACTIVITY_CAP rows or works in bounded
- * steps. The organization's activity_retention row records a pending trim,
- * so writes schedule at most one at a time. */
+ * Each subject keeps its own newest SUBJECT_ACTIVITY_CAP rows. The writer
+ * (insertActivity) numbers a subject's rows through seq and deletes the one
+ * row a new row pushes past the cap, so writes about one subject never remove
+ * another's history. Readers ask for one subject's rows through the by_target
+ * index. Rows stored before numbering have no seq; they sort first and stay
+ * until their task is deleted for good. */
 
-/** The newest rows of an organization's activity that every reader shows.
- * The feed displays 30 of them. */
-export const ACTIVITY_CAP = 500
-/** How long an organization's activity may run past the cap before a trim. */
-export const ACTIVITY_TRIM_DELAY_MS = 5 * 60_000
-/** A pending trim this far past due is assumed lost and scheduled again. */
-export const ACTIVITY_TRIM_STALE_MS = 60 * 60_000
-/** Rows newer than this stay for a later trim, which only counts the oldest
- * of them, so a trim seldom reads the range that writes in flight insert
- * into. */
-const TRIM_SETTLE_MS = 10_000
-/** Rows one trim step deletes before it schedules the next. Tests lower it. */
-export const ACTIVITY_TRIM_BUDGET = { rows: 1_000 }
-
-/** The trim step (activityRetention.ts), by name, since that module imports
- * this one. */
-export const activityTrimRef = makeFunctionReference<'mutation', { org_id: string }, null>(
-  'activityRetention:trim',
-)
-
-/** The organization's activity_retention row, or null before its first
- * activity write or after the organization is deleted. */
+/** The organization's activity_retention row, or null. The organization trim
+ * that used these rows is gone; organization deletion still removes them. */
 export const retentionRow = (ctx: QueryCtx, orgId: string) =>
   ctx.db
     .query('activity_retention')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .unique()
 
-/** Creates the organization's activity_retention row with no trim pending,
- * when it has none. Returns whether it did. */
-export async function ensureActivityRetention(ctx: MutationCtx, orgId: string): Promise<boolean> {
-  if ((await retentionRow(ctx, orgId)) !== null) return false
-  await ctx.db.insert('activity_retention', { org_id: orgId })
-  return true
-}
-
-/** Schedules a trim of the organization's activity unless one is pending.
- * While one is, a write only reads the state row, so concurrent writers do
- * not conflict, and the several writes of one mutation schedule one trim.
- * Code that inserts activity rows directly calls it once afterwards. */
-export async function requestActivityTrim(ctx: MutationCtx, orgId: string): Promise<void> {
-  const state = await retentionRow(ctx, orgId)
-  const now = Date.now()
-  if (state?.trim_due_at !== undefined && state.trim_due_at > now - ACTIVITY_TRIM_STALE_MS) return
-  const due = now + ACTIVITY_TRIM_DELAY_MS
-  await ctx.scheduler.runAt(due, activityTrimRef, { org_id: orgId })
-  if (state === null) await ctx.db.insert('activity_retention', { org_id: orgId, trim_due_at: due })
-  else await ctx.db.patch(state._id, { trim_due_at: due })
-}
-
-/** One trim step. Deletes, oldest first and at most ACTIVITY_TRIM_BUDGET.rows,
- * the rows beyond the newest ACTIVITY_CAP among those older than the settle
- * time. Readers order rows the same way, so the kept rows include every row
- * they show. Returns 'more' when such rows remain, 'later' when rows newer
- * than the settle time still hold the organization past the cap, and 'done'
- * when it holds at most ACTIVITY_CAP rows. */
-export async function trimActivity(
-  ctx: MutationCtx,
-  orgId: string,
-): Promise<'done' | 'more' | 'later'> {
-  const cutoff = new Date(Date.now() - TRIM_SETTLE_MS).toISOString()
-  const kept = await ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lt('ts', cutoff))
-    .order('desc')
-    .take(ACTIVITY_CAP)
-  if (kept.length === ACTIVITY_CAP) {
-    const oldestKept = kept[kept.length - 1]
-    let deleted = 0
-    for await (const row of ctx.db
-      .query('activity_events')
-      .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).lte('ts', oldestKept.ts))
-      .order('asc')) {
-      if (row._id === oldestKept._id) break
-      if (deleted === ACTIVITY_TRIM_BUDGET.rows) return 'more'
-      await ctx.db.delete(row._id)
-      deleted++
-    }
-  }
-  // Only as many newer rows as would pass the cap are read, so the read
-  // stops short of the newest rows, where writes in flight insert, whenever
-  // the organization has more.
-  const room = ACTIVITY_CAP - kept.length
-  const unsettled = await ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', orgId).gte('ts', cutoff))
-    .take(room + 1)
-  return unsettled.length > room ? 'later' : 'done'
-}
-
-/** One activity row as its writers describe it. */
-export type ActivityEntry = {
+type EntryFields = {
   org_id: string
   actor_id: string | undefined
   verb: string
-  target_type: ActivityTarget
   target_id: string
   label: string
   detail?: string
@@ -124,24 +35,44 @@ export type ActivityEntry = {
   team_id?: string
 }
 
-// Activity commits with the mutation it describes. Retention runs later in
-// the background (requestActivityTrim), so a write never reads the feed.
-export async function logActivity(ctx: MutationCtx, e: ActivityEntry): Promise<void> {
-  await insertActivity(ctx, e)
-  // A read only. The organization row changes rarely (settings, the slug,
-  // an export record), so this check seldom makes a write retry.
-  const org = await byId(ctx, 'organizations', e.org_id)
-  if (org === null) throw notFound('organization not found')
-  await requestActivityTrim(ctx, e.org_id)
-}
+/** One activity row as its writers describe it. A task row lists the numbers
+ * of the other tasks its detail names, [] when none, so visibility never
+ * reads the text (lib/activityVisibility.ts). */
+export type ActivityEntry =
+  | (EntryFields & { target_type: 'issue'; named_task_nums: readonly number[] })
+  | (EntryFields & { target_type: Exclude<ActivityTarget, 'issue'>; named_task_nums?: never })
 
-/** Inserts one activity row, without logActivity's organization check and
- * trim request. A mutation that writes a row for each of many tasks inserts
- * them with this and calls requestActivityTrim once afterwards, so it reads
- * the retention row once rather than once per row. */
-export async function insertActivity(ctx: MutationCtx, e: ActivityEntry): Promise<void> {
+/** Rows each subject keeps. A subject is one (target_type, target_id): a
+ * task, project, milestone or person, or under 'org' the organization or one
+ * of its labels. Team rows are rows about the person they name. Writes about
+ * other subjects never remove them. */
+export const SUBJECT_ACTIVITY_CAP = 500
+
+/** Inserts `e` as its subject's next row, one past the subject's newest
+ * numbered row, and deletes the row this pushes past SUBJECT_ACTIVITY_CAP.
+ * It reads only the subject's own newest row, so writers about different
+ * subjects never conflict. Rows written earlier in the same mutation count,
+ * so rows about one subject written one after another get consecutive
+ * numbers. Never run two calls for one subject at the same time, as in
+ * Promise.all: both would read the same newest row. Rows stored before
+ * numbering have no seq, sort first and are neither counted nor deleted.
+ * `opts.id` fixes the row id, for the Northstar seed only. It does not check
+ * the organization; logActivity does. */
+export async function insertActivity(
+  ctx: MutationCtx,
+  e: ActivityEntry,
+  opts: { id?: string } = {},
+): Promise<void> {
+  const newest = await ctx.db
+    .query('activity_events')
+    .withIndex('by_target', (q) =>
+      q.eq('org_id', e.org_id).eq('target_type', e.target_type).eq('target_id', e.target_id),
+    )
+    .order('desc')
+    .first()
+  const seq = (newest?.seq ?? 0) + 1
   await ctx.db.insert('activity_events', {
-    id: newUuid(),
+    id: opts.id ?? newUuid(),
     org_id: e.org_id,
     ts: e.ts,
     actor_id: e.actor_id,
@@ -153,21 +84,47 @@ export async function insertActivity(ctx: MutationCtx, e: ActivityEntry): Promis
     project_id: e.project_id,
     related_project_id: e.related_project_id,
     team_id: e.team_id,
+    seq,
+    named_task_nums: e.target_type === 'issue' ? [...e.named_task_nums] : undefined,
   })
+  if (seq <= SUBJECT_ACTIVITY_CAP) return
+  // first, not unique: a duplicate seq must not make every later write fail
+  const dropped = await ctx.db
+    .query('activity_events')
+    .withIndex('by_target', (q) =>
+      q
+        .eq('org_id', e.org_id)
+        .eq('target_type', e.target_type)
+        .eq('target_id', e.target_id)
+        .eq('seq', seq - SUBJECT_ACTIVITY_CAP),
+    )
+    .first()
+  if (dropped !== null) await ctx.db.delete(dropped._id)
 }
 
-/* Task rows that name other tasks by key: a parent change written by
- * model/issues.ts browserVerbDetail ('moved' under QN-n (from QN-m),
- * 'detached' from QN-m) and a link written by model/links.ts addLinkCore
- * ('linked' (blocks QN-n)). A REST or MCP write appends its provenance
- * (machineDetail below), which names no task. Returns the task numbers the
- * row names, [] when it names none, and null when the wording is not one
- * these writers produce, so the reader can fail closed. Keep in step with
- * those two writers.
+/** Inserts one activity row with the mutation it describes and checks that
+ * the organization exists. */
+export async function logActivity(ctx: MutationCtx, e: ActivityEntry): Promise<void> {
+  await insertActivity(ctx, e)
+  // A read only. The organization row changes rarely (settings, the slug,
+  // an export record), so this check seldom makes a write retry.
+  const org = await byId(ctx, 'organizations', e.org_id)
+  if (org === null) throw notFound('organization not found')
+}
+
+/* The task numbers a task row stored before named_task_nums existed names
+ * by key, read from its text: a parent change written by model/issues.ts
+ * browserVerbDetail ('moved' under QN-n (from QN-m), 'detached' from QN-m)
+ * and a link written by model/links.ts addLinkCore ('linked' (blocks QN-n)).
+ * A REST or MCP write appended its provenance (machineDetail below), which
+ * names no task. Returns [] when the row names none, and null when the
+ * wording is not one those writers produced, so the reader can fail closed.
+ * Newer rows store the numbers instead, so their wording no longer needs to
+ * match this parser.
  *
  * Rows written before October 2026 joined the provenance with ' — ' and
- * wrote a link as '— blocks QN-n'. Stored rows keep that text, so both
- * forms are read. */
+ * wrote a link as '— blocks QN-n'; later ones use ', ' and '(blocks QN-n)'.
+ * Stored rows keep their text, so both forms are read. */
 const KEY = `${ISSUE_PREFIX}-(\\d+)`
 const SIGNED = '(?:(?: —|,) via (?:MCP|the REST API(?: \\(.*\\))?))?'
 const NAMED_PARENT_CHANGE = new RegExp(
@@ -214,6 +171,18 @@ const DIFF_FIELDS = [
   ['paused', 'paused'],
   ['description', 'description'],
 ] as const
+
+/** Whether a task write changed anything its history narrates: a DIFF_FIELDS
+ * column, the parent or the archive state. It compares the stored rows, so a
+ * trimmed title, cleanRemaining and the unchanged-parent drop count as no
+ * change. */
+export function narratedChange(before: Doc<'issues'>, after: Doc<'issues'>): boolean {
+  return (
+    DIFF_FIELDS.some(([col]) => (before[col] ?? '') !== (after[col] ?? '')) ||
+    before.parent_id !== after.parent_id ||
+    before.archived_at !== after.archived_at
+  )
+}
 
 // Strip diff delimiters to prevent forged clauses; truncate by codepoint.
 const clean = (s: string): string => {

@@ -14,7 +14,7 @@ import {
 } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
-import { ACTIVITY_CAP, requestActivityTrim } from './activity'
+import { insertActivity } from './activity'
 import { markArchivedTask } from './archiveMarks'
 import { storeCommentCount } from './commentCounts'
 import { cleanDescription } from './issues'
@@ -238,25 +238,27 @@ export async function writeNorthstarWork(
         issue_id: issueIds[i.key],
         label_id: labelIds[label],
       })
-    await ctx.db.insert('activity_events', {
-      id: await id(`activity:import:${i.key}`),
-      org_id: org.id,
-      actor_id: personIds.atlas,
-      verb: 'created',
-      target_type: 'issue',
-      target_id: issueIds[i.key],
-      label: i.title,
-      detail: 'Imported from the fictional Northstar marketing dataset',
-      project_id: projectIds[i.project],
-      ts: touched,
-    })
+    await insertActivity(
+      ctx,
+      {
+        org_id: org.id,
+        actor_id: personIds.atlas,
+        verb: 'created',
+        target_type: 'issue',
+        target_id: issueIds[i.key],
+        label: i.title,
+        detail: 'Imported from the fictional Northstar marketing dataset',
+        project_id: projectIds[i.project],
+        ts: touched,
+        named_task_nums: [],
+      },
+      { id: await id(`activity:import:${i.key}`) },
+    )
     const issue = await ctx.db.get(issueDocId)
     require(issue !== null, rule('marketing demo: task insert missing'))
     issueDocs.set(i.key, issue)
     await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
   }
-  // The rows above bypass logActivity. Past the cap they need a trim.
-  if (data.issues.length > ACTIVITY_CAP) await requestActivityTrim(ctx, org.id)
   for (const l of data.links) {
     const pair = [issueIds[l.source], issueIds[l.target]].sort()
     await ctx.db.insert('issue_links', {

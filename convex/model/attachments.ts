@@ -231,6 +231,7 @@ export async function attachFileCore(
     detail: signedDetail(name, a.provenance),
     project_id: issue.project_id,
     ts: a.now,
+    named_task_nums: [],
   })
   const row = (await ctx.db.get(rowId)) as Doc<'issue_attachments'>
   return { attachment: pub(row) }
@@ -267,6 +268,7 @@ export async function removeAttachmentCore(
     detail: signedDetail(attachment.name, a.provenance),
     project_id: issue.project_id,
     ts: a.now,
+    named_task_nums: [],
   })
 }
 

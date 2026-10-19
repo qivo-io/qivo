@@ -15,8 +15,10 @@
  * detached child's subscribers read 'Detached from its parent'. Both are
  * reproduced here: side-effect writes notify and touch.
  *
- * Activity rows STAY — "History survives its subjects" (0001:144);
- * activity_events carries no issue FK, target_id is plain text (0026). */
+ * Activity rows STAY here, "History survives its subjects" (0001:144);
+ * activity_events carries no issue FK, target_id is plain text (0026).
+ * Deleting a task for good from Deleted items deletes its history instead
+ * (model/deletedItems.ts purgeHistory). */
 
 import { makeFunctionReference } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -24,7 +26,6 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LARGE_ROWS_PER_READ } from '../lib/db'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
-import { ACTIVITY_CAP } from './activity'
 import { hasPendingCheckout } from './billing'
 import { dropCommentCount } from './commentCounts'
 import { clearOrgTrash } from './deletedItems'
@@ -115,13 +116,12 @@ export async function deleteIssueDeep(
  * grants are swept per project defensively), and issues (0001:88
  * CASCADE) each through deleteIssueDeep, which detaches cross-project
  * children WITH the issues_touch stamp + notify and reaps attachment bytes.
- * Activity rows are KEPT, "History survives its subjects" (0001:144), with
- * project_id nulled (0001:155 SET NULL) on the newest ACTIVITY_CAP rows,
- * the ones readers show. Without a project, the snapshot
- * sends those rows to org admins only, except the rows of a task that moved
- * out before the delete (snapshot.ts memberSeesActivity). Only tests call
- * it. The app's project delete moves the project to Deleted items
- * (model/deletedItems.ts), and the Northstar wipe deletes in bounded batches
+ * Activity rows are left as they are, project_id included; callers delete
+ * them or clear project_id (model/deletedItems.ts purgeActivity does it
+ * through by_project). A row filed under a deleted project reaches org
+ * admins only (lib/activityVisibility.ts). Only tests call it. The app's
+ * project delete moves the project to Deleted items (model/deletedItems.ts),
+ * and the Northstar wipe deletes in bounded batches
  * (model/orgDeletion.ts wipeWorkStep). */
 export async function deleteProjectDeep(
   ctx: MutationCtx,
@@ -155,19 +155,6 @@ export async function deleteProjectDeep(
     for (const i of issues)
       await deleteIssueDeep(ctx, { issue: i, actor, now, deletingProjectIds: doomedIds })
   }
-  // Only the newest ACTIVITY_CAP rows, the ones readers show, are cleared.
-  // Older rows, thousands in a busy organization, are never shown again and
-  // wait for the background trim (model/activity.ts).
-  const events = await ctx.db
-    .query('activity_events')
-    .withIndex('by_org_ts', (q) => q.eq('org_id', project.org_id))
-    .order('desc')
-    .take(ACTIVITY_CAP)
-  for (const e of events) {
-    if (e.project_id !== undefined && doomedIds.has(e.project_id)) {
-      await ctx.db.patch(e._id, { project_id: undefined })
-    }
-  }
   for (const p of doomed) await ctx.db.delete(p._id)
 }
 
@@ -176,9 +163,8 @@ export async function deleteProjectDeep(
  * legacy ownership column while preserving projects, tasks and milestones.
  * Memberships die (team_members.team_id CASCADE, 0001:51), labels are
  * org-level and SURVIVE (0010/0078). Activity rows survive and keep their
- * team_id, unlike 0001:156's SET NULL. snapshot.ts memberSeesActivity finds
- * no leader for a deleted team, so only organization admins receive its
- * membership history instead of every member. Guards — 'team not found', 'only organization
+ * team_id, unlike 0001:156's SET NULL. Membership rows reach no client;
+ * organization admins read them in the export. Guards — 'team not found', 'only organization
  * admins can delete teams', the last-team guard — live in the caller
  * (teams.deleteDeep), which narrates nothing (the old client wrote no event). */
 export async function deleteTeamDeep(
@@ -311,6 +297,10 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
   'profileRemovals:step',
 )
 
+/** The activity rows this transaction clears; the profile removal activity
+ * phase clears the rest. */
+const ACTED_ROWS_FIRST_PASS = 500
+
 /* remove_member's cascade (0100:206-222 authorizes; the FK graph resolves).
  * Guards live in the callers (profiles.remove, adminOrgs.cancelInvite):
  * 'user not found' / 'you cannot remove yourself' / 'cannot remove the last
@@ -324,13 +314,13 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
  * revokes the OAuth connections as 'deleted', so the person's own list
  * hides them at once. Every session, credential and OAuth path requires the
  * profile row, so access fails closed here. It also clears the profile from
- * project leads, its newest ACTIVITY_CAP activity rows (readers show an
- * organization's newest ACTIVITY_CAP) and as many open tasks as
- * REMOVAL_BUDGET allows, assignee and reviewer fields first. That is every
+ * project leads, its newest ACTED_ROWS_FIRST_PASS activity rows and as
+ * many open tasks as REMOVAL_BUDGET allows, assignee and reviewer fields
+ * first. That is every
  * open task unless the profile holds hundreds. Then it inserts the
  * profile_removals row and schedules the first background step
  * (profileRemovals.ts), which clears the open tasks left over, archived
- * tasks, older activity rows the trim has not deleted yet, comments,
+ * tasks, its older activity rows, comments,
  * messages, subscriptions, attachments, agent keys it created and the
  * revoked connections in bounded steps. Readers already show an id that no
  * longer resolves as "Someone" or "Unknown user" until then.
@@ -380,13 +370,13 @@ export async function removeProfile(
     .withIndex('by_lead', (q) => q.eq('lead_id', profile.id))
     .collect()
   for (const p of led) await ctx.db.patch(p._id, { lead_id: undefined })
-  // The newest rows first, the ones readers show. A busy agent can have
-  // thousands more waiting for the trim; the activity phase clears them.
+  // The newest rows first. A busy agent can have thousands more; the
+  // profile removal activity phase clears them.
   const acted = await ctx.db
     .query('activity_events')
     .withIndex('by_actor', (q) => q.eq('actor_id', profile.id))
     .order('desc')
-    .take(ACTIVITY_CAP)
+    .take(ACTED_ROWS_FIRST_PASS)
   for (const e of acted) await ctx.db.patch(e._id, { actor_id: undefined })
   // DELETE
   const memberships = ctx.db
