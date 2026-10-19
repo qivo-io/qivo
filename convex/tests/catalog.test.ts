@@ -490,6 +490,7 @@ describe('messages — markRead / markUnread / remove', () => {
     const caller = as(t, f.admin)
     const first = await caller.mutation(api.messages.markAllRead, { org_id: f.org.id })
     expect(first).toMatchObject({ marked: 256, hasMore: true })
+    expect(new Set(first.ids).size).toBe(256)
     expect((await messagesFor(t, f.admin.id, issue_id)).filter((row) => !row.read_at)).toHaveLength(
       344,
     )
@@ -501,14 +502,14 @@ describe('messages — markRead / markUnread / remove', () => {
     expect(arrival._creationTime).toBeGreaterThan(first.before)
     expect(
       await caller.mutation(api.messages.markAllRead, { org_id: f.org.id, before: first.before }),
-    ).toEqual({
+    ).toMatchObject({
       marked: 256,
       hasMore: true,
       before: first.before,
     })
     expect(
       await caller.mutation(api.messages.markAllRead, { org_id: f.org.id, before: first.before }),
-    ).toEqual({
+    ).toMatchObject({
       marked: 88,
       hasMore: false,
       before: first.before,
@@ -593,7 +594,9 @@ describe('messages — markRead / markUnread / remove', () => {
       recipient_id: f.otherAdmin.id,
       issue_id: uuid(),
     })
-    expect(await as(t, f.admin).mutation(api.messages.markAllRead, { org_id: f.org.id })).toEqual({
+    expect(
+      await as(t, f.admin).mutation(api.messages.markAllRead, { org_id: f.org.id }),
+    ).toMatchObject({
       marked: 0,
       hasMore: false,
       before: 0,
@@ -637,17 +640,19 @@ describe('messages — markRead / markUnread / remove', () => {
     const base = { org_id: f.org.id, recipient_id: f.admin.id }
     const read = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
     const unread = await plantMessage(t, { ...base, issue_id: read.issue_id })
-    await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
+    const other = await plantMessage(t, { ...base, issue_id: uuid(), read_at: NOW })
     const foreign = await plantMessage(t, {
       ...base,
       recipient_id: f.user.id,
       issue_id: read.issue_id,
       read_at: NOW,
     })
+    const removedIds = [read.id, other.id]
 
     const result = await as(t, f.admin).mutation(api.messages.removeRead, { org_id: f.org.id })
 
-    expect(result).toEqual({ removed: 2, hasMore: false })
+    expect(result).toMatchObject({ removed: 2, hasMore: false })
+    expect(result.ids.sort()).toEqual(removedIds.sort())
     expect((await messagesFor(t, f.admin.id)).map((message) => message.id)).toEqual([unread.id])
     expect((await messagesFor(t, f.user.id)).map((message) => message.id)).toEqual([foreign.id])
   })
@@ -702,19 +707,19 @@ describe('messages — markRead / markUnread / remove', () => {
     })
 
     const caller = as(t, f.admin)
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toEqual({
+    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
       removed: 256,
       hasMore: true,
     })
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toEqual({
+    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
       removed: 256,
       hasMore: true,
     })
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toEqual({
+    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
       removed: 88,
       hasMore: false,
     })
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toEqual({
+    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
       removed: 0,
       hasMore: false,
     })

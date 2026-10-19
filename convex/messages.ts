@@ -51,13 +51,19 @@ export const markRead = orgMutation({
 /* P.markAllMessagesRead. The cutoff is the newest stored unread row at the
  * first call, not the browser clock or the notification's narrated date.
  * Reusing it across batches leaves later arrivals unread. Already-read
- * stamps stay intact. */
+ * stamps stay intact. `ids` names the rows this batch marked, so the client
+ * can paint exactly them again after a rollback. */
 export const markAllRead = orgMutation({
   args: { before: v.optional(v.number()) },
   handler: async (ctx, { before }) => {
     const now = new Date().toISOString()
     const done = await markAllMessagesRead(ctx, ctx.me, before, now)
-    return { marked: done.marked.length, hasMore: done.hasMore, before: done.before }
+    return {
+      marked: done.marked.length,
+      ids: done.marked.map((row) => row.id),
+      hasMore: done.hasMore,
+      before: done.before,
+    }
   },
 })
 
@@ -84,12 +90,17 @@ export const remove = orgMutation({
 
 /* Read cleanup is independent of the snapshot's 500-message display limit.
  * Each bounded batch selects the current read rows, so a message reopened
- * by another device survives. The caller repeats while hasMore is true. */
+ * by another device survives. The caller repeats while hasMore is true.
+ * `ids` names the rows this batch deleted, as markAllRead's does. */
 export const removeRead = orgMutation({
   args: {},
   handler: async (ctx) => {
     const done = await removeReadMessages(ctx, ctx.me)
-    return { removed: done.removed.length, hasMore: done.hasMore }
+    return {
+      removed: done.removed.length,
+      ids: done.removed.map((row) => row.id),
+      hasMore: done.hasMore,
+    }
   },
 })
 

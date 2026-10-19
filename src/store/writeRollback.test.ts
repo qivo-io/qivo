@@ -174,7 +174,7 @@ describe('rollback during snapshot trouble', () => {
       name: 'mark all as read',
       act: async () => {
         const done = P().markAllMessagesRead()
-        await accept({ marked: 1, hasMore: false, before: 1 })
+        await accept({ marked: 1, ids: ['message-a'], hasMore: false, before: 1 })
         await done
       },
       shown: () => {
@@ -222,7 +222,7 @@ describe('rollback during snapshot trouble', () => {
       name: 'remove all read',
       act: async () => {
         const done = P().deleteReadMessages()
-        await accept({ removed: 1, hasMore: false })
+        await accept({ removed: 1, ids: ['message-b'], hasMore: false })
         await done
       },
       shown: () => {
@@ -352,12 +352,12 @@ describe('rollback during snapshot trouble', () => {
     P().snoozeMessages(['message-a'], UNTIL)
     const [first, snooze] = sent.splice(0)
     expect([first.name, snooze.name]).toEqual(['messages:markAllRead', 'messages:snooze'])
-    first.resolve({ marked: 0, hasMore: true, before: 1 })
+    first.resolve({ marked: 0, ids: [], hasMore: true, before: 1 })
     await settle()
     snooze.resolve(null)
     await settle()
     // the server's last batch skips the snoozed row
-    sent.pop()!.resolve({ marked: 0, hasMore: false, before: 1 })
+    sent.pop()!.resolve({ marked: 0, ids: [], hasMore: false, before: 1 })
     await done
     await refuseFollow()
     expect(message('message-a')?.read).toBe(false)
@@ -390,14 +390,42 @@ describe('rollback during snapshot trouble', () => {
     })
     live().fail(new Error(QUERY_FAILURE))
     const read = P().markAllMessagesRead()
-    await accept({ marked: 1, hasMore: false, before: 1 })
+    await accept({ marked: 1, ids: ['message-a'], hasMore: false, before: 1 })
     await read
     const removed = P().deleteReadMessages()
-    await accept({ removed: 1, hasMore: false })
+    await accept({ removed: 2, ids: ['message-a', 'message-b'], hasMore: false })
     await removed
     await refuseFollow()
     expect(P().canMarkAllRead).toBe(false)
     expect(P().canRemoveRead).toBe(false)
+  })
+
+  it('keeps each batch of mark all as read in the order the server took it', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    const done = P().markAllMessagesRead()
+    sent.pop()!.resolve({ marked: 1, ids: ['message-a'], hasMore: true, before: 1 })
+    await settle()
+    // a read message reopened between batches, which the next batch marks again
+    P().markMessagesUnread(['message-b'])
+    const [batch, unread] = sent.splice(0)
+    expect([batch.name, unread.name]).toEqual(['messages:markAllRead', 'messages:markUnread'])
+    unread.resolve(null)
+    await settle()
+    batch.resolve({ marked: 1, ids: ['message-b'], hasMore: false, before: 1 })
+    await done
+    await refuseFollow()
+    expect(message('message-a')?.read).toBe(true)
+    expect(message('message-b')?.read).toBe(true)
+  })
+
+  it('keeps the batches the server saved when a later batch is refused', async () => {
+    live().fail(new Error(QUERY_FAILURE))
+    const done = P().markAllMessagesRead()
+    sent.pop()!.resolve({ marked: 1, ids: ['message-a'], hasMore: true, before: 1 })
+    await settle()
+    sent.pop()!.reject(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
+    await done
+    expect(message('message-a')?.read).toBe(true)
   })
 
   it('keeps no paint of a write the newest delivery already holds', async () => {
@@ -411,7 +439,7 @@ describe('rollback during snapshot trouble', () => {
       snap.messages[1].read_at = undefined
       snap.readMessageCount = 0
     })
-    await accept({ removed: 0, hasMore: false })
+    await accept({ removed: 0, ids: [], hasMore: false })
     await done
     expect(message('message-b')?.read).toBe(false)
     await refuseFollow()
@@ -446,7 +474,7 @@ describe('rollback during snapshot trouble', () => {
       snap.readMessageCount = 0
     })
     live().fail(new Error(QUERY_FAILURE))
-    await accept({ removed: 0, hasMore: false })
+    await accept({ removed: 0, ids: [], hasMore: false })
     await done
     expect(message('message-b')?.read).toBe(false)
   })

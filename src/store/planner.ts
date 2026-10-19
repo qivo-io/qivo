@@ -4995,27 +4995,16 @@ export const PLANNER = {
       .filter((message) => !message.read && message.snoozedUntil === null)
       .map((message) => message.id)
     const at = new Date().toISOString()
-    const byOrg = messagesByOrg(ids)
     markLoadedMessagesRead(ids, at)
     unexaminedUnread = false
     rebuild()
     emit()
-    /* A seat's paint is kept once its last batch is saved. The client does
-       not know which rows an earlier batch marked, so a refused later batch
-       leaves that seat to the next delivery. Like the server's batches, the
-       kept paint skips rows snoozed meanwhile. */
-    const markSeatRead = (org: string) =>
-      markLoadedMessagesRead(
-        (byOrg.get(org) ?? []).filter((id) => !rows.messages.get(id)?.snoozed_until),
-        at,
-      )
     const operations = orgs.map(async (org) => {
       let before: number | undefined
       while (epoch === storeEpoch) {
         const operation = write(api.messages.markAllRead, { org_id: org, before })
-        run(operation, (result) => {
-          if (!result.hasMore) keepAcceptedPaint(() => markSeatRead(org))
-        })
+        // each batch names the rows it marked, so the kept paint is exact
+        run(operation, (result) => keepAcceptedPaint(() => markLoadedMessagesRead(result.ids, at)))
         const result = await operation
         if (!result.hasMore) return true
         before = result.before
@@ -5088,28 +5077,20 @@ export const PLANNER = {
     const ids = PLANNER.messages
       .filter((message) => message.read && message.snoozedUntil === null)
       .map((message) => message.id)
-    const byOrg = messagesByOrg(ids)
-    ids.forEach((id) => {
-      rows.messages.delete(id)
-    })
+    const remove = (list: string[]) =>
+      list.forEach((id) => {
+        rows.messages.delete(id)
+      })
+    remove(ids)
     hiddenReadMessages = 0
     unexaminedRead = false
     rebuild()
     emit()
-    /* Kept per seat once its last batch is saved, as markAllMessagesRead
-       does. Like the server's batches, the kept paint leaves rows that are
-       unread or snoozed by then. */
-    const removeSeatRead = (org: string) =>
-      (byOrg.get(org) ?? []).forEach((id) => {
-        const row = rows.messages.get(id)
-        if (row?.read_at && !row.snoozed_until) rows.messages.delete(id)
-      })
     const operations = orgs.map(async (org) => {
       while (epoch === storeEpoch) {
         const operation = write(api.messages.removeRead, { org_id: org })
-        run(operation, (result) => {
-          if (!result.hasMore) keepAcceptedPaint(() => removeSeatRead(org))
-        })
+        // each batch names the rows it deleted, as markAllMessagesRead's do
+        run(operation, (result) => keepAcceptedPaint(() => remove(result.ids)))
         const result = await operation
         if (!result.hasMore) return true
       }
