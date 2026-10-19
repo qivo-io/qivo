@@ -1121,12 +1121,13 @@ const pausedText = () => (snapshotTrouble?.kind === 'no_access' ? NO_ACCESS_TEXT
 const PAUSED_TOAST_GAP_MS = 1000
 let pausedToastAt = Number.NEGATIVE_INFINITY
 
-/** Toasts the pause, at most once per PAUSED_TOAST_GAP_MS. */
-function toastPaused() {
+/** Toasts the pause, or `text` in its place, at most once per
+    PAUSED_TOAST_GAP_MS. */
+function toastPaused(text = pausedText()) {
   const now = Date.now()
   if (now - pausedToastAt < PAUSED_TOAST_GAP_MS) return
   pausedToastAt = now
-  toast(pausedText())
+  toast(text)
 }
 
 /** Toasts the pause and answers true while shared edits are paused. Every
@@ -1149,11 +1150,23 @@ function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
   return true
 }
 
+/** Whether a refusal says the person has no seat in the organization any
+    more (convex/lib/functions.ts loadMember). It can arrive before the
+    snapshot delivery that reports the lost seat. */
+const seatGone = (d: ErrData) =>
+  d.code === 'forbidden' && d.message === 'no profile in this organization'
+
 /** Whether a refusal reads as the pause: a paused write never left the
     browser, and a write that was in flight when the last seat went is
     refused as forbidden, so it reads like the writes paused after it. */
 const refusedAsPaused = (d: ErrData) =>
-  d.code === 'paused' || (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
+  d.code === 'paused' ||
+  seatGone(d) ||
+  (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
+
+/** The sentence of a refusal that reads as the pause (refusedAsPaused). A
+    lost seat says so even before the snapshot reports it. */
+const refusalPauseText = (d: ErrData) => (seatGone(d) ? NO_ACCESS_TEXT : pausedText())
 
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
@@ -1163,7 +1176,7 @@ const refusedAsPaused = (d: ErrData) =>
 function toastWriteError(e: unknown) {
   const d = errData(e)
   if (refusedAsPaused(d)) {
-    toastPaused()
+    toastPaused(refusalPauseText(d))
     return
   }
   if ((readOnly(d) || d.code === 'rule') && d.message) {
@@ -1182,7 +1195,7 @@ function toastWriteError(e: unknown) {
    sentence is quoted, forbidden reads the fixed permission line. */
 function restoreErrorText(e: unknown): string {
   const d = errData(e)
-  if (refusedAsPaused(d)) return pausedText()
+  if (refusedAsPaused(d)) return refusalPauseText(d)
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
@@ -1195,7 +1208,7 @@ function restoreErrorText(e: unknown): string {
    Anything else (offline, a server fault) asks for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
   const d = errData(e)
-  if (refusedAsPaused(d)) return pausedText()
+  if (refusedAsPaused(d)) return refusalPauseText(d)
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that."
