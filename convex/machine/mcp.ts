@@ -88,8 +88,8 @@ import {
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
 import {
-  type EventOwner,
   EVENT_PARAMS_NOT_FINITE,
+  type EventOwner,
   type EventReply,
   eventParamsJson,
   vEventOwner,
