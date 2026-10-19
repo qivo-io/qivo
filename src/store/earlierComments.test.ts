@@ -207,6 +207,67 @@ describe('earlier comments in the store', () => {
     expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
   })
 
+  it('offers nothing earlier once the check shows the whole thread is loaded', async () => {
+    const { P } = store
+    publish({ comments: range(1, 51), earlier: true })
+    // #0 and #1 deleted while #51 and #52 arrived
+    publish({ comments: range(3, 53), earlier: true })
+    expect(P.commentsEarlier).toBe('more')
+    asked[0].answer.resolve({ comments: [comment(2)], earlier: false })
+    await settle()
+    expect(bodies()).toEqual(range(2, 53).map((c) => c.body))
+    expect(P.commentsEarlier).toBe('none')
+  })
+
+  it('keeps offering earlier comments when the page holds one never loaded', async () => {
+    const { P } = store
+    publish({ comments: range(1, 51), earlier: true })
+    publish({ comments: range(3, 53), earlier: true })
+    // #0 still exists and was never loaded
+    asked[0].answer.resolve({ comments: [comment(0), comment(1), comment(2)], earlier: false })
+    await settle()
+    expect(bodies()).toEqual(range(1, 53).map((c) => c.body))
+    expect(P.commentsEarlier).toBe('more')
+  })
+
+  it('keeps comments that left the window when the check fails', async () => {
+    publish({ comments: range(100, 150), earlier: true })
+    publish({ comments: range(102, 152), earlier: true })
+    asked[0].answer.reject(new Error('offline'))
+    await settle()
+    expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
+  })
+
+  it('ignores a check answered after the task window moved on', async () => {
+    const { P } = store
+    publish({ comments: range(100, 150), earlier: true })
+    publish({ comments: range(102, 152), earlier: true })
+    const check = asked[0]
+    P.watchComments(null)
+    P.watchComments('task-a')
+    publish({ comments: range(100, 150), earlier: true })
+    publish({ comments: range(102, 152), earlier: true })
+    check.answer.resolve({ comments: range(51, 101), earlier: true })
+    await settle()
+    expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
+  })
+
+  it('drops a deleted comment the check finds only once my write in flight settles', async () => {
+    const { P } = store
+    publish({ comments: range(100, 150), earlier: true })
+    publish({ comments: range(102, 152), earlier: true })
+    P.updateComment('comment-120', 'Edited')
+    asked[0].answer.resolve({ comments: range(51, 101), earlier: true })
+    await settle()
+    // the edit stays on screen while it is in flight
+    expect(P.comments.find((c) => c.id === 'comment-120')?.body).toBe('Edited')
+    expect(bodies()).toContain('#101')
+    writes[0].answer.resolve(null)
+    await settle()
+    expect(bodies()).not.toContain('#101')
+    expect(bodies()).toContain('#100')
+  })
+
   it("drops a short thread's first comment that someone else deleted", () => {
     publish({ comments: range(0, 30), earlier: false })
     publish({ comments: range(1, 30), earlier: false })

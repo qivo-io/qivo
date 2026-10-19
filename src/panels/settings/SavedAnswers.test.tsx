@@ -33,6 +33,7 @@ let pages: {
   general: typeof import('./OrganizationSettings')
   project: typeof import('./ProjectSettings')
   modals: typeof import('../Modals')
+  detail: typeof import('../IssueDetail')
   version: typeof import('../../store/usePlannerVersion')
 }
 let requests: Pending[]
@@ -69,6 +70,21 @@ async function load() {
     { id: 'beta', project_id: 'sensor', name: 'Beta', week: '2026-10-05', created_at: NOW },
     { id: 'gamma', project_id: 'sensor', name: 'Gamma', week: '2026-11-02', created_at: NOW },
   )
+  snap.issues.push({
+    id: 'task',
+    org_id: org,
+    project_id: snap.projects[0].id,
+    num: 4,
+    title: 'Calibrate the sensor',
+    description: '',
+    status: 'progress',
+    priority: 'medium',
+    paused: false,
+    created_at: NOW,
+    updated_at: NOW,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  })
   requests = []
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((_ref, _args, next) => {
@@ -88,6 +104,7 @@ async function load() {
     general: await import('./OrganizationSettings'),
     project: await import('./ProjectSettings'),
     modals: await import('../Modals'),
+    detail: await import('../IssueDetail'),
     version: await import('../../store/usePlannerVersion'),
   }
 }
@@ -225,6 +242,26 @@ describe('create forms', () => {
     await act(async () => requests.at(-1)?.resolve(null))
     expect(field?.value).toBe('')
     expect(toasts().at(-1)).toBe('Milestone “Launch” added')
+  })
+})
+
+describe('the label picker in the task window', () => {
+  it('creates a label at once and puts a refused name back', async () => {
+    const { P } = await import('../../store/planner')
+    const task = P.issues.find((t) => t.title === 'Calibrate the sensor')
+    if (!task) throw new Error('no task')
+    await render(() => (
+      <pages.detail.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
+    ))
+    const field = input('input[placeholder="Add labels…"]')
+    await type(field, 'Firmware')
+    await act(async () =>
+      field?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+    )
+    expect(requests.map((r) => r.name)).toEqual(['labels:create', 'labels:toggle'])
+    expect(field?.value).toBe('')
+    await answer('labels:create', 'refuse')
+    expect(field?.value).toBe('Firmware')
   })
 })
 

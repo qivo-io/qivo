@@ -195,6 +195,21 @@ describe('snapshot trouble', () => {
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
   })
 
+  it('refuses a paused label create even when the name is taken', async () => {
+    snapshot.labels.push({
+      id: 'label-a',
+      org_id: snapshot.orgs[0].id,
+      name: 'Firmware',
+      name_lower: 'firmware',
+      color: '#335577',
+      created_at: '2026-09-14T08:00:00.000Z',
+    })
+    await boot()
+    live().fail(new Error(QUERY_FAILURE))
+    expect(store.P.addLabel({ name: 'firmware' })).toBeNull()
+    expect(showToast).toHaveBeenLastCalledWith(store.PAUSED_TEXT, 'error')
+  })
+
   it('deletes a discarded draft upload quietly once edits resume, unless a description took it', async () => {
     snapshot.attachments.push(
       ...['file-a', 'file-b', 'file-c'].map((id) => ({
@@ -493,6 +508,7 @@ describe('snapshot trouble', () => {
     const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
     const restore = P.unarchiveProject(snapshot.projects[0].id)
     const restored = P.restoreDeletedItems(items)
+    P.addProject({ type: 'meta', key: 'NEW', name: 'New' })
     await settle()
     // the refusals arrive while the last delivery still holds the seat
     const lost = new ConvexError({ code: 'forbidden', message: 'no profile in this organization' })
@@ -500,7 +516,29 @@ describe('snapshot trouble', () => {
     expect(await restore).toBe(false)
     expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
     expect(await restored).toMatchObject({ failed: ['item-a'], error: store.NO_ACCESS_TEXT })
-    expect(showToast).not.toHaveBeenCalledWith("You don't have permission for that", 'error')
+    await settle()
+    expect(sentNames()).toContain('projects:create')
+    expect(showToast.mock.calls.map(([text]) => text)).not.toContainEqual(
+      expect.stringMatching(/permission|no profile/i),
+    )
+  })
+
+  it('words a lost seat as a permission refusal while another organization remains', async () => {
+    const guest = crypto.randomUUID()
+    snapshot.orgs.push({ ...snapshot.orgs[0], id: guest, name: 'Partner Co', slug: 'partner' })
+    const seat = { ...snapshot.profiles[0], id: crypto.randomUUID(), org_id: guest }
+    snapshot.profiles.push({ ...seat, org_role: 'guest' })
+    snapshot.myProfileIds.push(seat.id)
+    await boot()
+    const { P } = store
+    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    sent[0].reject(
+      new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
+    )
+    expect(await restore).toBe(false)
+    expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+    expect(showToast).not.toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
   })
 
   it('deletes a connected app the server no longer has, with no error toast', async () => {

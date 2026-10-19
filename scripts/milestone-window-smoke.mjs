@@ -135,6 +135,9 @@ try {
   await newBox.fill(`${prefix} A`)
   await page.keyboard.press('Enter')
   await editButton(`${prefix} A`).waitFor()
+  // the row paints at once, the box clears once the server created it
+  const cleared = Date.now() + 15000
+  while ((await newBox.inputValue()) !== '' && Date.now() < cleared) await page.waitForTimeout(200)
   assert.equal(await newBox.inputValue(), '', 'New box was not cleared after Add')
   assert.equal(await modal().count(), 1, 'Window closed after Add')
   assert.equal(

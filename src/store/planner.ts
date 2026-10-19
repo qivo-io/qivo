@@ -349,10 +349,11 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
    Comments only ever join a thread at its end, so every comment between the
    oldest slid-out one and the window that still exists is on that page,
    unless the page stops short of it (long comments). A slid-out comment the
-   page reaches but does not hold was deleted. `current` says whether the
-   same subscription still watches the thread when the answer comes. A
-   failed read changes nothing, and the comments stay until the task opens
-   again. */
+   page reaches but does not hold was deleted. When the page starts the
+   thread and everything on it is loaded, the whole thread is. `current`
+   says whether the same subscription still watches the thread when the
+   answer comes. A failed read changes nothing, and the comments stay until
+   the task opens again. */
 async function checkSlidOut(
   orgId: string,
   issueUuid: string,
@@ -379,9 +380,18 @@ async function checkSlidOut(
   const reach =
     page.earlier && page.comments[0] ? slid.findIndex((r) => r.id === page.comments[0].id) : 0
   const gone = slid.slice(Math.max(reach, 0)).filter((r) => !held.has(r.id))
-  if (!gone.length) return
   const drop = new Set(gone.map((r) => r.id))
   olderComments = olderComments.filter((r) => !drop.has(r.id))
+  // A page that starts the thread before an unmoved window, all of it
+  // loaded, means nothing earlier is left to load.
+  const loaded = new Set(olderComments.map((r) => r.id))
+  const start =
+    !threadStart &&
+    !page.earlier &&
+    commentsSnap?.[0]?.id === firstId &&
+    page.comments.every((r) => loaded.has(r.id))
+  if (start) threadStart = true
+  if (!gone.length && !start) return
   if (inFlight > 0) {
     commentsDirty = true
     return
@@ -1153,10 +1163,12 @@ function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
 }
 
 /** Whether a refusal says the person has no seat in the organization any
-    more (convex/lib/functions.ts loadMember). It can arrive before the
-    snapshot delivery that reports the lost seat. */
+    more (convex/lib/functions.ts loadMember), and they held no other seat.
+    It can arrive before the snapshot delivery that reports the lost seat.
+    Someone who keeps another organization keeps working there, so for them
+    it stays a plain permission refusal. */
 const seatGone = (d: ErrData) =>
-  d.code === 'forbidden' && d.message === 'no profile in this organization'
+  d.code === 'forbidden' && d.message === 'no profile in this organization' && myProfiles.size <= 1
 
 /** Whether a refusal reads as the pause: a paused write never left the
     browser, and a write that was in flight when the last seat went is
@@ -1295,8 +1307,8 @@ function refuseLongName(
    "Couldn't save", which does not say a project is gone. */
 function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
-  if (d.code === 'paused') {
-    toastPaused()
+  if (refusedAsPaused(d)) {
+    toastPaused(refusalPauseText(d))
     return
   }
   const m = d.message ? String(d.message) : ''
@@ -2751,8 +2763,9 @@ export const PLANNER = {
         emit()
       },
       (error) => {
-        const { code, message: detail } = errData(error)
-        if (code === 'paused') toastPaused()
+        const d = errData(error)
+        const detail = d.message
+        if (refusedAsPaused(d)) toastPaused(refusalPauseText(d))
         else
           toast(
             detail ? `Couldn't undo: ${detail}. No changes reverted.` : "Couldn't undo. Try again.",
@@ -6267,7 +6280,7 @@ export const PLANNER = {
 
   /* --- labels: one shared, curated list per organization (0078) ------------ */
   /** Paints a new label at once. Returns its id and whether the server
-      created it, or the existing label of that name, already saved. Null
+      created it, or the existing label of that name with nothing sent. Null
       when it refused the change first (toasted) or there is nothing to
       create. A refusal after sending is toasted and rolled back. */
   addLabel: (rec: {
@@ -6282,8 +6295,9 @@ export const PLANNER = {
     const dup = [...rows.labels.values()].find(
       (l) => l.org_id === org.id && l.name.toLowerCase() === name.toLowerCase(),
     )
-    if (dup) return { id: dup.id, saved: Promise.resolve(true) }
+    // paused first, so a paused create never reads as done
     if (refusePausedEdit()) return null
+    if (dup) return { id: dup.id, saved: Promise.resolve(true) }
     // the shared palette picks the color unless rec.color overrides it
     const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length].color
     const uuid = crypto.randomUUID()
