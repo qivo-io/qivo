@@ -1496,6 +1496,7 @@ export default defineSchema({
     created_at: v.string(),
   }).index('by_auth_user', ['auth_user_id']),
 
+  // Rows are deleted once they are 90 days old (auditRetention.ts).
   platform_audit_log: defineTable({
     ts: v.string(),
     actor_auth_id: v.optional(v.string()),

@@ -130,4 +130,9 @@ crons.interval(
   makeFunctionReference<'mutation', Record<string, never>, null>('webhooks:sweep'),
 )
 
+// Deletes platform_audit_log rows older than 90 days, after the nightly jobs
+// have written theirs. The empty arguments start a run; each step schedules
+// the next, and the last writes the expire_audit_log row (auditRetention.ts).
+crons.daily('expire-audit-log', { hourUTC: 4, minuteUTC: 45 }, internal.auditRetention.expire, {})
+
 export default crons

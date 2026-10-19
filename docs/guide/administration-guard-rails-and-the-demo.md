@@ -256,6 +256,8 @@ organization, so an address that already belongs to another organization can
 only join as a guest. Qivo Admin does not invite guests. Org admins and
 project leads invite them from project settings. The operator audit log
 records the invitations, email attempts and role changes made in Qivo Admin.
+Qivo deletes audit entries after 90 days. A pending person invited earlier
+then shows only **Invited**, without when the email was sent.
 
 ## Demo usage. Platform operators
 

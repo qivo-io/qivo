@@ -37,7 +37,8 @@ export type InviteResult = { profile_id: string; email: string; sent: boolean }
 
 /* One seat to email. The app schedules the address it saw, so a send that a
  * later correction superseded is skipped, and a reactivation sends only if
- * that address was never emailed (unless_sent). */
+ * the audit log, which keeps 90 days, holds no delivered email to that
+ * address (unless_sent). */
 const vInvite = v.object({
   profile_id: v.string(),
   email: v.optional(v.string()),

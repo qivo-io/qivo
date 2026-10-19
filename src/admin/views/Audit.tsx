@@ -1,4 +1,5 @@
-/* Audit log: the immutable trail of everything platform operators have done. */
+/* Audit log: what platform operators have done in the last 90 days. Older
+ * entries are deleted nightly (convex/auditRetention.ts). */
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -129,7 +130,7 @@ export function Audit() {
     <div className="min-w-0 space-y-6">
       <AdminPageHeader
         title="Audit log"
-        description="Review the operator actions that changed accounts, billing and image curation."
+        description="Review the operator actions of the last 90 days that changed accounts, billing and image curation."
         actions={
           <Button
             type="button"

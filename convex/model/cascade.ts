@@ -456,7 +456,8 @@ export async function removeProfile(
  * the operator's tool once no profile references it), the appearance tables
  * and roadmap_history (per login, cleared with the login), demo_sessions
  * (internal/demoCleanup owns the public demo's lifecycle) and the platform
- * audit log (history survives its subjects). Pending profile_removals rows
+ * audit log (history survives its subjects until auditRetention.ts deletes
+ * it after 90 days). Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
  * profiles' inboxes and OAuth connections, which this sweep only reaches
  * through live profiles. Deleted items go first, whatever state they are in,
