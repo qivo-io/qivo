@@ -269,19 +269,27 @@ async function ancestorsFrom(
 }
 
 /* Whether a person can see every task in `chain`, through their own access
- * to each task's project. Answers per person, read once per project. */
-function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[]) {
+ * to each task's project. Answers per person, read once per project. A bulk
+ * writer's `bulk` serves the profiles and projects from its preload and
+ * keeps each sight that passed (sightKey), so a handover of many subtasks
+ * asks it once per person and project. */
+function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkUpdate) {
   const projectIds = [...new Set(chain.map((t) => t.project_id))]
   const known = new Map<string, Promise<boolean>>()
   return (profileId: string): Promise<boolean> => {
     let sees = known.get(profileId)
     if (sees === undefined) {
       sees = (async () => {
-        const profile = await byId(ctx, 'profiles', profileId)
+        const profile =
+          bulk?.preload.orgProfiles.find((p) => p.id === profileId) ??
+          (await byId(ctx, 'profiles', profileId))
         if (profile === null) return false
         for (const id of projectIds) {
-          const project = await byId(ctx, 'projects', id)
+          const key = sightKey(profileId, id)
+          if (bulk?.checked.has(key)) continue
+          const project = bulk?.preload.projects.get(id) ?? (await byId(ctx, 'projects', id))
           if (project === null || !(await canSeeProject(ctx, profile, project))) return false
+          bulk?.checked.add(key)
         }
         return true
       })()
@@ -1159,9 +1167,10 @@ export type IssuePatch = {
 /** Reused answers for a bulk writer that runs updateIssueCore for many
  * tasks in one transaction, which changes no profile, project, grant, team or
  * team membership while it runs (model/messages.ts NotifyPreload). `checked`
- * holds the checks already passed, under gateKey and holderKey, so the write
- * gate runs once per project and each assignee or reviewer rule once per
- * person and project. No single task write passes one. */
+ * holds the checks already passed, under gateKey, holderKey and sightKey, so
+ * the write gate runs once per project, and each assignee or reviewer rule
+ * and each sight of a parent chain's project once per person and project.
+ * No single task write passes one. */
 export type BulkUpdate = { preload: NotifyPreload; checked: Set<string> }
 
 /* The BulkUpdate key of `actorId`'s passed write gate on a project. */
@@ -1174,6 +1183,9 @@ export const holderKey = (
   profileId: string,
   projectId: string,
 ): string => `holder:${role}:${profileId}:${projectId}`
+
+/* The BulkUpdate key of a profile's passed sight of a project (chainSight). */
+const sightKey = (profileId: string, projectId: string): string => `sight:${profileId}:${projectId}`
 
 /* Runs `check` unless the bulk writer already passed `key`, and records the
  * key once it passes. Without a bulk writer it always runs. */
@@ -1296,7 +1308,7 @@ export async function updateIssueCore(
   const newParent =
     'parent_id' in patch && nextParent !== undefined && nextParent !== issue.parent_id
   if (nextParent !== undefined && (newAssignee || newReviewer || newParent)) {
-    const sees = chainSight(ctx, await ancestorsFrom(ctx, nextParent))
+    const sees = chainSight(ctx, await ancestorsFrom(ctx, nextParent), bulk)
     if (newAssignee && !(await sees(heldAssignee))) throw rule(ASSIGNEE_SIGHT_RULE)
     if (newReviewer && !(await sees(heldReviewer))) throw rule(REVIEWER_SIGHT_RULE)
     if (newParent) {
@@ -1668,15 +1680,21 @@ export async function moveIssueCore(
   // or leave the parent in the same change. A later parent in the
   // destination's top-level project is checked in full by the write that
   // sets it. An older subtask already outside its parent's top-level project
-  // stays movable within its own and into its parent's.
+  // stays movable within its own and into its parent's. A parent the mover
+  // cannot see counts as being in the task's own top-level project, as the
+  // app counts it, so the answer tells nothing about where it is.
   const detach = a.detachParent === true && issue.parent_id !== undefined
   if (crosses && issue.parent_id !== undefined && !detach) {
+    const seenTop = async (task: Doc<'issues'>): Promise<string | null> => {
+      const project = await byId(ctx, 'projects', task.project_id)
+      if (project === null) return null
+      return (await canSeeProject(ctx, me, project)) ? topLevelOf(project) : topLevelOf(source)
+    }
     const parent = await byId(ctx, 'issues', issue.parent_id)
-    if (parent !== null && (await topOf(parent.project_id)) !== dst) {
+    if (parent !== null && (await seenTop(parent)) !== dst) {
       const laterParent = a.machine?.laterParent
       const next = laterParent ? await byId(ctx, 'issues', laterParent) : null
-      const leaves =
-        laterParent === null || (next !== null && (await topOf(next.project_id)) === dst)
+      const leaves = laterParent === null || (next !== null && (await seenTop(next)) === dst)
       if (!leaves) throw rule(MOVE_SUBTASK_RULE)
     }
   }

@@ -406,6 +406,49 @@ describe("older subtasks outside their parent's top-level project", () => {
   })
 })
 
+describe('an older subtask whose parent the mover cannot see', () => {
+  it('moves to another top-level project only when it leaves the parent, wherever the parent is', async () => {
+    const t = newT()
+    const { f, backend } = await scene(t)
+    // Vault's Open sub-project is the agent's; its Closed one is not, so the
+    // agent sees Vault only for navigation and cannot see the parent
+    const vault = await plantProject(t, { org_id: f.org.id, key: 'VLT', name: 'Vault' })
+    const under = { org_id: f.org.id, type: 'project' as const, parent_id: vault.id }
+    const open = await plantProject(t, { ...under, key: 'OPN', name: 'Open' })
+    const closed = await plantProject(t, { ...under, key: 'CLS', name: 'Closed' })
+    await grant(t, open.id, f.agent.id)
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: closed.id })
+    const elsewhere = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const strays = []
+    for (const parent_id of [parent.id, elsewhere.id]) {
+      // the agent cannot see the TBED parent either once its grant goes below
+      strays.push(await plantIssue(t, { org_id: f.org.id, project_id: backend.id, parent_id }))
+    }
+    await t.run(async (ctx) => {
+      const tbed = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.agent.id),
+        )
+        .unique()
+      await ctx.db.delete(tbed!._id)
+    })
+    // the parent under Vault and the one under TBED answer alike
+    for (const stray of strays) {
+      const r = await expectRefusal(
+        restPatch(t, f, `QN-${stray.num}`, { project: open.id }),
+        'rule',
+      )
+      expect(r.data.message).toBe(MOVE_SUBTASK_RULE)
+      expect(await row(t, stray.id)).toEqual(stray)
+    }
+    // leaving the parent in the same request moves it
+    await restPatch(t, f, `QN-${strays[0].num}`, { project: open.id, parent: null })
+    const moved = await row(t, strays[0].id)
+    expect([moved.project_id, moved.parent_id]).toEqual([open.id, undefined])
+  })
+})
+
 describe('asking whether a move carries subtasks', () => {
   it('counts archived subtasks, which the app cannot see, and nothing else', async () => {
     const t = newT()

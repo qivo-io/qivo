@@ -22,11 +22,11 @@
  * each follower. Index ranges ran out first. Without the preload it managed
  * 44 tasks, at about 93 ranges each. A local Convex backend reassigned 400
  * tasks of the same shape, with 92 more people in Northstar, using 3,422 of
- * its 4,096 reads. A task costs more with more followers, most of all ones
- * the transaction has not checked yet. On a local backend, 120 tasks used
- * 1,316 index ranges with 4 followers each among 97 people and 3,664 with 10
- * among 504 people, and passed the limit with 20 among 1,504 people, which
- * REASSIGN_ROOM turns into the same refusal. */
+ * its 4,096 reads. Followers' sight is now worked out once per project
+ * (model/messages.ts RecipientSight), so each follower costs about one range:
+ * REASSIGN_MAX tasks used 1,597 ranges here with 4 followers each and 3,637
+ * with 21, and 100 tasks with 61 followers each reach REASSIGN_ROOM, which
+ * refuses them. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -271,9 +271,9 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
-    // Without the room check, 100 tasks with 21 followers each exceed the
-    // limit of 4,096 index ranges here, at the 97th task
-    const fx = await crowded(100, { followers: 20 })
+    // 100 tasks with 61 followers each need about 7,000 index ranges here,
+    // past the limit of 4,096
+    const fx = await crowded(100, { followers: 60 })
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
     expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
@@ -284,40 +284,41 @@ describe('reassigning the tasks of an access removal', () => {
     expect(await fx.t.run((ctx) => ctx.db.query('messages').collect())).toEqual([])
   })
 
-  it('refuses during a task whose followers it has not checked would pass the limits', async () => {
+  it('refuses during a task whose followers would pass the limits', async () => {
     const fx = await crowded(100)
-    // 200 more people of Hardware follow only the last task, which the
-    // removal reaches last. Checked only before each task, their sight checks
+    // 3,000 more people of Hardware follow only the last task, which the
+    // removal reaches last. Checked only before each task, their messages
     // pass the limit of 4,096 index ranges during that task.
     const last = fx.tasks[fx.tasks.length - 1]
-    await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 200; i++) {
-        const id = uuid()
-        await ctx.db.insert('profiles', {
-          id,
-          org_id: fx.org.id,
-          name: `q${i}`,
-          initials: 'QQ',
-          color: '#7a7ad0',
-          org_role: 'user',
-          active: true,
-          kind: 'person',
-          plannable_hours: 40,
-          accepted_at: NOW,
-          created_at: NOW,
-        })
-        await ctx.db.insert('team_members', {
-          team_id: fx.team.id,
-          profile_id: id,
-          is_leader: false,
-        })
-        await ctx.db.insert('issue_subscriptions', {
-          issue_id: last.id,
-          profile_id: id,
-          created_at: NOW,
-        })
-      }
-    })
+    for (let from = 0; from < 3000; from += 1000)
+      await fx.t.run(async (ctx) => {
+        for (let i = from; i < from + 1000; i++) {
+          const id = uuid()
+          await ctx.db.insert('profiles', {
+            id,
+            org_id: fx.org.id,
+            name: `q${i}`,
+            initials: 'QQ',
+            color: '#7a7ad0',
+            org_role: 'user',
+            active: true,
+            kind: 'person',
+            plannable_hours: 40,
+            accepted_at: NOW,
+            created_at: NOW,
+          })
+          await ctx.db.insert('team_members', {
+            team_id: fx.team.id,
+            profile_id: id,
+            is_leader: false,
+          })
+          await ctx.db.insert('issue_subscriptions', {
+            issue_id: last.id,
+            profile_id: id,
+            created_at: NOW,
+          })
+        }
+      })
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
     expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
@@ -325,10 +326,10 @@ describe('reassigning the tasks of an access removal', () => {
     expect(await holders(fx)).toEqual(before)
   })
 
-  it('refuses during a task whose followers are costly to check because many teams share the project', async () => {
-    // With 50 more teams sharing TBED, a first check of a follower's sight
-    // reads every share, about 100 index ranges, so the 41 followers of one
-    // task pass the limit, though the transaction was nearly empty before it.
+  it('hands over a task whose followers see it through one of many teams', async () => {
+    // With 50 more teams sharing TBED, checking each follower's sight on its
+    // own read every share, about 100 index ranges each, so the 41 followers
+    // of one task passed the limit. The project's shares are now read once.
     const fx = await crowded(1, { followers: 40 })
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 50; i++) {
@@ -349,12 +350,12 @@ describe('reassigning the tasks of an access removal', () => {
         })
       }
     })
-    const before = await holders(fx)
-    const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
-    expect((e.data as Refusal).message).toBe(reassignTooLarge(true))
-    expect((e.data as Refusal).reason).toBeUndefined()
-    expect(await membership(fx)).not.toBeNull()
-    expect(await holders(fx)).toEqual(before)
+    await removeEmil(fx, fx.leo.id)
+    expect(await membership(fx)).toBeNull()
+    expect(await holders(fx)).toEqual([[fx.leo.id, null]])
+    expect((await messagesFor(fx.t, fx.crowd[1].id, fx.tasks[0].id)).map((m) => m.detail)).toEqual([
+      'Assigned to Leo',
+    ])
   })
 
   it('still refuses, changing nothing, when the new holder cannot take a task', async () => {
