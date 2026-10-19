@@ -279,15 +279,30 @@ async function preloadedProject(
   return project
 }
 
-/** Who can see each project a fan-out asks about, by project uuid, with
- * the project's grants, team shares and sharing teams' members read once,
- * up to a bound, the first time it is asked about, and each follower's
- * answer kept (lib/access.ts projectSightForProfiles). One check per
- * follower costs a few index ranges, and two more for each team sharing the
- * project, so a task with some hundreds of followers passed Convex's 4,096
- * ranges or its 1 s. Like a preload, it holds only while the transaction
- * changes no profile, project, grant, team or team membership. */
-export type RecipientSight = Map<string, Promise<(profile: Doc<'profiles'>) => Promise<boolean>>>
+/** How many people a fan-out asks about one project's sight one at a time
+ * before it works out everyone's at once (RecipientSight). A few followers,
+ * as most comments and updates have, cost less asked alone than the
+ * project's grants and team members read in full. */
+export const SIGHT_ALONE = 8
+
+/** Who can see each project a fan-out asks about, by project uuid. The
+ * first SIGHT_ALONE people are asked one at a time. After that the
+ * project's grants, team shares and sharing teams' members are read once,
+ * up to a bound, and answer everyone (lib/access.ts
+ * projectSightForProfiles). One check per follower costs a few index
+ * ranges, and two more for each team sharing the project, so a task with
+ * some hundreds of followers passed Convex's 4,096 ranges or its 1 s. Like
+ * a preload, it holds only while the transaction changes no profile,
+ * project, grant, team or team membership. */
+export type RecipientSight = Map<
+  string,
+  {
+    /* the answers asked one at a time, by profile uuid */
+    alone: Map<string, boolean>
+    /* everyone's, once more people were asked about */
+    all?: Promise<(profile: Doc<'profiles'>) => Promise<boolean>>
+  }
+>
 
 /* profileCanSeeProject, answered through `visibility` when one is given,
  * else asked live. */
@@ -298,12 +313,20 @@ async function recipientCanSee(
   visibility: RecipientSight | undefined,
 ): Promise<boolean> {
   if (visibility === undefined) return await profileCanSeeProject(ctx, profile, project)
-  let sees = visibility.get(project.id)
-  if (sees === undefined) {
-    sees = projectSightForProfiles(ctx, project)
-    visibility.set(project.id, sees)
+  let sight = visibility.get(project.id)
+  if (sight === undefined) {
+    sight = { alone: new Map() }
+    visibility.set(project.id, sight)
   }
-  return await (await sees)(profile)
+  const known = sight.alone.get(profile.id)
+  if (known !== undefined) return known
+  if (sight.all === undefined && sight.alone.size < SIGHT_ALONE) {
+    const sees = await profileCanSeeProject(ctx, profile, project)
+    sight.alone.set(profile.id, sees)
+    return sees
+  }
+  sight.all ??= projectSightForProfiles(ctx, project)
+  return await (await sight.all)(profile)
 }
 
 /* ------------------------------------------------------------- postMessage

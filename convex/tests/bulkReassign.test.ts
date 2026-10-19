@@ -23,10 +23,10 @@
  * 44 tasks, at about 93 ranges each. A local Convex backend reassigned 400
  * tasks of the same shape, with 92 more people in Northstar, using 3,422 of
  * its 4,096 reads. Followers' sight is now worked out once per project
- * (model/messages.ts RecipientSight), so each follower costs about one range:
- * REASSIGN_MAX tasks used 1,597 ranges here with 4 followers each and 3,637
- * with 21, and 100 tasks with 61 followers each reach REASSIGN_ROOM, which
- * refuses them. */
+ * after the first few (model/messages.ts RecipientSight), so each follower
+ * costs about one range: REASSIGN_MAX tasks used 1,669 ranges here with 4
+ * followers each and 3,709 with 21, and 100 tasks with 61 followers each
+ * reach REASSIGN_ROOM, which refuses them. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -271,7 +271,7 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
-    // 40 tasks with 21 followers each need about 1,260 index ranges here,
+    // 40 tasks with 21 followers each need about 1,330 index ranges here,
     // past a limit of 1,000
     const fx = await crowded(40, {
       followers: 20,

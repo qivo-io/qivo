@@ -1211,6 +1211,66 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     expect(read).toBeLessThan(SIGHT_READ.max + 20)
   })
 
+  it('asks about a few followers alone, without reading a sharing team in full', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // a team of 600 shares the task's sub-project; two of them follow it
+    const people = await t.run(async (ctx) => {
+      const team = uuid()
+      await ctx.db.insert('teams', {
+        id: team,
+        org_id: f.org.id,
+        name: 'Everyone',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: team,
+        level: 'user',
+      })
+      const ids: string[] = []
+      for (let i = 0; i < 600; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `Member ${i}`,
+          initials: 'ME',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: id, is_leader: false })
+        ids.push(id)
+      }
+      for (const id of ids.slice(0, 2))
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: issue.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+      return ids.length
+    })
+    const read = await t.run(async (ctx) => {
+      await notifyCommentInsert(ctx, {
+        comment: { body: 'Any news?' },
+        issue,
+        actor: f.admin,
+        now: NOW,
+      })
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    // the organization's profiles for mentions, and a few rows for each
+    // follower; the team's members would be 600 more
+    expect(read).toBeLessThan(people + 200)
+  })
+
   it("a seed's visibility memo answers repeat checks; without a preload each check is live", async () => {
     const t = newT()
     const f = await withOrg(t)
