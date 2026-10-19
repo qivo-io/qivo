@@ -31,7 +31,7 @@
  *     outside every door here.
  *
  * The actions send invitation email after the seat mutation commits, through
- * invites.sendInvites (From is the deployment's AgentMail inbox,
+ * invites.sendInvites (From is the deployment's MAIL_FROM,
  * no-reply@qivo.io in production), which records every attempt. A failed or
  * unconfigured send keeps the seat, and the console offers the sign-up link
  * instead. A seat claimed between saving and sending is skipped rather than

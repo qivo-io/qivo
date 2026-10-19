@@ -1,11 +1,11 @@
-/* Qivo transactional mail uses the shared AgentMail account for verification,
- * password resets, billing reminders and organization invitations. The
- * configured inbox supplies From; customer replies go to support. No inbound
- * mail is processed here.
+/* Qivo transactional mail goes through Lettermint's sending API for
+ * verification, password resets, billing reminders, deletion notices and
+ * organization invitations. MAIL_FROM supplies From; customer replies go to
+ * support. No inbound mail is processed here.
  *
- * AGENTMAIL_API_KEY, AGENTMAIL_INBOX and AGENTMAIL_BASE_URL belong only in the
- * selected Convex deployment. Never log keys, inboxes, recipients or auth URLs.
- * Local auth-link logging requires an explicit loopback development opt-in. */
+ * LETTERMINT_API_KEY (a project API token) and MAIL_FROM belong only in the
+ * selected Convex deployment. Never log tokens, recipients or auth URLs. Local
+ * auth-link logging requires an explicit loopback development opt-in. */
 
 import { v } from 'convex/values'
 import { internalAction } from './_generated/server'
@@ -36,9 +36,8 @@ declare function fetch(
   init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
 ): Promise<SendResponse>
 
-// Use the API host for the shared account's region. The deleted account's
-// region is not evidence for a replacement key. Keep the deployment override.
-const MAIL_BASE_DEFAULT = 'https://api.agentmail.to'
+const SEND_URL = 'https://api.lettermint.co/v1/send'
+const REPLY_TO = 'support@qivo.io'
 
 const SEND_TIMEOUT_MS = 10_000
 const SEND_ATTEMPTS = 3
@@ -69,8 +68,6 @@ ${paragraphs.map((p) => `  <p style="margin:0 0 1em">${p}</p>`).join('\n')}
 </div>`.trim()
 
 type Letter = { to: string; subject: string; text: string; html: string }
-
-// AgentMail takes From from AGENTMAIL_INBOX, not from the message body.
 
 const verifyLetter = (to: string, url: string): Letter => ({
   to,
@@ -111,14 +108,23 @@ If it was not you, you can ignore this message. Your password is unchanged.`,
 
 // ------------------------------------------------------------------- sender
 
+/** The configured sender, or null when mail is off: no token, a MAIL_FROM
+ * that is not one bare address, or the demo. */
+function sender(): { token: string; from: string } | null {
+  const token = process.env.LETTERMINT_API_KEY
+  const from = address(process.env.MAIL_FROM ?? '')
+  if (!token || from === null || process.env.APP_MODE === 'demo') return null
+  return { token, from }
+}
+
 const toHex = (bytes: Uint8Array) =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 
 /* Idempotency key = sha256 hex of the Better Auth URL: every send carries a
  * unique token in the url, so postLetter's internal retries share the key
  * while a genuinely new request (new token) is a new mail — which is correct.
- * Hex stays inside the key charset, and it is never an empty string (an
- * explicitly empty Idempotency-Key is a 400 rather than "no key"). */
+ * The 64 hex characters stay inside the provider's 1 to 255, and the key is
+ * never empty (an invalid Idempotency-Key is a 422 rather than "no key"). */
 const sha256Hex = async (s: string): Promise<string> =>
   toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))))
 
@@ -127,26 +133,25 @@ const sha256Hex = async (s: string): Promise<string> =>
  * attempt's timeout and each wait then stop at it, and a letter that cannot
  * finish in time counts as not sent.
  *
- * Retry covers 408 / 429 / 5xx and a network or timeout failure. 409 gets
- * exactly ONE extra attempt: under the same idempotency key a 409 means
- * EITHER "the original send is still in flight", whose documented remedy is
- * to repeat the identical request, OR "a different body", which no number of
- * repeats will fix — one repeat covers the first without spending three calls
- * on the second. Everything else — auth, validation, a rejected recipient —
- * is final, and repeating it just spends a rate limit whose ceiling is not
- * published.
+ * Retry covers 408 / 429 / 5xx and a network or timeout failure. The
+ * provider keeps an idempotency key for 24 hours, and a repeat of the same
+ * request returns the first answer. 409 gets exactly ONE extra attempt: under
+ * the same key a 409 means EITHER "the original send is still in flight",
+ * which a repeat can outlast, OR "a different body" or "an earlier attempt
+ * failed after the letter may have been accepted", which no number of
+ * repeats will fix. One repeat covers the first without spending three calls
+ * on the others. Everything else (401 token, 403 plan feature, 413 size, 422
+ * validation, a rejected recipient) is final.
  *
- * The provider's reply body is {code, message, docs, fix} on an application
- * error but NOT on an auth failure: a missing or wrong key is rejected at the
- * gateway with a bare {"message":"Unauthorized"} and no code at all — exactly
- * the first failure a fresh deployment produces — so this branches on the
- * STATUS and treats `code` as a bonus. */
+ * The provider's reply body is {error: {code, message, details}} on most
+ * errors, but a bare {message} or {message, errors} on others, and a message
+ * can echo what was sent. So this branches on the STATUS, logs `error.code`
+ * only as a bonus, and never logs a message. */
 async function postLetter(
   letter: Letter,
   intent: string,
   cfg: {
-    key: string
-    inbox: string
+    sender: { token: string; from: string }
     idempotencyKey: string
     deadline?: number
     /* Called for each failed request. 'refused' is a final provider answer
@@ -167,11 +172,10 @@ async function postLetter(
     console.error('[mail] refusing a letter', { intent, reason: 'bad address' })
     return false
   }
-  const base = (process.env.AGENTMAIL_BASE_URL ?? MAIL_BASE_DEFAULT).replace(/\/+$/, '')
-  const url = `${base}/v0/inboxes/${encodeURIComponent(cfg.inbox)}/messages/send`
   const body = JSON.stringify({
+    from: `Qivo <${cfg.sender.from}>`,
     to: [to],
-    reply_to: ['support@qivo.io'],
+    reply_to: [REPLY_TO],
     subject: letter.subject,
     text: letter.text,
     html: letter.html,
@@ -184,10 +188,10 @@ async function postLetter(
       return false
     }
     try {
-      const res = await fetch(url, {
+      const res = await fetch(SEND_URL, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${cfg.key}`,
+          'x-lettermint-token': cfg.sender.token,
           'Content-Type': 'application/json',
           'Idempotency-Key': cfg.idempotencyKey,
         },
@@ -195,13 +199,20 @@ async function postLetter(
         signal: AbortSignal.timeout(Math.min(SEND_TIMEOUT_MS, left)),
       })
       if (res.ok) {
-        const ok = (await res.json().catch(() => null)) as { message_id?: string } | null
-        // ids only — no address, no subject
-        console.log('[mail] sent', { intent, message_id: ok?.message_id ?? null })
+        const ok = (await res.json().catch(() => null)) as {
+          message_id?: string
+          sandbox?: boolean
+        } | null
+        // ids only — no address, no subject. A sandbox project delivers nothing.
+        console.log('[mail] sent', {
+          intent,
+          message_id: ok?.message_id ?? null,
+          ...(ok?.sandbox === true ? { sandbox: true } : {}),
+        })
         return true
       }
-      const detail = (await res.json().catch(() => null)) as { code?: unknown } | null
-      const code = typeof detail?.code === 'string' ? detail.code : null
+      const detail = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null
+      const code = typeof detail?.error?.code === 'string' ? detail.error.code : null
       const ambiguous =
         res.status === 408 || res.status === 409 || res.status === 429 || res.status >= 500
       const retryable = ambiguous && (res.status !== 409 || attempt === 1)
@@ -211,9 +222,9 @@ async function postLetter(
       const after = Number(res.headers.get('Retry-After'))
       retryAfterMs = Number.isFinite(after) && after > 0 ? after * 1000 : 0
     } catch (e) {
-      /* MANDATORY own catch. A fetch failure stringifies with the url, and
-       * the url carries the inbox address — only the error's NAME
-       * (TypeError, TimeoutError) is safe to record. */
+      /* MANDATORY own catch. A fetch failure's message and cause can carry
+       * request details, so only the error's NAME (TypeError, TimeoutError)
+       * is safe to record. */
       console.error('[mail] provider unreachable', {
         intent,
         name: (e as Error)?.name ?? 'error',
@@ -240,9 +251,8 @@ export async function sendBillingReminder(input: {
   until: string
   notice_key: string
 }): Promise<boolean> {
-  const key = process.env.AGENTMAIL_API_KEY
-  const inbox = process.env.AGENTMAIL_INBOX
-  if (!key || !inbox || process.env.APP_MODE === 'demo') return false
+  const configured = sender()
+  if (configured === null) return false
   const expired = Date.parse(input.until) <= Date.now()
   const date = input.until.slice(0, 10)
   const message = expired
@@ -257,8 +267,7 @@ export async function sendBillingReminder(input: {
     html: shell([esc(message)], { href: input.url, label: 'Open Billing' }),
   }
   return await postLetter(letter, 'billing', {
-    key,
-    inbox,
+    sender: configured,
     idempotencyKey: await sha256Hex(input.notice_key),
   })
 }
@@ -266,7 +275,7 @@ export async function sendBillingReminder(input: {
 export type InviteOutcome = 'sent' | 'unsent' | 'uncertain'
 
 /** Organization invitations (invites.ts), from the operator console and the
- * app, use the same transport and From inbox. The organization name is stored
+ * app, use the same transport and From address. The organization name is stored
  * text, so it appears only in the body, folded to one line, capped and escaped
  * in HTML, never in the subject. A guest invitation ends its sentence with
  * "as a guest". The outcome is 'sent' when the provider accepted the letter,
@@ -286,9 +295,8 @@ export async function sendInviteEmail(input: {
   send_key: string
   deadline: number
 }): Promise<InviteOutcome> {
-  const key = process.env.AGENTMAIL_API_KEY
-  const inbox = process.env.AGENTMAIL_INBOX
-  if (!key || !inbox || process.env.APP_MODE === 'demo') return 'unsent'
+  const configured = sender()
+  if (configured === null) return 'unsent'
   // a name stored before the NAME_MAX cap can be longer, so it is cut here
   const org = cutName(input.org_name.replace(/\s+/g, ' ').trim())
   const join = (name: string) =>
@@ -310,8 +318,7 @@ ${input.url}`,
   }
   let ambiguous = false
   const ok = await postLetter(letter, 'invite', {
-    key,
-    inbox,
+    sender: configured,
     idempotencyKey: await sha256Hex(input.send_key),
     deadline: input.deadline,
     onFailure: (kind) => {
@@ -334,9 +341,8 @@ export async function sendDeletionNotice(input: {
   url: string
   notice_key: string
 }): Promise<boolean> {
-  const key = process.env.AGENTMAIL_API_KEY
-  const inbox = process.env.AGENTMAIL_INBOX
-  if (!key || !inbox || process.env.APP_MODE === 'demo') return false
+  const configured = sender()
+  if (configured === null) return false
   const org = cutName(input.org_name.replace(/\s+/g, ' ').trim())
   const lead = (name: string) =>
     `${name} is read-only and will be deleted on ${input.delete_after.slice(0, 10)}, with all of its projects, tasks, comments and files.`
@@ -361,8 +367,7 @@ ${input.url}`,
     }),
   }
   return await postLetter(letter, 'deletion', {
-    key,
-    inbox,
+    sender: configured,
     idempotencyKey: await sha256Hex(input.notice_key),
   })
 }
@@ -378,18 +383,23 @@ export const send = internalAction({
   handler: async (_ctx, { to, intent, url }) => {
     if (process.env.APP_MODE === 'demo') return
     requireAuthMailDelivery()
-    const key = process.env.AGENTMAIL_API_KEY
-    if (key === undefined || key === '') {
+    if (!process.env.LETTERMINT_API_KEY) {
       if (!localAuthEmailLogging()) throw new Error('Local auth-link logging is disabled')
       console.log(`[mail] local-development intent=${intent} url=${url}`)
       return
     }
-    const inbox = process.env.AGENTMAIL_INBOX
-    if (inbox === undefined || inbox === '') {
-      throw new Error('Authentication email is unavailable. Configure AGENTMAIL_INBOX.')
+    // requireAuthMailDelivery checked both, so only a malformed MAIL_FROM is left
+    const configured = sender()
+    if (configured === null) {
+      throw new Error('Authentication email is unavailable. Set MAIL_FROM to one address.')
     }
     const letter = intent === 'verify' ? verifyLetter(to, url) : resetLetter(to, url)
-    if (!(await postLetter(letter, intent, { key, inbox, idempotencyKey: await sha256Hex(url) }))) {
+    if (
+      !(await postLetter(letter, intent, {
+        sender: configured,
+        idempotencyKey: await sha256Hex(url),
+      }))
+    ) {
       throw new Error('Authentication email delivery failed')
     }
   },

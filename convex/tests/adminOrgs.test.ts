@@ -113,8 +113,8 @@ const orgCount = (t: T) =>
 
 /* Captures every letter the transport posts, with mail configured. */
 function stubMail() {
-  vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-provider-key')
-  vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
+  vi.stubEnv('LETTERMINT_API_KEY', 'test-only-provider-token')
+  vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
   const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm' }) })
   vi.stubGlobal('fetch', fetch)
   return () =>
@@ -122,6 +122,7 @@ function stubMail() {
       ([url, init]) =>
         ({ url, ...JSON.parse(init.body) }) as {
           url: string
+          from: string
           to: string[]
           subject: string
           text: string
@@ -492,7 +493,7 @@ describe('createOrganization', () => {
     ])
   })
 
-  it('emails each invitation from the configured inbox, linking to sign-up or sign-in', async () => {
+  it('emails each invitation from the configured sender, linking to sign-up or sign-in', async () => {
     const t = newAuthT()
     const op = await withOperator(t)
     await plantLogin(t, 'aisha@brightwater.studio')
@@ -515,7 +516,8 @@ describe('createOrganization', () => {
       'tomas@brightwater.studio',
     ])
     const elin = to('elin@brightwater.studio')
-    expect(elin?.url).toBe('https://api.agentmail.to/v0/inboxes/no-reply%40qivo.io/messages/send')
+    expect(elin?.url).toBe('https://api.lettermint.co/v1/send')
+    expect(sent.every((l) => l.from === 'Qivo <no-reply@qivo.io>')).toBe(true)
     expect(sent.every((l) => l.subject === 'You are invited to Qivo')).toBe(true)
     expect(elin?.text).toContain(`${process.env.SITE_URL}/app#signup`)
     expect(to('aisha@brightwater.studio')?.text.endsWith(`${process.env.SITE_URL}/app`)).toBe(true)

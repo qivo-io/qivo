@@ -1,5 +1,5 @@
 /* Run the real auth HTTP handler through scheduled mail and link consumption.
- * Only AgentMail's network boundary is mocked. No hosted data is touched. */
+ * Only Lettermint's network boundary is mocked. No hosted data is touched. */
 /// <reference types="vite/client" />
 import { afterEach, expect, it, vi } from 'vitest'
 import authSchema from '../betterAuth/schema'
@@ -15,13 +15,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('delivers verification and reset links through the shared account and consumes both links', async () => {
+it('delivers verification and reset links through the mail provider and consumes both links', async () => {
   vi.stubEnv('SITE_URL', APP)
   vi.stubEnv('CONVEX_SITE_URL', SITE)
   vi.stubEnv('BETTER_AUTH_SECRET', 'test-only-auth-mail-secret-at-least-32-characters')
-  vi.stubEnv('AGENTMAIL_API_KEY', 'test-only-shared-account-key')
-  vi.stubEnv('AGENTMAIL_INBOX', 'no-reply@qivo.io')
-  vi.stubEnv('AGENTMAIL_BASE_URL', undefined)
+  vi.stubEnv('LETTERMINT_API_KEY', 'test-only-project-token')
+  vi.stubEnv('MAIL_FROM', 'no-reply@qivo.io')
   vi.stubEnv('APP_MODE', '')
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const provider = vi.fn().mockResolvedValue({
@@ -79,7 +78,5 @@ it('delivers verification and reset links through the shared account and consume
   expect((await post('sign-in/email', { email, password: newPassword })).status).toBe(200)
   expect((await post('sign-in/email', { email, password })).status).not.toBe(200)
   expect((await post('reset-password', { token, newPassword: password })).status).not.toBe(200)
-  expect(provider.mock.calls[0][0]).toBe(
-    'https://api.agentmail.to/v0/inboxes/no-reply%40qivo.io/messages/send',
-  )
+  expect(provider.mock.calls[0][0]).toBe('https://api.lettermint.co/v1/send')
 })
