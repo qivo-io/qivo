@@ -98,7 +98,7 @@ import {
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
-import { type EventOwner, vEventOwner } from '../lib/taskEvents'
+import { type EventOwner, eventParamsJson, vEventOwner } from '../lib/taskEvents'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { ingressShard } from '../model/billingUsage'
 import { postComment } from '../model/comments'
@@ -1552,7 +1552,7 @@ async function webhookResponse(
     const reply = await ctx.runAction(internal.webhookActions.manage, {
       owner,
       method: 'events/subscribe',
-      params_json: JSON.stringify(params),
+      params_json: eventParamsJson(params),
     })
     if ('error' in reply) {
       const status =

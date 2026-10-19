@@ -90,6 +90,7 @@ import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
 import {
   type EventOwner,
   type EventReply,
+  eventParamsJson,
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
@@ -2357,7 +2358,7 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
           return ctx.runAction(internal.webhookActions.manage, {
             owner: oauthOwner(live),
             method,
-            params_json: JSON.stringify(params),
+            params_json: eventParamsJson(params),
           })
         },
         runTool: async (name, args) => {
@@ -2427,7 +2428,7 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
         ctx.runAction(internal.webhookActions.manage, {
           owner,
           method,
-          params_json: JSON.stringify(params),
+          params_json: eventParamsJson(params),
         }),
     })
   } catch (e) {

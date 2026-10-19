@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import { eventParamsJson } from '../lib/taskEvents'
 import { sha256hex } from '../machine/auth'
 import { ROUTES } from '../machine/rest'
 import { NOW, newT, type T, uuid, withOrg } from './helpers.setup'
@@ -245,5 +246,19 @@ describe('request bodies', () => {
     // a body the shared rules accept still reaches the subscription rules
     const res = await call(t, token, 'POST', '/v1/webhooks', { name: 'task.nope' })
     expect(res).toEqual({ status: 404, body: { error: 'Unknown event name' } })
+    // a number too large for a double reads as Infinity, which reaches the
+    // subscription rules as a value they refuse, never as null (no filter)
+    const huge = '{"name":"task.updated","arguments":1e309,"delivery":{"mode":"webhook","url":"x"}}'
+    expect(await call(t, token, 'POST', '/v1/webhooks', huge)).toEqual({
+      status: 400,
+      body: { error: 'Expected an object' },
+    })
+  })
+
+  it('writes an event request number JSON cannot hold as a string, for MCP and REST', () => {
+    expect(eventParamsJson({ ttlMs: -Infinity, arguments: Infinity, cursor: NaN, n: 2 })).toBe(
+      '{"ttlMs":"-Infinity","arguments":"Infinity","cursor":"NaN","n":2}',
+    )
+    expect(eventParamsJson({ arguments: { task_id: null } })).toBe('{"arguments":{"task_id":null}}')
   })
 })

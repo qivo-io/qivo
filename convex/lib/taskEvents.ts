@@ -31,6 +31,16 @@ export const vEventFilters = v.object({
   project_id: v.optional(v.string()),
 })
 export type EventOwner = Infer<typeof vEventOwner>
+
+/** Event request params as webhookActions.manage reads them. JSON.parse reads
+ * a number literal too large for a double, such as 1e309, as Infinity, and
+ * JSON.stringify would write that as null, which manage reads as "not set"
+ * (no expiry, no filter). Writing it as a string keeps it a value manage
+ * refuses. */
+export const eventParamsJson = (params: unknown): string =>
+  JSON.stringify(params, (_key, value: unknown) =>
+    typeof value === 'number' && !Number.isFinite(value) ? String(value) : value,
+  )
 export type EventFilters = Infer<typeof vEventFilters>
 
 export const EVENT_CATALOG = EVENT_NAMES.map((name) => ({
