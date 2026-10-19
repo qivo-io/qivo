@@ -1310,7 +1310,10 @@ active tasks are too large to list in one request`, and a smaller `limit`
 does not help. When the call instead runs out of index reads, which follow
 the active projects, your team memberships and the labels a search matches,
 it is refused with `this organization has too many projects, teams or labels
-to list its tasks in one request`.
+to list its tasks in one request`. A `search` whose label names it would have
+to read for too many tasks at once is refused with `this search reads too
+many label assignments to answer in one request; name a project or add a
+filter`.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all

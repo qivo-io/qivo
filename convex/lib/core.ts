@@ -438,28 +438,68 @@ async function labelNamesOf(
   return labels.filter((label) => held.has(label.id)).map((label) => label.name)
 }
 
-/* The names of `labels` by task, for the organization's `active` tasks. Each
- * label's assignments are read through by_label without the archive mark,
- * so the read follows active work, not every task ever archived with the
- * label (schema.ts taskArchived). Assignments stored without an organization
- * are found too. A task restored from the archive keeps marked assignments
- * until background steps clear them and carries relations_marked meanwhile,
- * so each such task is read through its own assignments instead. */
+/** How many tasks a search reads the labels of one by one (by_issue) before
+ * it reads each matching label's active assignments instead. Tests lower
+ * `reads`. */
+export const LABEL_TASK_READS = { reads: 1000 }
+
+/** What a search's label reads keep back from the request's limits for the
+ * page after them, its parents and newest comments. They check the request's
+ * reads every LABEL_ROWS_PER_CHECK rows, so the documents and bytes also
+ * hold that many rows. Tests lower these. */
+export const LABEL_READS_RESERVE = { ranges: 416, documents: 1024, bytes: 2 * DOCUMENT_MAX_BYTES }
+
+/* How many label assignments a search reads between two checks of the
+ * request's reads. */
+const LABEL_ROWS_PER_CHECK = 256
+
+/** The refusal for a search whose label assignments do not fit in one
+ * request. */
+export const SEARCH_TOO_LARGE =
+  'this search reads too many label assignments to answer in one request; name a project or add a filter'
+
+/* The names of `labels` by task, for the active `tasks` a search still
+ * needs them for. Up to LABEL_TASK_READS tasks, while their reads leave
+ * LABEL_READS_RESERVE ranges, are read through their own assignments
+ * (labelNamesOf). Past that each label's assignments are read through
+ * by_label without the archive mark, so the read follows active work, not
+ * every task ever archived with the label (schema.ts taskArchived), within
+ * the request's room less LABEL_READS_RESERVE. A search whose assignments do
+ * not fit is refused with SEARCH_TOO_LARGE. Assignments stored without an
+ * organization are found too. A task restored from the archive keeps marked
+ * assignments until background steps clear them and carries relations_marked
+ * meanwhile, so each such task is read through its own assignments
+ * instead. */
 async function activeLabelNames(
   ctx: QueryCtx,
   labels: readonly Doc<'labels'>[],
-  active: readonly Doc<'issues'>[],
+  tasks: readonly Doc<'issues'>[],
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()
-  if (labels.length === 0) return out
-  const restored = active.filter((task) => task.relations_marked === true)
+  if (labels.length === 0 || tasks.length === 0) return out
+  const m = await ctx.meta.getTransactionMetrics()
+  if (
+    tasks.length <= LABEL_TASK_READS.reads &&
+    tasks.length < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges
+  ) {
+    const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
+    tasks.forEach((task, i) => out.set(task.id, names[i] ?? []))
+    return out
+  }
+  const ceiling = roomOf(m, LABEL_READS_RESERVE)
+  const wanted = new Set(tasks.map((task) => task.id))
+  const restored = tasks.filter((task) => task.relations_marked === true)
   const own = new Set(restored.map((task) => task.id))
+  let read = 0
   for (const label of labels) {
     const rows = ctx.db
       .query('issue_labels')
       .withIndex('by_label', (q) => q.eq('label_id', label.id).eq('task_archived', undefined))
     for await (const row of rows) {
-      if (own.has(row.issue_id)) continue
+      if (++read % LABEL_ROWS_PER_CHECK === 0 && !(await readsUnder(ctx, ceiling))) {
+        throw badRequest(SEARCH_TOO_LARGE)
+      }
+      if (!wanted.has(row.issue_id) || own.has(row.issue_id)) continue
       const names = out.get(row.issue_id)
       if (names === undefined) out.set(row.issue_id, [label.name])
       else names.push(label.name)
@@ -528,7 +568,9 @@ async function listedActiveTasks(
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
  * title, description, status name (not on a task with subtasks), priority
  * name, assignee name and label names. REST retains explicit `*` wildcards;
- * all other punctuation stays literal.
+ * all other punctuation stays literal. Label names are read only for the
+ * tasks the other fields miss (activeLabelNames), and a search whose label
+ * assignments do not fit in one request is refused with SEARCH_TOO_LARGE.
  */
 export async function listActiveIssuesCore(
   ctx: QueryCtx,
@@ -556,22 +598,8 @@ export async function listActiveIssuesCore(
   const isGroup = (task: Doc<'issues'>): boolean => isGroupIn(children, task, live)
   const profiles = await rosterOf(ctx, me.org_id)
   const names = namesOf(profiles)
-  let match: ((i: Doc<'issues'>) => boolean) | null = null
-  if (o.search) {
-    const matches = allWordsMatcher(o.search, o.stars)
-    const pieces = searchPieces(o.search, o.stars)
-    const labels = await activeLabelNames(ctx, await matchingLabels(ctx, me.org_id, pieces), active)
-    match = (i) =>
-      matches(
-        taskSearchText({
-          ...searchFields(i, names),
-          group: isGroup(i),
-          labelNames: labels.get(i.id) ?? [],
-        }),
-      )
-  }
   const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
-  const found: Doc<'issues'>[] = []
+  let found: Doc<'issues'>[] = []
   for (const i of active) {
     if (!readable(i.project_id)) continue // RLS's successor — always, scope or not
     if (scope !== null) {
@@ -584,8 +612,22 @@ export async function listActiveIssuesCore(
     if (o.assignee && i.assignee_id !== o.assignee) continue
     // a group stays with its assignee, as in the app
     if (o.owner && taskOwnerId(i, isGroup(i)) !== o.owner) continue
-    if (match !== null && !match(i)) continue
     found.push(i)
+  }
+  if (o.search) {
+    const matches = allWordsMatcher(o.search, o.stars)
+    const pieces = searchPieces(o.search, o.stars)
+    const text = (i: Doc<'issues'>, labelNames: readonly string[]) =>
+      taskSearchText({ ...searchFields(i, names), group: isGroup(i), labelNames })
+    // more text never unmatches, so only the tasks that miss without their
+    // labels need them read
+    const plain = new Set(found.filter((i) => matches(text(i, []))).map((i) => i.id))
+    const labels = await activeLabelNames(
+      ctx,
+      await matchingLabels(ctx, me.org_id, pieces),
+      found.filter((i) => !plain.has(i.id)),
+    )
+    found = found.filter((i) => plain.has(i.id) || matches(text(i, labels.get(i.id) ?? [])))
   }
   found.sort(byCreation)
   const page = found.slice(o.offset, o.offset + o.limit)

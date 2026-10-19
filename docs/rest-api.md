@@ -909,7 +909,9 @@ anywhere inside a word. These are the fields the app's task filter searches.
 `search=upd%20firm` finds “Add signed firmware updates and rollback”, and
 `search=in%20progress%20anna` finds Anna's tasks in progress.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
-literal.
+literal. A search of active tasks whose label names it would have to read for
+too many tasks at once is a `400` with `this search reads too many label
+assignments to answer in one request; name a project or add a filter`.
 
 Active lists come in creation order, oldest first, with tasks created at the
 same moment ordered by number, so `offset` pages through them. MCP's
