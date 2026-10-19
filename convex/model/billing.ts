@@ -471,13 +471,13 @@ export async function storagePage(
 /* Where a 'tasks' phase page starts: the cursor of its tasks and, when the
  * page before it stopped inside a task's rows, that task, its range (the
  * task's archived rows or the others), the _creationTime of the last row
- * counted and how many counted rows have that time. Convex does not make
- * _creationTime unique, so the next page reads from that time on, that time
- * included, and passes over the rows at it already counted, as
- * model/comments.ts newestComments does. */
+ * counted and the ids of the counted rows with that time. Convex does not
+ * make _creationTime unique, so the next page reads from that time on, that
+ * time included, and passes over those ids. Ids, not a count, because a
+ * counted row may be deleted between pages. */
 type TasksCursor = {
   tasks: string | null
-  within?: { issue: string; archived: boolean; after: number | null; counted: number }
+  within?: { issue: string; archived: boolean; after: number | null; seen: string[] }
 }
 
 /* A 'tasks' phase page of storagePage. It reads the rows without org_id of
@@ -507,20 +507,22 @@ async function legacyTaskPage(
   for (const [i, task] of page.page.entries()) {
     // A task moved to Deleted items since took its rows along, so the task
     // in its place starts from its first row.
-    const from =
-      at.within?.issue === task.id ? at.within : { archived: false, after: null, counted: 0 }
+    const from: NonNullable<TasksCursor['within']> =
+      at.within?.issue === task.id
+        ? at.within
+        : { issue: task.id, archived: false, after: null, seen: [] }
     for (const archived of [false, true]) {
       if (from.archived && !archived) continue
       const resumed = archived === from.archived && from.after !== null
       const after = resumed ? from.after : null
-      const counted = resumed ? from.counted : 0
+      const seen = resumed ? from.seen : []
       const room = STORAGE_PAGE.rows - rows
-      const stop = (last: number | null, atLast: number): StoragePage => {
+      const stop = (last: number | null, atLast: string[]): StoragePage => {
         if (i > 0) return { split: i }
-        const within = { issue: task.id, archived, after: last, counted: atLast }
+        const within = { issue: task.id, archived, after: last, seen: atLast }
         return { ...counter.counted(), next: JSON.stringify({ tasks: at.tasks, within }) }
       }
-      if (room <= 0) return stop(after, counted)
+      if (room <= 0) return stop(after, seen)
       const read = await ctx.db
         .query('issue_attachments')
         .withIndex('by_org_task_archived_issue', (q) => {
@@ -530,18 +532,17 @@ async function legacyTaskPage(
             .eq('issue_id', task.id)
           return after === null ? range : range.gte('_creationTime', after)
         })
-        .take(counted + room + 1)
-      // the rows at `after` the page before counted come first
-      let passed = 0
-      while (passed < counted && read[passed]?._creationTime === after) passed++
-      const files = read.slice(passed, passed + room)
+        .take(seen.length + room + 1)
+      const counted = new Set(seen)
+      const fresh = read.filter((f) => !(f._creationTime === after && counted.has(f._id)))
+      const files = fresh.slice(0, room)
       for (const file of files)
         if (file._creationTime <= before) await counter.add(task.project_id, file.size_bytes)
       rows += files.length
-      if (read.length > passed + room) {
+      if (fresh.length > room) {
         const last = files[files.length - 1]._creationTime
-        const atLast = files.filter((f) => f._creationTime === last).length
-        return stop(last, atLast + (last === after ? passed : 0))
+        const atLast = files.filter((f) => f._creationTime === last).map((f) => f._id)
+        return stop(last, last === after ? [...seen, ...atLast] : atLast)
       }
     }
   }
