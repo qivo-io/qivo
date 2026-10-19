@@ -455,14 +455,14 @@ export const listProjects = internalQuery({
 export const getProject = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestProjectDetailJson> => {
-    const { me, cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
+    const { cat, flags, readable } = await withAccess(ctx, a.callerId, a.access)
     const p = findProjectRef(cat, a.ref)
     if (p === undefined || !readable(p.id)) throw notFound('project not found')
     return await projectDetailJson(
       ctx,
       p,
       flags.get(p.id) ?? { read: false, write: false },
-      await projectCompletion(ctx, me, p, { cat, readable }),
+      await projectCompletion(ctx, p, { cat, readable }),
     )
   },
 })

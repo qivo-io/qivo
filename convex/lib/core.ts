@@ -485,7 +485,7 @@ async function activeLabelNames(
     tasks.length < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges
   ) {
     const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
-    tasks.forEach((task, i) => out.set(task.id, names[i] ?? []))
+    for (const [i, task] of tasks.entries()) out.set(task.id, names[i] ?? [])
     return out
   }
   const ceiling = roomOf(m, LABEL_READS_RESERVE)
@@ -1202,27 +1202,69 @@ async function indexLiveness(
  * lib/workingSet.ts with this Shown, as the app's snapshot passes its
  * working set. */
 
+/** How many projects a read without the surface's flags checks one at a
+ * time (lazyReach) before it answers for the whole organization at once
+ * (orgReach). A check costs about three index ranges for a caller who is not
+ * an admin, and orgReach reads the organization's projects. Tests change
+ * `checks`. */
+export const ACCESS_POINT_CHECKS = { checks: 16 }
+
+/** Each project and whether the caller can read it, for a read without the
+ * surface's flags. */
+type ProjectReach = {
+  project: (projectId: string) => Promise<Doc<'projects'> | null>
+  reads: (projectId: string) => Promise<boolean>
+}
+
+/* A ProjectReach that reads each project and checks canSeeProject on it,
+ * once each, until it has met ACCESS_POINT_CHECKS projects, and answers the
+ * rest from the organization's projects and the caller's levels at once
+ * (orgReach), the same rule (accessFlags), which a link or a family with
+ * many sub-projects needs. */
+function lazyReach(ctx: QueryCtx, me: Caller): ProjectReach {
+  const projects = new Map<string, Promise<Doc<'projects'> | null>>()
+  const reads = new Map<string, Promise<boolean>>()
+  let reach: ReturnType<typeof orgReach> | undefined
+  const project = (projectId: string) => {
+    let result = projects.get(projectId)
+    if (result === undefined) {
+      if (projects.size >= ACCESS_POINT_CHECKS.checks) reach ??= orgReach(ctx, me)
+      result =
+        reach !== undefined
+          ? reach.then((r) => r.projectOf(projectId) ?? null)
+          : byId(ctx, 'projects', projectId)
+      projects.set(projectId, result)
+    }
+    return result
+  }
+  return {
+    project,
+    reads: (projectId) => {
+      let result = reads.get(projectId)
+      if (result === undefined) {
+        result = project(projectId).then(async (p) => {
+          if (p === null) return false
+          if (reach !== undefined) return (await reach).readable(p.id)
+          return await canSeeProject(ctx, me, p)
+        })
+        reads.set(projectId, result)
+      }
+      return result
+    },
+  }
+}
+
 /** The caller's project read access, from the surface's flags when it holds
- * them, else canSeeProject, read once per project. */
+ * them, else canSeeProject, read once per project, or past
+ * ACCESS_POINT_CHECKS projects from the caller's levels in the whole
+ * organization (lazyReach). */
 export function projectReader(
   ctx: QueryCtx,
   me: Caller,
   readable?: (projectId: string) => boolean,
 ): (projectId: string) => Promise<boolean> {
-  const known = new Map<string, Promise<boolean>>()
-  return (projectId) => {
-    let result = known.get(projectId)
-    if (result === undefined) {
-      result =
-        readable !== undefined
-          ? Promise.resolve(readable(projectId))
-          : byId(ctx, 'projects', projectId).then(
-              async (p) => p !== null && (await canSeeProject(ctx, me, p)),
-            )
-      known.set(projectId, result)
-    }
-    return result
-  }
+  if (readable !== undefined) return async (projectId) => readable(projectId)
+  return lazyReach(ctx, me).reads
 }
 
 /** The Shown of a machine read over these tasks: the ones in the caller's
@@ -1341,9 +1383,10 @@ async function subtreeIndex(
   let reads = 0
   for (let depth = 0; frontier.length > 0 && depth <= 20; depth++) {
     // a level that cannot be read whole ends the walk before its first read
+    reads += frontier.length
     if (ceiling !== undefined) {
       if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped
-    } else if ((reads += frontier.length) > SUBTREE_WALK.reads) {
+    } else if (reads > SUBTREE_WALK.reads) {
       // the root's own subtasks are read first, so they are in the index
       return {
         children: await activeTasksUnder(ctx, root, index.get(root.id) ?? []),
@@ -1445,7 +1488,9 @@ type GroupCounter = (task: Doc<'issues'>) => Promise<boolean>
  * and they also enter only subtasks that make the task above them a group
  * (lib/liveTasks.ts countsAsSubtask).
  * `readable` is the caller's project flags when the surface already holds
- * them, and `projectOf` its catalogue. Each project is read once.
+ * them, and `projectOf` its catalogue. Without them each project is read
+ * and checked once, or past ACCESS_POINT_CHECKS answered with the rest of
+ * the organization (lazyReach).
  */
 function groupCounter(
   ctx: QueryCtx,
@@ -1458,6 +1503,8 @@ function groupCounter(
   const allArchived = group.archived_at !== undefined
   const liveProject = groupProject.archived_at === undefined
   const byProject = new Map<string, Promise<boolean>>()
+  // reads nothing until a project is missing from what the surface holds
+  const reach = lazyReach(ctx, me)
   return async (task) => {
     if (task.org_id !== me.org_id) return false
     if (!allArchived && task.archived_at !== undefined) return false
@@ -1467,9 +1514,9 @@ function groupCounter(
         const p =
           projectOf !== undefined
             ? (projectOf(task.project_id) ?? null)
-            : await byId(ctx, 'projects', task.project_id)
+            : await reach.project(task.project_id)
         if (p === null || (liveProject && p.archived_at !== undefined)) return false
-        return readable !== undefined ? readable(p.id) : await canSeeProject(ctx, me, p)
+        return readable !== undefined ? readable(p.id) : await reach.reads(p.id)
       })()
       byProject.set(task.project_id, known)
     }
@@ -2123,13 +2170,19 @@ export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
  * can read (`view.readable`) and that are not archived. A task with an
  * active subtask in an active project is a group and does not count, even
  * when the caller cannot read the subtask, as in the app. Null for an archived
- * project, whose tasks are outside the working plan. Reads the active tasks
- * of the organization's active projects once, the read an active task list
- * makes (listedActiveTasks).
+ * project, whose tasks are outside the working plan.
+ *
+ * Reads the active tasks of the project's family only, its top-level project
+ * and that project's active sub-projects (lib/liveTasks.ts liveTasksOf),
+ * because a subtask stays in its parent's top-level project. A subtask
+ * stored in another family before that rule, which
+ * internal/subtaskFamilyBackfill finds, is not read, so its parent counts
+ * as a task without subtasks. That can change only the counts, never which
+ * projects are counted, and in an update_project mutation the read
+ * conflicts only with writes to the family's tasks.
  */
 export async function projectCompletion(
   ctx: QueryCtx,
-  me: Caller,
   project: Doc<'projects'>,
   view: Pick<ListView, 'cat' | 'readable'>,
 ): Promise<CompletionJson | null> {
@@ -2140,7 +2193,10 @@ export async function projectCompletion(
       : [project]
   const scope = new Set(subs.filter((p) => view.readable(p.id)).map((p) => p.id))
   if (scope.size === 0) return NO_TASKS
-  const active = await listedActiveTasks(ctx, me, view.cat, [...scope])
+  const root =
+    project.parent_id === undefined ? project : (view.cat.byUuid.get(project.parent_id) ?? project)
+  const family = [root, ...view.cat.projects.filter((c) => c.parent_id === root.id)]
+  const active = await liveTasksOf(ctx, family)
   const isGroup = groupTest(active, liveIn(view.cat.byUuid))
   let done = 0
   let total = 0
