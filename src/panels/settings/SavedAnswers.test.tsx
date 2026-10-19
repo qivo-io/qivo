@@ -65,13 +65,10 @@ async function load() {
     track_delay: true,
     created_at: NOW,
   })
-  snap.milestones.push({
-    id: 'beta',
-    project_id: 'sensor',
-    name: 'Beta',
-    week: '2026-10-05',
-    created_at: NOW,
-  })
+  snap.milestones.push(
+    { id: 'beta', project_id: 'sensor', name: 'Beta', week: '2026-10-05', created_at: NOW },
+    { id: 'gamma', project_id: 'sensor', name: 'Gamma', week: '2026-11-02', created_at: NOW },
+  )
   requests = []
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((_ref, _args, next) => {
@@ -228,6 +225,19 @@ describe('create forms', () => {
     await act(async () => requests.at(-1)?.resolve(null))
     expect(field?.value).toBe('')
     expect(toasts().at(-1)).toBe('Milestone “Launch” added')
+  })
+})
+
+describe('the milestone editor', () => {
+  it('leaves another editor open when an earlier save is answered', async () => {
+    await render(() => <pages.modals.MilestoneModal init={{ id: 'beta' }} onClose={vi.fn()} />)
+    await type(input('[data-milestone-editor] input[aria-label="Name"]'), 'Beta 2')
+    await act(async () => button('Save')?.click())
+    expect(input('[data-milestone-editor] input[aria-label="Name"]')?.readOnly).toBe(true)
+    const edit = document.querySelector<HTMLButtonElement>('button[aria-label="Edit Gamma"]')
+    await act(async () => edit?.click())
+    await answer('projects:updateMilestone', 'accept')
+    expect(document.querySelector('[data-milestone-editor="gamma"]')).not.toBeNull()
   })
 })
 

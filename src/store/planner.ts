@@ -373,9 +373,11 @@ async function checkSlidOut(
   }
   if (!current()) return
   const held = new Set(page.comments.map((r) => r.id))
-  // the page's oldest comment, when it is one of them, is as far back as it
-  // reaches; any other oldest comment is older than all of them
-  const reach = page.comments[0] ? slid.findIndex((r) => r.id === page.comments[0].id) : 0
+  // A page that starts the thread reaches all of them. Otherwise its oldest
+  // comment, when it is one of them, is as far back as it reaches, and any
+  // other oldest comment is older than all of them.
+  const reach =
+    page.earlier && page.comments[0] ? slid.findIndex((r) => r.id === page.comments[0].id) : 0
   const gone = slid.slice(Math.max(reach, 0)).filter((r) => !held.has(r.id))
   if (!gone.length) return
   const drop = new Set(gone.map((r) => r.id))

@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BILLING_READ_ONLY } from '../../convex/lib/billingAccess'
 import { TooltipProvider } from '../components/ui/tooltip'
+import type { AccessRemoval } from '../store/planner'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
 /* The removal window on the real store, fed one snapshot. The signed-in
@@ -44,15 +45,18 @@ let refusal: unknown
 /* `lead` signs the Planner in as the project's lead who is not an
    organization admin, which the server refuses every removal while the
    organization is read-only. `tasks` is how many open tasks Leo holds, and
-   `level` his grant. */
+   `level` his grant. With `viaTeam`, Leo's grant comes from the Crew team,
+   one of two teams, instead. */
 async function load({
   lead = false,
   tasks = 1,
   level = 'user',
+  viaTeam = false,
 }: {
   lead?: boolean
   tasks?: number
   level?: 'user' | 'viewer'
+  viaTeam?: boolean
 } = {}) {
   vi.resetModules()
   const snap = plannerFixture()
@@ -70,7 +74,20 @@ async function load({
     name: 'Leo Berg',
     org_role: 'user',
   })
-  snap.access.push({ project_id: work, profile_id: 'leo', level })
+  if (viaTeam) {
+    for (const id of ['crew', 'bench'])
+      snap.teams.push({
+        id,
+        org_id: org,
+        name: id === 'crew' ? 'Crew' : 'Bench',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: AT,
+      })
+    snap.teamMembers.push({ team_id: 'crew', profile_id: 'leo', is_leader: false })
+    snap.teamAccess.push({ project_id: work, team_id: 'crew', level })
+  } else snap.access.push({ project_id: work, profile_id: 'leo', level })
   for (let n = 1; n <= tasks; n++)
     snap.issues.push({
       id: `t${n}`,
@@ -161,9 +178,9 @@ const submit = async () => {
   await settle()
 }
 
-/* Opens the window for removing Leo from the project, as project settings do. */
-async function open() {
-  const change = { kind: 'userGrant', projectId: work, userId: 'leo' } as const
+/* Opens the window for removing Leo from the project, as project settings
+   do, or for another `change`. */
+async function open(change: AccessRemoval = { kind: 'userGrant', projectId: work, userId: 'leo' }) {
   expect(P.startRemoval(change)).toBe(true)
   const dialogs = await import('./Modals')
   const onClose = vi.fn()
@@ -267,6 +284,13 @@ describe('the reassign cap in the removal window', () => {
     await load({ tasks: 120 })
     await open()
     expect(reassignCard()).toContain('Reviewer roles move to the same person.')
+    expect(reassignCard()).not.toContain('at most')
+  })
+
+  it('says nothing of the cap when deleting a team, which saves each task on its own', async () => {
+    await load({ tasks: 121, viaTeam: true })
+    await open({ kind: 'deleteTeam', teamId: 'crew' })
+    expect(document.querySelector('[data-access-removal]')?.textContent).toContain('121 tasks')
     expect(reassignCard()).not.toContain('at most')
   })
 

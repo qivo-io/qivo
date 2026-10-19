@@ -189,6 +189,15 @@ describe('earlier comments in the store', () => {
     expect(bodies()).toEqual([comment(100), ...range(102, 152)].map((c) => c.body))
   })
 
+  it('drops a deleted first comment when the page before the window starts the thread', async () => {
+    publish({ comments: range(0, 50), earlier: false })
+    // #0 deleted while #50 and #51 arrived: the window starts at #2
+    publish({ comments: range(2, 52), earlier: true })
+    asked[0].answer.resolve({ comments: [comment(1)], earlier: false })
+    await settle()
+    expect(bodies()).toEqual(range(1, 52).map((c) => c.body))
+  })
+
   it('keeps comments that left the window when the page before it does not reach them', async () => {
     publish({ comments: range(100, 150), earlier: true })
     publish({ comments: range(102, 152), earlier: true })

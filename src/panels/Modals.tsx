@@ -1086,7 +1086,9 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
                 Reviewer roles move to the same person.
                 {/* the server's fixed cap; its follower-based room cannot be
                     known here, so only the count is checked */}
-                {count > REASSIGN_MAX &&
+                {/* deleting a team saves each task on its own, so no cap */}
+                {!deleting &&
+                  count > REASSIGN_MAX &&
                   ` One removal reassigns at most ${REASSIGN_MAX} tasks, so ${canKeep ? `keep ${names.length === 1 ? `${names[0].split(' ')[0]} as a Viewer` : 'them as Viewers'} or ` : ''}reassign some of ${these} first.`}
               </span>
             </span>
@@ -1845,8 +1847,9 @@ function MilestoneModal({
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
   // a create in flight: Add waits for the server's answer
   const [adding, setAdding] = useStateM(false)
-  const nameRef = useRefM(name)
-  nameRef.current = name
+  // the draft as it is now, so an answer can tell whether it changed since
+  const draftRef = useRefM({ name, date })
+  draftRef.current = { name, date }
   const week = exactWeekForDate(date)
   const list = project
     ? P.milestonesIn(project.id)
@@ -1860,14 +1863,16 @@ function MilestoneModal({
     // The typed name and date stay until the server creates the milestone,
     // and after a refusal, so a paused or refused add can be sent again.
     const added = name.trim()
+    const sent = date
     setAdding(true)
     void P.addMilestone({ name: added, week: exactWeekForDate(date), project: project.id }).then(
       (saved) => {
         setAdding(false)
         if (!saved) return
         window.showToast?.(`Milestone “${added}” added`)
-        // a name typed while the add was in flight is the next one
-        if (nameRef.current.trim() !== added) return
+        // a name or date changed while the add was in flight is the next one
+        const draft = draftRef.current
+        if (draft.name.trim() !== added || draft.date !== sent) return
         setName('')
         setDate(initialDate ?? weekToISO(P.TODAY_WEEK))
       },
@@ -2042,9 +2047,19 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   const [name, setName] = useStateM(m.name)
   const [date, setDate] = useStateM(() => weekToISO(m.week))
   const week = exactWeekForDate(date)
-  // a save in flight: the editor stays open until the server answers
+  // a save in flight: the editor stays open, its fields read-only, until
+  // the server answers
   const [saving, setSaving] = useStateM(false)
   const canSave = name.trim().length > 0 && !saving
+  // an answer that comes after this editor closed, for example because
+  // another milestone's editor opened, closes nothing
+  const mounted = useRefM(true)
+  useEffectM(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const rootRef = useRefM<HTMLDivElement>(null)
   const closeRef = useRefM(onClose)
   closeRef.current = onClose
@@ -2076,7 +2091,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
         setSaving(false)
         if (!saved) return
         window.showToast?.('Milestone updated')
-        closeRef.current()
+        if (mounted.current) closeRef.current()
       },
     )
   }
@@ -2109,6 +2124,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
           autoFocus
           value={name}
           maxLength={NAME_MAX}
+          readOnly={saving}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') save()
@@ -2117,6 +2133,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
         />
         <DateSelect
           value={week}
+          disabled={saving}
           onChange={(w) => {
             if (w != null) setDate(weekToISO(w))
           }}
