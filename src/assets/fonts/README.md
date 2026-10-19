@@ -1,8 +1,9 @@
 # Application fonts
 
 The application, the operator console and the demo serve their fonts from
-their own origin. `src/styles/tokens.css` declares them, and Vite publishes
-each file under `/assets/` with a content hash in its name.
+their own origin. `src/styles/tokens.css` declares them. Vite publishes the
+Instrument Sans and Geist Mono files under `/assets/` with a content hash in
+their names, and embeds the 1.2 KB Rubik wordmark file in the stylesheet.
 
 Instrument Sans and Geist Mono are the files Google Fonts served the
 application for

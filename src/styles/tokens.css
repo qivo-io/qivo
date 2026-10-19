@@ -426,8 +426,9 @@ body {
 /* Instrument Sans (--sans) and Geist Mono (--mono), served from this origin so
    no visitor's browser asks Google for them. These are the woff2 files and
    subsets Google Fonts served the application, under the SIL Open Font
-   License in instrument-sans-OFL.txt and geist-mono-OFL.txt beside them.
-   src/assets/fonts/README.md lists their sources and hashes.
+   License in public/fonts/instrument-sans-OFL.txt and geist-mono-OFL.txt,
+   which every build publishes at /fonts/. src/assets/fonts/README.md lists
+   their sources and hashes.
    Each file is a variable font, so one face per subset covers every weight.
    The weight ranges are the weights the application requested from Google
    (400 to 700 and 400 to 600). A heavier weight renders at the top of its
@@ -512,7 +513,7 @@ body {
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 /* Google's Rubik 700 subset with only Q, i, v and o (about 1.2 KB), under the
-   SIL Open Font License in src/assets/fonts/rubik-OFL.txt. Vite embeds a file
+   SIL Open Font License in public/fonts/rubik-OFL.txt. Vite embeds a file
    this small in the stylesheet, so the wordmark never waits for a request and
    never shows in another font. */
 @font-face {

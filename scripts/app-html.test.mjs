@@ -53,12 +53,19 @@ const SRC = new URL('../src/', import.meta.url)
 const TOKENS = new URL('styles/tokens.css', SRC)
 const PUBLIC_FONTS = new URL('../public/fonts/', import.meta.url)
 
-/** url() and @import targets in a stylesheet, without data: URLs. */
-function cssTargets(css) {
-  const targets = []
-  for (const match of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)) targets.push(match[2])
-  for (const match of css.matchAll(/@import\s+(['"])([^'"]+)\1/g)) targets.push(match[2])
-  return targets.filter((target) => !target.startsWith('data:'))
+/** What a stylesheet can load, without data: URLs: url() and @import
+ * targets, and remote quoted strings such as image-set() arguments. CSS names
+ * are case-insensitive, and comments load nothing. */
+function cssTargets(stylesheet) {
+  const css = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '')
+  const targets = new Set()
+  for (const match of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)) targets.add(match[2])
+  for (const match of css.matchAll(/@import\s*(['"])([^'"]+)\1/gi)) targets.add(match[2])
+  // A url() may hold a data: URL with quoted SVG attributes, which load nothing.
+  const outsideUrls = css.replace(/url\((?:"[^"]*"|'[^']*'|[^)]*)\)/gi, '')
+  for (const match of outsideUrls.matchAll(/(['"])([^'"]*)\1/g))
+    if (remote(match[2])) targets.add(match[2])
+  return [...targets].filter((target) => !target.startsWith('data:'))
 }
 
 /** True for absolute and protocol-relative URLs, which load from another origin. */
@@ -107,6 +114,14 @@ describe('application stylesheets', () => {
     expect(
       cssTargets('@import "//fonts.googleapis.com/css2?family=Geist+Mono";').filter(remote),
     ).toHaveLength(1)
+    for (const css of [
+      'a{src:URL(https://fonts.gstatic.com/s/x.woff2)}',
+      '@IMPORT "https://x.test/a.css";',
+      '@import"https://x.test/a.css";',
+      'a{background:image-set("https://cdn.x.test/x.png" 1x)}',
+    ])
+      expect(cssTargets(css).filter(remote), css).not.toEqual([])
+    expect(cssTargets('/* url(https://x.test/a.png) */ a{color:red}')).toEqual([])
     expect(cssTargets('a{background:url(/marketing/x.png)}').filter(remote)).toEqual([])
     expect(cssTargets('a{background:url("data:image/png;base64,AA==")}')).toEqual([])
     expect(resolves('../assets/fonts/missing.woff2', TOKENS)).toBe(false)
