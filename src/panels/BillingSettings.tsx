@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PageTitle, SettingsField, SettingsSection } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
-import { billingError } from '@/lib/billingDisplay'
+import { billingDate, billingError } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { DEMO_MODE, WORKSPACE_SIGNUP_URL } from '@/lib/demoMode'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
@@ -134,9 +134,9 @@ function LiveBillingSettings({
     }
   }
 
-  /** Cancelling ends the subscription at once. The summary then reports the
-   * deletion date that the read-only period counts towards. Answers the
-   * refusal for the dialog to show, or null once the subscription ended. */
+  /** Cancelling stops renewal, and the summary then shows when the
+   * subscription ends. Answers the refusal for the dialog to show, or null
+   * once Polar accepted the cancellation. */
   async function cancelSubscription(): Promise<string | null> {
     if (actionInFlight.current) return 'Another billing action is still running.'
     actionInFlight.current = true
@@ -144,8 +144,10 @@ function LiveBillingSettings({
     setBusy(true)
     setActionError('')
     try {
-      await convex.action(api.billingActions.cancelSubscription, { org_id: orgId })
-      window.showToast?.('Subscription cancelled')
+      const { ends_at } = await convex.action(api.billingActions.cancelSubscription, {
+        org_id: orgId,
+      })
+      window.showToast?.(`Subscription cancelled. It ends on ${billingDate(ends_at)}.`)
       return null
     } catch (cause) {
       return billingError(cause)

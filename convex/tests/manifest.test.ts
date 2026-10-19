@@ -424,7 +424,6 @@ orgRemovals:markDeleting mutation internal {"type":"object","value":{"org_id":{"
 orgRemovals:noCheckoutCandidate query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:noticeReady query internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:noticeSent mutation internal {"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false}}}
-orgRemovals:recordCancellation mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:recordExport mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:recordRequest mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:recover mutation internal {"type":"object","value":{}}
@@ -584,8 +583,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   billingActions: {
     checkout: 'orgAction',
     portal: 'orgAction',
-    // An admin ends the paid subscription at once; the action's internal
-    // query repeats the admin check, as for checkout and the portal.
+    // An admin stops renewal, so the subscription ends with its paid period;
+    // the action's internal query repeats the admin check, as for checkout
+    // and the portal.
     cancelSubscription: 'orgAction',
     createPlan: 'platformAction',
     connectPlan: 'platformAction',

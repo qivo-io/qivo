@@ -312,8 +312,28 @@ export const LIVE_POLAR_STATUSES: readonly PolarSubscriptionStatus[] = [
   'unpaid',
 ]
 
-/** Ends a subscription at once (Polar's revoke). The terms say cancellation
- * takes effect immediately, so Qivo never cancels at period end. */
+/** Subscriptions Polar lets Qivo cancel at the end of their period. Polar
+ * refuses any other status, and one that already ends. */
+export const CANCELABLE_POLAR_STATUSES: readonly PolarSubscriptionStatus[] = [
+  'active',
+  'trialing',
+  'past_due',
+]
+
+/** Stops a subscription renewing (Polar's cancel at period end). It keeps
+ * its access until the period it was paid for ends, as the terms say, and
+ * Polar ends it then. */
+export async function cancelPolarSubscription(id: string): Promise<PolarSubscription> {
+  const subscription = parsePolarSubscription(
+    await request(`/subscriptions/${uuid(id)}`, 'PATCH', { cancel_at_period_end: true }),
+  )
+  if (subscription.id !== id || !subscription.cancelAtPeriodEnd) return invalid()
+  return subscription
+}
+
+/** Ends a subscription at once (Polar's revoke), without a refund. Only an
+ * organization's deletion does this; cancelling in Billing waits for the
+ * period end (cancelPolarSubscription). */
 export async function revokePolarSubscription(id: string): Promise<PolarSubscription> {
   const subscription = parsePolarSubscription(await request(`/subscriptions/${uuid(id)}`, 'DELETE'))
   if (subscription.id !== id) return invalid()

@@ -2,23 +2,26 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, internalQuery } from './_generated/server'
+import { subscriptionPayload } from './billingSync'
 import { getBillableUsers } from './lib/billableUsers'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { billingPlanFields } from './lib/billingTypes'
 import { byId } from './lib/db'
 import { badRequest, notFound, orgAction, platformAction, require, rule } from './lib/functions'
 import {
+  CANCELABLE_POLAR_STATUSES,
+  cancelPolarSubscription,
   createPolarCheckout,
   createPolarPortal,
   getPolarCheckout,
   LIVE_POLAR_STATUSES,
   listPolarSubscriptions,
+  PolarError,
   polarConfigured,
   validatePolarProduct,
 } from './lib/polar'
 import { enrollOrganization, isoNow, validatePlan } from './model/billing'
 import { newUuid } from './model/orgs'
-import { revokeLiveSubscriptions } from './orgRemovals'
 
 type PlanInput = Omit<
   Doc<'billing_plans'>,
@@ -294,22 +297,47 @@ export const portal = orgAction({
   },
 })
 
-const recordCancellationRef = makeFunctionReference<'mutation', { org_id: string }, string | null>(
-  'orgRemovals:recordCancellation',
-)
+const applyRef = makeFunctionReference<'mutation', { payload: string }, null>('billingSync:apply')
 
-/** Ends the organization's paid subscription at once, as the terms say
- * cancellation does, and returns the deletion date that the read-only
- * period now counts towards. */
+/** Stops the organization's subscription renewing, as the terms say
+ * cancellation does. The organization keeps full access until the paid
+ * period ends, without a refund. Polar then ends the subscription, and
+ * billingSync starts the read-only period before deletion. A subscription
+ * that already ends counts as cancelled. Every live subscription is checked
+ * before anything changes, even when Qivo has not heard of it yet. One whose
+ * payment Polar reports overdue is refused, because billing pauses editing
+ * at once for a past-due subscription set to end (subscriptionWritable).
+ * Polar cannot end an unpaid, paused or incomplete one at period end, and
+ * those may still bill, so their refusal points elsewhere rather than
+ * reporting a cancellation. Answers when access ends. */
 export const cancelSubscription = orgAction({
   args: {},
-  handler: async (ctx): Promise<{ delete_after: string | null }> => {
+  handler: async (ctx): Promise<{ ends_at: string }> => {
     require(billingEnabled() && polarConfigured(), rule('Billing is not available yet.'))
-    require((await revokeLiveSubscriptions(ctx, ctx.orgId)) > 0, rule(
-      'This organization has no subscription to cancel.',
-    ))
-    return {
-      delete_after: await ctx.runMutation(recordCancellationRef, { org_id: ctx.orgId }),
+    let endsAt = 0
+    try {
+      const live = (await listPolarSubscriptions(ctx.orgId)).filter(
+        (s) => LIVE_POLAR_STATUSES.includes(s.status) && s.endedAt === undefined,
+      )
+      require(!live.some((s) => s.status === 'past_due' && !s.cancelAtPeriodEnd), rule(
+        'A payment is overdue. Update the payment method in Manage billing, then cancel.',
+      ))
+      require(live.every((s) => CANCELABLE_POLAR_STATUSES.includes(s.status)), rule(
+        'This subscription cannot be cancelled here. Use Manage billing, or delete the organization.',
+      ))
+      for (const subscription of live) {
+        const canceled = subscription.cancelAtPeriodEnd
+          ? subscription
+          : await cancelPolarSubscription(subscription.id)
+        await ctx.runMutation(applyRef, { payload: subscriptionPayload(canceled) })
+        endsAt = Math.max(endsAt, canceled.currentPeriodEnd)
+      }
+    } catch (error) {
+      if (error instanceof PolarError)
+        throw rule('Polar could not cancel the subscription. Try again later.')
+      throw error
     }
+    require(endsAt > 0, rule('This organization has no subscription to cancel.'))
+    return { ends_at: new Date(endsAt).toISOString() }
   },
 })

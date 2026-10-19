@@ -3,9 +3,10 @@
  *
  * When an organization's service ends, it stays read-only for RETENTION_DAYS
  * so its admins can export it, then everything it owns is deleted. The
- * service ends when an admin cancels the subscription or asks for deletion,
- * when Polar ends a subscription, or when complimentary access ends without
- * a paid subscription. Overdue payments only pause editing. An organization
+ * service ends when an admin asks for deletion, when Polar ends a
+ * subscription, including a cancelled one at the end of its paid period, or
+ * when complimentary access ends without a paid subscription. Overdue
+ * payments only pause editing. An organization
  * that has not completed checkout CHECKOUT_DAYS after enrollment is deleted
  * without that period: every write waits for checkout, so it holds nothing
  * customers made. The terms of service promise these periods.

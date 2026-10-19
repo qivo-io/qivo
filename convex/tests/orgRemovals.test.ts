@@ -141,13 +141,15 @@ const applied = (t: T, body: Record<string, unknown>) =>
   t.mutation(internal.billingSync.apply, { payload: JSON.stringify(body) })
 
 /* Answers the Polar calls these flows make: listing an organization's
- * subscriptions, revoking one, and reading a checkout. */
+ * subscriptions, cancelling one at period end, revoking one, and reading a
+ * checkout. Anything else fails as Polar being unavailable. */
 function polar(routes: {
   list?: () => unknown[]
+  cancel?: (id: string) => unknown
   revoke?: (id: string) => unknown
   checkout?: (id: string) => unknown
 }) {
-  const fetchMock = vi.fn(async (input: unknown, init?: { method?: string }) => {
+  const fetchMock = vi.fn(async (input: unknown, init?: { method?: string; body?: string }) => {
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
     const json = (body: unknown) => new Response(JSON.stringify(body))
@@ -155,6 +157,13 @@ function polar(routes: {
       return json({ items: routes.list?.() ?? [], pagination: { max_page: 1 } })
     const sub = /^\/v1\/subscriptions\/([0-9a-f-]+)$/.exec(url.pathname)
     if (sub && method === 'DELETE' && routes.revoke) return json(routes.revoke(sub[1]))
+    if (
+      sub &&
+      method === 'PATCH' &&
+      routes.cancel &&
+      init?.body === JSON.stringify({ cancel_at_period_end: true })
+    )
+      return json(routes.cancel(sub[1]))
     const checkout = /^\/v1\/checkouts\/([0-9a-f-]+)$/.exec(url.pathname)
     if (checkout && routes.checkout) return json(routes.checkout(checkout[1]))
     return new Response('unexpected request', { status: 500 })
@@ -265,24 +274,50 @@ describe('when the service ends', () => {
 })
 
 describe('cancelling a subscription', () => {
-  it('ends it at once and makes the organization read-only for 30 days', async () => {
+  const summary = (t: T, f: Awaited<ReturnType<typeof withOrg>>) =>
+    as(t, f.admin).query(api.billing.summary, { org_id: f.org.id })
+  /* Polar ends a subscription cancelled at period end once the period is
+   * over, a minute after END here. */
+  const ended = Date.parse(END) + 60_000
+  const periodOver = (t: T, orgId: string) => {
+    vi.setSystemTime(ended)
+    return applied(
+      t,
+      remote(orgId, {
+        status: 'canceled',
+        cancel_at_period_end: true,
+        ended_at: END,
+        modified_at: new Date(ended).toISOString(),
+      }),
+    )
+  }
+
+  it('keeps access until the paid period ends, then starts the 30 days', async () => {
     const { t, f } = await billed()
     await applied(t, remote(f.org.id))
     const fetchMock = polar({
       list: () => [remote(f.org.id)],
-      revoke: () => remote(f.org.id, { status: 'canceled', ended_at: NOW }),
+      cancel: () => remote(f.org.id, { cancel_at_period_end: true, modified_at: at(0.001) }),
     })
     const result = await as(t, f.admin).action(api.billingActions.cancelSubscription, {
       org_id: f.org.id,
     })
-    expect(result.delete_after).toBe(at(30))
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining(`/v1/subscriptions/${providerId}`),
-      expect.objectContaining({ method: 'DELETE' }),
-    )
-    expect(await as(t, f.user).query(api.billing.status, { org_id: f.org.id })).toMatchObject({
-      writable: false,
-      deletion: { reason: 'service_ended', delete_after: at(30) },
+    expect(result.ends_at).toBe(END)
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET', 'PATCH'])
+    expect(await summary(t, f)).toMatchObject({
+      writable: true,
+      cancel_at_period_end: true,
+      cancel_available: false,
+      deletion: null,
+    })
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    await createTask(t, f.admin, f.org.id, f.sub.id)
+
+    await periodOver(t, f.org.id)
+    expect(await removalOf(t, f.org.id)).toMatchObject({
+      reason: 'service_ended',
+      ended_at: END,
+      delete_after: new Date(ended + 30 * DAY).toISOString(),
     })
     const refusal = await expectRefusal(createTask(t, f.admin, f.org.id, f.sub.id), 'forbidden')
     expect(refusal.data).toMatchObject({ reason: 'deletion_scheduled' })
@@ -290,16 +325,108 @@ describe('cancelling a subscription', () => {
     await exportNow(t, f)
   })
 
-  it('refuses non-admins and organizations without a subscription', async () => {
+  it.each([
+    ['a renewing subscription', true, {}],
+    ['an overdue payment', false, { status: 'past_due' }],
+    ['a subscription that already ends', false, { cancel_at_period_end: true }],
+  ] as const)('is offered for %s: %s', async (_, offered, fields) => {
     const { t, f } = await billed()
+    await applied(t, remote(f.org.id, fields))
+    expect((await summary(t, f)).cancel_available).toBe(offered)
+  })
+
+  it('counts a subscription that already ends as cancelled', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id))
+    // cancelled in Polar's portal, before its webhook arrived
+    const fetchMock = polar({ list: () => [remote(f.org.id, { cancel_at_period_end: true })] })
+    const result = await as(t, f.admin).action(api.billingActions.cancelSubscription, {
+      org_id: f.org.id,
+    })
+    expect(result.ends_at).toBe(END)
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET'])
+    expect(await summary(t, f)).toMatchObject({ cancel_at_period_end: true, writable: true })
+  })
+
+  it('refuses an overdue payment Qivo has not heard of yet, before cancelling', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id))
+    // Polar marked it past due, and its webhook has not arrived
+    const fetchMock = polar({
+      list: () => [remote(f.org.id, { status: 'past_due' })],
+      cancel: () => remote(f.org.id, { status: 'past_due', cancel_at_period_end: true }),
+    })
+    await expectRefusal(
+      as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
+      'rule',
+      /payment is overdue/,
+    )
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET'])
+    expect(await summary(t, f)).toMatchObject({ writable: true, cancel_at_period_end: false })
+
+    // one already set to end, in Polar's portal, is recorded, and editing
+    // pauses at once, as the guide says
+    polar({
+      list: () => [
+        remote(f.org.id, { status: 'past_due', cancel_at_period_end: true, modified_at: at(0.01) }),
+      ],
+    })
+    const result = await as(t, f.admin).action(api.billingActions.cancelSubscription, {
+      org_id: f.org.id,
+    })
+    expect(result.ends_at).toBe(END)
+    expect(await summary(t, f)).toMatchObject({
+      status: 'past_due',
+      cancel_at_period_end: true,
+      writable: false,
+    })
+  })
+
+  it.each([
+    ['an unpaid subscription', [{ status: 'unpaid' }]],
+    // the renewing one is listed first, so nothing may be cancelled before the check
+    ['a paused one beside a renewing one', [{}, { id: replacementId, status: 'paused' }]],
+  ] as const)(
+    'refuses %s, which Polar cannot end at period end, before cancelling anything',
+    async (_, subscriptions) => {
+      const { t, f } = await billed()
+      await applied(t, remote(f.org.id))
+      const fetchMock = polar({
+        list: () => subscriptions.map((fields) => remote(f.org.id, fields)),
+        cancel: () => remote(f.org.id, { cancel_at_period_end: true, modified_at: at(0.01) }),
+      })
+      await expectRefusal(
+        as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
+        'rule',
+        /cannot be cancelled here/,
+      )
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET'])
+      expect(await summary(t, f)).toMatchObject({ cancel_at_period_end: false })
+    },
+  )
+
+  it('refuses non-admins, a Polar failure and organizations without a subscription', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id))
     await expectRefusal(
       as(t, f.user).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
       'forbidden',
     )
+    polar({ list: () => [remote(f.org.id)] })
+    await expectRefusal(
+      as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
+      'rule',
+      /Polar could not cancel/,
+    )
+    expect(await summary(t, f)).toMatchObject({
+      cancel_at_period_end: false,
+      cancel_available: true,
+    })
     polar({ list: () => [] })
     await expectRefusal(
       as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
       'rule',
+      /no subscription to cancel/,
     )
     expect(await removalOf(t, f.org.id)).toBeNull()
   })
@@ -307,24 +434,26 @@ describe('cancelling a subscription', () => {
   it.each([
     [8, 1],
     [6, 0],
-  ])('emails admins when the last export is %i days old: %i notices', async (age, count) => {
-    const { t, f } = await billed()
-    await applied(t, remote(f.org.id))
-    vi.setSystemTime(Date.parse(NOW) - age * DAY)
-    await exportNow(t, f)
-    vi.setSystemTime(NOW)
-    polar({
-      list: () => [remote(f.org.id)],
-      revoke: () => remote(f.org.id, { status: 'canceled', ended_at: NOW }),
-    })
-    await as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id })
-    const notices = await deletionNotices(t)
-    expect(notices).toHaveLength(count)
-    if (count)
-      expect(
-        await t.query(internal.orgRemovals.noticeReady, { key: notices[0].key }),
-      ).toMatchObject({ to: f.admin.email, delete_after: at(30), reason: 'service_ended' })
-  })
+  ])(
+    'emails admins when the period ends and the last export is %i days old: %i notices',
+    async (age, count) => {
+      const { t, f } = await billed()
+      await applied(t, remote(f.org.id, { cancel_at_period_end: true }))
+      vi.setSystemTime(ended - age * DAY)
+      await exportNow(t, f)
+      await periodOver(t, f.org.id)
+      const notices = await deletionNotices(t)
+      expect(notices).toHaveLength(count)
+      if (count)
+        expect(
+          await t.query(internal.orgRemovals.noticeReady, { key: notices[0].key }),
+        ).toMatchObject({
+          to: f.admin.email,
+          delete_after: new Date(ended + 30 * DAY).toISOString(),
+          reason: 'service_ended',
+        })
+    },
+  )
 
   it('stops the deletion when a new subscription starts', async () => {
     const { t, f } = await billed()

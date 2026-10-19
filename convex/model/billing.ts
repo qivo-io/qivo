@@ -182,11 +182,14 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
       !complimentary &&
       (!sub?.polar_subscription_id || sub.status === 'canceled'),
     portal_available: enabled && configured && !!sub?.polar_customer_id,
+    // Cancelling keeps access until the period ends, so it is offered only
+    // while the organization is paid up and its subscription still renews.
     cancel_available:
       enabled &&
       polarConfigured() &&
       !!sub?.polar_subscription_id &&
-      ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(sub.status) &&
+      ['active', 'trialing'].includes(sub.status) &&
+      !sub.cancel_at_period_end &&
       !removal,
     checkout_due_at: checkoutDeadline(sub),
     last_export_at: org.last_export_at ?? null,

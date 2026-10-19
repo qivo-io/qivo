@@ -7,7 +7,7 @@ describe('usageHints', () => {
   it('reports the charges a paid period recorded', () => {
     const hints = usageHints({ ...usage, period_kind: 'paid' }, 'usd')
     expect(hints.api).toBe(
-      'Extra API charges recorded this period: $2.00. Added to your next renewal invoice.',
+      'Extra API charges recorded this period: $2.00. Added to the invoice at the end of this period.',
     )
     expect(hints.storage).toContain('Extra storage charge recorded this period: $0.00')
   })

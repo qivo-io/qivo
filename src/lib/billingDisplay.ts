@@ -64,7 +64,7 @@ export function usageHints(
       storage: 'Storage is covered by free access. It will not be charged later.',
     }
   return {
-    api: `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to your next renewal invoice.`,
-    storage: `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to your next renewal invoice.`,
+    api: `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to the invoice at the end of this period.`,
+    storage: `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to the invoice at the end of this period.`,
   }
 }

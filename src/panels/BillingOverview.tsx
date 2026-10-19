@@ -40,7 +40,10 @@ function statusExplanation(billing: BillingSummary): string {
   if (billing.status === 'complimentary')
     return 'Your organization has free access without a payment card.'
   if (billing.cancel_at_period_end && billing.writable)
-    return 'Your subscription ends at the end of the current paid period. The organization then stays read-only for 30 days and is deleted unless someone subscribes.'
+    return `Your subscription is cancelled and ends on ${billingDate(billing.current_period_end)}. The organization then stays read-only for 30 days and is deleted unless someone subscribes again. To keep the subscription, choose Uncancel in Manage billing before then.`
+  // Between the period end and Polar's confirmation that the subscription ended
+  if (billing.cancel_at_period_end && billing.status !== 'past_due')
+    return 'Your cancelled subscription has ended, and Qivo is waiting for Polar to confirm it. The organization then stays read-only for 30 days and is deleted unless someone subscribes again.'
   if (billing.status === 'past_due')
     return 'Update your payment method in the customer portal. Polar retries failed payments automatically.'
   if (!billing.writable && billing.checkout_due_at)
@@ -138,6 +141,7 @@ export function BillingOverview({
             )}
             {billing.cancel_available && (
               <CancelSubscription
+                endsAt={billing.current_period_end}
                 lastExportAt={billing.last_export_at}
                 busy={busy}
                 onCancel={onCancel}
@@ -245,14 +249,17 @@ export function BillingOverview({
   )
 }
 
-/** Cancelling ends the subscription at once and starts the read-only period
- * before deletion, so the dialog says so and offers the export first. */
+/** Cancelling stops renewal. The subscription ends with its paid period,
+ * without a refund, and the read-only period before deletion starts then, so
+ * the dialog says so and offers the export first. */
 function CancelSubscription({
+  endsAt,
   lastExportAt,
   busy,
   onCancel,
   onExport,
 }: {
+  endsAt: string | null
   lastExportAt: string | null
   busy: boolean
   onCancel: () => Promise<string | null>
@@ -282,7 +289,10 @@ function CancelSubscription({
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
           <AlertDialogDescription>
-            The subscription ends now. The organization becomes read-only for 30 days so admins can
+            {endsAt && Date.parse(endsAt) > Date.now()
+              ? `The subscription stays active until ${billingDate(endsAt)} and does not renew.`
+              : 'The subscription stays active until the paid period ends and does not renew.'}{' '}
+            Nothing is refunded. The organization then becomes read-only for 30 days so admins can
             export its data, and is then deleted.{' '}
             {lastExportAt
               ? `The last export was made on ${billingDate(lastExportAt)}.`

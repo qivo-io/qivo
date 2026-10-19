@@ -125,9 +125,9 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
             <AlertDialogHeader>
               <AlertDialogTitle>Delete {orgName}?</AlertDialogTitle>
               <AlertDialogDescription>
-                Any paid subscription ends now. The organization becomes read-only for 30 days so
-                admins can export its data, and is then deleted with all of its projects, tasks,
-                comments and files.{' '}
+                Any paid subscription ends now, and nothing is refunded. The organization becomes
+                read-only for 30 days so admins can export its data, and is then deleted with all of
+                its projects, tasks, comments and files.{' '}
                 {state.last_export_at
                   ? `The last export was made on ${billingDate(state.last_export_at)}.`
                   : 'No export has been made yet.'}
