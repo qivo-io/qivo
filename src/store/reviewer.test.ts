@@ -131,7 +131,6 @@ function fixture() {
     teamAccess: [],
     links: [],
     milestones: [],
-    activity: [],
     labels: [],
     issueLabels: [],
     issueSubs: [],

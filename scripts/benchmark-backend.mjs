@@ -6,7 +6,10 @@
 // are compared with. It defaults to the merge base of HEAD and origin/main,
 // so a branch is measured against the commit it started from, and to HEAD in
 // a checkout without origin/main. --current-only measures the working tree
-// alone and needs no revision.
+// alone and needs no revision. The baseline's snapshot.ts runs against the
+// working tree's other modules, so a revision before v0.1.18 cannot be one,
+// because its snapshot.ts imports helpers that lib/activityVisibility.ts no
+// longer exports.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { realpathSync } from 'node:fs'
@@ -142,11 +145,4 @@ async function main(args) {
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main(process.argv.slice(2))
-  // The activity writes schedule a trim minutes ahead on a real timer, which
-  // would keep the process alive and then fail against the closed Vite runner.
-  // process.exit drops output still queued for a pipe, so that goes out first.
-  await Promise.all(
-    [process.stdout, process.stderr].map((stream) => new Promise((done) => stream.write('', done))),
-  )
-  process.exit()
 }

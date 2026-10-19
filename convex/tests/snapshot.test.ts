@@ -2136,8 +2136,8 @@ describe('the status stamp in the snapshot', () => {
   })
 })
 
-describe('the activity list', () => {
-  it('is always empty, while the task window still holds the history', async () => {
+describe('the task window history', () => {
+  it('holds the task’s own rows and no other subject’s or organization’s', async () => {
     const created = uuid()
     await as(t, f.user).mutation(api.issues.create, {
       org_id: f.org.id,
@@ -2160,24 +2160,17 @@ describe('the activity list', () => {
         target_id: f.sub.id,
         project_id: f.sub.id,
       })
+      // another organization's row about a task with the same id
       await ctx.db.insert('activity_events', {
         ...row,
         id: uuid(),
         org_id: f.otherOrg.id,
         target_type: 'issue',
-        target_id: uuid(),
+        target_id: created,
         project_id: f.otherProject.id,
       })
     })
-    // the admin's seat in the other organization holds rows too
-    await plantSeat(t, {
-      org_id: f.otherOrg.id,
-      auth_user_id: f.admin.auth_user_id,
-      email: f.admin.email,
-      org_role: 'admin',
-    })
     for (const p of [f.admin, f.user, f.guest, f.viewer]) {
-      expect((await snapFor(p)).activity).toEqual([])
       const thread = await as(t, p).query(api.snapshot.commentThread, {
         org_id: f.org.id,
         issue_id: created,

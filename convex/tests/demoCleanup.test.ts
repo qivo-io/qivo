@@ -121,7 +121,6 @@ const APP_OWNED: TableNames[] = [
   'roadmap_history',
   'organizations',
   'org_counters',
-  'activity_retention',
   'teams',
   'profiles',
   'projects',

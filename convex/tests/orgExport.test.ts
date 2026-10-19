@@ -101,8 +101,6 @@ const EXCLUDED_TABLES = [
   'machine_rate_limits',
   // Internal counters, exported on the organization row (next_issue_num).
   'org_counters',
-  // The former organization activity trim's bookkeeping.
-  'activity_retention',
   // Deleted items are not exported: restore an item to include its work.
   'deleted_items',
   'deleted_item_jobs',

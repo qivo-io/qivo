@@ -66,7 +66,6 @@ function fixture(): Snapshot {
     teamAccess: [],
     links: [],
     milestones: [],
-    activity: [],
     labels: [],
     issueLabels: [],
     issueSubs: [],

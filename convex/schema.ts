@@ -673,8 +673,8 @@ export default defineSchema({
     name: v.string(),
     slug: v.string(), // lowercase; shape + reserved list checked in model/orgs
     created_at: v.string(),
-    // Legacy. The activity row count retention kept before the background
-    // trim (model/activity.ts). Only the backfill reads it, to clear it.
+    // Legacy. The activity row count that retention kept before the former
+    // organization trim. Only the backfill reads it, to clear it.
     activity_count: v.optional(v.number()),
     // Legacy. Moved to org_counters by the organization's first task or
     // project number, or by internal/orgCountersBackfill. Only model/orgs
@@ -743,15 +743,6 @@ export default defineSchema({
     org_id: v.string(),
     next_issue_num: v.number(),
     next_project_num: v.number(),
-  }).index('by_org', ['org_id']),
-
-  // The former organization activity trim's state. Nothing reads or creates
-  // these rows any more (each subject keeps its own rows, model/activity.ts);
-  // organization deletion still removes them. The table goes in a later
-  // release.
-  activity_retention: defineTable({
-    org_id: v.string(),
-    trim_due_at: v.optional(v.number()), // epoch ms; absent = no trim pending
   }).index('by_org', ['org_id']),
 
   teams: defineTable({

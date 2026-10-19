@@ -7,8 +7,7 @@
  *                    list (the reserved word is `qivo`)
  *   counters         the per-org issue and project numbers (org_counters),
  *                    and the helpers that insert an organization with its
- *                    org_counters row and delete that row and any legacy
- *                    activity_retention row
+ *                    org_counters row and delete that row
  *   column defaults  including the organization-wide 20 MiB upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
@@ -27,7 +26,7 @@ import { isTeamLeader } from '../lib/access'
 import { byId } from '../lib/db'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
-import { logActivity, retentionRow } from './activity'
+import { logActivity } from './activity'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -274,15 +273,13 @@ export async function insertOrgRows(
   return id
 }
 
-/** Deletes the organization's org_counters row and the activity_retention
- * row the former organization trim left, if any. Every organization delete
- * (model/cascade.ts deleteOrgDeep, the last step of model/orgDeletion.ts,
- * the demo purge) calls it before it deletes the organization row. */
+/** Deletes the organization's org_counters row, if any. Every organization
+ * delete (model/cascade.ts deleteOrgDeep, the last step of
+ * model/orgDeletion.ts, the demo purge) calls it before it deletes the
+ * organization row. */
 export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
   const counters = await countersRow(ctx, orgId)
   if (counters !== null) await ctx.db.delete(counters._id)
-  const retention = await retentionRow(ctx, orgId)
-  if (retention !== null) await ctx.db.delete(retention._id)
 }
 
 /* ------------------------------------------------------------------ defaults

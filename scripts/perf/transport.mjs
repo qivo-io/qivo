@@ -96,7 +96,6 @@ const snapshot = {
   teamAccess: [],
   links: [],
   milestones: [],
-  activity: [],
   labels: [],
   issueLabels: [],
   issueSubs: [],

@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as activityRetention from "../activityRetention.js";
 import type * as admin from "../admin.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBilling from "../adminBilling.js";
@@ -189,7 +188,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  activityRetention: typeof activityRetention;
   admin: typeof admin;
   adminAuth: typeof adminAuth;
   adminBilling: typeof adminBilling;

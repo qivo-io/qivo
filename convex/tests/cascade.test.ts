@@ -393,11 +393,9 @@ describe('deleteOrgDeep', () => {
         created_at: NOW,
         updated_at: NOW,
       })
-      // the counters and retention rows (model/orgs.ts), for both organizations
-      for (const org_id of [f.org.id, f.otherOrg.id]) {
+      // the counters rows (model/orgs.ts), for both organizations
+      for (const org_id of [f.org.id, f.otherOrg.id])
         await ctx.db.insert('org_counters', { org_id, next_issue_num: 1, next_project_num: 5 })
-        await ctx.db.insert('activity_retention', { org_id })
-      }
       return storage_id
     })
     // the control: the other organization's own rows
@@ -421,14 +419,13 @@ describe('deleteOrgDeep', () => {
       'labels',
       'activity_events',
       'org_counters',
-      'activity_retention',
     ] as const) {
       const rows = await t.run(async (ctx) => await ctx.db.query(table).collect())
       expect(
         rows.some((r) => r.org_id === f.org.id),
         table,
       ).toBe(false)
-      if (table === 'org_counters' || table === 'activity_retention')
+      if (table === 'org_counters')
         expect(
           rows.map((r) => r.org_id),
           table,

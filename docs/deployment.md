@@ -275,6 +275,10 @@ and organization pages fail. The v0.1.15 console calls `adminPeople.listUsers`,
 so its Users page fails. The app before v0.1.16 calls `billing.usage`, so its
 Billing page cannot load usage. Later releases removed all four.
 
+The app before v0.1.18 reads an activity list that the snapshot no longer
+sends, so it cannot load at all. Never return the app or the demo to a
+deployment of a commit older than v0.1.18 (`8a1b37c`).
+
 ## Environment configuration
 
 The `staging` and `production` GitHub environments provide these variables.

@@ -1,5 +1,5 @@
 import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx, QueryCtx } from '../_generated/server'
+import type { MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import type { ActivityTarget, IssuePriority, IssueStatus } from '../lib/enums'
 import { notFound } from '../lib/functions'
@@ -14,14 +14,6 @@ import { newUuid } from './orgs'
  * another's history. Readers ask for one subject's rows through the by_target
  * index. Rows stored before numbering have no seq; they sort first and stay
  * until their task is deleted for good. */
-
-/** The organization's activity_retention row, or null. The organization trim
- * that used these rows is gone; organization deletion still removes them. */
-export const retentionRow = (ctx: QueryCtx, orgId: string) =>
-  ctx.db
-    .query('activity_retention')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .unique()
 
 type EntryFields = {
   org_id: string

@@ -28,7 +28,9 @@
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
  * profile_removals and label_removals rows (their own steps finish), the
- * platform audit log and webhook receipts that only name provider ids. */
+ * platform audit log, webhook receipts that only name provider ids, and any
+ * activity_retention row an earlier release left, a table the schema no
+ * longer lists. */
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
@@ -427,8 +429,8 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   ])
 
 /** The last step checks that every parent range is empty, Deleted items
- * included, then deletes the organization with its counters and retention
- * rows, and its removal row. */
+ * included, then deletes the organization with its counters row and its
+ * removal row. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
   for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels'] as const)
