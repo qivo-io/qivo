@@ -428,21 +428,28 @@ export type ListView = {
 }
 
 /* The names of `labels` that the task carries, in their order, read through
- * the task's own assignments (by_issue), archive marks included. */
+ * the task's own assignment of each (by_issue_label), archive marks
+ * included. One index range and at most one document per label, however
+ * many other labels the task carries. */
 async function labelNamesOf(
   ctx: QueryCtx,
   taskId: string,
   labels: readonly Doc<'labels'>[],
 ): Promise<string[]> {
-  const held = new Set<string>()
-  const rows = ctx.db.query('issue_labels').withIndex('by_issue', (q) => q.eq('issue_id', taskId))
-  for await (const row of rows) held.add(row.label_id)
-  return labels.filter((label) => held.has(label.id)).map((label) => label.name)
+  const held = await Promise.all(
+    labels.map((label) =>
+      ctx.db
+        .query('issue_labels')
+        .withIndex('by_issue_label', (q) => q.eq('issue_id', taskId).eq('label_id', label.id))
+        .first(),
+    ),
+  )
+  return labels.filter((_, i) => held[i] !== null).map((label) => label.name)
 }
 
-/** How many tasks a search reads the labels of one by one (by_issue) before
- * it reads each matching label's active assignments instead. Tests lower
- * `reads`. */
+/** How many reads of one task's assignment of one matching label
+ * (labelNamesOf) a search makes before it reads each matching label's
+ * active assignments instead. Tests lower `reads`. */
 export const LABEL_TASK_READS = { reads: 1000 }
 
 /** What a search's label reads keep back from the request's limits for the
@@ -461,9 +468,10 @@ export const SEARCH_TOO_LARGE =
   'this search reads too many label assignments to answer in one request; name a project or add a filter'
 
 /* The names of `labels` by task, for the active `tasks` a search still
- * needs them for. Up to LABEL_TASK_READS tasks, while their reads leave
- * LABEL_READS_RESERVE ranges, are read through their own assignments
- * (labelNamesOf). Past that each label's assignments are read through
+ * needs them for. While the tasks times the labels are at most
+ * LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges, each task's
+ * assignment of each label is read on its own (labelNamesOf), at most one
+ * document each. Past that each label's assignments are read through
  * by_label without the archive mark, so the read follows active work, not
  * every task ever archived with the label (schema.ts taskArchived), within
  * the request's room less LABEL_READS_RESERVE. A search whose assignments do
@@ -480,9 +488,10 @@ async function activeLabelNames(
   const out = new Map<string, string[]>()
   if (labels.length === 0 || tasks.length === 0) return out
   const m = await ctx.meta.getTransactionMetrics()
+  const pairs = tasks.length * labels.length
   if (
-    tasks.length <= LABEL_TASK_READS.reads &&
-    tasks.length < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges
+    pairs <= LABEL_TASK_READS.reads &&
+    pairs < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges
   ) {
     const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
     for (const [i, task] of tasks.entries()) out.set(task.id, names[i] ?? [])
@@ -507,7 +516,10 @@ async function activeLabelNames(
       else names.push(label.name)
     }
   }
-  for (const task of restored) out.set(task.id, await labelNamesOf(ctx, task.id, labels))
+  for (const task of restored) {
+    if (!(await readsUnder(ctx, ceiling))) throw badRequest(SEARCH_TOO_LARGE)
+    out.set(task.id, await labelNamesOf(ctx, task.id, labels))
+  }
   return out
 }
 

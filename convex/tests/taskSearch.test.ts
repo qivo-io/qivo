@@ -280,6 +280,28 @@ describe('task search reads only the labels it can match', () => {
     expect(await ranges('lid')).toEqual({ rows: 1, ranges: titles.ranges })
   })
 
+  it('reads one assignment per task and matching label, however many labels a task carries', async () => {
+    const { fx, thermal } = await mixed()
+    const spares: Doc<'issues'>[] = []
+    for (let n = 0; n < 20; n++) {
+      spares.push(
+        await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: `Spare ${n}` }),
+      )
+    }
+    await label(fx, thermal, spares)
+    // thirty more labels on every Spare, none of which the search names
+    for (let n = 0; n < 30; n++)
+      await label(fx, await plantLabel(fx.t, fx.org.id, `Other ${n}`), spares)
+    const documents = (search: string) =>
+      fx.t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        await activeList(ctx, fx, search)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used - before
+      })
+    // the twenty Spares' Thermal rows and Bracket's, not the 600 others
+    expect((await documents('spare therm')) - (await documents('spare'))).toBe(21)
+  })
+
   it('refuses a search whose label assignments do not fit, and names a way out', async () => {
     const { fx, thermal } = await mixed()
     const spares: Doc<'issues'>[] = []
