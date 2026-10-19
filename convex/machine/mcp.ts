@@ -2259,7 +2259,8 @@ const oauthOwner = (live: {
 
 /* The MCP POST handler. Every failure that mcpResponse does not answer
  * itself, from the ingress count on, gets a JSON body with CORS. A write
- * that kept conflicting (WRITE_CONFLICT) gets the retryable 503, and
+ * that kept conflicting or running out of time (WRITE_CONFLICT) gets the
+ * retryable 503, and
  * anything else a 500 with INTERNAL_ERROR, because its own text can hold a
  * stack trace. */
 const mcpPost = httpAction(async (ctx, request) => {
@@ -2274,7 +2275,7 @@ const mcpPost = httpAction(async (ctx, request) => {
 
 /* Answers an MCP POST. It counts the request at ingress, authenticates it,
  * stamps the call and then dispatches it. Every mutation it runs retries
- * write conflicts (conflictRetrying). It answers the auth-to-dispatch race
+ * write conflicts and time outs (conflictRetrying). It answers the auth-to-dispatch race
  * itself and throws every other failure to mcpPost. */
 async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> {
   const runMutation = conflictRetrying(ctx)

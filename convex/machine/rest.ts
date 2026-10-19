@@ -33,11 +33,13 @@
  * Refusal mapping: ConvexError e.data.code → {not_found:404, forbidden:403,
  * bad_request:400, rule:400}, body {"error": message}; the CALLER_GONE /
  * CALLER_DEACTIVATED race reasons map back to the caller's own 401 sentences
- * BEFORE the code map, and a write that kept conflicting (WRITE_CONFLICT,
- * machine/registry.ts retryConflicts) is a 503 with Retry-After; anything
+ * BEFORE the code map, and a write that kept conflicting or running out of
+ * time (WRITE_CONFLICT, machine/registry.ts retryConflicts) is a 503 with
+ * Retry-After; anything
  * else → 500 {"error": "internal error"}, with the error itself only in the
  * deployment's log (shared.ts internalError). Every mutation the handler
- * runs, before dispatch too, retries write conflicts (conflictRetrying). */
+ * runs, before dispatch too, retries write conflicts and time outs
+ * (conflictRetrying). */
 
 import type { HttpRouter } from 'convex/server'
 import { ConvexError, v } from 'convex/values'

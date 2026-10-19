@@ -79,8 +79,9 @@ export function readRunner(ctx: Pick<ActionCtx, 'runQuery'>): ReadRunner {
 }
 
 /** A runner holding runQuery, runMutation and runAction, bound to `ctx`.
- * Its runMutation retries write conflicts (conflictRetrying). runAction does
- * not, because an action may have committed mutations before it failed. */
+ * Its runMutation retries write conflicts and time outs (conflictRetrying).
+ * runAction does not, because an action may have committed mutations before
+ * it failed. */
 export function writeRunner(ctx: Runners): WriteRunner {
   return {
     runQuery: ctx.runQuery.bind(ctx),
@@ -130,7 +131,8 @@ export function isMutationTimeout(e: unknown): boolean {
   return e instanceof Error && !(e instanceof ConvexError) && TIMEOUT_FAILURE.test(e.message)
 }
 
-/** How many more times retryConflicts runs a write that conflicted. */
+/** How many more times retryConflicts runs a write that conflicted or ran
+ * out of time. */
 export const CONFLICT_RETRIES = 2
 
 /**

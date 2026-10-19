@@ -167,8 +167,9 @@ several agents commenting on one task at once, answers `the request
 conflicted with other changes made at the same time and changed nothing;
 send it again`, as REST `503` with `Retry-After: 1` or as the MCP tool's
 error. A change that kept running out of time answers `the request took too
-long and changed nothing; send it again` the same way. Nothing was saved, so
-wait a second and send the same request again.
+long and changed nothing; send it again, or change less at once if it keeps
+happening` the same way. Nothing was saved, so wait a second and send the
+same request again, and split a change whose time out repeats.
 `internal error` (REST `500`) does not say whether the change was saved, so
 read the task first, as after a lost response.
 

@@ -59,7 +59,8 @@ export function internalError(e: unknown): string {
 
 /** The refusal reason of a write that kept conflicting with writes made at
  * the same time, or kept running out of time (machine/registry.ts
- * retryConflicts). Its transaction never committed, so the request changed nothing and can be sent again. REST
+ * retryConflicts). Its transaction never committed, so the request changed
+ * nothing and can be sent again. REST
  * answers it 503 with Retry-After, and MCP as the tool's error result, or
  * as an HTTP 503 when the conflict came before the call ran. */
 export const WRITE_CONFLICT = 'write_conflict'
@@ -69,8 +70,11 @@ export const WRITE_CONFLICT_MESSAGE =
   'the request conflicted with other changes made at the same time and changed nothing; send it again'
 
 /** The sentence REST and MCP answer for WRITE_CONFLICT when the write kept
- * running out of time instead (machine/registry.ts retryConflicts). */
-export const WRITE_TIMEOUT_MESSAGE = 'the request took too long and changed nothing; send it again'
+ * running out of time instead (machine/registry.ts retryConflicts). A busy
+ * server can cause it, and so can a change too large to finish in time,
+ * which runs out every time, so it also says to change less. */
+export const WRITE_TIMEOUT_MESSAGE =
+  'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
 
 /** The seconds REST and MCP ask a caller to wait after WRITE_CONFLICT. */
 export const WRITE_CONFLICT_RETRY_AFTER = 1

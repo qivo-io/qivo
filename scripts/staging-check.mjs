@@ -460,7 +460,9 @@ async function send(profile, url, init, { read = false } = {}) {
         say(
           'NOTE',
           'write-conflict',
-          'a write conflicted and changed nothing; sending it once more',
+          error === WRITE_TIMEOUT
+            ? 'a write ran out of time and changed nothing; sending it once more'
+            : 'a write conflicted and changed nothing; sending it once more',
         )
         await sleep(1000)
         continue
@@ -1486,7 +1488,8 @@ const OAUTH_GONE = 'OAuth connection is invalid, expired or disconnected'
  *  WRITE_TIMEOUT_MESSAGE): REST's 503 error and MCP's tool error. */
 const WRITE_CONFLICT =
   'the request conflicted with other changes made at the same time and changed nothing; send it again'
-const WRITE_TIMEOUT = 'the request took too long and changed nothing; send it again'
+const WRITE_TIMEOUT =
+  'the request took too long and changed nothing; send it again, or change less at once if it keeps happening'
 const changedNothing = (error) => error === WRITE_CONFLICT || error === WRITE_TIMEOUT
 const TOO_MANY_COMMENTS = `this task has ${COMMENT_MAX} comments, the most a task can have; start a new task to continue`
 const NOT_SAME_FAMILY =

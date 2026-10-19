@@ -57,9 +57,10 @@ instead.
 **Comments** is the default filter; **All** adds changes such as assignments,
 status moves, dates, labels and attachments. Until the first comment is
 loaded, **All** shows only the changes since the oldest loaded comment. Qivo
-keeps an organization's newest 500 changes across all its tasks, so in a busy
-organization an older task's early changes can be missing from **All** even
-once every comment is loaded. Field-change entries show before and after
+keeps an organization's newest 500 changes, counting changes to projects,
+teams and people as well as tasks, and the app loads at most the newest 500
+across all your organizations. So an older task's early changes can be
+missing from **All** even once every comment is loaded. Field-change entries show before and after
 values, including short description excerpts. A **New** line marks unread
 activity, and sits at the top of the loaded comments when the first unread one
 is earlier ([Your inbox](./working-together.md#your-inbox)).

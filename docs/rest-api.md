@@ -111,9 +111,11 @@ other changes made at the same time and changed nothing; send it again"}`.
 Qivo first retries such a conflict itself, twice at most. A change that
 keeps running out of time, which a busy server and such conflicts can cause,
 is retried the same way and is the same `503` with `{"error": "the request
-took too long and changed nothing; send it again"}`. The `503` means the
-request saved nothing, so wait the `Retry-After` seconds and send the same
-request again. Creating a webhook subscription is the exception, as
+took too long and changed nothing; send it again, or change less at once if
+it keeps happening"}`. The `503` means the request saved nothing, so wait
+the `Retry-After` seconds and send the same request again. A change too
+large to finish in time runs out every time, so if the time out repeats,
+split the change into smaller requests. Creating a webhook subscription is the exception, as
 [Generic webhooks](#generic-webhooks) describes. A failure that is not a
 refusal, such as a server limit, is a `500` with `{"error": "internal
 error"}`, and Qivo keeps its details in its own logs. A `500` does not say
@@ -1074,15 +1076,18 @@ archived ones, cannot move to another top-level project (otherwise `400`,
 within its project`). A move or a parent change whose task and subtasks are
 too large for one request, such as one with thousands of subtasks or
 attachments, is a `400` with `this task and its subtasks are too large to
-change in one request; detach some subtasks first`. Each moved subtask sends `task.updated`, but only
-the task itself gets an activity row and an inbox message. A subtask moved to
+change in one request; detach some subtasks first`. Each moved subtask
+sends `task.updated`, but only the task itself gets an activity row and an
+inbox message. A subtask moved to
 another top-level project must leave its parent in the same request, with
 `parent: null` or a new parent in the destination's top-level project;
 otherwise the PATCH is a `400` with `a subtask stays in its parent task's
 project; to move it to another project, detach it from its parent in the
 same change`. A subtask created before this rule in another top-level
 project than its parent can still move within its own top-level project and
-into its parent's.
+into its parent's. A parent in a project you cannot see counts as being in
+the subtask's own top-level project, so moving such a subtask to another
+top-level project also needs `parent: null` or a new parent there.
 
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
 and `null` detaches it. The rules are those of `parent` on POST, against

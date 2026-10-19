@@ -373,9 +373,10 @@ export async function storeThenAttach<Out>(
 
 /* attach_text_file stores `text` as a UTF-8 file and attaches it to the
  * task. The check runs first, so a refused call stores nothing. Both
- * mutations retry write conflicts (machine/registry.ts conflictRetrying), as
- * the write runner does for every other tool, and an attach that kept
- * conflicting deletes the stored file with its WRITE_CONFLICT refusal.
+ * mutations retry write conflicts and time outs (machine/registry.ts
+ * conflictRetrying), as the write runner does for every other tool, and an
+ * attach that kept failing so deletes the stored file with its
+ * WRITE_CONFLICT refusal.
  * Answers the attachment as get_task lists it. */
 export const mcpAttachTextFile = internalAction({
   args: {

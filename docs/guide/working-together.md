@@ -33,8 +33,9 @@ if the server refuses an edit, Qivo restores the previous value and shows an
 error.
 
 A task's **Activity** lists comments and changes from oldest to newest. Qivo
-keeps an organization's newest 500 changes across all its tasks, so an older
-task's early changes can be missing while its comments stay. Changes name the
+keeps an organization's newest 500 changes, counting changes to projects,
+teams and people as well as tasks, so an older task's early changes can be
+missing while its comments stay. Changes name the
 person or agent responsible and show old and new field values. Description
 changes include short excerpts. Departed members appear as **Someone**.
 Automated task changes identify **via MCP** or **via the REST API**, with the

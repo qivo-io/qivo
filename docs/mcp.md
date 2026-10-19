@@ -868,11 +868,13 @@ the change itself, twice at most, and answers this only when none of it was
 saved, so wait a second and make the same call again. A change that keeps
 running out of time, which a busy server and such conflicts can cause, is
 retried the same way and answers `the request took too long and changed
-nothing; send it again`, which you handle the same way. A conflict or time
-out before the tool runs, while Qivo counts or authenticates the request, is
-an HTTP `503` with `Retry-After: 1` and that sentence as `error`, and the
-request is safe to send again in the same way. A failure that is not a refusal, such as a
-server limit, answers `internal error` there instead, and outside a tool call
+nothing; send it again, or change less at once if it keeps happening`,
+which you handle the same way. A change too large to finish in time runs
+out every time, so if the time out repeats, split the change into smaller
+calls. A conflict or time out before the tool runs, while Qivo counts or
+authenticates the request, is an HTTP `503` with `Retry-After: 1` and the
+matching sentence as `error`, and the request is safe to send again in the
+same way. A failure that is not a refusal, such as a server limit, answers `internal error` there instead, and outside a tool call
 it is an HTTP `500` with the same error. Qivo keeps its details in its own
 logs. `internal error` does not say whether a change was saved, so read the
 task or list before you make a changing call again.
@@ -1363,15 +1365,17 @@ cannot move to another top-level project (otherwise `this task has more than
 move or a parent change whose task and subtasks are too large for one call,
 such as one with thousands of subtasks or attachments, is refused with `this
 task and its subtasks are too large to change in one request; detach some
-subtasks first`. Each moved subtask sends `task.updated`, but only the task itself
-gets an activity row and an inbox message. A subtask moved to another
+subtasks first`. Each moved subtask sends `task.updated`, but only the task
+itself gets an activity row and an inbox message. A subtask moved to another
 top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the
 call is refused with `a subtask stays in its parent task's project; to move
 it to another project, detach it from its parent in the same change`. A
 subtask created before this rule in another top-level project than its
 parent can still move within its own top-level project and into its
-parent's.
+parent's. A parent in a project you cannot see counts as being in the
+subtask's own top-level project, so moving such a subtask to another
+top-level project also needs `parent: null` or a new parent there.
 
 `parent` (a task ref) makes the task a subtask of that task, and `null`
 detaches it. You need Edit access on the parent's project, because the
