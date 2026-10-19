@@ -279,13 +279,13 @@ async function preloadedProject(
   return project
 }
 
-/** Who can see each project a fan-out asks about, by project uuid, worked
- * out for every profile at once the first time the project is asked about
- * (lib/access.ts projectSightForProfiles). One check per follower costs a
- * few index ranges, and two more for each team sharing the project, so a
- * task with some hundreds of followers passed Convex's 4,096. Like a
- * preload, it holds only while the transaction changes no profile, project,
- * grant, team or team membership. */
+/** Who can see each project a fan-out asks about, by project uuid, with
+ * the project's team shares read once the first time it is asked about and
+ * each follower's answer kept (lib/access.ts projectSightForProfiles). One
+ * check per follower costs a few index ranges, and two more for each team
+ * sharing the project, so a task with some hundreds of followers passed
+ * Convex's 4,096. Like a preload, it holds only while the transaction
+ * changes no profile, project, grant, team or team membership. */
 export type RecipientSight = Map<string, Promise<(profile: Doc<'profiles'>) => Promise<boolean>>>
 
 /* profileCanSeeProject, answered through `visibility` when one is given,

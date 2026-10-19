@@ -22,11 +22,13 @@
  * each follower. Index ranges ran out first. Without the preload it managed
  * 44 tasks, at about 93 ranges each. A local Convex backend reassigned 400
  * tasks of the same shape, with 92 more people in Northstar, using 3,422 of
- * its 4,096 reads. Followers' sight is now worked out once per project
- * (model/messages.ts RecipientSight), so each follower costs about one range:
- * REASSIGN_MAX tasks used 1,597 ranges here with 4 followers each and 3,637
- * with 21, and 100 tasks with 61 followers each reach REASSIGN_ROOM, which
- * refuses them. */
+ * its 4,096 reads. A follower's sight now reads the project's team shares
+ * once and then only the follower's own grants and memberships, and is kept
+ * for the whole removal (model/messages.ts RecipientSight), so a follower
+ * costs about one range on each further task: REASSIGN_MAX tasks used 1,878
+ * ranges here with 4 followers each and 3,078 with 14, 100 tasks used 3,324
+ * with 21, and REASSIGN_MAX tasks with 21 followers each reach REASSIGN_ROOM,
+ * which refuses them. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -271,7 +273,7 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('refuses fewer tasks whose followers would fill the transaction, and changes nothing', async () => {
-    // 40 tasks with 21 followers each need about 1,200 index ranges here,
+    // 40 tasks with 21 followers each need about 1,540 index ranges here,
     // past a limit of 1,000
     const fx = await crowded(40, {
       followers: 20,
@@ -293,35 +295,34 @@ describe('reassigning the tasks of an access removal', () => {
     // removal reaches last. Checked only before each task, their messages
     // pass a limit of 1,000 index ranges during that task.
     const last = fx.tasks[fx.tasks.length - 1]
-    for (let from = 0; from < 1000; from += 1000)
-      await fx.t.run(async (ctx) => {
-        for (let i = from; i < from + 1000; i++) {
-          const id = uuid()
-          await ctx.db.insert('profiles', {
-            id,
-            org_id: fx.org.id,
-            name: `q${i}`,
-            initials: 'QQ',
-            color: '#7a7ad0',
-            org_role: 'user',
-            active: true,
-            kind: 'person',
-            plannable_hours: 40,
-            accepted_at: NOW,
-            created_at: NOW,
-          })
-          await ctx.db.insert('team_members', {
-            team_id: fx.team.id,
-            profile_id: id,
-            is_leader: false,
-          })
-          await ctx.db.insert('issue_subscriptions', {
-            issue_id: last.id,
-            profile_id: id,
-            created_at: NOW,
-          })
-        }
-      })
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 1000; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: fx.org.id,
+          name: `q${i}`,
+          initials: 'QQ',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          accepted_at: NOW,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: fx.team.id,
+          profile_id: id,
+          is_leader: false,
+        })
+        await ctx.db.insert('issue_subscriptions', {
+          issue_id: last.id,
+          profile_id: id,
+          created_at: NOW,
+        })
+      }
+    })
     const before = await holders(fx)
     const e = await expectRefusal(removeEmil(fx, fx.leo.id), 'rule')
     expect((e.data as Refusal).message).toBe(reassignTooLarge(true))

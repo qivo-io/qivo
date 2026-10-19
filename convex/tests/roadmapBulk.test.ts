@@ -157,9 +157,8 @@ describe('roadmap saves and undo of many tasks', () => {
   }, 120_000)
 
   it('refuses a save whose followers would fill the transaction, and changes nothing', async () => {
-    // Followers' sight is worked out once per project, so 120 tasks with 20
-    // followers each now fit in 4,096 index ranges. Under a limit of 1,500,
-    // 60 of them pass it without the room check, with an internal error.
+    // Under a limit of 1,500 index ranges, 60 tasks with 20 followers each
+    // pass it without the room check, with an internal error
     const fx = await planted(60, 20, newT({ transactionLimits: { databaseQueries: 1500 } }))
     const e = await expectRefusal(scheduleAll(fx, uuid(), '2026-01-05'), 'rule')
     expect((e.data as Refusal).message).toBe(ROADMAP_CHANGE_TOO_LARGE)

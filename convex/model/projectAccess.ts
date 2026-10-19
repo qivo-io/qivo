@@ -1,7 +1,7 @@
 /* Who has access to a project, changed one person or one team at a time.
  * The app's removal window, REST and MCP all remove a grant through
- * removeProjectGrantCore, and REST and MCP give or change one through
- * setProjectGrantCore, so the rule exists once.
+ * removeProjectGrantCore, and give or change one through setProjectGrantCore
+ * (the app through projects.setAccess), so the rule exists once.
  *
  * Only a person who controls the project's access may change it: an
  * organization admin or the project's lead (lib/access.ts
@@ -245,15 +245,16 @@ export const REASSIGN_MAX = 120
 /** The share of each of Convex's limits for one transaction that a removal
  * may have used before it reassigns another task or notifies another
  * follower. A task costs more the more followers it has, and the first
- * follower in a project costs a read of every grant and team share there
+ * follower in a project costs a read of every team share there
  * (model/messages.ts RecipientSight). So a handover under REASSIGN_MAX can
- * still be too large, and no fixed cost per task or follower bounds it. The removal checks what the transaction used, as the
- * deployment reports it (ctx.meta.getTransactionMetrics), before each task
+ * still be too large, and no fixed cost per task or follower bounds it. The
+ * removal checks what the transaction used, as the deployment reports it
+ * (ctx.meta.getTransactionMetrics), before each task
  * and, through the preload's guard (model/messages.ts NotifyPreload), before
  * each follower it notifies. The rest of each limit is room for one
  * follower or one task's own reads and writes and the removal's narration.
  * In tests/bulkReassign.test.ts, REASSIGN_MAX tasks with four followers each
- * use about 40% of the index ranges, and with 21 followers each about 90%. */
+ * use about 46% of the index ranges, and with 14 followers each about 75%. */
 export const REASSIGN_ROOM = 0.95
 
 /** The refusal of a handover too large for one removal: more than

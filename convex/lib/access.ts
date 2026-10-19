@@ -450,22 +450,73 @@ export async function projectLevelsForProfiles(
   }
 }
 
-/** canSeeProject for many profiles of `project`'s organization at once, for
- * a write that notifies many followers. Working it out costs the reads of
- * projectLevelsForProfiles, a few index ranges however many profiles it
- * answers, where canSeeProject costs a few ranges for each profile and two
- * more for each team sharing the project. A top-level project also shows to
- * someone who reaches only one of its sub-projects, which that read leaves
- * out, so on one a profile without a level of its own is asked alone
- * (canSeeProject). Tasks live in sub-projects only. */
+/** canSeeProject for many profiles of `project`'s organization, for a write
+ * that notifies many followers. It reads the team shares on the project and
+ * its root, and each sharing team, once. Each profile then costs at most
+ * three index ranges, its own grants on the two and its team memberships, where
+ * canSeeProject costs a few ranges and two more for each team sharing the
+ * project. Nothing it reads grows with a team's size or the number of
+ * grants. A top-level project also shows to someone who reaches only one of
+ * its sub-projects, which this leaves out, so on one a profile without a
+ * level of its own is asked alone (canSeeProject). Tasks live in
+ * sub-projects only. Each profile's answer is kept. A missing parent or a
+ * cycle throws not found, as in rootMetaOf. */
 export async function projectSightForProfiles(
   ctx: QueryCtx,
   project: Doc<'projects'>,
 ): Promise<(profile: Doc<'profiles'>) => Promise<boolean>> {
-  const levelOf = await projectLevelsForProfiles(ctx, project)
-  return async (profile) =>
-    levelOf(profile) !== null ||
-    (project.parent_id === undefined && (await canSeeProject(ctx, profile, project)))
+  const root = await rootMetaOf(ctx, project)
+  const tree = project.id === root.id ? [project] : [root, project]
+  // the shares of the teams teamGrantOn counts, by team
+  const sharesOf = new Map<string, Doc<'project_team_access'>[]>()
+  const teamCounts = new Map<string, boolean>()
+  for (const { id } of tree) {
+    const shares = ctx.db
+      .query('project_team_access')
+      .withIndex('by_project', (q) => q.eq('project_id', id))
+    for await (const share of shares) {
+      let counts = teamCounts.get(share.team_id)
+      if (counts === undefined) {
+        const team = await ctx.db
+          .query('teams')
+          .withIndex('by_uuid', (q) => q.eq('id', share.team_id))
+          .unique()
+        counts = team !== null && team.org_id === project.org_id
+        teamCounts.set(share.team_id, counts)
+      }
+      if (!counts) continue
+      const held = sharesOf.get(share.team_id)
+      if (held === undefined) sharesOf.set(share.team_id, [share])
+      else held.push(share)
+    }
+  }
+  const sees = async (profile: Doc<'profiles'>): Promise<boolean> => {
+    if (profile.org_id !== project.org_id || root.org_id !== project.org_id) return false
+    const grants: Doc<'project_access'>[] = []
+    for (const { id } of tree) {
+      const grant = await grantOn(ctx, id, profile.id)
+      if (grant !== null) grants.push(grant)
+    }
+    const shares: Doc<'project_team_access'>[] = []
+    if (sharesOf.size > 0) {
+      const memberships = ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+      for await (const { team_id } of memberships) shares.push(...(sharesOf.get(team_id) ?? []))
+    }
+    const { levelOf, navigationOnly } = levelsFrom(profile, tree, grants, shares)
+    if (!navigationOnly(project.id) && levelOf(project) !== null) return true
+    return project.parent_id === undefined && (await canSeeProject(ctx, profile, project))
+  }
+  const known = new Map<string, Promise<boolean>>()
+  return (profile) => {
+    let answer = known.get(profile.id)
+    if (answer === undefined) {
+      answer = sees(profile)
+      known.set(profile.id, answer)
+    }
+    return answer
+  }
 }
 
 /* The profile ids of team `teamId`, or none when the team is gone or belongs
