@@ -14,8 +14,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { LOGIN_PURGE } from '../adminAuth'
 import authSchema from '../betterAuth/schema'
-import { expectRefusal, newT, type T, uuid, withOrg } from './helpers.setup'
+import { expectRefusal, newT, runInAuth, type T, uuid, withOrg } from './helpers.setup'
 
 declare const process: { env: Record<string, string | undefined> }
 process.env.BETTER_AUTH_SECRET ??= 'adminAuth-test-secret-not-a-real-deployment'
@@ -314,5 +315,170 @@ describe('deleteOrphanLogin', () => {
     expect(rows.map((r) => r.action)).toEqual(['delete_orphan'])
     expect(rows[0].actor_email).toBe('cli')
     expect(rows[0].detail).toEqual({ email: 'leftover@test.local' })
+  })
+
+  /* The MCP OAuth provider's rows and the roadmap undo receipts of `userId`,
+   * planted as a connected assistant and a recent roadmap edit leave them. */
+  const plantGrants = (t: T, userId: string) =>
+    Promise.all([
+      runInAuth(t, async (ctx) => {
+        const at = Date.now()
+        const grant = { clientId: 'mcp-client', userId, scopes: ['qivo:read'], createdAt: at }
+        await ctx.db.insert('oauthAccessToken', { ...grant, token: `access-${userId}` })
+        await ctx.db.insert('oauthRefreshToken', { ...grant, token: `refresh-${userId}` })
+        await ctx.db.insert('oauthConsent', grant)
+      }),
+      t.run(async (ctx) => {
+        await ctx.db.insert('roadmap_history', {
+          auth_user_id: userId,
+          session_key: 'roadmap-session',
+          position: 1,
+          expires_at: Date.now() + 60_000,
+          changes: '[]',
+        })
+      }),
+    ])
+
+  /* How many of those rows `userId` still holds. */
+  const grantsOf = async (t: T, userId: string) =>
+    (
+      await runInAuth(t, async (ctx) => [
+        ...(await ctx.db
+          .query('oauthAccessToken')
+          .withIndex('userId', (q) => q.eq('userId', userId))
+          .collect()),
+        ...(await ctx.db
+          .query('oauthRefreshToken')
+          .withIndex('userId', (q) => q.eq('userId', userId))
+          .collect()),
+        ...(await ctx.db
+          .query('oauthConsent')
+          .withIndex('userId', (q) => q.eq('userId', userId))
+          .collect()),
+      ])
+    ).length +
+    (
+      await t.run(async (ctx) =>
+        ctx.db
+          .query('roadmap_history')
+          .withIndex('by_owner_session', (q) => q.eq('auth_user_id', userId))
+          .collect(),
+      )
+    ).length
+
+  it("also removes the orphan's OAuth grants and undo receipts, and nobody else's", async () => {
+    const t = newAuthT()
+    const orphan = await plantLogin(t, 'leftover@test.local', { session: true, account: true })
+    const other = await plantLogin(t, 'someone-else@test.local', { session: true })
+    await plantGrants(t, orphan._id)
+    await plantGrants(t, other._id)
+    expect(await grantsOf(t, orphan._id)).toBe(4)
+    await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'leftover@test.local' })
+    expect(await grantsOf(t, orphan._id)).toBe(0)
+    expect(await grantsOf(t, other._id)).toBe(4)
+    expect(await componentRow(t, 'session', 'userId', other._id)).not.toBeNull()
+  })
+
+  it('removes the login at once and a token backlog in bounded steps', async () => {
+    const t = newAuthT()
+    const limits = { ...LOGIN_PURGE }
+    Object.assign(LOGIN_PURGE, { rows: 3, receipts: 2 })
+    vi.useFakeTimers()
+    try {
+      const orphan = await plantLogin(t, 'leftover@test.local', { session: true, account: true })
+      // a long-lived assistant's refreshes: four access and four refresh tokens
+      await runInAuth(t, async (ctx) => {
+        const grant = { clientId: 'mcp-client', userId: orphan._id, scopes: ['qivo:read'] }
+        for (let n = 0; n < 4; n++) {
+          const at = Date.now() + n
+          await ctx.db.insert('oauthAccessToken', { ...grant, createdAt: at, token: `a${n}` })
+          await ctx.db.insert('oauthRefreshToken', { ...grant, createdAt: at, token: `r${n}` })
+        }
+      })
+      // and a busy roadmap session's undo receipts
+      await t.run(async (ctx) => {
+        for (let n = 0; n < 4; n++)
+          await ctx.db.insert('roadmap_history', {
+            auth_user_id: orphan._id,
+            session_key: 'roadmap-session',
+            position: n,
+            expires_at: Date.now() + 60_000,
+            changes: '[]',
+          })
+      })
+      const tokensLeft = async () => {
+        let n = await runInAuth(t, async (ctx) => {
+          let rows = 0
+          for (const table of ['session', 'oauthAccessToken', 'oauthRefreshToken'] as const)
+            rows += (
+              await ctx.db
+                .query(table)
+                .withIndex('userId', (q) => q.eq('userId', orphan._id))
+                .collect()
+            ).length
+          return rows
+        })
+        n += await t.run(
+          async (ctx) =>
+            (
+              await ctx.db
+                .query('roadmap_history')
+                .withIndex('by_owner_session', (q) => q.eq('auth_user_id', orphan._id))
+                .collect()
+            ).length,
+        )
+        return n
+      }
+      expect(await tokensLeft()).toBe(13)
+      await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'leftover@test.local' })
+      // the login, its account and the audit row go in the first transaction
+      expect(await componentRow(t, 'user', '_id', orphan._id)).toBeNull()
+      expect(await componentRow(t, 'account', 'userId', orphan._id)).toBeNull()
+      expect((await auditRows(t)).map((r) => r.action)).toEqual(['delete_orphan'])
+      expect(await tokensLeft()).toBe(10)
+      await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+      expect(await tokensLeft()).toBe(0)
+    } finally {
+      Object.assign(LOGIN_PURGE, limits)
+      vi.useRealTimers()
+    }
+  })
+
+  it('refuses to purge the sessions of a login that still exists', async () => {
+    const t = newAuthT()
+    const login = await plantLogin(t, 'still-here@test.local', { session: true })
+    await expectRefusal(
+      t.mutation(internal.adminAuth.purgeLoginTokens, { auth_user_id: login._id }),
+      'rule',
+      /still exists/,
+    )
+    expect(await componentRow(t, 'session', 'userId', login._id)).not.toBeNull()
+  })
+
+  it("refuses a platform operator's login and removes nothing", async () => {
+    const t = newAuthT()
+    const { userId } = await plantOperator(t)
+    await plantGrants(t, userId)
+    await expectRefusal(
+      t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'operator@test.local' }),
+      'conflict',
+      /platform operator; run admin:removeOperator first/,
+    )
+    expect(await componentRow(t, 'user', '_id', userId)).not.toBeNull()
+    expect(await grantsOf(t, userId)).toBe(4)
+    expect(await auditRows(t)).toEqual([])
+  })
+
+  it('still refuses a member login and leaves its grants', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const member = f.guest.auth_user_id as string
+    await plantGrants(t, member)
+    await expectRefusal(
+      t.mutation(internal.adminAuth.deleteOrphanLogin, { email: f.guest.email as string }),
+      'conflict',
+      /remove the member instead/,
+    )
+    expect(await grantsOf(t, member)).toBe(4)
   })
 })

@@ -24,6 +24,7 @@
  * console and lives on as the deleteOrphanLogin internal
  * mutation, run through the private with-deployment helper (see below). */
 
+import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { components, internal } from './_generated/api'
 import type { ActionCtx, MutationCtx } from './_generated/server'
@@ -40,6 +41,7 @@ import {
   type PlatformOperator,
   platformAction,
   require,
+  rule,
 } from './lib/functions'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -317,13 +319,19 @@ export const insertBreakGlass = internalMutation({
 
 /* ----------------------------------------------------------- delete orphan */
 
-/* Adapter-level removal of a Better Auth user and everything session/account
- * shaped it holds (auth.api.removeUser needs an admin session; internal
- * mutations have none). Verification rows are keyed by identifier, not
- * userId, and expire on their own — removeUser leaves them too. */
+/* Adapter-level removal of a Better Auth user and every row keyed by its id
+ * (auth.api.removeUser needs an admin session; internal mutations have
+ * none). That covers its accounts and the MCP OAuth provider's consents in
+ * the same transaction, and its sessions, OAuth access and refresh tokens
+ * and roadmap undo receipts in bounded steps (purgeLoginTokens). The app side
+ * also loses the login's appearance settings and custom backgrounds, which
+ * only that login could use. Verification rows are keyed by identifier, not
+ * userId, and expire on their own, as removeUser leaves them too. An OAuth
+ * client registered while the login was signed in keeps its row, because
+ * other logins may hold grants through the same client. */
 async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<void> {
   await ctx.runMutation(internal.appearance.clearForDeletedLogin, { auth_user_id: userId })
-  for (const model of ['session', 'account'] as const) {
+  for (const model of ['oauthConsent', 'account'] as const) {
     let cursor: string | null = null
     for (;;) {
       const res = (await ctx.runMutation(components.betterAuth.adapter.deleteMany, {
@@ -337,7 +345,83 @@ async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<voi
   await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
     input: { model: 'user', where: [{ field: '_id', value: userId }] },
   })
+  await purgeTokenRows(ctx, userId)
 }
+
+/* Rows a login piles up without bound. Better Auth keeps an expired session
+ * until someone presents it, and every MCP token refresh adds an access
+ * token and a refresh token, keeping the used refresh token as revoked.
+ * Roadmap undo receipts expire within a day but allow 1,000 per session key. */
+const LOGIN_TOKEN_MODELS = ['session', 'oauthAccessToken', 'oauthRefreshToken'] as const
+
+/** Size of one token purge step. Tests lower it. */
+export const LOGIN_PURGE = {
+  /** Session and token rows one step deletes at most, far below Convex's
+   * write limits. */
+  rows: 2000,
+  /** Roadmap undo receipts one step deletes at most. A receipt's changes
+   * have no cap below Convex's 1 MiB document limit, so 8 keep a step's
+   * reads under half of the 16 MiB a transaction may read. */
+  receipts: 8,
+}
+
+const purgeLoginTokensRef = makeFunctionReference<'mutation', { auth_user_id: string }, null>(
+  'adminAuth:purgeLoginTokens',
+)
+
+/* Deletes up to LOGIN_PURGE.rows of a deleted login's sessions and tokens,
+ * then up to LOGIN_PURGE.receipts of its roadmap undo receipts, and schedules
+ * the next step while any remain. They grant nothing once the user row is
+ * gone: Better Auth answers no session for a missing user, and
+ * oauthConnections.lookupAccess requires the user. */
+async function purgeTokenRows(ctx: MutationCtx, userId: string): Promise<void> {
+  let left = LOGIN_PURGE.rows
+  const more = () => ctx.scheduler.runAfter(0, purgeLoginTokensRef, { auth_user_id: userId })
+  for (const model of LOGIN_TOKEN_MODELS) {
+    for (;;) {
+      if (left <= 0) {
+        await more()
+        return
+      }
+      const res = (await ctx.runMutation(components.betterAuth.adapter.deleteMany, {
+        input: { model, where: [{ field: 'userId', value: userId }] },
+        paginationOpts: { numItems: left, cursor: null },
+      })) as { count: number; isDone: boolean }
+      // never let an adapter change turn a bounded step into an endless one
+      require(Number.isSafeInteger(res.count) &&
+        res.count >= 0 &&
+        (res.isDone || res.count > 0), rule('Invalid token purge result'))
+      left -= res.count
+      if (res.isDone) break
+    }
+  }
+  if (left <= 0) {
+    await more()
+    return
+  }
+  const receipts = await ctx.db
+    .query('roadmap_history')
+    .withIndex('by_owner_session', (q) => q.eq('auth_user_id', userId))
+    .take(LOGIN_PURGE.receipts + 1)
+  for (const row of receipts.slice(0, LOGIN_PURGE.receipts)) await ctx.db.delete(row._id)
+  if (receipts.length > LOGIN_PURGE.receipts) await more()
+}
+
+/** One step of a deleted login's token purge (removeAuthUserRows). Safe to
+ * run twice or for a login whose rows are already gone. Refuses a login that
+ * still exists, so a mistaken run cannot sign anyone out. */
+export const purgeLoginTokens = internalMutation({
+  args: { auth_user_id: v.string() },
+  handler: async (ctx, { auth_user_id }) => {
+    const user = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: 'user',
+      where: [{ field: '_id', value: auth_user_id }],
+    })
+    require(user === null, rule('That login still exists; delete it with deleteOrphanLogin'))
+    await purgeTokenRows(ctx, auth_user_id)
+    return null
+  },
+})
 
 /* createBreakGlass's compensation arm — no fences, no audit: the login it
  * removes was minted a moment ago by the same action and never handed out. */
@@ -349,7 +433,9 @@ export const removeAuthUser = internalMutation({
 })
 
 /* Sign-up leftovers: a login no profile references. Cut from the console;
- * the edge's 20-page listUsers walk becomes one indexed lookup. Name the
+ * the edge's 20-page listUsers walk becomes one indexed lookup. A platform
+ * operator's login is refused too, because its platform_admins row would
+ * outlive it and admin:removeOperator owns the last-operator guard. Name the
  * deployment with the private helper, which refuses to run without the
  * target's key, because a bare `npx convex run` lands on the deployment in
  * .env.local. TARGET is development, staging or production:
@@ -382,6 +468,16 @@ export const deleteOrphanLogin = internalMutation({
       .first()
     if (byEmail !== null || byAuth !== null) {
       throw conflict('that login belongs to a member — remove the member instead', 'login_in_use')
+    }
+    const operator = await ctx.db
+      .query('platform_admins')
+      .withIndex('by_auth_user', (q) => q.eq('auth_user_id', user._id))
+      .first()
+    if (operator !== null) {
+      throw conflict(
+        'that login is a platform operator; run admin:removeOperator first',
+        'operator_login',
+      )
     }
     await removeAuthUserRows(ctx, user._id)
     await audit(ctx, { actor_email: 'cli', action: 'delete_orphan', detail: { email } })

@@ -183,9 +183,16 @@ describe('demo creator attribution lifecycle', () => {
     expect(sessions.page).toHaveLength(1)
     expect(sessions.page[0].ipAddress).toBeUndefined()
     expect(sessions.page[0].userAgent).toBeUndefined()
-    // The main product retains Better Auth's normal session behavior.
+    // The main product stores neither field either (authData.test.ts).
     vi.stubEnv('APP_MODE', 'normal')
-    expect(createAuthOptions({} as never).databaseHooks.session).toBeUndefined()
+    const kept = await createAuthOptions({} as never).databaseHooks.session.create.before({
+      ...sessions.page[0],
+      ipAddress: '192.0.2.123',
+      userAgent: 'Mozilla/5.0',
+    })
+    expect(kept).toEqual({
+      data: expect.objectContaining({ ipAddress: undefined, userAgent: undefined }),
+    })
   })
 
   it('ignores country headers, including a signed legacy context, without blocking login', async () => {
