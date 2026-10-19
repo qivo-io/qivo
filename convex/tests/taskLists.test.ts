@@ -1233,7 +1233,9 @@ describe('a single-task read of an archived group', () => {
     expect(rest.subtasks.map((t) => t.id)).toEqual(kids)
     expect(mcp).toMatchObject({ is_group: true, group_remaining_hours: 1200 })
     expect((mcp.subtasks as unknown[]).length).toBe(1200)
-  })
+    // The archive must pass 16 MiB, so the fixture cannot shrink; planting it
+    // takes longer than the default timeout on a busy machine.
+  }, 60_000)
 
   it('lists the subtasks of a group too large to walk, without its plan weeks, progress or hours', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
