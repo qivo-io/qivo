@@ -13,7 +13,7 @@
 import { literals } from 'convex-helpers/validators'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { insertUnique } from '../lib/db'
+import { assertNewRowId, insertUnique } from '../lib/db'
 import type { LinkType } from '../lib/enums'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { issueKey } from '../lib/taskRefs'
@@ -94,6 +94,7 @@ export async function addLinkCore(
   },
 ): Promise<{ link: Doc<'issue_links'>; added: boolean }> {
   const { me, source_id, target_id, type, now } = a
+  if (a.id !== undefined) assertNewRowId(a.id)
   if (source_id === target_id) throw badRequest('a task cannot be linked to itself')
   const { source, target } = await assertLinkableIssues(ctx, source_id, target_id)
   // a pair in someone else's organization, or an end the actor cannot see,

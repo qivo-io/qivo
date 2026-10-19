@@ -40,7 +40,7 @@
 
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import {
   attachmentFileUrl,
   attachmentUploadUrl,
@@ -181,6 +181,7 @@ export async function attachFileCore(
   },
 ): Promise<AttachResult> {
   const { me, issue } = a
+  assertNewRowId(a.id)
   await assertCanEdit(ctx, me, issue.project_id)
   const name = cleanAttachmentName(a.name)
   if (await storageIdInUse(ctx, a.storage_id)) {

@@ -25,7 +25,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON, canChangeAccess, canLeadTeams, isTeamLeader } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { NAME_MAX, nameOverCap } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
@@ -153,6 +153,7 @@ export async function createTeamCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; id: string; name: string; now: string },
 ): Promise<Doc<'teams'>> {
+  assertNewRowId(a.id)
   if (a.me.org_role !== 'admin') throw forbidden('only organization admins can create teams')
   const _id = await insertUnique(
     ctx,

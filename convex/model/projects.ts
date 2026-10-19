@@ -24,7 +24,7 @@ import {
   canSeeProject,
   hasProjectLevel,
 } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import type { GrantLevel, ProjectType } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { canCreateProjects, projectCreationRefusal } from '../lib/projectCreators'
@@ -299,6 +299,7 @@ export async function createProjectCore(
   a: { me: Doc<'profiles'>; project: NewProject; now: string; provenance?: string },
 ): Promise<Doc<'projects'>> {
   const { me, now, project: p } = a
+  assertNewRowId(p.id)
   const lead_id = p.lead_id ?? me.id
   // Neither products nor sub-projects have an owning team. A parent is the
   // only structural requirement for a sub-project; permissions are explicit

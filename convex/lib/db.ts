@@ -13,7 +13,7 @@ import type {
 import type { ConvexError, Value } from 'convex/values'
 import type { DataModel, Doc, Id, TableNames } from '../_generated/dataModel'
 import { isStoredTable } from './enums'
-import type { Refusal } from './functions'
+import { badRequest, type Refusal } from './functions'
 
 /* Comments and tasks can approach Convex's 1 MiB document limit, so their
  * ranges are read a few rows at a time. Unused rows of the last read then
@@ -57,6 +57,21 @@ export async function byId(
     .query(table)
     .withIndex('by_uuid', (q) => q.eq('id', uuid))
     .unique()
+}
+
+/* The form of crypto.randomUUID: lowercase hex in 8-4-4-4-12 groups. */
+const ROW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** The refusal of a new row id that is not a lowercase UUID. */
+export const ROW_ID_SHAPE =
+  'an id must be a lowercase UUID, such as 0b7d6f4e-1c2a-4d3b-9e8f-7a6b5c4d3e2f'
+
+/** Refuses the id a client chose for a new row unless it is a lowercase
+ * UUID, the form the app generates. REST and MCP lowercase an id before
+ * they look it up, so a row stored under any other string could not be
+ * found by id. Every create that takes the caller's id checks it. */
+export function assertNewRowId(id: string): void {
+  if (!ROW_ID.test(id)) throw badRequest(ROW_ID_SHAPE)
 }
 
 /* Chainable eq shape shared by every IndexRangeBuilder — the generic index

@@ -11,7 +11,7 @@ import { makeFunctionReference } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { LABEL_NAME_MAX } from '../lib/textLimits'
 import { logActivity, signedDetail } from './activity'
@@ -119,6 +119,7 @@ export async function createLabelCore(
   },
 ): Promise<Doc<'labels'>> {
   const { me, id, now } = a
+  assertNewRowId(id)
   await assertLabelCreator(ctx, me)
   const name = labelName(a.name)
   const color = labelColor(a.color)

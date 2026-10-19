@@ -67,7 +67,7 @@ import {
   profileCanBeAssigned,
   profileCanSeeProject,
 } from '../lib/access'
-import { byId, insertUnique, usedMoreThan } from '../lib/db'
+import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
@@ -1123,6 +1123,7 @@ export async function createIssueCore(
   a: { me: Doc<'profiles'>; args: CreateIssueArgs; now: string; machine?: MachineNarration },
 ): Promise<Doc<'issues'>> {
   const { me, args, now } = a
+  assertNewRowId(args.id)
   await assertCanEdit(ctx, me, args.project_id)
   // resolve → meta guard → arrival guard (0050's issues_assign_num fires
   // before 0106's archived guard: the meta sentence wins on an archived meta)

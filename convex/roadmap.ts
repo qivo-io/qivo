@@ -9,7 +9,7 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { canSeeProject, hasProjectLevel } from './lib/access'
 import { assertOrgWritable } from './lib/billingAccess'
-import { byId, insertUnique, usedMoreThan } from './lib/db'
+import { assertNewRowId, byId, insertUnique, usedMoreThan } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
 import { logActivity } from './model/activity'
 import {
@@ -320,6 +320,7 @@ export const change = authedMutation({
         if (!beforeMilestones.has(op.id))
           beforeMilestones.set(op.id, existing ? milestoneValues(existing) : undefined)
         if (op.kind === 'milestone_create') {
+          assertNewRowId(op.id)
           // A sub-project folds up to the top-level project that stores it.
           const me = await seatFor(ctx, op.project_id)
           if (!me) throw notFound('project not found')

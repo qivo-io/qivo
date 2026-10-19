@@ -14,7 +14,7 @@ import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { assertRoomForComment, noteCommentAdded, noteCommentRemoved } from './commentCounts'
@@ -57,6 +57,7 @@ async function insertComment(
   o: { capped: boolean },
 ): Promise<Doc<'comments'>> {
   const { issue, author, now } = a
+  if (a.id !== undefined) assertNewRowId(a.id)
   await assertCanEdit(ctx, author, issue.project_id)
   if (a.body.trim() === '') throw badRequest('a comment cannot be empty')
   if (a.body.length > TEXT_MAX) throw rule(COMMENT_TOO_LONG)
