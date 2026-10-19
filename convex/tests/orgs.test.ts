@@ -96,7 +96,6 @@ const plantOrg = (
       week_start: 1,
       week_one_rule: 'first4day',
       default_plannable_hours: 32,
-      gravatar_avatars: true,
       ...extra,
     })
     return (await ctx.db.get(_id)) as Doc<'organizations'>
@@ -265,10 +264,11 @@ describe('identity.createOrganization — the whole door', () => {
     expect(org!.week_start).toBe(1)
     expect(org!.week_one_rule).toBe('first4day')
     expect(org!.default_plannable_hours).toBe(32)
-    expect(org!.gravatar_avatars).toBe(true)
     expect(org!.max_attachment_mb).toBe(20)
-    // New organizations no longer store the retired setting.
+    // New organizations no longer store the retired team leads setting, and
+    // store the retired Gravatar setting as false only for rollbacks.
     expect(org!.only_team_leads_manage_project_users).toBeUndefined()
+    expect(org!.gravatar_avatars).toBe(false)
     // absent means every standard user can create projects
     expect(org!.project_creators).toBeUndefined()
     expect(org!.billing).toBeUndefined()

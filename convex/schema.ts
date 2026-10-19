@@ -660,7 +660,11 @@ export default defineSchema({
     week_start: v.number(),
     week_one_rule: v.string(), // jan1 | first4day | firstfull
     default_plannable_hours: v.number(), // whole hours (0095)
-    gravatar_avatars: v.boolean(),
+    // Retired and unread. Qivo no longer requests Gravatar pictures. New
+    // organizations still store false (model/orgs.ts newOrgDefaults) so a
+    // rollback to an earlier release, whose schema requires it, can deploy.
+    // Optional so rows can drop it later.
+    gravatar_avatars: v.optional(v.boolean()),
     // Org-wide upload cap, 1..20 MiB. Older organizations default to 20.
     max_attachment_mb: v.optional(v.number()),
     // Retired and unread. No rule consults it and nothing writes it. Kept

@@ -85,11 +85,19 @@ function attachmentRow(doc: Doc<'issue_attachments'>) {
 // Billing is admin-only; application counters and settings are shared. The
 // counters come from org_counters (model/orgs.ts countersOf), never from the
 // legacy fields an older organization row may still hold.
+//
+// gravatar_avatars is always false. Qivo no longer reads the retired setting,
+// but app builds from earlier releases still open in a browser read it from
+// the viewer's home organization and treat a missing value as on. This stops
+// their Gravatar requests. Such a build signed in with only guest seats has
+// no home organization and treats it as on regardless, until the tab
+// reloads. Remove it once no earlier release can still be open or be rolled
+// back to.
 type OrgRow = Omit<
   AppRow<'organizations'>,
-  'billing' | 'activity_count' | 'next_issue_num' | 'next_project_num'
+  'billing' | 'activity_count' | 'next_issue_num' | 'next_project_num' | 'gravatar_avatars'
 > &
-  OrgCounters & { billing?: Doc<'organizations'>['billing'] }
+  OrgCounters & { billing?: Doc<'organizations'>['billing']; gravatar_avatars: boolean }
 
 const orgRowFor = (doc: Doc<'organizations'>, counters: OrgCounters, isAdmin: boolean): OrgRow => {
   const {
@@ -99,9 +107,10 @@ const orgRowFor = (doc: Doc<'organizations'>, counters: OrgCounters, isAdmin: bo
     activity_count: _activityCount,
     next_issue_num: _issueNum,
     next_project_num: _projectNum,
+    gravatar_avatars: _gravatar,
     ...rest
   } = doc
-  const row = { ...rest, ...counters }
+  const row = { ...rest, ...counters, gravatar_avatars: false }
   return isAdmin && billing !== undefined ? { ...row, billing } : row
 }
 

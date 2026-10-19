@@ -9,7 +9,6 @@
    which keeps this out of the editor's render cycle entirely. */
 import type { MentionNodeAttrs } from '@tiptap/extension-mention'
 import type { SuggestionKeyDownProps, SuggestionOptions, SuggestionProps } from '@tiptap/suggestion'
-import { gravatarUrl } from '../lib/gravatar'
 import { matchesAllWords } from '../lib/search'
 import { P } from '../store/planner'
 
@@ -22,10 +21,6 @@ type Member = {
   avatarPath: string | null
   avatarUrl: string | null
 }
-
-/** Avatar size in this popup, in CSS px — matches `.mentionpop-av` in
-    tokens.css, and is what the Gravatar request is sized against. */
-const AV_PX = 28
 
 const MAX_ITEMS = 8
 
@@ -69,17 +64,13 @@ export const mentionSuggestion: Omit<SuggestionOptions<Member, MentionNodeAttrs>
         row.className = `mentionpop-row${i === selected ? ' active' : ''}`
         row.setAttribute('data-mention-option', u.name)
         // this popup builds its own avatar in plain DOM, so it inherits
-        // nothing from <Avatar> — the same three layers are assembled by hand:
-        // initials text, with an uploaded or Gravatar picture painted over it
+        // nothing from <Avatar> — the same layers are assembled by hand:
+        // initials text, with an uploaded picture painted over it
         const av = document.createElement('span')
         av.className = 'mentionpop-av'
         av.style.background = u.color
         av.textContent = u.initials
-        const src = u.avatarPath
-          ? u.avatarUrl
-          : P.org.gravatarAvatars
-            ? gravatarUrl(u.email, AV_PX)
-            : null
+        const src = u.avatarPath ? u.avatarUrl : null
         if (src) {
           const img = document.createElement('img')
           img.src = src

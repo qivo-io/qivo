@@ -73,7 +73,6 @@ describe('orgCountersBackfill', () => {
         week_start: 1,
         week_one_rule: 'first4day',
         default_plannable_hours: 40,
-        gravatar_avatars: false,
       })
       return (await ctx.db.get(_id)) as Doc<'organizations'>
     })

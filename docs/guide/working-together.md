@@ -18,24 +18,15 @@ An organization admin can rename anyone, including agents, in
 **Organization → Users**. This changes only that organization's copy.
 Changing your own name again updates all your existing copies.
 
-Your profile picture uses the first available source:
-
-1. **An uploaded picture.** Click **Picture** under
-   **Settings → Your preferences → Profile**, then **Upload a picture…** or
-   **Change picture…**. Organization admins can also change pictures in the
-   Users list. **Remove picture** restores the fallback below.
-2. **[Gravatar](https://gravatar.com).** Qivo looks up the picture linked to
-   your email using a hash, without sending the email itself. Gravatar
-   pictures are public.
-3. **Your initials** when no picture is available.
+Your profile picture is a picture you upload, or your initials when there
+is none. Click **Picture** under **Settings → Your preferences → Profile**,
+then **Upload a picture…** or **Change picture…**. Organization admins can
+also change pictures in the Users list. **Remove picture** shows your initials
+again, or your sample portrait in the demo.
 
 Uploaded pictures are visible to members and invited guests in that
 organization. Qivo uses temporary download links, which you should treat as
 private. Your browser may cache pictures for your signed-in account.
-
-**Profile pictures from Gravatar** in **Organization → General** is on by
-default. Turning it off stops Gravatar lookups for that organization and
-leaves uploaded pictures intact.
 
 Other people's changes appear automatically. Your edits appear immediately;
 if the server refuses an edit, Qivo restores the previous value and shows an

@@ -82,7 +82,6 @@ import {
 } from '../lib/delay'
 import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
-import { prime as primeGravatar } from '../lib/gravatar'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
@@ -2103,25 +2102,13 @@ function rebuild(now = new Date()) {
 
   P.CURRENT_USER = CURRENT_USER
 
-  // Gravatar keys on a SHA-256 of the address and crypto.subtle is async,
-  // while <Avatar> renders synchronously on every card and row. Hash the
-  // roster once here and emit again when the map grows, so the component only
-  // ever reads finished hashes; until then people show their initials. Skipped
-  // entirely when the organization has the lookup switched off — that setting
-  // is about requests this browser makes, so it gates the hashing too.
-  if (P.org.gravatarAvatars) {
-    void primeGravatar(P.users.map((u) => u.email)).then((grew) => {
-      if (grew) emit()
-    })
-  }
   // Uploaded pictures prepare shared decoded sources after minting access.
-  // One difference matters: a Gravatar URL is built at RENDER time from the
-  // hash map, so a bare emit() is enough for it, while a prepared portrait is
-  // baked into this snapshot — so fresh mints have to land through a REBUILD
-  // or the freshly-minted URL sits in the cache unread. The second pass finds
-  // nothing left to mint and stops there. Only avatars pre-mint: attachment
-  // URLs are minted on demand (attachmentUrl), because only the open issue's
-  // inline images ever render eagerly — avatars render by the dozen per board.
+  // A prepared portrait is baked into this snapshot, so fresh mints have to
+  // land through a REBUILD or the freshly-minted URL sits in the cache
+  // unread. The second pass finds nothing left to mint and stops there. Only
+  // avatars pre-mint: attachment URLs are minted on demand (attachmentUrl),
+  // because only the open issue's inline images ever render eagerly — avatars
+  // render by the dozen per board.
   const needAvatars = P.users
     .filter((u) => u.avatarPath && avatarSources.needsRefresh(`avatar:${u.id}:${u.avatarPath}`))
     .map((u) => ({ kind: 'avatar' as const, id: u.id }))
@@ -2584,7 +2571,6 @@ export type OrgPatch = Partial<{
   defaultPlannableHours: number | string
   maxAttachmentMb: number | string
   projectCreators: FunctionArgs<typeof api.orgs.update>['patch']['project_creators']
-  gravatarAvatars: boolean
 }>
 export type TeamPatch = Partial<{
   name: string
@@ -5564,13 +5550,6 @@ export const PLANNER = {
       org.project_creators = patch.projectCreators
       wire.project_creators = patch.projectCreators
     }
-    if ('gravatarAvatars' in patch) {
-      // turning it ON has to prime the hashes rebuild() skipped while it was
-      // off — rebuild below does exactly that
-      const on = !!patch.gravatarAvatars
-      org.gravatar_avatars = on
-      wire.gravatar_avatars = on
-    }
     if (!Object.keys(wire).length) return true
     rebuild() // re-anchors the grid when the week settings moved
     emit()
@@ -6000,8 +5979,8 @@ export const PLANNER = {
     return null
   }),
 
-  /** Drop the uploaded picture. The person falls back to Gravatar, then to
-      their initials — there is no "no picture at all" state. */
+  /** Drop the uploaded picture. The person falls back to their initials, or to
+      their sample portrait in the demo. */
   clearAvatar: async (profileId: string) => {
     const row = rows.profiles.get(profileId)
     if (!row?.avatar_storage_id) return null
@@ -6610,8 +6589,8 @@ export function disposeDemoStore() {
 
 /* Replace the raw row cache per section from one snapshot delivery. adopt is
    always followed by rebuild(): rebuild is deliberately impure (setWeekConfig
-   re-anchors dates.ts's live bindings, the Gravatar prime fires from inside
-   it), so nothing may patch P.* directly off a snapshot. */
+   re-anchors dates.ts's live bindings), so nothing may patch P.* directly off
+   a snapshot. */
 function adopt(source: Snapshot) {
   // Optimistic edits mutate these rows. Keep the server's snapshot separate
   // so a refused write can restore it even without a newer delivery.

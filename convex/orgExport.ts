@@ -238,6 +238,8 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   delete row.auth_user_id
   delete row.message_retention_days
   delete row.activity_count
+  // the retired Gravatar setting (schema.ts)
+  delete row.gravatar_avatars
   // a task's archive-mark flag only steers the app snapshot's reads
   delete row.relations_marked
   // The organization id and the archive mark only serve the app's index reads.

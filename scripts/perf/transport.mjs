@@ -67,7 +67,6 @@ const snapshot = {
       week_start: 1,
       week_one_rule: 'first4day',
       default_plannable_hours: 40,
-      gravatar_avatars: false,
     },
   ],
   profiles,

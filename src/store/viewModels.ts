@@ -36,7 +36,7 @@ export const shapeUser = (
   name: u.name,
   color: u.color,
   initials: u.initials,
-  // An uploaded picture suppresses Gravatar even while its bytes are loading.
+  // Set while an uploaded picture's bytes are still loading, too.
   avatarPath: u.avatar_storage_id || (u.sample_avatar ? `sample:${u.sample_avatar}` : null),
   avatarUrl: u.avatar_storage_id ? avatarUrl : sampleAvatarUrl(u.sample_avatar),
   sampleAvatar: !!u.sample_avatar && !u.avatar_storage_id,
@@ -99,11 +99,6 @@ export const shapeOrg = (
   maxAttachmentMb: home?.max_attachment_mb ?? 20,
   // who may create top-level projects besides org admins; missing is 'users'
   projectCreators: home?.project_creators ?? 'users',
-  // may the browser ask gravatar.com for a picture (0096)? The HOME org's
-  // answer governs every avatar the app draws, including people from
-  // organizations that shared a project with me — it is a statement about
-  // requests THIS browser makes, not about whose profile is being drawn.
-  gravatarAvatars: home ? home.gravatar_avatars !== false : true,
 })
 export type OrgVM = ReturnType<typeof shapeOrg>
 

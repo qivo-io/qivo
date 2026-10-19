@@ -53,7 +53,7 @@ const EXCLUSIONS = [
   'Authentication accounts, sessions, login identifiers, and credentials',
   'Agent key secrets and hashes (agent key metadata is included)',
   'Platform administration, audit logs, demo receipts, and shared panorama library data',
-  'External images linked in descriptions and Gravatar images (uploaded files are included)',
+  'External images linked in descriptions (uploaded files are included)',
 ]
 
 const README = `Qivo organization export, format version 2
