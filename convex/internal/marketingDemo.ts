@@ -455,8 +455,12 @@ export const apply = internalMutation({
         'demo_id_collision',
       ))
     }
-    for (const issue of MARKETING_DEMO.issues) {
-      const existing = await byId(ctx, 'activity_events', await id(`activity:import:${issue.key}`))
+    const activityKeys = [
+      ...MARKETING_DEMO.issues.map((issue) => `activity:import:${issue.key}`),
+      ...MARKETING_DEMO.history.map((change) => `activity:change:${change.key}`),
+    ]
+    for (const key of activityKeys) {
+      const existing = await byId(ctx, 'activity_events', await id(key))
       require(existing === null || existing.org_id === org.id, conflict(
         'marketing demo: reserved activity id belongs to another organization',
         'demo_id_collision',

@@ -12,6 +12,7 @@ import {
   flushWebhookEvents,
   newT,
   plantIssue,
+  plantProject,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -106,6 +107,65 @@ describe('durable task events', () => {
       data: { task_id: f.issue.id, changed_fields: ['due_date'] },
     })
     expect(rows[0].payload).not.toContain('encrypted-test-key')
+  })
+
+  it('never lists the status stamp, which moves only with status or project_id', async () => {
+    const f = await fixture()
+    await f.subscribe('task.updated')
+    // the subscriber also reads the second top-level project
+    const far = await plantProject(f.t, {
+      org_id: f.fx.org.id,
+      type: 'project',
+      parent_id: f.fx.hidden.id,
+    })
+    await f.t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.fx.hidden.id,
+        profile_id: f.fx.guest.id,
+        level: 'user',
+      }),
+    )
+    const org_id = f.fx.org.id
+    const child = await plantIssue(f.t, { org_id, project_id: f.fx.sub.id })
+    const write = async (run: () => Promise<unknown>) => {
+      const before = (await f.rows()).length
+      await run()
+      await flushWebhookEvents(f.t)
+      return (await f.rows())
+        .slice(before)
+        .map(
+          (row) =>
+            JSON.parse(row.payload) as { data: { task_id: string; changed_fields: string[] } },
+        )
+        .map((p) => [p.data.task_id, p.data.changed_fields])
+    }
+    const status = (id: string) =>
+      write(() =>
+        as(f.t, f.fx.user).mutation(api.issues.update, {
+          org_id,
+          id,
+          patch: { status: 'progress' },
+        }),
+      )
+    expect(await status(f.issue.id)).toEqual([[f.issue.id, ['status']]])
+    expect(await status(child.id)).toEqual([[child.id, ['status']]])
+    const stamped = await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id))
+    expect(stamped?.status_at).toBeDefined()
+    // a plain move: the stamp is cleared, and only the project is news
+    const move = (project_id: string) =>
+      write(() =>
+        as(f.t, f.fx.user).mutation(api.issues.move, { org_id, id: f.issue.id, project_id }),
+      )
+    expect(await move(f.fx.sub2.id)).toEqual([[f.issue.id, ['project_id']]])
+    // a carried subtask's event says the same
+    await status(f.issue.id)
+    await f.t.run(async (ctx) => {
+      const row = await byId(ctx, 'issues', child.id)
+      await ctx.db.patch(row!._id, { parent_id: f.issue.id })
+    })
+    const carried = await move(far.id)
+    expect(carried).toContainEqual([child.id, ['project_id']])
+    expect(carried.flatMap(([, fields]) => fields)).not.toContain('status_at')
   })
 
   it('emits create, comment, delete and restore through the shared model hooks', async () => {

@@ -495,7 +495,6 @@ export function SyncCard({ it, ctx, later }: { it: IssueVM; ctx: PageCtx; later?
     issueById: P.issueById,
     // absent until an answer covers this task, so no since mark shows
     lastCommentAt: P.lastComments.get(it.uuid),
-    activity: P.activity,
   })
   const hint = planHint(it)
   const dueLate = !!it.due && (it.due < ctx.day.today || marks.verdict === 'late')

@@ -150,7 +150,7 @@ function PersonColumns({
   const onIt = [...group('progress'), ...group('review')]
   const week = group('week')
   const later = group('later')
-  const waiting = waitingOnReview(person.id, rows, P.activity)
+  const waiting = waitingOnReview(person.id, rows)
   const done = doneSince(person.id, P.issues, subIds, ctx.since)
   const sinceLabel = dayLabel(ctx.since, ctx.now)
   return (

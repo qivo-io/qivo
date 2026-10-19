@@ -205,8 +205,9 @@ export async function emitTaskEvent(
   const changed = a.before
     ? Array.from(new Set([...Object.keys(a.issue), ...Object.keys(a.before)])).filter(
         (key) =>
-          // relations_marked is the archive steps' bookkeeping, never news
-          !['_id', '_creationTime', 'updated_at', 'relations_marked'].includes(key) &&
+          // relations_marked is the archive steps' bookkeeping, never news;
+          // status_at moves only with status or project_id, which are listed
+          !['_id', '_creationTime', 'updated_at', 'status_at', 'relations_marked'].includes(key) &&
           !sameValue(a.issue[key as keyof Doc<'issues'>], a.before?.[key as keyof Doc<'issues'>]),
       )
     : []

@@ -3,7 +3,6 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import {
-  DEMO_EVENT_TIME,
   DEMO_SYNC_TIME,
   MARKETING_DEMO,
   MARKETING_DEMO_VERSION,
@@ -11,13 +10,15 @@ import {
   marketingId,
   marketingInstant,
   marketingWeek,
+  northstarTaskTimes,
 } from '../internal/marketingDemoData'
 import { byId } from '../lib/db'
 import { require, rule } from '../lib/functions'
-import { insertActivity } from './activity'
+import { issueKey } from '../lib/taskRefs'
+import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
 import { storeCommentCount } from './commentCounts'
-import { cleanDescription } from './issues'
+import { browserVerbDetail, cleanDescription } from './issues'
 import {
   type NotifyPreload,
   notifyCommentInsert,
@@ -189,15 +190,13 @@ export async function writeNorthstarWork(
       color: l.color,
       created_at: now,
     })
-  // Tasks as inserted, for the comment loop and the archive marks; nothing
-  // below patches them.
+  // Tasks as inserted, for the history, the comment loop and the archive
+  // marks; nothing below patches them.
   const issueDocs = new Map<string, Doc<'issues'>>()
   for (const [index, i] of data.issues.entries()) {
-    const created = `${marketingDate(anchor, -21)}T09:00:00.000Z`
-    // A dated last write (updated_at and the import event) lets Team sync
-    // read the task as untouched, or its review as waiting, since a sync.
-    const touched =
-      i.touchedDay === undefined ? now : marketingInstant(anchor, i.touchedDay, DEMO_EVENT_TIME)
+    // A dated last write (updated_at) lets Team sync read the task as
+    // untouched, or its review as waiting, since a sync.
+    const times = northstarTaskTimes(anchor, now, i)
     // These are explicitly imported fixtures. Atlas is the import actor;
     // reporter is separate attribution, never a forged creator history.
     const issueDocId = await ctx.db.insert('issues', {
@@ -229,13 +228,12 @@ export async function writeNorthstarWork(
       remaining_hours: i.remaining,
       remaining_set_at: i.remaining !== undefined ? now : undefined,
       paused: i.paused ?? false,
-      ...(i.status === 'done' ? { done_at: `${marketingDate(anchor, -3)}T15:00:00.000Z` } : {}),
-      ...(i.reviewDay !== undefined
-        ? { review_at: marketingInstant(anchor, i.reviewDay, DEMO_EVENT_TIME) }
-        : {}),
+      done_at: times.done,
+      review_at: times.review,
+      status_at: times.status,
       ...(i.archived ? { archived_at: `${marketingDate(anchor, -1)}T15:00:00.000Z` } : {}),
-      created_at: created,
-      updated_at: touched,
+      created_at: times.created,
+      updated_at: times.updated,
     })
     for (const label of i.labels)
       await ctx.db.insert('issue_labels', {
@@ -254,7 +252,7 @@ export async function writeNorthstarWork(
         label: i.title,
         detail: 'Imported from the fictional Northstar marketing dataset',
         project_id: projectIds[i.project],
-        ts: touched,
+        ts: times.created,
         named_task_nums: [],
       },
       { id: await id(`activity:import:${i.key}`) },
@@ -264,8 +262,13 @@ export async function writeNorthstarWork(
     issueDocs.set(i.key, issue)
     await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
   }
+  const changedAt = (c: { day: number; time: string }) => marketingInstant(anchor, c.day, c.time)
   for (const l of data.links) {
     const pair = [issueIds[l.source], issueIds[l.target]].sort()
+    // a link the history adds dates from that change
+    const added = data.history.find(
+      (c) => c.kind === 'link' && c.issue === l.source && c.target === l.target,
+    )
     await ctx.db.insert('issue_links', {
       org_id: org.id,
       id: await id(`link:${l.source}:${l.target}`),
@@ -273,8 +276,51 @@ export async function writeNorthstarWork(
       target_id: l.type === 'relates' ? pair[1] : issueIds[l.target],
       type: l.type,
       pair_key: pair.join(':'),
-      created_at: now,
+      created_at: added ? changedAt(added) : now,
     })
+  }
+  // Each task's short history, after its import row and oldest first, so
+  // seq follows ts. The words come from the app's own writers; nothing else
+  // (notifications, follows, webhook events) is written for these rows.
+  for (const c of data.history) {
+    const doc = issueDocs.get(c.issue)
+    require(doc !== undefined, rule('marketing demo: history task missing'))
+    let entry: { verb: string; detail: string | undefined; named: number[] }
+    if (c.kind === 'status' && c.via === 'mcp') {
+      // machine/shared.ts MCP_PROVENANCE; model code never imports machine code
+      const diff = issueChanges({ ...doc, status: c.from }, { ...doc, status: c.to })
+      entry = { verb: 'changed', detail: machineDetail(diff, 'via MCP'), named: [] }
+    } else if (c.kind === 'status') {
+      entry = await browserVerbDetail(ctx, {
+        before: { ...doc, status: c.from },
+        after: { ...doc, status: c.to },
+        patch: { status: c.to },
+      })
+    } else if (c.kind === 'label') {
+      const label = data.labels.find((l) => l.key === c.label)
+      require(label !== undefined, rule('marketing demo: history label missing'))
+      entry = { verb: 'labeled', detail: `“${label.name}”`, named: [] }
+    } else {
+      const target = issueDocs.get(c.target)
+      require(target !== undefined, rule('marketing demo: history link target missing'))
+      entry = { verb: 'linked', detail: `(blocks ${issueKey(target.num)})`, named: [target.num] }
+    }
+    await insertActivity(
+      ctx,
+      {
+        org_id: org.id,
+        actor_id: personIds[c.actor],
+        verb: entry.verb,
+        target_type: 'issue',
+        target_id: doc.id,
+        label: doc.title,
+        detail: entry.detail,
+        project_id: doc.project_id,
+        ts: changedAt(c),
+        named_task_nums: entry.named,
+      },
+      { id: await id(`activity:change:${c.key}`) },
+    )
   }
   for (const m of data.milestones)
     await ctx.db.insert('milestones', {

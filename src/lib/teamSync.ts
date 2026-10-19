@@ -1,6 +1,6 @@
 /* Team sync: the pure rules behind the meeting page (docs/team-sync-brief.md).
    Everything here is a function of plain inputs (tasks, people, projects, the
-   activity feed, the latest comment per task, a reading point and today), so
+   tasks' stamps, the latest comment per task, a reading point and today), so
    the page reads the store once per render and the rules test on small
    fixtures. Nothing here writes, and nothing imports the store at runtime.
 
@@ -10,8 +10,9 @@
      with one, else the assignee (convex/lib/review.ts);
    · `since` is the page owner's reading point in ms (convex/lib/teamSync.ts
      `syncSince`): "Done since", "untouched" and "changed" all read from it. */
+import { STATUS_NAMES } from '../../convex/lib/taskRefs'
 import { isReadingDay, SYNC_SITTING_MS, type SyncStamp } from '../../convex/lib/teamSync'
-import type { ActivityVM, IssueVM, MilestoneVM, ProjectVM, TeamVM, UserVM } from '../store/planner'
+import type { IssueVM, MilestoneVM, ProjectVM, TeamVM, UserVM } from '../store/planner'
 import { fmtDate, isoFromDate, isoToDate, TODAY_WEEK, WEEKDAYS, weekStartOf } from './dates'
 import type { DelayInfo } from './delay'
 import { isIssueDone, isIssueGroup } from './issueGroups'
@@ -43,10 +44,11 @@ export type SyncIssue = Pick<
   | 'updatedAt'
   | 'doneAt'
   | 'reviewAt'
+  | 'statusAt'
+  | 'createdAt'
 >
 export type SyncStatus = IssueVM['status']
 export type SyncUser = Pick<UserVM, 'id' | 'name' | 'isAgent' | 'teams'>
-export type SyncEvent = Pick<ActivityVM, 'ts' | 'verb' | 'targetType' | 'targetId' | 'detail'>
 export type SyncProject = Pick<
   ProjectVM,
   'id' | 'type' | 'org' | 'parent' | 'children' | 'teamAccess'
@@ -65,23 +67,10 @@ export type Verdict = 'behind' | 'late' | null
 
 const OPEN = new Set<SyncStatus>(['todo', 'progress', 'review'])
 const DAY = 86400000
-/* The hand-off's own write lands with it (one server `now`); this much slack
-   keeps a client paint or a later event of the same write from reading as
-   activity after the hand-off. */
+/* The hand-off's own write sets updated_at to the same instant (one server
+   now, and the paint uses the row's updated_at); this slack keeps a write a
+   moment later from reading as an edit after the hand-off. */
 const HANDOFF_SLACK_MS = 1000
-
-/* The activity feed's status names (convex/model/activity.ts STATUS_NAMES),
-   which the narrations below are parsed from and the marks are worded in. */
-const STATUS_NAMES: Record<SyncStatus, string> = {
-  backlog: 'Backlog',
-  todo: 'To Do',
-  progress: 'In Progress',
-  review: 'In Review',
-  done: 'Done',
-}
-const STATUS_BY_NAME = new Map(
-  Object.entries(STATUS_NAMES).map(([id, name]) => [name, id as SyncStatus]),
-)
 const PRIORITY_RANK: Record<IssueVM['priority'], number> = { urgent: 0, high: 1, medium: 2, low: 3 }
 
 /* ---- today ---------------------------------------------------------------- */
@@ -301,14 +290,13 @@ function byHandoff(a: number | null, b: number | null): number {
 export function waitingOnReview<I extends SyncIssue>(
   person: string,
   rows: readonly I[],
-  activity: readonly SyncEvent[],
 ): { issue: I; reviewer: string; since: number | null }[] {
   return rows
     .filter(
       (it) =>
         it.status === 'review' && it.assignee === person && !!it.reviewer && it.reviewer !== person,
     )
-    .map((issue) => ({ issue, reviewer: issue.reviewer, since: handoffInstant(issue, activity) }))
+    .map((issue) => ({ issue, reviewer: issue.reviewer, since: issue.reviewAt }))
     .sort((a, b) => byHandoff(a.since, b.since) || syncRowOrder(a.issue, b.issue))
 }
 
@@ -337,73 +325,6 @@ export function doneSince<I extends SyncIssue>(
       b.issue.doneAt - a.issue.doneAt ||
       a.issue.key.localeCompare(b.issue.key, undefined, { numeric: true }),
   )
-}
-
-/* ---- the activity feed ------------------------------------------------------- */
-
-/* The machine grammar's status clause, `status In Progress → In Review`, as
-   one element of the `(a → b, c → d)` diff (model/activity.ts issueChanges).
-   Free text there has its arrows replaced, so a title cannot forge one. */
-const MACHINE_STATUS =
-  /(?:^\(|, )status (Backlog|To Do|In Progress|In Review|Done) → (Backlog|To Do|In Progress|In Review|Done)(?=[,)])/
-const MACHINE_REVIEWER = /(?:^\(|, )reviewer [^,→]+ → (?!unset[,)])[^,→)]+(?=[,)])/
-
-/** The status a task moved INTO, read from one activity event, or null.
-    Browser writes narrate verb `moved` with `from <Status> to <Status>`;
-    machine writes a diff holding `status <A> → <B>`. The other `moved`
-    events (a parent or sub-project change) are not status moves. */
-export function statusMoveOf(verb: string, detail: string | undefined): SyncStatus | null {
-  if (!detail) return null
-  if (verb === 'moved') {
-    const m = /^from (.+) to (.+)$/.exec(detail)
-    if (!m || m[1] === m[2] || !STATUS_BY_NAME.has(m[1])) return null
-    return STATUS_BY_NAME.get(m[2]) || null
-  }
-  const m = MACHINE_STATUS.exec(detail)
-  return m && m[1] !== m[2] ? STATUS_BY_NAME.get(m[2]) || null : null
-}
-
-/* A reviewer was named (not removed): the browser verb or a machine diff. */
-function reviewerSet(e: SyncEvent): boolean {
-  return e.verb === 'set the reviewer of' || (!!e.detail && MACHINE_REVIEWER.test(e.detail))
-}
-
-function eventsOf(handle: string, activity: readonly SyncEvent[]): SyncEvent[] {
-  return activity
-    .filter((e) => e.targetType === 'issue' && e.targetId === handle)
-    .sort((a, b) => a.ts - b.ts)
-}
-
-/** When a task that is In Review now was handed to review, from the feed:
-    its latest move into In Review, or a reviewer named later while it stayed
-    there (moving in and then naming the reviewer are two writes). A reviewer
-    named with no status move in the feed at all is a hand-off too: the feed
-    drops its oldest events first, so the task has been In Review since.
-    Null when the feed does not say: the task never moved in within the kept
-    events (500 per org), or it has moved out since. `handle` is `IssueVM.id`,
-    the feed's `targetId`. */
-export function handoffAt(handle: string, activity: readonly SyncEvent[]): number | null {
-  let at: number | null = null
-  let moved = false
-  for (const e of eventsOf(handle, activity)) {
-    const to = statusMoveOf(e.verb, e.detail)
-    if (to) {
-      moved = true
-      at = to === 'review' ? e.ts : null
-    } else if ((at != null || !moved) && reviewerSet(e)) at = e.ts
-  }
-  return at
-}
-
-/** The hand-off instant of a task In Review: the server's stamp
-    (`issues.review_at`), else the feed (a task handed over before the stamp
-    existed), else null. Never a Remaining or last-write time, which move on
-    edits that hand nothing over. */
-export function handoffInstant(
-  it: Pick<SyncIssue, 'id' | 'reviewAt'>,
-  activity: readonly SyncEvent[],
-): number | null {
-  return it.reviewAt ?? handoffAt(it.id, activity)
 }
 
 /* ---- per-row marks -------------------------------------------------------------- */
@@ -435,10 +356,10 @@ export type SinceMark =
   | { kind: 'untouched'; at: number }
   /** a review handed to the page owner after `since` */
   | { kind: 'handed'; at: number }
-  /** a review handed over before `since` with nothing since the hand-off (no
-      write, comment or activity event); `at` is the hand-off */
+  /** a review handed over before `since` with no edit or comment since the
+      hand-off; `at` is the hand-off */
   | { kind: 'waiting'; at: number }
-  /** the latest status move or comment after `since`, in the feed's words */
+  /** the latest status change or comment after `since` */
   | { kind: 'changed'; what: string; at: number }
 
 export type RowMarks = {
@@ -457,8 +378,7 @@ export type RowMarks = {
 /** Everything a row says about itself on `person`'s page. `lastCommentAt` is
     the task's latest comment (`P.lastComments` by uuid), null when it has
     none. Left out, the comment is not known yet, so the row carries no since
-    mark rather than call a discussed task untouched. `activity` may be the
-    whole feed or the task's own events. */
+    mark rather than call a discussed task untouched. */
 export function rowMarks(
   it: SyncIssue,
   o: {
@@ -467,7 +387,6 @@ export function rowMarks(
     verdict: Verdict
     issueById: Readonly<Record<string, BlockerIssue>>
     lastCommentAt?: number | null
-    activity: readonly SyncEvent[]
   },
 ): RowMarks {
   const reviewing = it.status === 'review' && !!it.reviewer && it.reviewer === o.person
@@ -478,7 +397,8 @@ export function rowMarks(
     noEstimate: it.remaining == null,
     noReviewer: it.status === 'review' && !it.reviewer,
     reviewFor: reviewing && it.assignee && it.assignee !== o.person ? it.assignee : null,
-    since: o.lastCommentAt === undefined ? null : sinceMark(it, reviewing, o.lastCommentAt, o),
+    since:
+      o.lastCommentAt === undefined ? null : sinceMark(it, reviewing, o.lastCommentAt, o.since),
   }
 }
 
@@ -486,26 +406,27 @@ function sinceMark(
   it: SyncIssue,
   reviewing: boolean,
   comment: number | null,
-  o: { since: number; activity: readonly SyncEvent[] },
+  since: number,
 ): SinceMark | null {
-  const events = eventsOf(it.id, o.activity)
-  const lastTouch = Math.max(it.updatedAt, comment ?? 0, events.at(-1)?.ts ?? 0)
-  if (it.status === 'progress' && lastTouch < o.since) return { kind: 'untouched', at: lastTouch }
-  // an unknown hand-off (no stamp, not in the feed) says neither
-  const handoff = reviewing ? handoffInstant(it, events) : null
-  if (handoff != null) {
-    if (handoff > o.since) return { kind: 'handed', at: handoff }
-    if (lastTouch <= handoff + HANDOFF_SLACK_MS) return { kind: 'waiting', at: handoff }
+  const lastTouch = Math.max(it.updatedAt, comment ?? 0)
+  if (it.status === 'progress' && lastTouch < since) return { kind: 'untouched', at: lastTouch }
+  const commented: SinceMark | null =
+    comment != null && comment > since ? { kind: 'changed', what: 'commented', at: comment } : null
+  if (reviewing) {
+    // No recorded hand-off: handed over before review_at existed, or a leaf
+    // again after subtasks cleared it (model/issues.ts clearParentRemaining).
+    // Such a review says neither handed nor waiting, nor its status move.
+    if (it.reviewAt == null) return commented
+    if (it.reviewAt > since) return { kind: 'handed', at: it.reviewAt }
+    if (lastTouch <= it.reviewAt + HANDOFF_SLACK_MS) return { kind: 'waiting', at: it.reviewAt }
   }
-  let changed: SinceMark | null = null
-  for (const e of events) {
-    const to = e.ts > o.since ? statusMoveOf(e.verb, e.detail) : null
-    if (to) changed = { kind: 'changed', what: `moved to ${STATUS_NAMES[to]}`, at: e.ts }
-  }
-  if (comment != null && comment > o.since && (!changed || comment >= changed.at)) {
-    changed = { kind: 'changed', what: 'commented', at: comment }
-  }
-  return changed
+  // creation stamps status_at too, and the status a task starts with is no move
+  const movedAt =
+    it.statusAt != null && it.statusAt > since && it.statusAt > it.createdAt ? it.statusAt : null
+  if (commented && (movedAt == null || commented.at >= movedAt)) return commented
+  return movedAt == null
+    ? null
+    : { kind: 'changed', what: `moved to ${STATUS_NAMES[it.status]}`, at: movedAt }
 }
 
 /* ---- the team opening ------------------------------------------------------------- */
@@ -633,11 +554,10 @@ export function needsOwner<I extends SyncIssue>(
     first (`since` is the hand-off instant; an unknown one, null, last). */
 export function needsReviewer<I extends SyncIssue>(
   rows: readonly I[],
-  activity: readonly SyncEvent[],
 ): { issue: I; since: number | null }[] {
   return rows
     .filter((it) => it.status === 'review' && !it.reviewer && !isIssueGroup(it))
-    .map((issue) => ({ issue, since: handoffInstant(issue, activity) }))
+    .map((issue) => ({ issue, since: issue.reviewAt }))
     .sort(
       (a, b) =>
         byHandoff(a.since, b.since) ||

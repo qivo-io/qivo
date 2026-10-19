@@ -159,6 +159,11 @@ const issuesTable = defineTable({
   // last entered In Review or went to a different reviewer there; kept into
   // Done, cleared by any other move out, never on a group
   review_at: v.optional(v.string()),
+  // server-owned: when the status was last set while the task was in its
+  // current project. createIssueCore and updateIssueCore stamp it and
+  // moveIssueCore clears it (model/issues.ts). Never in the REST or MCP task
+  // JSON or a webhook's changed_fields.
+  status_at: v.optional(v.string()),
   archived_at: v.optional(v.string()),
   // server-owned: some relation rows of this task may carry task_archived
   // (above). Never sent to clients, REST, MCP, webhooks or the export.

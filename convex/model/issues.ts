@@ -20,7 +20,8 @@
  *   stamps      done stamp (0071) → remaining stamp (server-owned) →
  *               review-time stamp (status INTO review, no explicit hours:
  *               the project review time with a fresh remaining_set_at) →
- *               review hand-off stamp (review_at, lib/review.ts) → touch
+ *               review hand-off stamp (review_at, lib/review.ts) → status
+ *               stamp (status_at, only when the status changes) → touch
  *   write       the row insert/patch. A group's dates are calculated from
  *               its leaves by every reader, so no write ever changes an
  *               ancestor's dates because a child changed
@@ -1231,6 +1232,7 @@ export async function createIssueCore(
       reporter_id,
       done_at: doneStampInsert(status, now),
       review_at: reviewStamp(null, { status, reviewer_id }, now), // created In Review: now
+      status_at: now,
       archived_at: undefined,
       created_at: now,
       updated_at: now,
@@ -1269,7 +1271,8 @@ export async function createIssueCore(
 /* A key's PRESENCE means "set this field"; null clears (Convex strips
  * undefined from args, so null is the wire form of a clear — stored rows
  * still hold ABSENT, never null). reporter_id/num/org_id/done_at/remaining_set_at/
- * review_at/archived_at deliberately have no slot: immutable or server-owned. */
+ * review_at/status_at/archived_at deliberately have no slot: immutable or
+ * server-owned. */
 export type IssuePatch = {
   title?: string
   description?: string | null
@@ -1498,6 +1501,10 @@ export async function updateIssueCore(
   // the review hand-off: entering Review, or a different reviewer while there
   const nextReviewer = 'reviewer_id' in patch ? w.reviewer_id : issue.reviewer_id
   w.review_at = reviewStamp(issue, { status: nextStatus, reviewer_id: nextReviewer }, now)
+  // the status stamp: the status changed in this project (moveIssueCore
+  // clears it). Set only on a change, because ctx.db.patch unsets a key
+  // whose value is undefined.
+  if (nextStatus !== issue.status) w.status_at = now
   if (toggle !== undefined) w.archived_at = nextArchivedAt // undefined clears via patch
   w.updated_at = now
   // -- a leaf's plan lands as given once the resulting pair holds
@@ -1847,7 +1854,13 @@ export async function moveIssueCore(
   if (issue.assignee_id !== undefined && !replacedLater(issue, later, 'assignee_id')) {
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
-  const w: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
+  // a status set in the source project may predate the reader's access, so a
+  // move clears the status stamp (ctx.db.patch unsets it)
+  const w: Partial<WithoutSystemFields<Doc<'issues'>>> = {
+    project_id,
+    updated_at: now,
+    status_at: undefined,
+  }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
   const live = projectLiveness(ctx)
   // Which projects are live once the move lands, for the group tests of the
@@ -1899,7 +1912,12 @@ export async function moveIssueCore(
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   for (const { row, clearReviewer } of carried) {
     await assertRoom(ctx)
-    const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
+    // a carried subtask's status stamp goes too, as the task's above
+    const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = {
+      project_id,
+      updated_at: now,
+      status_at: undefined,
+    }
     if (clearReviewer) patch.reviewer_id = undefined
     await ctx.db.patch(row._id, patch)
     await moveAttachmentRows(ctx, row.id, project_id, room)

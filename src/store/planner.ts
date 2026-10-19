@@ -211,7 +211,6 @@ const rows = {
   hiddenParentTasks: new Set<string>(),
   links: new Map<string, Row<'issue_links'>>(),
   milestones: new Map<string, Row<'milestones'>>(),
-  activity: new Map<string, Row<'activity_events'>>(),
   labels: new Map<string, Row<'labels'>>(),
   issueLabels: [] as Row<'issue_labels'>[],
   // who follows which task (0114). The snapshot carries own rows only, exactly
@@ -221,7 +220,7 @@ const rows = {
   issueSubs: [] as Row<'issue_subscriptions'>[],
   attachments: new Map<string, Row<'issue_attachments'>>(),
   // comments for ONE issue — the open modal's (watchComments); other issues'
-  // comments are never fetched, so this is not org-wide state like activity
+  // comments are never fetched, so this is not org-wide state
   comments: new Map<string, Row<'comments'>>(),
   // the watched issue's history, delivered with its comments (commentThread)
   threadEvents: [] as Row<'activity_events'>[],
@@ -586,10 +585,6 @@ function purgeIssueRows(subtree: Set<string>) {
   rows.issueSubs = rows.issueSubs.filter((subscription) => !subtree.has(subscription.issue_id))
   ;[...rows.messages.values()].forEach((message) => {
     if (subtree.has(message.issue_id)) rows.messages.delete(message.id)
-  })
-  ;[...rows.activity.values()].forEach((event) => {
-    if (event.target_type === 'issue' && subtree.has(event.target_id))
-      rows.activity.delete(event.id)
   })
   rows.orgLoad = rows.orgLoad.filter(
     (load) => load.issue_id === null || !subtree.has(load.issue_id),
@@ -1877,7 +1872,7 @@ function rebuildComments() {
   PLANNER.comments = [...rows.comments.values()]
     .map(shapeComment)
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
-  // oldest first, the same order as P.activity
+  // oldest first
   PLANNER.threadEvents = rows.threadEvents
     .map((e) => shapeActivity(e, uuidToKey))
     .sort((a, b) => a.ts - b.ts)
@@ -2189,15 +2184,12 @@ function rebuild(now = new Date()) {
     loadByOwner,
   )
 
-  // milestones / activity
+  // milestones
   P.milestones = [...rows.milestones.values()]
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     .map(shapeMilestone)
-  P.activity = [...rows.activity.values()]
-    .map((event) => shapeActivity(event, uuidToKey))
-    .sort((a, b) => a.ts - b.ts)
 
-  // comments — the watched issue's only (oldest first, like activity; the
+  // comments — the watched issue's only (oldest first, like its history; the
   // discussion spine reverses for newest-first display). Ties on the insert
   // timestamp order by id so two optimistic rows can't swap on redelivery.
   rebuildComments()
@@ -2591,8 +2583,8 @@ export type NewIssueInput = IssuePatch & { project: string }
    patch shape issues.update validates (derived below, so a validator change
    is a type error here) — key PRESENT means "set this field", null is the
    wire form of a clear. Never emits a server-owned column (num, org_id,
-   updated_at, done_at, remaining_set_at, archived_at have no slot in the
-   validator either). */
+   updated_at, done_at, remaining_set_at, review_at, status_at, archived_at
+   have no slot in the validator either). */
 type IssueWirePatch = FunctionArgs<typeof api.issues.update>['patch']
 function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
   const db: IssueWirePatch = {}
@@ -2639,9 +2631,12 @@ function applyIssuePatchToRow(row: Row<'issues'>, patch: IssuePatch) {
   // mirror the server's pause rule: a move into Done or Backlog resumes
   if (db.status === 'done' || db.status === 'backlog') row.paused = false
   row.updated_at = new Date().toISOString() // mirror the server's touch
-  // mirror doneStampUpdate (0071): a move into Done stamps now, out clears
-  if (db.status !== undefined && db.status !== prevStatus)
+  // mirror updateIssueCore's stamps: a status change stamps status_at now,
+  // and a move into Done stamps done_at while a move out clears it (0071)
+  if (db.status !== undefined && db.status !== prevStatus) {
     row.done_at = db.status === 'done' ? row.updated_at : undefined
+    row.status_at = row.updated_at
+  }
   if (remChanged) row.remaining_set_at = newRem != null ? row.updated_at : undefined
   // mirror updateIssueCore's review-time stamp: entering Review sets the
   // project's review time with a fresh stamp unless the same patch states
@@ -2870,7 +2865,6 @@ export const PLANNER = {
   issues: [] as IssueVM[],
   issueById: {} as Record<string, IssueVM>,
   milestones: [] as MilestoneVM[],
-  activity: [] as ActivityVM[],
   // the watched task's history, delivered with its comments (watchComments)
   threadEvents: [] as ActivityVM[],
   labels: [] as LabelVM[],
@@ -3945,6 +3939,7 @@ export const PLANNER = {
         { status: it.status || 'backlog', reviewer_id: it.reviewer || undefined },
         now,
       ),
+      status_at: now, // mirror createIssueCore's status stamp
       created_at: now,
       updated_at: now,
     }
@@ -4209,6 +4204,7 @@ export const PLANNER = {
       if (!moved) continue
       moved.project_id = projectId
       moved.updated_at = now
+      moved.status_at = undefined // the server's move clears the status stamp
     }
     if (leavesParent) {
       row.parent_id = undefined
@@ -6166,9 +6162,6 @@ export const PLANNER = {
     ;[...rows.projects.values()].forEach((p) => {
       if (p.lead_id === id) p.lead_id = undefined
     })
-    ;[...rows.activity.values()].forEach((e) => {
-      if (e.actor_id === id) e.actor_id = undefined
-    })
     for (const e of rows.threadEvents) if (e.actor_id === id) e.actor_id = undefined
     rows.profiles.delete(id)
     rebuild()
@@ -6853,7 +6846,6 @@ function adopt(source: Snapshot) {
   rows.hiddenParentTasks = new Set(snap.issues.filter((r) => r.has_hidden_parent).map((r) => r.id))
   rows.links = new Map(snap.links.map((r) => [r.id, r]))
   rows.milestones = new Map(snap.milestones.map((r) => [r.id, r]))
-  rows.activity = new Map(snap.activity.map((r) => [r.id, r]))
   rows.labels = new Map(snap.labels.map((r) => [r.id, r]))
   rows.issueLabels = snap.issueLabels
   rows.issueSubs = snap.issueSubs

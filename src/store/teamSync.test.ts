@@ -79,7 +79,7 @@ function fixture(myRole: Role) {
     remaining_set_at: ago(5 * HOUR),
     review_at: ago(5 * HOUR),
   })
-  const todo = task('To do', { assignee_id: aisha.id })
+  const todo = task('To do', { assignee_id: aisha.id, status_at: ago(100 * HOUR) })
   const snap: Snapshot = {
     auth_user_id: 'test-account',
     myProfileIds: [me.id],
@@ -246,6 +246,48 @@ describe('the Team sync store', () => {
     expect(task('To do').createdAt).toBe(Date.parse(f.todo.created_at))
     expect(task('In review').reviewAt).toBe(Date.parse(f.review.review_at!))
     expect(task('To do').reviewAt).toBeNull()
+    expect(task('To do').statusAt).toBe(Date.parse(f.todo.status_at!))
+    expect(task('In review').statusAt).toBeNull()
+  })
+
+  it('paints the status stamp the way the server stamps and clears it', () => {
+    // a second top-level project to move into, and a leaf to become a subtask
+    const [meta2, sub2] = [crypto.randomUUID(), crypto.randomUUID()]
+    const project = f.snap.projects[1]
+    deliver({
+      ...f.snap,
+      projects: [
+        ...f.snap.projects,
+        { ...f.snap.projects[0], id: meta2, key: 'P3', num: 3, name: 'Other' },
+        { ...project, id: sub2, key: 'P4', num: 4, name: 'Other sub', parent_id: meta2 },
+      ],
+      issues: [
+        ...f.snap.issues,
+        { ...f.todo, id: crypto.randomUUID(), num: 9, title: 'Child', status_at: undefined },
+      ],
+    })
+    const before = Date.now()
+    // a status change stamps now
+    P.updateIssue(task('To do').id, { status: 'progress' })
+    const stamped = task('To do').statusAt
+    expect(stamped).toBeGreaterThanOrEqual(before)
+    // a title edit and a patch that resends the status keep it
+    P.updateIssue(task('To do').id, { title: 'To do' })
+    P.updateIssue(task('To do').id, { status: 'progress' })
+    expect(task('To do').statusAt).toBe(stamped)
+    // a move to another project clears it on the task and the subtask it carries
+    P.updateIssue(task('Child').id, { status: 'progress' })
+    expect(task('Child').statusAt).toBeGreaterThanOrEqual(before)
+    P.updateIssue(task('Child').id, { parent: task('To do').id })
+    expect(P.moveFamily(task('To do'), sub2).carried.map((c) => c.title)).toEqual(['Child'])
+    P.moveIssue(task('To do').id, sub2)
+    expect(task('To do').project).toBe(sub2)
+    expect(task('To do').statusAt).toBeNull()
+    expect(task('Child').statusAt).toBeNull()
+    // a new task starts with the stamp at its creation
+    const key = P.addIssue({ project: project.id, title: 'Fresh', status: 'todo' })!
+    expect(P.issueById[key].statusAt).not.toBeNull()
+    expect(P.issueById[key].statusAt).toBe(P.issueById[key].createdAt)
   })
 
   it('paints the review hand-off the way the server stamps it', () => {

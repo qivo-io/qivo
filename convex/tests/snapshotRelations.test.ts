@@ -488,11 +488,12 @@ describe('the snapshot of an organization with a long archive', () => {
     expect(snapshot!.links).toHaveLength(ACTIVE - 1)
     expect(snapshot!.attachments).toHaveLength(ACTIVE)
     expect(snapshot!.issueSubs).toHaveLength(ACTIVE)
-    expect(snapshot!.activity).toHaveLength(400)
+    expect(snapshot!.activity).toEqual([])
     expect(snapshot!.messages).toHaveLength(200)
     // The task-by-task read this replaced took four ranges per visible task,
-    // over 6,000 here.
-    expect(metrics.databaseQueries.used).toBeLessThan(400)
+    // over 6,000 here. The read takes 230 now; the activity feed it no
+    // longer reads took 331.
+    expect(metrics.databaseQueries.used).toBeLessThan(300)
     expect(metrics.documentsRead.used).toBeLessThan(12_000)
   }, 120_000)
 })

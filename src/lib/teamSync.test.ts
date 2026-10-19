@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEMO_EVENT_TIME,
   DEMO_SYNC_TIME,
   MARKETING_DEMO,
   marketingInstant,
+  northstarTaskTimes,
 } from '../../convex/internal/marketingDemoData'
 import { taskOwnerId } from '../../convex/lib/review'
 import { syncSince } from '../../convex/lib/teamSync'
-import { restProvenance } from '../../convex/machine/shared'
 import { parseMd } from './md'
 import {
   type BlockerIssue,
@@ -15,8 +14,6 @@ import {
   blockersOf,
   dayLabel,
   doneSince,
-  handoffAt,
-  handoffInstant,
   loadFigure,
   mentionBody,
   milestonesAhead,
@@ -34,13 +31,11 @@ import {
   type SentencePart,
   type SinceMark,
   type SyncDay,
-  type SyncEvent,
   type SyncIssue,
   type SyncProject,
   scopeMetaIds,
   scopeProjectIds,
   stampLabel,
-  statusMoveOf,
   syncDay,
   syncRoster,
   syncRows,
@@ -78,18 +73,13 @@ const task = (o: Partial<SyncIssue> & { key: string }): SyncIssue => {
     updatedAt: at(20),
     doneAt: null,
     reviewAt: null,
+    statusAt: null,
+    createdAt: at(1),
     ...o,
   }
   if (!('owner' in o)) t.owner = t.status === 'review' && t.reviewer ? t.reviewer : t.assignee
   return t
 }
-const ev = (targetId: string, ts: number, verb: string, detail?: string): SyncEvent => ({
-  ts,
-  verb,
-  targetType: 'issue',
-  targetId,
-  detail,
-})
 const keys = (list: readonly { key: string }[]) => list.map((t) => t.key)
 const byId = (...list: SyncIssue[]): Record<string, BlockerIssue> =>
   Object.fromEntries(list.map((t) => [t.id, t]))
@@ -262,104 +252,6 @@ describe('personGroups', () => {
   })
 })
 
-describe('statusMoveOf', () => {
-  it('reads the browser grammar', () => {
-    expect(statusMoveOf('moved', 'from In Progress to In Review')).toBe('review')
-    expect(statusMoveOf('moved', 'from To Do to In Progress')).toBe('progress')
-    expect(statusMoveOf('moved', 'from In Review to Done')).toBe('done')
-    expect(statusMoveOf('moved', 'from In Review to Backlog')).toBe('backlog')
-    expect(statusMoveOf('moved', 'from Backlog to To Do')).toBe('todo')
-  })
-  it('reads the machine diff', () => {
-    expect(statusMoveOf('changed', '(status In Progress → In Review) — via MCP')).toBe('review')
-    // rows written since October 2026 sign after a comma
-    expect(statusMoveOf('changed', '(status In Progress → In Review), via MCP')).toBe('review')
-    expect(statusMoveOf('changed', '(status To Do → Done), via the REST API (CI key)')).toBe('done')
-    expect(
-      statusMoveOf(
-        'changed',
-        '(title “A” → “B”, status To Do → Done, remaining 6 h → 2 h) — via API',
-      ),
-    ).toBe('done')
-  })
-  it('ignores the other moves and anything that only mentions a status', () => {
-    expect(statusMoveOf('moved', 'under QN-4 (from QN-3)')).toBeNull()
-    expect(statusMoveOf('moved', 'to the Firmware sub-project (from Electronics)')).toBeNull()
-    expect(statusMoveOf('moved', 'from In Review to In Review')).toBeNull()
-    expect(statusMoveOf('moved', 'from Somewhere to In Review')).toBeNull()
-    expect(statusMoveOf('changed', '(title “Fix status To Do - Done” → “x”) — via MCP')).toBeNull()
-    expect(statusMoveOf('changed', '(remaining 6 h → 2 h) — via MCP')).toBeNull()
-    expect(statusMoveOf('renamed', 'status In Review')).toBeNull()
-    expect(statusMoveOf('moved', undefined)).toBeNull()
-  })
-  it('finds no status move in an agent key name (convex/machine/shared.ts restProvenance)', () => {
-    const name = 'x, status To Do → Done)'
-    const title = '(title “A” → “B”)'
-    // the raw name would read as a move to Done
-    expect(statusMoveOf('changed', `${title}, via the REST API (${name})`)).toBe('done')
-    expect(statusMoveOf('changed', `${title}, ${restProvenance(name)}`)).toBeNull()
-    expect(statusMoveOf('changed', `(status To Do → In Progress), ${restProvenance(name)}`)).toBe(
-      'progress',
-    )
-  })
-})
-
-describe('handoffAt', () => {
-  it('is the latest move into review, or a reviewer named later while there', () => {
-    const feed = [
-      ev('QN-1', at(21), 'moved', 'from To Do to In Review'),
-      ev('QN-1', at(22), 'moved', 'from In Review to In Progress'),
-      ev('QN-1', at(24), 'moved', 'from In Progress to In Review'),
-      ev('QN-2', at(26), 'moved', 'from In Progress to Done'),
-    ]
-    expect(handoffAt('QN-1', feed)).toBe(at(24))
-    const named = [...feed, ev('QN-1', at(25), 'set the reviewer of', 'to Aisha Rahman')]
-    expect(handoffAt('QN-1', named.reverse())).toBe(at(25))
-    const machine = [...feed, ev('QN-1', at(25), 'changed', '(reviewer unset → Aisha) — via MCP')]
-    expect(handoffAt('QN-1', machine)).toBe(at(25))
-  })
-  it('reads a reviewer named with no status move in the feed as the hand-off', () => {
-    // the move into Review has dropped out of the capped feed; the naming has not
-    expect(handoffAt('QN-1', [ev('QN-1', at(28, 15), 'set the reviewer of', 'to Aisha')])).toBe(
-      at(28, 15),
-    )
-    expect(handoffAt('QN-1', [ev('QN-1', at(28), 'changed', '(reviewer unset → Aisha)')])).toBe(
-      at(28),
-    )
-    // a reviewer named before a move out is no hand-off
-    expect(
-      handoffAt('QN-1', [
-        ev('QN-1', at(21), 'set the reviewer of', 'to Aisha'),
-        ev('QN-1', at(22), 'moved', 'from In Review to In Progress'),
-      ]),
-    ).toBeNull()
-  })
-  it('knows nothing when the task moved out or never moved in', () => {
-    expect(
-      handoffAt('QN-1', [
-        ev('QN-1', at(21), 'moved', 'from To Do to In Review'),
-        ev('QN-1', at(22), 'moved', 'from In Review to Done'),
-      ]),
-    ).toBeNull()
-    expect(handoffAt('QN-1', [ev('QN-2', at(21), 'moved', 'from To Do to In Review')])).toBeNull()
-    expect(handoffAt('QN-1', [ev('QN-1', at(21), 'created')])).toBeNull()
-    expect(
-      handoffAt('QN-1', [
-        ev('QN-1', at(21), 'moved', 'from To Do to In Review'),
-        ev('QN-1', at(22), 'changed', '(reviewer Ben → unset) — via MCP'),
-      ]),
-    ).toBe(at(21))
-  })
-  it('takes the server stamp, else the feed, else nothing', () => {
-    const t = task({ key: 'QN-1', status: 'review', reviewAt: at(23), updatedAt: at(27) })
-    const feed = [ev('QN-1', at(22), 'moved', 'from To Do to In Review')]
-    expect(handoffInstant(t, feed)).toBe(at(23))
-    expect(handoffInstant({ ...t, reviewAt: null }, feed)).toBe(at(22))
-    // never the last write (a Remaining edit, a reschedule): unknown is unknown
-    expect(handoffInstant({ ...t, reviewAt: null }, [])).toBeNull()
-  })
-})
-
 describe('rowMarks', () => {
   const SINCE = at(25, 0)
   const base = {
@@ -368,7 +260,6 @@ describe('rowMarks', () => {
     verdict: null,
     issueById: {},
     lastCommentAt: null,
-    activity: [],
   } as const
 
   it('marks In Progress with nothing since as untouched, from the last touch', () => {
@@ -400,23 +291,57 @@ describe('rowMarks', () => {
     // the other marks do not wait for it
     expect(rowMarks({ ...t, remaining: undefined }, unknown).noEstimate).toBe(true)
   })
-  it('says the latest status move or comment since the sync', () => {
-    const t = task({ key: 'QN-1', status: 'progress', assignee: 'aisha', updatedAt: at(27) })
-    const moved = [ev('QN-1', at(27), 'moved', 'from To Do to In Progress')]
-    expect(rowMarks(t, { ...base, activity: moved }).since).toEqual({
+  it('says the latest status change or comment since the sync', () => {
+    const t = task({
+      key: 'QN-1',
+      status: 'progress',
+      assignee: 'aisha',
+      updatedAt: at(27),
+      statusAt: at(27),
+    })
+    // worded from the task's current status
+    expect(rowMarks(t, base).since).toEqual({
       kind: 'changed',
       what: 'moved to In Progress',
       at: at(27),
     })
-    expect(rowMarks(t, { ...base, activity: moved, lastCommentAt: at(28) }).since).toMatchObject({
+    expect(rowMarks(t, { ...base, lastCommentAt: at(28) }).since).toMatchObject({
       what: 'commented',
     })
-    expect(rowMarks(t, { ...base, activity: moved, lastCommentAt: at(26) }).since).toMatchObject({
+    expect(rowMarks(t, { ...base, lastCommentAt: at(26) }).since).toMatchObject({
       what: 'moved to In Progress',
     })
-    // a move before the sync is not a change since
-    const old = [ev('QN-1', at(24), 'moved', 'from To Do to In Progress')]
-    expect(rowMarks({ ...t, status: 'todo' }, { ...base, activity: old }).since).toBeNull()
+    // a change before the sync is not a change since
+    expect(rowMarks({ ...t, status: 'todo', statusAt: at(24) }, base).since).toBeNull()
+    // the status a task was created with is no change, however new the task
+    expect(rowMarks({ ...t, status: 'todo', createdAt: at(27) }, base).since).toBeNull()
+    // no stamp (an older task, or one moved to another project) says nothing
+    expect(rowMarks({ ...t, status: 'todo', statusAt: null }, base).since).toBeNull()
+  })
+  it("says only a comment on a reviewer's review without a recorded hand-off", () => {
+    // a leaf again after its subtasks went: In Review with a reviewer, a
+    // status stamp and no hand-off (model/issues.ts clearParentRemaining)
+    const r = task({
+      key: 'QN-2',
+      status: 'review',
+      assignee: 'ben',
+      reviewer: 'aisha',
+      reviewAt: null,
+      statusAt: at(27),
+      updatedAt: at(27),
+    })
+    expect(rowMarks(r, base).since).toBeNull()
+    expect(rowMarks(r, { ...base, lastCommentAt: at(28) }).since).toEqual({
+      kind: 'changed',
+      what: 'commented',
+      at: at(28),
+    })
+    // the assignee's page reads the status change as on any other row
+    expect(rowMarks(r, { ...base, person: 'ben' }).since).toEqual({
+      kind: 'changed',
+      what: 'moved to In Review',
+      at: at(27),
+    })
   })
   it("reads a review on the reviewer's page as handed or waiting", () => {
     const r = task({ key: 'QN-2', status: 'review', assignee: 'ben', reviewer: 'aisha' })
@@ -424,23 +349,15 @@ describe('rowMarks', () => {
     expect(m.since).toEqual({ kind: 'handed', at: at(28) })
     expect(m.reviewFor).toBe('ben')
     expect(m.noReviewer).toBe(false)
-    // from the feed when the task has no stamp
-    const handed = [ev('QN-2', at(28), 'moved', 'from In Progress to In Review')]
-    expect(rowMarks({ ...r, updatedAt: at(28) }, { ...base, activity: handed }).since).toEqual({
-      kind: 'handed',
-      at: at(28),
-    })
 
     // handed before the sync, and nothing since the hand-off's own write
     const r2 = { ...r, reviewAt: at(23), updatedAt: at(23) + 400 }
     expect(rowMarks(r2, base).since).toEqual({ kind: 'waiting', at: at(23) })
     // however long ago that sync was: the brief tests the hand-off only
     expect(rowMarks(r2, { ...base, since: at(27) }).since).toEqual({ kind: 'waiting', at: at(23) })
-    // a comment, a later write or another event since the hand-off is activity
+    // a comment or a later write since the hand-off is a touch
     expect(rowMarks(r2, { ...base, lastCommentAt: at(24) }).since).toBeNull()
     expect(rowMarks({ ...r2, updatedAt: at(24) }, base).since).toBeNull()
-    const linked = [ev('QN-2', at(24), 'linked')]
-    expect(rowMarks(r2, { ...base, activity: linked }).since).toBeNull()
     expect(rowMarks(r2, { ...base, lastCommentAt: at(27) }).since).toEqual({
       kind: 'changed',
       what: 'commented',
@@ -458,7 +375,7 @@ describe('rowMarks', () => {
     })
     // re-estimated in the sync: a later write, not a hand-off
     const edited = { ...r, remaining: 3, updatedAt: at(29, 9) }
-    expect(handoffInstant(edited, [])).toBe(at(23))
+    expect(edited.reviewAt).toBe(at(23))
     expect(rowMarks(edited, base).since).toBeNull()
   })
   it('says neither handed nor waiting when the hand-off is unknown', () => {
@@ -555,11 +472,10 @@ describe('waitingOnReview and doneSince', () => {
       task({ key: 'QN-5', status: 'progress', assignee: 'aisha', reviewer: 'leo' }),
       task({ key: 'QN-6', status: 'review', assignee: 'aisha', reviewer: 'nora' }),
     ]
-    const feed = [ev('QN-2', at(22), 'moved', 'from In Progress to In Review')]
-    // an unknown hand-off (QN-6) is listed, last and without an age
-    expect(waitingOnReview('aisha', rows, feed)).toEqual([
-      { issue: rows[1], reviewer: 'ben', since: at(22) },
+    // an unknown hand-off (QN-2, QN-6) is listed, last and without an age
+    expect(waitingOnReview('aisha', rows)).toEqual([
       { issue: rows[0], reviewer: 'leo', since: at(26) },
+      { issue: rows[1], reviewer: 'ben', since: null },
       { issue: rows[5], reviewer: 'nora', since: null },
     ])
   })
@@ -690,13 +606,11 @@ describe('needsOwner and needsReviewer', () => {
       task({ key: 'QN-5', status: 'review', assignee: 'ben', updatedAt: at(20) }),
       task({ key: 'QN-6', status: 'review', assignee: 'ben', reviewAt: at(26) }),
     ]
-    const feed = [ev('QN-1', at(21), 'moved', 'from In Progress to In Review')]
-    const order = (list: SyncIssue[]) =>
-      needsReviewer(list, feed).map((r) => [r.issue.key, r.since])
+    const order = (list: SyncIssue[]) => needsReviewer(list).map((r) => [r.issue.key, r.since])
     expect(order(rows)).toEqual([
-      ['QN-1', at(21)],
       ['QN-2', at(24)],
       ['QN-6', at(26)],
+      ['QN-1', null],
       ['QN-5', null],
     ])
     // a Remaining edit on the oldest review keeps its place
@@ -841,8 +755,10 @@ describe('the Northstar seed', () => {
   const parents = new Set(issues.map((i) => i.parent))
   const tasks = issues
     .filter((i) => !i.archived && !parents.has(i.key))
-    .map((i) =>
-      task({
+    .map((i) => {
+      const times = northstarTaskTimes(ANCHOR, new Date(seeded).toISOString(), i)
+      const ms = (iso: string | undefined) => (iso === undefined ? null : Date.parse(iso))
+      return task({
         key: i.key,
         project: i.project,
         status: i.status,
@@ -852,11 +768,13 @@ describe('the Northstar seed', () => {
         owner: taskOwnerId({ status: i.status, assignee_id: i.assignee, reviewer_id: i.reviewer }),
         remaining: i.remaining,
         paused: !!i.paused,
-        updatedAt: i.touchedDay === undefined ? seeded : instant(i.touchedDay, DEMO_EVENT_TIME),
-        doneAt: i.status === 'done' ? instant(-3, '15:00:00.000Z') : null,
-        reviewAt: i.reviewDay === undefined ? null : instant(i.reviewDay, DEMO_EVENT_TIME),
-      }),
-    )
+        updatedAt: Date.parse(times.updated),
+        doneAt: ms(times.done),
+        reviewAt: ms(times.review),
+        statusAt: Date.parse(times.status),
+        createdAt: Date.parse(times.created),
+      })
+    })
   const sinceOf = (key: string) => {
     const day = people.find((p) => p.key === key)?.syncDay
     const stamp = day === undefined ? null : { at: marketingInstant(ANCHOR, day, DEMO_SYNC_TIME) }
@@ -865,19 +783,20 @@ describe('the Northstar seed', () => {
 
   it('reads untouched work, waiting and handed reviews on the owners’ pages', () => {
     const byKind = new Map<SinceMark['kind'], string[]>()
+    const moves: [string, string][] = []
     for (const t of tasks) {
-      if ((t.status !== 'progress' && t.status !== 'review') || !t.owner) continue
+      // the page's rows: To Do, In Progress and In Review
+      if (t.status === 'backlog' || t.status === 'done' || !t.owner) continue
       if (t.owner === 'atlas') continue // an agent is not synced
-      // the import event is the task's one activity event, at its last write
       const m = rowMarks(t, {
         person: t.owner,
         since: sinceOf(t.owner),
         verdict: null,
         issueById: {},
         lastCommentAt: lastComment.get(t.key) ?? null,
-        activity: [ev(t.id, t.updatedAt, 'created')],
       }).since
       if (m) byKind.set(m.kind, [...(byKind.get(m.kind) ?? []), t.key].sort())
+      if (m?.kind === 'changed' && m.what !== 'commented') moves.push([t.key, m.what])
     }
     expect(byKind.get('untouched')).toEqual(['landing-copy', 'room-cards'])
     // Nora, never synced, reads from Tuesday; Ben synced on Friday
@@ -889,7 +808,11 @@ describe('the Northstar seed', () => {
       'pcb-review',
       'wifi-setup',
     ])
-    expect(byKind.get('changed')).toContain('support-playbook')
+    expect(byKind.get('changed')).toEqual(
+      expect.arrayContaining(['support-playbook', 'offline-buffer']),
+    )
+    // Ben moved it into To Do on Friday after his sync; its last comment is older
+    expect(moves).toEqual([['birch-installation', 'moved to To Do']])
   })
 
   it('credits a review to Done to its reviewer, and the work to its assignee', () => {

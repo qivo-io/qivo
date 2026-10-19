@@ -12,7 +12,7 @@ declare class TextEncoder {
   encode(input: string): Uint8Array
 }
 
-export const MARKETING_DEMO_VERSION = 7
+export const MARKETING_DEMO_VERSION = 8
 
 export type DemoPerson = {
   key: string
@@ -72,9 +72,9 @@ export type DemoIssue = {
   // anchor at DEMO_EVENT_TIME: every Review task, and a Done task reviewed to
   // Done. Absent = never handed over.
   reviewDay?: number
-  // Last written (updated_at and the import activity), as a negative day
-  // offset at DEMO_EVENT_TIME, so Team sync reads the task as untouched or
-  // its review as waiting. Absent = the seed instant.
+  // Last written (updated_at), as a negative day offset at DEMO_EVENT_TIME,
+  // so Team sync reads the task as untouched or its review as waiting.
+  // Absent = the seed instant.
   touchedDay?: number
   labels: string[]
 }
@@ -1833,6 +1833,188 @@ const issues: DemoIssue[] = [
   ]),
 ]
 
+/** One change in a task's history. The seed writes it after the task's
+ * import row, in the words the app's own writer uses (model/demoSeed.ts).
+ * `day` is a negative day offset from the anchor; `time` a UTC time of day. */
+export type DemoChange = {
+  key: string
+  issue: string
+  actor: string
+  day: number
+  time: string
+} & (
+  | { kind: 'status'; from: IssueStatus; to: IssueStatus; via?: 'mcp' }
+  | { kind: 'label'; label: string } // a label key the task carries
+  | { kind: 'link'; target: string } // a task key this task blocks in `links`
+)
+
+/* Oldest first within each task, on the weekdays of the week before the
+ * anchor. A move into Done is at DEMO_DONE_DAY and DEMO_DONE_TIME, and the
+ * last move into Review of a task still In Review, or reviewed to Done, is
+ * at its reviewDay and DEMO_EVENT_TIME, so the stamps agree with the history
+ * (northstarTaskTimes). Atlas, an agent, writes only the MCP change. */
+const history: DemoChange[] = [
+  {
+    key: 'pcb-review-started',
+    issue: 'pcb-review',
+    actor: 'leo',
+    day: -7,
+    time: '10:00:00.000Z',
+    kind: 'status',
+    from: 'todo',
+    to: 'progress',
+  },
+  {
+    key: 'pcb-review-handed',
+    issue: 'pcb-review',
+    actor: 'leo',
+    day: -4,
+    time: '16:00:00.000Z',
+    kind: 'status',
+    from: 'progress',
+    to: 'review',
+  },
+  {
+    key: 'telemetry-contract-started',
+    issue: 'telemetry-contract',
+    actor: 'aisha',
+    day: -7,
+    time: '10:00:00.000Z',
+    kind: 'status',
+    from: 'todo',
+    to: 'progress',
+  },
+  {
+    key: 'telemetry-contract-blocks-ingestion',
+    issue: 'telemetry-contract',
+    actor: 'aisha',
+    day: -6,
+    time: '15:00:00.000Z',
+    kind: 'link',
+    target: 'ingestion',
+  },
+  {
+    key: 'telemetry-contract-done',
+    issue: 'telemetry-contract',
+    actor: 'aisha',
+    day: -3,
+    time: '15:00:00.000Z',
+    kind: 'status',
+    from: 'progress',
+    to: 'done',
+  },
+  {
+    key: 'offline-buffer-started',
+    issue: 'offline-buffer',
+    actor: 'aisha',
+    day: -7,
+    time: '10:00:00.000Z',
+    kind: 'status',
+    from: 'todo',
+    to: 'progress',
+  },
+  {
+    key: 'offline-buffer-reliability',
+    issue: 'offline-buffer',
+    actor: 'aisha',
+    day: -5,
+    time: '15:00:00.000Z',
+    kind: 'label',
+    label: 'reliability',
+  },
+  {
+    key: 'offline-buffer-handed',
+    issue: 'offline-buffer',
+    actor: 'aisha',
+    day: -4,
+    time: '15:00:00.000Z',
+    kind: 'status',
+    from: 'progress',
+    to: 'review',
+  },
+  {
+    key: 'offline-buffer-returned',
+    issue: 'offline-buffer',
+    actor: 'leo',
+    day: -3,
+    time: '16:00:00.000Z',
+    kind: 'status',
+    from: 'review',
+    to: 'progress',
+  },
+  {
+    key: 'design-tokens-handed',
+    issue: 'design-tokens',
+    actor: 'sofia',
+    day: -5,
+    time: '16:00:00.000Z',
+    kind: 'status',
+    from: 'progress',
+    to: 'review',
+  },
+  {
+    key: 'design-tokens-done',
+    issue: 'design-tokens',
+    actor: 'daniel',
+    day: -3,
+    time: '15:00:00.000Z',
+    kind: 'status',
+    from: 'review',
+    to: 'done',
+  },
+  {
+    key: 'room-cards-started',
+    issue: 'room-cards',
+    actor: 'daniel',
+    day: -7,
+    time: '10:00:00.000Z',
+    kind: 'status',
+    from: 'todo',
+    to: 'progress',
+  },
+  {
+    key: 'accessibility-audit-started',
+    issue: 'accessibility-audit',
+    actor: 'atlas',
+    day: -6,
+    time: '11:00:00.000Z',
+    kind: 'status',
+    from: 'todo',
+    to: 'progress',
+    via: 'mcp',
+  },
+  {
+    key: 'installation-checklist-started',
+    issue: 'installation-checklist',
+    actor: 'ben',
+    day: -7,
+    time: '10:00:00.000Z',
+    kind: 'status',
+    from: 'todo',
+    to: 'progress',
+  },
+  {
+    key: 'installation-checklist-handed',
+    issue: 'installation-checklist',
+    actor: 'ben',
+    day: -3,
+    time: '16:00:00.000Z',
+    kind: 'status',
+    from: 'progress',
+    to: 'review',
+  },
+  {
+    key: 'birch-installation-planned',
+    issue: 'birch-installation',
+    actor: 'ben',
+    day: -3,
+    time: '11:00:00.000Z',
+    kind: 'status',
+    from: 'backlog',
+    to: 'todo',
+  },
+]
+
 const links: { source: string; target: string; type: LinkType }[] = [
   { source: 'sensor-selection', target: 'pcb-review', type: 'blocks' },
   { source: 'pcb-review', target: 'pcb-bringup', type: 'blocks' },
@@ -1886,6 +2068,7 @@ export const MARKETING_DEMO = {
     { key: 'agent', name: 'Agent', color: '#334155' },
   ],
   links,
+  history,
   milestones: [
     { key: 'pcb-released', project: 'sensor', name: 'Revision B ready', week: 1 },
     { key: 'prototype-validated', project: 'sensor', name: 'Prototype validated', week: 3 },
@@ -3723,13 +3906,44 @@ export function marketingDate(anchor: string, dayOffset: number): string {
 /* The seeded times of day (UTC). A person's last Team sync is at
  * DEMO_SYNC_TIME; a hand-off to review or a backdated last write is at
  * DEMO_EVENT_TIME, after that day's sample comments (14:00 plus a minute per
- * same-day reply) and the seeded completions (15:00). */
+ * same-day reply) and the seeded completions (DEMO_DONE_TIME on
+ * DEMO_DONE_DAY). */
 export const DEMO_SYNC_TIME = '09:10:00.000Z'
 export const DEMO_EVENT_TIME = '16:00:00.000Z'
+export const DEMO_DONE_DAY = -3
+export const DEMO_DONE_TIME = '15:00:00.000Z'
 
 /** The instant `dayOffset` days from the anchor at `time` (UTC). */
 export function marketingInstant(anchor: string, dayOffset: number, time: string): string {
   return `${marketingDate(anchor, dayOffset)}T${time}`
+}
+
+/** A seeded task's instants (ISO): created, last written, Done, handed to
+ * review and status last set. `now` is the seed's own instant. The status
+ * was last set at the task's last status change in `history`, else when it
+ * reached Done or was handed to review, else at its import. The last write
+ * is never before the status was last set. */
+export function northstarTaskTimes(
+  anchor: string,
+  now: string,
+  issue: DemoIssue,
+  changes: readonly DemoChange[] = history,
+) {
+  const created = marketingInstant(anchor, -21, '09:00:00.000Z')
+  const done =
+    issue.status === 'done' ? marketingInstant(anchor, DEMO_DONE_DAY, DEMO_DONE_TIME) : undefined
+  const review =
+    issue.reviewDay === undefined
+      ? undefined
+      : marketingInstant(anchor, issue.reviewDay, DEMO_EVENT_TIME)
+  const lastMove = changes.filter((c) => c.issue === issue.key && c.kind === 'status').at(-1)
+  const status =
+    (lastMove && marketingInstant(anchor, lastMove.day, lastMove.time)) ?? done ?? review ?? created
+  const touched =
+    issue.touchedDay === undefined
+      ? now
+      : marketingInstant(anchor, issue.touchedDay, DEMO_EVENT_TIME)
+  return { created, updated: touched > status ? touched : status, done, review, status }
 }
 
 export function marketingWeek(anchor: string, weekOffset: number): string {

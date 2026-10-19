@@ -527,14 +527,6 @@ describe('apiAccess.revoke', () => {
       ['revoked', f.admin.id, 'admin', 'the connection to “Claude”', f.admin.id],
       ['revoked', f.agent.id, 'Relay', 'the key “GitHub Actions”', f.admin.id],
     ])
-    const feed = async (profile: Doc<'profiles'>) => {
-      const snap = await as(t, profile).query(api.snapshot.forMe, {})
-      return (snap?.activity ?? []).map((row) => row.id).sort()
-    }
-    // the rows stay for the organization export and reach no snapshot, an
-    // admin's included; the owner's token list says it
-    for (const member of [f.admin, f.user, f.viewer, f.guest])
-      expect(await feed(member)).toEqual([])
   })
 
   it('stops a revoked token and key on REST and MCP', async () => {

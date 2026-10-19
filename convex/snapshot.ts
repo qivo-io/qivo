@@ -4,7 +4,7 @@
  *
  * forMe reads every seat in one transaction, so the sum must stay within
  * Convex's limits of 4,096 index ranges, 32,000 documents and 16 MiB. Besides
- * one range for the caller's seats, each seat reads 12 ranges plus:
+ * one range for the caller's seats, each seat reads 11 ranges plus:
  * - one per active project of the organization, its active tasks
  *   (lib/liveTasks.ts liveTasksOf), so the tasks of archived projects are
  *   never read, or one for all of them past LIVE_PROJECT_READS active
@@ -20,35 +20,26 @@
  *   has left, a dense table past that read in full;
  * - five per visible task restored so recently that its relation rows still
  *   carry archive marks (model/archiveMarks.ts), its own relation reads and
- *   follow. Background steps clear the marks moments after the restore;
- * - one per task an activity row is about, or names by number, that is not
- *   among the live tasks. The snapshot reads the organization's newest 500
- *   rows (CAP) and keeps the task rows, so that is at most 500 for an
- *   admin, who reads the task each row is about, and at most 1,000 for a
- *   member, who reads up to two numbered tasks a row names.
+ *   follow. Background steps clear the marks moments after the restore.
  * A seat whose relation tables stay in bulk therefore reads at most about
- * 1,020 ranges plus one per active project (at most 1,000) and three per
- * team and per visible project, and a person's seats add up. Teams and projects are few
- * beside tasks. A view read task by task adds up to 4 ranges per task, as
- * the rule this replaced did, until the ranges left run short and a dense
- * table is read in full. Documents read follow the live tasks (past LIVE_PROJECT_READS
- * active projects, every active task, archived projects' included, as one
- * range holds them all) and the unmarked relation
- * rows of the active tasks (model/archiveMarks.ts marks the rows of archived
- * tasks, and a project archive marks none), the organization's people,
- * projects, teams and labels, at most 500 activity rows, and at most 3,002
- * messages per seat (lib/inbox.ts). A read that uses half of any of these
- * limits is logged (the end of forMe), so a growing organization shows in
- * the deployment logs before its members' app stops loading. */
+ * 17 ranges plus one per active project (at most 1,000) and three per team
+ * and per visible project, and a person's seats add up. Teams and projects
+ * are few beside tasks. A view read task by task adds up to 4 ranges per
+ * task, as the rule this replaced did, until the ranges left run short and a
+ * dense table is read in full. Documents read follow the live tasks (past
+ * LIVE_PROJECT_READS active projects, every active task, archived projects'
+ * included, as one range holds them all) and the unmarked relation rows of
+ * the active tasks (model/archiveMarks.ts marks the rows of archived tasks,
+ * and a project archive marks none), the organization's people, projects,
+ * teams and labels, and at most 3,002 messages per seat (lib/inbox.ts). A
+ * read that uses half of any of these limits is logged (the end of forMe),
+ * so a growing organization shows in the deployment logs before its
+ * members' app stops loading. */
 import { v } from 'convex/values'
 import type { Doc, TableNames } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
-import {
-  memberSeesActivity,
-  taskActivity,
-  withoutLegacySubtaskCount,
-} from './lib/activityVisibility'
+import { taskActivity } from './lib/activityVisibility'
 import { byId } from './lib/db'
 import { authedQuery, notFound, orgQuery } from './lib/functions'
 import { INBOX_LIMIT, loadInbox } from './lib/inbox'
@@ -182,7 +173,6 @@ export const forMe = authedQuery({
     const attachments: ReturnType<typeof attachmentRow>[] = []
     const milestones: AppRow<'milestones'>[] = []
     const orgLoad: OrgLoadRow[] = []
-    const activityDocs: Doc<'activity_events'>[] = []
     const unreadDocs: Doc<'messages'>[] = []
     const readDocs: Doc<'messages'>[] = []
     // whether some seat's bounded inbox read left unread (read) rows
@@ -190,34 +180,6 @@ export const forMe = authedQuery({
     let unreadTruncated = false
     let readTruncated = false
     const seenLinkIds = new Set<string>()
-    /* Live tasks and project rows fill these caches below. Only an admin's
-     * activity row about a task outside the live set needs a lookup; never
-     * walk the whole archive just to exclude it. Cache promises too so
-     * concurrent references to the same task share one read. */
-    const archivedProjects = new Map<string, Promise<boolean>>()
-    const archivedIssues = new Map<string, Promise<boolean>>()
-    const isArchivedProject = (projectId: string): Promise<boolean> => {
-      let result = archivedProjects.get(projectId)
-      if (result === undefined) {
-        result = byId(ctx, 'projects', projectId).then(
-          (project) => project?.archived_at !== undefined,
-        )
-        archivedProjects.set(projectId, result)
-      }
-      return result
-    }
-    const isArchivedIssue = (issueId: string): Promise<boolean> => {
-      let result = archivedIssues.get(issueId)
-      if (result === undefined) {
-        result = byId(ctx, 'issues', issueId).then(async (issue) => {
-          if (issue === null) return false
-          return issue.archived_at !== undefined || (await isArchivedProject(issue.project_id))
-        })
-        archivedIssues.set(issueId, result)
-      }
-      return result
-    }
-
     for (const me of ctx.myProfiles.values()) {
       const orgId = me.org_id
       const org = await byId(ctx, 'organizations', orgId)
@@ -259,16 +221,12 @@ export const forMe = authedQuery({
       // on tasks the member cannot see.
       const view = await orgProjectView(ctx, me)
       const liveOrgIssues = await liveTasksOf(ctx, view.projects)
-      for (const p of view.projects) {
-        archivedProjects.set(p.id, Promise.resolve(p.archived_at !== undefined))
-      }
       const visibleProjects = view.projects.filter((p) => view.visible(p.id))
-      for (const issue of liveOrgIssues) archivedIssues.set(issue.id, Promise.resolve(false))
       /* The working set is the active tasks of visible, active projects
        * (lib/workingSet.ts). Every task id this query sends (task rows,
-       * parent ids, links, own subscriptions, inbox messages and activity
-       * targets) belongs to it. A task related to work outside it learns
-       * only that such work exists (has_hidden_subtasks, has_hidden_parent).
+       * parent ids, links, own subscriptions and inbox messages) belongs
+       * to it. A task related to work outside it learns only that such work
+       * exists (has_hidden_subtasks, has_hidden_parent).
        * Visible children remain client-derived so optimistic
        * detaching/deleting the last one immediately restores normal status.
        * Archived issues are deliberately absent from the working set; their
@@ -373,50 +331,6 @@ export const forMe = authedQuery({
       mySubs.sort((x, y) => x._creationTime - y._creationTime)
       for (const s of aboutShownTasks(mySubs, workingSet.shown)) issueSubs.push(relationRow(s))
 
-      // Activity, for Team Sync: the task rows among the organization's
-      // newest CAP rows. Org admins receive every one except those about
-      // archived tasks or tasks in archived projects; other members receive
-      // only the rows memberSeesActivity allows. Rows about anything but a
-      // task reach no client. The task window reads one task's history in
-      // commentThread instead. Walked ts-desc; the blend below keeps at most
-      // CAP rows, so stop early.
-      const orgActivity = await ctx.db
-        .query('activity_events')
-        .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
-        .order('desc')
-        .take(CAP)
-      // Task numbers resolve to projects from the live set, else one cached
-      // indexed read (archived or deleted tasks, and tasks in archived
-      // projects).
-      const taskProjects = new Map<number, Promise<string | undefined>>(
-        liveOrgIssues.map((i) => [i.num, Promise.resolve(i.project_id)]),
-      )
-      const taskProject = (num: number): Promise<string | undefined> => {
-        let result = taskProjects.get(num)
-        if (result === undefined) {
-          result = ctx.db
-            .query('issues')
-            .withIndex('by_org_num', (q) => q.eq('org_id', orgId).eq('num', num))
-            .first()
-            .then((issue) => issue?.project_id)
-          taskProjects.set(num, result)
-        }
-        return result
-      }
-      let kept = 0
-      for (const ev of orgActivity) {
-        // admins skip the rule below, so this keeps non-task rows from them too
-        if (ev.target_type !== 'issue') continue
-        if (
-          !isAdmin &&
-          !(await memberSeesActivity(ev, { view, inWorkingSet: workingSet.shown, taskProject }))
-        )
-          continue
-        if (await isArchivedIssue(ev.target_id)) continue
-        activityDocs.push(isAdmin ? ev : withoutLegacySubtaskCount(ev))
-        if (++kept >= CAP) break
-      }
-
       // The caller's inbox, limited to tasks in this working set and read
       // within lib/inbox.ts's bounds, so a backlog nobody clears cannot stop
       // the app from loading; the blended cap applies below. The machine
@@ -437,10 +351,6 @@ export const forMe = authedQuery({
       // Hidden workload remains anonymized by orgLoadRows.
       orgLoad.push(...orgLoadRows(me, view, orgProfileIds, liveOrgIssues))
     }
-
-    // One newest-first cap across all organizations.
-    activityDocs.sort((a, b) => (a.ts === b.ts ? 0 : a.ts < b.ts ? 1 : -1))
-    const activity = activityDocs.slice(0, CAP).map(rowOf)
 
     // One cap across all organizations, unread rows first, newest first,
     // then read rows, most recently read first, as the list shows them.
@@ -499,7 +409,10 @@ export const forMe = authedQuery({
       issueSubs,
       attachments,
       milestones,
-      activity,
+      // Always empty. App builds from earlier releases still open in a browser
+      // map it on every delivery, so it stays until no such build can be open or
+      // be rolled back to. Team Sync reads task stamps instead.
+      activity: [] as never[],
       messages,
       readMessageCount,
       // A seat's bounded read can stop before it reaches every row, also when
