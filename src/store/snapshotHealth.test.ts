@@ -538,6 +538,18 @@ describe('snapshot trouble', () => {
     )
     expect(await restore).toBe(false)
     expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+    // the same when the delivery that drops the seat arrives first
+    const again = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    const left = structuredClone(snapshot)
+    left.myProfileIds = [seat.id]
+    left.delivered_at = '2026-09-15T09:00:00.000Z'
+    live().deliver(left)
+    sent[sent.length - 1].reject(
+      new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
+    )
+    expect(await again).toBe(false)
+    expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
     expect(showToast).not.toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
   })
 

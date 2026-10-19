@@ -1162,25 +1162,38 @@ function refusePausedWrite(mutation: FunctionReference<'mutation'>): boolean {
   return true
 }
 
+/* The organization each refused write named (write), so a refusal for a
+   lost seat can tell whether the person still has a seat elsewhere. */
+const refusedOrgs = new WeakMap<object, string>()
+
 /** Whether a refusal says the person has no seat in the organization any
-    more (convex/lib/functions.ts loadMember), and they held no other seat.
-    It can arrive before the snapshot delivery that reports the lost seat.
-    Someone who keeps another organization keeps working there, so for them
-    it stays a plain permission refusal. */
-const seatGone = (d: ErrData) =>
-  d.code === 'forbidden' && d.message === 'no profile in this organization' && myProfiles.size <= 1
+    more (convex/lib/functions.ts loadMember), and they hold no seat in
+    another one. It can arrive before or after the snapshot delivery that
+    reports the lost seat. Someone who keeps another organization keeps
+    working there, so for them, and when the refused organization is not
+    known, it stays a plain permission refusal. */
+function seatGone(e: unknown): boolean {
+  const d = errData(e)
+  if (d.code !== 'forbidden' || d.message !== 'no profile in this organization') return false
+  const org = typeof e === 'object' && e !== null ? refusedOrgs.get(e) : undefined
+  return [...myProfiles.keys()].every((seat) => seat === org)
+}
 
 /** Whether a refusal reads as the pause: a paused write never left the
     browser, and a write that was in flight when the last seat went is
     refused as forbidden, so it reads like the writes paused after it. */
-const refusedAsPaused = (d: ErrData) =>
-  d.code === 'paused' ||
-  seatGone(d) ||
-  (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
+function refusedAsPaused(e: unknown): boolean {
+  const d = errData(e)
+  return (
+    d.code === 'paused' ||
+    seatGone(e) ||
+    (d.code === 'forbidden' && snapshotTrouble?.kind === 'no_access')
+  )
+}
 
 /** The sentence of a refusal that reads as the pause (refusedAsPaused). A
     lost seat says so even before the snapshot reports it. */
-const refusalPauseText = (d: ErrData) => (seatGone(d) ? NO_ACCESS_TEXT : pausedText())
+const refusalPauseText = (e: unknown) => (seatGone(e) ? NO_ACCESS_TEXT : pausedText())
 
 /* 'rule' and read-only sentences are the P0001 successors and keep their
    words, shaped by asSentence. Everything else is deliberately generic. The
@@ -1189,8 +1202,8 @@ const refusalPauseText = (d: ErrData) => (seatGone(d) ? NO_ACCESS_TEXT : pausedT
    (refusedAsPaused). */
 function toastWriteError(e: unknown) {
   const d = errData(e)
-  if (refusedAsPaused(d)) {
-    toastPaused(refusalPauseText(d))
+  if (refusedAsPaused(e)) {
+    toastPaused(refusalPauseText(e))
     return
   }
   if ((readOnly(d) || d.code === 'rule') && d.message) {
@@ -1209,7 +1222,7 @@ function toastWriteError(e: unknown) {
    sentence is quoted, forbidden reads the fixed permission line. */
 function restoreErrorText(e: unknown): string {
   const d = errData(e)
-  if (refusedAsPaused(d)) return refusalPauseText(d)
+  if (refusedAsPaused(e)) return refusalPauseText(e)
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that"
   if (d.message) return `Couldn't restore. ${asSentence(String(d.message))}`
@@ -1222,7 +1235,7 @@ function restoreErrorText(e: unknown): string {
    Anything else (offline, a server fault) asks for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
   const d = errData(e)
-  if (refusedAsPaused(d)) return refusalPauseText(d)
+  if (refusedAsPaused(e)) return refusalPauseText(e)
   // read-only for billing or a scheduled deletion says why, in its own words
   if (readOnly(d) && d.message) return d.message
   if (d.code === 'forbidden') return "You don't have permission for that."
@@ -1307,8 +1320,8 @@ function refuseLongName(
    "Couldn't save", which does not say a project is gone. */
 function toastCreateProjectError(e: unknown, label: string) {
   const d = errData(e)
-  if (refusedAsPaused(d)) {
-    toastPaused(refusalPauseText(d))
+  if (refusedAsPaused(e)) {
+    toastPaused(refusalPauseText(e))
     return
   }
   const m = d.message ? String(d.message) : ''
@@ -1388,7 +1401,10 @@ const write: typeof convex.mutation = (mutation, args, options) => {
       })
       .catch((error) => {
         if (DEMO_MODE && epoch === storeEpoch && isDemoLifecycleRefusal(error)) notifyDemoEnded()
-        noteReadOnlyRefusal(args && 'org_id' in args ? args.org_id : undefined, error)
+        const orgId = args && 'org_id' in args ? args.org_id : undefined
+        noteReadOnlyRefusal(orgId, error)
+        if (typeof orgId === 'string' && typeof error === 'object' && error !== null)
+          refusedOrgs.set(error, orgId)
         throw error
       })
       .finally(releaseUpdate)
@@ -2765,7 +2781,7 @@ export const PLANNER = {
       (error) => {
         const d = errData(error)
         const detail = d.message
-        if (refusedAsPaused(d)) toastPaused(refusalPauseText(d))
+        if (refusedAsPaused(error)) toastPaused(refusalPauseText(error))
         else
           toast(
             detail ? `Couldn't undo: ${detail}. No changes reverted.` : "Couldn't undo. Try again.",
