@@ -1424,9 +1424,8 @@ A subtask stays in its parent's top-level project, in any of its
 sub-projects, so a parent in another top-level project, after any move in
 the same call, is refused with `a subtask must be in the same project as its
 parent task, in any of its sub-projects`.
-The task cannot become its own parent or a subtask of one of its subtasks,
-an active task cannot go under an archived parent, and chains stop at 20
-tasks. Everyone assigned to or reviewing the task or its subtasks must be
+The task cannot become its own parent, an active task cannot go under an
+archived parent, and a task has one level of subtasks (see above). Everyone assigned to or reviewing the task or its subtasks must be
 able to see the new parent. An `assignee_id` or `reviewer_id` in the same
 call, null included, counts in place of the current one.
 

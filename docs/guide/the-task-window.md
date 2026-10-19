@@ -130,8 +130,7 @@ it. Removing a parent needs edit access to the subtask only. Adding or
 removing a link needs edit access to one of the two tasks and access to the
 other. If a task's parent is in an archived project or
 a project you cannot access, **Parent** says the parent task is outside this
-view. Choosing another parent replaces it; the task window cannot remove such
-a parent directly.
+view. Choosing another parent replaces it, and **Remove parent** removes it.
 
 ## Moving a task
 

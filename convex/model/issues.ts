@@ -1161,9 +1161,14 @@ export async function createIssueCore(
   const description = cleanDescription(args.description)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
-    // a used id is refused first, so the subtask check below, which reads
-    // the subtasks of the id it is given, tells nothing about another task
-    if ((await byId(ctx, 'issues', args.id)) !== null) {
+    // a used id, live or held by Deleted items, is refused first, so the
+    // subtask check below, which reads the subtasks of the id it is given,
+    // tells nothing about another task
+    const held = await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', args.id))
+      .first()
+    if ((await byId(ctx, 'issues', args.id)) !== null || held !== null) {
       throw badRequest(DUPLICATE_TASK_ID)
     }
     const child = { id: args.id, org_id, project_id: project.id }

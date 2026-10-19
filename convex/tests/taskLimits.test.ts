@@ -208,6 +208,39 @@ describe('one level of subtasks', () => {
     )
   })
 
+  it("refuses a create whose id Deleted items holds before it looks at that task's subtasks", async () => {
+    const fx = await setup()
+    const top = await task(fx)
+    // a parent held by Deleted items while a project delete still moves its
+    // subtasks, which are live until their step
+    const parent = await task(fx, { project_id: fx.hidden.id })
+    await task(fx, { project_id: fx.hidden.id, parent_id: parent.id })
+    await fx.t.run(async (ctx) => {
+      const { _id, _creationTime, ...doc } = (await ctx.db.get(parent._id)) as Doc<'issues'>
+      await ctx.db.insert('deleted_rows', {
+        item_id: uuid(),
+        org_id: fx.org.id,
+        table: 'issues',
+        owner_id: parent.id,
+        row_id: parent.id,
+        created_ts: _creationTime,
+        row: { table: 'issues', doc },
+      })
+      await ctx.db.delete(_id)
+    })
+    await refused(
+      as(fx.t, fx.admin).mutation(api.issues.create, {
+        org_id: fx.org.id,
+        id: parent.id,
+        project_id: fx.sub.id,
+        title: 'Probe',
+        parent_id: top.id,
+      }),
+      'bad_request',
+      'a task with this id already exists',
+    )
+  })
+
   it("refuses a create whose id names a task before it looks at that task's subtasks", async () => {
     const fx = await setup()
     const top = await task(fx)
