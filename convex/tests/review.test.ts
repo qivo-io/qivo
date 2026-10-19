@@ -591,6 +591,48 @@ describe('the hand-off and Done times across a move', () => {
     expect(grandchildRow.project_id).toBe(far.id)
     expect(grandchildRow.review_at).toBe(moved.updated_at)
   })
+
+  it('a move to another sub-project restarts the remaining-hours measurement; one to the same does not', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const measured = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      remaining_hours: 5,
+      remaining_set_at: NOW,
+    }
+    const moved = await move(t, f, (await plantIssue(t, measured)).id, f.sub2.id)
+    expect(moved.remaining_set_at).toBe(moved.updated_at)
+    expect(moved.remaining_set_at).not.toBe(NOW)
+    expect(moved.remaining_hours).toBe(5)
+    // naming the current sub-project changes nothing
+    const kept = await move(t, f, (await plantIssue(t, measured)).id, f.sub.id)
+    expect(kept.remaining_set_at).toBe(NOW)
+    // a task without hours gains no measurement
+    const plain = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    expect('remaining_set_at' in (await move(t, f, plain.id, f.sub2.id))).toBe(false)
+  })
+
+  it('every subtask the move carries restarts its measurement, archived ones too', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const far = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+    const measured = {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      remaining_hours: 3,
+      remaining_set_at: NOW,
+    }
+    const top = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const child = await plantIssue(t, { ...measured, parent_id: top.id })
+    const shelved = await plantIssue(t, { ...measured, parent_id: child.id, archived_at: NOW })
+    const moved = await move(t, f, top.id, far.id)
+    const [childRow, shelvedRow] = [await issueRow(t, child.id), await issueRow(t, shelved.id)]
+    expect(childRow).toMatchObject({ project_id: far.id, remaining_set_at: moved.updated_at })
+    expect(shelvedRow).toMatchObject({ project_id: far.id, remaining_set_at: moved.updated_at })
+    // the archive time is the archive state, which a move keeps
+    expect(shelvedRow.archived_at).toBe(NOW)
+  })
 })
 
 describe('every writer', () => {

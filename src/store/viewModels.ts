@@ -274,7 +274,8 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     due: i.due_date,
     remaining: i.remaining_hours != null ? Number(i.remaining_hours) : undefined,
     // week the remaining hours were measured (server-stamped, 0072) — the
-    // spread/projection anchor everywhere remaining is divided over weeks
+    // spread/projection anchor everywhere remaining is divided over weeks,
+    // restarted by a move to another sub-project (model/issues.ts movedStamps)
     remainingSet: i.remaining_set_at != null ? tsToWeek(i.remaining_set_at) : null,
     // when it was last handed to review (server-owned review_at, ms): entering
     // In Review or a new reviewer there; kept into Done, else cleared, and

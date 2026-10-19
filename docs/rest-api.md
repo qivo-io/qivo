@@ -1238,7 +1238,9 @@ subtask clears its new parent's own hours.
 Writing `remaining_hours` also stamps the read-only `remaining_set_at`
 (0072): a remaining time is a measurement, and the planning math anchors on
 when it was taken — the server stamps the moment the value *changes* (an
-unchanged value writes nothing) and clears the stamp with the hours. A
+unchanged value writes nothing) and clears the stamp with the hours. A move
+to another sub-project restamps it at the move, for the task and each subtask
+that moves with it, so the planning math counts the hours from the move. A
 request that sends `remaining_set_at` is refused as an unknown field.
 
 **Review time.** A task that enters `review`, whether created there by POST or

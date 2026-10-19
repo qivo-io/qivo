@@ -1812,15 +1812,19 @@ async function subtreeToCarry(
 /** The stamps a task writes as it moves to another sub-project. A time
  * from the source project may predate the reader's access there, so the
  * status stamp clears (ctx.db.patch unsets it), and a review hand-off
- * (review_at) or a Done time (done_at) the task carries restarts at the
- * move. A moved Done task therefore waits the full auto-archive threshold
- * again (jobs.ts). A task that lands as a group keeps its hand-off for the
- * write that clears it with its hours (clearParentRemaining), so the move
- * does not restart it first. */
+ * (review_at), a remaining-hours measurement (remaining_set_at) or a Done
+ * time (done_at) the task carries restarts at the move. A moved Done task
+ * therefore waits the full auto-archive threshold again (jobs.ts), and the
+ * planning math spreads and projects a moved task's hours from the move. A
+ * task that lands as a group keeps its hand-off and measurement for the
+ * write that clears them with its hours (clearParentRemaining), so the move
+ * does not restart them first. created_at and archived_at stay: the archive
+ * time is the archive state, whose change the history and inbox narrate. */
 function movedStamps(task: Doc<'issues'>, now: string, group = false) {
   return {
     status_at: undefined,
     ...(task.review_at !== undefined && !group ? { review_at: now } : {}),
+    ...(task.remaining_set_at !== undefined && !group ? { remaining_set_at: now } : {}),
     ...(task.done_at !== undefined ? { done_at: now } : {}),
   }
 }

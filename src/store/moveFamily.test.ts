@@ -122,6 +122,22 @@ describe('moving a task with its family', () => {
     expect(moves()).toEqual([expect.not.objectContaining({ detach_parent: expect.anything() })])
   })
 
+  it('restarts the remaining-hours measurement of the task and each subtask it carries', async () => {
+    const measured = { remaining_hours: 4, remaining_set_at: '2026-08-03T08:00:00.000Z' }
+    await load((snap) => {
+      for (const row of snap.issues) if (row.id !== 'epic') Object.assign(row, measured)
+    })
+    const week = vm('lone').remainingSet!
+    P.moveIssue(vm('epic').id, ids.fw)
+    expect(vm('api').remainingSet).toBeGreaterThan(week)
+    expect(vm('lone').remainingSet).toBe(week)
+    // naming the current sub-project changes nothing
+    expect(P.moveIssue(vm('lone').id, ids.fe)).toBeNull()
+    expect(vm('lone').remainingSet).toBe(week)
+    P.moveIssue(vm('lone').id, ids.be)
+    expect(vm('lone').remainingSet).toBeGreaterThan(week)
+  })
+
   it('moves only the task within its top-level project', async () => {
     await load()
     expect(P.moveFamily(vm('feature'), ids.be)).toEqual({

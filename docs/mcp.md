@@ -742,9 +742,10 @@ including server-maintained fields such as `remaining_set_at`. These names do
 not form an API write payload. Names can include `created_by`, `done_at`,
 `review_at`, `start_week`, `end_week` and `parent_id`. For example, the event
 reports `archived_at`, while a machine API write uses `archived`. A move to
-another sub-project lists `done_at` and `review_at` next to `project_id` for
-a task whose Done time or review hand-off the move restarts. Changes only
-to `updated_at` are excluded.
+another sub-project lists `done_at`, `remaining_set_at` and `review_at` next
+to `project_id` for a task whose Done time, remaining-hours measurement or
+review hand-off the move restarts. Changes only to `updated_at` are
+excluded.
 
 An integration receives matching events from its own writes. Receivers that
 write back to Qivo must prevent feedback loops through idempotent changes or
@@ -1857,11 +1858,12 @@ from before their subtasks counted.
 
 Tasks also read back `remaining_set_at` (0072) — the server-stamped moment
 `remaining_hours` was last saved. A remaining time is a measurement, and the
-app's planning math anchors on when it was taken. The stamp moves only when
-the value genuinely *changes* (re-sending the same number is a no-op there),
-clears together with the hours, and cannot be written over MCP. It is not in
-any tool schema, so a call that sends it is refused like any unknown
-argument.
+app's planning math anchors on when it was taken. The stamp moves when the
+value genuinely *changes* (re-sending the same number is a no-op there) and
+when the task moves to another sub-project, for the task and each subtask that
+moves with it. It clears together with the hours and cannot be written over
+MCP. It is not in any tool schema, so a call that sends it is refused like any
+unknown argument.
 
 A task that enters `review`, created there or moved there, gets its project's
 review time as `remaining_hours`. That is `effective_review_hours` in

@@ -175,10 +175,12 @@ starts this count again, for the task and each subtask that moves with it.
 It sends no inbox update. The task's messages are marked read as with any
 archive.
 
-The sweep archives subtasks before their parents. Once a group's active
-subtasks are gone, its saved status applies again. A saved Done task can
-archive on a later sweep when its Done age meets the threshold;
-a saved To Do task returns to To Do.
+The sweep archives subtasks before their parents. A Done task whose Done
+subtask moves to another sub-project therefore stays at least until the
+night after that subtask archives, a full archive period after the move, even
+if the task itself did not move. Once a group's active subtasks are gone, its saved status
+applies again. A saved Done task can archive on a later sweep when its Done
+age meets the threshold; a saved To Do task returns to To Do.
 
 **Manual archiving** uses **Archive or delete…** in the task's **…** menu,
 which needs edit access. **Archive** is selected first. For a task with
