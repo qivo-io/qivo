@@ -129,6 +129,15 @@ Qivo subscribes you when you are assigned or handed a task, mentioned on it,
 or comment on it. Creating a task alone does not subscribe you. Removing you
 as assignee does not unsubscribe you.
 
+A task has at most 100 subscribers. Once it has 100, **+ Add**, and **Me**
+for someone not subscribed yet, are disabled with **This task has 100
+followers, the most a task can have**. A subscriber can still unsubscribe,
+and a comment or a mention no longer subscribes anyone, though mentioned
+people still receive their message. A new assignee or reviewer is still
+subscribed, so the people working on a task always hear about it. A comment
+or description reaches at most 100 mentioned people. Tasks that had more
+subscribers before this limit keep them.
+
 A hand-off happens when a task enters **In Review** with you as reviewer, you
 become the reviewer during review, or work returns to you as assignee when it
 leaves review or loses its reviewer. Hand-offs subscribe you again even after
@@ -142,7 +151,8 @@ counter. Opening the row or the task marks its messages read and leaves only
 the latest message in the inbox. Further updates start the unread counter
 again on the same row. A row keeps at most 50 unread updates. Beyond that,
 Qivo drops the oldest ones but keeps the first unread update and the newest
-mention, comment and change. The Inbox loads up to 500 messages, unread ones
+mention, comment and change. On a task with many subscribers it does so
+moments after the update arrives. The Inbox loads up to 500 messages, unread ones
 first.
 
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.

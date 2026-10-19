@@ -72,14 +72,22 @@ import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
 import { reviewStamp } from '../lib/review'
+import {
+  PARENT_FULL,
+  PARENT_IS_SUBTASK,
+  SUBTASK_MAX,
+  SUBTASK_WITH_SUBTASKS,
+} from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { plainText, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
 import { issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import {
   type NotifyPreload,
+  newNotifyPreload,
   notifyIssueInsert,
   notifyIssueUpdate,
+  orgProfile,
   scheduleArchivedReads,
 } from './messages'
 import { nextIssueNum } from './orgs'
@@ -250,8 +258,9 @@ export async function assertAssigneeRule(
   }
 }
 
-/* The tasks from `parentId` up, nearest first. assertParentChain bounds a
- * chain at 20 tasks, and the seen set stops a corrupt cycle. */
+/* The tasks from `parentId` up, nearest first. A chain stored before the
+ * one level of subtasks is read up to 20 tasks, and the seen set stops a
+ * corrupt cycle. */
 async function ancestorsFrom(
   ctx: QueryCtx,
   parentId: string | undefined,
@@ -276,14 +285,16 @@ async function ancestorsFrom(
  * asks it once per person and project. */
 function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkUpdate) {
   const projectIds = [...new Set(chain.map((t) => t.project_id))]
+  const orgId = chain[0]?.org_id
   const known = new Map<string, Promise<boolean>>()
   return (profileId: string): Promise<boolean> => {
     let sees = known.get(profileId)
     if (sees === undefined) {
       sees = (async () => {
         const profile =
-          bulk?.preload.orgProfiles.find((p) => p.id === profileId) ??
-          (await byId(ctx, 'profiles', profileId))
+          bulk === undefined || orgId === undefined
+            ? await byId(ctx, 'profiles', profileId)
+            : ((await orgProfile(ctx, bulk.preload.profiles, orgId, profileId)) ?? null)
         if (profile === null) return false
         for (const id of projectIds) {
           const key = sightKey(profileId, id)
@@ -317,18 +328,25 @@ export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 export const SUBTREE_TOO_LARGE =
   'this task and its subtasks are too large to change in one request; detach some subtasks first'
 
-/* Refuses with SUBTREE_TOO_LARGE once the transaction passed SUBTREE_ROOM's
- * `room`. Run before each step of a change whose cost has no fixed bound,
- * such as one holder's sight check, and through roomCheck for walks. */
-async function assertRoom(ctx: QueryCtx): Promise<void> {
-  if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(SUBTREE_TOO_LARGE)
+/** The refusal of an archive whose task and active subtasks are too large
+ * for one transaction (SUBTREE_ROOM), such as a task stored before the one
+ * level of subtasks with thousands of them. */
+export const ARCHIVE_TOO_LARGE =
+  'this task and its subtasks are too large to archive in one request; archive some subtasks first'
+
+/* Refuses with `sentence`, SUBTREE_TOO_LARGE by default, once the
+ * transaction passed SUBTREE_ROOM's `room`. Run before each step of a change
+ * whose cost has no fixed bound, such as one holder's sight check, and
+ * through roomCheck for walks. */
+async function assertRoom(ctx: QueryCtx, sentence = SUBTREE_TOO_LARGE): Promise<void> {
+  if (await usedMoreThan(ctx, SUBTREE_ROOM.room)) throw rule(sentence)
 }
 
 /* A check to run before each query and after each row of a walk under
  * SUBTREE_ROOM, given the row's size when it may be large (subtaskBytes). It
  * asks the transaction's use every `every` calls, or once the sizes since
- * it last asked reach `bytes` (assertRoom). */
-function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
+ * it last asked reach `bytes` (assertRoom, refusing with `sentence`). */
+function roomCheck(ctx: QueryCtx, sentence = SUBTREE_TOO_LARGE): (bytes?: number) => Promise<void> {
   let calls = 0
   let pending = 0
   return async (bytes = 0) => {
@@ -336,7 +354,7 @@ function roomCheck(ctx: QueryCtx): (bytes?: number) => Promise<void> {
     pending += bytes
     if (calls % SUBTREE_ROOM.every !== 0 && pending < SUBTREE_ROOM.bytes) return
     pending = 0
-    await assertRoom(ctx)
+    await assertRoom(ctx, sentence)
   }
 }
 
@@ -566,14 +584,15 @@ export const PAUSE_RULE = 'a Done or Backlog task cannot be paused'
 export const GROUP_PAUSE_RULE = 'a task with subtasks cannot be paused; pause its subtasks instead'
 
 /* -------------------------------------------------- the parent link fence
- * issues_check_parent (0057:38-85, final), plus the subtask family rule. The
- * caller must pass the row's PINNED org (0057:27-30: org from the project
- * first, THEN this check). A parent the actor cannot see (missing, in another
- * organization or in a hidden project) answers 'parent task not found' before
- * any other guard describes it. Attaching changes the parent (it becomes a
- * group and loses its own hours), so it also needs Edit on the parent's
- * project, like any other change to it. A subtask stays in its parent's
- * top-level project, in any of its sub-projects. */
+ * issues_check_parent (0057:38-85, final), plus the subtask family rule and
+ * the one level of subtasks (lib/taskLimits.ts). The caller must pass the
+ * row's PINNED org (0057:27-30: org from the project first, THEN this
+ * check). A parent the actor cannot see (missing, in another organization or
+ * in a hidden project) answers 'parent task not found' before any other
+ * guard describes it. Attaching changes the parent (it becomes a group and
+ * loses its own hours), so it also needs Edit on the parent's project, like
+ * any other change to it. A subtask stays in its parent's top-level project,
+ * in any of its sub-projects. */
 
 /** The top-level project a project belongs to, which is its parent or itself. */
 export const topLevelOf = (project: Pick<Doc<'projects'>, 'id' | 'parent_id'>): string =>
@@ -592,26 +611,52 @@ export const sameTopLevel = (
 export const SUBTASK_PROJECT_RULE =
   'a subtask must be in the same project as its parent task, in any of its sub-projects'
 
-/** Why parentChainCheck refuses a parent, in the order it checks. `cycle`
- * means the parent is below the child; `deep_or_cyclic` that the chain above
- * the parent is longer than 20 tasks or loops on itself; `too_deep` that the
- * joined chain would be deeper than 20 tasks. */
+/** Why parentChainCheck refuses a parent, in the order it checks.
+ * `parent_is_subtask` means the parent has a parent of its own,
+ * `has_subtasks` that the child has subtasks, archived ones included, and
+ * `parent_full` that the parent already has SUBTASK_MAX subtasks. Any of
+ * them would break the one level of subtasks or its size. */
 export type ParentProblem =
   | 'self'
   | 'not_found'
   | 'no_write'
   | 'other_project'
-  | 'cycle'
-  | 'deep_or_cyclic'
-  | 'too_deep'
+  | 'parent_is_subtask'
+  | 'has_subtasks'
+  | 'parent_full'
+
+/** How many subtasks `parentId` has, archived ones included, counted up to
+ * SUBTASK_MAX. The count reads the subtask rows under SUBTREE_ROOM, because
+ * a legacy task can hold larger ones than TEXT_MAX allows today. */
+export async function subtaskCount(ctx: QueryCtx, parentId: string): Promise<number> {
+  const room = roomCheck(ctx)
+  let count = 0
+  await room()
+  const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+  for await (const kid of kids) {
+    count += 1
+    if (count >= SUBTASK_MAX) break
+    await room(subtaskBytes(kid))
+  }
+  return count
+}
+
+/** Whether the task has any subtask, archived or not. */
+export async function hasAnySubtask(ctx: QueryCtx, issueId: string): Promise<boolean> {
+  const kid = await ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) => q.eq('parent_id', issueId))
+    .first()
+  return kid !== null
+}
 
 /** Checks a proposed parent link, answering a problem rather than throwing
  * one, for writers that adapt instead of refusing; assertParentChain throws
- * from it. It still throws SUBTREE_TOO_LARGE when the subtree under `child`
- * is too large to measure in one transaction (SUBTREE_ROOM). `child.project_id`
- * is the project the child will be in after the write. Checks the cheapest
- * facts first, and a parent the actor cannot see is `not_found` before
- * anything else describes it. */
+ * from it. `child.project_id` is the project the child will be in after the
+ * write. Checks the cheapest facts first, and a parent the actor cannot see
+ * is `not_found` before anything else describes it. A parent without a
+ * parent of its own and a child without subtasks can form no cycle and no
+ * chain deeper than two tasks, so neither chain is walked. */
 export async function parentChainCheck(
   ctx: QueryCtx,
   child: { id: string; org_id: string; project_id: string },
@@ -637,52 +682,22 @@ export async function parentChainCheck(
   if (childProject === null || !sameTopLevel(childProject, parentProject)) {
     return no('other_project')
   }
-  // upward walk: bound the chain above the attach point
-  let cur: string | undefined = parentId
-  let up = 0
-  while (cur !== undefined) {
-    up += 1
-    if (up > 20) return no('deep_or_cyclic')
-    const row: Doc<'issues'> | null = await byId(ctx, 'issues', cur)
-    cur = row?.parent_id
-    if (cur === child.id) return no('cycle')
-  }
-  // downward measure (0038 fix 1): the height of the subtree hanging under
-  // the row, capped at 24 so the walk stays finite over corrupt cycles — a
-  // reparent must not merge two legal chains into one deeper than the
-  // cascade budget. It reads every subtask, under SUBTREE_ROOM, which
-  // throws rather than answering a problem.
-  let down = 0
-  let frontier = [child.id]
-  const room = roomCheck(ctx)
-  while (frontier.length > 0 && down < 24) {
-    const next: string[] = []
-    for (const id of frontier) {
-      await room()
-      const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
-      for await (const c of kids) {
-        await room(subtaskBytes(c))
-        next.push(c.id)
-      }
-    }
-    if (next.length === 0) break
-    down += 1
-    frontier = next
-  }
-  if (up + 1 + down > 20) return no('too_deep')
+  if (parent.parent_id !== undefined) return no('parent_is_subtask')
+  if (await hasAnySubtask(ctx, child.id)) return no('has_subtasks')
+  if ((await subtaskCount(ctx, parent.id)) >= SUBTASK_MAX) return no('parent_full')
   return { ok: true, parent }
 }
 
-/* The refusal for each problem: `rule` sentences for the chain's shape,
+/* The refusal for each problem: `rule` sentences for the family's shape,
  * the uniform not-found answer and the parent's write refusal. */
 const PARENT_REFUSALS: Record<ParentProblem, () => ReturnType<typeof rule>> = {
   self: () => rule('a task cannot be its own parent'),
   not_found: () => notFound('parent task not found'),
   no_write: () => forbidden('no write access to the parent task'),
   other_project: () => rule(SUBTASK_PROJECT_RULE),
-  cycle: () => rule('task parent cycle detected'),
-  deep_or_cyclic: () => rule('task hierarchy too deep or cyclic'),
-  too_deep: () => rule('task hierarchy too deep'),
+  parent_is_subtask: () => rule(PARENT_IS_SUBTASK),
+  has_subtasks: () => rule(SUBTASK_WITH_SUBTASKS),
+  parent_full: () => rule(PARENT_FULL),
 }
 
 /** parentChainCheck as a guard. It refuses a parent that does not qualify
@@ -1114,6 +1129,9 @@ export type CreateIssueArgs = {
   paused?: boolean | null
 }
 
+/* The refusal of a create whose client-chosen id names a task already. */
+const DUPLICATE_TASK_ID = 'a task with this id already exists'
+
 /** Creates the task `args` describes as `me`, who needs Edit on its
  * sub-project, and answers the stored row. The app, REST and MCP all create
  * through it, so every shared field rule runs here, including the title cap
@@ -1143,6 +1161,16 @@ export async function createIssueCore(
   const description = cleanDescription(args.description)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
+    // a used id, live or held by Deleted items, is refused first, so the
+    // subtask check below, which reads the subtasks of the id it is given,
+    // tells nothing about another task
+    const held = await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', args.id))
+      .first()
+    if ((await byId(ctx, 'issues', args.id)) !== null || held !== null) {
+      throw badRequest(DUPLICATE_TASK_ID)
+    }
     const child = { id: args.id, org_id, project_id: project.id }
     const parent = await assertParentChain(ctx, child, parent_id, me)
     assertParentActive(parent, undefined) // a fresh row is active
@@ -1207,7 +1235,7 @@ export async function createIssueCore(
       created_at: now,
       updated_at: now,
     },
-    badRequest('a task with this id already exists'),
+    badRequest(DUPLICATE_TASK_ID),
   )
   const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
   // the attach clears the parent's hours; its dates are calculated, never
@@ -1988,7 +2016,10 @@ function editableBy(
 /* The descendant walk, shared with updateIssueCore's folded machine toggle:
  * stamps active descendants (touched, NEVER notified). An active descendant
  * in a project the actor cannot edit refuses the archive, because an active
- * task may never sit under an archived parent. Returns the ids it stamped. */
+ * task may never sit under an archived parent. The walk reads every
+ * subtask, under SUBTREE_ROOM, and refuses with ARCHIVE_TOO_LARGE a tree
+ * stored before the one level of subtasks that one transaction cannot
+ * archive. Returns the ids it stamped. */
 async function archiveSubtree(
   ctx: MutationCtx,
   rootId: string,
@@ -1996,6 +2027,7 @@ async function archiveSubtree(
   actor: Doc<'profiles'>,
 ): Promise<string[]> {
   const edits = editableBy(ctx, actor)
+  const room = roomCheck(ctx, ARCHIVE_TOO_LARGE)
   const stamped: string[] = []
   let frontier = [rootId]
   const seen = new Set<string>([rootId])
@@ -2003,8 +2035,10 @@ async function archiveSubtree(
     if (depth >= 20) throw rule('task hierarchy too deep for the archive cascade')
     const next: string[] = []
     for (const pid of frontier) {
+      await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', pid))
       for await (const c of kids) {
+        await room(subtaskBytes(c))
         if (c.archived_at !== undefined || seen.has(c.id)) continue
         seen.add(c.id)
         const editable = await edits(c.project_id)
@@ -2039,11 +2073,20 @@ export async function archiveIssueCore(
   await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at !== undefined) return issue
   if (a.keepSubtasks === true) {
-    const kids = await ctx.db
-      .query('issues')
-      .withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
-      .collect()
-    for (const kid of kids) if (kid.archived_at === undefined) await detachChild(ctx, kid, me, now)
+    // read in full before the first detach, under the archive's room check
+    const room = roomCheck(ctx, ARCHIVE_TOO_LARGE)
+    const kids: Doc<'issues'>[] = []
+    const rows = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', issue.id))
+    for await (const kid of rows) {
+      await room(subtaskBytes(kid))
+      if (kid.archived_at === undefined) kids.push(kid)
+    }
+    // the detaches change only tasks, so one preload serves them all
+    const preload = newNotifyPreload()
+    for (const kid of kids) {
+      await assertRoom(ctx, ARCHIVE_TOO_LARGE)
+      await detachChild(ctx, kid, me, now, preload)
+    }
   }
   const before = { ...issue }
   await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })

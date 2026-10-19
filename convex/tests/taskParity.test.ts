@@ -32,6 +32,7 @@ import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
+import { SUBTASK_WITH_SUBTASKS } from '../lib/taskLimits'
 import { sha256hex } from '../machine/auth'
 import { namedTaskNums } from '../model/activity'
 import { taskAttachments } from '../model/attachments'
@@ -669,10 +670,11 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
       'rule',
       MOVE_HOLDER_RULE,
     )
+    // and a task with subtasks takes no parent at all (one level of subtasks)
     await refused(
       restPatch(fx, top.id, { parent: pcbParent.id, assignee_id: fx.guest.id }),
       'rule',
-      HOLDER_SIGHT_RULE,
+      SUBTASK_WITH_SUBTASKS,
     )
     for (const t of [stays, blind, top]) {
       expect(await row(fx.t, t.id)).toMatchObject({ project_id: fx.sub.id })

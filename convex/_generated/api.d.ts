@@ -104,6 +104,7 @@ import type * as lib_review from "../lib/review.js";
 import type * as lib_search from "../lib/search.js";
 import type * as lib_snapshotRelations from "../lib/snapshotRelations.js";
 import type * as lib_taskEvents from "../lib/taskEvents.js";
+import type * as lib_taskLimits from "../lib/taskLimits.js";
 import type * as lib_taskRefs from "../lib/taskRefs.js";
 import type * as lib_teamSync from "../lib/teamSync.js";
 import type * as lib_textLimits from "../lib/textLimits.js";
@@ -283,6 +284,7 @@ declare const fullApi: ApiFromModules<{
   "lib/search": typeof lib_search;
   "lib/snapshotRelations": typeof lib_snapshotRelations;
   "lib/taskEvents": typeof lib_taskEvents;
+  "lib/taskLimits": typeof lib_taskLimits;
   "lib/taskRefs": typeof lib_taskRefs;
   "lib/teamSync": typeof lib_teamSync;
   "lib/textLimits": typeof lib_textLimits;

@@ -4,7 +4,15 @@
    parent changes both tasks, so the server needs Edit on each, and only tasks
    in editable projects are offered. Every relation is same-organization by
    the server's guard, so the blended snapshot is narrowed to the task's own
-   organization first. The task's own sub-project comes first. */
+   organization first. The task's own sub-project comes first.
+
+   A task has one level of subtasks, at most SUBTASK_MAX of them
+   (convex/lib/taskLimits.ts), so neither picker offers a link the server
+   would refuse: no subtask as a parent, no task with subtasks as a subtask
+   and no parent that is full. The view counts the subtasks it shows, so a
+   task whose other subtasks are archived or hidden can still be refused. */
+
+import { SUBTASK_MAX } from '../../convex/lib/taskLimits'
 
 /** A task as the pickers read it. */
 export type RelationTask = {
@@ -13,6 +21,8 @@ export type RelationTask = {
   project: string
   parent?: string | null
   children?: readonly string[]
+  hasHiddenParent?: boolean
+  hasHiddenSubtasks?: boolean
 }
 
 /** What the pickers need from the store. `topLevelOf` answers the top-level
@@ -21,6 +31,29 @@ export type RelationView<T extends RelationTask> = {
   byId: Readonly<Record<string, T | undefined>>
   topLevelOf: (projectId: string) => string | undefined
   canWrite: (projectId: string) => boolean
+}
+
+const isSubtask = (x: RelationTask): boolean => !!x.parent || !!x.hasHiddenParent
+const hasSubtasks = (x: RelationTask): boolean =>
+  (x.children?.length ?? 0) > 0 || !!x.hasHiddenSubtasks
+const subtasksFull = (x: RelationTask): boolean => (x.children?.length ?? 0) >= SUBTASK_MAX
+
+/** Why `it` can take no more subtasks, as a control's tooltip, or undefined
+ * when it can. */
+export function subtaskBlock(it: RelationTask): string | undefined {
+  if (isSubtask(it)) return 'A subtask cannot have subtasks'
+  if (subtasksFull(it)) return `This task has ${SUBTASK_MAX} subtasks, the most a task can have`
+  return undefined
+}
+
+/** Why `it` cannot get a parent, or another one, as a control's tooltip, or
+ * undefined when it can. A subtask with subtasks, stored before the one
+ * level of subtasks, can only leave its parent. */
+export function parentBlock(it: RelationTask): string | undefined {
+  if (!hasSubtasks(it)) return undefined
+  return isSubtask(it)
+    ? 'A task with subtasks can only leave its parent'
+    : 'A task with subtasks cannot become a subtask'
 }
 
 /* Whether `x` is in `it`'s organization and top-level project. A project
@@ -35,49 +68,45 @@ const sameProjectFirst =
   (a: T, b: T): number =>
     Number(b.project === it.project) - Number(a.project === it.project)
 
-/** The tasks `it` can be attached under. The task itself and everything below
- * it would form a cycle and are left out. The current parent stays listed,
- * wherever it is, so it can be cleared. */
+/** The tasks `it` can be attached under: tasks that are no subtask and have
+ * room for one more. A task with subtasks gets none. The current parent
+ * stays listed, wherever it is, so it can be cleared. */
 export function parentCandidatesFor<T extends RelationTask>(
   it: T,
   tasks: readonly T[],
   view: RelationView<T>,
 ): T[] {
-  const below = new Set<string>()
-  const stack = [...(it.children ?? [])]
-  while (stack.length) {
-    const id = stack.pop() as string
-    if (below.has(id)) continue
-    below.add(id)
-    stack.push(...(view.byId[id]?.children ?? []))
-  }
+  const open = parentBlock(it) === undefined
   return tasks
     .filter(
       (x) =>
         x.id === it.parent ||
-        (x.id !== it.id && !below.has(x.id) && sameFamily(it, x, view) && view.canWrite(x.project)),
+        (open &&
+          x.id !== it.id &&
+          !isSubtask(x) &&
+          !subtasksFull(x) &&
+          sameFamily(it, x, view) &&
+          view.canWrite(x.project)),
     )
     .sort(sameProjectFirst(it))
 }
 
-/** The tasks that can become `it`'s subtasks. The task itself and everything
- * above it would form a cycle and are left out. A current subtask stays
- * listed, wherever it is, so it can be removed; removing one needs Edit on
- * it like adding one. */
+/** The tasks that can become `it`'s subtasks: tasks without subtasks of
+ * their own. A subtask, or a task that is full, gets none. A current
+ * subtask stays listed, wherever it is, so it can be removed; removing one
+ * needs Edit on it like adding one. */
 export function subtaskCandidatesFor<T extends RelationTask>(
   it: T,
   tasks: readonly T[],
   view: RelationView<T>,
 ): T[] {
-  const above = new Set<string>()
-  for (let up = it.parent; up && !above.has(up); up = view.byId[up]?.parent) above.add(up)
+  const open = subtaskBlock(it) === undefined
   return tasks
     .filter(
       (x) =>
         x.org === it.org &&
         x.id !== it.id &&
-        !above.has(x.id) &&
-        (x.parent === it.id || sameFamily(it, x, view)) &&
+        (x.parent === it.id || (open && !hasSubtasks(x) && sameFamily(it, x, view))) &&
         view.canWrite(x.project),
     )
     .sort(sameProjectFirst(it))

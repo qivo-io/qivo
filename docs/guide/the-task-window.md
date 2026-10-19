@@ -104,10 +104,23 @@ groups omit status, and unowned tasks omit the portrait.
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
 
+A task has one level of subtasks: a subtask cannot have subtasks of its own,
+and a task has at most 100 subtasks, archived ones included. On a subtask,
+the **Subtasks** button is disabled with **A subtask cannot have subtasks**,
+and when the window lists 100 subtasks with **This task has 100 subtasks,
+the most a task can have**. A task with subtasks cannot become a subtask, so
+when the window lists any, its **Parent** button is disabled with **A task
+with subtasks cannot become a subtask**. The window does not list archived
+subtasks, so Qivo refuses those choices when you make them, with the same
+sentence. Tasks nested deeper, or with more subtasks, before these limits
+keep their shape, and you can still detach them: **Remove parent** also
+appears when the parent is outside this view.
+
 A subtask stays in its parent's project, in any of that project's
 sub-projects. Setting a parent changes both tasks, so it needs edit access to
 the subtask and to the parent. The parent and subtask pickers offer only
-tasks of the same project that you can edit. The current parent stays listed
+tasks of the same project that you can edit, and leave out tasks the limits
+above refuse. The current parent stays listed
 so you can remove it, and so does each current subtask you can edit.
 Everyone assigned to or reviewing the task or its subtasks must be able to
 see the new parent and every task above it; otherwise Qivo refuses the parent and names the person
@@ -117,8 +130,7 @@ it. Removing a parent needs edit access to the subtask only. Adding or
 removing a link needs edit access to one of the two tasks and access to the
 other. If a task's parent is in an archived project or
 a project you cannot access, **Parent** says the parent task is outside this
-view. Choosing another parent replaces it; the task window cannot remove such
-a parent directly.
+view. Choosing another parent replaces it, and **Remove parent** removes it.
 
 ## Moving a task
 
@@ -173,7 +185,10 @@ subtasks**, selected first, archives the whole subtask tree, including
 subtasks in other sub-projects. Qivo refuses that when one of them is in a
 project you cannot edit, and an organization admin can archive the whole tree
 instead. While one of them is in a project being moved to Deleted items, Qivo
-refuses it for everyone until that move finishes. Clear the box to archive only the task. Its subtasks stay in their
+refuses it for everyone until that move finishes. Qivo also refuses the
+archive when the task and its subtasks are too large to archive at once,
+which only a task with very many subtasks from before the subtask limits
+can be. Clear the box to archive only the task. Its subtasks stay in their
 projects, those directly under it become top-level tasks, and restoring the
 task later does not bring them back under it.
 

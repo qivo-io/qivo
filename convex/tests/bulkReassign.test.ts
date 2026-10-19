@@ -35,7 +35,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
 import { REASSIGN_MAX } from '../lib/projectGrants'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
-import { loadNotifyPreload } from '../model/messages'
+import { newNotifyPreload } from '../model/messages'
 import { reassignTooLarge } from '../model/projectAccess'
 import {
   as,
@@ -437,7 +437,7 @@ describe('a bulk update', () => {
     const p50 = fx.crowd[50]
     await fx.t.run(async (ctx) => {
       const bulk: BulkUpdate | undefined = withBulk
-        ? { preload: await loadNotifyPreload(ctx, fx.org.id), checked: new Set() }
+        ? { preload: newNotifyPreload(), checked: new Set() }
         : undefined
       for (const [i, task] of fx.tasks.entries()) {
         const role = task.reviewer_id === fx.emil.id ? 'reviewer_id' : 'assignee_id'
@@ -485,7 +485,7 @@ describe('a bulk update', () => {
     await expectRefusal(
       fx.t.run(async (ctx) => {
         const bulk: BulkUpdate = {
-          preload: await loadNotifyPreload(ctx, fx.org.id),
+          preload: newNotifyPreload(),
           checked: new Set([holderKey('assignee', fx.leo.id, fx.sub.id)]),
         }
         await updateIssueCore(ctx, {

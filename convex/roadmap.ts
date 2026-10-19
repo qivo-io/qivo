@@ -21,7 +21,7 @@ import {
   hasSubtasks,
   updateIssueCore,
 } from './model/issues'
-import { loadNotifyPreload, notifyIssueUpdate } from './model/messages'
+import { newNotifyPreload, notifyIssueUpdate } from './model/messages'
 import {
   changeableMilestone,
   cleanMilestoneName,
@@ -131,10 +131,10 @@ function batchOf(ctx: Context, tooLarge: string): Batch {
   const bulkOf = (orgId: string) => {
     let bulk = bulks.get(orgId)
     if (bulk === undefined) {
-      bulk = loadNotifyPreload(ctx, orgId).then((preload) => ({
-        preload: { ...preload, guard: room },
+      bulk = Promise.resolve({
+        preload: { ...newNotifyPreload(), guard: room },
         checked: new Set<string>(),
-      }))
+      })
       bulks.set(orgId, bulk)
     }
     return bulk

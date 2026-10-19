@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { FOLLOWER_MAX } from '../../convex/lib/taskLimits'
 import { matchesAllWords } from '../lib/search'
 import { type IssueVM, P, type IssueSubscribers as SubscriberRoster } from '../store/planner'
 import { Avatar, Icon, MenuItem } from './qivo'
@@ -45,6 +46,10 @@ export function IssueSubscribers({ issue }: { issue: IssueVM }) {
       setSearch('')
     }
   }
+  // A task takes no new follower by hand past FOLLOWER_MAX; leaving it and
+  // removing others still work. A new assignee or reviewer still follows.
+  const full = !!roster && roster.subscribers.length >= FOLLOWER_MAX
+  const fullTip = `This task has ${FOLLOWER_MAX} followers, the most a task can have`
   const nameOf = (id: string) => P.user(id)?.name || 'Unavailable user'
   const byName = (a: string, b: string) => nameOf(a).localeCompare(nameOf(b))
   const others = (roster?.subscribers ?? []).filter((id) => id !== me).sort(byName)
@@ -129,12 +134,19 @@ export function IssueSubscribers({ issue }: { issue: IssueVM }) {
             issue.subscribed ? 'Unsubscribe from task updates' : 'Subscribe to task updates'
           }
           aria-pressed={!!issue.subscribed}
+          disabled={!issue.subscribed && full}
+          title={!issue.subscribed && full ? fullTip : undefined}
           onClick={() => P.setIssueSubscribed(issue.id, !issue.subscribed)}
         >
           <Avatar id={me} size={28} />
           <span className="flex-1">Me</span>
           <Icon name={issue.subscribed ? 'eye' : 'eyeOff'} size={16} />
         </MenuItem>
+        {full && (
+          <p data-task-subscribers-full className="px-2 pb-1 text-sm text-text-2">
+            {fullTip}.
+          </p>
+        )}
         <Separator className="my-1" />
         <div className="min-h-0 overflow-y-auto overscroll-contain">
           {failed ? (
@@ -228,7 +240,12 @@ export function IssueSubscribers({ issue }: { issue: IssueVM }) {
                 </div>
               </>
             ) : (
-              <MenuItem data-task-subscriber-add-open onClick={() => setAdding(true)}>
+              <MenuItem
+                data-task-subscriber-add-open
+                disabled={full}
+                title={full ? fullTip : undefined}
+                onClick={() => setAdding(true)}
+              >
                 <Icon name="plus" size={16} />
                 Add
               </MenuItem>

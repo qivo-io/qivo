@@ -32,6 +32,7 @@ import {
   removeMessages,
   removeReadMessages,
   snoozeMessages,
+  trimUnreadMessages,
   wakeSnoozedItem,
 } from './model/messages'
 
@@ -112,6 +113,19 @@ export const wake = internalMutation({
   args: { recipient_id: v.string(), issue_id: v.string(), until: v.string() },
   handler: async (ctx, a) => {
     await wakeSnoozedItem(ctx, a, new Date().toISOString())
+    return null
+  },
+})
+
+/* One background step that trims the inbox items of a fan-out's later
+ * recipients about one task toward the item cap, scheduled by name from the
+ * fan-outs (model/messages.ts scheduleItemTrims). */
+export const trimItems = internalMutation({
+  args: { issue_id: v.string(), recipients: v.array(v.string()) },
+  handler: async (ctx, a) => {
+    for (const recipient_id of a.recipients) {
+      await trimUnreadMessages(ctx, { recipient_id, issue_id: a.issue_id })
+    }
     return null
   },
 })

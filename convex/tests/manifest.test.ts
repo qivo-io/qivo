@@ -285,6 +285,7 @@ issues:archive mutation public {"type":"object","value":{"id":{"fieldType":{"typ
 issues:archivedFor query public {"type":"object","value":{"project_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 issues:archivedPage query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":true}}}
 issues:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"status":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"backlog"},{"type":"literal","value":"todo"},{"type":"literal","value":"progress"},{"type":"literal","value":"review"},{"type":"literal","value":"done"}]},{"type":"null"}]},"optional":true},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":true},"assignee_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"reviewer_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"parent_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"due_date":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"paused":{"fieldType":{"type":"union","value":[{"type":"boolean"},{"type":"null"}]},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+issues:createParent mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:deleteDeep mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"subtask_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"reason":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:move mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"detach_parent":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:moveCarriesSubtasks query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -407,6 +408,7 @@ messages:readArchivedTasks mutation internal {"type":"object","value":{"issues":
 messages:remove mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:removeRead mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:snooze mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+messages:trimItems mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:wake mutation internal {"type":"object","value":{"recipient_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:claimIssuance mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"authUserId":{"fieldType":{"type":"string"},"optional":false},"clientId":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false},"scopes":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"credentialHash":{"fieldType":{"type":"string"},"optional":false},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"authorization_code"},{"type":"literal","value":"refresh_token"}]},"optional":false}}}
 oauthConnections:ensure mutation internal {"type":"object","value":{"authorizationHash":{"fieldType":{"type":"string"},"optional":false},"authUserId":{"fieldType":{"type":"string"},"optional":false},"clientId":{"fieldType":{"type":"string"},"optional":false},"clientName":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false},"requestedScopes":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"scopes":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"approve":{"fieldType":{"type":"boolean"},"optional":false},"expiresAt":{"fieldType":{"type":"string"},"optional":false}}}
@@ -713,6 +715,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     create: 'orgMutation',
     update: 'orgMutation',
     move: 'orgMutation',
+    // The Parent picker's Create new parent task: create and attach in one
+    // write, so a refused attach leaves no new task.
+    createParent: 'orgMutation',
     // The Move window asks whether a move carries subtasks, archived ones
     // included; it answers false unless the caller can edit both ends.
     moveCarriesSubtasks: 'orgQuery',
@@ -858,7 +863,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 165
+const PUBLIC_COUNT = 166
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

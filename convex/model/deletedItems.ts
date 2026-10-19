@@ -120,6 +120,7 @@ import {
 } from '../lib/enums'
 import { notFound, rule } from '../lib/functions'
 import { countsAsSubtask } from '../lib/liveTasks'
+import { SUBTASK_MAX } from '../lib/taskLimits'
 import { DELETE_REASON_MAX } from '../lib/textLimits'
 import { insertActivity, logActivity } from './activity'
 import { storageIdInUse } from './attachments'
@@ -127,8 +128,8 @@ import { dropCommentCount } from './commentCounts'
 import { estimateDocumentBytes } from './demoMetrics'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import {
-  loadNotifyPreload,
   type NotifyPreload,
+  newNotifyPreload,
   postMessage,
   type RecipientSight,
   scheduleArchivedReads,
@@ -774,7 +775,7 @@ async function storeTask(
 /** The step's NotifyPreload. A step changes no profile, grant, team or
  * project after it starts, so one read serves every detach. */
 async function preloadOf(run: Run): Promise<NotifyPreload> {
-  run.preload ??= await loadNotifyPreload(run.ctx, run.item.org_id)
+  run.preload ??= newNotifyPreload()
   return run.preload
 }
 
@@ -2517,6 +2518,8 @@ type LiveTasks = Map<string, Doc<'issues'> | null>
  * (liveProjects) and what each person sees of them (seenBy). */
 type ParentReads = {
   tasks: LiveTasks
+  /* each parent's subtasks as the step leaves them (liveSubtasks) */
+  subtasks: Map<string, number>
   weights: WeakMap<Doc<'issues'>, number>
   parents: Map<string, Promise<OutsideParent | null>>
   projects: Promise<Doc<'projects'>[]> | undefined
@@ -2525,6 +2528,7 @@ type ParentReads = {
 
 const newParentReads = (): ParentReads => ({
   tasks: new Map(),
+  subtasks: new Map(),
   weights: new WeakMap(),
   parents: new Map(),
   projects: undefined,
@@ -2653,8 +2657,11 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * `home`, the live project the task comes back in, by the subtask rule
  * (model/issues.ts sameTopLevel). A parent that moved to another top-level
  * project since the delete fails it, as can a subtask stored before the
- * rule. An active parent stays when the restorer may change it, within 20
- * levels; an archived one only for an archived task, within the same depth.
+ * rule. The one level of subtasks (lib/taskLimits.ts) also clears a
+ * parent that is a subtask itself, the parent of a task that comes back
+ * with subtasks, and a parent that already has SUBTASK_MAX subtasks. An
+ * active parent stays when the restorer may change it; an archived one only
+ * for an archived task.
  * `grouped`: the attach makes the parent a group (lib/liveTasks.ts
  * countsAsSubtask). Any task under an archived parent does, and so does an
  * active task under an active parent unless the task's project is archived
@@ -2676,8 +2683,9 @@ type Kept = { id: string; grouped: boolean } | undefined | 'later'
  * Where an edit refuses, the task comes back without the parent and keeps
  * its people, as for the table's other refusals. The chain above the parent
  * (chainOver) and the subtree under `task` (workersBelow) are read only for
- * a parent that passes the rest, and for each task, because an attach
- * earlier in the step can deepen a chain. Who sees the chain (allSee) is
+ * a parent that passes the rest. With one level of subtasks the chain is
+ * the parent alone and the walk under `task` stops at its first level; the
+ * longer reads remain for data stored before that rule. Who sees the chain (allSee) is
  * read last. The chain and who sees it answer 'later' when the step's reads
  * run out before they read what the step has not read yet. */
 async function keptParent(
@@ -2689,6 +2697,8 @@ async function keptParent(
   reads: ParentReads,
 ): Promise<Kept> {
   if (outside === null || !sameTopLevel(home, outside.project)) return undefined
+  // one level of subtasks (lib/taskLimits.ts): no parent that is a subtask
+  if (outside.parent.parent_id !== undefined) return undefined
   const active = outside.parent.archived_at === undefined
   const taskActive = task.archived_at === undefined
   if (!active && taskActive) return undefined
@@ -2696,16 +2706,62 @@ async function keptParent(
   const chain = await chainOver(run, outside.parent, task.id, reads)
   if (chain === 'later') return 'later'
   if (chain === null) return undefined
-  const workers = await workersBelow(run, task, 20 - chain.levels - 1, children)
+  // nor a task with subtasks under one, so the walk allows no level below
+  const workers = await workersBelow(run, task, 0, children)
   if (workers === null) return undefined
+  const subtasks = await liveSubtasks(run, reads, outside.parent.id)
+  if (subtasks === 'later') return 'later'
+  if (subtasks >= SUBTASK_MAX) return undefined
   const sees = await allSee(run, reads, task, workers, chain.projects)
   if (sees === 'later') return 'later'
+  if (sees) reads.subtasks.set(outside.parent.id, subtasks + 1)
   // the attach makes the parent a group only when the task counts for it
   const grouped = countsAsSubtask(
     { archived: !active, projectLive: outside.project.archived_at === undefined },
     { archived: !taskActive, projectLive: home.archived_at === undefined },
   )
   return sees ? { id: outside.parent.id, grouped } : undefined
+}
+
+/** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
+ * A subtask within TEXT_MAX stores up to about 120 KB, and one stored
+ * before that cap almost 1 MiB, so a parent's 100 subtasks can pass what a
+ * step can read. A count past it stops, counts the parent as full, with a
+ * warning, and its task comes back without it. Someone with Edit can still
+ * give the task that parent by hand. A mutable object, so tests can lower
+ * it. */
+export const COUNT_READ = { bytes: 8 * 1024 * 1024 }
+
+/** How many subtasks live task `parentId` has, archived ones included,
+ * counted up to SUBTASK_MAX, with the ones the step gave it, or SUBTASK_MAX
+ * for a count past COUNT_READ. Read once per step and charged to its
+ * budget; 'later' when the step's reads are spent before it is read. */
+async function liveSubtasks(
+  run: Run,
+  reads: ParentReads,
+  parentId: string,
+): Promise<number | 'later'> {
+  const known = reads.subtasks.get(parentId)
+  if (known !== undefined) return known
+  if (readsSpent(run.budget)) return 'later'
+  let count = 0
+  let bytes = 0
+  const kids = run.ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+  for await (const kid of kids) {
+    count += 1
+    bytes += chargeRead(run.budget, kid)
+    if (count >= SUBTASK_MAX) break
+    if (bytes > COUNT_READ.bytes) {
+      console.warn('A deleted item restore cannot count the subtasks of a parent', {
+        item_id: run.item.id,
+        parent_id: parentId,
+      })
+      count = SUBTASK_MAX
+      break
+    }
+  }
+  reads.subtasks.set(parentId, count)
+  return count
 }
 
 /** The chain from a live task to the top: how many levels it holds and the
@@ -2716,8 +2772,8 @@ type Chain = { levels: number; projects: Set<string> }
  * included. Its tasks count from the start, whether the step read them for
  * an earlier task or not, so the answer depends only on the data. A chain
  * past it does not fit, so its task keeps no parent from outside, with a
- * warning, as for HEIGHT_READ, and a retry answers the same. Someone with
- * Edit can still give the task that parent by hand. Twenty tasks of 200 KB
+ * warning, as for HEIGHT_READ, and a retry answers the same. With one level
+ * of subtasks only the parent itself is read now. Twenty tasks of 200 KB
  * fit, while a description within TEXT_MAX holds at most 120 KB. Tasks
  * stored before that cap can hold almost 1 MiB, and twenty of them would
  * pass what one transaction can read. A mutable object, so tests can lower
@@ -2828,9 +2884,9 @@ async function allSee(
 /** The most one walk under a task (workersBelow) reads: tasks and their
  * bytes. A subtree past it counts as too deep, so its task keeps no parent
  * from outside, and the walk stays within what one step can read next to
- * its own budget. Someone with Edit can still give the task that parent by
- * hand, which reads the whole subtree (model/issues.ts assertParentChain).
- * A mutable object, so tests can lower it. */
+ * its own budget. With one level of subtasks any subtask already keeps the
+ * task from its parent, so only the first level is read. A mutable object,
+ * so tests can lower it. */
 export const HEIGHT_READ = { tasks: 500, bytes: 4 * 1024 * 1024 }
 
 /**
@@ -3915,7 +3971,7 @@ export async function moveTasksToTrash(
       .collect()
     for (const kid of kids) {
       if (doomed.has(kid.id)) continue
-      preload ??= await loadNotifyPreload(counted, actor.org_id)
+      preload ??= newNotifyPreload()
       await detachChild(counted, kid, actor, now, preload)
     }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })

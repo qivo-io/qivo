@@ -40,7 +40,13 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { canManageOwnProjectAccess, canSeeProject, hasProjectLevel, keepsInbox } from './lib/access'
+import {
+  canManageOwnProjectAccess,
+  canSeeProject,
+  hasProjectLevel,
+  keepsInbox,
+  projectLevelsForProfiles,
+} from './lib/access'
 import {
   ARCHIVED_PAGE_ROWS,
   type ArchivedPageRow,
@@ -301,6 +307,34 @@ export const update = orgMutation({
   },
 })
 
+/* ----------------------------------------------------------- create parent
+ * P.createParent, the Parent picker's Create new parent task: a new
+ * top-level task `parent_id` titled `title` in task `id`'s sub-project, and
+ * task `id` attached under it, in one transaction. A refused attach, such as
+ * for a task with archived subtasks the app cannot see, rolls the new task
+ * back too. Both writes run their usual cores and checks. */
+export const createParent = orgMutation({
+  args: { id: v.string(), parent_id: v.string(), title: v.string() },
+  handler: async (ctx, { id, parent_id, title }) => {
+    const now = new Date().toISOString()
+    const issue = await myIssue(ctx, id)
+    await assertWritable(ctx, issue.project_id)
+    await createIssueCore(ctx, {
+      me: ctx.me,
+      args: { id: parent_id, project_id: issue.project_id, title },
+      now,
+    })
+    const child = (await byId(ctx, 'issues', issue.id)) as Doc<'issues'>
+    const after = await updateIssueCore(ctx, {
+      me: ctx.me,
+      issue: child,
+      patch: { parent_id },
+      now,
+    })
+    return await pubFor(ctx, ctx.me, after)
+  },
+})
+
 /* ------------------------------------------------------------------- move
  * P.moveIssue. REST and MCP move through the same moveIssueCore.
  * 'member' on BOTH ends, checked before moveIssueCore's guards as create
@@ -531,7 +565,10 @@ async function subscriptionTarget(ctx: MeCtx, issueId: string) {
  * snapshot. Existing subscriptions remain visible after access/deactivation
  * so a manager can remove them. Add candidates require CURRENT access, an
  * active seat and an inbox (lib/access.ts keepsInbox, which leaves out
- * Viewer agents); a subscription itself never grants project access. */
+ * Viewer agents); a subscription itself never grants project access. Their
+ * levels on the task's sub-project are read for everyone at once
+ * (projectLevelsForProfiles), in a few index ranges, because one check per
+ * person passed Convex's 4,096 in an organization of some thousands. */
 export const subscribers = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
@@ -548,13 +585,14 @@ export const subscribers = orgQuery({
       .collect()
     const subscribers: string[] = []
     const candidates: string[] = []
+    const levelOf = canManage ? await projectLevelsForProfiles(ctx, project) : undefined
     for (const profile of profiles) {
       if (subscribed.has(profile.id)) subscribers.push(profile.id)
       else if (
-        canManage &&
+        levelOf !== undefined &&
         profile.active &&
         keepsInbox(profile) &&
-        (await canSeeProject(ctx, profile, project))
+        levelOf(profile) !== null
       ) {
         candidates.push(profile.id)
       }
@@ -589,6 +627,7 @@ export const setSubscriber = orgMutation({
         org_id: issue.org_id,
         project,
         now: new Date().toISOString(),
+        cap: 'refuse',
       })
     } else {
       const row = await ctx.db

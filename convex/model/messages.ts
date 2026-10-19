@@ -36,6 +36,7 @@ import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
+import { FOLLOWER_MAX, FOLLOWERS_FULL } from '../lib/taskLimits'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { scheduleArchiveMarks } from './archiveMarks'
 import { newUuid } from './orgs'
@@ -129,7 +130,10 @@ export async function wakeSnoozedItem(
 }
 
 /* Oldest first by (created_at, id), the total order the prune uses too. */
-function oldestFirst(a: Doc<'messages'>, b: Doc<'messages'>): number {
+function oldestFirst(
+  a: Pick<Doc<'messages'>, 'created_at' | 'id'>,
+  b: Pick<Doc<'messages'>, 'created_at' | 'id'>,
+): number {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1
   return a.id === b.id ? 0 : a.id < b.id ? -1 : 1
 }
@@ -165,14 +169,13 @@ export async function pruneReadMessages(
 }
 
 /* -------------------------------------------------------------- item cap
- * The most UNREAD messages one inbox item keeps. Every pair-level operation
- * reads the whole item: pairRows in postMessage (on every comment and
- * change to the task), snooze, wake, the prune after mark read and the
- * machine inbox's item actions (itemMessages). Without a cap, a follower or
- * an agent that never reads its inbox would grow one item on a busy task
- * without limit, until each new comment or change to that task read more
- * than one transaction allows and failed for everybody, and snoozing or
- * marking the item read failed too. Only arrivals add rows, and the prune
+ * The most UNREAD messages one inbox item keeps. Snooze, wake, the prune
+ * after mark read and the machine inbox's item actions (itemMessages) read
+ * the whole item, and the trim after each arrival reads up to the cap and a
+ * step more (trimUnreadMessages). Without a cap, a follower or an agent that
+ * never reads its inbox would grow one item on a busy task without limit,
+ * until snoozing or marking the item read failed, and each comment or change
+ * to that task paid for it. Only arrivals add rows, and the prune
  * keeps at most one read row, so an item held at the cap stays within
  * ITEM_UNREAD_CAP + 1 rows. An item that grew past the cap before the cap
  * existed shrinks by up to ITEM_TRIM_STEP rows per arrival, so it reaches
@@ -189,23 +192,36 @@ export const ITEM_UNREAD_CAP = 50
  * trim back each time. */
 export const ITEM_TRIM_STEP = ITEM_UNREAD_CAP
 
-/* Collapses an oversized item. When `rows` (the whole item, as postMessage
- * read it after its insert) holds more than ITEM_UNREAD_CAP unread rows, it
- * deletes the oldest unread rows, by (created_at, id) like the prune, until
+/** How many of an item's oldest unread rows decide a trim: every row it may
+ * delete is among them. */
+const TRIM_READ = ITEM_UNREAD_CAP + ITEM_TRIM_STEP + 1
+
+/* The start of an item in by_recipient_issue_read_order, which holds its
+ * unread rows oldest first by (created_at, id), then its read rows. */
+const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string }) =>
+  ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue_read_order', (q) =>
+      q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id),
+    )
+
+/* Collapses an oversized item. `unread` is the item's unread rows oldest
+ * first, or at least its first TRIM_READ of them. When the item holds more
+ * than ITEM_UNREAD_CAP unread rows, it deletes the oldest unread rows until
  * the item holds the cap or ITEM_TRIM_STEP rows are gone. It never deletes
  * the item's oldest unread row, which marks where the unread run starts
  * (src/lib/spine.ts firstUnreadTs puts the New divider there), nor the
  * newest unread row of each kind, so the Inbox kind filter still finds the
- * item. This is separate from retention, and the nightly sweep still never
- * deletes an unread row. */
-async function trimUnreadMessages(
+ * item. A kind whose newest row lies past the first TRIM_READ keeps one more
+ * row than it needs to. This is separate from retention, and the nightly
+ * sweep still never deletes an unread row. */
+async function trimRows(
   ctx: MutationCtx,
-  rows: readonly Doc<'messages'>[],
+  unread: readonly Pick<Doc<'messages'>, '_id' | 'kind'>[],
 ): Promise<void> {
-  const unread = rows.filter((r) => r.read_at === undefined).sort(oldestFirst)
   let excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
   if (excess <= 0) return
-  const newestOfKind = new Map<MessageKind, Doc<'messages'>>()
+  const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
   for (const r of unread) newestOfKind.set(r.kind, r)
   const kept = new Set([unread[0]._id, ...[...newestOfKind.values()].map((r) => r._id)])
   for (const r of unread) {
@@ -216,12 +232,28 @@ async function trimUnreadMessages(
   }
 }
 
+/** Trims one item toward ITEM_UNREAD_CAP (trimRows), reading its first
+ * TRIM_READ unread rows. The background trim step runs it. */
+export async function trimUnreadMessages(
+  ctx: MutationCtx,
+  a: { recipient_id: string; issue_id: string },
+): Promise<void> {
+  const unread = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue_read_order', (q) =>
+      q.eq('recipient_id', a.recipient_id).eq('issue_id', a.issue_id).eq('read_at', undefined),
+    )
+    .take(TRIM_READ)
+  await trimRows(ctx, unread)
+}
+
 /* ---------------------------------------------------------------- preload
- * Rows a bulk writer already holds, handed to notifyIssueInsert,
- * notifyIssueUpdate and notifyCommentInsert so each call need not read them
- * again. A preload is a snapshot. It is valid only while nothing in the
- * transaction changes profiles, projects, grants, teams or team memberships
- * after it is built, because its visibility answers would then be stale. A
+ * Rows a bulk writer keeps for every task it writes, handed to
+ * notifyIssueInsert, notifyIssueUpdate and notifyCommentInsert so each call
+ * need not read them again. A preload fills as it is asked. It is valid only
+ * while nothing in the transaction changes profiles, projects, grants, teams
+ * or team memberships after it is built, because its answers would then be
+ * stale. A
  * bulk writer that meets this may pass one:
  *   - the Northstar seed (demoSeed.ts writeNorthstarWork);
  *   - a Deleted items step (model/deletedItems.ts), which reads it after any
@@ -236,8 +268,8 @@ async function trimUnreadMessages(
  *     milestones and activity, one preload per organization.
  * A write that changes one task passes none, so every row is read fresh. */
 export type NotifyPreload = {
-  /* Every profile of the issue's org, as stored now (after any patch). */
-  orgProfiles: Doc<'profiles'>[]
+  /* The profiles the fan-outs read, each once, by uuid (ProfileCache). */
+  profiles: ProfileCache
   /* The org's projects by uuid, as stored now. A miss is read by uuid and
    * kept. */
   projects: Map<string, Doc<'projects'>>
@@ -250,19 +282,42 @@ export type NotifyPreload = {
   guard?: () => Promise<void>
 }
 
-/** Builds a preload for `orgId` from its profiles as stored now, with the
- * `projects` the caller already read. Call it only once the transaction will
- * change no profile, project, grant, team or team membership (NotifyPreload). */
-export async function loadNotifyPreload(
-  ctx: MutationCtx,
-  orgId: string,
-  projects: readonly Doc<'projects'>[] = [],
-): Promise<NotifyPreload> {
+/** Builds an empty preload with the `projects` the caller already read. Use
+ * it only while the transaction will change no profile, project, grant,
+ * team or team membership (NotifyPreload). */
+export function newNotifyPreload(projects: readonly Doc<'projects'>[] = []): NotifyPreload {
   return {
-    orgProfiles: await orgProfilesOf(ctx, orgId),
+    profiles: new Map(),
     projects: new Map(projects.map((p) => [p.id, p])),
     visibility: new Map(),
   }
+}
+
+/** Profiles a fan-out read by uuid, each read once, null for one that is
+ * gone. A fan-out reads only the people it names, the followers, the
+ * mentioned people and the assignee and reviewer, never the whole
+ * organization, so its cost does not grow with the organization. */
+export type ProfileCache = Map<string, Promise<Doc<'profiles'> | null>>
+
+/** A ProfileCache that already holds `profiles`, for a writer that read them. */
+export const profileCacheOf = (profiles: readonly Doc<'profiles'>[]): ProfileCache =>
+  new Map(profiles.map((p) => [p.id, Promise.resolve(p)]))
+
+/** Profile `id` of organization `orgId`, read once through `cache`, or
+ * undefined for one that is gone or in another organization. */
+export async function orgProfile(
+  ctx: QueryCtx,
+  cache: ProfileCache,
+  orgId: string,
+  id: string,
+): Promise<Doc<'profiles'> | undefined> {
+  let read = cache.get(id)
+  if (read === undefined) {
+    read = byId(ctx, 'profiles', id)
+    cache.set(id, read)
+  }
+  const profile = await read
+  return profile !== null && profile.org_id === orgId ? profile : undefined
 }
 
 /* A project by uuid, from the preload when one is given. A miss is read and
@@ -329,6 +384,22 @@ async function recipientCanSee(
   return await (await sight.all)(profile)
 }
 
+/** How many items one fan-out trims in its own transaction (ItemTrims).
+ * An item at ITEM_UNREAD_CAP costs about that many rows to trim, so a task
+ * with hundreds of followers would read tens of thousands of rows in every
+ * comment or change, near Convex's limit for one transaction. */
+export const INLINE_TRIMS = 32
+
+/** The trims of one fan-out: the first INLINE_TRIMS items it posts to are
+ * trimmed in the posting transaction, and the recipients of the rest are
+ * collected in `later` for one background step (scheduleItemTrims), which
+ * the fan-out schedules once it has posted. Until that step runs, such an
+ * item holds one row past the cap. */
+export type ItemTrims = { inline: number; later: string[] }
+
+/** A fan-out's ItemTrims, before it posts. */
+export const newItemTrims = (): ItemTrims => ({ inline: 0, later: [] })
+
 /* ------------------------------------------------------------- postMessage
  * THE single insert path (0109:95-114) — no other code may insert messages.
  * Silent drops, never errors: the actor's own copy, a recipient outside the
@@ -338,8 +409,10 @@ async function recipientCanSee(
  * mention must not leak a hidden project's existence (0074), and a
  * subscription can never outlive the access that justified it (0114:40-42).
  * After the insert it wakes a snoozed item, prunes its read rows and trims
- * its unread rows toward ITEM_UNREAD_CAP (trimUnreadMessages). Returns
- * whether a row was inserted.
+ * its unread rows toward ITEM_UNREAD_CAP (trimUnreadMessages), or leaves the
+ * trim to the fan-out's background step (`trims`, ItemTrims). It reads the
+ * item's rows in full only to wake a snoozed item, so a follower's cost does
+ * not grow with the item. Returns whether a row was inserted.
  *
  * A message about an archived task, or a task in an archived project, is
  * stored already read, stamped `now`, because no inbox shows that task and
@@ -367,6 +440,7 @@ export async function postMessage(
     project?: Doc<'projects'>
     recipient?: Doc<'profiles'>
     visibility?: RecipientSight
+    trims?: ItemTrims
   },
 ): Promise<boolean> {
   if (m.actor_id !== undefined && m.recipient_id === m.actor_id) return false
@@ -378,7 +452,31 @@ export async function postMessage(
   if (project === null) return false
   if (!(await recipientCanSee(ctx, recipient, project, m.visibility))) return false
   const archived = issue.archived_at !== undefined || project.archived_at !== undefined
-  await ctx.db.insert('messages', {
+  const pair = { recipient_id: m.recipient_id, issue_id: m.issue_id }
+  // One read of the item. A trim in this transaction reads its start: the
+  // unread rows it decides on, then the read rows, which 0109's invariant
+  // keeps to one. Otherwise its end holds the read rows and a row besides.
+  // Every row of an item carries the same snooze or none (schema.ts), so
+  // any one of them tells whether the item sleeps.
+  const inline = m.trims === undefined || m.trims.inline < INLINE_TRIMS
+  const rows = inline
+    ? await itemStart(ctx, pair).take(TRIM_READ + 2)
+    : await itemStart(ctx, pair).order('desc').take(3)
+  // An item past the cap from before it (ITEM_UNREAD_CAP) can fill the
+  // start with unread rows, so its read rows are read on their own.
+  const read =
+    inline && rows.length === TRIM_READ + 2 && rows.at(-1)?.read_at === undefined
+      ? await ctx.db
+          .query('messages')
+          .withIndex('by_recipient_issue_read_order', (q) =>
+            q
+              .eq('recipient_id', pair.recipient_id)
+              .eq('issue_id', pair.issue_id)
+              .gt('read_at', undefined),
+          )
+          .take(2)
+      : rows.filter((r) => r.read_at !== undefined)
+  const row = {
     id: newUuid(),
     org_id: m.org_id,
     recipient_id: m.recipient_id,
@@ -389,29 +487,88 @@ export async function postMessage(
     detail: m.body,
     created_at: m.now,
     read_at: archived ? m.now : undefined,
-  })
-  const pair = { recipient_id: m.recipient_id, issue_id: m.issue_id }
-  const rows = await pairRows(ctx, pair)
+  }
+  const inserted = await ctx.db.insert('messages', row)
   // News wakes a snoozed item: the arrival is the news, so the older rows
   // only drop the snooze (no woke_at — the new row's created_at floats and
   // announces the item), and the scheduled wake later finds nothing to do.
   // An arrival stored read drops it too, so every row of the item keeps the
   // same stamp; the archive's background step would drop it anyway.
-  for (const r of rows) {
-    if (r.snoozed_until !== undefined) await ctx.db.patch(r._id, { snoozed_until: undefined })
+  if (rows[0]?.snoozed_until !== undefined) {
+    for (const r of await pairRows(ctx, pair)) {
+      if (r.snoozed_until !== undefined) await ctx.db.patch(r._id, { snoozed_until: undefined })
+    }
   }
-  await pruneReadMessages(ctx, pair, rows)
-  // The prune deletes read rows only, so the unread rows read above are
-  // still the item's.
-  await trimUnreadMessages(ctx, rows)
+  // The prune (pruneReadMessages): the item keeps its newest row, read or
+  // not, and no other read row. Only a row of this same instant can be newer
+  // than the arrival, and only such a row survives it.
+  let newest: Pick<Doc<'messages'>, 'created_at' | 'id'> = row
+  for (const r of read) if (oldestFirst(newest, r) < 0) newest = r
+  for (const r of read) if (r !== newest) await ctx.db.delete(r._id)
+  if (newest !== row && row.read_at !== undefined) await ctx.db.delete(inserted)
+  if (!inline) {
+    m.trims?.later.push(m.recipient_id)
+    return true
+  }
+  if (m.trims !== undefined) m.trims.inline += 1
+  const unread = rows.filter((r) => r.read_at === undefined)
+  // the arrival is the item's newest unread row
+  await trimRows(ctx, row.read_at === undefined ? [...unread, { ...row, _id: inserted }] : unread)
   return true
+}
+
+/* The background trim step in convex/messages.ts, referenced by name like
+ * wakeRef below. */
+const trimItemsRef = makeFunctionReference<
+  'mutation',
+  { issue_id: string; recipients: string[] },
+  null
+>('messages:trimItems')
+
+/** How many items one background trim step trims. Each reads at most
+ * ITEM_UNREAD_CAP + ITEM_TRIM_STEP + 1 rows and deletes at most
+ * ITEM_TRIM_STEP. */
+export const TRIM_BATCH = 64
+
+/** Schedules the background trims of a fan-out's deferred items
+ * (ItemTrims.later), TRIM_BATCH recipients a step. */
+export async function scheduleItemTrims(
+  ctx: MutationCtx,
+  issueId: string,
+  trims: ItemTrims,
+): Promise<void> {
+  const recipients = [...new Set(trims.later)]
+  for (let i = 0; i < recipients.length; i += TRIM_BATCH) {
+    await ctx.scheduler.runAfter(0, trimItemsRef, {
+      issue_id: issueId,
+      recipients: recipients.slice(i, i + TRIM_BATCH),
+    })
+  }
+}
+
+/** How a new follow meets FOLLOWER_MAX (lib/taskLimits.ts). 'refuse'
+ * throws FOLLOWERS_FULL, for a follow by hand. 'skip' adds no follower, for
+ * a comment's author and a mentioned person, whose comment or mention still
+ * goes ahead. 'pass' adds the follower anyway, for a new assignee or
+ * reviewer, who must hear about their own task. */
+export type FollowCap = 'refuse' | 'skip' | 'pass'
+
+/** Whether the task already has FOLLOWER_MAX followers, read with a bound.
+ * A task followed before the cap can have more. */
+export async function followersFull(ctx: QueryCtx, issueId: string): Promise<boolean> {
+  const rows = await ctx.db
+    .query('issue_subscriptions')
+    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issueId))
+    .take(FOLLOWER_MAX)
+  return rows.length >= FOLLOWER_MAX
 }
 
 /* --------------------------------------------------------------- subscribe
  * subscribe_to_issue (0114:134-149): same fence as postMessage (org, an
  * inbox and visibility — a subscription row decides who gets messages, so it
  * must not be creatable for someone who could not have received them),
- * idempotent.
+ * idempotent, then the follower cap as `cap` says (FollowCap). Someone who
+ * already follows is never refused.
  * `visibility` is the fan-out's RecipientSight, as for postMessage. Returns
  * whether a row was inserted. */
 export async function subscribeToIssue(
@@ -422,6 +579,7 @@ export async function subscribeToIssue(
     org_id: string
     project: Doc<'projects'> | null
     now: string
+    cap: FollowCap
     visibility?: RecipientSight
   },
 ): Promise<boolean> {
@@ -435,6 +593,10 @@ export async function subscribeToIssue(
     )
     .unique()
   if (existing !== null) return false
+  if (a.cap !== 'pass' && (await followersFull(ctx, a.issue_id))) {
+    if (a.cap === 'refuse') throw rule(FOLLOWERS_FULL)
+    return false
+  }
   await ctx.db.insert('issue_subscriptions', {
     issue_id: a.issue_id,
     profile_id: a.profile.id,
@@ -452,7 +614,8 @@ export async function subscribeToIssue(
 
 /**
  * Starts `me` following `issue`. Refuses a task whose project `me` cannot
- * see. Returns whether `me` was not following it before.
+ * see, and one with FOLLOWER_MAX followers that `me` does not follow yet.
+ * Returns whether `me` was not following it before.
  */
 export async function followTask(
   ctx: MutationCtx,
@@ -468,6 +631,7 @@ export async function followTask(
     org_id: a.issue.org_id,
     project,
     now: a.now,
+    cap: 'refuse',
   })
 }
 
@@ -1066,25 +1230,44 @@ const SPAN_RE = /`[^`\n]*`/g
 const MENTION_RE =
   /@\[[^\][]*\]\([ \t]*user:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[ \t]*\)/gi
 
-export function extractMentions(text: string, profiles: Doc<'profiles'>[]): Doc<'profiles'>[] {
+/** The most people one text mentions. Mentions past them notify no one,
+ * so a comment or description reads at most this many profiles to resolve
+ * its mentions. */
+export const MENTION_MAX = 100
+
+/** The distinct uuids `text` mentions, lowercase, in order, at most `max`
+ * of them (MENTION_MAX unless the caller reads no profiles for them, as for
+ * the text before an edit). */
+export function mentionIds(text: string, max = MENTION_MAX): string[] {
   const stripped = (text ?? '').replace(FENCE_RE, ' ').replace(SPAN_RE, ' ')
   const seen = new Set<string>()
-  const out: Doc<'profiles'>[] = []
   for (const match of stripped.matchAll(MENTION_RE)) {
-    const uuid = match[1].toLowerCase()
-    if (seen.has(uuid)) continue
-    seen.add(uuid)
-    const profile = profiles.find((p) => p.id === uuid)
+    if (seen.size >= max) break
+    seen.add(match[1].toLowerCase())
+  }
+  return [...seen]
+}
+
+/** The profiles among `profiles` that `text` mentions (mentionIds). */
+export function extractMentions(text: string, profiles: Doc<'profiles'>[]): Doc<'profiles'>[] {
+  return mentionIds(text).flatMap((id) => profiles.filter((p) => p.id === id))
+}
+
+/* The profiles of organization `orgId` that `text` mentions, read by uuid
+ * through `cache`. Unknown and foreign uuids drop. */
+async function mentionedIn(
+  ctx: QueryCtx,
+  text: string,
+  cache: ProfileCache,
+  orgId: string,
+): Promise<Doc<'profiles'>[]> {
+  const out: Doc<'profiles'>[] = []
+  for (const id of mentionIds(text)) {
+    const profile = await orgProfile(ctx, cache, orgId, id)
     if (profile !== undefined) out.push(profile)
   }
   return out
 }
-
-const orgProfilesOf = (ctx: MutationCtx, orgId: string): Promise<Doc<'profiles'>[]> =>
-  ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
 
 const subscribersOf = (ctx: MutationCtx, issueId: string): Promise<Doc<'issue_subscriptions'>[]> =>
   ctx.db
@@ -1113,9 +1296,10 @@ export async function notifyIssueInsert(
   const { issue, actor, now, preload } = a
   if (!a.skipTaskEvent) await emitTaskEvent(ctx, { name: 'task.created', issue, actor, now })
   const project = await preloadedProject(ctx, preload, issue.project_id)
-  const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, issue.org_id))
+  const profiles = preload?.profiles ?? new Map()
   const visibility: RecipientSight = preload?.visibility ?? new Map()
-  const mentioned = extractMentions(issue.description, orgProfiles)
+  const trims = newItemTrims()
+  const mentioned = await mentionedIn(ctx, issue.description, profiles, issue.org_id)
   for (const m of mentioned) {
     await subscribeToIssue(ctx, {
       issue_id: issue.id,
@@ -1123,6 +1307,7 @@ export async function notifyIssueInsert(
       org_id: issue.org_id,
       project,
       now,
+      cap: 'skip',
       visibility,
     })
     await postMessage(ctx, {
@@ -1137,10 +1322,11 @@ export async function notifyIssueInsert(
       project: project ?? undefined,
       recipient: m,
       visibility,
+      trims,
     })
   }
   if (issue.assignee_id !== undefined) {
-    const assignee = orgProfiles.find((p) => p.id === issue.assignee_id)
+    const assignee = await orgProfile(ctx, profiles, issue.org_id, issue.assignee_id)
     // a missing profile is skipped (the org fence would drop both writes),
     // but the reviewer below still hears about the task
     if (assignee !== undefined) {
@@ -1150,6 +1336,7 @@ export async function notifyIssueInsert(
         org_id: issue.org_id,
         project,
         now,
+        cap: 'pass',
         visibility,
       })
       if (assignee.id !== actor.id && !mentioned.some((p) => p.id === assignee.id)) {
@@ -1165,13 +1352,14 @@ export async function notifyIssueInsert(
           project: project ?? undefined,
           recipient: assignee,
           visibility,
+          trims,
         })
       }
     }
   }
   // a task created In Review is the reviewer's: they follow it and hear so
   if (reviewerOwns(issue) && issue.reviewer_id !== issue.assignee_id) {
-    const reviewer = orgProfiles.find((p) => p.id === issue.reviewer_id)
+    const reviewer = await orgProfile(ctx, profiles, issue.org_id, issue.reviewer_id as string)
     if (reviewer !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: issue.id,
@@ -1179,6 +1367,7 @@ export async function notifyIssueInsert(
         org_id: issue.org_id,
         project,
         now,
+        cap: 'pass',
         visibility,
       })
       if (reviewer.id !== actor.id && !mentioned.some((p) => p.id === reviewer.id)) {
@@ -1194,10 +1383,12 @@ export async function notifyIssueInsert(
           project: project ?? undefined,
           recipient: reviewer,
           visibility,
+          trims,
         })
       }
     }
   }
+  await scheduleItemTrims(ctx, issue.id, trims)
 }
 
 /* ---------------------------------------------------------- notify: update
@@ -1230,11 +1421,11 @@ export async function notifyIssueInsert(
  * (model/deletedItems.ts), which also passes the step's `preload`, and for a
  * restore's regroup step whose restorer is gone (regroup.ts).
  *
- * `preload` is a bulk writer's NotifyPreload, which answers the
- * organization's profiles, the projects and the recipients' sight from
- * memory, and whose `guard` runs before each mention and follower. Without
- * one every row is read fresh, and the recipients' sight is worked out once
- * per project for the call (RecipientSight). */
+ * `preload` is a bulk writer's NotifyPreload, which keeps the profiles,
+ * the projects and the recipients' sight it read for the next task, and
+ * whose `guard` runs before each mention and follower. Without one each
+ * profile the call names is read once, and the recipients' sight is worked
+ * out once per project for the call (RecipientSight). */
 export async function notifyIssueUpdate(
   ctx: MutationCtx,
   a: {
@@ -1260,19 +1451,21 @@ export async function notifyIssueUpdate(
     })
   const isGroup = a.isGroup === true
   const project = await preloadedProject(ctx, preload, after.project_id)
-  const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, after.org_id))
+  const profiles = preload?.profiles ?? new Map()
+  const profileOf = (id: string) => orgProfile(ctx, profiles, after.org_id, id)
   const visibility: RecipientSight = preload?.visibility ?? new Map()
+  const trims = newItemTrims()
 
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into. An
   // unchanged description adds none, so a bulk write of dates skips the scan
   const oldMentions =
-    after.description === before.description ? [] : extractMentions(before.description, orgProfiles)
+    after.description === before.description ? [] : mentionIds(before.description, Infinity)
   const newMentions =
     after.description === before.description
       ? []
-      : extractMentions(after.description, orgProfiles).filter(
-          (p) => !oldMentions.some((o) => o.id === p.id),
+      : (await mentionedIn(ctx, after.description, profiles, after.org_id)).filter(
+          (p) => !oldMentions.includes(p.id),
         )
   for (const m of newMentions) {
     await preload?.guard?.()
@@ -1282,6 +1475,7 @@ export async function notifyIssueUpdate(
       org_id: after.org_id,
       project,
       now,
+      cap: 'skip',
       visibility,
     })
     await postMessage(ctx, {
@@ -1296,13 +1490,14 @@ export async function notifyIssueUpdate(
       project: project ?? undefined,
       recipient: m,
       visibility,
+      trims,
     })
   }
 
   // a new assignee starts following; the old one keeps following — being
   // taken off a task is news you want (0114:228-229)
   if (after.assignee_id !== before.assignee_id && after.assignee_id !== undefined) {
-    const assignee = orgProfiles.find((p) => p.id === after.assignee_id)
+    const assignee = await profileOf(after.assignee_id)
     if (assignee !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: after.id,
@@ -1310,6 +1505,7 @@ export async function notifyIssueUpdate(
         org_id: after.org_id,
         project,
         now,
+        cap: 'pass',
         visibility,
       })
     }
@@ -1320,7 +1516,7 @@ export async function notifyIssueUpdate(
   // Review (#314). A reviewer set outside Review owns nothing yet.
   const ownerAfter = taskOwnerId(after, isGroup)
   if (ownerAfter !== undefined && ownerAfter !== taskOwnerId(before, isGroup)) {
-    const owner = orgProfiles.find((p) => p.id === ownerAfter)
+    const owner = await profileOf(ownerAfter)
     if (owner !== undefined) {
       await subscribeToIssue(ctx, {
         issue_id: after.id,
@@ -1328,6 +1524,7 @@ export async function notifyIssueUpdate(
         org_id: after.org_id,
         project,
         now,
+        cap: 'pass',
         visibility,
       })
     }
@@ -1339,7 +1536,7 @@ export async function notifyIssueUpdate(
 
   // the cheap exit: with nobody following, there is nothing to narrate for
   const subs = await subscribersOf(ctx, after.id)
-  if (subs.length === 0) return
+  if (subs.length === 0) return await scheduleItemTrims(ctx, after.id, trims)
 
   // narrate what changed (from → to, mirroring the activity feed's rule)
   const parts: string[] = []
@@ -1419,12 +1616,10 @@ export async function notifyIssueUpdate(
   if (after.assignee_id !== before.assignee_id) {
     if (after.assignee_id === undefined) {
       const oldName =
-        before.assignee_id === undefined
-          ? undefined
-          : orgProfiles.find((p) => p.id === before.assignee_id)?.name
+        before.assignee_id === undefined ? undefined : (await profileOf(before.assignee_id))?.name
       assignedLine = `Unassigned (was ${oldName ?? 'someone'})`
     } else {
-      const newName = orgProfiles.find((p) => p.id === after.assignee_id)?.name
+      const newName = (await profileOf(after.assignee_id))?.name
       assignedLine = `Assigned to ${newName ?? 'someone'}`
     }
   }
@@ -1433,23 +1628,23 @@ export async function notifyIssueUpdate(
   if (after.reviewer_id !== before.reviewer_id) {
     if (after.reviewer_id === undefined) {
       const oldName =
-        before.reviewer_id === undefined
-          ? undefined
-          : orgProfiles.find((p) => p.id === before.reviewer_id)?.name
+        before.reviewer_id === undefined ? undefined : (await profileOf(before.reviewer_id))?.name
       reviewerLine = `Reviewer removed (was ${oldName ?? 'someone'})`
     } else {
-      const newName = orgProfiles.find((p) => p.id === after.reviewer_id)?.name
+      const newName = (await profileOf(after.reviewer_id))?.name
       reviewerLine = `Reviewer set to ${newName ?? 'someone'}`
     }
   }
 
-  if (parts.length === 0 && assignedLine === undefined && reviewerLine === undefined) return
+  if (parts.length === 0 && assignedLine === undefined && reviewerLine === undefined) {
+    return await scheduleItemTrims(ctx, after.id, trims)
+  }
 
   // one message per follower. postMessage drops the actor's own copy, anyone
   // who has left the org, and anyone who can no longer see the project.
   for (const s of subs) {
     await preload?.guard?.()
-    const recipient = orgProfiles.find((p) => p.id === s.profile_id)
+    const recipient = await profileOf(s.profile_id)
     let mine = [...parts]
     if (newMentions.some((m) => m.id === s.profile_id)) {
       // a fresh mention supersedes the bare description line — they will
@@ -1497,8 +1692,10 @@ export async function notifyIssueUpdate(
       project: project ?? undefined,
       recipient,
       visibility,
+      trims,
     })
   }
+  await scheduleItemTrims(ctx, after.id, trims)
 }
 
 /* --------------------------------------------------------- notify: comment
@@ -1522,9 +1719,10 @@ export async function notifyCommentInsert(
   const { comment, issue, actor, now, preload } = a
   if (!a.skipTaskEvent) await emitTaskEvent(ctx, { name: 'comment.created', issue, actor, now })
   const project = await preloadedProject(ctx, preload, issue.project_id)
-  const orgProfiles = preload?.orgProfiles ?? (await orgProfilesOf(ctx, issue.org_id))
+  const profiles = preload?.profiles ?? new Map()
   const visibility: RecipientSight = preload?.visibility ?? new Map()
-  const mentioned = extractMentions(comment.body, orgProfiles)
+  const trims = newItemTrims()
+  const mentioned = await mentionedIn(ctx, comment.body, profiles, issue.org_id)
   for (const m of mentioned) {
     await subscribeToIssue(ctx, {
       issue_id: issue.id,
@@ -1532,6 +1730,7 @@ export async function notifyCommentInsert(
       org_id: issue.org_id,
       project,
       now,
+      cap: 'skip',
       visibility,
     })
     await postMessage(ctx, {
@@ -1546,6 +1745,7 @@ export async function notifyCommentInsert(
       project: project ?? undefined,
       recipient: m,
       visibility,
+      trims,
     })
   }
   await subscribeToIssue(ctx, {
@@ -1554,6 +1754,7 @@ export async function notifyCommentInsert(
     org_id: issue.org_id,
     project,
     now,
+    cap: 'skip',
     visibility,
   })
   const subs = await subscribersOf(ctx, issue.id)
@@ -1569,10 +1770,12 @@ export async function notifyCommentInsert(
       now,
       issue,
       project: project ?? undefined,
-      recipient: orgProfiles.find((p) => p.id === s.profile_id),
+      recipient: await orgProfile(ctx, profiles, issue.org_id, s.profile_id),
       visibility,
+      trims,
     })
   }
+  await scheduleItemTrims(ctx, issue.id, trims)
 }
 
 /* notify_comment_update (0114:384-403): only when the body changed; mentions
@@ -1592,11 +1795,11 @@ export async function notifyCommentUpdate(
   const { before, after, issue, actor, now } = a
   if (after.body === before.body) return
   const project = await byId(ctx, 'projects', issue.project_id)
-  const orgProfiles = await orgProfilesOf(ctx, issue.org_id)
-  const oldMentions = extractMentions(before.body, orgProfiles)
-  const added = extractMentions(after.body, orgProfiles).filter(
-    (p) => !oldMentions.some((o) => o.id === p.id),
+  const oldMentions = mentionIds(before.body, Infinity)
+  const added = (await mentionedIn(ctx, after.body, new Map(), issue.org_id)).filter(
+    (p) => !oldMentions.includes(p.id),
   )
+  const trims = newItemTrims()
   for (const m of added) {
     await subscribeToIssue(ctx, {
       issue_id: issue.id,
@@ -1604,6 +1807,7 @@ export async function notifyCommentUpdate(
       org_id: issue.org_id,
       project,
       now,
+      cap: 'skip',
     })
     await postMessage(ctx, {
       org_id: issue.org_id,
@@ -1616,6 +1820,8 @@ export async function notifyCommentUpdate(
       issue,
       project: project ?? undefined,
       recipient: m,
+      trims,
     })
   }
+  await scheduleItemTrims(ctx, issue.id, trims)
 }

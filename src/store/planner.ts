@@ -4162,6 +4162,25 @@ export const PLANNER = {
     }
   },
 
+  /** Creates a top-level task titled `title` in task `id`'s sub-project and
+      makes it that task's parent, for the Parent picker, in one server
+      transaction (api.issues.createParent). The view holds no archived
+      subtasks, which also keep a task from getting a parent
+      (convex/lib/taskLimits.ts), so a refusal shows its sentence and leaves
+      no new task. The new task appears with the next delivery. */
+  createParent: (id: string, title: string): void => {
+    const it = PLANNER.issueById[id]
+    if (!it) return
+    run(
+      write(api.issues.createParent, {
+        org_id: it.org,
+        id: it.uuid,
+        parent_id: crypto.randomUUID(),
+        title: title.trim(),
+      }),
+    )
+  },
+
   /** Move an issue to another sub-project. Issue numbers are org-scoped and
       immutable, so the key survives the move unchanged — nothing to
       renumber. A move to another top-level project detaches the task from a

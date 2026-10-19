@@ -1027,7 +1027,12 @@ access to the parent task`. The new task's project still comes from
 `project` and `sub_project`. A subtask may live in another sub-project than
 its parent, but not in another top-level project. Such a parent answers
 `400` with `a subtask must be in the same project as its parent task, in any
-of its sub-projects`. A chain of subtasks is at most 20 tasks deep.
+of its sub-projects`. A task has one level of subtasks, at most 100 of them,
+archived ones included. A parent that is a subtask itself answers `400` with
+`the parent task is a subtask, and a subtask cannot have subtasks of its own`,
+and a parent with 100 subtasks `400` with `the parent task already has 100
+subtasks, the most a task can have`. Tasks nested deeper, or with more
+subtasks, before these limits keep their shape and read as before.
 
 Tasks have Reporter, Assignee and Reviewer. The reporter identifies the Qivo
 user who reported the work and is fixed when the task is created. Omitting
@@ -1122,8 +1127,11 @@ top-level project also needs `parent: null` or a new parent there.
 **Parent.** `parent` sets the task's parent, named by key, number or uuid,
 and `null` detaches it. The rules are those of `parent` on POST, against
 the task's project after any move in the same PATCH. Setting the
-parent to the task itself or to one of its own subtasks is a `400`, and so
-is a parent that is archived while the task is active. A new parent must be
+parent to the task itself is a `400`, and so is a parent that is archived
+while the task is active. A task with subtasks, archived ones included,
+cannot get a parent: `400` with `this task has subtasks, so it cannot become
+a subtask; a subtask cannot have subtasks of its own`. `null` always
+detaches. A new parent must be
 visible to the task's assignee and reviewer and to everyone working on its
 subtasks. An `assignee_id` or `reviewer_id` in the same PATCH, `null`
 included, counts in place of the current one.
@@ -1246,7 +1254,10 @@ it`, and nothing changes. A subtask or parent in a project that is being
 moved to Deleted items refuses the PATCH for everyone, admins included, with
 `a subtask of this task is being moved to Deleted items; try again when that
 finishes` or `a parent of this task is being moved to Deleted items; try
-again when that finishes`. Archived tasks disappear from the default list
+again when that finishes`. A task whose subtasks, from before the one level
+of subtasks, are too many to archive in one request is a `400` with `this
+task and its subtasks are too large to archive in one request; archive some
+subtasks first`. Archived tasks disappear from the default list
 (`?archived=true&project=<ref>` finds them, see [Archived tasks](#archived-tasks)),
 stop counting as workload, and in the app leave every normal view for
 the Archived tasks page. A nightly sweep archives tasks that have been `done` for
@@ -1519,13 +1530,17 @@ user, and any API write that changes a task — or comments on it — messages
 everyone **subscribed** to that task. Since 0114 that is the whole rule:
 subscribers, not "the assignee", who is simply subscribed by having been
 assigned. Being @mentioned or leaving a comment subscribes you too, so an
-agent that comments on a task starts receiving its news. Whoever a task passes
+agent that comments on a task starts receiving its news, unless the task
+already has 100 followers, the most a task can have. The comment and the
+mention still go through, and the mention still notifies. A text reaches at
+most 100 mentioned people. Whoever a task passes
 to starts following it as well: the reviewer when the task enters `review`
 with a reviewer set (or a reviewer is set while it is there), who reads
 `Ready for your review`, and the assignee when it leaves `review` again or
 loses its reviewer there. A reviewer set in any other status is not
 subscribed, and a task with subtasks stays with its assignee, so clearing its
-reviewer subscribes nobody.
+reviewer subscribes nobody. A new assignee or reviewer follows even a task
+that already has 100 followers.
 
 Following (subscribing to) a task yourself is [its own route](#following),
 and the caller reads and clears what arrives through [the inbox
@@ -1563,7 +1578,10 @@ Both answer `{ "id": "…uuid…", "key": "QN-3", "following": true | false,
 "changed": true | false }`; `changed` is `false` when the caller already
 was, or was not, following. Following needs only read access to the task,
 as the app's eye button does, and a task the caller cannot read answers
-`404` like an unknown one. The caller's own follow is the only one these
+`404` like an unknown one. A task has at most 100 followers, so `PUT` on a
+task with 100 that the caller does not follow yet is a `400` with `this task
+already has 100 followers, the most a task can have`. Tasks with more
+followers from before this limit keep them. The caller's own follow is the only one these
 routes change; managing other people's follows stays in the app. The
 single-task read shows `following` and `followers`. Qivo also makes the
 caller follow a task when it is assigned or handed the task, mentioned on it
@@ -1575,7 +1593,9 @@ The caller's own inbox, with the same items the app's **Inbox** shows. Each
 item is one active task the caller can read and holds the messages about
 that task the caller has not removed. An item keeps at most 50 unread
 messages. When more arrive, Qivo drops the oldest unread ones but keeps the
-item's first unread message and the newest message of each `kind`.
+item's first unread message and the newest message of each `kind`. On a task
+with many followers it does so moments after the arrival, so an item can
+briefly hold one more.
 
 ```
 GET  /v1/inbox                 items, latest activity first (read)

@@ -94,6 +94,11 @@ number, so restart any paging with `offset` after this change. With
 [Task results](#task-results)). A client holding the older catalogue does
 not see `cursor` until it refreshes its tool list.
 
+The subtask limits added a sentence to the `create_task`, `update_task`
+and `set_following` descriptions: a task has one level of subtasks, at most
+100 of them, and at most 100 followers. A client holding the older catalogue
+keeps working, and the server refuses such a call with the rule's sentence.
+
 The subtask project rule added a sentence to the `create_task` and
 `update_task` descriptions, which now say that a parent must be in the
 task's top-level project, that a move to another top-level project carries
@@ -1395,7 +1400,18 @@ itself gets an activity row and an inbox message. A subtask moved to another
 top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the
 call is refused with `a subtask stays in its parent task's project; to move
-it to another project, detach it from its parent in the same change`. A
+it to another project, detach it from its parent in the same change`.
+
+A task has one level of subtasks, at most 100 of them, archived ones
+included. `parent` is refused with `the parent task is a subtask, and a
+subtask cannot have subtasks of its own` for a parent that is a subtask,
+with `this task has subtasks, so it cannot become a subtask; a subtask cannot
+have subtasks of its own` for a task with subtasks, and with `the parent task
+already has 100 subtasks, the most a task can have` for a full parent.
+`parent: null` always detaches. Tasks nested deeper, or with more subtasks,
+before these limits keep their shape. Archiving such a task with too many
+subtasks for one call is refused with `this task and its subtasks are too
+large to archive in one request; archive some subtasks first`. A
 parent in a project you cannot see counts as being in the subtask's own
 top-level project, so moving such a subtask to another top-level project
 also needs `parent: null` or a new parent there.
@@ -1408,9 +1424,8 @@ A subtask stays in its parent's top-level project, in any of its
 sub-projects, so a parent in another top-level project, after any move in
 the same call, is refused with `a subtask must be in the same project as its
 parent task, in any of its sub-projects`.
-The task cannot become its own parent or a subtask of one of its subtasks,
-an active task cannot go under an archived parent, and chains stop at 20
-tasks. Everyone assigned to or reviewing the task or its subtasks must be
+The task cannot become its own parent, an active task cannot go under an
+archived parent, and a task has one level of subtasks (see above). Everyone assigned to or reviewing the task or its subtasks must be
 able to see the new parent. An `assignee_id` or `reviewer_id` in the same
 call, null included, counts in place of the current one.
 
@@ -1631,7 +1646,11 @@ Following needs only read access to the task, and the result's `changed`
 is `false` when nothing changed. Followers receive the task's updates in
 their inbox. Qivo also makes you follow a task when you are assigned or
 handed it, mentioned on it or comment on it. You can change only your own
-follow.
+follow. A task has at most 100 followers. Following one that has 100 is
+refused with `this task already has 100 followers, the most a task can
+have`, and a comment or a mention there adds no follower, though the
+mention still notifies. A new assignee or reviewer still becomes a follower.
+A comment or description reaches at most 100 mentioned people.
 
 `list_inbox` answers your inbox as the app's **Inbox** shows it, one item per
 task, latest activity first:
@@ -1683,7 +1702,8 @@ bring them back. `messages` run oldest first, `kind` is
 is later. Snoozed items are left out unless `include_snoozed` is `true`. An
 item keeps at most 50 unread messages. When more arrive, Qivo drops the
 oldest unread ones but keeps the item's first unread message and the newest
-message of each `kind`.
+message of each `kind`. On a task with many followers it does so moments
+after the arrival, so an item can briefly hold one more.
 
 One call lists up to 500 of your unread messages (newest first) and up to
 500 read ones (most recently read first). It looks at no more than 1,000 of

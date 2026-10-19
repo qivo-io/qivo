@@ -13,6 +13,7 @@ import {
   marketingWeek,
 } from '../internal/marketingDemoData'
 import { taskOwnerId } from '../lib/review'
+import { FOLLOWER_MAX, SUBTASK_MAX } from '../lib/taskLimits'
 import { nameTooLong, TEXT_MAX } from '../lib/textLimits'
 import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
@@ -150,6 +151,21 @@ describe('the versioned Northstar marketing scenario', () => {
       const parent = issues.find((candidate) => candidate.key === issue.parent)!
       expect(topOf(issue.project), issue.key).toBe(topOf(parent.project))
     }
+  })
+
+  it('follows the task limits: one level of subtasks, and few enough subtasks and followers', () => {
+    const subtasks = issues.filter((issue) => issue.parent !== undefined)
+    for (const issue of subtasks) {
+      const parent = issues.find((candidate) => candidate.key === issue.parent)!
+      expect(parent.parent, issue.key).toBeUndefined()
+    }
+    // archived subtasks count too
+    for (const issue of issues)
+      expect(subtasks.filter((kid) => kid.parent === issue.key).length).toBeLessThanOrEqual(
+        SUBTASK_MAX,
+      )
+    // a task's followers are people of the organization
+    expect(people.length).toBeLessThanOrEqual(FOLLOWER_MAX)
   })
 
   it('archives exactly two completed leaf tasks in each main project', () => {
