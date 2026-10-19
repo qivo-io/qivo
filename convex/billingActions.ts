@@ -303,18 +303,18 @@ const applyRef = makeFunctionReference<'mutation', { payload: string }, null>('b
  * cancellation does. The organization keeps full access until the paid
  * period ends, without a refund. Polar then ends the subscription, and
  * billingSync starts the read-only period before deletion. A subscription
- * that already ends counts as cancelled. One whose payment Polar reports
- * overdue is refused before anything changes, even when Qivo has not heard
- * yet, because billing pauses editing at once for a past-due subscription
- * set to end (subscriptionWritable). Polar cannot end an unpaid or paused
- * subscription at period end, so the refusal points elsewhere. Answers when
- * access ends. */
+ * that already ends counts as cancelled. Every live subscription is checked
+ * before anything changes, even when Qivo has not heard of it yet. One whose
+ * payment Polar reports overdue is refused, because billing pauses editing
+ * at once for a past-due subscription set to end (subscriptionWritable).
+ * Polar cannot end an unpaid, paused or incomplete one at period end, and
+ * those may still bill, so their refusal points elsewhere rather than
+ * reporting a cancellation. Answers when access ends. */
 export const cancelSubscription = orgAction({
   args: {},
   handler: async (ctx): Promise<{ ends_at: string }> => {
     require(billingEnabled() && polarConfigured(), rule('Billing is not available yet.'))
     let endsAt = 0
-    let uncancelable = false
     try {
       const live = (await listPolarSubscriptions(ctx.orgId)).filter(
         (s) => LIVE_POLAR_STATUSES.includes(s.status) && s.endedAt === undefined,
@@ -322,11 +322,10 @@ export const cancelSubscription = orgAction({
       require(!live.some((s) => s.status === 'past_due' && !s.cancelAtPeriodEnd), rule(
         'A payment is overdue. Update the payment method in Manage billing, then cancel.',
       ))
+      require(live.every((s) => CANCELABLE_POLAR_STATUSES.includes(s.status)), rule(
+        'This subscription cannot be cancelled here. Use Manage billing, or delete the organization.',
+      ))
       for (const subscription of live) {
-        if (!CANCELABLE_POLAR_STATUSES.includes(subscription.status)) {
-          uncancelable = true
-          continue
-        }
         const canceled = subscription.cancelAtPeriodEnd
           ? subscription
           : await cancelPolarSubscription(subscription.id)
@@ -338,11 +337,7 @@ export const cancelSubscription = orgAction({
         throw rule('Polar could not cancel the subscription. Try again later.')
       throw error
     }
-    require(endsAt > 0, rule(
-      uncancelable
-        ? 'This subscription cannot be cancelled here. Use Manage billing, or delete the organization.'
-        : 'This organization has no subscription to cancel.',
-    ))
+    require(endsAt > 0, rule('This organization has no subscription to cancel.'))
     return { ends_at: new Date(endsAt).toISOString() }
   },
 })

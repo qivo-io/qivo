@@ -382,16 +382,28 @@ describe('cancelling a subscription', () => {
     })
   })
 
-  it('says so when Polar cannot end the subscription at period end', async () => {
-    const { t, f } = await billed()
-    await applied(t, remote(f.org.id))
-    polar({ list: () => [remote(f.org.id, { status: 'unpaid' })] })
-    await expectRefusal(
-      as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
-      'rule',
-      /cannot be cancelled here/,
-    )
-  })
+  it.each([
+    ['an unpaid subscription', [{ status: 'unpaid' }]],
+    // the renewing one is listed first, so nothing may be cancelled before the check
+    ['a paused one beside a renewing one', [{}, { id: replacementId, status: 'paused' }]],
+  ] as const)(
+    'refuses %s, which Polar cannot end at period end, before cancelling anything',
+    async (_, subscriptions) => {
+      const { t, f } = await billed()
+      await applied(t, remote(f.org.id))
+      const fetchMock = polar({
+        list: () => subscriptions.map((fields) => remote(f.org.id, fields)),
+        cancel: () => remote(f.org.id, { cancel_at_period_end: true, modified_at: at(0.01) }),
+      })
+      await expectRefusal(
+        as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
+        'rule',
+        /cannot be cancelled here/,
+      )
+      expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET'])
+      expect(await summary(t, f)).toMatchObject({ cancel_at_period_end: false })
+    },
+  )
 
   it('refuses non-admins, a Polar failure and organizations without a subscription', async () => {
     const { t, f } = await billed()
