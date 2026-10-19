@@ -130,6 +130,7 @@ import {
   loadNotifyPreload,
   type NotifyPreload,
   postMessage,
+  type RecipientSight,
   scheduleArchivedReads,
 } from './messages'
 import { newUuid } from './orgs'
@@ -2870,12 +2871,16 @@ async function announce(
 }
 
 /* The Restored notice to the followers of `root`, the one a restore from
- * the archive sends (model/issues.ts unarchiveIssueCore). */
+ * the archive sends (model/issues.ts unarchiveIssueCore). The rows are back
+ * by now, so the followers' sight is worked out once (RecipientSight). */
 async function noticeRestored(
   run: Run,
   root: Doc<'issues'>,
   restorer: Doc<'profiles'>,
 ): Promise<void> {
+  const project = await byId(run.ctx, 'projects', root.project_id)
+  if (project === null) return
+  const visibility: RecipientSight = new Map()
   const follows = run.ctx.db
     .query('issue_subscriptions')
     .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', root.id))
@@ -2889,6 +2894,8 @@ async function noticeRestored(
       actor_id: restorer.id,
       now: run.now,
       issue: root,
+      project,
+      visibility,
     })
 }
 

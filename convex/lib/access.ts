@@ -450,6 +450,24 @@ export async function projectLevelsForProfiles(
   }
 }
 
+/** canSeeProject for many profiles of `project`'s organization at once, for
+ * a write that notifies many followers. Working it out costs the reads of
+ * projectLevelsForProfiles, a few index ranges however many profiles it
+ * answers, where canSeeProject costs a few ranges for each profile and two
+ * more for each team sharing the project. A top-level project also shows to
+ * someone who reaches only one of its sub-projects, which that read leaves
+ * out, so on one a profile without a level of its own is asked alone
+ * (canSeeProject). Tasks live in sub-projects only. */
+export async function projectSightForProfiles(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+): Promise<(profile: Doc<'profiles'>) => Promise<boolean>> {
+  const levelOf = await projectLevelsForProfiles(ctx, project)
+  return async (profile) =>
+    levelOf(profile) !== null ||
+    (project.parent_id === undefined && (await canSeeProject(ctx, profile, project)))
+}
+
 /* The profile ids of team `teamId`, or none when the team is gone or belongs
  * to another organization than `orgId`, the teams teamGrantOn skips. */
 async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string): Promise<string[]> {
