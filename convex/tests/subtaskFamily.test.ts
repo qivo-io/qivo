@@ -18,6 +18,8 @@ import {
   MOVE_SUBTREE_TOO_LARGE,
   parentChainCheck,
   SUBTASK_PROJECT_RULE,
+  SUBTREE_ROOM,
+  SUBTREE_TOO_LARGE,
 } from '../model/issues'
 import {
   activityFor,
@@ -446,6 +448,75 @@ describe('an older subtask whose parent the mover cannot see', () => {
     await restPatch(t, f, `QN-${strays[0].num}`, { project: open.id, parent: null })
     const moved = await row(t, strays[0].id)
     expect([moved.project_id, moved.parent_id]).toEqual([open.id, undefined])
+  })
+})
+
+describe('a move or a parent change too large for one transaction', () => {
+  /* Runs `body` with SUBTREE_ROOM lowered so that `every`th read or row of
+   * a walk finds the transaction full. */
+  const crowdedRoom = async (every: number, body: () => Promise<void>) => {
+    const saved = { ...SUBTREE_ROOM }
+    Object.assign(SUBTREE_ROOM, { room: 0, every })
+    try {
+      await body()
+    } finally {
+      Object.assign(SUBTREE_ROOM, saved)
+    }
+  }
+
+  it('refuses with a plain sentence and changes nothing, where a smaller one passes', async () => {
+    // convex-test reports a transaction's use only under its limits
+    const t = newT({ transactionLimits: true })
+    const { f, backend } = await scene(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const root = await plantIssue(t, base)
+    const kids = []
+    for (let i = 0; i < 3; i++) kids.push(await plantIssue(t, { ...base, parent_id: root.id }))
+    for (const kid of kids) await plantIssue(t, { ...base, parent_id: kid.id })
+    const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
+    const lone = await plantIssue(t, base)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 4; i++)
+        await ctx.db.insert('issue_attachments', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          issue_id: lone.id,
+          name: `notes ${i}.txt`,
+          size_bytes: 1,
+          storage_id: await ctx.storage.store(new Blob() as never),
+          inline: false,
+          created_at: f.org.created_at,
+        })
+    })
+    const before = await allIssues(t, f.org.id)
+    await crowdedRoom(4, async () => {
+      // a move within TBED walks the four tasks under the root's three
+      // children for their holders, and a parent change measures them
+      for (const change of [
+        () => appMove(t, f, root.id, f.sub2.id),
+        () => appUpdate(t, f, root.id, { parent_id: other.id }),
+        // the task's four attachment rows
+        () => appMove(t, f, lone.id, backend.id),
+      ]) {
+        const r = await expectRefusal(change(), 'rule')
+        expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+      }
+    })
+    expect(await allIssues(t, f.org.id)).toEqual(before)
+    // with room to spare, all three pass
+    await appMove(t, f, root.id, f.sub2.id)
+    await appUpdate(t, f, root.id, { parent_id: other.id })
+    await appMove(t, f, lone.id, backend.id)
+    expect((await row(t, root.id)).parent_id).toBe(other.id)
+    expect((await row(t, lone.id)).project_id).toBe(backend.id)
+    const moved = await t.run((ctx) =>
+      ctx.db
+        .query('issue_attachments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', lone.id))
+        .collect(),
+    )
+    expect(moved.map((file) => file.project_id)).toEqual(Array(4).fill(backend.id))
   })
 })
 

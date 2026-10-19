@@ -133,7 +133,9 @@ A subtask moved to another project stops being a subtask of its parent,
 because a subtask stays in its parent's project. The dialog says both before
 you move. Qivo refuses the move if a subtask that would move is in a
 sub-project you cannot edit (an organization admin can move it), or if the
-task has more than 200 subtasks at any depth, archived ones included.
+task has more than 200 subtasks at any depth, archived ones included. A
+move or a new parent is also refused when the task and its subtasks are too
+large to change at once, such as with thousands of subtasks or attachments.
 While a subtask that would move is in a project being moved to Deleted
 items, Qivo refuses the move for everyone until that move finishes.
 

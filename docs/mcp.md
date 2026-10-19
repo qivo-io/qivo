@@ -1359,7 +1359,11 @@ without subtasks of its own must be able to work in the destination
 edit that sub-project`); a group's own reviewer who cannot is cleared. A
 task with more than 200 subtasks, counting every depth and archived ones,
 cannot move to another top-level project (otherwise `this task has more than
-200 subtasks; detach some of them first, or move it within its project`). Each moved subtask sends `task.updated`, but only the task itself
+200 subtasks; detach some of them first, or move it within its project`). A
+move or a parent change whose task and subtasks are too large for one call,
+such as one with thousands of subtasks or attachments, is refused with `this
+task and its subtasks are too large to change in one request; detach some
+subtasks first`. Each moved subtask sends `task.updated`, but only the task itself
 gets an activity row and an inbox message. A subtask moved to another
 top-level project must leave its parent in the same call, with `parent:
 null` or a new parent in the destination's top-level project; otherwise the

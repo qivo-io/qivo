@@ -66,7 +66,7 @@ import {
   profileCanBeAssigned,
   profileCanSeeProject,
 } from '../lib/access'
-import { byId, insertUnique } from '../lib/db'
+import { byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { IssuePriority, IssueStatus } from '../lib/enums'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { countsAsSubtask, type Liveness, projectLiveness } from '../lib/liveTasks'
@@ -299,12 +299,40 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkU
   }
 }
 
+/** How full a move or a parent change may let its transaction get while it
+ * walks a task's subtasks or moves their attachment rows, checked every
+ * `every` reads or rows (lib/db.ts usedMoreThan). Neither walk has a fixed
+ * bound: a move within one top-level project, or a parent change, reads
+ * every subtask, and a task can hold any number of attachments. Past `room`
+ * the change is refused with SUBTREE_TOO_LARGE rather than failing on one of
+ * Convex's limits for one transaction. Tests lower these. */
+export const SUBTREE_ROOM = { room: 0.9, every: 64 }
+
+/** The refusal of a move or a parent change whose task and subtasks are too
+ * large for one transaction (SUBTREE_ROOM). */
+export const SUBTREE_TOO_LARGE =
+  'this task and its subtasks are too large to change in one request; detach some subtasks first'
+
+/* A check to run before each read or row of a walk under SUBTREE_ROOM. It
+ * asks the transaction's use every `every` calls and refuses once it passes
+ * `room`. */
+function roomCheck(ctx: QueryCtx): () => Promise<void> {
+  let calls = 0
+  return async () => {
+    calls += 1
+    if (calls % SUBTREE_ROOM.every === 0 && (await usedMoreThan(ctx, SUBTREE_ROOM.room))) {
+      throw rule(SUBTREE_TOO_LARGE)
+    }
+  }
+}
+
 /* The people working on a task and its active subtasks at any depth: each
  * assignee, and each reviewer of a task that is no group (a group's
  * reviewer is dormant). `self` holds the task's own next values. `live`
  * tells which projects are live for the group test, by default as they are
  * now; a move passes them as they are once its subtasks land. Callers skip
- * switched-off people, who hold no new work. */
+ * switched-off people, who hold no new work. The walk reads every active
+ * subtask, under SUBTREE_ROOM. */
 async function holdersUnder(
   ctx: QueryCtx,
   rootId: string,
@@ -315,10 +343,12 @@ async function holdersUnder(
   if (self.assignee_id !== undefined) holders.add(self.assignee_id)
   if (self.reviewer_id !== undefined && !self.group) holders.add(self.reviewer_id)
   const seen = new Set<string>([rootId])
+  const room = roomCheck(ctx)
   let frontier = [rootId]
   for (let depth = 0; frontier.length > 0 && depth < 20; depth++) {
     const next: string[] = []
     for (const id of frontier) {
+      await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const c of kids) {
         if (c.archived_at !== undefined || seen.has(c.id)) continue
@@ -596,12 +626,15 @@ export async function parentChainCheck(
   // downward measure (0038 fix 1): the height of the subtree hanging under
   // the row, capped at 24 so the walk stays finite over corrupt cycles — a
   // reparent must not merge two legal chains into one deeper than the
-  // cascade budget
+  // cascade budget. It reads every subtask, under SUBTREE_ROOM, which
+  // throws rather than answering a problem.
   let down = 0
   let frontier = [child.id]
+  const room = roomCheck(ctx)
   while (frontier.length > 0 && down < 24) {
     const next: string[] = []
     for (const id of frontier) {
+      await room()
       const kids = ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', id))
       for await (const c of kids) next.push(c.id)
     }
@@ -1509,17 +1542,22 @@ export const MOVE_SUBTREE_TOO_LARGE = `this task has more than ${MOVE_SUBTREE_MA
 
 /* Attachment rows carry their task's project for the storage totals
  * (model/billing.ts storageUsage), so they move with the task and with each
- * subtask a move carries. */
+ * subtask a move carries, under SUBTREE_ROOM through `room`, the move's one
+ * roomCheck. */
 async function moveAttachmentRows(
   ctx: MutationCtx,
   issueId: string,
   projectId: string,
+  room: () => Promise<void>,
 ): Promise<void> {
   const files = await ctx.db
     .query('issue_attachments')
     .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
     .collect()
-  for (const file of files) await ctx.db.patch(file._id, { project_id: projectId })
+  for (const file of files) {
+    await room()
+    await ctx.db.patch(file._id, { project_id: projectId })
+  }
 }
 
 /* Per-call cache from a project id to its top-level project id, null for a
@@ -1753,13 +1791,14 @@ export async function moveIssueCore(
   }
   const before = { ...issue }
   await ctx.db.patch(issue._id, w)
-  await moveAttachmentRows(ctx, issue.id, project_id)
+  const room = roomCheck(ctx)
+  await moveAttachmentRows(ctx, issue.id, project_id, room)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   for (const { row, clearReviewer } of carried) {
     const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = { project_id, updated_at: now }
     if (clearReviewer) patch.reviewer_id = undefined
     await ctx.db.patch(row._id, patch)
-    await moveAttachmentRows(ctx, row.id, project_id)
+    await moveAttachmentRows(ctx, row.id, project_id, room)
     const landed = (await ctx.db.get(row._id)) as Doc<'issues'>
     await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })
   }
