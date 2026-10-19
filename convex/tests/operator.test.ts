@@ -2,6 +2,8 @@ import { verifyPassword } from 'better-auth/crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { components, internal } from '../_generated/api'
 import authSchema from '../betterAuth/schema'
+import { INSPECT_READ } from '../internal/marketingDemo'
+import { REMOVAL_BUDGET } from '../model/cascade'
 import { newT, type T, withOrg } from './helpers.setup'
 
 const SITE = 'https://preview.qivo.io'
@@ -235,4 +237,128 @@ describe('legacy fixture retirement', () => {
     })
     await expect(retire(t, false)).rejects.toThrow(/fixture marker/)
   })
+})
+
+describe('Northstar wipe', () => {
+  const defaults = { ...REMOVAL_BUDGET }
+  const inspectDefaults = { ...INSPECT_READ }
+  afterEach(() => {
+    Object.assign(REMOVAL_BUDGET, defaults)
+    Object.assign(INSPECT_READ, inspectDefaults)
+  })
+
+  const apply = (t: T, mode: 'seed' | 'wipe') =>
+    t.mutation(internal.internal.marketingDemo.apply, {
+      expected_site_url: SITE,
+      anchor: '2026-09-07',
+      mode,
+    })
+  const orgRows = (t: T, orgId: string) =>
+    t.run(async (ctx) => {
+      const count = async (table: 'issues' | 'projects' | 'teams' | 'labels' | 'profiles') =>
+        (
+          await ctx.db
+            .query(table)
+            .withIndex('by_org', (q) => q.eq('org_id', orgId))
+            .collect()
+        ).length
+      return {
+        issues: await count('issues'),
+        projects: await count('projects'),
+        teams: await count('teams'),
+        labels: await count('labels'),
+        profiles: await count('profiles'),
+        activity: (
+          await ctx.db
+            .query('activity_events')
+            .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
+            .collect()
+        ).length,
+      }
+    })
+
+  it('deletes a grown copy in bounded batches, keeps its people, and seeds it again', async () => {
+    // Convex's real limits, which one transaction for all of it would pass
+    const t = newT({ transactionLimits: true })
+    t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
+    const { org_id } = await t.mutation(internal.internal.marketingDemo.provision, {
+      expected_site_url: SITE,
+      credential_set_id: '00000000-0000-4000-8000-000000000000',
+      password_hashes: Object.fromEntries(
+        ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben'].map((key) => [key, HASH]),
+      ),
+    })
+    await apply(t, 'seed')
+    const seeded = await orgRows(t, org_id)
+    expect(seeded.issues).toBeGreaterThan(0)
+    // manual or contract-test work: 500 more tasks, each with a comment
+    await t.run(async (ctx) => {
+      const project = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .filter((q) => q.eq(q.field('type'), 'project'))
+        .first()
+      const author = await ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .first()
+      if (project === null || author === null) throw new Error('the seed made no project')
+      for (let i = 0; i < 500; i++) {
+        const id = crypto.randomUUID()
+        await ctx.db.insert('issues', {
+          id,
+          org_id,
+          project_id: project.id,
+          num: 10_000 + i,
+          title: `Manual task ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: '2026-09-07T00:00:00.000Z',
+          updated_at: '2026-09-07T00:00:00.000Z',
+        })
+        await ctx.db.insert('comments', {
+          id: crypto.randomUUID(),
+          issue_id: id,
+          author: author.id,
+          body: 'manual',
+          created_at: '2026-09-07T00:00:00.000Z',
+        })
+      }
+    })
+
+    // The CLI inspects before it wipes. Past INSPECT_READ the count stops
+    // and says so, so a copy larger than one query may read can be wiped.
+    const inspect = () =>
+      t.query(internal.internal.marketingDemo.inspect, { expected_site_url: SITE })
+    const total = seeded.issues + 500
+    expect((await inspect()).counts).toMatchObject({ tasks: total })
+    expect((await inspect()).counts).not.toHaveProperty('tasks_partial')
+    INSPECT_READ.tasks = 100
+    expect((await inspect()).counts).toMatchObject({ tasks: 100, tasks_partial: true })
+    Object.assign(INSPECT_READ, inspectDefaults, { bytes: 1 })
+    expect((await inspect()).counts).toMatchObject({ tasks: 1, tasks_partial: true })
+    Object.assign(INSPECT_READ, inspectDefaults)
+
+    // the first batch leaves work behind, which a seed refuses
+    // a step that leaves work answers without inspecting it all again
+    expect(await apply(t, 'wipe')).toEqual({ state: 'empty', wipe_done: false })
+    await expect(apply(t, 'seed')).rejects.toThrow(/work was added after wipe/)
+    let steps = 1
+    while (!(await apply(t, 'wipe')).wipe_done) expect(++steps).toBeLessThan(50)
+    expect(steps).toBeGreaterThan(2)
+    expect(await orgRows(t, org_id)).toEqual({
+      issues: 0,
+      projects: 0,
+      teams: 0,
+      labels: 0,
+      profiles: seeded.profiles,
+      activity: 0,
+    })
+    expect(await apply(t, 'wipe')).toMatchObject({ wipe_done: true })
+
+    await apply(t, 'seed')
+    expect(await orgRows(t, org_id)).toEqual(seeded)
+  }, 60_000)
 })

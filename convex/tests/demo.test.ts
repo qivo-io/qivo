@@ -2,6 +2,7 @@
 import { createFunctionHandle, makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
+import type { Doc } from '../_generated/dataModel'
 import { createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { byId } from '../lib/db'
@@ -10,6 +11,7 @@ import {
   DEMO_MAX_PAYLOAD_BYTES,
   DEMO_TTL_MS,
   DEMO_WRITES_PER_MINUTE,
+  DEMO_WRITES_TOTAL,
 } from '../lib/demo'
 import { expectRefusal, newT, type T, uuid } from './helpers.setup'
 
@@ -71,6 +73,33 @@ async function anonymousLogin(on = t) {
   const as = on.withIdentity({ subject: user._id as string, sessionId: session._id as string })
   return { user, session, as }
 }
+
+type Counts = Partial<
+  Pick<
+    Doc<'demo_write_counts'>,
+    'write_window_at' | 'write_window_count' | 'write_count' | 'insert_count'
+  >
+>
+
+/** The write and insert counters of the demo with receipt `receipt`. */
+const countsOf = (receipt: Doc<'demo_sessions'>) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('demo_write_counts')
+      .withIndex('by_demo', (q) => q.eq('demo_id', receipt.id))
+      .unique(),
+  )
+
+/** Sets the demo's counters, as many writes would have left them. */
+const setCounts = (receipt: Doc<'demo_sessions'>, counts: Counts) =>
+  t.run(async (ctx) => {
+    const row = await ctx.db
+      .query('demo_write_counts')
+      .withIndex('by_demo', (q) => q.eq('demo_id', receipt.id))
+      .unique()
+    if (row) await ctx.db.patch(row._id, counts)
+    else await ctx.db.insert('demo_write_counts', { demo_id: receipt.id, ...counts })
+  })
 
 async function readyDemo() {
   const login = await anonymousLogin()
@@ -408,26 +437,29 @@ describe('demo lifetime and capabilities', () => {
 
   it('enforces write/record quotas transactionally and refuses large websocket payloads', async () => {
     const a = await readyDemo()
-    await t.run((ctx) =>
-      ctx.db.patch(a.receipt._id, {
-        write_window_at: Date.now(),
-        write_window_count: DEMO_WRITES_PER_MINUTE,
-      }),
-    )
+    await setCounts(a.receipt, {
+      write_window_at: Date.now(),
+      write_window_count: DEMO_WRITES_PER_MINUTE,
+    })
     await expectRefusal(
       a.as.mutation(api.profiles.setDisplayName, { name: 'Over budget' }),
       'forbidden',
       /change limit/,
     )
-    await t.run((ctx) =>
-      ctx.db.patch(a.receipt._id, { write_window_count: 0, insert_count: DEMO_INSERTS_TOTAL }),
-    )
+    await setCounts(a.receipt, { write_window_count: 0, insert_count: DEMO_INSERTS_TOTAL })
     await expectRefusal(
       a.as.mutation(api.profiles.setDisplayName, { name: 'Needs an activity row' }),
       'forbidden',
       /record limit/,
     )
     expect((await t.run((ctx) => ctx.db.get(a.profile._id)))?.name).toBe(a.profile.name)
+    await setCounts(a.receipt, { write_count: DEMO_WRITES_TOTAL, insert_count: 0 })
+    await expectRefusal(
+      a.as.mutation(api.profiles.setDisplayName, { name: 'Over the total' }),
+      'forbidden',
+      /change limit/,
+    )
+    await setCounts(a.receipt, { write_count: 0 })
     await expectRefusal(
       a.as.mutation(api.profiles.setDisplayName, { name: 'x'.repeat(70_000) }),
       'forbidden',
@@ -437,6 +469,46 @@ describe('demo lifetime and capabilities', () => {
       a.as.mutation(api.profiles.setDisplayName, { name: '😀'.repeat(20_000) }),
       'forbidden',
       /too large/,
+    )
+  })
+
+  it('counts writes beside the receipt, which a write leaves as it was', async () => {
+    const a = await readyDemo()
+    const receipt = await t.run((ctx) => ctx.db.get(a.receipt._id))
+    await a.as.mutation(api.profiles.setDisplayName, { name: 'Counted once' })
+    await a.as.mutation(api.profiles.setDisplayName, { name: 'Counted twice' })
+    expect(await t.run((ctx) => ctx.db.get(a.receipt._id))).toEqual(receipt)
+    expect(await countsOf(a.receipt)).toMatchObject({
+      write_window_at: Date.now(),
+      write_window_count: 2,
+      write_count: 2,
+    })
+  })
+
+  it('starts the counts of a receipt from before them at what it holds', async () => {
+    const a = await readyDemo()
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('demo_write_counts')
+        .withIndex('by_demo', (q) => q.eq('demo_id', a.receipt.id))
+        .unique()
+      if (row) await ctx.db.delete(row._id)
+      await ctx.db.patch(a.receipt._id, {
+        write_window_at: Date.now(),
+        write_window_count: DEMO_WRITES_PER_MINUTE - 1,
+        write_count: 40,
+        insert_count: 7,
+      })
+    })
+    await a.as.mutation(api.profiles.setDisplayName, { name: 'One more' })
+    expect(await countsOf(a.receipt)).toMatchObject({
+      write_window_count: DEMO_WRITES_PER_MINUTE,
+      write_count: 41,
+    })
+    await expectRefusal(
+      a.as.mutation(api.profiles.setDisplayName, { name: 'Over budget' }),
+      'forbidden',
+      /change limit/,
     )
   })
 
@@ -462,22 +534,24 @@ describe('demo lifetime and capabilities', () => {
       })
       return leaf
     })
-    /* The receipt's counters, and the ids of the records a delete or a
+    /* The demo's counters, and the ids of the records a delete or a
      * restore adds besides the rows it moves: items, activity rows and
      * notices. */
-    const counters = () =>
-      t.run(async (ctx) => {
-        const receipt = (await ctx.db.get(a.receipt._id))!
+    const counters = async () => {
+      const counts = await countsOf(a.receipt)
+      const ids = await t.run(async (ctx) => {
         const ids: string[] = []
         for (const table of ['deleted_items', 'activity_events', 'messages'] as const)
           for (const row of await ctx.db.query(table).collect())
             if (row.org_id === org_id) ids.push(row._id)
-        return { inserts: receipt.insert_count ?? 0, writes: receipt.write_count ?? 0, ids }
+        return ids
       })
+      return { inserts: counts?.insert_count ?? 0, writes: counts?.write_count ?? 0, ids }
+    }
     const added = (before: { ids: string[] }, after: { ids: string[] }) =>
       after.ids.filter((id) => !before.ids.includes(id)).length
     // near the limit, so a move that counted its rows would be refused
-    await t.run((ctx) => ctx.db.patch(a.receipt._id, { insert_count: DEMO_INSERTS_TOTAL - 10 }))
+    await setCounts(a.receipt, { insert_count: DEMO_INSERTS_TOTAL - 10 })
     const before = await counters()
     await a.as.mutation(api.issues.deleteDeep, { org_id, id: task.id })
     const deleted = await counters()

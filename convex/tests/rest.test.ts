@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { CALLER_GONE } from '../lib/core'
+import { CALLER_GONE, SUBTREE_WALK } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import {
   classifySecret,
@@ -2032,66 +2032,76 @@ describe("a group's dates on REST", () => {
     expect(out).toMatchObject(span('2026-05-04', '2026-05-17'))
   })
 
-  /* Under Convex's real limits a function may read at most 4,096 index
-   * ranges. A group's dates come from one read of the organization's tasks,
-   * so a large tree costs the same as a small one on list, get and PATCH.
-   * Inserting 2,121 rows takes several seconds, and far longer on a loaded
-   * host, so it gets the heavy fixture timeout. */
+  /* Convex lets a function read at most 4,096 index ranges. A single-task
+   * read walks a group's subtree one read per task up to SUBTREE_WALK.reads,
+   * then reads the organization's active tasks once, and a list reads them
+   * once for all its groups. Past the walk a large tree costs the same as a
+   * small one on list, get and PATCH. The test checks that on a smaller
+   * tree with a lower limit and a shorter walk, so it builds fewer rows.
+   * With the walk at 100 tasks the three calls need 130 to 165 ranges, under
+   * a limit of 256. Reading one range per task of this tree of 511 tasks
+   * would need more than 511. */
   it('a large tree stays within transaction limits on list, get and PATCH', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await machineOrg(t)
-    const base = { org_id: f.org.id, project_id: f.sub.id }
-    const epic = await plantIssue(t, { ...base, title: 'Epic' })
-    const { _id, _creationTime, ...row } = epic
-    // features number first, so the first list page holds every group
-    await t.run(async (ctx) => {
-      let num = 20_000
-      for (let g = 0; g < 21; g++) {
-        const feature = uuid()
-        await ctx.db.insert('issues', {
-          ...row,
-          id: feature,
-          num: 10_000 + g,
-          title: `Feature ${g}`,
-          parent_id: epic.id,
-        })
-        for (let k = 0; k < 100; k++) {
-          const week = `2026-0${1 + (k % 9)}-05`
+    const t = newT({ transactionLimits: { databaseQueries: 256 } })
+    const walk = SUBTREE_WALK.reads
+    SUBTREE_WALK.reads = 100
+    try {
+      const f = await machineOrg(t)
+      const base = { org_id: f.org.id, project_id: f.sub.id }
+      const epic = await plantIssue(t, { ...base, title: 'Epic' })
+      const { _id, _creationTime, ...row } = epic
+      // features number first, so the first list page holds every group
+      await t.run(async (ctx) => {
+        let num = 20_000
+        for (let g = 0; g < 10; g++) {
+          const feature = uuid()
           await ctx.db.insert('issues', {
             ...row,
-            id: uuid(),
-            num: num++,
-            title: `Leaf ${g}.${k}`,
-            parent_id: feature,
-            start_week: week,
-            end_week: week,
+            id: feature,
+            num: 10_000 + g,
+            title: `Feature ${g}`,
+            parent_id: epic.id,
           })
+          for (let k = 0; k < 50; k++) {
+            const week = `2026-0${1 + (k % 9)}-05`
+            await ctx.db.insert('issues', {
+              ...row,
+              id: uuid(),
+              num: num++,
+              title: `Leaf ${g}.${k}`,
+              parent_id: feature,
+              start_week: week,
+              end_week: week,
+            })
+          }
         }
-      }
-    })
-    const listed = await restTasks(t, {
-      callerId: f.agent.id,
-      access: 'read',
-      limit: '200',
-    })
-    expect(listed.filter((i) => i.is_group)).toHaveLength(22)
-    expect(listed.find((i) => i.id === epic.id)).toMatchObject(span('2026-01-05', '2026-09-05'))
-    const got = await t.query(internal.machine.rest.getIssue, {
-      now: NOW,
-      callerId: f.agent.id,
-      access: 'read',
-      ref: epic.id,
-    })
-    expect(got).toMatchObject({ is_group: true, ...span('2026-01-05', '2026-09-05') })
-    const renamed = await t.mutation(internal.machine.rest.updateIssue, {
-      callerId: f.agent.id,
-      access: 'write',
-      keyName: KEY,
-      ref: epic.id,
-      body: JSON.stringify({ title: 'Renamed' }),
-    })
-    expect(renamed).toMatchObject({ title: 'Renamed', ...span('2026-01-05', '2026-09-05') })
-  }, 60_000)
+      })
+      const listed = await restTasks(t, {
+        callerId: f.agent.id,
+        access: 'read',
+        limit: '100',
+      })
+      expect(listed.filter((i) => i.is_group)).toHaveLength(11)
+      expect(listed.find((i) => i.id === epic.id)).toMatchObject(span('2026-01-05', '2026-09-05'))
+      const got = await t.query(internal.machine.rest.getIssue, {
+        now: NOW,
+        callerId: f.agent.id,
+        access: 'read',
+        ref: epic.id,
+      })
+      expect(got).toMatchObject({ is_group: true, ...span('2026-01-05', '2026-09-05') })
+      const renamed = await t.mutation(internal.machine.rest.updateIssue, {
+        callerId: f.agent.id,
+        access: 'write',
+        keyName: KEY,
+        ref: epic.id,
+        body: JSON.stringify({ title: 'Renamed' }),
+      })
+      expect(renamed).toMatchObject({ title: 'Renamed', ...span('2026-01-05', '2026-09-05') })
+    } finally {
+      SUBTREE_WALK.reads = walk
+    }
+  })
 })
 
 /* ----------------------------------------------------------- delete issue */

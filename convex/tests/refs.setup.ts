@@ -160,6 +160,7 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'demo_sessions.org_id',
   'demo_sessions.expiry_scheduled_id',
   'demo_sessions.cleanup_scheduled_id',
+  'demo_write_counts.demo_id',
   'demo_uploads.demo_id',
   'demo_uploads.auth_user_id',
   'demo_uploads.target_id',

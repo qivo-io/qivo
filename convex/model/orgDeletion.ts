@@ -475,6 +475,48 @@ const PHASE_ROWS: Record<
   billing: billingRows,
 }
 
+/** The phases that hold an organization's work, which the Northstar
+ * fixture's wipe deletes (internal/marketingDemo.ts) while it keeps the
+ * organization, its profiles and their logins. */
+const WORK_PHASES = ['tasks', 'projects', 'teams', 'labels', 'activity'] as const
+
+/** Deletes one REMOVAL_BUDGET of an organization's work: its tasks with
+ * everything under them and their files, its projects, teams, labels and
+ * activity, then the view preferences and messages of `profileIds`. Returns
+ * true once all of it is gone. Like a deletion step, it reads every range
+ * again from its start, so a repeated step cannot skip a row. It leaves
+ * Deleted items alone, so a caller must see them empty first. */
+export async function wipeWorkStep(
+  ctx: MutationCtx,
+  orgId: string,
+  profileIds: readonly string[],
+): Promise<boolean> {
+  const budget: RemovalBudget = { ...REMOVAL_BUDGET }
+  return await inOrder([
+    ...WORK_PHASES.map((phase) => () => PHASE_ROWS[phase](ctx, orgId, budget)),
+    ...profileIds.flatMap((profileId) => [
+      () =>
+        drain(ctx, budget, (n) =>
+          ctx.db
+            .query('user_prefs')
+            .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+            .take(n),
+        ),
+      () =>
+        drain(
+          ctx,
+          budget,
+          (n) =>
+            ctx.db
+              .query('messages')
+              .withIndex('by_recipient', (q) => q.eq('recipient_id', profileId))
+              .take(n),
+          { perRead: LARGE_ROWS_PER_READ },
+        ),
+    ]),
+  ])
+}
+
 /** Runs one bounded step of a deletion that has begun. Returns true once the
  * organization and its removal row are gone, or false after saving the phase
  * the next step continues from. */

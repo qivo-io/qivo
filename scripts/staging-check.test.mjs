@@ -1,15 +1,24 @@
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   addDays,
   deleteOutcome,
+  evaluate,
   findComment,
   hasTag,
+  isSiteOf,
+  pace,
   parseArgs,
+  RATE_BUDGET,
   redact,
   request,
   resolveConfig,
+  send,
+  syncsWith,
   TAG_ANY,
+  WAITS,
+  WRITE_CONFLICT,
   weekOf,
   windowOrder,
 } from './staging-check.mjs'
@@ -104,6 +113,21 @@ describe('staging check target', () => {
     ).toThrow()
     expect(() => resolve(staging, ['--api-url', 'https://api.qivo.io'])).toThrow()
   })
+  it('takes a Convex site URL of the deployment only', () => {
+    const deployment = 'striped-snake-649'
+    for (const url of [
+      'https://striped-snake-649.convex.site',
+      'https://striped-snake-649.eu-west-1.convex.site',
+    ])
+      expect(isSiteOf(new URL(url), deployment)).toBe(true)
+    for (const url of [
+      'http://striped-snake-649.convex.site',
+      'https://determined-dachshund-357.convex.site',
+      'https://striped-snake-649.convex.site.evil.example',
+      'https://striped-snake-649.convex.cloud',
+    ])
+      expect(isSiteOf(new URL(url), deployment)).toBe(false)
+  })
   it('takes loopback origins only for a local run, outside a hosted helper', () => {
     const local = [
       '--local',
@@ -136,6 +160,90 @@ describe('staging check target', () => {
       { NODE_DEBUG: 'http' },
     ])
       expect(() => resolve({ ...staging, ...env })).toThrow(/debug output/)
+  })
+})
+
+describe('local backend proof', () => {
+  const backend = 'http://127.0.0.1:3236'
+  it("accepts the Convex client's sync socket to the backend", () => {
+    expect(
+      syncsWith(['ws://localhost:5241/?token=hmr', 'ws://127.0.0.1:3236/api/1.31.0/sync'], backend),
+    ).toBe(true)
+    expect(
+      syncsWith(
+        ['wss://striped-snake-649.convex.cloud/api/1.31.0/sync'],
+        'https://striped-snake-649.convex.cloud',
+      ),
+    ).toBe(true)
+  })
+  it('refuses a socket to another host, port, protocol or path', () => {
+    for (const socket of [
+      'ws://127.0.0.1:3210/api/1.31.0/sync',
+      'ws://localhost:3236/api/1.31.0/sync',
+      'wss://127.0.0.1:3236/api/1.31.0/sync',
+      'ws://127.0.0.1:3236/',
+      'ws://127.0.0.1:5241/api/1.31.0/sync',
+      'not a URL',
+    ])
+      expect(syncsWith([socket], backend)).toBe(false)
+    expect(syncsWith([], backend)).toBe(false)
+  })
+})
+
+describe('page calls', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  it('gives up on a page call that never settles and leaves no timer', async () => {
+    vi.useFakeTimers()
+    const hung = { evaluate: () => new Promise(() => {}) }
+    const failed = expect(evaluate(hung, () => 1, undefined, 1000)).rejects.toThrow(
+      'a call in the page gave no answer in 1 s',
+    )
+    await vi.advanceTimersByTimeAsync(1000)
+    await failed
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('answers what the page answers and leaves no timer', async () => {
+    vi.useFakeTimers()
+    const page = { evaluate: async (fn, arg) => fn(arg) }
+    expect(await evaluate(page, (n) => n * 2, 21)).toBe(42)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('request pacing', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  it('lets RATE_BUDGET calls of a profile through at once, then waits for the oldest to age', async () => {
+    vi.useFakeTimers()
+    const profile = `pace-${randomUUID()}`
+    let through = 0
+    for (let i = 0; i < RATE_BUDGET; i++) pace(profile).then(() => through++)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(through).toBe(RATE_BUDGET)
+    let next = false
+    pace(profile).then(() => {
+      next = true
+    })
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(next).toBe(false)
+    // a call just inside the minute waits too, and another profile has its own window
+    let late = false
+    pace(profile).then(() => {
+      late = true
+    })
+    let other = false
+    pace(`pace-${randomUUID()}`).then(() => {
+      other = true
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(other).toBe(true)
+    expect(next || late).toBe(false)
+    // the oldest call is 60 seconds old, plus the 100 ms margin
+    await vi.advanceTimersByTimeAsync(101)
+    expect(next && late).toBe(true)
   })
 })
 
@@ -236,6 +344,61 @@ describe('staging check requests', () => {
       stalled.server.closeAllConnections()
       stalled.server.close()
     }
+  })
+
+  describe('send', () => {
+    const waits = { ...WAITS }
+    beforeEach(() => {
+      Object.assign(WAITS, { rateLimit: 20, readRetry: 5, conflictRetry: 5 })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+    })
+    afterEach(() => {
+      Object.assign(WAITS, waits)
+      vi.restoreAllMocks()
+    })
+    /** Sends one request to a server that gives `answers` ([status, body])
+     *  in turn and then the last one again, and answers the status send()
+     *  returned and how many requests the server got. */
+    const exchange = async (answers, read) => {
+      let hits = 0
+      const target = await serve((_req, res) => {
+        const [status, body = {}] = answers[Math.min(hits++, answers.length - 1)]
+        res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
+      })
+      try {
+        const init = read ? { method: 'GET' } : { method: 'POST', body: '{}' }
+        const r = await send(`send-${randomUUID()}`, `${target.origin}/v1/tasks`, init, { read })
+        await r.arrayBuffer()
+        return { status: r.status, hits }
+      } finally {
+        target.server.closeAllConnections()
+        target.server.close()
+      }
+    }
+
+    it('waits out one 429 and answers what comes next', async () => {
+      expect(await exchange([[429], [200]], true)).toEqual({ status: 200, hits: 2 })
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('waiting 0.02 seconds'))
+    })
+    it('returns a second 429 as it is', async () => {
+      expect(await exchange([[429]], true)).toEqual({ status: 429, hits: 2 })
+    })
+    it('sends a read once more after a server error', async () => {
+      expect(await exchange([[502], [200]], true)).toEqual({ status: 200, hits: 2 })
+      expect(await exchange([[503]], true)).toEqual({ status: 503, hits: 2 })
+    })
+    it('never sends a write again after a server error', async () => {
+      expect(await exchange([[500]], false)).toEqual({ status: 500, hits: 1 })
+      expect(await exchange([[503, { error: 'internal error' }]], false)).toEqual({
+        status: 503,
+        hits: 1,
+      })
+    })
+    it('sends a write once more after a write conflict', async () => {
+      const conflict = [503, { error: WRITE_CONFLICT }]
+      expect(await exchange([conflict, [201]], false)).toEqual({ status: 201, hits: 2 })
+      expect(await exchange([conflict], false)).toEqual({ status: 503, hits: 2 })
+    })
   })
 })
 

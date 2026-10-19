@@ -69,7 +69,7 @@ const provisionRef = makeFunctionReference<
 const applyRef = makeFunctionReference<
   'mutation',
   typeof TARGET & { anchor: string; mode: 'seed' | 'wipe' },
-  Inspection
+  Inspection & { wipe_done?: boolean }
 >('internal/marketingDemo:apply')
 const avatarRef = makeFunctionReference<
   'mutation',
@@ -90,9 +90,17 @@ const provision = (t: T, credentialSet = CREDENTIAL_SET) =>
   })
 const apply = (t: T, mode: 'seed' | 'wipe', anchor = ANCHOR) =>
   t.mutation(applyRef, { ...TARGET, mode, anchor })
-// The CLI's reset: two transactions, a wipe and then a seed.
+// The CLI's wipe: one bounded batch a call, until the backend says it is done.
+const wipe = async (t: T, anchor = ANCHOR) => {
+  for (let step = 0; step < 100; step++) {
+    const result = await apply(t, 'wipe', anchor)
+    if (result.wipe_done !== false) return result
+  }
+  throw new Error('the wipe did not finish in 100 calls')
+}
+// The CLI's reset: a wipe and then a seed in its own transaction.
 const reset = async (t: T, anchor = ANCHOR) => {
-  await apply(t, 'wipe', anchor)
+  await wipe(t, anchor)
   return await apply(t, 'seed', anchor)
 }
 const profiles = (t: T, orgId: string) =>
@@ -1036,8 +1044,9 @@ describe('marketing demo rebuild ownership', () => {
       // a demo provisioned before org_counters kept this on its row
       await ctx.db.patch(org._id, { activity_count: 500 })
     })
-    expect(await apply(t, 'wipe')).toMatchObject({
+    expect(await wipe(t)).toMatchObject({
       state: 'empty',
+      wipe_done: true,
       counts: { projects: 0, tasks: 0, users: 8 },
     })
     await assertNoDanglingRefs(t, 'marketing demo wipe')
@@ -1090,7 +1099,7 @@ describe('marketing demo rebuild ownership', () => {
   it('does not treat an empty receipt as permission to erase manual work added after wipe', async () => {
     const t = newAuthT()
     const demo = await seeded(t)
-    await apply(t, 'wipe')
+    await wipe(t)
     const manualProject = await plantProject(t, {
       org_id: demo.org_id,
       name: 'A manually prepared walkthrough',
@@ -1337,7 +1346,7 @@ describe('marketing demo Deleted items', () => {
   it('refuses a seed after a wipe once something reached Deleted items again', async () => {
     const t = newAuthT()
     const demo = await seeded(t)
-    await apply(t, 'wipe')
+    await wipe(t)
     // a stored row a purge stopped short of: no item, but a reserved uuid
     await t.run((ctx) =>
       ctx.db.insert('deleted_rows', {
@@ -1363,7 +1372,7 @@ describe('marketing demo Deleted items', () => {
     const t = newAuthT()
     const foreign = await withOrg(t)
     await seeded(t)
-    await apply(t, 'wipe')
+    await wipe(t)
     const reserved = await demoId(`issue:${MARKETING_DEMO.issues[0].key}`)
     await t.run((ctx) =>
       ctx.db.insert('deleted_rows', {

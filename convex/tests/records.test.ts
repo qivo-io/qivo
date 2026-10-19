@@ -318,6 +318,7 @@ describe('attachments in the single-task read', () => {
       access: 'read',
       ref: `QN-${issue.num}`,
     })
+    const after = Math.floor(Date.now() / 1000)
     expect(got.attachments.map((a) => a.id)).toEqual([first.id, later.id])
     const [file, image] = got.attachments
     expect(file).toMatchObject({
@@ -330,13 +331,15 @@ describe('attachments in the single-task read', () => {
       created_at: '2026-01-01T00:00:00.000Z',
     })
     expect(image.inline).toBe(true)
-    // the link names the reader as its minter and expires in ten minutes
+    // The link names the reader as its minter and expires ten minutes after a
+    // second within the call. A slow call can span several seconds, so the
+    // bounds are the seconds read before and after it.
     const url = new URL(file.url)
     expect(url.pathname).toBe(`/files/${first.id}`)
     expect(url.searchParams.get('m')).toBe(fx.agent.id)
     const exp = Number(url.searchParams.get('e'))
     expect(exp - before).toBeGreaterThanOrEqual(600)
-    expect(exp - before).toBeLessThanOrEqual(601)
+    expect(exp - after).toBeLessThanOrEqual(600)
     expect(file.url_expires_at).toBe(new Date(exp * 1000).toISOString())
     expect(
       await verifyFileToken({

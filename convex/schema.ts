@@ -322,6 +322,8 @@ export default defineSchema({
     cleanup_file_after: v.optional(v.number()),
     cleanup_file_cursor: v.optional(v.string()),
     cleanup_file_wait_until: v.optional(v.number()),
+    // Counters a receipt kept before demo_write_counts. New writes count
+    // there, starting from these (lib/demo.ts demoCounts).
     write_window_at: v.optional(v.number()),
     write_window_count: v.optional(v.number()),
     write_count: v.optional(v.number()),
@@ -339,6 +341,18 @@ export default defineSchema({
     .index('by_expiry', ['expires_at'])
     .index('by_status_progress', ['status', 'cleanup_progress_at'])
     .index('by_status_expiry', ['status', 'expires_at']),
+
+  // A public demo's write and insert counters (lib/demo.ts), one row per
+  // demo_sessions receipt, kept apart so that counting a write does not
+  // change the receipt every call reads. The purge deletes it with the
+  // receipt.
+  demo_write_counts: defineTable({
+    demo_id: v.string(),
+    write_window_at: v.optional(v.number()),
+    write_window_count: v.optional(v.number()),
+    write_count: v.optional(v.number()),
+    insert_count: v.optional(v.number()),
+  }).index('by_demo', ['demo_id']),
 
   // Demo uploads reserve capacity before bytes are accepted. Kept after
   // attachment so ownership is independent of editable planning records.
@@ -568,6 +582,10 @@ export default defineSchema({
     // when its last step ran. Both are cleared when it finishes.
     storage_run: v.optional(v.string()),
     storage_run_at: v.optional(v.string()),
+    // How many times the sample started, cleared when it finishes, and when
+    // apply stopped it after STORAGE_ATTEMPTS starts (billingSync.ts).
+    storage_attempts: v.optional(v.number()),
+    storage_failed_at: v.optional(v.string()),
     created_at: v.string(),
   })
     .index('by_subscription_period', ['subscription_id', 'period_start'])

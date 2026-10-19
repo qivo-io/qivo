@@ -23,7 +23,7 @@ import {
   validatePolarProduct,
 } from './lib/polar'
 import { audit } from './model/admin'
-import { GB, isoNow, STORAGE_PAGE, storagePage } from './model/billing'
+import { GB, isoNow, legacyPhase, storagePage } from './model/billing'
 import { syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
 
@@ -67,9 +67,9 @@ const noticesRef = makeFunctionReference<'mutation', Record<string, never>, null
 const storageStepArgs = {
   period: v.id('billing_periods'),
   run: v.string(),
-  phase: v.union(v.literal('own'), v.literal('unscoped')),
+  phase: v.union(v.literal('own'), v.literal('unscoped'), v.literal('tasks')),
   cursor: v.optional(v.string()),
-  // the page size after a step split its page, else STORAGE_PAGE.rows
+  // the page size after a step split its page, else the phase's STORAGE_PAGE size
   size: v.optional(v.number()),
   bytes: v.number(),
 }
@@ -82,6 +82,12 @@ const storageStepRef = makeFunctionReference<'mutation', StorageStep, null>(
  * again. A step runs in well under a second, so only a sample whose step
  * failed waits this long. */
 export const STORAGE_STALL_MS = 15 * 60_000
+
+/** How many times a period's storage sample starts before apply gives up
+ * on it. A sample that stalls this often has a step that fails every time,
+ * so apply stops it, logs an error and writes a
+ * billing.storage_sample_failed audit row instead of starting it again. */
+export const STORAGE_ATTEMPTS = 5
 
 // API responses are normalized by the adapter; serialize their raw-equivalent
 // fields for one shared validator on the write boundary and webhook path.
@@ -145,8 +151,9 @@ export const release = internalMutation({
  * organization's billing row. Stale or out-of-order events are ignored. It
  * opens the paid period's record when a new period starts and starts the
  * period's storage sample (storageStep), or starts a sample again that has
- * gone STORAGE_STALL_MS without a step. Then it starts or stops the
- * read-only period before deletion (model/orgRetention.ts). */
+ * gone STORAGE_STALL_MS without a step, up to STORAGE_ATTEMPTS starts. Then
+ * it starts or stops the read-only period before deletion
+ * (model/orgRetention.ts). */
 export const apply = internalMutation({
   args: { payload: v.string(), event_id: v.optional(v.string()) },
   handler: async (ctx, { payload, event_id }) => {
@@ -238,9 +245,10 @@ export const apply = internalMutation({
     } else if (
       period &&
       period.storage_bytes === undefined &&
+      period.storage_failed_at === undefined &&
       (period.storage_run_at ?? '') < new Date(Date.now() - STORAGE_STALL_MS).toISOString()
     ) {
-      await startStorageSample(ctx, period._id)
+      await restartStorageSample(ctx, period)
     }
     if (event_id)
       await ctx.db.insert('billing_webhooks', {
@@ -262,19 +270,99 @@ export const apply = internalMutation({
   },
 })
 
-/* Starts a period's storage sample, or starts it again. A new run id stops
- * any earlier run at its next step. */
-async function startStorageSample(ctx: MutationCtx, period: Id<'billing_periods'>): Promise<void> {
+/* Starts a period's storage sample, or starts it again, and counts the
+ * start. A new run id stops any earlier run at its next step. */
+async function startStorageSample(
+  ctx: MutationCtx,
+  period: Id<'billing_periods'>,
+  attempts = 1,
+): Promise<void> {
   const run = newUuid()
-  await ctx.db.patch(period, { storage_run: run, storage_run_at: isoNow() })
+  await ctx.db.patch(period, {
+    storage_run: run,
+    storage_run_at: isoNow(),
+    storage_attempts: attempts,
+  })
   await ctx.scheduler.runAfter(0, storageStepRef, { period, run, phase: 'own', bytes: 0 })
 }
+
+/* Starts a stalled sample again, or stops it once it has started
+ * STORAGE_ATTEMPTS times. A stopped sample records no storage, so the
+ * period charges none. The error log and the audit row tell an operator,
+ * who can start it again with restartStorage once the cause is fixed. */
+async function restartStorageSample(
+  ctx: MutationCtx,
+  period: Doc<'billing_periods'>,
+): Promise<void> {
+  const attempts = period.storage_attempts ?? 1
+  if (attempts < STORAGE_ATTEMPTS) {
+    console.warn(
+      `billing: storage sample of period ${period._id} stalled; starting it again (start ${attempts + 1} of ${STORAGE_ATTEMPTS})`,
+    )
+    await startStorageSample(ctx, period._id, attempts + 1)
+    return
+  }
+  console.error(
+    `billing: storage sample of period ${period._id} stalled after ${attempts} starts; it is stopped and the period records no storage`,
+  )
+  await ctx.db.patch(period._id, {
+    storage_run: undefined,
+    storage_run_at: undefined,
+    storage_failed_at: isoNow(),
+  })
+  await audit(ctx, {
+    actor_email: 'system',
+    action: 'billing.storage_sample_failed',
+    target_org_id: period.org_id,
+    detail: {
+      period: period._id,
+      subscription_id: period.subscription_id,
+      period_start: period.period_start,
+      attempts,
+    },
+  })
+}
+
+/** Starts a period's storage sample again after it stopped
+ * (billing.storage_sample_failed, whose detail names the period) or while it
+ * runs, with its starts counted from one, and writes a
+ * billing.storage_sample_restarted audit row. An operator runs it once the
+ * failing step is fixed:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+ *     TARGET npx convex run billingSync:restartStorage '{"period":"…"}'
+ * A period whose sample finished is left alone. The storage charge a
+ * finished sample records is sent only while the period is still the
+ * subscription's current one and more than 30 seconds from its end
+ * (eventReady), so a restart after that records the bytes but charges
+ * nothing. */
+export const restartStorage = internalMutation({
+  args: { period: v.id('billing_periods') },
+  handler: async (ctx, { period }): Promise<boolean> => {
+    const row = await ctx.db.get(period)
+    require(row !== null, notFound('billing period not found'))
+    if (row.storage_bytes !== undefined) return false
+    await ctx.db.patch(row._id, { storage_failed_at: undefined })
+    await startStorageSample(ctx, row._id)
+    await audit(ctx, {
+      actor_email: 'cli',
+      action: 'billing.storage_sample_restarted',
+      target_org_id: row.org_id,
+      detail: {
+        period: row._id,
+        subscription_id: row.subscription_id,
+        period_start: row.period_start,
+      },
+    })
+    return true
+  },
+})
 
 /** One step of a period's storage sample. The renewal (apply) records the
  * period at once and starts the sample, so the renewal never reads the
  * organization's attachment rows. Each step counts one page of them
  * (model/billing.ts storagePage), first the organization's own rows and then
- * the rows stored before rows carried their organization, and schedules the
+ * the rows stored before rows carried their organization, from their own
+ * range or through the organization's tasks (legacyPhase), and schedules the
  * next step with the running total. It counts the rows stored before the
  * renewal recorded the period, so a file stored later, or a restore's rows
  * written back, waits for the next period. The last step records the bytes and the
@@ -290,7 +378,7 @@ export const storageStep = internalMutation({
     if (period === null || period.storage_run !== a.run) return null
     const page = await storagePage(ctx, period.org_id, a.phase, {
       cursor: a.cursor ?? null,
-      size: a.size ?? STORAGE_PAGE.rows,
+      size: a.size,
       before: period._creationTime,
     })
     let next: StorageStep | undefined
@@ -299,7 +387,7 @@ export const storageStep = internalMutation({
       const bytes = a.bytes + page.bytes
       if (page.next !== null) next = { ...a, cursor: page.next, size: undefined, bytes }
       else if (a.phase === 'own')
-        next = { ...a, phase: 'unscoped', cursor: undefined, size: undefined, bytes }
+        next = { ...a, phase: await legacyPhase(ctx), cursor: undefined, size: undefined, bytes }
       else return await finishStorageSample(ctx, period, bytes)
     }
     await ctx.db.patch(period._id, { storage_run_at: isoNow() })
@@ -324,6 +412,7 @@ async function finishStorageSample(
     storage_blocks: blocks,
     storage_run: undefined,
     storage_run_at: undefined,
+    storage_attempts: undefined,
   })
   const sub = await subscriptionFor(ctx, period.org_id)
   const id = `${period.subscription_id}:${period.period_start}:storage`

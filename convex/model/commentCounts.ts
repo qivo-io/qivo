@@ -36,11 +36,12 @@
  *   MCP's task and project deletes move tasks with their comments, delete
  *   the row when the task row leaves the live tables (dropCommentCount). A
  *   restore writes the comments back and leaves the task not counted yet.
- * - deleteIssueDeep and deleteOrgDeep (model/cascade.ts), which the guest
- *   organization reset and the marketing demo wipe run, delete the task's
- *   row with its comments (dropCommentCount).
- * - The stepped organization deletion (model/orgDeletion.ts) and the public
- *   demo purge (internal/demoCleanup.ts) delete the row before the comments.
+ * - deleteIssueDeep and deleteOrgDeep (model/cascade.ts), which tests and
+ *   the guest organization reset run, delete the task's row with its
+ *   comments (dropCommentCount).
+ * - The stepped organization deletion (model/orgDeletion.ts), whose phases
+ *   the Northstar wipe also runs, and the public demo purge
+ *   (internal/demoCleanup.ts) delete the row before the comments.
  * - The Northstar seed (model/demoSeed.ts) inserts every comment of tasks it
  *   creates and stores their counts (storeCommentCount).
  * Deleting a task's row is always safe, because its next post counts again.

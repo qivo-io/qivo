@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import { internalQuery } from './_generated/server'
 import {
   assertOrgAvailable,
@@ -7,10 +8,20 @@ import {
   subscriptionFor,
   subscriptionWritable,
 } from './lib/billingAccess'
+import type { BillingUsage } from './lib/billingTypes'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { forbidden, orgQuery, require } from './lib/functions'
-import { billingSummary, billingUsage } from './model/billing'
+import { forbidden, orgAction, orgQuery, require } from './lib/functions'
+import {
+  billingSummary,
+  billingUsage,
+  billingUsageHead,
+  legacyPhase,
+  type StoragePage,
+  type StoragePhase,
+  type StorageProject,
+  storagePage,
+} from './model/billing'
 import { checkoutDeadline } from './model/orgRetention'
 
 // Explicit admin-only query keeps amounts/customer state outside the planner.
@@ -23,14 +34,91 @@ export const summary = orgQuery({
   },
 })
 
-// This is fetched on demand. A subscribed usage counter would re-render on
-// every API request; callers refresh the report when they want fresh figures.
+// The report in one query, which reads all the organization's attachment
+// rows at once. Billing pages before usageReport call it, so tabs opened
+// before that release keep working (docs/deployment.md, Recovery and
+// compatibility). Remove it once no served build calls it.
 export const usage = orgQuery({
   args: {},
   handler: async (ctx) => {
     refuseDemoFeature()
     require(ctx.me.org_role === 'admin', forbidden('admin only'))
     return await billingUsage(ctx, ctx.me.org_id)
+  },
+})
+
+/** The usage report's figures other than storage. */
+export const usageHead = internalQuery({
+  args: { org_id: v.string() },
+  handler: async (ctx, { org_id }) => await billingUsageHead(ctx, org_id),
+})
+
+/** One page of the organization's stored bytes as they are now. */
+export const storageNowPage = internalQuery({
+  args: {
+    org_id: v.string(),
+    phase: v.union(v.literal('own'), v.literal('unscoped'), v.literal('tasks')),
+    cursor: v.union(v.string(), v.null()),
+    size: v.optional(v.number()),
+  },
+  handler: async (ctx, { org_id, phase, cursor, size }): Promise<StoragePage> =>
+    await storagePage(ctx, org_id, phase, { cursor, size, before: Number.MAX_SAFE_INTEGER }),
+})
+
+/** The phase that reads the rows stored without org_id (legacyPhase). */
+export const storageLegacyPhase = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<StoragePhase> => await legacyPhase(ctx),
+})
+
+/** The admin Billing page's usage report (model/billing.ts
+ * billingUsageHead). Its storage is counted page by page, as a period's
+ * storage sample counts it (storagePage), so no transaction reads all the
+ * organization's attachment rows. Each page is its own snapshot, so a file
+ * stored or removed while the report runs may count or not. It is fetched
+ * on demand. A subscribed usage counter would re-render on every API
+ * request, so callers refresh the report when they want fresh figures. */
+export const usageReport = orgAction({
+  args: {},
+  handler: async (ctx): Promise<BillingUsage> => {
+    const org_id = ctx.orgId
+    const head = await ctx.runQuery(internal.billing.usageHead, { org_id })
+    const projects = new Map<string, StorageProject>()
+    let bytes = 0
+    let phase: StoragePhase | null = 'own'
+    while (phase !== null) {
+      let cursor: string | null = null
+      let size: number | undefined
+      for (;;) {
+        const page: StoragePage = await ctx.runQuery(internal.billing.storageNowPage, {
+          org_id,
+          phase,
+          cursor,
+          size,
+        })
+        if ('split' in page) {
+          size = page.split
+          continue
+        }
+        bytes += page.bytes
+        for (const counted of page.projects) {
+          const total = projects.get(counted.project_id)
+          if (total === undefined) projects.set(counted.project_id, { ...counted })
+          else total.storage_bytes += counted.storage_bytes
+        }
+        if (page.next === null) break
+        cursor = page.next
+        size = undefined
+      }
+      phase = phase === 'own' ? await ctx.runQuery(internal.billing.storageLegacyPhase, {}) : null
+    }
+    return {
+      ...head,
+      storage_bytes: bytes,
+      projects: [...projects.values()]
+        .filter((p) => p.storage_bytes > 0)
+        .sort((a, b) => b.storage_bytes - a.storage_bytes),
+    }
   },
 })
 

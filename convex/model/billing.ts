@@ -332,59 +332,121 @@ export async function storageUsage(ctx: QueryCtx, orgId: string) {
 }
 
 /** Sizes of one step of a period's storage sample (storagePage). A step
- * reads at most `rows` attachment rows and `bytes` of their range, one task
- * for each row that does not carry its project, and one project for each
- * project it meets. When the tasks it read pass `taskBytes`, it stops and
- * the step after it reads the same page again, only as far as the rows
- * before the one that passed. Tests lower them. */
-export const STORAGE_PAGE = { rows: 1000, bytes: 4 * 1024 * 1024, taskBytes: 4 * 1024 * 1024 }
+ * reads at most `rows` attachment rows and `bytes` of their range, and in
+ * the 'tasks' phase at most `tasks` tasks as well. It reads one task for each row that
+ * does not carry its project, and one project for each project it meets.
+ * When the tasks it read pass `taskBytes`, it stops and the step after it
+ * reads the same page again, only as far as the rows before the one that
+ * passed. Tests lower them. */
+export const STORAGE_PAGE = {
+  rows: 1000,
+  tasks: 500,
+  bytes: 4 * 1024 * 1024,
+  taskBytes: 4 * 1024 * 1024,
+}
 
-/** The two ranges a storage sample pages through, in order. 'own' is the
- * organization's attachment rows, and 'unscoped' the deployment's rows
- * stored before rows carried their organization. */
-export type StoragePhase = 'own' | 'unscoped'
+/** The ranges a storage sample pages through, in order. 'own' is the
+ * organization's attachment rows. The rows stored before rows carried their
+ * organization come next, read by one of the other two (legacyPhase).
+ * 'unscoped' reads them from their own range, the whole deployment's.
+ * 'tasks' reads them task by task through this organization's tasks. */
+export type StoragePhase = 'own' | 'unscoped' | 'tasks'
+
+/** One project's counted bytes. */
+export type StorageProject = BillingUsage['projects'][number]
 
 /** A storage sample's page, or the smaller size to read the same page at. */
-export type StoragePage = { bytes: number; next: string | null } | { split: number }
+export type StoragePage =
+  | { bytes: number; projects: StorageProject[]; next: string | null }
+  | { split: number }
+
+/**
+ * The phase that reads the rows stored without org_id after the 'own'
+ * phase. While the deployment holds at most UNSCOPED_READ.lookups of them,
+ * 'unscoped' reads them from their own range, so every organization's
+ * sample reads at most that many rows of other organizations. Past it,
+ * 'tasks' finds this organization's rows through its own tasks, at the cost
+ * the read had before rows carried their organization. Either way a sample
+ * reads a bounded number of other organizations' rows.
+ */
+export async function legacyPhase(ctx: QueryCtx): Promise<'unscoped' | 'tasks'> {
+  const rows = await ctx.db
+    .query('issue_attachments')
+    .withIndex('by_org', (q) => q.eq('org_id', undefined))
+    .take(UNSCOPED_READ.lookups + 1)
+  return rows.length > UNSCOPED_READ.lookups ? 'tasks' : 'unscoped'
+}
+
+/* Counts bytes in the projects of `orgId` that still exist, reading each
+ * project once. */
+function projectCounter(ctx: QueryCtx, orgId: string) {
+  const live = new Map<string, StorageProject | null>()
+  let bytes = 0
+  return {
+    async add(projectId: string, size: number) {
+      let project = live.get(projectId)
+      if (project === undefined) {
+        const row = await byId(ctx, 'projects', projectId)
+        project =
+          row?.org_id === orgId ? { project_id: row.id, name: row.name, storage_bytes: 0 } : null
+        live.set(projectId, project)
+      }
+      if (project === null) return
+      project.storage_bytes += size
+      bytes += size
+    },
+    counted: () => ({
+      bytes,
+      projects: [...live.values()].filter((p): p is StorageProject => p !== null),
+    }),
+  }
+}
 
 /**
  * One page of the bytes storageUsage counts for organization `orgId`, for a
- * sample taken over many transactions. It counts the same rows. In the 'own'
- * phase a row counts in its project, or its task's project when it carries
- * none. In the 'unscoped' phase a row counts in its task's project when the
- * task belongs to `orgId`. Either way the project must still exist in the
- * organization.
+ * sample taken over many transactions or the Billing page's report. It
+ * counts the same rows. In the 'own' phase a row counts in its project, or
+ * its task's project when it carries none. In the 'unscoped' and 'tasks'
+ * phases a row without org_id counts in its task's project when the task
+ * belongs to `orgId`. Either way the project must still exist in the
+ * organization. The page also gives the bytes of each project it counted.
  *
- * Pages follow the order rows were stored, so archiving a task or restoring
- * an archived one during the sample moves none of them. Rows stored after
- * `before` (a _creationTime, the period row's) are left out. Those include the
- * rows a restore from Deleted items writes back, which would otherwise be
- * counted a second time if their earlier copies were counted before the
- * task was deleted. Each page is its own snapshot, so a file removed while
- * the sample runs may count or not. The phases run in this order on
- * purpose. internal/attachmentScopeBackfill can give a row without org_id
- * its organization during a sample. Once the 'own' phase has passed the
- * row's place it is in neither range and is missed, which can only lower
- * the sample. The other order would count such a row twice.
+ * Pages follow the order rows, or in the 'tasks' phase tasks, were stored,
+ * so archiving a task or restoring an archived one during the sample moves
+ * none of them. Rows stored after `before` (a _creationTime, the period
+ * row's) are left out. Those include the rows a restore from Deleted items
+ * writes back, which would otherwise be counted a second time if their
+ * earlier copies were counted before the task was deleted. Each page is its
+ * own snapshot, so a file removed while the sample runs may count or not.
+ * The phases run in this order on purpose. internal/attachmentScopeBackfill
+ * can give a row without org_id its organization during a sample. Once the
+ * 'own' phase has passed the row's place it is in neither range and is
+ * missed, which can only lower the sample. The other order would count such
+ * a row twice.
  *
  * Returns the bytes the page counts and the cursor of the next one, or
  * `split` with a smaller size when the tasks it read pass
- * STORAGE_PAGE.taskBytes. A page of one row always completes.
+ * STORAGE_PAGE.taskBytes. A page of one row always completes. `size`
+ * defaults to the phase's STORAGE_PAGE size.
  */
 export async function storagePage(
   ctx: QueryCtx,
   orgId: string,
   phase: StoragePhase,
-  { cursor, size, before }: { cursor: string | null; size: number; before: number },
+  { cursor, size, before }: { cursor: string | null; size?: number; before: number },
 ): Promise<StoragePage> {
+  const counter = projectCounter(ctx, orgId)
+  if (phase === 'tasks') return await legacyTaskPage(ctx, counter, orgId, { cursor, size, before })
   const page = await ctx.db
     .query('issue_attachments')
     .withIndex('by_org', (q) => q.eq('org_id', phase === 'own' ? orgId : undefined))
-    .paginate({ cursor, numItems: Math.max(1, size), maximumBytesRead: STORAGE_PAGE.bytes })
+    .paginate({
+      cursor,
+      numItems: Math.max(1, size ?? STORAGE_PAGE.rows),
+      maximumBytesRead: STORAGE_PAGE.bytes,
+    })
   const tasks = new Map<string, Doc<'issues'> | null>()
-  const live = new Map<string, boolean>()
   let taskBytes = 0
-  let bytes = 0
   for (const [i, file] of page.page.entries()) {
     if (file._creationTime > before) continue
     let projectId = phase === 'own' ? file.project_id : undefined
@@ -401,15 +463,91 @@ export async function storagePage(
       if (task === null || (phase === 'unscoped' && task.org_id !== orgId)) continue
       projectId = task.project_id
     }
-    let counts = live.get(projectId)
-    if (counts === undefined) {
-      const project = await byId(ctx, 'projects', projectId)
-      counts = project?.org_id === orgId
-      live.set(projectId, counts)
-    }
-    if (counts) bytes += file.size_bytes
+    await counter.add(projectId, file.size_bytes)
   }
-  return { bytes, next: page.isDone ? null : page.continueCursor }
+  return { ...counter.counted(), next: page.isDone ? null : page.continueCursor }
+}
+
+/* Where a 'tasks' phase page starts: the cursor of its tasks and, when the
+ * page before it stopped inside a task's rows, that task, its range (the
+ * task's archived rows or the others), the _creationTime of the last row
+ * counted and the ids of the counted rows with that time. Convex does not
+ * make _creationTime unique, so the next page reads from that time on, that
+ * time included, and passes over those ids. Ids, not a count, because a
+ * counted row may be deleted between pages. */
+type TasksCursor = {
+  tasks: string | null
+  within?: { issue: string; archived: boolean; after: number | null; seen: string[] }
+}
+
+/* A 'tasks' phase page of storagePage. It reads the rows without org_id of
+ * the organization's tasks, task by task, and at most STORAGE_PAGE.rows of
+ * them. When that runs out at a task after the page's first, the page splits
+ * before that task. When it runs out inside the first task, the next page is
+ * that task again from the row after the last one counted, so a task with
+ * more rows than a page takes several pages. Its cursor is a TasksCursor in
+ * JSON. A function may run one paginated query, so the rows are read with
+ * take. */
+async function legacyTaskPage(
+  ctx: QueryCtx,
+  counter: ReturnType<typeof projectCounter>,
+  orgId: string,
+  { cursor, size, before }: { cursor: string | null; size?: number; before: number },
+): Promise<StoragePage> {
+  const at: TasksCursor = cursor === null ? { tasks: null } : JSON.parse(cursor)
+  const page = await ctx.db
+    .query('issues')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .paginate({
+      cursor: at.tasks,
+      numItems: at.within ? 1 : Math.max(1, size ?? STORAGE_PAGE.tasks),
+      maximumBytesRead: STORAGE_PAGE.bytes,
+    })
+  let rows = 0
+  for (const [i, task] of page.page.entries()) {
+    // A task moved to Deleted items since took its rows along, so the task
+    // in its place starts from its first row.
+    const from: NonNullable<TasksCursor['within']> =
+      at.within?.issue === task.id
+        ? at.within
+        : { issue: task.id, archived: false, after: null, seen: [] }
+    for (const archived of [false, true]) {
+      if (from.archived && !archived) continue
+      const resumed = archived === from.archived && from.after !== null
+      const after = resumed ? from.after : null
+      const seen = resumed ? from.seen : []
+      const room = STORAGE_PAGE.rows - rows
+      const stop = (last: number | null, atLast: string[]): StoragePage => {
+        if (i > 0) return { split: i }
+        const within = { issue: task.id, archived, after: last, seen: atLast }
+        return { ...counter.counted(), next: JSON.stringify({ tasks: at.tasks, within }) }
+      }
+      if (room <= 0) return stop(after, seen)
+      const read = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_org_task_archived_issue', (q) => {
+          const range = q
+            .eq('org_id', undefined)
+            .eq('task_archived', archived ? true : undefined)
+            .eq('issue_id', task.id)
+          return after === null ? range : range.gte('_creationTime', after)
+        })
+        .take(seen.length + room + 1)
+      const counted = new Set(seen)
+      const fresh = read.filter((f) => !(f._creationTime === after && counted.has(f._id)))
+      const files = fresh.slice(0, room)
+      for (const file of files)
+        if (file._creationTime <= before) await counter.add(task.project_id, file.size_bytes)
+      rows += files.length
+      if (fresh.length > room) {
+        const last = files[files.length - 1]._creationTime
+        const atLast = files.filter((f) => f._creationTime === last).map((f) => f._id)
+        return stop(last, last === after ? [...seen, ...atLast] : atLast)
+      }
+    }
+  }
+  const next: TasksCursor | null = page.isDone ? null : { tasks: page.continueCursor }
+  return { ...counter.counted(), next: next && JSON.stringify(next) }
 }
 
 /** The plan usage allowances follow (the subscription's, else the default
@@ -432,13 +570,16 @@ export async function usageAllowance(
   return { plan, seats, includedCalls }
 }
 
-/** The admin Billing page's usage report. It reads the same bucket the
- * API-call writer is filling now (`usagePeriod`): the live paid period, the
- * pending interval after it, or the current UTC calendar month. Allowances
- * come from the subscription's plan, or the default plan before enrollment,
- * and are null when there is no plan. A calendar month and a pending
- * interval are always waived. */
-export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
+/** The admin Billing page's usage report without its storage figures. It
+ * reads the same bucket the API-call writer is filling now (`usagePeriod`):
+ * the live paid period, the pending interval after it, or the current UTC
+ * calendar month. Allowances come from the subscription's plan, or the
+ * default plan before enrollment, and are null when there is no plan. A
+ * calendar month and a pending interval are always waived. */
+export async function billingUsageHead(
+  ctx: QueryCtx,
+  orgId: string,
+): Promise<Omit<BillingUsage, 'storage_bytes' | 'projects'>> {
   const sub = await subscriptionFor(ctx, orgId)
   const { plan, seats, includedCalls } = await usageAllowance(ctx, orgId, sub)
   const now = Date.now()
@@ -467,7 +608,6 @@ export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<Billin
   const includedBytes = plan
     ? Math.max(plan.minimum_storage_gb, seats * plan.storage_gb_per_seat) * GB
     : null
-  const storage = await storageUsage(ctx, orgId)
   // A calendar month never has billing events, so this finds none for it.
   const events = await ctx.db
     .query('billing_events')
@@ -491,15 +631,22 @@ export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<Billin
     period_end: period.end,
     calls,
     included_calls: includedCalls,
-    storage_bytes: storage.bytes,
     included_storage_bytes: includedBytes,
     api_overage_cents: apiBlocks * (plan?.api_block_price_cents ?? 100),
     storage_overage_cents: storageBlocks * (plan?.storage_block_price_cents ?? 100),
     waived,
     delivery_unconfirmed: events.some((event) => !!event.abandoned_at && event.attempts > 0),
     users: [...users.values()].sort((a, b) => b.calls - a.calls),
-    projects: storage.projects,
   }
+}
+
+/** The usage report with its storage read in one transaction
+ * (storageUsage). Billing pages before billing.ts usageReport call it
+ * through billing.usage. */
+export async function billingUsage(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
+  const head = await billingUsageHead(ctx, orgId)
+  const storage = await storageUsage(ctx, orgId)
+  return { ...head, storage_bytes: storage.bytes, projects: storage.projects }
 }
 
 export function validatePlan(plan: Omit<BillingPlan, 'id' | 'archived' | 'created_at'>) {
