@@ -190,6 +190,18 @@ describe('invitation mail', () => {
     expect(keys[1]).toBe(keys[0])
   })
 
+  it('counts a sandbox acceptance as not sent, because nothing was delivered', async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ message_id: 'm', status: 'pending', sandbox: true }),
+    })
+    vi.stubGlobal('fetch', fetch)
+    expect(await invite(Date.now() + 60_000)).toBe('unsent')
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).toContain('sandbox mode')
+  })
+
   it('repeats a conflict once, then reports it uncertain', async () => {
     const fetch = vi.fn().mockResolvedValue({
       ok: false,

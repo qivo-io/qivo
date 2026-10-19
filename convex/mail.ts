@@ -203,12 +203,21 @@ async function postLetter(
           message_id?: string
           sandbox?: boolean
         } | null
-        // ids only — no address, no subject. A sandbox project delivers nothing.
-        console.log('[mail] sent', {
-          intent,
-          message_id: ok?.message_id ?? null,
-          ...(ok?.sandbox === true ? { sandbox: true } : {}),
-        })
+        const message_id = ok?.message_id ?? null
+        if (ok?.sandbox === true) {
+          /* A sandbox project accepts a letter and delivers nothing. Counting
+           * it as not sent keeps billing and deletion notices retrying and
+           * invitations offering their link until a live project's key is
+           * configured. Repeats return the same cached answer. */
+          console.error('[mail] provider is in sandbox mode, nothing was delivered', {
+            intent,
+            message_id,
+          })
+          cfg.onFailure?.('refused')
+          return false
+        }
+        // ids only — no address, no subject
+        console.log('[mail] sent', { intent, message_id })
         return true
       }
       const detail = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null
