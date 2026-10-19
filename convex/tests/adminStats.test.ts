@@ -375,18 +375,21 @@ describe('listOrgs', () => {
     )
   })
 
-  it('lists an organization of 6,000 tasks within 700 index ranges a transaction', async () => {
-    const t = newT({ transactionLimits: { databaseQueries: 700 } })
+  /* A page of tasks reads one range for the page and one for each task's
+   * links, so pages of 75 tasks need 76 ranges. One page for the whole
+   * organization of 1,500 tasks needs 1,501, as the old single query did. */
+  it('lists an organization of 1,500 tasks within 175 index ranges a transaction', async () => {
+    const t = newT({ transactionLimits: { databaseQueries: 175 } })
     const f = await withOrg(t)
     const asOp = await operator(t)
-    for (let batch = 0; batch < 6; batch++) {
+    for (let batch = 0; batch < 3; batch++) {
       await t.run(async (ctx) => {
-        for (let i = 0; i < 1000; i++) {
+        for (let i = 0; i < 500; i++) {
           await ctx.db.insert('issues', {
             id: uuid(),
             org_id: f.org.id,
             project_id: f.sub.id,
-            num: batch * 1000 + i + 1,
+            num: batch * 500 + i + 1,
             title: 'Bulk task',
             description: '',
             status: 'todo',
@@ -399,14 +402,15 @@ describe('listOrgs', () => {
       })
     }
 
+    Object.assign(STATS_PAGE, { issues: 75 })
     const rows = await asOp.action(api.adminStats.listOrgs, {})
-    expect(rows.find((row) => row.id === f.org.id)?.issue_count).toBe(6000)
+    expect(rows.find((row) => row.id === f.org.id)?.issue_count).toBe(1500)
     const stats = await asOp.action(api.adminStats.platformStats, {})
-    expect(stats.totals.issues).toBe(6000)
+    expect(stats.totals.issues).toBe(1500)
 
     // One page for the whole organization reads one range per task, as the
     // old single query did, and fails under the same limit.
-    Object.assign(STATS_PAGE, { issues: 6000 })
+    Object.assign(STATS_PAGE, { issues: 1500 })
     await expect(asOp.action(api.adminStats.listOrgs, {})).rejects.toThrow(
       /Too many index ranges read/,
     )

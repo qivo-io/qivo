@@ -242,7 +242,12 @@ async function choose(projectId: string) {
 /** The newest issues.archivedPage call. */
 const last = () => calls[calls.length - 1]
 
-describe('Archived tasks', () => {
+/* This file runs in the node project, whose default timeout is 5 s. Every
+   test resets the modules and imports and boots the real planner store
+   again. The first one also transforms the store and the page, and took up
+   to 9 s on a busy host, so the tests get the 20 s the convex project gives
+   its fixtures. */
+describe('Archived tasks', { timeout: 20_000 }, () => {
   it('opens on its project with the search focused, newest first, a page at a time', async () => {
     await open()
     expect(calls.map((c) => c.args)).toEqual([{ project_id: META, limit: 100 }])

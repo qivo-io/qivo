@@ -95,8 +95,6 @@ activityRetention:trim mutation internal {"type":"object","value":{"org_id":{"fi
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
-admin:listUsers query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false}}}
-admin:orgDetail query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:promoteOrgAdmin mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:removeOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
 adminAuth:banUser action public {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false}}}
@@ -136,9 +134,10 @@ adminPeople:listUsers action public {"type":"object","value":{"search":{"fieldTy
 adminPeople:loginPage query internal {"type":"object","value":{"auth_user_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 adminPeople:memberPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminPeople:orgDetail action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-adminPeople:profilePage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminPeople:profilePage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
 adminPeople:teamCountPage query internal {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"child":{"fieldType":{"type":"union","value":[{"type":"literal","value":"members"},{"type":"literal","value":"projects"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminPeople:teamPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+adminPeople:userPage action public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:childPage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:listOrgs action public {"type":"object","value":{}}
 adminStats:orgHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -173,8 +172,12 @@ backgroundPreviews:beginDemoWork mutation internal {"type":"object","value":{"ki
 backgroundPreviews:source query internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 billing:adminContext query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:status query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+billing:storageLegacyPhase query internal {"type":"object","value":{}}
+billing:storageNowPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"},{"type":"literal","value":"tasks"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
 billing:summary query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:usage query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+billing:usageHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+billing:usageReport action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:cancelSubscription action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:checkout action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:clearEndedCheckout mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"checkout_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -199,7 +202,8 @@ billingSync:pump action internal {"type":"object","value":{}}
 billingSync:reconcile action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingSync:release mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"token":{"fieldType":{"type":"string"},"optional":false},"seats":{"fieldType":{"type":"number"},"optional":true},"error":{"fieldType":{"type":"string"},"optional":true}}}
 billingSync:reminders mutation internal {"type":"object","value":{}}
-billingSync:storageStep mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"size":{"fieldType":{"type":"number"},"optional":true},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
+billingSync:restartStorage mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false}}}
+billingSync:storageStep mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"},{"type":"literal","value":"tasks"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"size":{"fieldType":{"type":"number"},"optional":true},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
 billingSync:sweep action internal {"type":"object","value":{}}
 billingSync:webhook action internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false},"subscription_id":{"fieldType":{"type":"string"},"optional":false}}}
 commentCounts:step mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -258,7 +262,7 @@ internal/demoMetrics:snapshot query internal {"type":"object","value":{}}
 internal/demoTest:expireOwned mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"delay_ms":{"fieldType":{"type":"number"},"optional":false}}}
 internal/demoTest:inspect query internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":true},"expected_site_url":{"fieldType":{"type":"string"},"optional":false}}}
 internal/guestOrg:zzGuestOrg mutation internal {"type":"object","value":{}}
-internal/guestTeams:check query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"limit":{"fieldType":{"type":"number"},"optional":true}}}
+internal/guestTeams:check query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":true}}}
 internal/guestTeams:page mutation internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 internal/guestTeams:repair action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false}}}
 internal/marketingDemo:adoptAvatar mutation internal {"type":"object","value":{"expected_site_url":{"fieldType":{"type":"string"},"optional":false},"person":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
@@ -579,7 +583,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Billing details/usage require an org admin; status reveals only the
   // caller's org entitlement. Checkout and portal re-check admin identity in
   // orgAction and remain available during billing recovery/read-only access.
-  billing: { summary: 'orgQuery', usage: 'orgQuery', status: 'orgQuery' },
+  billing: { summary: 'orgQuery', usage: 'orgQuery', usageReport: 'orgAction', status: 'orgQuery' },
   // API access lists every member's credentials for an org admin (checked in
   // the handler) and revokes any of them; revoking only takes access away, so
   // it stays open to admins during a billing pause.
@@ -638,10 +642,6 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // bare on purpose — the AdminGate's fail-OPEN probe answers false, never
     // throws (admin.ts documents it); every real admin door below re-checks.
     isOperator: 'query',
-    // the console's earlier single-query reads, kept for older console
-    // builds; adminPeople holds the paged ones
-    orgDetail: 'platformQuery',
-    listUsers: 'platformQuery',
     promoteOrgAdmin: 'platformMutation',
     auditLog: 'platformQuery',
   },
@@ -655,7 +655,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // The Users page and an organization's page page through the data the same
   // way (adminPeople.ts).
-  adminPeople: { listUsers: 'platformAction', orgDetail: 'platformAction' },
+  adminPeople: {
+    userPage: 'platformAction',
+    listUsers: 'platformAction',
+    orgDetail: 'platformAction',
+  },
   adminAuth: {
     recoveryLink: 'platformAction',
     banUser: 'platformAction',

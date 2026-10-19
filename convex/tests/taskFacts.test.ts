@@ -226,6 +226,44 @@ describe('a group’s progress is the app task window’s Progress', () => {
     })
     expect(page.tasks.find((r) => r.id === ga.id)?.progress).toEqual(p(1, 1, 100, true))
   })
+
+  /* Valid writes keep a chain to 20 tasks without a cycle
+   * (assertParentChain). The walk still stops on data that breaks that, and
+   * says the progress is partial. */
+  it('is partial on a parent cycle and past the depth a chain can have', async () => {
+    const fx = await setup()
+    // two tasks parented to each other, so each is the other's group
+    const aId = uuid()
+    const b = await task(fx, { parent_id: aId, title: 'Cycle B' })
+    const a = await task(fx, { id: aId, parent_id: b.id, title: 'Cycle A' })
+    // a chain of `length` tasks under its root, the last one Done
+    const chain = async (length: number, title: string) => {
+      const root = await task(fx, { title })
+      let parent = root
+      for (let i = 1; i < length; i++)
+        parent = await task(fx, {
+          parent_id: parent.id,
+          status: i === length - 1 ? 'done' : 'todo',
+        })
+      return root
+    }
+    const valid = await chain(20, 'Chain of 20')
+    const deepest = await chain(21, 'Chain of 21')
+    const tooDeep = await chain(22, 'Chain of 22')
+    for (const [root, progress] of [
+      [a, { done: 0, total: 0, percent: 0, partial: true }],
+      [valid, { done: 1, total: 1, percent: 100, partial: false }],
+      [deepest, { done: 1, total: 1, percent: 100, partial: false }],
+      // the walk stops above the Done leaf
+      [tooDeep, { done: 0, total: 0, percent: 0, partial: true }],
+    ] as const) {
+      expect((await restGet(fx, root.id, fx.admin.id)).progress, root.title).toEqual(progress)
+      const viaMcp = await mcpRead<Row>(fx, internal.machine.mcp.getIssue, fx.admin.id, {
+        ref: root.id,
+      })
+      expect(viaMcp.progress, root.title).toEqual(progress)
+    }
+  })
 })
 
 /* ---------------------------------------------------------- 2. completion */
