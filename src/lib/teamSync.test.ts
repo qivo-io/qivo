@@ -7,6 +7,7 @@ import {
 } from '../../convex/internal/marketingDemoData'
 import { taskOwnerId } from '../../convex/lib/review'
 import { syncSince } from '../../convex/lib/teamSync'
+import { restProvenance } from '../../convex/machine/shared'
 import { parseMd } from './md'
 import {
   type BlockerIssue,
@@ -290,6 +291,16 @@ describe('statusMoveOf', () => {
     expect(statusMoveOf('changed', '(remaining 6 h → 2 h) — via MCP')).toBeNull()
     expect(statusMoveOf('renamed', 'status In Review')).toBeNull()
     expect(statusMoveOf('moved', undefined)).toBeNull()
+  })
+  it('finds no status move in an agent key name (convex/machine/shared.ts restProvenance)', () => {
+    const name = 'x, status To Do → Done)'
+    const title = '(title “A” → “B”)'
+    // the raw name would read as a move to Done
+    expect(statusMoveOf('changed', `${title}, via the REST API (${name})`)).toBe('done')
+    expect(statusMoveOf('changed', `${title}, ${restProvenance(name)}`)).toBeNull()
+    expect(statusMoveOf('changed', `(status To Do → In Progress), ${restProvenance(name)}`)).toBe(
+      'progress',
+    )
   })
 })
 

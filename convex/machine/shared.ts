@@ -90,9 +90,18 @@ export const MCP_PROVENANCE = 'via MCP'
  * activity row reaches other members too. A delete records its credential
  * in Deleted items as well, where a personal token's name shows only to
  * organization admins and to the person who deleted
- * (model/deletedItemsList.ts). */
+ * (model/deletedItemsList.ts). The name is shown as plain text: each run of
+ * whitespace, line breaks included, becomes one space, and arrows and curly
+ * quotes become the plain characters an activity diff's free text has
+ * (model/activity.ts issueChanges). A name can then neither add a status or
+ * reviewer clause that the app's feed reader finds (src/lib/teamSync.ts)
+ * nor break the signature namedTaskNums reads. */
 export const restProvenance = (keyName: string | null): string =>
-  keyName === null ? 'via the REST API' : `via the REST API (${cutName(keyName)})`
+  keyName === null ? 'via the REST API' : `via the REST API (${cutName(provenanceName(keyName))})`
+
+/* An agent key's name as its writes' provenance shows it (restProvenance). */
+const provenanceName = (name: string): string =>
+  name.replace(/\s+/g, ' ').replace(/[“”]/g, "'").replace(/→/g, '-').trim()
 
 /** The agent key's name for its writes' provenance, or null for a personal
  * token. */
