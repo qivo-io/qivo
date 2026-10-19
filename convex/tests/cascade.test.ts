@@ -1,30 +1,20 @@
-/* model/cascade.ts — the four deep deletes over the explicit FK graph.
+/* model/cascade.ts — the deep deletes over the explicit FK graph.
  *
  * The heart of the suite is the table-driven zero-dangling-refs sweep
  * (tests/refs.setup.ts): after every cascade, NO surviving row anywhere may
  * reference a deleted id, edge by edge off schema.ts. The specifics ride on
- * top: the issues_touch echo (updated_at stamped on unassign/detach), the
- * detach notify, activity rows surviving (a deleted profile's actor_id
- * nulled, a deleted project's rows left for the caller to delete),
- * cross-project children detached not deleted, inbox messages of a deleted
- * issue gone from every inbox, and storage bytes dying with their row. */
+ * top: the issues_touch echo (updated_at stamped on unassign), activity rows
+ * surviving (a deleted profile's actor_id nulled), and storage bytes dying
+ * with their row. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc, Id } from '../_generated/dataModel'
+import { deleteOrgDeep, deleteTeamDeep, removeProfile } from '../model/cascade'
 import {
-  deleteIssueDeep,
-  deleteOrgDeep,
-  deleteProjectDeep,
-  deleteTeamDeep,
-  removeProfile,
-} from '../model/cascade'
-import {
-  drainActivity,
   messagesFor,
   NOW,
   newT,
   plantIssue,
-  plantProject,
   plantSubscription,
   type T,
   uuid,
@@ -293,198 +283,6 @@ describe('the ref sweep itself', () => {
     )
     await t.run((ctx) => ctx.db.patch(libraryRow, { active_run_id: undefined }))
     await assertNoDanglingRefs(t, 'active run link cleared')
-  })
-})
-
-describe('deleteIssueDeep', () => {
-  it('destroys every edge, detaches children with touch + notify, and reaps the bytes', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const parent = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'Doomed parent',
-    })
-    const childSame = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      parent_id: parent.id,
-    })
-    // cross-project child (0057): lives in ANOTHER project, must survive detached
-    const childCross = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      parent_id: parent.id,
-    })
-    const peerA = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const peerB = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await plantLink(t, parent.id, peerA.id) // by_source edge
-    await plantLink(t, peerB.id, parent.id) // by_target edge
-    const label = await plantLabel(t, f.org.id, 'Doom')
-    await t.run(async (ctx) => {
-      await ctx.db.insert('issue_labels', {
-        org_id: parent.org_id,
-        issue_id: parent.id,
-        label_id: label.id,
-      })
-    })
-    await plantSubscription(t, { issue_id: parent.id, profile_id: f.admin.id })
-    await plantSubscription(t, { issue_id: parent.id, profile_id: f.guest.id })
-    await plantSubscription(t, { issue_id: childCross.id, profile_id: f.user.id }) // hears the detach
-    await plantComment(t, { issue_id: parent.id, author: f.user.id })
-    await plantComment(t, { issue_id: parent.id, author: f.admin.id, edited_by: f.user.id })
-    await t.run((ctx) => ctx.db.insert('comment_counts', { issue_id: parent.id, count: 2 }))
-    // inbox rows about the doomed issue, in several people's inboxes
-    await plantMessageRow(t, {
-      org_id: f.org.id,
-      recipient_id: f.viewer.id,
-      issue_id: parent.id,
-      actor_id: f.user.id,
-    })
-    await plantMessageRow(t, { org_id: f.org.id, recipient_id: f.admin.id, issue_id: parent.id })
-    const att = await plantAttachment(t, { issue_id: parent.id, uploaded_by: f.user.id })
-    expect(await storageMeta(t, att.storage_id)).not.toBeNull()
-
-    await t.run(async (ctx) => {
-      await deleteIssueDeep(ctx, { issue: parent, actor: f.admin, now: NOW2 })
-    })
-
-    // the row and its whole edge fan are gone
-    expect(await rowByUuid(t, 'issues', parent.id)).toBeNull()
-    expect(await collect(t, 'issue_links')).toEqual([])
-    expect(await collect(t, 'issue_labels')).toEqual([])
-    expect(await collect(t, 'comments')).toEqual([])
-    expect(await collect(t, 'comment_counts')).toEqual([])
-    expect(await collect(t, 'issue_attachments')).toEqual([])
-    expect(await storageMeta(t, att.storage_id)).toBeNull() // bytes die with the row
-    expect(await rowByUuid(t, 'labels', label.id)).not.toBeNull() // org-level, survives
-
-    // messages about the issue are gone from EVERY inbox (the PG FK cascade)
-    expect(await messagesFor(t, f.viewer.id, parent.id)).toEqual([])
-    expect(await messagesFor(t, f.admin.id, parent.id)).toEqual([])
-
-    // children DETACHED, never deleted — cross-project included — with the
-    // issues_touch echo and the 'Detached from its parent' notify
-    for (const child of [childSame, childCross]) {
-      const now = await rowByUuid(t, 'issues', child.id)
-      expect(now).not.toBeNull()
-      expect(now!.parent_id).toBeUndefined()
-      expect(now!.updated_at).toBe(NOW2)
-    }
-    const detachNews = await messagesFor(t, f.user.id, childCross.id)
-    expect(detachNews.length).toBe(1)
-    expect(detachNews[0].detail).toBe('Detached from its parent')
-    expect(detachNews[0].actor_id).toBe(f.admin.id)
-    expect(detachNews[0].created_at).toBe(NOW2)
-
-    // untouched peers keep their instant; the parent's subscriptions are gone,
-    // the child's survives
-    expect((await rowByUuid(t, 'issues', peerA.id))!.updated_at).toBe(NOW)
-    const subs = await collect(t, 'issue_subscriptions')
-    expect(subs.map((s) => `${s.issue_id}:${s.profile_id}`)).toEqual([
-      `${childCross.id}:${f.user.id}`,
-    ])
-
-    await assertNoDanglingRefs(t, 'after deleteIssueDeep')
-  })
-})
-
-describe('deleteProjectDeep', () => {
-  it('takes the subtree, detaches cross-project children, and leaves the history to its caller', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const hiddenSub = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
-    })
-    const iSub = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const iSub2 = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
-    // a child in a FOREIGN tree whose parent dies with the meta
-    const survivor = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: hiddenSub.id,
-      parent_id: iSub.id,
-    })
-    await plantSubscription(t, { issue_id: survivor.id, profile_id: f.user.id })
-    await plantLink(t, iSub.id, iSub2.id)
-    await plantLink(t, iSub.id, survivor.id)
-    const label = await plantLabel(t, f.org.id, 'Sticky')
-    await t.run(async (ctx) => {
-      await ctx.db.insert('issue_labels', {
-        org_id: iSub2.org_id,
-        issue_id: iSub2.id,
-        label_id: label.id,
-      })
-    })
-    await plantComment(t, { issue_id: iSub.id, author: f.user.id })
-    await plantMessageRow(t, { org_id: f.org.id, recipient_id: f.viewer.id, issue_id: iSub2.id })
-    await plantMilestone(t, f.meta.id, 'On the meta')
-    await plantMilestone(t, f.sub.id, 'On the sub')
-    const eMeta = await plantEvent(t, {
-      org_id: f.org.id,
-      actor_id: f.admin.id,
-      project_id: f.meta.id,
-    })
-    const eSub = await plantEvent(t, {
-      org_id: f.org.id,
-      actor_id: f.user.id,
-      project_id: f.sub.id,
-      team_id: f.team.id,
-    })
-    const eControl = await plantEvent(t, {
-      org_id: f.org.id,
-      actor_id: f.user.id,
-      project_id: f.hidden.id,
-    })
-
-    await t.run(async (ctx) => {
-      await deleteProjectDeep(ctx, { project: f.meta, actor: f.admin, now: NOW2 })
-    })
-
-    // the meta and BOTH subs are gone; unrelated trees stand
-    for (const gone of [f.meta.id, f.sub.id, f.sub2.id]) {
-      expect(await rowByUuid(t, 'projects', gone)).toBeNull()
-    }
-    expect(await rowByUuid(t, 'projects', f.hidden.id)).not.toBeNull()
-    expect(await rowByUuid(t, 'projects', hiddenSub.id)).not.toBeNull()
-    expect(await rowByUuid(t, 'projects', f.otherProject.id)).not.toBeNull()
-
-    // issues of the subtree died through deleteIssueDeep with all their edges
-    expect(await rowByUuid(t, 'issues', iSub.id)).toBeNull()
-    expect(await rowByUuid(t, 'issues', iSub2.id)).toBeNull()
-    expect(await collect(t, 'issue_links')).toEqual([])
-    expect(await collect(t, 'issue_labels')).toEqual([])
-    expect(await collect(t, 'comments')).toEqual([])
-    expect(await collect(t, 'milestones')).toEqual([])
-    expect(await collect(t, 'project_access')).toEqual([]) // the meta's guest+viewer grants
-    expect(await messagesFor(t, f.viewer.id, iSub2.id)).toEqual([])
-    expect(await rowByUuid(t, 'labels', label.id)).not.toBeNull()
-
-    // the cross-project child was DETACHED (touch + notify), not deleted
-    const kept = await rowByUuid(t, 'issues', survivor.id)
-    expect(kept).not.toBeNull()
-    expect(kept!.parent_id).toBeUndefined()
-    expect(kept!.updated_at).toBe(NOW2)
-    const news = await messagesFor(t, f.user.id, survivor.id)
-    expect(news.map((m) => m.detail)).toEqual(['Detached from its parent'])
-
-    // the history stays as it was, project_id included; a caller deletes
-    // it or clears project_id (model/deletedItems.ts purgeActivity)
-    const events = await collect(t, 'activity_events')
-    const byId = new Map(events.map((e) => [e.id, e]))
-    expect(byId.get(eMeta.id)?.project_id).toBe(f.meta.id)
-    expect(byId.get(eSub.id)?.project_id).toBe(f.sub.id)
-    expect(byId.get(eSub.id)?.team_id).toBe(f.team.id)
-    expect(byId.get(eControl.id)?.project_id).toBe(f.hidden.id)
-    await expect(assertNoDanglingRefs(t, 'before the activity goes')).rejects.toThrow(
-      /activity_events\.project_id → projects dangles/,
-    )
-
-    // then the organization's activity goes, as the demo wipe deletes it
-    // with the rest of the work (model/orgDeletion.ts wipeWorkStep)
-    await drainActivity(t)
-    await assertNoDanglingRefs(t, 'after deleteProjectDeep')
   })
 })
 

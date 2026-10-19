@@ -806,7 +806,7 @@ export async function clearParentRemaining(
  * items (model/deletedItems.ts) or is archived alone (archiveIssueCore with
  * keepSubtasks). The child becomes a top-level task with the SET NULL's
  * touch, and its followers read 'Detached from its parent' with
- * task.updated, as model/cascade.ts deleteIssueDeep does. The child's
+ * task.updated, as the SQL schema's SET NULL did. The child's
  * project needs no Edit: only the link to the parent goes, as a delete has
  * always detached such children. */
 export async function detachChild(

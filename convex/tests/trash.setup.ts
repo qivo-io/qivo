@@ -160,7 +160,7 @@ export const historyOf = (t: T, taskId: string) =>
 
 /** Throws unless every task activity row names a live task or a task that
  * Deleted items stores (deleted_tasks), so no purge left history behind.
- * For purge tests only: deleteIssueDeep keeps a task's rows by design. */
+ * For purge tests only: the deep deletes keep a task's history by design. */
 export async function assertNoOrphanHistory(t: T, label: string): Promise<void> {
   await t.run(async (ctx) => {
     const tasks = new Set((await ctx.db.query('issues').collect()).map((i) => i.id))
