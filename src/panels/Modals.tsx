@@ -17,6 +17,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { hasOpenTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { REASSIGN_MAX } from '../../convex/lib/projectGrants'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { PROJECT_DESCRIPTION_MAX } from '../../convex/lib/projectLimits'
 import { DELETE_REASON_MAX, NAME_MAX, TEXT_MAX } from '../../convex/lib/textLimits'
@@ -261,7 +262,7 @@ function NewIssueModal({
   onClose,
   onCreate,
 }: {
-  init?: Partial<Pick<NewIssueInput, 'project' | 'status' | 'parent' | 'start' | 'end' | 'due'>>
+  init?: Partial<Pick<NewIssueInput, 'project' | 'status' | 'start' | 'end' | 'due'>>
   onClose: () => void
   onCreate: (issue: NewIssueInput) => boolean
 }) {
@@ -316,10 +317,14 @@ function NewIssueModal({
 
   const submit = () => {
     if (!canSave) return
-    // Keep the initiating column/date/parent context; the remaining details
+    // Keep the initiating column and date context; the remaining details
     // are edited in the existing task window immediately after creation.
+    // No parent is passed on: the Project select can leave a parent's
+    // top-level project, and the server refuses a subtask outside it.
     created.current = onCreate({
-      ...init,
+      start: init.start,
+      end: init.end,
+      due: init.due,
       title: title.trim(),
       project: projId,
       status: init.status || 'backlog',
@@ -1077,7 +1082,13 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
               <span className="text-base font-semibold text-text-1">
                 Reassign {theTasks}, then {deleting ? 'delete the team' : 'remove'}
               </span>
-              <span className="text-sm text-text-2">Reviewer roles move to the same person.</span>
+              <span className="text-sm text-text-2">
+                Reviewer roles move to the same person.
+                {/* the server's fixed cap; its follower-based room cannot be
+                    known here, so only the count is checked */}
+                {count > REASSIGN_MAX &&
+                  ` One removal reassigns at most ${REASSIGN_MAX} tasks, so ${canKeep ? `keep ${names.length === 1 ? `${names[0].split(' ')[0]} as a Viewer` : 'them as Viewers'} or ` : ''}reassign some of ${these} first.`}
+              </span>
             </span>
           </Label>
           {/* outside the label, so opening the picker never toggles the radio */}
@@ -1832,6 +1843,10 @@ function MilestoneModal({
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
+  // a create in flight: Add waits for the server's answer
+  const [adding, setAdding] = useStateM(false)
+  const nameRef = useRefM(name)
+  nameRef.current = name
   const week = exactWeekForDate(date)
   const list = project
     ? P.milestonesIn(project.id)
@@ -1839,15 +1854,24 @@ function MilestoneModal({
         .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name))
     : []
   const next = list.find((m) => m.week >= P.TODAY_WEEK) ?? null
-  const canAdd = canWrite && name.trim().length > 0
+  const canAdd = canWrite && name.trim().length > 0 && !adding
   const add = () => {
     if (!canAdd || !project) return
-    // a paused add keeps the typed name and date
-    if (P.refusePausedEdit()) return
-    P.addMilestone({ name: name.trim(), week: exactWeekForDate(date), project: project.id })
-    window.showToast?.(`Milestone “${name.trim()}” added`)
-    setName('')
-    setDate(initialDate ?? weekToISO(P.TODAY_WEEK))
+    // The typed name and date stay until the server creates the milestone,
+    // and after a refusal, so a paused or refused add can be sent again.
+    const added = name.trim()
+    setAdding(true)
+    void P.addMilestone({ name: added, week: exactWeekForDate(date), project: project.id }).then(
+      (saved) => {
+        setAdding(false)
+        if (!saved) return
+        window.showToast?.(`Milestone “${added}” added`)
+        // a name typed while the add was in flight is the next one
+        if (nameRef.current.trim() !== added) return
+        setName('')
+        setDate(initialDate ?? weekToISO(P.TODAY_WEEK))
+      },
+    )
   }
   return (
     <ModalShell
@@ -2018,7 +2042,9 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   const [name, setName] = useStateM(m.name)
   const [date, setDate] = useStateM(() => weekToISO(m.week))
   const week = exactWeekForDate(date)
-  const canSave = name.trim().length > 0
+  // a save in flight: the editor stays open until the server answers
+  const [saving, setSaving] = useStateM(false)
+  const canSave = name.trim().length > 0 && !saving
   const rootRef = useRefM<HTMLDivElement>(null)
   const closeRef = useRefM(onClose)
   closeRef.current = onClose
@@ -2042,11 +2068,17 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   }, [])
   const save = () => {
     if (!canSave) return
-    // a refused save (paused, or a name over the cap) keeps the editor open
-    // with the draft
-    if (!P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) })) return
-    window.showToast?.('Milestone updated')
-    onClose()
+    // a refused save (paused, a name over the cap, or refused by the server)
+    // keeps the editor open with the draft
+    setSaving(true)
+    void P.updateMilestone(m.id, { name: name.trim(), week: exactWeekForDate(date) }).then(
+      (saved) => {
+        setSaving(false)
+        if (!saved) return
+        window.showToast?.('Milestone updated')
+        closeRef.current()
+      },
+    )
   }
   // Two-click arm-then-confirm with the app-wide timing (lib/useConfirmArm).
   const deletion = useConfirmArm<'delete'>()
@@ -2054,8 +2086,9 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   const remove = () =>
     deletion.press('delete', () => {
       if (P.refusePausedEdit()) return
-      P.removeMilestone(m.id)
-      window.showToast?.('Milestone removed')
+      void P.removeMilestone(m.id).then((saved) => {
+        if (saved) window.showToast?.('Milestone removed')
+      })
       onClose()
     })
   return (

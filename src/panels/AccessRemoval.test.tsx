@@ -43,8 +43,17 @@ let refusal: unknown
 
 /* `lead` signs the Planner in as the project's lead who is not an
    organization admin, which the server refuses every removal while the
-   organization is read-only. */
-async function load({ lead = false } = {}) {
+   organization is read-only. `tasks` is how many open tasks Leo holds, and
+   `level` his grant. */
+async function load({
+  lead = false,
+  tasks = 1,
+  level = 'user',
+}: {
+  lead?: boolean
+  tasks?: number
+  level?: 'user' | 'viewer'
+} = {}) {
   vi.resetModules()
   const snap = plannerFixture()
   const org = snap.orgs[0].id
@@ -61,23 +70,24 @@ async function load({ lead = false } = {}) {
     name: 'Leo Berg',
     org_role: 'user',
   })
-  snap.access.push({ project_id: work, profile_id: 'leo', level: 'user' })
-  snap.issues.push({
-    id: 't1',
-    org_id: org,
-    project_id: work,
-    num: 1,
-    title: 'Ship it',
-    description: '',
-    status: 'todo',
-    priority: 'low',
-    paused: false,
-    assignee_id: 'leo',
-    created_at: AT,
-    updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
-  })
+  snap.access.push({ project_id: work, profile_id: 'leo', level })
+  for (let n = 1; n <= tasks; n++)
+    snap.issues.push({
+      id: `t${n}`,
+      org_id: org,
+      project_id: work,
+      num: n,
+      title: n === 1 ? 'Ship it' : `Task ${n}`,
+      description: '',
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      assignee_id: 'leo',
+      created_at: AT,
+      updated_at: AT,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
@@ -238,5 +248,33 @@ describe('the removal window when the organization turns read-only', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(writes()).toEqual([['projects:removeAccess', 'keep_as_viewer']])
     expect(document.querySelector('[data-access-removal]')?.textContent).toContain('Ship it')
+  })
+})
+
+describe('the reassign cap in the removal window', () => {
+  const reassignCard = () =>
+    [...document.querySelectorAll('[data-access-removal] label')].at(-1)?.textContent ?? ''
+
+  it('says so when it lists more tasks than one removal reassigns', async () => {
+    await load({ tasks: 121 })
+    await open()
+    expect(reassignCard()).toContain(
+      'One removal reassigns at most 120 tasks, so keep Leo as a Viewer or reassign some of these tasks first.',
+    )
+  })
+
+  it('says nothing of the cap at the cap', async () => {
+    await load({ tasks: 120 })
+    await open()
+    expect(reassignCard()).toContain('Reviewer roles move to the same person.')
+    expect(reassignCard()).not.toContain('at most')
+  })
+
+  it('offers only reassigning some tasks first when the grant is already Viewer', async () => {
+    await load({ tasks: 121, level: 'viewer' })
+    await open()
+    expect(reassignCard()).toContain(
+      'One removal reassigns at most 120 tasks, so reassign some of these tasks first.',
+    )
   })
 })

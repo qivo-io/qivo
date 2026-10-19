@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Id } from '../../convex/_generated/dataModel'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* Snapshot trouble is the live snapshot query failing after the first
@@ -192,6 +193,43 @@ describe('snapshot trouble', () => {
     expect(P.project(project)?.name).toBe('Task creation fixture')
     // one action can reach several mutators, so the pause toasts once
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
+  })
+
+  it('deletes a discarded draft upload quietly once edits resume, unless a description took it', async () => {
+    snapshot.attachments.push(
+      ...['file-a', 'file-b', 'file-c'].map((id) => ({
+        id,
+        issue_id: 'task-a',
+        name: `${id}.png`,
+        mime: 'image/png',
+        size_bytes: 1024,
+        storage_id: `storage-${id}` as Id<'_storage'>,
+        inline: true,
+        created_at: '2026-09-14T08:00:00.000Z',
+      })),
+    )
+    await boot()
+    const { P } = store
+    live().fail(new Error(QUERY_FAILURE))
+    P.removeAttachment('file-a', { deferWhilePaused: true })
+    P.removeAttachment('file-b', { deferWhilePaused: true })
+    expect(showToast).not.toHaveBeenCalled()
+    expect(sentNames()).toEqual([])
+    // file-b reached a saved description meanwhile, so it stays
+    const next = structuredClone(snapshot)
+    next.issues[0].description = '![Plot](att:file-b)'
+    next.delivered_at = '2026-09-15T09:00:00.000Z'
+    live().deliver(next)
+    expect(sentNames()).toEqual(['files:removeAttachment'])
+    const removed = network.mutation.mock.calls
+      .filter(([ref]) => getFunctionName(ref) === 'files:removeAttachment')
+      .map(([, args]) => args.id)
+    expect(removed).toEqual(['file-a'])
+    // a delete that is not a draft upload still says the edit is paused
+    live().fail(new Error(QUERY_FAILURE))
+    P.removeAttachment('file-c')
+    expect(showToast).toHaveBeenLastCalledWith(store.PAUSED_TEXT, 'error')
+    expect(sentNames()).toEqual(['files:removeAttachment'])
   })
 
   it('pauses Deleted items restores and deletes, and says so on the page', async () => {

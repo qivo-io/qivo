@@ -133,9 +133,9 @@ describe('the text cap in the store', () => {
     const { P } = store
     const project = P.projects[0].id
     expect(await P.updateProject(project, { name: SHORTENED })).toBe(false)
-    expect(P.updateTeam('team-a', { name: SHORTENED })).toBe(false)
-    expect(P.setOrg({ name: SHORTENED })).toBe(false)
-    expect(P.updateMilestone('milestone-a', { name: SHORTENED })).toBe(false)
+    expect(await P.updateTeam('team-a', { name: SHORTENED })).toBe(false)
+    expect(await P.setOrg({ name: SHORTENED })).toBe(false)
+    expect(await P.updateMilestone('milestone-a', { name: SHORTENED })).toBe(false)
     for (const what of ['A project', 'A team', 'An organization', 'A milestone'])
       expect(toast).toHaveBeenCalledWith(`${what} name must be at most 80 characters.`, 'error')
     expect(P.project(project)?.name).toBe(LEGACY_NAME)
@@ -150,9 +150,9 @@ describe('the text cap in the store', () => {
     const project = P.projects[0].id
     void P.updateProject(project, { name: LEGACY_NAME })
     void P.updateProject(project, { name: 'n'.repeat(NAME_MAX) })
-    expect(P.updateTeam('team-a', { name: ` ${LEGACY_NAME} ` })).toBe(true)
-    expect(P.setOrg({ name: 'Northstar Labs' })).toBe(true)
-    expect(P.updateMilestone('milestone-a', { name: 'Beta' })).toBe(true)
+    void P.updateTeam('team-a', { name: ` ${LEGACY_NAME} ` })
+    void P.setOrg({ name: 'Northstar Labs' })
+    void P.updateMilestone('milestone-a', { name: 'Beta' })
     expect(P.org.name).toBe('Northstar Labs')
     expect(sent).toEqual([
       'projects:update',

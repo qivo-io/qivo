@@ -177,6 +177,27 @@ describe('earlier comments in the store', () => {
     expect(store.P.commentsEarlier).toBe('none')
   })
 
+  it('drops a comment deleted from the old end in the delivery that moves the window on', async () => {
+    publish({ comments: range(100, 150), earlier: true })
+    // someone deleted #101 while two new comments arrived
+    publish({ comments: range(102, 152), earlier: true })
+    expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
+    const check = asked[0]
+    expect(check.before).toBe('comment-102')
+    check.answer.resolve({ comments: range(51, 101), earlier: true })
+    await settle()
+    expect(bodies()).toEqual([comment(100), ...range(102, 152)].map((c) => c.body))
+  })
+
+  it('keeps comments that left the window when the page before it does not reach them', async () => {
+    publish({ comments: range(100, 150), earlier: true })
+    publish({ comments: range(102, 152), earlier: true })
+    // long comments: the page holds only #101, so #100 cannot be told apart
+    asked[0].answer.resolve({ comments: [comment(101)], earlier: true })
+    await settle()
+    expect(bodies()).toEqual(range(100, 152).map((c) => c.body))
+  })
+
   it("drops a short thread's first comment that someone else deleted", () => {
     publish({ comments: range(0, 30), earlier: false })
     publish({ comments: range(1, 30), earlier: false })

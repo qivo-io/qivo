@@ -26,10 +26,15 @@ export function AdminGate() {
 
   /* Arm the Convex socket with the fresh session BEFORE the probe, or
      isOperator lands on an anonymous connection (lib/authSession.ts). Any
-     throw reads as denied — the gate never surfaces a console error. */
+     throw reads as denied — the gate never surfaces a console error. A
+     sign-in Convex drops later returns to the sign-in form, since every
+     operator query and change would be refused from then on. */
   async function gate() {
     try {
-      await armConvexAuth()
+      await armConvexAuth(() => {
+        setError('Your session ended. Sign in again.')
+        setPhase('signedOut')
+      })
       const ok = await convex.query(api.admin.isOperator, {})
       setPhase(ok === true ? 'ready' : 'denied')
     } catch {

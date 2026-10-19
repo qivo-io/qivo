@@ -79,7 +79,8 @@ async function load(setting: Setting) {
     const name = getFunctionName(ref)
     if (name === 'identity:claimMySeats') return Promise.resolve(null)
     requests.push({ name, args })
-    return new Promise(() => {})
+    // the server accepts the setting, so its success toast follows
+    return name === 'orgs:update' ? Promise.resolve(null) : new Promise(() => {})
   })
   const store = await import('../../store/planner')
   P = store.P

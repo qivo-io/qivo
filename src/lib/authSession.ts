@@ -42,15 +42,18 @@ export function createAuthSession(
    * session, before issuing authenticated operations. Arming during module
    * import would request a token before that session check (or before sign-in)
    * and then immediately repeat the request here. Convex owns token refresh
-   * after this callback is installed. */
-  function armConvexAuth(): Promise<boolean> {
+   * after this callback is installed. Resolves with the first answer.
+   * `onLost` runs when Convex later drops the sign-in, after a refresh found
+   * no token or the server refused every new one. Convex does not try again
+   * after that, so the page must sign in and arm the socket again. */
+  function armConvexAuth(onLost?: () => void): Promise<boolean> {
     return new Promise((resolve) => {
       let settled = false
       client.setAuth(fetchConvexToken, (isAuthenticated) => {
         if (!settled) {
           settled = true
           resolve(isAuthenticated)
-        }
+        } else if (!isAuthenticated) onLost?.()
       })
     })
   }

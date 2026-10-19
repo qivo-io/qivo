@@ -471,11 +471,17 @@ function LabelPickerPopup({
     P.canWriteOrgLabels() &&
     !all.some((l) => l.name.toLowerCase() === ql)
   const create = () => {
-    // a paused create keeps the typed name in the search field
-    if (P.refusePausedEdit()) return
-    const id = P.addLabel({ name: q.trim() })
-    if (id && !(it.labels || []).includes(id)) P.toggleIssueLabel(it.id, id)
+    // A paused create keeps the typed name in the search field, and a
+    // refused one puts it back when the field is still empty. The field
+    // clears at once otherwise, so a second Enter cannot detach the label.
+    const name = q.trim()
+    const made = P.addLabel({ name })
+    if (!made) return
+    if (!(it.labels || []).includes(made.id)) P.toggleIssueLabel(it.id, made.id)
     setQ('')
+    void made.saved.then((saved) => {
+      if (!saved) setQ((typed) => typed || name)
+    })
   }
   return (
     <AnchoredPop

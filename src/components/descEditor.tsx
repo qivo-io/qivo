@@ -171,7 +171,8 @@ function finishUpload(issueKey: string, src: string, attId: string | null, alt: 
   }
   // in neither the draft nor the committed text (the paste was discarded
   // before the upload landed), or too long to keep, so drop the attachment
-  if (attId && (overflow || (!inDraft && !committed))) P.removeAttachment(attId)
+  if (attId && (overflow || (!inDraft && !committed)))
+    P.removeAttachment(attId, { deferWhilePaused: true })
 }
 
 /* ---- image node view ------------------------------------------------------ */
@@ -734,7 +735,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const it = issueKey !== null ? P.issueById[issueKey] : null
     const storeDesc = it && typeof it.description === 'string' ? it.description : ''
     sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => {
-      if (!rawRef.current.includes(id) && !storeDesc.includes(id)) P.removeAttachment(id)
+      if (!rawRef.current.includes(id) && !storeDesc.includes(id))
+        P.removeAttachment(id, { deferWhilePaused: true })
       return false
     })
   }

@@ -313,22 +313,24 @@ function adoptComments() {
    thread order, and whether the thread holds earlier comments. Comments that
    left the window at its old end move to olderComments, so what a reader
    loaded stays while new comments arrive. A window with nothing earlier
-   starts the thread, so nothing loaded before it exists any more. A comment
-   deleted from the old end while new ones push the window on stays until
-   the task opens again, since nothing tells it from one that slid out. When
-   the window no longer meets what was loaded, because more comments arrived
-   between two deliveries than it holds, the thread starts over from the
-   window. */
-function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }) {
+   starts the thread, so nothing loaded before it exists any more. Returns
+   the comments that just left the window, oldest first, since a delivery
+   alone cannot tell one deleted from the old end from one that slid out
+   (checkSlidOut). When the window no longer meets what was loaded, because
+   more comments arrived between two deliveries than it holds, the thread
+   starts over from the window. */
+function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
+  let slid: Row<'comments'>[] = []
   if (first === undefined || !page.earlier) {
     olderComments = []
   } else if (prev !== null) {
     const at = prev.findIndex((r) => r.id === first.id)
     if (at > 0) {
       const known = new Set(olderComments.map((r) => r.id))
-      olderComments = [...olderComments, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
+      slid = prev.slice(0, at)
+      olderComments = [...olderComments, ...slid.filter((r) => !known.has(r.id))]
     } else if (at === -1) {
       // the window reached down into what was loaded before it, or past it
       const kept = olderComments.findIndex((r) => r.id === first.id)
@@ -338,6 +340,53 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }) 
   }
   if (!page.earlier) threadStart = true
   commentsSnap = page.comments
+  return slid
+}
+
+/* Drops the comments in `slid` that were deleted rather than pushed out of
+   the watched thread's window, which now starts at the comment `firstId`.
+   It asks for the page before that comment once (snapshot.commentsBefore).
+   Comments only ever join a thread at its end, so every comment between the
+   oldest slid-out one and the window that still exists is on that page,
+   unless the page stops short of it (long comments). A slid-out comment the
+   page reaches but does not hold was deleted. `current` says whether the
+   same subscription still watches the thread when the answer comes. A
+   failed read changes nothing, and the comments stay until the task opens
+   again. */
+async function checkSlidOut(
+  orgId: string,
+  issueUuid: string,
+  firstId: string,
+  slid: Row<'comments'>[],
+  current: () => boolean,
+) {
+  let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
+  try {
+    page = await convex.query(api.snapshot.commentsBefore, {
+      org_id: orgId,
+      issue_id: issueUuid,
+      before: firstId,
+    })
+  } catch (e) {
+    console.error('[qivo] could not check comments that left the live window:', e)
+    return
+  }
+  if (!current()) return
+  const held = new Set(page.comments.map((r) => r.id))
+  // the page's oldest comment, when it is one of them, is as far back as it
+  // reaches; any other oldest comment is older than all of them
+  const reach = page.comments[0] ? slid.findIndex((r) => r.id === page.comments[0].id) : 0
+  const gone = slid.slice(Math.max(reach, 0)).filter((r) => !held.has(r.id))
+  if (!gone.length) return
+  const drop = new Set(gone.map((r) => r.id))
+  olderComments = olderComments.filter((r) => !drop.has(r.id))
+  if (inFlight > 0) {
+    commentsDirty = true
+    return
+  }
+  adoptComments()
+  rebuildComments()
+  emit('comments')
 }
 
 /* Drops the comment `id` from the watched thread's server truth, for a
@@ -403,7 +452,9 @@ function subscribeThread(issueUuid: string, orgId: string) {
       // gate the paint, never the data: while our own writes are in flight
       // (an optimistic comment among them) the delivery is recorded and the
       // last settle flushes it — adopting now would eat the optimistic row
-      receiveThread(page)
+      const slid = receiveThread(page)
+      if (slid.length && page.comments[0])
+        void checkSlidOut(orgId, issueUuid, page.comments[0].id, slid, current)
       if (inFlight > 0) {
         commentsDirty = true
         return
@@ -461,6 +512,26 @@ const pendingArchiveIssueIds = new Map<string, { keepSubtasks: boolean }>()
    delete removed, by root, and the projects a project delete removed. */
 const pendingTaskDeletes = new Map<string, Set<string>>()
 const pendingProjectDeletes = new Set<string>()
+/* Draft-only uploads a discarded draft let go of while edits were paused
+   (removeAttachment's deferWhilePaused). The pause would refuse their
+   delete, so it waits for the snapshot to recover (reapPausedUploads). A
+   reload forgets them, and the description GC removes them later, as it
+   does a closed tab's leftovers. */
+const reapAfterPause = new Set<string>()
+
+/* Deletes the uploads reapAfterPause holds once edits resume, except one a
+   description took meanwhile, which is the description GC's from then on. */
+function reapPausedUploads() {
+  const ids = [...reapAfterPause]
+  reapAfterPause.clear()
+  for (const id of ids) {
+    const rec = rows.attachments.get(id)
+    const issue = rec ? rows.issues.get(rec.issue_id) : undefined
+    if (!issue || (typeof issue.description === 'string' && issue.description.includes(id)))
+      continue
+    PLANNER.removeAttachment(id)
+  }
+}
 
 function issueSubtree(rootId: string): Set<string> {
   const subtree = new Set<string>([rootId])
@@ -4452,10 +4523,17 @@ export const PLANNER = {
 
   /** Delete an attachment (row + bytes, one server transaction). Optimistic
       like every other run() mutator; any project member may remove any
-      attachment on an issue they can write. */
-  removeAttachment: (attId: string) => {
+      attachment on an issue they can write. With `deferWhilePaused`, for an
+      upload only a discarded draft held, a paused delete says nothing and
+      runs once edits resume (reapPausedUploads). */
+  removeAttachment: (attId: string, opts: { deferWhilePaused?: boolean } = {}) => {
     const rec = rows.attachments.get(attId)
-    if (!rec || refusePausedEdit()) return
+    if (!rec) return
+    if (opts.deferWhilePaused && snapshotTrouble) {
+      reapAfterPause.add(attId)
+      return
+    }
+    if (refusePausedEdit()) return
     const issueRow = rows.issues.get(rec.issue_id)
     rows.attachments.delete(attId)
     minted.delete(`att:${attId}`)
@@ -5475,13 +5553,15 @@ export const PLANNER = {
 
   /* Organization settings — the old six independent UPDATEs fold into ONE
      patch mutation; the client clamps stay (the field must show what will be
-     stored before it is). Narrates nothing, name included. Returns false
-     when it refused the change before sending it (toasted), or when there is
-     no home organization here. */
-  setOrg: (patch: OrgPatch): boolean => {
+     stored before it is). Narrates nothing, name included. Resolves whether
+     the server saved the change: false without sending when it refused the
+     change first (toasted) or there is no home organization here, and false
+     after a refusal, which run() toasts and rolls back. */
+  setOrg: (patch: OrgPatch): Promise<boolean> => {
     const org = homeRow()
-    if (!org || refusePausedEdit()) return false
-    if ('name' in patch && refuseLongName('organization', patch.name ?? '', org.name)) return false
+    if (!org || refusePausedEdit()) return Promise.resolve(false)
+    if ('name' in patch && refuseLongName('organization', patch.name ?? '', org.name))
+      return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.orgs.update>['patch'] = {}
     if ('name' in patch) {
       org.name = patch.name
@@ -5523,11 +5603,10 @@ export const PLANNER = {
       org.project_creators = patch.projectCreators
       wire.project_creators = patch.projectCreators
     }
-    if (!Object.keys(wire).length) return true
+    if (!Object.keys(wire).length) return Promise.resolve(true)
     rebuild() // re-anchors the grid when the week settings moved
     emit()
-    run(write(api.orgs.update, { org_id: org.id, patch: wire }))
-    return true
+    return runSaved(write(api.orgs.update, { org_id: org.id, patch: wire }))
   },
 
   /** Change the organization's address — the first segment under /app/.
@@ -5564,9 +5643,13 @@ export const PLANNER = {
     return null
   },
 
-  addTeam: (name: string) => {
+  /** Paints the new team at once and resolves whether the server created
+      it. Resolves false without sending when it refused the change first
+      (toasted), and false after a refusal, which run() toasts and rolls
+      back. */
+  addTeam: (name: string): Promise<boolean> => {
     const org = homeRow()
-    if (!org || !String(name || '').trim() || refusePausedEdit()) return
+    if (!org || !String(name || '').trim() || refusePausedEdit()) return Promise.resolve(false)
     const uuid = crypto.randomUUID()
     rows.teams.set(uuid, {
       id: uuid,
@@ -5579,17 +5662,18 @@ export const PLANNER = {
     })
     rebuild()
     emit()
-    run(write(api.teams.create, { org_id: org.id, id: uuid, name }))
-    return uuid
+    return runSaved(write(api.teams.create, { org_id: org.id, id: uuid, name }))
   },
 
-  /** Paints the change at once and sends it. Returns false when it refused
-      the change before sending it (toasted), or when the team is missing
-      here. */
-  updateTeam: (id: string, patch: TeamPatch): boolean => {
+  /** Paints the change at once and resolves whether the server saved it.
+      Resolves false without sending when it refused the change first
+      (toasted) or the team is missing here, and false after a refusal,
+      which run() toasts and rolls back. */
+  updateTeam: (id: string, patch: TeamPatch): Promise<boolean> => {
     const row = rows.teams.get(id)
-    if (!row || refusePausedEdit()) return false
-    if ('name' in patch && refuseLongName('team', patch.name ?? '', row.name)) return false
+    if (!row || refusePausedEdit()) return Promise.resolve(false)
+    if ('name' in patch && refuseLongName('team', patch.name ?? '', row.name))
+      return Promise.resolve(false)
     const wire: FunctionArgs<typeof api.teams.update>['patch'] = {}
     if ('name' in patch) {
       row.name = patch.name
@@ -5611,11 +5695,10 @@ export const PLANNER = {
       row.track_delay_default = on
       wire.track_delay_default = on
     }
-    if (!Object.keys(wire).length) return true
+    if (!Object.keys(wire).length) return Promise.resolve(true)
     rebuild()
     emit()
-    run(write(api.teams.update, { org_id: row.org_id, id, patch: wire }))
-    return true
+    return runSaved(write(api.teams.update, { org_id: row.org_id, id, patch: wire }))
   },
 
   /* --- team membership (managed in Team settings) ------------------------- */
@@ -6080,14 +6163,17 @@ export const PLANNER = {
   },
 
   setMilestone: (id: string, week: number) => {
-    PLANNER.updateMilestone(id, { week })
+    void PLANNER.updateMilestone(id, { week })
   },
 
   /* Milestones sit on a project's roadmap (0078). The caller passes the meta
-     project; a sub-project id is folded up to it. */
-  addMilestone: (m: { project: string; name: string; week: number }) => {
+     project; a sub-project id is folded up to it. Paints the milestone at
+     once and resolves whether the server created it: false without sending
+     when it refused the change first (toasted), and false after a refusal,
+     which is toasted and rolled back. */
+  addMilestone: (m: { project: string; name: string; week: number }): Promise<boolean> => {
     const meta = PLANNER.metaOf(m.project)
-    if (!meta || refusePausedEdit()) return null
+    if (!meta || refusePausedEdit()) return Promise.resolve(false)
     const uuid = crypto.randomUUID()
     const week = weekToISO(m.week)
     rows.milestones.set(uuid, {
@@ -6099,16 +6185,15 @@ export const PLANNER = {
     })
     rebuild()
     emit()
-    if (
-      !recordRoadmapChange({
+    return (
+      recordRoadmapChange({
         kind: 'milestone_create',
         id: uuid,
         project_id: meta.id,
         name: m.name,
         week,
-      })
-    )
-      run(
+      }) ??
+      runSaved(
         write(api.projects.addMilestone, {
           org_id: meta.org,
           id: uuid,
@@ -6117,49 +6202,63 @@ export const PLANNER = {
           week,
         }),
       )
-    return uuid
+    )
   },
 
-  /** Paints the change at once and sends it. Returns false when it refused
-      the change before sending it (toasted), or when the milestone is missing
-      here. */
-  updateMilestone: (id: string, patch: { name?: string; week?: number }): boolean => {
+  /** Paints the change at once and resolves whether the server saved it.
+      Resolves false without sending when it refused the change first
+      (toasted) or the milestone is missing here, and false after a refusal,
+      which is toasted and rolled back. */
+  updateMilestone: (id: string, patch: { name?: string; week?: number }): Promise<boolean> => {
     const row = rows.milestones.get(id)
-    if (!row) return false
+    if (!row) return Promise.resolve(false)
     const db: FunctionArgs<typeof api.projects.updateMilestone>['patch'] = {}
     if ('name' in patch) db.name = patch.name
     if (patch.week != null) db.week = weekToISO(patch.week)
-    if (!Object.keys(db).length) return true
-    if (refusePausedEdit()) return false
-    if ('name' in patch && refuseLongName('milestone', patch.name ?? '', row.name)) return false
+    if (!Object.keys(db).length) return Promise.resolve(true)
+    if (refusePausedEdit()) return Promise.resolve(false)
+    if ('name' in patch && refuseLongName('milestone', patch.name ?? '', row.name))
+      return Promise.resolve(false)
     Object.assign(row, db)
     rebuild()
     emit()
     // moved/renamed verb logic is server-side now (it diffs against its row)
-    if (!recordRoadmapChange({ kind: 'milestone_update', id, patch: db }))
-      run(
+    return (
+      recordRoadmapChange({ kind: 'milestone_update', id, patch: db }) ??
+      runSaved(
         write(api.projects.updateMilestone, {
           org_id: orgOfProject(row.project_id),
           id,
           patch: db,
         }),
       )
-    return true
+    )
   },
 
-  removeMilestone: (id: string) => {
+  /** Removes the milestone from the screen at once and resolves whether the
+      server deleted it, as updateMilestone does. */
+  removeMilestone: (id: string): Promise<boolean> => {
     const row = rows.milestones.get(id)
-    if (!row || refusePausedEdit()) return
+    if (!row || refusePausedEdit()) return Promise.resolve(false)
     const org = orgOfProject(row.project_id)
     rows.milestones.delete(id)
     rebuild()
     emit()
-    if (!recordRoadmapChange({ kind: 'milestone_remove', id }))
-      run(write(api.projects.removeMilestone, { org_id: org, id }))
+    return (
+      recordRoadmapChange({ kind: 'milestone_remove', id }) ??
+      runSaved(write(api.projects.removeMilestone, { org_id: org, id }))
+    )
   },
 
   /* --- labels: one shared, curated list per organization (0078) ------------ */
-  addLabel: (rec: { name?: string; color?: string }) => {
+  /** Paints a new label at once. Returns its id and whether the server
+      created it, or the existing label of that name, already saved. Null
+      when it refused the change first (toasted) or there is nothing to
+      create. A refusal after sending is toasted and rolled back. */
+  addLabel: (rec: {
+    name?: string
+    color?: string
+  }): { id: string; saved: Promise<boolean> } | null => {
     const name = (rec.name || '').trim().slice(0, 40)
     const org = homeRow()
     if (!name || !org) return null
@@ -6168,7 +6267,7 @@ export const PLANNER = {
     const dup = [...rows.labels.values()].find(
       (l) => l.org_id === org.id && l.name.toLowerCase() === name.toLowerCase(),
     )
-    if (dup) return dup.id
+    if (dup) return { id: dup.id, saved: Promise.resolve(true) }
     if (refusePausedEdit()) return null
     // the shared palette picks the color unless rec.color overrides it
     const color = rec.color || LABEL_COLORS[rows.labels.size % LABEL_COLORS.length].color
@@ -6183,8 +6282,10 @@ export const PLANNER = {
     })
     rebuild()
     emit()
-    run(write(api.labels.create, { org_id: org.id, id: uuid, name, color }))
-    return uuid
+    return {
+      id: uuid,
+      saved: runSaved(write(api.labels.create, { org_id: org.id, id: uuid, name, color })),
+    }
   },
 
   /** Renames or recolors a label. Returns false when nothing was written,
@@ -6224,15 +6325,19 @@ export const PLANNER = {
     return true
   },
 
-  removeLabel: (id: string) => {
+  /** Removes the label from the screen at once and resolves whether the
+      server deleted it: false without sending when it refused the change
+      first (toasted), and false after a refusal, which run() toasts and
+      rolls back. */
+  removeLabel: (id: string): Promise<boolean> => {
     const row = rows.labels.get(id)
-    if (!row || refusePausedEdit()) return
+    if (!row || refusePausedEdit()) return Promise.resolve(false)
     // the attach rows go with the label server-side — mirror the sweep
     rows.issueLabels = rows.issueLabels.filter((il) => il.label_id !== id)
     rows.labels.delete(id)
     rebuild()
     emit()
-    run(write(api.labels.remove, { org_id: row.org_id, id }))
+    return runSaved(write(api.labels.remove, { org_id: row.org_id, id }))
   },
 
   toggleIssueLabel: (issueId: string, labelId: string) => {
@@ -6416,6 +6521,7 @@ function snapshotRecovered() {
   resetSnapshotTrouble()
   toast('Qivo is up to date again.', 'success')
   emit('health')
+  reapPausedUploads()
 }
 
 /** Subscribes to the live snapshot. With `first`, the subscription's first
@@ -6567,6 +6673,7 @@ export function disposeDemoStore() {
   pendingArchiveIssueIds.clear()
   pendingTaskDeletes.clear()
   pendingProjectDeletes.clear()
+  reapAfterPause.clear()
   roadmapVisit = null
   roadmapBatch = null
   roadmapDetailOpen = false

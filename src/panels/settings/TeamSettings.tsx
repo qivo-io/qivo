@@ -60,7 +60,10 @@ export function TeamPage({
             value={teamName}
             maxLength={P.NAME_MAX}
             onCommit={(v) => {
-              if (P.updateTeam(ws, { name: v })) window.showToast?.('Team renamed')
+              // the toast waits for the server, so a refusal never reads as done
+              void P.updateTeam(ws, { name: v }).then((saved) => {
+                if (saved) window.showToast?.('Team renamed')
+              })
             }}
           />
         ) : (
@@ -215,6 +218,8 @@ export function TeamPage({
 export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const admin = P.isAdmin()
   const [teamName, setTeamName] = useStateS('')
+  // a create in flight: Add waits for the server's answer
+  const [adding, setAdding] = useStateS(false)
   useUpdateBlocker(!!teamName)
   const confirm = useConfirmArm<string>()
   // deleting a team whose members would lose sight of their tasks asks first
@@ -225,12 +230,17 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const homeTeams = P.teams.filter((t) => t.org === homeOrg)
   const mine = homeTeams.filter((t) => P.isTeamLeader(t.id))
   const addTeam = () => {
-    if (!teamName.trim() || !admin) return
-    // a paused create keeps the typed name
-    if (P.refusePausedEdit()) return
-    P.addTeam(teamName.trim())
-    window.showToast?.(`Team “${teamName.trim()}” created`)
-    setTeamName('')
+    const name = teamName.trim()
+    if (!name || !admin || adding) return
+    // The typed name stays until the server creates the team, and after a
+    // refusal, so a paused or refused create can be sent again.
+    setAdding(true)
+    void P.addTeam(name).then((saved) => {
+      setAdding(false)
+      if (!saved) return
+      window.showToast?.(`Team “${name}” created`)
+      setTeamName((typed) => (typed.trim() === name ? '' : typed))
+    })
   }
   return (
     <>
@@ -328,7 +338,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                 }}
                 className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
               />
-              <Button type="button" disabled={!teamName.trim()} onClick={addTeam}>
+              <Button type="button" disabled={!teamName.trim() || adding} onClick={addTeam}>
                 <Icon name="plus" size={16} />
                 Add team
               </Button>

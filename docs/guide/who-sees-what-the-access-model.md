@@ -33,7 +33,8 @@ cannot be reassigned or a Viewer grant cannot be given, nothing changes and
 the window lists the tasks again. Such a removal reassigns at most 120 tasks,
 and fewer when the tasks have many followers. With more, keep the people as
 Viewers and hand the tasks over later, or reassign some of the tasks first.
-The message says which of these you can choose. Deleting a team saves each
+The message says which of these you can choose, and the window says so
+before you save when it lists more than 120 tasks. Deleting a team saves each
 task and Viewer grant first; if one cannot be saved, the team stays, tasks
 already saved keep their new assignee, and the window lists what remains.
 Removing a person's grant that is already Viewer offers only the reassignment.

@@ -198,9 +198,8 @@ describe('recipient-relative narration', () => {
     expect((await messagesFor(t, f.admin.id, child.id))[0].detail).toBe(
       `Attached under QN-${parent.num}`,
     )
-    // Inbox.tsx:60 rewrites exactly this string at render time
     expect((await messagesFor(t, f.guest.id, child.id))[0].detail).toBe(
-      'Attached under a task in another project',
+      'Attached under a task in another sub-project',
     )
   })
 

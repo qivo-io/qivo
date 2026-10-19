@@ -525,6 +525,21 @@ describe('independent app and admin browser sessions', () => {
     expect(await adminReady).toBe(false)
   })
 
+  it('reports a sign-in Convex drops after the first answer, and only that', async () => {
+    const { admin, adminSocket } = pair()
+    await login(admin, 'operator@example.test')
+    const lost = vi.fn()
+    const ready = admin.armConvexAuth(lost)
+    adminSocket.settle(false)
+    expect(await ready).toBe(false)
+    // the first answer is the promise's, never a loss
+    expect(lost).not.toHaveBeenCalled()
+    adminSocket.settle(true)
+    expect(lost).not.toHaveBeenCalled()
+    adminSocket.settle(false)
+    expect(lost).toHaveBeenCalledOnce()
+  })
+
   it('a failed admin login does not overwrite either existing session or cache', async () => {
     const { app, admin, appSocket, adminSocket } = pair()
     const appToken = await login(app, 'nora@example.test')
