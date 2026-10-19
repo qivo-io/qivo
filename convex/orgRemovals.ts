@@ -15,9 +15,10 @@
  * labelRemovals.ts does.
  *
  * Admins act through `request` (delete the organization, ending any paid
- * subscription at once), `keep` (stop a deletion they asked for) and
- * `recordExport`, which the export panel calls once the browser has built
- * the archive. */
+ * subscription at once without a refund), `keep` (stop a deletion they asked
+ * for) and `recordExport`, which the export panel calls once the browser has
+ * built the archive. Cancelling in Billing (billingActions.cancelSubscription)
+ * only stops renewal, so its period starts when Polar ends the subscription. */
 
 import { makeFunctionReference } from 'convex/server'
 import { type ObjectType, v } from 'convex/values'
@@ -127,11 +128,11 @@ const sendNoticeRef = makeFunctionReference<
   null
 >('orgRemovals:sendNotice')
 
-/** Ends every live Polar subscription of the organization at once and
- * records the result locally, so a deletion never leaves one billing. A
- * Polar failure, or billing without Polar credentials, becomes a readable
- * refusal, and nothing is scheduled. */
-export async function revokeLiveSubscriptions(
+/** Ends every live Polar subscription of the organization at once, without
+ * a refund, and records the result locally, so a deletion never leaves one
+ * billing. A Polar failure, or billing without Polar credentials, becomes a
+ * readable refusal, and nothing is scheduled. */
+async function revokeLiveSubscriptions(
   ctx: Pick<ActionCtx, 'runMutation'>,
   orgId: string,
 ): Promise<number> {
@@ -426,9 +427,9 @@ export const recover = internalMutation({
 
 /* ------------------------------------------------------------ admin actions */
 
-/** An admin asks for deletion. Any paid subscription ends at once, then the
- * organization is read-only until its deletion date. The address confirms
- * the choice. */
+/** An admin asks for deletion. Any paid subscription ends at once, without
+ * a refund, then the organization is read-only until its deletion date. The
+ * address confirms the choice. */
 export const request = orgAction({
   args: { confirm: v.string() },
   handler: async (ctx, { confirm }): Promise<{ delete_after: string }> => {
@@ -537,24 +538,6 @@ export const recordExport = authedMutation({
     require(org, notFound('organization not found'))
     await ctx.db.patch(org._id, { last_export_at: isoNow() })
     return null
-  },
-})
-
-/** The deletion date after a cancellation, starting the read-only period
- * if billing has not yet done so. Null while access continues. */
-export const recordCancellation = internalMutation({
-  args: orgArg,
-  handler: async (ctx, { org_id }): Promise<string | null> => {
-    await syncOrgRemoval(ctx, org_id)
-    const existing = await orgRemovalFor(ctx, org_id)
-    if (existing) return existing.delete_after
-    if (subscriptionWritable(await subscriptionFor(ctx, org_id))) return null
-    const removal = await scheduleRemoval(ctx, {
-      orgId: org_id,
-      reason: 'service_ended',
-      endedAt: isoNow(),
-    })
-    return removal.delete_after
   },
 })
 

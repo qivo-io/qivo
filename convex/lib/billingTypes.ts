@@ -85,7 +85,8 @@ export type BillingSummary = {
   cancel_at_period_end: boolean
   checkout_available: boolean
   portal_available: boolean
-  // An admin can end a paid subscription at once from the Billing page.
+  // An admin can stop a renewing subscription from the Billing page. It
+  // ends when the paid period does.
   cancel_available: boolean
   // When an organization that never completed checkout is deleted.
   checkout_due_at: string | null

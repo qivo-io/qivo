@@ -89,23 +89,26 @@ organization is read-only before its deletion.
 
 An organization's service ends in one of these ways:
 
-- **Cancelling.** An admin chooses **Cancel subscription** in **Billing**. The
-  subscription ends at once.
+- **Cancelling.** An admin chooses **Cancel subscription** in **Billing**, or
+  cancels in **Manage billing**. The subscription stops renewing and ends with
+  the period already paid for. The organization keeps full access until then,
+  and nothing is refunded. Before that date, **Uncancel** in **Manage
+  billing** keeps the subscription.
 - **Deleting.** An admin chooses **Delete organization** under **Settings →
   Organization → General** and types the organization address. Any paid
-  subscription ends at once.
+  subscription ends at once, and nothing is refunded.
 - **Access ending.** Polar ends a subscription, for example after failed
   payments, or complimentary access ends without a subscription. Overdue
   payments alone only pause editing.
 
-The organization then stays read-only for 30 days. Members can still read
-their work, and admins can export it. Admins can also still take access away,
-as while billing pauses editing
+Once the service has ended, the organization stays read-only for 30 days.
+Members can still read their work, and admins can export it. Admins can also
+still take access away, as while billing pauses editing
 ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
 Qivo emails the admins unless one of them finished an export in the 7 days
-before. On the deletion date, Qivo
-deletes everything the organization owns, including uploaded files. Each
-person's sign-in and their other organizations remain.
+before the service ended. On the deletion date, Qivo deletes everything the
+organization owns, including uploaded files. Each person's sign-in and their
+other organizations remain.
 
 Until that date, subscribing again keeps an organization whose subscription
 ended. An admin can stop a deletion an admin asked for with **Keep

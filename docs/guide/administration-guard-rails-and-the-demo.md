@@ -198,8 +198,9 @@ deleted for good with **Delete now…**
 
 API calls accumulate during each paid subscription period. Qivo samples storage
 at the start of the period and collects its extra charge, plus API overages, on
-the following renewal invoice. Current storage can differ from that sample.
-Polar handles checkout taxes and recurring payments.
+the invoice at the end of the period. That is the renewal invoice, or the final
+one when a cancelled subscription ends. Current storage can differ from that
+sample. Polar handles checkout taxes and recurring payments.
 
 Without a paid billing period, for example during free access, before you
 subscribe or after a subscription ends, Billing counts API calls per calendar
@@ -213,9 +214,10 @@ not charge free-period usage retroactively.
 Polar retries failed payments. Qivo allows seven days from the recorded
 past-due state before pausing editing, and a 24-hour grace period for delayed
 renewal confirmation on an otherwise active subscription. API calls made
-while a renewal awaits confirmation are counted but not charged. Cancellation at
-period end preserves access through the paid period. Restoring payment
-restores editing.
+while a renewal awaits confirmation are counted but not charged. A cancelled
+subscription keeps access through the paid period, without a refund
+([Deleting an organization](./organization-and-team-settings.md#deleting-an-organization)).
+Restoring payment restores editing.
 
 ## Separate app and admin sign-in
 
