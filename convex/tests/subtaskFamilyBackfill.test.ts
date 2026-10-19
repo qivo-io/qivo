@@ -21,6 +21,7 @@ import {
   plantProject,
   plantSubscription,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -394,7 +395,7 @@ describe('subtaskFamilyBackfill start', () => {
     const s = await scene(t)
     const getTask = (ref: string) =>
       t.query(internal.machine.rest.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: s.f.admin.id,
         access: 'read',
         ref,

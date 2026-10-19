@@ -404,8 +404,8 @@ export type ActiveListOpts = ListFilters & {
   scope: string[] | null
   limit: number
   offset: number
-  /** the request's clock, an ISO timestamp, which delay verdicts are judged by */
-  now: string
+  /** the request's UTC day (YYYY-MM-DD), which delay verdicts are judged by */
+  today: string
 }
 
 export type ArchivedListOpts = ListFilters & {
@@ -518,7 +518,7 @@ async function listedActiveTasks(
  * parents too, except a parent in an archived project under a list of
  * active projects, which is read on its own before the comments. With the
  * roster it also holds every input of the rows' delay verdicts
- * (lib/machineDelay.ts listForecaster), judged on `o.now`. Each row's
+ * (lib/machineDelay.ts listForecaster), judged on `o.today`. Each row's
  * newest comment is one more read (lastCommentTimes). A page whose comments
  * do not fit in what the request has left is refused with PAGE_TOO_LARGE,
  * and with ACTIVE_TASKS_TOO_LARGE or ACTIVE_LIST_TOO_WIDE when the reads
@@ -600,7 +600,7 @@ export async function listActiveIssuesCore(
   const org = await byId(ctx, 'organizations', me.org_id)
   const projectOf = (id: string) => cat.byUuid.get(id)
   const forecast = listForecaster({
-    clock: delayClock(org, o.now),
+    clock: delayClock(org, o.today),
     me,
     active,
     view: { byUuid: cat.byUuid, visible: readable },
@@ -1814,11 +1814,11 @@ export async function taskDetail(
  * (model/attachments.ts taskAttachments), inline images included. */
 export type TaskAttachmentsJson = { attachments: AttachmentJson[] }
 
-/** The request's clock, an ISO timestamp, which a single-task read judges
- * the task's delay by (the HTTP action's for a query, the mutation's own for
- * a REST write answer). */
+/** The request's UTC day (YYYY-MM-DD), which a single-task read judges the
+ * task's delay by (the HTTP action's for a query, the mutation's own for a
+ * REST write answer). */
 type Clock = {
-  now: string
+  today: string
   /** the answer of a write, read in the write's own transaction (taskSubtree) */
   write?: boolean
 }
@@ -1865,7 +1865,7 @@ export async function taskOut(
   const read = {
     ...subtree,
     orgSlug: opts.orgSlug ?? org?.slug,
-    forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.now)),
+    forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.today)),
   }
   const row =
     opts.surface === 'rest'

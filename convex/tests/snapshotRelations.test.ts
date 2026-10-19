@@ -14,10 +14,10 @@ afterEach(() => {
 })
 
 /* Every view reads each table in bulk and in full. */
-const ALL_BULK = { tasks: 0, ratio: DEFAULT_READ.ratio, ranges: 0 }
+const ALL_BULK = { ...DEFAULT_READ, tasks: 0, ranges: 0 }
 /* Every view reads task by task, which is main's read for a view it did not
  * read in bulk. */
-const ALL_SELECTIVE = { tasks: Number.POSITIVE_INFINITY, ratio: 0, ranges: 0 }
+const ALL_SELECTIVE = { ...DEFAULT_READ, tasks: Number.POSITIVE_INFINITY, ratio: 0, ranges: 0 }
 
 /* The caller's snapshot with the transaction's read counts. */
 const read = (t: T, profile: Doc<'profiles'>) =>

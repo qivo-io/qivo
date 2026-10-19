@@ -33,6 +33,7 @@ import {
   restArchivedPage,
   restTasks,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -138,7 +139,7 @@ function appCompletion(view: Awaited<ReturnType<typeof appView>>, metaId: string
 }
 
 const restGet = (fx: Fx, ref: string, callerId: string) =>
-  fx.t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
+  fx.t.query(internal.machine.rest.getIssue, { today: TODAY, callerId, access: 'read', ref })
 
 const mcpRead = async <Out>(
   fx: Fx,
@@ -146,7 +147,9 @@ const mcpRead = async <Out>(
   callerId: string,
   args: Record<string, unknown>,
 ): Promise<Out> =>
-  JSON.parse(await fx.t.query(fn, { now: NOW, callerId, access: 'read', ...args } as never)) as Out
+  JSON.parse(
+    await fx.t.query(fn, { today: TODAY, callerId, access: 'read', ...args } as never),
+  ) as Out
 
 type Row = { id: string; progress: unknown; last_comment_at: unknown }
 
@@ -482,7 +485,7 @@ describe('an active page keeps inside the request’s read limits', () => {
     await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read' }))
     await refusal(
       fx.t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.agent.id,
         access: 'read',
       }),
@@ -508,7 +511,7 @@ describe('an active page keeps inside the request’s read limits', () => {
     await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }))
     await refusal(
       fx.t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: fx.agent.id,
         access: 'read',
         limit: 1,

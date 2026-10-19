@@ -33,6 +33,7 @@ import {
   plantSubscription,
   restTasks,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -78,7 +79,7 @@ const task = (fx: Fx, over: Partial<Doc<'issues'>> = {}) =>
 const row = (fx: Fx, id: string) => fx.t.run((ctx) => byId(ctx, 'issues', id))
 
 const restGet = (fx: Fx, ref: string, callerId = fx.agent.id) =>
-  fx.t.query(internal.machine.rest.getIssue, { callerId, access: 'read', now: NOW, ref })
+  fx.t.query(internal.machine.rest.getIssue, { callerId, access: 'read', today: TODAY, ref })
 
 const restPatch = (fx: Fx, ref: string, body: unknown) =>
   fx.t.mutation(internal.machine.rest.updateIssue, {
@@ -94,7 +95,7 @@ const mcpGet = async (fx: Fx, ref: string): Promise<Record<string, unknown>> =>
     await fx.t.query(internal.machine.mcp.getIssue, {
       callerId: fx.agent.id,
       access: 'read',
-      now: NOW,
+      today: TODAY,
       ref,
     }),
   )
@@ -178,7 +179,7 @@ describe('the group rule', () => {
     const todo = await fx.t.query(internal.machine.rest.listIssues, {
       callerId: fx.agent.id,
       access: 'read',
-      now: NOW,
+      today: TODAY,
       status: 'todo',
     })
     expect(Array.isArray(todo) && todo.map((r) => r.id)).toContain(parent.id)
@@ -332,7 +333,7 @@ describe('reading only live tasks', () => {
       await fx.t.query(internal.machine.mcp.listIssues, {
         callerId: fx.agent.id,
         access: 'read',
-        now: NOW,
+        today: TODAY,
         project: 'TBED',
       }),
     ) as { id: string }[]
@@ -401,7 +402,7 @@ describe('reading only live tasks', () => {
       mcp: await fx.t.query(internal.machine.mcp.listIssues, {
         callerId: fx.agent.id,
         access: 'read',
-        now: NOW,
+        today: TODAY,
         project: 'TBED',
       }),
       completion: (

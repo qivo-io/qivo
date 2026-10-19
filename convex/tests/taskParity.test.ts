@@ -55,6 +55,7 @@ import {
   plantProject,
   restTasks,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -122,7 +123,7 @@ const task = (fx: Fx, over: Partial<Doc<'issues'>> & { project_id?: string } = {
   plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, ...over })
 
 const restGet = (fx: Fx, ref: string, callerId = fx.agent.id) =>
-  fx.t.query(internal.machine.rest.getIssue, { now: NOW, callerId, access: 'read', ref })
+  fx.t.query(internal.machine.rest.getIssue, { today: TODAY, callerId, access: 'read', ref })
 
 const restPatch = (fx: Fx, ref: string, body: unknown) =>
   fx.t.mutation(internal.machine.rest.updateIssue, {
@@ -142,7 +143,7 @@ const mcp = async <T = Record<string, unknown>>(
   args: Record<string, unknown>,
 ): Promise<T> =>
   JSON.parse(
-    await fx.t.query(fn, { now: NOW, callerId: fx.agent.id, access: 'read', ...args } as never),
+    await fx.t.query(fn, { today: TODAY, callerId: fx.agent.id, access: 'read', ...args } as never),
   ) as T
 
 const mcpWrite = async <T = Record<string, unknown>>(
@@ -340,8 +341,8 @@ describe('a single-task read walks only the subtasks that can count', () => {
     fx.t.run(async (ctx) => {
       const out =
         surface === 'rest'
-          ? await taskOut(ctx, issue, { surface, me, now: NOW })
-          : await taskOut(ctx, issue, { surface, me, now: NOW })
+          ? await taskOut(ctx, issue, { surface, me, today: TODAY })
+          : await taskOut(ctx, issue, { surface, me, today: TODAY })
       const metrics = await ctx.meta.getTransactionMetrics()
       const project = (await byId(ctx, 'projects', issue.project_id)) as Doc<'projects'>
       const children = childIndexOf(
@@ -356,7 +357,7 @@ describe('a single-task read walks only the subtasks that can count', () => {
         .collect()
       const live = liveIn(new Map(projects.map((p) => [p.id, p])))
       const org = await byId(ctx, 'organizations', issue.org_id)
-      const forecast = taskForecaster(ctx, me, delayClock(org, NOW))
+      const forecast = taskForecaster(ctx, me, delayClock(org, TODAY))
       const row =
         surface === 'rest'
           ? await issueOut(ctx, issue, { surface, me, project, children, live, forecast })

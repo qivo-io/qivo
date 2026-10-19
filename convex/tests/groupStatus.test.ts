@@ -9,6 +9,7 @@ import {
   plantIssue,
   plantProject,
   restTasks,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -34,7 +35,7 @@ describe('parent task status', () => {
       })
       const getParent = () =>
         t.query(internal.machine.rest.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: f.admin.id,
           access: 'read',
           ref: parent.id,
@@ -91,7 +92,7 @@ describe('parent task status', () => {
     })
     const mcp = JSON.parse(
       await t.query(internal.machine.mcp.listIssues, {
-        now: NOW,
+        today: TODAY,
         callerId: f.admin.id,
         access: 'read',
         status: 'review',
@@ -102,7 +103,7 @@ describe('parent task status', () => {
     expect(
       JSON.parse(
         await t.query(internal.machine.mcp.getIssue, {
-          now: NOW,
+          today: TODAY,
           callerId: f.admin.id,
           access: 'read',
           ref: root.id,
@@ -159,7 +160,7 @@ describe('parent task status', () => {
     expect(snapshot?.issues.map((i) => i.id)).not.toContain(hiddenChild.id)
     expect(
       await t.query(internal.machine.rest.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: f.guest.id,
         access: 'read',
         ref: parent.id,
@@ -196,7 +197,7 @@ describe('parent task status', () => {
       await t.query(internal.machine.rest.getIssue, {
         callerId: f.guest.id,
         access: 'read',
-        now: NOW,
+        today: TODAY,
         ref: parent.id,
       }),
     ).toMatchObject({ is_group: false, status: 'done' })
@@ -255,7 +256,7 @@ describe('parent task status', () => {
     expect(archived.find((i) => i.id !== parent.id)?.is_group).toBe(false)
     expect(
       await t.query(internal.machine.rest.getIssue, {
-        now: NOW,
+        today: TODAY,
         callerId: f.admin.id,
         access: 'read',
         ref: parent.id,

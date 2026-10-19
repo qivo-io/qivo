@@ -6,9 +6,11 @@
  * snapshot's own rule). A group's plan weeks and completion are its group
  * facts (lib/core.ts groupFacts), the app's groupSpan and isIssueDone.
  *
- * Today is the request's clock, which the HTTP action passes as `now`,
- * because a query that read the time itself could answer from Convex's cache
- * on a later day. The server judges it, and remaining_set_at, by UTC day on
+ * Today is the request's UTC day, which the HTTP action passes as `today`
+ * (utcToday), because a query that read the time itself could answer from
+ * Convex's cache on a later day. Passing the day rather than the moment
+ * lets Convex answer repeated reads within a day from that cache, with the
+ * same answer. The server judges it, and remaining_set_at, by UTC day on
  * the organization's week grid (lib/workload.ts weekGrid). The app judges
  * both in the browser's time zone, so near midnight or a week boundary the
  * two can differ. Week indexes on the two grids differ by a constant, which
@@ -41,13 +43,16 @@ export type DelayJson = { status: DelayStatus; projected_end_week: string | null
  * week grid. */
 export type DelayClock = { grid: WeekGrid; today: string; todayWeek: number }
 
-/** The clock of a read made at `now`, an ISO timestamp, in an organization. */
+/** Today's UTC day, YYYY-MM-DD, as an HTTP action passes it to a read. */
+export const utcToday = (): string => new Date().toISOString().slice(0, 10)
+
+/** The clock of a read made on `today`, a UTC day (YYYY-MM-DD), in an
+ * organization. */
 export function delayClock(
   org: Pick<Doc<'organizations'>, 'week_start'> | null,
-  now: string,
+  today: string,
 ): DelayClock {
   const grid = weekGrid(org?.week_start ?? 1)
-  const today = new Date(now).toISOString().slice(0, 10)
   return { grid, today, todayWeek: grid.ofDay(today) }
 }
 
