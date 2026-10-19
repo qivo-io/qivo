@@ -281,7 +281,8 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     reviewAt: i.review_at ? new Date(i.review_at).getTime() : null,
     // when the status was last set in the task's current project (server-owned
     // status_at, ms). Creation sets it; null for a task created before Qivo
-    // recorded it and not changed since, and after a move to another project
+    // recorded it and not changed since, and after a move to another
+    // sub-project
     statusAt: i.status_at ? new Date(i.status_at).getTime() : null,
     // when it reached Done (server-derived, 0071; null while not Done) and
     // when it was created, both ms

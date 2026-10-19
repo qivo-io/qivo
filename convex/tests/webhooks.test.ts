@@ -157,14 +157,23 @@ describe('durable task events', () => {
         as(f.t, f.fx.user).mutation(api.issues.move, { org_id, id: f.issue.id, project_id }),
       )
     expect(await move(f.fx.sub2.id)).toEqual([[f.issue.id, ['project_id']]])
-    // a carried subtask's event says the same
-    await status(f.issue.id)
+    // a carried subtask's event says the same, and so does the task's own
+    await write(() =>
+      as(f.t, f.fx.user).mutation(api.issues.update, {
+        org_id,
+        id: f.issue.id,
+        patch: { status: 'todo' },
+      }),
+    )
+    expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeDefined()
     await f.t.run(async (ctx) => {
       const row = await byId(ctx, 'issues', child.id)
       await ctx.db.patch(row!._id, { parent_id: f.issue.id })
     })
     const carried = await move(far.id)
     expect(carried).toContainEqual([child.id, ['project_id']])
+    expect(carried.find(([id]) => id === f.issue.id)?.[1]).toContain('project_id')
+    expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeUndefined()
     expect(carried.flatMap(([, fields]) => fields)).not.toContain('status_at')
   })
 

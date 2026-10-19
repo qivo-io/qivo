@@ -375,7 +375,9 @@ describe('rowMarks', () => {
     })
     // re-estimated in the sync: a later write, not a hand-off
     const edited = { ...r, remaining: 3, updatedAt: at(29, 9) }
-    expect(edited.reviewAt).toBe(at(23))
+    expect(waitingOnReview('ben', [edited])).toEqual([
+      { issue: edited, reviewer: 'aisha', since: at(23) },
+    ])
     expect(rowMarks(edited, base).since).toBeNull()
   })
   it('says neither handed nor waiting when the hand-off is unknown', () => {

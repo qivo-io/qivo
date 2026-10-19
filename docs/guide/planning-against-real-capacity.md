@@ -148,8 +148,8 @@ label, link or attachment is not an edit. Review rows show **handed to you**
 for a new hand-off, or **waiting since** for an older one that nobody has
 edited or commented on since the hand-off. Entering In Review or changing the
 reviewer starts a hand-off; changing Remaining does not. Other rows can show
-the latest status change or comment. After a task moves to another project, it
-shows no status change until its status changes again.
+the latest status change or comment. After a task moves to another
+sub-project, it shows no status change until its status changes again.
 
 A review has no recorded hand-off if it was handed over before Qivo recorded
 hand-offs, or if it has had subtasks since the hand-off. Such a review shows no

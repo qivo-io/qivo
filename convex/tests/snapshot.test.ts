@@ -1845,6 +1845,28 @@ describe('commentThread events', () => {
     }
   })
 
+  it("drops only an archive row's legacy subtask count, singular or plural, for members", async () => {
+    const counted = { named_task_nums: [] as number[] }
+    const ids = await plantRows([
+      ev({ ...counted, verb: 'archived', detail: 'with 1 subtask' }),
+      ev({ ...counted, verb: 'archived', detail: 'with 2 subtasks' }),
+      // the same words under another verb are not a count
+      ev({ ...counted, verb: 'renamed', detail: 'with 3 subtasks' }),
+    ])
+    const details = async (p: Doc<'profiles'>) =>
+      (await thread(p, issueVis.id)).events.map((e) => [e.id, e.detail])
+    expect(await details(f.admin)).toEqual([
+      [ids[0], 'with 1 subtask'],
+      [ids[1], 'with 2 subtasks'],
+      [ids[2], 'with 3 subtasks'],
+    ])
+    expect(await details(f.guest)).toEqual([
+      [ids[0], undefined],
+      [ids[1], undefined],
+      [ids[2], 'with 3 subtasks'],
+    ])
+  })
+
   it('gives admins every row and members the rows the rule allows, without legacy counts', async () => {
     const ids = await plantRows([
       ev({ verb: 'created' }),

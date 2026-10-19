@@ -227,6 +227,7 @@ describe('the Team sync store', () => {
   beforeEach(() => boot('admin'))
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -266,14 +267,26 @@ describe('the Team sync store', () => {
         { ...f.todo, id: crypto.randomUUID(), num: 9, title: 'Child', status_at: undefined },
       ],
     })
+    // a clock that moves a minute before each write, so a stamp a later
+    // write repainted would differ
+    let clock = Date.parse('2026-10-19T10:00:00.000Z')
+    const tick = () => {
+      clock += 60_000
+      vi.setSystemTime(clock)
+    }
+    vi.useFakeTimers({ toFake: ['Date'] })
+    tick()
     const before = Date.now()
     // a status change stamps now
     P.updateIssue(task('To do').id, { status: 'progress' })
     const stamped = task('To do').statusAt
-    expect(stamped).toBeGreaterThanOrEqual(before)
+    expect(stamped).toBe(before)
     // a title edit and a patch that resends the status keep it
+    tick()
     P.updateIssue(task('To do').id, { title: 'To do' })
+    tick()
     P.updateIssue(task('To do').id, { status: 'progress' })
+    expect(task('To do').updatedAt).toBe(Date.now())
     expect(task('To do').statusAt).toBe(stamped)
     // a move to another project clears it on the task and the subtask it carries
     P.updateIssue(task('Child').id, { status: 'progress' })
