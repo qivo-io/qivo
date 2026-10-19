@@ -2722,10 +2722,17 @@ async function keptParent(
   return sees ? { id: outside.parent.id, grouped } : undefined
 }
 
+/** The most bytes one count of a parent's subtasks (liveSubtasks) reads.
+ * Subtasks stored before TEXT_MAX can each hold almost 1 MiB, so a count
+ * past it stops, counts the parent as full, with a warning, and its task
+ * comes back without it. Someone with Edit can still give the task that
+ * parent by hand. A mutable object, so tests can lower it. */
+export const COUNT_READ = { bytes: 4 * 1024 * 1024 }
+
 /** How many subtasks live task `parentId` has, archived ones included,
- * counted up to SUBTASK_MAX, with the ones the step gave it. Read once per
- * step and charged to its budget; 'later' when the step's reads are spent
- * before it is read. */
+ * counted up to SUBTASK_MAX, with the ones the step gave it, or SUBTASK_MAX
+ * for a count past COUNT_READ. Read once per step and charged to its
+ * budget; 'later' when the step's reads are spent before it is read. */
 async function liveSubtasks(
   run: Run,
   reads: ParentReads,
@@ -2734,13 +2741,24 @@ async function liveSubtasks(
   const known = reads.subtasks.get(parentId)
   if (known !== undefined) return known
   if (readsSpent(run.budget)) return 'later'
-  const kids = await run.ctx.db
-    .query('issues')
-    .withIndex('by_parent', (q) => q.eq('parent_id', parentId))
-    .take(SUBTASK_MAX)
-  for (const kid of kids) chargeRead(run.budget, kid)
-  reads.subtasks.set(parentId, kids.length)
-  return kids.length
+  let count = 0
+  let bytes = 0
+  const kids = run.ctx.db.query('issues').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
+  for await (const kid of kids) {
+    count += 1
+    bytes += chargeRead(run.budget, kid)
+    if (count >= SUBTASK_MAX) break
+    if (bytes > COUNT_READ.bytes) {
+      console.warn('A deleted item restore cannot count the subtasks of a parent', {
+        item_id: run.item.id,
+        parent_id: parentId,
+      })
+      count = SUBTASK_MAX
+      break
+    }
+  }
+  reads.subtasks.set(parentId, count)
+  return count
 }
 
 /** The chain from a live task to the top: how many levels it holds and the

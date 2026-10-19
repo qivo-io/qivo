@@ -28,6 +28,7 @@ import {
 } from '../../convex/lib/projectCreators'
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
+import { SUBTASK_WITH_SUBTASKS } from '../../convex/lib/taskLimits'
 import { firstSittingDay, nextSyncStamp } from '../../convex/lib/teamSync'
 import { NAME_MAX, nameOverCap, TEXT_MAX, TEXT_MAX_LABEL } from '../../convex/lib/textLimits'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
@@ -4160,6 +4161,27 @@ export const PLANNER = {
       console.error('[qivo] move preview failed:', e)
       return null
     }
+  },
+
+  /** Creates a top-level task titled `title` in task `id`'s sub-project and
+      makes it that task's parent, for the Parent picker. The view holds no
+      archived subtasks, which also keep a task from getting a parent
+      (convex/lib/taskLimits.ts), so the server is asked first
+      (api.issues.takesParent): a task that cannot take one gets the refusal
+      and no new task. A transport error leaves the check to the update. */
+  createParent: async (id: string, title: string): Promise<void> => {
+    const it = PLANNER.issueById[id]
+    if (!it) return
+    try {
+      if (!(await convex.query(api.issues.takesParent, { org_id: it.org, id: it.uuid }))) {
+        toast(asSentence(SUBTASK_WITH_SUBTASKS))
+        return
+      }
+    } catch (e) {
+      console.error('[qivo] parent check failed:', e)
+    }
+    const key = PLANNER.addIssue({ project: it.project, title })
+    if (key) PLANNER.updateIssue(id, { parent: key })
   },
 
   /** Move an issue to another sub-project. Issue numbers are org-scoped and

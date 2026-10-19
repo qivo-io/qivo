@@ -168,6 +168,17 @@ describe('one level of subtasks', () => {
     expect((await row(fx.t, lone.id)).parent_id).toBe(parent.id)
   })
 
+  it('tells the app whether a task can take a parent, archived subtasks included', async () => {
+    const fx = await setup()
+    const lone = await task(fx)
+    const former = await task(fx)
+    await task(fx, { parent_id: former.id, archived_at: NOW })
+    const takes = (issue: Doc<'issues'>) =>
+      as(fx.t, fx.admin).query(api.issues.takesParent, { org_id: fx.org.id, id: issue.id })
+    expect(await takes(lone)).toBe(true)
+    expect(await takes(former)).toBe(false)
+  })
+
   it('keeps a legacy chain readable and editable, and lets it be taken apart', async () => {
     const fx = await setup()
     // a chain from before the one level of subtasks

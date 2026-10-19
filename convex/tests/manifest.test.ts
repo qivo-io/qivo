@@ -292,6 +292,7 @@ issues:removeLink mutation public {"type":"object","value":{"a":{"fieldType":{"t
 issues:setSubscriber mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"subscribed":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:subscribe mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:subscribers query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+issues:takesParent query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:unarchive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:unsubscribe mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 issues:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"title":{"fieldType":{"type":"string"},"optional":true},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"status":{"fieldType":{"type":"union","value":[{"type":"literal","value":"backlog"},{"type":"literal","value":"todo"},{"type":"literal","value":"progress"},{"type":"literal","value":"review"},{"type":"literal","value":"done"}]},"optional":true},"priority":{"fieldType":{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},"optional":true},"assignee_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"reviewer_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"parent_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"due_date":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"paused":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -717,6 +718,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // The Move window asks whether a move carries subtasks, archived ones
     // included; it answers false unless the caller can edit both ends.
     moveCarriesSubtasks: 'orgQuery',
+    // The Parent picker asks whether a task can take a parent, archived
+    // subtasks included, before it creates one; a hidden task is not found.
+    takesParent: 'orgQuery',
     archive: 'orgMutation',
     unarchive: 'orgMutation',
     deleteDeep: 'orgMutation',
@@ -859,7 +863,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 165
+const PUBLIC_COUNT = 166
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

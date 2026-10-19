@@ -72,6 +72,7 @@ import {
   archiveIssueCore,
   assertCanEdit,
   createIssueCore,
+  hasAnySubtask,
   hasSubtasks,
   moveIssueCore,
   subtasksWouldMove,
@@ -350,6 +351,15 @@ export const moveCarriesSubtasks = orgQuery({
     if (target === null || target.org_id !== issue.org_id) return false
     return await subtasksWouldMove(ctx, issue, target)
   },
+})
+
+/* Whether task `id` can get a parent: it has no subtask, archived ones
+ * included (model/issues.ts parentChainCheck). The app's view holds no
+ * archived subtasks, so its Parent picker asks before it creates a new
+ * parent for the task. */
+export const takesParent = orgQuery({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => !(await hasAnySubtask(ctx, (await myIssue(ctx, id)).id)),
 })
 
 /* ---------------------------------------------------------------- archive

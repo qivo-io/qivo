@@ -23,6 +23,7 @@ import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
   CHAIN_READ,
+  COUNT_READ,
   HEIGHT_READ,
   type RestoreResult,
   restoreItems,
@@ -688,6 +689,34 @@ describe('restoring a task item', () => {
       pair.map(async (task) => (await liveTask(t, task.id))?.parent_id),
     )
     expect(parents.toSorted()).toEqual([other.id, undefined])
+  })
+
+  it('reads no more for a count of subtasks than COUNT_READ allows, and leaves that task without the parent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
+    await deleteTask(t, f, task.id)
+    // three subtasks of about 6 KB each, past a count bound of 10 KB
+    for (let i = 0; i < 3; i++)
+      await plantIssue(t, {
+        org_id,
+        project_id: f.sub.id,
+        parent_id: parent.id,
+        description: 'x'.repeat(6000),
+      })
+    COUNT_READ.bytes = 10_000
+    const item = await itemFor(t, task.id)
+    await restore(t, f.user, [item.id])
+    expect((await liveTask(t, task.id))?.parent_id).toBeUndefined()
+    expect(warn.mock.calls).toEqual([
+      [
+        'A deleted item restore cannot count the subtasks of a parent',
+        { item_id: item.id, parent_id: parent.id },
+      ],
+    ])
   })
 
   it('keeps a parent only while its assignee can still see it, as a reparent requires', async () => {
