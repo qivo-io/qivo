@@ -487,7 +487,9 @@ type ActivityJson = {
 }
 
 /* The task's history the caller receives (lib/activityVisibility.ts
- * taskActivity, the app's rule), oldest first, with actor names. */
+ * taskActivity, the app's rule), oldest first, with actor names. An actor
+ * whose profile is gone reads as null, also on rows a profile removal has
+ * not cleared yet (profileRemovals.ts clears older rows in the background). */
 async function activityOut(
   ctx: QueryCtx,
   me: Caller,
@@ -501,11 +503,12 @@ async function activityOut(
     if (actor !== undefined && !names.has(actor)) {
       names.set(actor, (await byId(ctx, 'profiles', actor))?.name ?? null)
     }
+    const name = actor === undefined ? null : (names.get(actor) ?? null)
     out.push({
       id: ev.id,
       created_at: ev.ts,
-      actor_id: actor ?? null,
-      actor_name: actor === undefined ? null : (names.get(actor) ?? null),
+      actor_id: name === null ? null : (actor ?? null),
+      actor_name: name,
       verb: ev.verb,
       detail: ev.detail ?? null,
     })

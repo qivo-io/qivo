@@ -1375,7 +1375,8 @@ describe('purging', () => {
       if (stored === null) throw new Error('the task was not stored')
       await ctx.db.delete(stored._id)
     })
-    // so a client can take the id again
+    // so a client can take the id again, later
+    vi.setSystemTime(Date.now() + HOUR)
     await as(t, f.user).mutation(api.issues.create, {
       org_id,
       id: task.id,
@@ -1387,9 +1388,49 @@ describe('purging', () => {
 
     while ((await jobFor(t, item.id)) !== null) await step(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    // the new task's rows stay, and the old ones with them
-    expect(await historyOf(t, task.id)).toEqual(before)
+    // the deleted task's rows go, written up to its deletion; the new task's stay
+    expect(await historyOf(t, task.id)).toEqual(before.slice(3))
     expect(await liveTask(t, task.id)).not.toBeNull()
+  })
+
+  it('keeps the history of a new task with a freed id that sits in Deleted items itself', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, task, { numbered: 2 })
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    await t.run(async (ctx) => {
+      await startPurge(ctx, item)
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the purge saved no job')
+      await ctx.db.patch(job._id, { phase: 'purge_rows' })
+      const stored = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', task.id))
+        .unique()
+      if (stored === null) throw new Error('the task was not stored')
+      await ctx.db.delete(stored._id)
+    })
+    vi.setSystemTime(Date.now() + HOUR)
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id,
+      id: task.id,
+      project_id: f.sub.id,
+      title: 'Same id, deleted too',
+    })
+    // the new task goes to Deleted items as an item of its own
+    await deleteTask(t, f, task.id)
+    const kept = (await historyOf(t, task.id)).slice(3)
+    expect(kept.map((e) => e.verb)).toEqual(['created', 'deleted'])
+
+    while ((await jobFor(t, item.id)) !== null) await step(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    expect(await historyOf(t, task.id)).toEqual(kept)
   })
 })
 

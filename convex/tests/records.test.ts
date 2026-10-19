@@ -1516,6 +1516,22 @@ describe('task activity', () => {
     expect(admin[4].detail).toBe('with 2 subtasks')
   })
 
+  it('answers null for an actor whose profile is gone, even before the removal clears the row', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const gone = uuid()
+    await plantActivity(fx, issue, [{ verb: 'created' }, { verb: 'changed', actor_id: gone }])
+    const rows = await fx.t.query(internal.machine.records.restTaskActivity, {
+      callerId: fx.admin.id,
+      access: 'read',
+      ref: issue.id,
+    })
+    expect(rows.map((r) => [r.actor_id, r.actor_name])).toEqual([
+      [fx.user.id, 'user'],
+      [null, null],
+    ])
+  })
+
   it("answers an archived task's history by the same rule", async () => {
     const fx = await setup()
     const issue = await task(fx, { archived_at: NOW })
