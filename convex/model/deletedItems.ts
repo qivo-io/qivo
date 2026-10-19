@@ -1231,7 +1231,10 @@ const purgeStored = (run: Run, table: StoredTable): Promise<boolean> =>
 /* Each deleted_tasks row once its task's history is gone (purgeHistory),
  * then every stored row but the project rows. A task's stored issues row
  * reserves its uuid (lib/db.ts) until its history is deleted, so a new task
- * with that id cannot lose rows to the drain. */
+ * with that id cannot lose rows to the drain. A purge the release before
+ * left in this phase may already have deleted the stored row, so a live
+ * task with the id is a new one: its history stays, and the deleted task's
+ * rows stay with it, since the two cannot be told apart. */
 async function purgeRows(run: Run): Promise<boolean> {
   const tasksDone = await drain(
     run.budget,
@@ -1241,7 +1244,8 @@ async function purgeRows(run: Run): Promise<boolean> {
         .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
         .take(n),
     async (task) => {
-      if (!(await purgeHistory(run, task.task_id))) return false
+      const reused = (await byId(run.ctx, 'issues', task.task_id)) !== null
+      if (!reused && !(await purgeHistory(run, task.task_id))) return false
       await run.ctx.db.delete(task._id)
       return true
     },

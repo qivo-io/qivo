@@ -1350,6 +1350,47 @@ describe('purging', () => {
     expect(await historyOf(t, other.id)).toHaveLength(1)
     await assertNoOrphanHistory(t, 'after a purge resumed at purge_rows')
   })
+
+  it("keeps a new task's history when the release before already freed its id", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await plantHistory(t, task, { numbered: 2 })
+    await deleteTask(t, f, task.id)
+    const item = await itemFor(t, task.id)
+    await t.run(async (ctx) => {
+      await startPurge(ctx, item)
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job === null) throw new Error('the purge saved no job')
+      await ctx.db.patch(job._id, { phase: 'purge_rows' })
+      // the release before deleted the stored task row before its marker
+      const stored = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', task.id))
+        .unique()
+      if (stored === null) throw new Error('the task was not stored')
+      await ctx.db.delete(stored._id)
+    })
+    // so a client can take the id again
+    await as(t, f.user).mutation(api.issues.create, {
+      org_id,
+      id: task.id,
+      project_id: f.sub.id,
+      title: 'Same id, new task',
+    })
+    const before = await historyOf(t, task.id)
+    expect(before.map((e) => e.verb)).toEqual(['updated', 'updated', 'deleted', 'created'])
+
+    while ((await jobFor(t, item.id)) !== null) await step(t, item.id)
+    expect(await itemById(t, item.id)).toBeNull()
+    // the new task's rows stay, and the old ones with them
+    expect(await historyOf(t, task.id)).toEqual(before)
+    expect(await liveTask(t, task.id)).not.toBeNull()
+  })
 })
 
 describe('recovery', () => {
