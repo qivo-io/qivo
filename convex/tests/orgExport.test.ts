@@ -40,6 +40,7 @@ const page = makeFunctionReference<
 const EXCLUDED_TABLES = [
   'webhook_workers', // shared worker reservations are operational state
   'demo_sessions',
+  'demo_write_counts',
   'demo_uploads',
   'demo_admission',
   // Deployment-wide anonymous statistics and sampler progress have no org owner.

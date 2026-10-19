@@ -116,6 +116,7 @@ async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>): Promise<string[]
 // are still cleaned defensively if a test/internal operation ever planted them.
 const APP_OWNED: TableNames[] = [
   'demo_sessions',
+  'demo_write_counts',
   'demo_uploads',
   'roadmap_history',
   'organizations',
@@ -540,6 +541,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
           data: { clientId: 'demo-cleanup-client', userId: a.auth_user_id, scopes: [] },
         },
       })
+      // the demo's write counters
+      await ctx.db.insert('demo_write_counts', { demo_id: a.id, write_count: 3, insert_count: 9 })
       return { attachment, avatar, background, preview, shared }
     })
     expect((await deleteDemo(t, a)).length).toBeGreaterThan(1)

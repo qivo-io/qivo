@@ -101,18 +101,48 @@ export async function requireActiveDemoOrg(ctx: QueryCtx, orgId: string) {
   return receipt
 }
 
+/** A demo's write and insert counters. */
+type DemoCounts = Pick<
+  Doc<'demo_write_counts'>,
+  'write_window_at' | 'write_window_count' | 'write_count' | 'insert_count'
+>
+
+/** The counters of `receipt`'s demo, and a writer that saves them. They sit
+ * in their own row (demo_write_counts), not on the receipt that every
+ * authenticated call reads, so counting a write reruns none of the visitor's
+ * queries. A receipt from before that row keeps its counts in its own
+ * fields, which seed the row. */
+async function demoCounts(ctx: MutationCtx, receipt: Doc<'demo_sessions'>) {
+  const row = await ctx.db
+    .query('demo_write_counts')
+    .withIndex('by_demo', (q) => q.eq('demo_id', receipt.id))
+    .unique()
+  const counts: DemoCounts = row ?? {
+    write_window_at: receipt.write_window_at,
+    write_window_count: receipt.write_window_count,
+    write_count: receipt.write_count,
+    insert_count: receipt.insert_count,
+  }
+  const save = async (next: DemoCounts) => {
+    if (row) await ctx.db.patch(row._id, next)
+    else await ctx.db.insert('demo_write_counts', { ...counts, ...next, demo_id: receipt.id })
+  }
+  return { counts, save }
+}
+
 /** Failed mutations roll this accounting back with their own writes. */
 export async function consumeDemoWrite(ctx: MutationCtx, authUserId: string): Promise<void> {
   if (!isDemoDeployment()) return
   const receipt = await requireActiveDemo(ctx, authUserId)
+  const { counts, save } = await demoCounts(ctx, receipt)
   const now = Date.now()
-  const fresh = receipt.write_window_at === undefined || now - receipt.write_window_at >= 60_000
-  const count = fresh ? 0 : (receipt.write_window_count ?? 0)
-  const total = receipt.write_count ?? 0
+  const fresh = counts.write_window_at === undefined || now - counts.write_window_at >= 60_000
+  const count = fresh ? 0 : (counts.write_window_count ?? 0)
+  const total = counts.write_count ?? 0
   if (count >= DEMO_WRITES_PER_MINUTE || total >= DEMO_WRITES_TOTAL)
     throw demoRefusal('Your demo has reached its change limit. Try again later.', 'demo_limit')
-  await ctx.db.patch(receipt._id, {
-    write_window_at: fresh ? now : receipt.write_window_at,
+  await save({
+    write_window_at: fresh ? now : counts.write_window_at,
     write_window_count: count + 1,
     write_count: total + 1,
   })
@@ -130,7 +160,7 @@ export function assertDemoPayload(value: unknown): void {
 const UNCOUNTED = Symbol('demoWriter.uncounted')
 
 /** Count actual inserted records, including narration and bulk helpers, in
- * the writer's transaction. Updating the receipt uses the underlying writer
+ * the writer's transaction. Updating the counters uses the underlying writer
  * so accounting cannot recursively count itself. */
 export function demoWriter(ctx: MutationCtx, authUserId: string): MutationCtx['db'] {
   if (!isDemoDeployment()) return ctx.db
@@ -140,10 +170,11 @@ export function demoWriter(ctx: MutationCtx, authUserId: string): MutationCtx['d
   ): Promise<Id<Table>> => {
     assertDemoPayload(value)
     const receipt = await requireActiveDemo(ctx, authUserId)
-    const count = receipt.insert_count ?? 0
+    const { counts, save } = await demoCounts(ctx, receipt)
+    const count = counts.insert_count ?? 0
     if (count >= DEMO_INSERTS_TOTAL)
       throw demoRefusal('Your demo has reached its record limit.', 'demo_limit')
-    await ctx.db.patch(receipt._id, { insert_count: count + 1 })
+    await save({ insert_count: count + 1 })
     return ctx.db.insert(table, value)
   }
   return new Proxy(ctx.db, {

@@ -579,6 +579,11 @@ export const purge = internalMutation({
         await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
           input: { model: 'user', where: [{ field: '_id', value: receipt.auth_user_id }] },
         })
+        for (const counts of await ctx.db
+          .query('demo_write_counts')
+          .withIndex('by_demo', (q) => q.eq('demo_id', receipt.id))
+          .collect())
+          await ctx.db.delete(counts._id)
         await ctx.db.delete(receipt._id)
         console.info('Demo cleanup completed', {
           lag_ms: Math.max(0, Date.now() - receipt.expires_at),
