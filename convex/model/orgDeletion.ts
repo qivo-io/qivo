@@ -28,7 +28,9 @@
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
  * profile_removals and label_removals rows (their own steps finish), the
- * platform audit log and webhook receipts that only name provider ids. */
+ * platform audit log, webhook receipts that only name provider ids, and any
+ * activity_retention row an earlier release left, a table the schema no
+ * longer lists. */
 
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'

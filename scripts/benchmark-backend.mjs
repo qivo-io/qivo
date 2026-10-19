@@ -145,12 +145,4 @@ async function main(args) {
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main(process.argv.slice(2))
-  // A baseline from before per-task activity retention schedules a trim
-  // minutes ahead on a real timer, which would keep the process alive and then
-  // fail against the closed Vite runner.
-  // process.exit drops output still queued for a pipe, so that goes out first.
-  await Promise.all(
-    [process.stdout, process.stderr].map((stream) => new Promise((done) => stream.write('', done))),
-  )
-  process.exit()
 }

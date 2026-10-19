@@ -750,8 +750,7 @@ describe('every machine write takes the credential access', () => {
       '../machine/fake.ts': { relay: { isAction: true, isInternal: true, exportArgs } },
       '../lib/log.ts': {},
     }
-    // log schedules through a reference the walk cannot follow, as an
-    // activity write's trim does
+    // log schedules through a reference the walk cannot follow
     const fakeSources = (relay: string): Sources => ({
       '../machine/fake.ts': [
         "import { log } from '../lib/log'",

@@ -2160,21 +2160,15 @@ describe('the task window history', () => {
         target_id: f.sub.id,
         project_id: f.sub.id,
       })
+      // another organization's row about a task with the same id
       await ctx.db.insert('activity_events', {
         ...row,
         id: uuid(),
         org_id: f.otherOrg.id,
         target_type: 'issue',
-        target_id: uuid(),
+        target_id: created,
         project_id: f.otherProject.id,
       })
-    })
-    // the admin's seat in the other organization holds rows too
-    await plantSeat(t, {
-      org_id: f.otherOrg.id,
-      auth_user_id: f.admin.auth_user_id,
-      email: f.admin.email,
-      org_role: 'admin',
     })
     for (const p of [f.admin, f.user, f.guest, f.viewer]) {
       const thread = await as(t, p).query(api.snapshot.commentThread, {
