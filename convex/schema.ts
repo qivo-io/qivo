@@ -1219,10 +1219,22 @@ export default defineSchema({
     // owning team. Like related_project_id it may outlive its team; a deleted
     // team's membership rows then reach admins only (snapshot.ts).
     team_id: v.optional(v.string()),
+    // This row's place in its subject's history (target_type, target_id), 1,
+    // 2, 3 and so on in commit order. Nothing writes or reads it yet; the
+    // per-task history release numbers new rows here.
+    seq: v.optional(v.number()),
+    // On task rows, the QN numbers of the other tasks the detail names, in
+    // text order, [] when none. Nothing writes or reads it yet; the per-task
+    // history release stores it so visibility stops parsing the text.
+    named_task_nums: v.optional(v.array(v.number())),
   })
     .index('by_uuid', ['id'])
     .index('by_org_ts', ['org_id', 'ts'])
-    .index('by_actor', ['actor_id']), // removeProfile's SET NULL — rows survive their actor
+    .index('by_actor', ['actor_id']) // removeProfile's SET NULL — rows survive their actor
+    // One subject's history in seq order. Nothing reads it yet.
+    .index('by_target', ['org_id', 'target_type', 'target_id', 'seq'])
+    // The rows filed under one project, for the project purge. Nothing reads it yet.
+    .index('by_project', ['org_id', 'project_id']),
 
   comments: commentsTable,
 
