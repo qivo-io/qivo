@@ -189,7 +189,7 @@ async function assertLeadAllowed(
   }
   if (!p.active || (p.org_role !== 'admin' && p.org_role !== 'user' && p.org_role !== 'guest')) {
     if (p.org_role === 'viewer') {
-      throw rule('a viewer cannot lead a project — make them a standard user first')
+      throw rule('a viewer cannot lead a project, so make them a standard user first')
     }
     throw rule('the lead must be an active organization user')
   }
@@ -327,7 +327,7 @@ export async function createProjectCore(
       throw rule('sub-projects live directly under a project, never under another sub-project')
     }
     if (parent.archived_at !== undefined) {
-      throw rule('the project is archived — restore it first')
+      throw rule('the project is archived, so restore it first')
     }
     if (!(await hasProjectLevel(ctx, me, parent.id, 'lead'))) {
       throw forbidden('requires lead access to this project')

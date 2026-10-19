@@ -1497,7 +1497,7 @@ const NOT_SAME_FAMILY =
 const UPLOAD_MISSING = 'upload not found or expired; start a new upload'
 const UPLOAD_URL_USED = 'this upload URL has already been used; start a new upload'
 const UNKNOWN_PROJECT = 'project must name a project by uuid, number or key'
-const GROUP_STATUS = 'status cannot be set on a task with subtasks — update its subtasks instead'
+const GROUP_STATUS = 'status cannot be set on a task with subtasks, so update its subtasks instead'
 
 /** The state the checks share. */
 const run = {}
@@ -1610,7 +1610,7 @@ function verifyActivity(rows, cred, provenance) {
   for (const row of rows) {
     eq(row.actor_name, cred.actor, `actor of the ${row.verb} row`)
     expect(
-      row.detail === provenance || row.detail?.endsWith(` — ${provenance}`),
+      row.detail === provenance || row.detail?.endsWith(`, ${provenance}`),
       `the ${row.verb} row detail ${short(row.detail)} does not end with ${short(provenance)}`,
     )
   }
@@ -2371,7 +2371,7 @@ async function textCapChecks() {
   await check('text-caps/mcp/comment', async () => {
     eq(
       await toolRefusal(w, 'add_comment', { ref: key, body: 'b'.repeat(20001) }),
-      schemaText('add_comment', 'body: Too big: expected string to have <=20000 characters'),
+      'a comment must be at most 20,000 characters',
       'refusal',
     )
   })
@@ -2382,10 +2382,7 @@ async function textCapChecks() {
         archived: true,
         archive_reason: 'c'.repeat(20001),
       }),
-      schemaText(
-        'update_task',
-        'archive_reason: Too big: expected string to have <=20000 characters',
-      ),
+      'archive_reason must be at most 20,000 characters',
       'refusal',
     )
     eq((await restOk(w, 'GET', `/tasks/${key}`)).archived, false, 'archived after the refusal')
@@ -2635,7 +2632,9 @@ async function bodyCapChecks() {
   const w = run.creds.writeToken
   // a project that does not exist, so a body that reaches the route creates nothing
   const project = randomUUID()
-  const restBody = (pad) => JSON.stringify({ project, title: `${run.tag} body cap`, padding: pad })
+  // padded with JSON whitespace, because POST /v1/tasks refuses a field it does not take
+  const restBody = (pad) =>
+    `${JSON.stringify({ project, title: `${run.tag} body cap` })}${' '.repeat(pad.length)}`
   const envelope = rpcBody('tools/call', { name: 'get_me' })
   const mcpBody = (pad) =>
     JSON.stringify({ ...envelope, params: { ...envelope.params, arguments: { padding: pad } } })
@@ -3199,7 +3198,7 @@ async function archiveChecks() {
       '/tasks',
       { project: A.id, title: `${run.tag} into archived` },
       400,
-      `${A.key} is archived — restore it in the app before adding tasks to it`,
+      `${A.key} is archived, so restore it in the app before adding tasks to it`,
     )
     const tasks = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
     expect(!tasks.some((t) => t.title === `${run.tag} into archived`), 'the task was created')

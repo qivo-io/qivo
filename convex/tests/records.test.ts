@@ -439,7 +439,7 @@ describe('removing an attachment', () => {
       actor_id: fx.agent.id,
       verb: 'removed an attachment from',
       target_id: issue.id,
-      detail: 'spec.pdf — via the REST API (CI key)',
+      detail: 'spec.pdf, via the REST API (CI key)',
     })
     // MCP signs its own way
     const other = await plantAttachment(fx, issue, { name: 'b.txt' })
@@ -449,7 +449,7 @@ describe('removing an attachment', () => {
       attachment: other.id,
       name: 'b.txt',
     })
-    expect((await activityFor(fx.t, fx.org.id)).at(-1)?.detail).toBe('b.txt — via MCP')
+    expect((await activityFor(fx.t, fx.org.id)).at(-1)?.detail).toBe('b.txt, via MCP')
   })
 
   it('needs Edit on the project, as in the app', async () => {
@@ -574,7 +574,7 @@ describe('the REST upload', () => {
     })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       verb: 'attached a file to',
-      detail: 'wiring.pdf — via the REST API (CI key)',
+      detail: 'wiring.pdf, via the REST API (CI key)',
     })
     // the ticket is spent, and so is its upload URL
     await refused(
@@ -1102,7 +1102,7 @@ describe('the MCP upload', () => {
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       actor_id: fx.user.id,
       verb: 'attached a file to',
-      detail: 'wiring.pdf — via MCP',
+      detail: 'wiring.pdf, via MCP',
     })
     expect(await tickets(fx.t)).toEqual([])
   })
@@ -1140,8 +1140,8 @@ describe('the MCP upload', () => {
     if (!('text' in mcpOut)) throw new Error('expected an attachment')
     expect(JSON.parse(mcpOut.text)).toMatchObject({ name: 'rest.txt', uploaded_by_id: fx.agent.id })
     expect((await activityFor(fx.t, fx.org.id)).map((row) => row.detail)).toEqual([
-      'mcp.txt — via the REST API (CI key)',
-      'rest.txt — via MCP',
+      'mcp.txt, via the REST API (CI key)',
+      'rest.txt, via MCP',
     ])
   })
 
@@ -1269,7 +1269,7 @@ describe('attach_text_file', () => {
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       actor_id: fx.user.id,
       verb: 'attached a file to',
-      detail: 'notes.txt — via MCP',
+      detail: 'notes.txt, via MCP',
     })
     // a given type is kept, and exactly 256 KiB of UTF-8 fits
     const csv = JSON.parse(
@@ -1468,7 +1468,7 @@ describe('task activity', () => {
       // moved here from a project the agent cannot access
       { verb: 'moved', detail: 'to the Firmware sub-project', related_project_id: fx.hiddenSub.id },
       // names a task the agent cannot see
-      { verb: 'linked', detail: `— blocks QN-${elsewhere.num} — via MCP` },
+      { verb: 'linked', detail: `(blocks QN-${elsewhere.num}), via MCP` },
       // filed while the task was in a project the agent cannot access
       { verb: 'changed', detail: '(title “a” → “b”)', project_id: fx.hiddenSub.id },
       { verb: 'archived', detail: 'with 2 subtasks' },

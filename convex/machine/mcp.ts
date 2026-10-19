@@ -88,12 +88,15 @@ import {
 import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource, mcpResourceMetadata, OAUTH_SCOPES } from '../lib/oauth'
 import {
+  EVENT_PARAMS_NOT_FINITE,
   type EventOwner,
   type EventReply,
+  eventParamsJson,
   vEventOwner,
   WEBHOOK_MAX_TTL_MS,
 } from '../lib/taskEvents'
-import { LABEL_NAME_MAX, TEXT_MAX } from '../lib/textLimits'
+import { LABEL_NAME_MAX, TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { ingressShard } from '../model/billingUsage'
 import { COMMENT_MAX } from '../model/commentCounts'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
@@ -255,7 +258,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_projects',
       title: 'List projects',
       description:
-        'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). `access.write` says whether you may create and change tasks in that project. Active projects only by default; `archived: true` lists the archived ones instead — an archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
+        'Projects visible to your account. type "meta" projects are products with sub-projects (parent_id); both project types are controlled by a lead and have no owning team. `num` is the durable per-org project number (usable as a ref). `access.write` says whether you may create and change tasks in that project. Active projects only by default; `archived: true` lists the archived ones instead. An archived project is one that has been put away, keeps everything it had, takes no new tasks, and does not appear in `list_tasks` unless you name it.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -279,7 +282,7 @@ export const TOOLS: McpTool[] = [
       name: 'list_users',
       title: 'List users',
       description:
-        'Users of the organization (use their id as assignee_id, reviewer_id or reporter_id). A roster entry is not proof of assignment eligibility: use `list_project_users` for the destination project and select an assignee or reviewer only from rows with `assignable: true`. `kind` is "person" or "agent" — an agent is a user like you, reachable through the API rather than a login. An assignee must be active and have effective Edit or Lead permission on the destination project; View-only users cannot be assigned work, including when their organization role is "user" or "guest". Reporters may be inactive or viewers when they can see the project. `plannable_hours` is that user\'s own capacity: the whole hours per week they have for planned project work, the work week minus meetings and other overhead (0092). It is what the planner divides by — plan someone at most that many hours in a week, and remember the week is shared across every project they work on, not just yours. It is null for an agent, which has no weekly capacity at all: an agent\'s work is never stretched to fit a calendar and an agent is never over capacity, so do not treat null as zero.',
+        'Users of the organization (use their id as assignee_id, reviewer_id or reporter_id). A roster entry is not proof of assignment eligibility: use `list_project_users` for the destination project and select an assignee or reviewer only from rows with `assignable: true`. `kind` is "person" or "agent", and an agent is a user like you, reachable through the API rather than a login. An assignee must be active and have effective Edit or Lead permission on the destination project; View-only users cannot be assigned work, including when their organization role is "user" or "guest". Reporters may be inactive or viewers when they can see the project. `plannable_hours` is that user\'s own capacity: the whole hours per week they have for planned project work, the work week minus meetings and other overhead (0092). It is what the planner divides by, so plan someone at most that many hours in a week, and remember the week is shared across every project they work on, not just yours. It is null for an agent, which has no weekly capacity at all: an agent\'s work is never stretched to fit a calendar and an agent is never over capacity, so do not treat null as zero.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -320,7 +323,7 @@ export const TOOLS: McpTool[] = [
       name: 'update_user',
       title: 'Update user',
       description:
-        'Set how many hours a week someone can be planned for — a WHOLE number of hours, 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to — nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only.',
+        'Set how many hours a week someone can be planned for, as a WHOLE number of hours from 1 to 168. Allowed for an organization admin, or a leader of a team that user belongs to, and nobody else, your own account included; the database decides, so a refusal here is the same refusal the app would give. An AGENT has no plannable week and cannot be given one (its capacity is unbounded), so this tool applies to people only.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1037,6 +1040,26 @@ function hasType(p: SchemaProp, x: unknown): boolean {
  * caps (TEXT_MAX) and of zod's string checks. */
 const CODE_POINT_ARGS: ReadonlySet<string> = new Set(['title', 'name'])
 
+/* Text arguments whose length the server checks itself, as `tool.argument`,
+ * so the app, REST and MCP accept the same text. Their schemas keep
+ * maxLength for clients, but validateArgs does not apply it. The server
+ * caps a comment body and an archive reason after trimming them, and lets
+ * an unchanged description saved before the cap through
+ * (model/comments.ts, model/issues.ts cleanDescription, and the
+ * archive_reason check of updateIssue below). */
+const SERVER_LENGTH_ARGS: ReadonlySet<string> = new Set([
+  'add_comment.body',
+  'update_comment.body',
+  'update_task.description',
+  'update_task.archive_reason',
+])
+
+/* `p` without maxLength, in its anyOf alternatives too. */
+function withoutMaxLength(p: SchemaProp): SchemaProp {
+  const { maxLength: _max, ...rest } = p
+  return rest.anyOf === undefined ? rest : { ...rest, anyOf: rest.anyOf.map(withoutMaxLength) }
+}
+
 /* The issue for a string holding an unpaired surrogate, which is not text
  * (shared.ts LONE_SURROGATE). */
 const UNPAIRED_SURROGATE = 'Invalid string: has an unpaired surrogate, which UTF-8 cannot encode'
@@ -1145,7 +1168,8 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
       }
       continue
     }
-    const msg = checkValue(prop, value, CODE_POINT_ARGS.has(key))
+    const checked = SERVER_LENGTH_ARGS.has(`${tool.name}.${key}`) ? withoutMaxLength(prop) : prop
+    const msg = checkValue(checked, value, CODE_POINT_ARGS.has(key))
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
   // Arguments the schema does not know are refused rather than dropped.
@@ -1620,7 +1644,7 @@ export const updateUser = internalMutation({
     // keeps the "not found" answer for a uuid outside the organization
     if (target.kind === 'agent') {
       throw badRequest(
-        `user "${user_id}" is an agent — an agent has no plannable week, its capacity is unbounded`,
+        `user "${user_id}" is an agent, which has no plannable week because its capacity is unbounded`,
       )
     }
     const fresh = await setPlannableHoursCore(ctx, {
@@ -1790,7 +1814,7 @@ export const createIssue = internalMutation({
     // before any other validation, and the refusal names the fix rather than
     // a bare unknown key
     if (a.archived !== undefined) {
-      throw badRequest('tasks are created active — archive with update_task after creating')
+      throw badRequest('tasks are created active, so archive with update_task after creating')
     }
     const title = cleanTitle(a.title)
     const { cat, readable, writable } = await catalogueFlags(ctx, me, a.access)
@@ -1945,6 +1969,11 @@ export const updateIssue = internalMutation({
     // the request's own shape, before anything is looked up
     if (a.archive_reason !== undefined && a.archived !== true) {
       throw badRequest('archive_reason needs archived set to true')
+    }
+    // REST's parse-time cap, after trimming, also for a task that is
+    // already archived and so posts no comment
+    if (a.archive_reason !== undefined && a.archive_reason.trim().length > TEXT_MAX) {
+      throw badRequest(`archive_reason must be at most ${TEXT_MAX_LABEL} characters`)
     }
     if (moves && a.project === undefined) {
       throw badRequest(
@@ -2232,10 +2261,13 @@ const scopeChallenge = (bodyText: string, scopes: string[]): Response | null => 
 /* 405 for every non-POST verb, BEFORE any auth or work (an old client
  * probing for the removed GET stream must not cost a function call). */
 const notAllowed = httpAction(async () => {
-  return new Response(JSON.stringify({ error: 'stateless MCP server — POST JSON-RPC only' }), {
-    status: 405,
-    headers: withCors({ Allow: 'POST, OPTIONS', 'Content-Type': 'application/json' }),
-  })
+  return new Response(
+    JSON.stringify({ error: 'stateless MCP server, which takes JSON-RPC by POST only' }),
+    {
+      status: 405,
+      headers: withCors({ Allow: 'POST, OPTIONS', 'Content-Type': 'application/json' }),
+    },
+  )
 })
 
 const preflight = httpAction(async () => {
@@ -2279,7 +2311,8 @@ const mcpPost = httpAction(async (ctx, request) => {
  * itself and throws every other failure to mcpPost. */
 async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> {
   const runMutation = conflictRetrying(ctx)
-  if (!(await runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
+  if (!(await runMutation(internal.billingMetering.ingress, { shard: ingressShard() })))
+    return rateLimited()
   // Bearer only — no X-Api-Key on MCP; the 'Bearer ' prefix match is
   // case-sensitive with one space (a lowercase `bearer` falls to `missing`)
   const auth = request.headers.get('Authorization') ?? ''
@@ -2323,10 +2356,12 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
                 message: 'OAuth connection is invalid, expired or disconnected',
               },
             }
+          const params_json = eventParamsJson(params)
+          if (params_json === null) return EVENT_PARAMS_NOT_FINITE
           return ctx.runAction(internal.webhookActions.manage, {
             owner: oauthOwner(live),
             method,
-            params_json: JSON.stringify(params),
+            params_json,
           })
         },
         runTool: async (name, args) => {
@@ -2392,12 +2427,11 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
       bodyText: body.text,
       runTool: (name, args) =>
         runTool(ctx, { callerId: cred.profileId, access: cred.access }, owner, name, args),
-      runEvent: (method, params) =>
-        ctx.runAction(internal.webhookActions.manage, {
-          owner,
-          method,
-          params_json: JSON.stringify(params),
-        }),
+      runEvent: async (method, params) => {
+        const params_json = eventParamsJson(params)
+        if (params_json === null) return EVENT_PARAMS_NOT_FINITE
+        return ctx.runAction(internal.webhookActions.manage, { owner, method, params_json })
+      },
     })
   } catch (e) {
     // the auth-to-dispatch race: the profile flipped between lookup and

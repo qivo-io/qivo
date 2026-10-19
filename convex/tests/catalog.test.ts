@@ -981,7 +981,7 @@ describe('labels — vocabulary + toggle', () => {
         target_type: 'issue',
         target_id: issue.id,
         label: issue.title,
-        detail: `— ${label.name}`,
+        detail: `“${label.name}”`,
         project_id: issue.project_id,
       })
     }

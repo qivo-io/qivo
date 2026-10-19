@@ -106,10 +106,10 @@ vi.mock('../model/billingUsage', async (importOriginal) => {
   const real = await importOriginal<typeof import('../model/billingUsage')>()
   return {
     ...real,
-    consumeMachineRequest: async (...a: Parameters<typeof real.consumeMachineRequest>) => {
+    consumeIngress: async (...a: Parameters<typeof real.consumeIngress>) => {
       const fault = faults.ingress.shift()
       if (fault !== undefined) throw fault
-      return await real.consumeMachineRequest(...a)
+      return await real.consumeIngress(...a)
     },
   }
 })

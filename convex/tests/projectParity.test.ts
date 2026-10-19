@@ -429,7 +429,7 @@ describe('creating projects and sub-projects', () => {
       'sub-projects live directly under a project, never under another sub-project',
     )
     await fx.t.run((ctx) => ctx.db.patch(fx.hidden._id, { archived_at: NOW }))
-    await refused(sub(fx.user, 'SKNK'), 'rule', 'the project is archived — restore it first')
+    await refused(sub(fx.user, 'SKNK'), 'rule', 'the project is archived, so restore it first')
     // REST: an unknown and an unreadable parent read alike
     for (const parent of ['SKNK', 'NOPE']) {
       await refused(
@@ -470,7 +470,7 @@ describe('creating projects and sub-projects', () => {
         lead_id: fx.viewer.id,
       }),
       'rule',
-      'a viewer cannot lead a project — make them a standard user first',
+      'a viewer cannot lead a project, so make them a standard user first',
     )
     await refused(
       fx.t.mutation(internal.machine.projects.mcpCreateProject, {
@@ -572,7 +572,6 @@ describe('changing a project', () => {
       description: 'Rig',
       review_hours: 1.25,
       track_delay: true,
-      unknown: 1,
     })
     expect(out).toMatchObject({
       name: 'Testbed',
@@ -583,7 +582,7 @@ describe('changing a project', () => {
     })
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'renamed',
-      detail: `from “Testbed platform” — ${VIA_REST}`,
+      detail: `from “Testbed platform”, ${VIA_REST}`,
     })
     // Edit on the project is not Lead; the fields a body cannot write
     await refused(
@@ -592,6 +591,11 @@ describe('changing a project', () => {
       'requires lead access to this project',
     )
     await refused(patch(fx.user, {}), 'bad_request', 'no recognized fields to update')
+    await refused(
+      patch(fx.user, { name: 'Testbed', unknown: 1 }),
+      'bad_request',
+      'unknown field "unknown"; this request takes name, description, review_hours, track_delay, lead_id, archived',
+    )
     await refused(patch(fx.user, { name: ' ' }), 'bad_request', 'a project name cannot be blank')
     await refused(
       patch(fx.user, { review_hours: '2' }),
@@ -662,7 +666,7 @@ describe('changing a project', () => {
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBe(archived.archived_at)
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'archived',
-      detail: 'with 2 sub-projects — via MCP',
+      detail: 'with 2 sub-projects, via MCP',
     })
     // one call restores first, so the rename lands on the active project
     const back = await update({ archived: false, name: 'Back' })
@@ -746,7 +750,7 @@ describe('changing a project', () => {
     expect(after[fx.user.id]).toBeUndefined()
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'changed the lead of',
-      detail: 'to user (was Pia) — via MCP',
+      detail: 'to user (was Pia), via MCP',
     })
     expect(grantsAfterHandover({ a: 'viewer', b: 'viewer' }, 'a', 'b')).toEqual({ a: 'user' })
     expect(grantsAfterHandover({ a: 'viewer' }, 'a', 'a')).toEqual({ a: 'viewer' })
@@ -1275,7 +1279,7 @@ describe('milestones', () => {
       project_id: fx.meta.id,
       created: true,
     })
-    expect((await lastEvent(fx.t, fx.org.id))?.detail).toMatch(/^at W10, .* — via MCP$/)
+    expect((await lastEvent(fx.t, fx.org.id))?.detail).toMatch(/^at W10, .*, via MCP$/)
     const renamed = await setMilestone(fx, fx.agent, { milestone: made.id, name: 'Freeze' })
     expect(renamed).toMatchObject({ name: 'Freeze', date: '2026-03-02', created: false })
     expect((await lastEvent(fx.t, fx.org.id))?.verb).toBe('renamed milestone')
@@ -1335,7 +1339,7 @@ describe('milestones', () => {
     await refused(
       setMilestone(fx, fx.agent, { name: 'Gate', date: '2026-03-02' }),
       'rule',
-      'that project is archived — restore it first',
+      'that project is archived, so restore it first',
     )
   })
 

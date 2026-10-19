@@ -79,7 +79,7 @@ export const mintCredential = internalMutation({
       )
       if (agents.length > 1) {
         throw badRequest(
-          `agent name "${a.agent_name}" is ambiguous (${agents.length} agents) — pass profile_id instead`,
+          `agent name "${a.agent_name}" is ambiguous (${agents.length} agents), so pass profile_id instead`,
         )
       }
       profile = agents[0] ?? null

@@ -243,6 +243,9 @@ describe('organization export', () => {
     const target = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const ids = await t.run(async (ctx) => {
       await ctx.db.patch(f.sub._id, { archived_at: NOW })
+      // legacy icons, stored before icons were dropped, of any length
+      await ctx.db.patch(f.meta._id, { icon: 'x'.repeat(5000), icon_color: '#335577' })
+      await ctx.db.patch(f.team._id, { icon: 'zap', icon_color: '#335577' })
       const storageId = await ctx.storage.store(new Blob(['file contents']) as never)
       const avatarId = await ctx.storage.store(new Blob(['portrait']) as never)
       await ctx.db.patch(f.admin._id, { avatar_storage_id: avatarId, message_retention_days: 30 })
@@ -352,6 +355,8 @@ describe('organization export', () => {
         expect(row).not.toHaveProperty('key_hash')
         expect(row).not.toHaveProperty('task_archived')
         expect(row).not.toHaveProperty('relations_marked')
+        expect(row).not.toHaveProperty('icon')
+        expect(row).not.toHaveProperty('icon_color')
       }
     }
     expect(exported.organizations).toHaveLength(1)

@@ -187,7 +187,7 @@ export async function assertAssignable(
   if (!p.active) throw badRequest(`user "${profileId}" is switched off and can hold no new work`)
   if (p.org_role === 'viewer') {
     throw badRequest(
-      `user "${profileId}" is a viewer — a viewer reads the projects they are added to and is never assigned work`,
+      `user "${profileId}" is a viewer, who reads the projects they are added to and is never assigned work`,
     )
   }
   if (!(await profileCanSeeProject(ctx, p, project))) {
@@ -412,7 +412,9 @@ export async function assertReporterRule(
 /* Archived projects take no new work — machine sentence (core.ts:379-383). */
 export function assertLive(project: Doc<'projects'>): void {
   if (project.archived_at !== undefined) {
-    throw badRequest(`${project.key} is archived — restore it in the app before adding tasks to it`)
+    throw badRequest(
+      `${project.key} is archived, so restore it in the app before adding tasks to it`,
+    )
   }
 }
 
@@ -420,7 +422,7 @@ export function assertLive(project: Doc<'projects'>): void {
  * Arrivals ONLY — created there, moved there; editing a task already inside
  * an archived project stays allowed (the nightly sweep updates rows in one). */
 export function assertProjectArrival(project: Doc<'projects'>): void {
-  if (project.archived_at !== undefined) throw rule('that project is archived — restore it first')
+  if (project.archived_at !== undefined) throw rule('that project is archived, so restore it first')
 }
 
 export const SUB_MUST_NAME = 'sub_project must name a sub-project by key, number or uuid'
@@ -429,7 +431,7 @@ export const SUB_MUST_NAME = 'sub_project must name a sub-project by key, number
 export function pairRule(project: Doc<'projects'>, sub: Doc<'projects'>): void {
   if (sub.type !== 'project' || (sub.id !== project.id && sub.parent_id !== project.id)) {
     throw badRequest(
-      `sub-project ${sub.key} does not belong to project ${project.key} — tasks are never created under another project's sub-project`,
+      `sub-project ${sub.key} does not belong to project ${project.key}, and tasks are never created under another project's sub-project`,
     )
   }
 }
@@ -448,12 +450,12 @@ export function metaNeedsSub(
     .map((c) => c.key)
     .sort()
   throw badRequest(
-    `${project.key} is a project — tasks live in its sub-projects; ${
+    `${project.key} is a project, and tasks live in its sub-projects; ${
       mine.length
         ? `pass sub_project (one of: ${mine.join(', ')})`
         : seen.length
           ? 'you have no write access to any of them'
-          : 'it has no sub-projects yet — create one in the app first'
+          : 'it has no sub-projects yet, so create one in the app first'
     }`,
   )
 }
@@ -500,7 +502,7 @@ async function hasActiveSubtasks(
 export async function assertNoSubtasks(ctx: QueryCtx, issue: GroupRow): Promise<void> {
   if (await hasActiveSubtasks(ctx, issue)) {
     throw badRequest(
-      'remaining_hours cannot be set on a task with subtasks — it is the sum of their remaining time',
+      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time',
     )
   }
 }
@@ -545,7 +547,7 @@ export async function assertNoGroupDates(ctx: QueryCtx, issue: Doc<'issues'>): P
 export async function assertOwnRemaining(ctx: QueryCtx, issue: GroupRow): Promise<void> {
   if (await hasActiveSubtasks(ctx, issue)) {
     throw rule(
-      'a task with subtasks has no remaining time of its own — it shows the sum of its subtasks',
+      'a task with subtasks has no remaining time of its own, because it shows the sum of its subtasks',
     )
   }
 }
@@ -704,7 +706,7 @@ export function assertParentActive(
   childArchivedAt: string | undefined,
 ): void {
   if (childArchivedAt === undefined && parent.archived_at !== undefined) {
-    throw rule('the parent task is archived — restore it first')
+    throw rule('the parent task is archived, so restore it first')
   }
 }
 
@@ -1399,7 +1401,7 @@ export async function updateIssueCore(
   const entersReview = patch.status === 'review' && issue.status !== 'review'
   if ('status' in patch && patch.status !== undefined) {
     if (await isGroup()) {
-      throw rule('status cannot be set on a task with subtasks — update its subtasks instead')
+      throw rule('status cannot be set on a task with subtasks, so update its subtasks instead')
     }
     w.status = patch.status
   }

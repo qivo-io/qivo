@@ -551,7 +551,7 @@ describe('a person writing over REST', () => {
     const rows = (await activityFor(t, f.org.id)).map((row) => [row.verb, row.actor_id, row.detail])
     expect(rows).toEqual([
       ['created', f.admin.id, 'via the REST API'],
-      ['changed', f.admin.id, '(title “Mine” → “Ours”) — via the REST API'],
+      ['changed', f.admin.id, '(title “Mine” → “Ours”), via the REST API'],
       ['deleted', f.admin.id, 'via the REST API'],
       ['created', f.agent.id, 'via the REST API (CI key)'],
     ])
@@ -574,7 +574,7 @@ describe('a person writing over REST', () => {
     expect((await call(fx.t, fx.agentKey, 'POST', path, { body: 'x', author: 'me' })).body).toEqual(
       {
         error:
-          'comments cannot be attributed over the API — a comment is always authored by the agent posting it',
+          'comments cannot be attributed over the API; a comment is always authored by the agent posting it',
       },
     )
   })
@@ -633,7 +633,7 @@ describe('PATCH /v1/users/{id}', () => {
     })
     expect(await patch(fx.writer, f.agent.id, { plannable_hours: 25 })).toEqual({
       status: 400,
-      body: { error: 'an agent has no plannable week — its capacity is unbounded' },
+      body: { error: 'an agent has no plannable week, because its capacity is unbounded' },
     })
     for (const id of [uuid(), f.otherAdmin.id, 'nobody']) {
       expect(await patch(fx.writer, id, { plannable_hours: 25 }), id).toEqual({
@@ -647,7 +647,8 @@ describe('PATCH /v1/users/{id}', () => {
       [{ plannable_hours: '30' }, whole],
       [{ plannable_hours: 0 }, whole],
       [{ plannable_hours: 169 }, whole],
-      [{ name: 'Renamed' }, 'no recognized fields to update'],
+      [{}, 'no recognized fields to update'],
+      [{ name: 'Renamed' }, 'unknown field "name"; this request takes plannable_hours'],
       ['not json', 'request body must be JSON'],
     ] as const) {
       expect(await patch(fx.writer, f.user.id, body), JSON.stringify(body)).toEqual({

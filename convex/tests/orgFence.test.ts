@@ -107,7 +107,7 @@ async function capture(promise: Promise<unknown>, ref: string): Promise<Captured
 
 /* issue_assignee_same_org's one sentence (0102:283-300) — the browser doors'
  * backstop. NOTE: the per-cause machine grammar (assertAssignable's
- * `user "…" is a viewer — …`, model/issues.ts) belongs to REST/MCP alone
+ * `user "…" is a viewer, who …`, model/issues.ts) belongs to REST/MCP alone
  * (rest.test.ts:792, mcp.test.ts:1049); the browser path deliberately answers
  * ONE sentence for foreign, unknown, viewer and switched-off alike — the
  * stronger form of the no-oracle rule. */
@@ -960,8 +960,8 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
   })
 
   /* Archived arrival, browser door. The machine surfaces read assertLive's
-   * grammar ('… is archived — restore it in the app before adding tasks to
-   * it', rest.test.ts:676/mcp.test.ts:1043); the browser door reads the DB
+   * grammar ('… is archived, so restore it in the app before adding tasks
+   * to it', rest.test.ts:676/mcp.test.ts:1043); the browser door reads the DB
    * backstop's own sentence (issue_project_archived_guard, 0106:123-139). */
   it('api.issues.create into an archived project refuses with the arrival sentence', async () => {
     await expectRefusal(
@@ -972,7 +972,7 @@ describe('0056 residuals — viewer assignee, hidden endpoints, archived arrival
         title: 'too late',
       }),
       'rule',
-      /^that project is archived — restore it first$/,
+      /^that project is archived, so restore it first$/,
     )
   })
 })

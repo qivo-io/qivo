@@ -8,6 +8,7 @@ declare class URLSearchParams {
   has(name: string): boolean
   append(name: string, value: string): void
   set(name: string, value: string): void
+  keys(): IterableIterator<string>
   [Symbol.iterator](): IterableIterator<[string, string]>
   toString(): string
 }

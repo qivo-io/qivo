@@ -100,6 +100,7 @@ import { badRequest, forbidden, notFound, type Refusal } from '../lib/functions'
 import { mcpResource } from '../lib/oauth'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { TEXT_MAX, TEXT_MAX_LABEL } from '../lib/textLimits'
+import { ingressShard } from '../model/billingUsage'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import {
@@ -149,8 +150,12 @@ import {
   REST_CALLER as CALLER,
   internalError,
   needJson,
+  optionalJson,
   restProvenance as provenanceOf,
+  REST_NOT_UTF8,
   readBody,
+  refuseUnknownFields,
+  refuseUnknownParams,
   vKeyName,
   WRITE_CONFLICT,
   WRITE_CONFLICT_MESSAGE,
@@ -215,8 +220,52 @@ async function orgNames(ctx: QueryCtx, orgId: string): Promise<Map<string, strin
   return new Map(profiles.map((p) => [p.id, p.name]))
 }
 
+/* The body fields of POST /v1/tasks. `archived`, `project_id` and
+ * `parent_id` are refused with their own sentences first. */
+const TASK_CREATE_FIELDS = [
+  'project',
+  'sub_project',
+  'parent',
+  'title',
+  'description',
+  'status',
+  'priority',
+  'assignee_id',
+  'reviewer_id',
+  'reporter_id',
+  'start_week',
+  'end_week',
+  'due_date',
+  'remaining_hours',
+  'paused',
+] as const
+
+/* The body fields of PATCH /v1/tasks/{ref}. `reporter_id`, `project_id` and
+ * `parent_id` are refused with their own sentences first. */
+const TASK_UPDATE_FIELDS = [
+  'title',
+  'description',
+  'status',
+  'priority',
+  'assignee_id',
+  'reviewer_id',
+  'start_week',
+  'end_week',
+  'due_date',
+  'remaining_hours',
+  'paused',
+  'archived',
+  'archive_reason',
+  'project',
+  'sub_project',
+  'parent',
+  'add_labels',
+  'remove_labels',
+] as const
+
 /* Validates + maps a request body onto issue columns (rest:267-302, sentences
- * verbatim). `forCreate` also requires title. Unknown fields are ignored. */
+ * verbatim). `forCreate` also requires title. The caller has refused unknown
+ * fields already. */
 function issueFields(b: Record<string, unknown>, forCreate: boolean): Record<string, unknown> {
   const f: Record<string, unknown> = {}
   if ('title' in b) f.title = cleanTitle(b.title)
@@ -481,6 +530,7 @@ export const updateUser = internalMutation({
     const target = (await listUsersCore(ctx, me)).find((m) => m.id === a.ref.toLowerCase())
     if (target === undefined) throw notFound('user not found')
     const b = needJson(a.body)
+    refuseUnknownFields(b, ['plannable_hours'])
     if (!('plannable_hours' in b)) throw badRequest('no recognized fields to update')
     if (typeof b.plannable_hours !== 'number' || !Number.isInteger(b.plannable_hours)) {
       throw badRequest('plannable hours must be a whole number of hours from 1 to 168')
@@ -609,20 +659,23 @@ export const getIssue = internalQuery({
 
 /* POST /v1/tasks — the order-sensitive dance (rest:440-471). A project or
  * sub_project the key cannot read answers exactly like an unknown ref, so no
- * answer reveals that a hidden project exists. */
+ * answer reveals that a hidden project exists. The body's own refusals,
+ * which name no project, come first. */
 export const createIssue = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, body: v.string() },
   handler: async (ctx, a): Promise<RestTaskJson> => {
     const { me, cat, readable, writable } = await withAccess(ctx, a.callerId, a.access)
     const b = needJson(a.body)
+    if ('archived' in b)
+      throw badRequest('tasks are created active, so archive with PATCH after creating')
+    refuseReadOnlyFields(b)
+    refuseUnknownFields(b, TASK_CREATE_FIELDS)
     const proj = findProjectRef(cat, typeof b.project === 'string' ? b.project : '')
     // A project the key cannot read reads like an unknown one (writable
     // implies readable), before any pair validation.
     if (proj === undefined || !readable(proj.id)) {
       throw badRequest('project must name a project by uuid, number or key')
     }
-    if ('archived' in b)
-      throw badRequest('tasks are created active — archive with PATCH after creating')
     assertLive(proj)
     // an explicit null sub_project means "not provided"
     let target = proj
@@ -644,7 +697,6 @@ export const createIssue = internalMutation({
     // a sub can be archived alone, so proj being live proves nothing
     assertLive(target)
     if (!writable(target.id)) throw noWrite(me)
-    refuseReadOnlyFields(b)
     const fields = issueFields(b, true)
     assertEffectiveWeekPair(fields)
     await applyPerson(ctx, target, b, fields, 'assignee_id')
@@ -718,6 +770,7 @@ export const updateIssue = internalMutation({
     const b = needJson(a.body)
     if ('reporter_id' in b) throw badRequest(REPORTER_IMMUTABLE_SENTENCE)
     refuseReadOnlyFields(b)
+    refuseUnknownFields(b, TASK_UPDATE_FIELDS)
     const fields = issueFields(b, false)
     // a group's dates come from its subtasks, so any date key on one is
     // refused, null and unchanged values included
@@ -788,8 +841,8 @@ export const updateIssue = internalMutation({
   },
 })
 
-/* DELETE /v1/tasks/{ref} moves the task to Deleted items as the app's
- * delete does (model/deletedItems.ts moveTasksToTrash), where a person can
+/* DELETE /v1/tasks/{ref}, which takes no body, moves the task to Deleted
+ * items as the app's delete does (model/deletedItems.ts moveTasksToTrash), where a person can
  * restore it in the app. Its comments, follows, labels, links and
  * attachments go with it, its messages are deleted, and its subtasks stay,
  * detached, touched AND notified. The item records the credential (`via`),
@@ -801,12 +854,14 @@ export const deleteIssue = internalMutation({
     keyName: vKeyName,
     credential: vEventOwner,
     ref: v.string(),
+    body: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<{ deleted: boolean; id: string; key: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const via = await credentialVia(ctx, me, a.credential)
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
+    refuseUnknownFields(optionalJson(a.body ?? ''), [])
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const now = new Date().toISOString()
     await moveTasksToTrash(ctx, {
@@ -865,6 +920,7 @@ export const addComment = internalMutation({
     if (!(await hasProjectLevel(ctx, me, issue.project_id, 'user'))) throw noWrite(me)
     const b = needJson(a.body)
     if ('author' in b || 'author_id' in b) throw badRequest(CALLER[me.kind].commentAuthor)
+    refuseUnknownFields(b, ['body'])
     if (typeof b.body !== 'string') throw badRequest('body must be a non-empty string')
     const trimmed = b.body.trim()
     if (trimmed === '') throw badRequest('comment body must not be blank')
@@ -898,6 +954,7 @@ export const addLink = internalMutation({
     const issue = await findIssue(ctx, me, a.ref)
     if (issue === null) throw notFound('task not found')
     const b = needJson(a.body)
+    refuseUnknownFields(b, ['task', 'kind'])
     if (!isTaskLinkKind(b.kind)) throw badRequest(linkKindSentence)
     const other = typeof b.task === 'string' ? await findIssue(ctx, me, b.task) : null
     if (other === null) throw badRequest('task must name a task by key, number or uuid')
@@ -912,9 +969,9 @@ export const addLink = internalMutation({
   },
 })
 
-/* DELETE /v1/tasks/{ref}/links/{kind}/{other} removes that link, kind as
- * seen from {ref}. No such link answers removed: false. Writes no activity
- * row, as in the app. */
+/* DELETE /v1/tasks/{ref}/links/{kind}/{other}, which takes no body, removes
+ * that link, kind as seen from {ref}. No such link answers removed: false.
+ * Writes no activity row, as in the app. */
 export const removeLink = internalMutation({
   args: {
     callerId: v.string(),
@@ -922,12 +979,14 @@ export const removeLink = internalMutation({
     ref: v.string(),
     kind: v.string(),
     other: v.string(),
+    body: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<RestLinkJson & { removed: boolean }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const issue = await findIssue(ctx, me, a.ref)
     const other = await findIssue(ctx, me, a.other)
     if (issue === null || other === null) throw notFound('task not found')
+    refuseUnknownFields(optionalJson(a.body ?? ''), [])
     if (!isTaskLinkKind(a.kind)) throw badRequest(linkKindSentence)
     if ((await linkAccess(ctx, me, issue, other)) !== 'write') throw noWrite(me)
     const removed = await removeLinkCore(ctx, { me, a: issue, b: other, kind: a.kind })
@@ -947,11 +1006,12 @@ export const listLabels = internalQuery({
 })
 
 /* A label body's name and color: strings when present, `required` names
- * the ones that must be. */
+ * the ones that must be. Any other field is refused. */
 function labelFields(
   b: Record<string, unknown>,
   required: boolean,
 ): { name?: string; color?: string } {
+  refuseUnknownFields(b, ['name', 'color'])
   const out: { name?: string; color?: string } = {}
   for (const field of ['name', 'color'] as const) {
     if (!(field in b)) {
@@ -1060,9 +1120,13 @@ function safeDecode(s: string): string {
  * and every other segment must match the raw request segment exactly.
  * Declaring a route through route() types `param` from its own path, so a
  * `run` that asks for a name its path does not declare does not compile.
- * Webhook routes are not here, because they also accept OAuth credentials
- * and are served before the agent key and personal token auth
- * (webhookResponse). */
+ * `query` lists the query parameters the route reads, the only names its
+ * `run` can ask for, and the shell refuses any other parameter with 400
+ * before the route runs. A route that reads a body refuses a field it does
+ * not take in its internal function, after the caller's own refusals
+ * (shared.ts refuseUnknownFields). Webhook routes are not here, because
+ * they also accept OAuth credentials and are served before the agent key
+ * and personal token auth (webhookResponse). */
 
 /** The `:name` placeholders of a route path, as a union of names. */
 type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${infer Rest}`
@@ -1072,7 +1136,7 @@ type ParamName<Path extends string> = Path extends `${string}:${infer Name}/${in
     : never
 
 /** What a route's `run` receives once auth and routing are done. */
-type RouteInput<Name extends string> = Principal & {
+type RouteInput<Name extends string, Query extends string> = Principal & {
   /** the credential row that authenticated the request, for GET /v1/me and
    * the delete, which records it in Deleted items */
   credential: EventOwner
@@ -1080,23 +1144,27 @@ type RouteInput<Name extends string> = Principal & {
   keyName: string | null
   /** One decoded `:name` segment of the request path. */
   param: (name: Name) => string
-  query: (name: string) => string | undefined
+  /** One query parameter the route declares, absent when not sent. */
+  query: (name: Query) => string | undefined
   body: string
 }
 
 /** A route's fields besides its registry entry. */
-type RouteFields<Path extends string> = {
+type RouteFields<Path extends string, Query extends string> = {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   path: Path
   status: 200 | 201
+  /** The query parameters the route takes; none when left out. */
+  query?: readonly Query[]
 }
 
 /** One REST route. `run` answers the JSON body sent with `status`. */
-type RestRoute = RouteFields<string> & MachineEntry<RouteInput<string>, unknown>
+type RestRoute = RouteFields<string, string> & MachineEntry<RouteInput<string, string>, unknown>
 
-/** Declares a route whose `run` may only read the params its path names. */
-export function route<Path extends string>(
-  declared: RouteFields<Path> & MachineEntry<RouteInput<ParamName<Path>>, unknown>,
+/** Declares a route whose `run` may only read the params its path names and
+ * the query parameters it lists. */
+export function route<Path extends string, const Query extends string = never>(
+  declared: RouteFields<Path, Query> & MachineEntry<RouteInput<ParamName<Path>, Query>, unknown>,
 ): RestRoute {
   return declared
 }
@@ -1115,6 +1183,7 @@ export const ROUTES: RestRoute[] = [
     path: 'projects',
     access: 'read',
     status: 200,
+    query: ['archived'],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.rest.listProjects, {
         callerId,
@@ -1172,6 +1241,18 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks',
     access: 'read',
     status: 200,
+    query: [
+      'project',
+      'status',
+      'priority',
+      'assignee',
+      'owner',
+      'search',
+      'archived',
+      'limit',
+      'offset',
+      'cursor',
+    ],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.rest.listIssues, {
         callerId,
@@ -1229,13 +1310,14 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, keyName, credential, param }) =>
+    run: (r, { callerId, access, keyName, credential, param, body }) =>
       r.runMutation(internal.machine.rest.deleteIssue, {
         callerId,
         access,
         keyName,
         credential,
         ref: param('ref'),
+        body,
       }),
   }),
   route({
@@ -1243,6 +1325,7 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref/comments',
     access: 'read',
     status: 200,
+    query: ['limit', 'before'],
     run: (r, { callerId, access, param, query }) =>
       r.runQuery(internal.machine.rest.listComments, {
         callerId,
@@ -1284,13 +1367,14 @@ export const ROUTES: RestRoute[] = [
     path: 'tasks/:ref/links/:kind/:other',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, param }) =>
+    run: (r, { callerId, access, param, body }) =>
       r.runMutation(internal.machine.rest.removeLink, {
         callerId,
         access,
         ref: param('ref'),
         kind: param('kind'),
         other: param('other'),
+        body,
       }),
   }),
   route({
@@ -1377,6 +1461,9 @@ function refusalResponse(e: unknown, kind: ProfileKind): Response {
   return err(internalError(e), 500)
 }
 
+/* The body fields of POST /v1/webhooks, MCP's events/subscribe params. */
+const WEBHOOK_SUBSCRIBE_FIELDS = ['name', 'arguments', 'delivery', 'cursor', 'ttlMs'] as const
+
 /** Webhook lifecycle and inspection, the only REST routes that also accept
  *  OAuth credentials. */
 async function webhookResponse(
@@ -1438,42 +1525,66 @@ async function webhookResponse(
     }
   }
 
-  if (seg.length === 3 && seg[2] === 'organization' && req.method === 'GET')
+  const route =
+    seg.length === 3 && seg[2] === 'organization' && req.method === 'GET'
+      ? 'list organization'
+      : seg.length === 4 && seg[2] === 'organization' && req.method === 'DELETE'
+        ? 'remove organization'
+        : seg.length === 2 && req.method === 'GET'
+          ? 'list'
+          : seg.length === 2 && req.method === 'POST'
+            ? 'subscribe'
+            : seg.length === 3 && req.method === 'DELETE'
+              ? 'remove'
+              : null
+  if (route === null) return err('unknown webhook route', 404)
+  // no webhook route takes a query parameter, and only POST takes a body
+  refuseUnknownParams(new URL(req.url).searchParams.keys(), [])
+  if (req.method === 'DELETE') {
+    const read = await readBody(req)
+    if (read === null) return tooLarge()
+    if (!read.utf8) return err(REST_NOT_UTF8, 400)
+    refuseUnknownFields(optionalJson(read.text), [])
+  }
+  if (route === 'list organization')
     return json(await ctx.runQuery(internal.webhooks.listOrganization, { owner }), 200)
-  if (seg.length === 4 && seg[2] === 'organization' && req.method === 'DELETE') {
+  if (route === 'remove organization') {
     await runMutation(internal.webhooks.removeOrganization, { owner, id: safeDecode(seg[3]) })
     return new Response(null, { status: 204, headers: CORS })
   }
-  if (seg.length === 2 && req.method === 'GET')
-    return json(await ctx.runQuery(internal.webhooks.list, { owner }), 200)
-  if (seg.length === 2 && req.method === 'POST') {
-    const params = await readBody(req)
-    if (params === null) return tooLarge()
-    const reply = await ctx.runAction(internal.webhookActions.manage, {
-      owner,
-      method: 'events/subscribe',
-      params_json: params.text,
-    })
-    if ('error' in reply) {
-      const status =
-        reply.error.code === -32603
-          ? 500
-          : reply.error.code === -32013
-            ? 429
-            : reply.error.code === -32012
-              ? 403
-              : reply.error.code === -32011
-                ? 404
-                : 400
-      return err(reply.error.message, status)
-    }
-    return json(reply.result, 201)
-  }
-  if (seg.length === 3 && req.method === 'DELETE') {
+  if (route === 'list') return json(await ctx.runQuery(internal.webhooks.list, { owner }), 200)
+  if (route === 'remove') {
     await runMutation(internal.webhooks.remove, { owner, id: safeDecode(seg[2]) })
     return new Response(null, { status: 204, headers: CORS })
   }
-  return err('unknown webhook route', 404)
+  const read = await readBody(req)
+  if (read === null) return tooLarge()
+  if (!read.utf8) return err(REST_NOT_UTF8, 400)
+  // the body rules of every other REST route, so a bad body answers with
+  // their sentences rather than the JSON parser's. manage reads the text as
+  // sent: parsing it again keeps a number too large for a double as
+  // Infinity, which manage refuses, where writing the parsed body back out
+  // would turn it into null ("not set")
+  refuseUnknownFields(needJson(read.text), WEBHOOK_SUBSCRIBE_FIELDS)
+  const reply = await ctx.runAction(internal.webhookActions.manage, {
+    owner,
+    method: 'events/subscribe',
+    params_json: read.text,
+  })
+  if ('error' in reply) {
+    const status =
+      reply.error.code === -32603
+        ? 500
+        : reply.error.code === -32013
+          ? 429
+          : reply.error.code === -32012
+            ? 403
+            : reply.error.code === -32011
+              ? 404
+              : 400
+    return err(reply.error.message, status)
+  }
+  return json(reply.result, 201)
 }
 
 const restHandler = httpAction(async (ctx, req) => {
@@ -1482,7 +1593,8 @@ const restHandler = httpAction(async (ctx, req) => {
   let kind: ProfileKind = 'agent'
   const runMutation = conflictRetrying(ctx)
   try {
-    if (!(await runMutation(internal.billingMetering.ingress, {}))) return rateLimited()
+    if (!(await runMutation(internal.billingMetering.ingress, { shard: ingressShard() })))
+      return rateLimited()
     // ---- authenticate the agent key (qva_) or personal token (qvt_) --------
     const auth = req.headers.get('Authorization') ?? ''
     const secret = auth.startsWith('Bearer ')
@@ -1518,14 +1630,16 @@ const restHandler = httpAction(async (ctx, req) => {
 
     if (seg[0] !== 'v1') return err('unknown route (expected /v1/…)', 404)
     // every method but GET may carry a body; DELETE's is optional. One over
-    // BODY_MAX_BYTES answers 413 here, after the call was counted. Bytes that
-    // are not UTF-8 read as U+FFFD, as request.text() reads them
-    const read = req.method === 'GET' ? { text: '' } : await readBody(req)
+    // BODY_MAX_BYTES answers 413 here, after the call was counted, and one
+    // whose bytes are not UTF-8 answers 400
+    const read = req.method === 'GET' ? { text: '', utf8: true } : await readBody(req)
     if (read === null) return tooLarge()
+    if (!read.utf8) return err(REST_NOT_UTF8, 400)
     // other methods on a known path (PATCH …/comments, PUT on a task) fall
     // to the unknown-route 404, as deployed
     const found = findRoute(req.method, seg.slice(1))
     if (found === null) return err('unknown route', 404)
+    refuseUnknownParams(url.searchParams.keys(), found.route.query ?? [])
     const result = await runEntry(ctx, found.route, {
       callerId,
       access,

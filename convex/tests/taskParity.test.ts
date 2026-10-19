@@ -560,7 +560,7 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     const moved = (await activityFor(fx.t, fx.org.id)).at(-1)
     expect(moved).toMatchObject({
       verb: 'moved',
-      detail: `to the Board rev sub-project (from Firmware) — ${VIA}`,
+      detail: `to the Board rev sub-project (from Firmware), ${VIA}`,
       project_id: fx.sub.id,
       related_project_id: fx.sub2.id,
     })
@@ -582,12 +582,12 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     await refused(
       restPatch(fx, t1.id, { project: 'TBED' }),
       'bad_request',
-      'TBED is a project — tasks live in its sub-projects; pass sub_project (one of: FW, PCB)',
+      'TBED is a project, and tasks live in its sub-projects; pass sub_project (one of: FW, PCB)',
     )
     await refused(
       restPatch(fx, t1.id, { project: 'ARC' }),
       'bad_request',
-      'ARC is archived — restore it in the app before adding tasks to it',
+      'ARC is archived, so restore it in the app before adding tasks to it',
     )
     expect((await row(fx.t, t1.id)).project_id).toBe(fx.sub.id)
   })
@@ -689,7 +689,7 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     expect((await row(fx.t, parent.id)).remaining_hours).toBeUndefined()
     const events = await activityFor(fx.t, fx.org.id)
     const attach = events.find((e) => e.target_id === child.id)
-    expect(attach).toMatchObject({ verb: 'moved', detail: `under QN-${parent.num} — ${VIA}` })
+    expect(attach).toMatchObject({ verb: 'moved', detail: `under QN-${parent.num}, ${VIA}` })
     expect(namedTaskNums(attach as Doc<'activity_events'>)).toEqual([parent.num])
     // a cycle, a hidden parent and a read-only parent are refused
     await expectRefusal(restPatch(fx, parent.id, { parent: child.id }), 'rule')
@@ -714,7 +714,7 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     expect(await restPatch(fx, child.id, { parent: null })).toMatchObject({ parent_id: null })
     expect((await activityFor(fx.t, fx.org.id)).at(-1)).toMatchObject({
       verb: 'detached',
-      detail: `from QN-${parent.num} — ${VIA}`,
+      detail: `from QN-${parent.num}, ${VIA}`,
     })
     // POST creates a subtask
     const created = await fx.t.mutation(internal.machine.rest.createIssue, {
@@ -736,7 +736,7 @@ describe('PATCH /v1/tasks/{ref} moves, parents, labels and archive reasons', () 
     const out = await restPatch(fx, t1.id, { add_labels: [bug, 'BLOCKED', 'bug'] })
     expect(out.labels.map((l) => l.name)).toEqual(['Blocked', 'Bug'])
     const rows = (await activityFor(fx.t, fx.org.id)).filter((e) => e.verb === 'labeled')
-    expect(rows.map((e) => e.detail).sort()).toEqual([`— Blocked — ${VIA}`, `— Bug — ${VIA}`])
+    expect(rows.map((e) => e.detail).sort()).toEqual([`“Blocked”, ${VIA}`, `“Bug”, ${VIA}`])
     // asking for the current state writes nothing
     await drainActivity(fx.t)
     await restPatch(fx, t1.id, { add_labels: ['bug'] })
@@ -853,7 +853,7 @@ describe('REST links', () => {
     expect(events[0]).toMatchObject({
       verb: 'linked',
       target_id: b.id,
-      detail: `— blocks QN-${a.num} — ${VIA}`,
+      detail: `(blocks QN-${a.num}), ${VIA}`,
     })
     expect(namedTaskNums(events[0])).toEqual([a.num])
     expect((await restGet(fx, b.id)).links).toEqual([
@@ -1039,10 +1039,10 @@ describe('MCP task parity', () => {
     expect(await labelNames(fx.t, t1.id)).toEqual(['Bug'])
     const verbs = (await activityFor(fx.t, fx.org.id)).map((e) => [e.verb, e.detail])
     expect(verbs).toEqual([
-      ['moved', 'to the Board rev sub-project (from Firmware) — via MCP'],
-      ['moved', `under QN-${parent.num} — via MCP`],
-      ['archived', '(start week unset → 2026-09-21, end week unset → 2026-09-21) — via MCP'],
-      ['labeled', '— Bug — via MCP'],
+      ['moved', 'to the Board rev sub-project (from Firmware), via MCP'],
+      ['moved', `under QN-${parent.num}, via MCP`],
+      ['archived', '(start week unset → 2026-09-21, end week unset → 2026-09-21), via MCP'],
+      ['labeled', '“Bug”, via MCP'],
     ])
     const reason = await fx.t.run(async (ctx) =>
       ctx.db
@@ -1485,9 +1485,19 @@ describe('the shared cores the app runs too', () => {
     ])
     expect(namedTaskNums(ev('moved', 'under QN-4 (from QN-5) — via the REST API'))).toEqual([4, 5])
     expect(namedTaskNums(ev('detached', 'from QN-6 — via MCP'))).toEqual([6])
+    // the comma the writers have used since October 2026
+    expect(namedTaskNums(ev('linked', '(blocks QN-12), via MCP'))).toEqual([12])
+    expect(namedTaskNums(ev('linked', '(relates to QN-3), via the REST API (a (b) c)'))).toEqual([
+      3,
+    ])
+    expect(namedTaskNums(ev('moved', 'under QN-4 (from QN-5), via the REST API'))).toEqual([4, 5])
+    expect(namedTaskNums(ev('detached', 'from QN-6, via MCP'))).toEqual([6])
     // anything else that follows the key is not a signature: fail closed
     expect(namedTaskNums(ev('linked', '— blocks QN-12 and QN-13'))).toBeNull()
     expect(namedTaskNums(ev('linked', '— blocks QN-12 — via email'))).toBeNull()
     expect(namedTaskNums(ev('detached', 'from QN-6 — via MCP — via MCP'))).toBeNull()
+    expect(namedTaskNums(ev('detached', 'from QN-6, via MCP, via MCP'))).toBeNull()
+    expect(namedTaskNums(ev('linked', '(blocks QN-12), via email'))).toBeNull()
+    expect(namedTaskNums(ev('detached', 'from QN-6 via MCP'))).toBeNull()
   })
 })

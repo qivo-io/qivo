@@ -129,18 +129,19 @@ export const create = adminMutation({
       // profiles_agent_shape (0102:421-426): no mailbox, no login, and only
       // user/viewer — the one readable sentence in the family is 0102:443's
       if (normalizeEmail(args.email) !== undefined) {
-        throw rule('An agent has no email address — its login is a key')
+        throw rule('An agent has no email address. Its login is a key')
       }
       if (args.org_role === 'admin') {
         throw rule(
-          'an agent cannot be an organization admin — it reaches only the projects it is added to',
+          'an agent cannot be an organization admin, because it reaches only the projects it is added to',
         )
       }
-      if (args.org_role === 'guest') throw badRequest('an agent is user or viewer — never a guest')
+      if (args.org_role === 'guest')
+        throw badRequest('an agent is a user or a viewer, never a guest')
     } else {
       email = normalizeEmail(args.email)
       if (email === undefined || !EMAIL_SHAPE.test(email)) {
-        throw rule('A person needs an email address — it is what they sign in with')
+        throw rule('A person needs an email address. It is what they sign in with')
       }
       const held = email
       const dup = await ctx.db
@@ -267,11 +268,11 @@ async function updateProfile(
 
   if (row.kind === 'agent' && newRole === 'admin') {
     throw rule(
-      'an agent cannot be an organization admin — it reaches only the projects it is added to',
+      'an agent cannot be an organization admin, because it reaches only the projects it is added to',
     )
   }
   if (row.kind === 'agent' && newRole === 'guest') {
-    throw badRequest('an agent is user or viewer — never a guest')
+    throw badRequest('an agent is a user or a viewer, never a guest')
   }
   // The project-creation right belongs to a standard user, person or agent
   // (lib/projectCreators.ts). Turning it off is always accepted.
@@ -316,13 +317,13 @@ async function updateProfile(
     refuseDemoFeature()
     // only while the seat is UNCLAIMED; corrected, never emptied (0104).
     // Client sentences, now server-owned
-    if (row.kind === 'agent') throw rule('An agent has no email address — its login is a key')
+    if (row.kind === 'agent') throw rule('An agent has no email address. Its login is a key')
     if (row.auth_user_id !== undefined) {
-      throw rule('This seat has been claimed — its address is the one they signed in with')
+      throw rule('This seat has been claimed. Its address is the one they signed in with')
     }
     const email = normalizeEmail(patch.email)
     if (email === undefined || !EMAIL_SHAPE.test(email)) {
-      throw rule('A person needs an email address — it is what they sign in with')
+      throw rule('A person needs an email address. It is what they sign in with')
     }
     if (email !== row.email) {
       const dup = await ctx.db

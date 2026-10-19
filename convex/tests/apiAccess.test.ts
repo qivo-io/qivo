@@ -221,10 +221,11 @@ async function fixture(t: T) {
     await usage(f.user.id, `mcp_tokens:${ids.cursor}`, 'Cursor', 30)(PAST)
     await usage(f.agent.id, `agent_keys:${ids.relay}`, 'GitHub Actions', 11)(MONTH)
     await usage(f.user.id, `mcp_tokens:${ids.gone}`, 'Zapier', 2)(FREE)
+    // a calendar month keeps no total (model/billingUsage.ts recordApiCall),
+    // so the page finds MONTH from its usage rows
     for (const [period_start, calls] of [
       [PERIOD, 48],
       [PAST, 30],
-      [MONTH, 11],
       [FREE, 2],
     ] as const)
       await ctx.db.insert('billing_usage_totals', {

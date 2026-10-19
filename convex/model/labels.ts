@@ -290,7 +290,7 @@ export async function setTaskLabel(
       issue_id: issue.id,
       label_id: label.id,
     })
-  const named = `— ${label.name}`
+  const named = `“${label.name}”`
   await logActivity(ctx, {
     org_id: issue.org_id,
     actor_id: me.id,

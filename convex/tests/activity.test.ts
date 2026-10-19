@@ -580,7 +580,7 @@ describe('atomicity — a refused write leaves zero rows', () => {
         patch: { remaining_hours: 5 },
       }),
       'rule',
-      /^a task with subtasks has no remaining time of its own — it shows the sum of its subtasks$/,
+      /^a task with subtasks has no remaining time of its own, because it shows the sum of its subtasks$/,
     )
     const after = await t.run(async (ctx) => (await ctx.db.get(parent._id)) as Doc<'issues'>)
     expect(after.remaining_hours).toBeUndefined()
@@ -725,7 +725,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
     events = await activityFor(t, f.org.id)
     expect(events).toHaveLength(1)
     expect(events[0].verb).toBe('linked')
-    expect(events[0].detail).toBe(`— blocks QN-${other.num}`)
+    expect(events[0].detail).toBe(`(blocks QN-${other.num})`)
     expect(events[0].target_id).toBe(id)
     await drainActivity(t)
     await as(t, f.user).mutation(api.issues.removeLink, { org_id: f.org.id, a: id, b: other.id })
@@ -789,6 +789,9 @@ describe('namedTaskNums — the relation grammar the snapshot checks', () => {
     expect(namedTaskNums(row('moved', 'under its parent (from QN-3)'))).toEqual([3])
     expect(namedTaskNums(row('detached', 'from QN-3'))).toEqual([3])
     expect(namedTaskNums(row('detached', 'from its parent'))).toEqual([])
+    expect(namedTaskNums(row('linked', '(blocks QN-6)'))).toEqual([6])
+    expect(namedTaskNums(row('linked', '(relates to QN-6)'))).toEqual([6])
+    // the wording rows were stored with before October 2026
     expect(namedTaskNums(row('linked', '— blocks QN-6'))).toEqual([6])
     expect(namedTaskNums(row('linked', '— relates to QN-6'))).toEqual([6])
   })
@@ -802,6 +805,9 @@ describe('namedTaskNums — the relation grammar the snapshot checks', () => {
 
   it('answers null for relation wording no writer produces, so readers fail closed', () => {
     expect(namedTaskNums(row('linked', '— blocks PCB-12'))).toBeNull()
+    expect(namedTaskNums(row('linked', '(blocks PCB-12)'))).toBeNull()
+    expect(namedTaskNums(row('linked', '(blocks QN-6'))).toBeNull()
+    expect(namedTaskNums(row('linked', '— (blocks QN-6)'))).toBeNull()
     expect(namedTaskNums(row('linked'))).toBeNull()
     expect(namedTaskNums(row('detached', 'from QN-3 and QN-4'))).toBeNull()
     expect(namedTaskNums(row('moved', 'under QN-5 (from PCB-3)'))).toBeNull()

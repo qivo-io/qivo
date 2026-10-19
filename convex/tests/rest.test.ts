@@ -7,7 +7,7 @@
  * (unknown and unreadable refs answer identically), the viewer-agent
  * write refusals (a Viewer agent is read-only; a Standard user agent with
  * only View on a project meets the project rule), and the machine activity grammar
- * (verb + `— via the REST API (<keyName>)` suffix) including the folded
+ * (verb + `, via the REST API (<keyName>)` suffix) including the folded
  * fields+archived single PATCH: one row write, one fan-out, one activity row,
  * plus the cascade with its suppression semantics. */
 
@@ -1231,7 +1231,7 @@ describe('POST /v1/tasks', () => {
         body: JSON.stringify({ project: 'FW', title: 'x', archived: false }),
       }),
       'bad_request',
-      'tasks are created active — archive with PATCH after creating',
+      'tasks are created active, so archive with PATCH after creating',
     )
     await archiveProject(t, f.sub2)
     await refused(
@@ -1242,7 +1242,7 @@ describe('POST /v1/tasks', () => {
         body: JSON.stringify({ project: 'PCB', title: 'x' }),
       }),
       'bad_request',
-      'PCB is archived — restore it in the app before adding tasks to it',
+      'PCB is archived, so restore it in the app before adding tasks to it',
     )
     // a sub archived alone, named via its live meta
     await refused(
@@ -1253,7 +1253,7 @@ describe('POST /v1/tasks', () => {
         body: JSON.stringify({ project: 'TBED', sub_project: 'PCB', title: 'x' }),
       }),
       'bad_request',
-      'PCB is archived — restore it in the app before adding tasks to it',
+      'PCB is archived, so restore it in the app before adding tasks to it',
     )
   })
 
@@ -1261,7 +1261,7 @@ describe('POST /v1/tasks', () => {
     const t = newT()
     const f = await machineOrg(t)
     const bare =
-      'TBED is a project — tasks live in its sub-projects; pass sub_project (one of: FW, PCB)'
+      'TBED is a project, and tasks live in its sub-projects; pass sub_project (one of: FW, PCB)'
     await refused(
       t.mutation(internal.machine.rest.createIssue, {
         callerId: f.agent.id,
@@ -1292,7 +1292,7 @@ describe('POST /v1/tasks', () => {
         body: JSON.stringify({ project: 'TBED', title: 'x' }),
       }),
       'bad_request',
-      'TBED is a project — tasks live in its sub-projects; you have no write access to any of them',
+      'TBED is a project, and tasks live in its sub-projects; you have no write access to any of them',
     )
     const empty = await plantProject(t, { org_id: f.org.id })
     await grant(t, empty.id, f.agent.id, 'user')
@@ -1304,7 +1304,7 @@ describe('POST /v1/tasks', () => {
         body: JSON.stringify({ project: empty.key, title: 'x' }),
       }),
       'bad_request',
-      `${empty.key} is a project — tasks live in its sub-projects; it has no sub-projects yet — create one in the app first`,
+      `${empty.key} is a project, and tasks live in its sub-projects; it has no sub-projects yet, so create one in the app first`,
     )
   })
 
@@ -1322,7 +1322,7 @@ describe('POST /v1/tasks', () => {
         body: JSON.stringify({ project: 'TBED', sub_project: sub3.key, title: 'x' }),
       }),
       'bad_request',
-      `sub-project ${sub3.key} does not belong to project TBED — tasks are never created under another project's sub-project`,
+      `sub-project ${sub3.key} does not belong to project TBED, and tasks are never created under another project's sub-project`,
     )
   })
 
@@ -1378,7 +1378,7 @@ describe('POST /v1/tasks', () => {
     await refused(
       post(f.viewer.id),
       'bad_request',
-      `user "${f.viewer.id}" is a viewer — a viewer reads the projects they are added to and is never assigned work`,
+      `user "${f.viewer.id}" is a viewer, who reads the projects they are added to and is never assigned work`,
     )
     await refused(
       post(inaccessible.id),
@@ -1441,21 +1441,24 @@ describe('POST /v1/tasks', () => {
     expect(await restTasks(t, { callerId: f.agent.id, access: 'read' })).toHaveLength(1)
   })
 
-  it('unknown fields are ignored; remaining_hours rounds to one decimal and stamps', async () => {
+  it('unknown fields are refused and create nothing; remaining_hours rounds to one decimal and stamps', async () => {
     const t = newT()
     const f = await machineOrg(t)
-    const out = await t.mutation(internal.machine.rest.createIssue, {
-      callerId: f.agent.id,
-      access: 'write',
-      keyName: KEY,
-      body: JSON.stringify({
-        project: 'FW',
-        title: 'ok',
-        estimate_hours: 5,
-        whatever: true,
-        remaining_hours: 2.34,
-      }),
-    })
+    const post = (body: unknown) =>
+      t.mutation(internal.machine.rest.createIssue, {
+        callerId: f.agent.id,
+        access: 'write',
+        keyName: KEY,
+        body: JSON.stringify(body),
+      })
+    // a misspelled parent would otherwise create a top-level task
+    await refused(
+      post({ project: 'FW', title: 'ok', parnet: 'QN-1', estimate_hours: 5 }),
+      'bad_request',
+      'unknown fields "parnet", "estimate_hours"; this request takes project, sub_project, parent, title, description, status, priority, assignee_id, reviewer_id, reporter_id, start_week, end_week, due_date, remaining_hours, paused',
+    )
+    expect(await restTasks(t, { callerId: f.agent.id, access: 'read' })).toEqual([])
+    const out = await post({ project: 'FW', title: 'ok', remaining_hours: 2.34 })
     expect(out.remaining_hours).toBe(2.3)
     expect(typeof out.remaining_set_at).toBe('string')
   })
@@ -1524,7 +1527,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
     expect(acts).toHaveLength(1)
     expect(acts[0].verb).toBe('changed')
     expect(acts[0].detail).toBe(
-      '(status To Do → In Review, remaining unset → 3 h) — via the REST API (drive)',
+      '(status To Do → In Review, remaining unset → 3 h), via the REST API (drive)',
     )
     const msgs = await messagesFor(t, f.user.id, row.id)
     expect(msgs).toHaveLength(1)
@@ -1556,7 +1559,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
     const acts = await activityFor(t, f.org.id)
     expect(acts).toHaveLength(1)
     expect(acts[0].detail).toBe(
-      '(status In Progress → In Review, remaining 6 h → 2 h) — via the REST API (drive)',
+      '(status In Progress → In Review, remaining 6 h → 2 h), via the REST API (drive)',
     )
   })
 
@@ -1620,7 +1623,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
     const acts = await activityFor(t, f.org.id)
     expect(acts).toHaveLength(1)
     expect(acts[0].verb).toBe('archived')
-    expect(acts[0].detail).toBe('(priority Medium → High) — via the REST API (drive)')
+    expect(acts[0].detail).toBe('(priority Medium → High), via the REST API (drive)')
     // ONE message — the Archived line rides with the field lines
     const parentMsgs = await messagesFor(t, f.user.id, parent.id)
     expect(parentMsgs).toHaveLength(1)
@@ -1711,7 +1714,11 @@ describe('PATCH /v1/tasks/{ref}', () => {
     await refused(patch({}, 'QN-999999'), 'not_found', 'task not found')
     await refused(patch('broken'), 'bad_request', 'request body must be JSON')
     await refused(patch({}), 'bad_request', 'no recognized fields to update')
-    await refused(patch({ estimate_hours: 5 }), 'bad_request', 'no recognized fields to update')
+    await refused(
+      patch({ title: 'x', estimate_hours: 5 }),
+      'bad_request',
+      'unknown field "estimate_hours"; this request takes title, description, status, priority, assignee_id, reviewer_id, start_week, end_week, due_date, remaining_hours, paused, archived, archive_reason, project, sub_project, parent, add_labels, remove_labels',
+    )
     await refused(patch({ archived: 'yes' }), 'bad_request', 'archived must be a boolean')
     // the response's own fields are refused with where to go, never dropped
     await refused(
@@ -1788,7 +1795,7 @@ describe('PATCH /v1/tasks/{ref}', () => {
         body: JSON.stringify({ remaining_hours: 3 }),
       }),
       'bad_request',
-      'remaining_hours cannot be set on a task with subtasks — it is the sum of their remaining time',
+      'remaining_hours cannot be set on a task with subtasks, because it is the sum of their remaining time',
     )
     const cleared = await t.mutation(internal.machine.rest.updateIssue, {
       callerId: f.agent.id,
@@ -2278,7 +2285,7 @@ describe('/v1/tasks/{ref}/comments', () => {
     await refused(post({ body: 'hi' }, hiddenIssue.id), 'not_found', 'task not found')
     await refused(post({ body: 'hi' }, 'QN-999999'), 'not_found', 'task not found')
     const attribution =
-      'comments cannot be attributed over the API — a comment is always authored by the agent posting it'
+      'comments cannot be attributed over the API; a comment is always authored by the agent posting it'
     await refused(post({ body: 'hi', author: 'someone' }), 'bad_request', attribution)
     await refused(post({ body: 'hi', author_id: f.user.id }), 'bad_request', attribution)
     await refused(post({ body: 7 }), 'bad_request', 'body must be a non-empty string')
@@ -2304,7 +2311,7 @@ describe('/v1/tasks/{ref}/comments', () => {
 describe('a navigation-only parent hides its other sub-projects', () => {
   const SUB_MUST_NAME = 'sub_project must name a sub-project by key, number or uuid'
   const META_SENTENCE = (tail: string) =>
-    `TBED is a project — tasks live in its sub-projects; ${tail}`
+    `TBED is a project, and tasks live in its sub-projects; ${tail}`
 
   async function subOnlyOrg(t: T) {
     const f = await machineOrg(t)
@@ -2358,7 +2365,7 @@ describe('a navigation-only parent hides its other sub-projects', () => {
     await refused(
       create(t, subOnly.id, { project: 'TBED' }),
       'bad_request',
-      META_SENTENCE('it has no sub-projects yet — create one in the app first'),
+      META_SENTENCE('it has no sub-projects yet, so create one in the app first'),
     )
     const mcp = await expectRefusal(
       t.mutation(internal.machine.mcp.createIssue, {
@@ -2370,7 +2377,7 @@ describe('a navigation-only parent hides its other sub-projects', () => {
       'bad_request',
     )
     expect((mcp.data as Refusal).message).toBe(
-      META_SENTENCE('it has no sub-projects yet — create one in the app first'),
+      META_SENTENCE('it has no sub-projects yet, so create one in the app first'),
     )
   })
 

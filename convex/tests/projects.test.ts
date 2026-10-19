@@ -230,7 +230,7 @@ describe('projects.create', () => {
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, subArgs(archived.id, 'SUB4')),
       'rule',
-      /^the project is archived — restore it first$/,
+      /^the project is archived, so restore it first$/,
     )
     // lead standing on the parent, not mere visibility: guest holds 'user'
     await expectRefusal(
@@ -308,7 +308,7 @@ describe('projects.create', () => {
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, createArgs(f, { lead_id: f.viewer.id })),
       'rule',
-      /^a viewer cannot lead a project — make them a standard user first$/,
+      /^a viewer cannot lead a project, so make them a standard user first$/,
     )
     await expectRefusal(
       as(t, f.admin).mutation(api.projects.create, createArgs(f, { lead_id: f.otherAdmin.id })),
@@ -1294,7 +1294,7 @@ describe('milestones', () => {
         week: '2026-05-11',
       }),
       'rule',
-      /^that project is archived — restore it first$/,
+      /^that project is archived, so restore it first$/,
     )
     // a viewer's capped grant never reaches 'user'
     await expectRefusal(
@@ -1506,7 +1506,7 @@ describe('milestones', () => {
         week: '2026-05-11',
       }),
       'rule',
-      /^that project is archived — restore it first$/,
+      /^that project is archived, so restore it first$/,
     )
   })
 

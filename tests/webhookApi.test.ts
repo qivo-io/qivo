@@ -291,6 +291,58 @@ describe('MCP Events and generic REST webhooks', () => {
       expect((await f.mcp('events/subscribe', params)).body.error?.code).toBe(-32014)
   })
 
+  it('refuses a number too large for a double instead of reading it as not set', async () => {
+    const f = await fixture()
+    // JSON.parse reads 1e309 as Infinity; written back out it would be null,
+    // which means no expiry and no filter
+    const huge = (body: unknown, value: string) => JSON.stringify(body).replace('"HUGE"', value)
+    const subscribe = (params: Record<string, unknown>, value: string) =>
+      f.t.fetch('/mcp', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer qvt_${'11'.repeat(24)}`,
+          'Content-Type': 'application/json',
+          'Mcp-Method': 'events/subscribe',
+        },
+        body: huge(
+          {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'events/subscribe',
+            params: {
+              ...params,
+              _meta: {
+                'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+                'io.modelcontextprotocol/clientCapabilities': {},
+              },
+            },
+          },
+          value,
+        ),
+      })
+    for (const params of [
+      { ...f.params, ttlMs: 'HUGE' },
+      { ...f.params, arguments: 'HUGE' },
+    ]) {
+      const res = await subscribe(params, '-1e309')
+      expect(res.status).toBe(200)
+      expect(JSON.parse(await res.text()).error).toEqual({
+        code: -32602,
+        message: 'Invalid params: a number is too large to represent',
+      })
+      const rest = await f.t.fetch('/v1/webhooks', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer qva_${'22'.repeat(24)}`,
+          'Content-Type': 'application/json',
+        },
+        body: huge(params, '1e309'),
+      })
+      expect(rest.status).toBe(400)
+    }
+    expect(await f.t.run((ctx) => ctx.db.query('webhook_subscriptions').collect())).toEqual([])
+  })
+
   it.each(['current', 'legacy'] as const)(
     'preserves signing-key rotation grace across same-key refreshes from a %s hash',
     async (hashFormat) => {

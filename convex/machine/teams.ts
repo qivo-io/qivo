@@ -255,20 +255,24 @@ export const restCreateTeam = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, body: v.string() },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const name = restName(needJson(a.body))
+    const b = needJson(a.body)
+    refuseUnknownFields(b, ['name'])
+    const name = restName(b)
     if (name === undefined) throw badRequest('name is required')
     const now = new Date().toISOString()
     return await teamJson(ctx, await createTeamCore(ctx, { me, id: newUuid(), name, now }))
   },
 })
 
-/* PATCH /v1/teams/{ref} {name}. Unknown fields are ignored. */
+/* PATCH /v1/teams/{ref} {name}. Any other field is refused. */
 export const restUpdateTeam = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
   handler: async (ctx, a) => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const team = await restTeam(ctx, me, a.ref)
-    const name = restName(needJson(a.body))
+    const b = needJson(a.body)
+    refuseUnknownFields(b, ['name'])
+    const name = restName(b)
     if (name === undefined) throw badRequest('no recognized fields to update')
     return await teamJson(ctx, await updateTeamCore(ctx, { me, team, patch: { name } }))
   },

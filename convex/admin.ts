@@ -244,7 +244,7 @@ export const promoteOrgAdmin = platformMutation({
     const profile = await byId(ctx, 'profiles', profile_id)
     require(profile !== null, notFound('profile not found'))
     require(profile.kind !== 'agent', rule(
-      'an agent cannot be an organization admin — it reaches only the projects it is added to',
+      'an agent cannot be an organization admin, because it reaches only the projects it is added to',
     ))
     /* A pending seat whose address has a home elsewhere would arrive as a
      * guest, so it cannot be the admin. A signed-in seat is promoted as is,
@@ -423,7 +423,7 @@ export const removeOperator = internalMutation({
         }
       }
       require(hasUsableOther, rule(
-        'the last platform operator cannot be removed — enrol another operator first',
+        'the last platform operator cannot be removed, so enrol another operator first',
       ))
       for (const row of theirs) await ctx.db.delete(row._id)
     }

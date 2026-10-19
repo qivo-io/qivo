@@ -663,6 +663,7 @@ export const restCreateProject = internalMutation({
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const b = needJson(a.body)
     refuseProjectFields(b)
+    refuseUnknownFields(b, ['name', 'parent', 'lead_id', 'description'])
     if (!('name' in b)) throw badRequest('name is required')
     if (typeof b.name !== 'string') throw badRequest('name must be a string')
     let parent: Doc<'projects'> | undefined
@@ -685,8 +686,8 @@ export const restCreateProject = internalMutation({
 
 /* PATCH /v1/projects/{ref} {name?, description?, review_hours?,
  * track_delay?, lead_id?, archived?}. The fields refuseProjectFields names,
- * `parent` and `archive_reason` are refused; other unknown fields are
- * ignored. */
+ * `parent` and `archive_reason` are refused with their own sentences, and
+ * any other unknown field after them. */
 export const restUpdateProject = internalMutation({
   args: {
     callerId: v.string(),
@@ -704,6 +705,14 @@ export const restUpdateProject = internalMutation({
     if ('parent' in b) throw badRequest(PARENT_AT_CREATION)
     // a task's archive reason, refused rather than dropped without a word
     if ('archive_reason' in b) throw badRequest(NO_PROJECT_ARCHIVE_REASON)
+    refuseUnknownFields(b, [
+      'name',
+      'description',
+      'review_hours',
+      'track_delay',
+      'lead_id',
+      'archived',
+    ])
     const input: UpdateInput = {}
     if ('name' in b) {
       if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -826,11 +835,12 @@ export const restRemoveTeamAccess = internalMutation({
 })
 
 /* A REST milestone body's name and date: strings when present, `required`
- * names the ones that must be. */
+ * names the ones that must be. Any other field is refused. */
 function milestoneFields(
   b: Record<string, unknown>,
   required: boolean,
 ): { name?: string; week?: string } {
+  refuseUnknownFields(b, ['name', 'date'])
   const out: { name?: string; week?: string } = {}
   if ('name' in b) {
     if (typeof b.name !== 'string') throw badRequest('name must be a string')
@@ -897,7 +907,7 @@ export const restUpdateMilestone = internalMutation({
   },
 })
 
-/* DELETE /v1/projects/{ref}/milestones/{id}. */
+/* DELETE /v1/projects/{ref}/milestones/{id}, which takes no body. */
 export const restDeleteMilestone = internalMutation({
   args: {
     callerId: v.string(),
@@ -905,12 +915,14 @@ export const restDeleteMilestone = internalMutation({
     keyName: vKeyName,
     ref: v.string(),
     milestone: v.string(),
+    body: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<{ deleted: true; id: string }> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const project = await restProject(ctx, me, a.ref)
     const milestone = await milestoneOn(ctx, me, project, a.milestone)
     if (milestone === null) throw notFound('milestone not found')
+    refuseUnknownFields(optionalJson(a.body ?? ''), [])
     await removeMilestoneCore(ctx, {
       me,
       milestone,
@@ -1275,13 +1287,14 @@ export const PROJECT_ROUTES: RestRoute[] = [
     path: 'projects/:ref/milestones/:milestone',
     access: 'write',
     status: 200,
-    run: (r, { callerId, access, keyName, param }) =>
+    run: (r, { callerId, access, keyName, param, body }) =>
       r.runMutation(internal.machine.projects.restDeleteMilestone, {
         callerId,
         access,
         keyName,
         ref: param('ref'),
         milestone: param('milestone'),
+        body,
       }),
   }),
 ]

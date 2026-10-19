@@ -250,6 +250,12 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   // An attachment's project copies its task's for the storage totals. Other
   // sections' project_id is their own data.
   if (section === 'issue_attachments') delete row.project_id
+  // A team's or project's legacy icon and its color: nothing writes or shows
+  // them now, and a value stored before they were dropped has no length limit.
+  if (section === 'teams' || section === 'projects') {
+    delete row.icon
+    delete row.icon_color
+  }
   delete row.key_hash
   return row
 }
