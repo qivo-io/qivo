@@ -6,11 +6,17 @@ import { astToMd } from '../../src/lib/mdSerialize'
 import type { LoadSpan } from '../../src/lib/workload'
 import {
   assertMarketingAnchor,
+  DEMO_DONE_DAY,
+  DEMO_DONE_TIME,
+  DEMO_EVENT_TIME,
+  type DemoChange,
   MARKETING_DEMO,
   MARKETING_DEMO_VERSION,
   marketingDate,
   marketingId,
+  marketingInstant,
   marketingWeek,
+  northstarTaskTimes,
 } from '../internal/marketingDemoData'
 import { taskOwnerId } from '../lib/review'
 import { FOLLOWER_MAX, SUBTASK_MAX } from '../lib/taskLimits'
@@ -19,7 +25,8 @@ import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
 
-const { people, teams, projects, issues, labels, links, milestones, comments } = MARKETING_DEMO
+const { people, teams, projects, issues, labels, links, milestones, comments, history } =
+  MARKETING_DEMO
 const defaultCapacity = newOrgDefaults('2026-09-07T00:00:00.000Z').default_plannable_hours
 // Whose week a task's hours count against: the app's one Reviewer rule.
 const ownerOf = (i: (typeof issues)[number]) =>
@@ -45,7 +52,7 @@ function weeksOf(i: (typeof issues)[number]): { start?: number; end?: number } {
 
 describe('the versioned Northstar marketing scenario', () => {
   it('keeps the agreed organization, project mix and sole administrator', () => {
-    expect(MARKETING_DEMO_VERSION).toBe(7)
+    expect(MARKETING_DEMO_VERSION).toBe(8)
     expect(people).toHaveLength(8)
     expect(people.filter((person) => person.role === 'admin').map((person) => person.key)).toEqual([
       'nora',
@@ -217,7 +224,7 @@ describe('the versioned Northstar marketing scenario', () => {
   })
 
   it('contains complete stable references and valid parent/leaf structure', () => {
-    for (const rows of [people, teams, projects, issues, labels, milestones, comments]) {
+    for (const rows of [people, teams, projects, issues, labels, milestones, comments, history]) {
       expect(new Set(rows.map((row) => row.key)).size).toBe(rows.length)
     }
     expect(new Set(projects.map((project) => project.code)).size).toBe(projects.length)
@@ -450,6 +457,164 @@ describe('the versioned Northstar marketing scenario', () => {
         .map((issue) => issue.key)
     }
     expect(delayed()).toEqual([])
+  })
+})
+
+type Dataset = Pick<
+  typeof MARKETING_DEMO,
+  'people' | 'teams' | 'projects' | 'issues' | 'links' | 'history'
+>
+const ANCHOR = '2026-09-28'
+
+/** What is wrong with a dataset's change history, one line per problem:
+ * each task's status moves chain and end at its status, its moves into Done
+ * and Review agree with its stamps, nothing is dated after its last write,
+ * Atlas writes only through MCP, and every actor may edit the task. */
+function historyProblems(data: Dataset): string[] {
+  const out: string[] = []
+  const at = (c: DemoChange) => marketingInstant(ANCHOR, c.day, c.time)
+  for (const issue of data.issues) {
+    const own = data.history.filter((c) => c.issue === issue.key)
+    if (own.length === 0) continue
+    const project = data.projects.find((p) => p.key === issue.project)!
+    const root = data.projects.find((p) => p.key === (project.parent ?? project.key))!
+    const team = data.teams.find((candidate) => candidate.key === root.team)
+    const touched =
+      issue.touchedDay === undefined
+        ? undefined
+        : marketingInstant(ANCHOR, issue.touchedDay, DEMO_EVENT_TIME)
+    let status: string | undefined
+    let last = ''
+    for (const c of own) {
+      const where = `${c.key}:`
+      if (at(c) < last) out.push(`${where} out of time order`)
+      last = at(c)
+      if (touched !== undefined && at(c) > touched) out.push(`${where} after the last write`)
+      const person = data.people.find((p) => p.key === c.actor)
+      if (person === undefined) {
+        out.push(`${where} unknown actor`)
+        continue
+      }
+      const mcp = c.kind === 'status' && c.via === 'mcp'
+      if (mcp !== (person.kind === 'agent')) out.push(`${where} Atlas writes only through MCP`)
+      const canWrite =
+        person.role === 'admin' ||
+        root.lead === person.key ||
+        (team ? team.members : data.teams.flatMap((x) => x.members)).includes(person.key)
+      if (!canWrite) out.push(`${where} the actor cannot edit the task`)
+      if (c.kind === 'label' && !issue.labels.includes(c.label))
+        out.push(`${where} the task lacks the label`)
+      if (
+        c.kind === 'link' &&
+        !data.links.some(
+          (l) => l.source === issue.key && l.target === c.target && l.type === 'blocks',
+        )
+      )
+        out.push(`${where} no such link`)
+      if (c.kind !== 'status') continue
+      if (status !== undefined && c.from !== status) out.push(`${where} a broken chain`)
+      status = c.to
+      if (c.to === 'done' && (c.day !== DEMO_DONE_DAY || c.time !== DEMO_DONE_TIME))
+        out.push(`${where} Done away from the seeded completion`)
+    }
+    const moves = own.filter((c) => c.kind === 'status')
+    if (moves.length > 0 && status !== issue.status)
+      out.push(`${issue.key}: ends away from its status`)
+    const handed = moves.filter((c) => c.to === 'review').at(-1)
+    const reviewed = issue.status === 'review' || (issue.status === 'done' && !!issue.reviewer)
+    if (
+      handed &&
+      reviewed &&
+      (issue.reviewDay === undefined ||
+        at(handed) !== marketingInstant(ANCHOR, issue.reviewDay, DEMO_EVENT_TIME))
+    )
+      out.push(`${issue.key}: handed over away from its reviewDay`)
+  }
+  return out
+}
+
+describe('the Northstar change history', () => {
+  /* The dataset with one change replaced. */
+  const withChange = (key: string, edit: Partial<DemoChange>): Dataset => ({
+    ...MARKETING_DEMO,
+    history: history.map((c) => (c.key === key ? ({ ...c, ...edit } as DemoChange) : c)),
+  })
+
+  it('agrees with every task it touches', () => {
+    expect(historyProblems(MARKETING_DEMO)).toEqual([])
+  })
+
+  it('reports each kind of disagreement', () => {
+    const cases: [Dataset, RegExp][] = [
+      [withChange('pcb-review-handed', { from: 'todo' } as Partial<DemoChange>), /broken chain/],
+      [withChange('pcb-review-handed', { to: 'done' } as Partial<DemoChange>), /ends away/],
+      [withChange('telemetry-contract-done', { time: '16:00:00.000Z' }), /seeded completion/],
+      [withChange('pcb-review-handed', { day: -5 }), /away from its reviewDay/],
+      [withChange('design-tokens-handed', { time: '15:00:00.000Z' }), /away from its reviewDay/],
+      [withChange('room-cards-started', { day: -3 }), /after the last write/],
+      [withChange('offline-buffer-reliability', { day: -7, time: '09:00:00.000Z' }), /time order/],
+      [withChange('accessibility-audit-started', { actor: 'daniel' }), /only through MCP/],
+      [withChange('room-cards-started', { actor: 'atlas' }), /only through MCP/],
+      [
+        withChange('offline-buffer-reliability', { label: 'launch' } as Partial<DemoChange>),
+        /lacks the label/,
+      ],
+      [
+        withChange('telemetry-contract-blocks-ingestion', {
+          target: 'pcb-review',
+        } as Partial<DemoChange>),
+        /no such link/,
+      ],
+      [withChange('room-cards-started', { actor: 'leo' }), /cannot edit/],
+    ]
+    for (const [data, problem] of cases) {
+      expect(historyProblems(data)).toContainEqual(expect.stringMatching(problem))
+    }
+  })
+
+  it('covers a few tasks with every kind of change, on weekdays before the anchor', () => {
+    const tasks = new Set(history.map((c) => c.issue))
+    expect(tasks.size).toBeGreaterThanOrEqual(7)
+    expect(tasks.size).toBeLessThanOrEqual(9)
+    expect(new Set(history.map((c) => c.kind))).toEqual(new Set(['status', 'label', 'link']))
+    const moves = history.flatMap((c) => (c.kind === 'status' ? [c] : []))
+    expect(moves.some((c) => c.to === 'review')).toBe(true)
+    expect(moves.some((c) => c.to === 'done')).toBe(true)
+    expect(moves.filter((c) => c.via === 'mcp')).toHaveLength(1)
+    for (const c of history) {
+      expect(c.day, c.key).toBeGreaterThanOrEqual(-7)
+      expect(c.day, c.key).toBeLessThanOrEqual(-1)
+      const weekday = new Date(`${marketingDate(ANCHOR, c.day)}T00:00:00Z`).getUTCDay()
+      expect(weekday >= 1 && weekday <= 5, c.key).toBe(true)
+    }
+  })
+
+  it('gives every task stamps in the order the app writes them', () => {
+    const seed = marketingInstant(ANCHOR, 0, '08:00:00.000Z')
+    // an anchor two weeks after the seed runs
+    const later = marketingDate(ANCHOR, 14)
+    for (const issue of issues) {
+      const times = northstarTaskTimes(ANCHOR, seed, issue)
+      expect(times.created <= times.status && times.status <= times.updated, issue.key).toBe(true)
+      // the last write is the seed's rule: the dated touch, else the seed instant
+      const touched =
+        issue.touchedDay === undefined
+          ? seed
+          : marketingInstant(ANCHOR, issue.touchedDay, DEMO_EVENT_TIME)
+      expect(times.updated, issue.key).toBe(touched)
+      // a seed run before a future anchor never writes the status after the last write
+      const future = northstarTaskTimes(later, seed, issue)
+      expect(future.status <= future.updated, issue.key).toBe(true)
+      const moves = history.filter((c) => c.issue === issue.key && c.kind === 'status')
+      const lastMove = moves.at(-1)
+      if (lastMove) {
+        expect(times.status, issue.key).toBe(marketingInstant(ANCHOR, lastMove.day, lastMove.time))
+      }
+      if (issue.status === 'done') expect(times.status, issue.key).toBe(times.done)
+      else if (issue.status === 'review' && times.review !== undefined) {
+        expect(times.status, issue.key).toBe(times.review)
+      } else if (!lastMove) expect(times.status, issue.key).toBe(times.created)
+    }
   })
 })
 

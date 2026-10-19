@@ -16,7 +16,8 @@ import {
   marketingInstant,
 } from '../internal/marketingDemoData'
 import { canSeeProject, hasProjectLevel } from '../lib/access'
-import { logActivity } from '../model/activity'
+import { MCP_PROVENANCE } from '../machine/shared'
+import { logActivity, machineDetail } from '../model/activity'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
@@ -1031,26 +1032,96 @@ describe('marketing demo rebuild ownership', () => {
     await assertNoDanglingRefs(t, 'marketing demo repeat reset')
   }, 30_000)
 
-  it("numbers each seeded task's history, so the next change to a task is its second row", async () => {
+  it("writes each task's import row and short history in order, with stamps that agree", async () => {
     const t = newAuthT()
     const result = await seeded(t)
-    const rows = await t.run((ctx) =>
-      ctx.db
+    const { rows, tasks, links } = await t.run(async (ctx) => ({
+      rows: await ctx.db
         .query('activity_events')
         .withIndex('by_org_ts', (q) => q.eq('org_id', result.org_id))
         .collect(),
-    )
-    expect(rows.length).toBe(MARKETING_DEMO.issues.length)
-    expect(rows.every((row) => row.seq === 1 && row.named_task_nums?.length === 0)).toBe(true)
-    const first = rows[0]
+      tasks: await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', result.org_id))
+        .collect(),
+      links: await ctx.db.query('issue_links').collect(),
+    }))
+    expect(rows.length).toBe(MARKETING_DEMO.issues.length + MARKETING_DEMO.history.length)
+    const atlas = await demoId('person:atlas')
+    for (const issue of MARKETING_DEMO.issues) {
+      const id = await demoId(`issue:${issue.key}`)
+      const task = tasks.find((row) => row.id === id)!
+      const own = rows.filter((row) => row.target_id === id).sort((x, y) => x.seq! - y.seq!)
+      expect(
+        own.map((row) => row.seq),
+        issue.key,
+      ).toEqual(own.map((_, i) => i + 1))
+      for (const [i, row] of own.entries()) if (i > 0) expect(row.ts >= own[i - 1].ts).toBe(true)
+      // the import row comes first, at the task's creation
+      expect(own[0]).toMatchObject({
+        id: await demoId(`activity:import:${issue.key}`),
+        actor_id: atlas,
+      })
+      expect(own[0].ts, issue.key).toBe(task.created_at)
+      const changes = MARKETING_DEMO.history.filter((c) => c.issue === issue.key)
+      for (const [i, c] of changes.entries()) {
+        expect(own[i + 1].id, c.key).toBe(await demoId(`activity:change:${c.key}`))
+      }
+      // the stamps agree with the history
+      expect(task.updated_at >= task.status_at!, issue.key).toBe(true)
+      const lastMove = own.filter((row) => ['moved', 'changed'].includes(row.verb)).at(-1)
+      if (issue.status === 'done') expect(task.status_at, issue.key).toBe(task.done_at)
+      else if (issue.status === 'review' && task.review_at !== undefined)
+        expect(task.status_at, issue.key).toBe(task.review_at)
+      else if (!lastMove) expect(task.status_at, issue.key).toBe(task.created_at)
+      if (lastMove) expect(task.status_at, issue.key).toBe(lastMove.ts)
+    }
+    const byKey = new Map<string, (typeof rows)[number]>()
+    for (const c of MARKETING_DEMO.history) {
+      const id = await demoId(`activity:change:${c.key}`)
+      byKey.set(c.key, rows.find((row) => row.id === id)!)
+    }
+    expect(byKey.get('pcb-review-started')).toMatchObject({
+      verb: 'moved',
+      detail: 'from To Do to In Progress',
+      named_task_nums: [],
+    })
+    expect(byKey.get('accessibility-audit-started')).toMatchObject({
+      verb: 'changed',
+      detail: machineDetail('(status To Do → In Progress)', MCP_PROVENANCE),
+      actor_id: atlas,
+    })
+    expect(byKey.get('offline-buffer-reliability')).toMatchObject({
+      verb: 'labeled',
+      detail: '“Reliability”',
+      named_task_nums: [],
+    })
+    const ingestionId = await demoId('issue:ingestion')
+    const ingestion = tasks.find((row) => row.id === ingestionId)!
+    expect(ingestion.num).toBe(58)
+    const linked = byKey.get('telemetry-contract-blocks-ingestion')!
+    expect(linked).toMatchObject({
+      verb: 'linked',
+      detail: `(blocks QN-${ingestion.num})`,
+      named_task_nums: [ingestion.num],
+    })
+    // only the link row names a task
+    expect(rows.filter((row) => row.named_task_nums?.length).map((row) => row.id)).toEqual([
+      linked.id,
+    ])
+    const linkId = await demoId('link:telemetry-contract:ingestion')
+    expect(links.find((l) => l.id === linkId)?.created_at).toBe(linked.ts)
+    // the next change to a task follows its seeded rows
+    const target = linked.target_id
+    const before = rows.filter((row) => row.target_id === target).length
     await t.run((ctx) =>
       logActivity(ctx, {
         org_id: result.org_id,
         actor_id: undefined,
         verb: 'renamed',
         target_type: 'issue',
-        target_id: first.target_id,
-        label: first.label,
+        target_id: target,
+        label: linked.label,
         ts: NOW,
         named_task_nums: [],
       }),
@@ -1059,11 +1130,11 @@ describe('marketing demo rebuild ownership', () => {
       ctx.db
         .query('activity_events')
         .withIndex('by_target', (q) =>
-          q.eq('org_id', result.org_id).eq('target_type', 'issue').eq('target_id', first.target_id),
+          q.eq('org_id', result.org_id).eq('target_type', 'issue').eq('target_id', target),
         )
         .collect(),
     )
-    expect(history.map((row) => row.seq)).toEqual([1, 2])
+    expect(history.map((row) => row.seq).at(-1)).toBe(before + 1)
   }, 30_000)
 
   it('wipe removes work but preserves the roster and allows reseeding with stable issue UUIDs', async () => {
@@ -1201,7 +1272,7 @@ describe('marketing demo rebuild ownership', () => {
     },
   )
 
-  it.each(['comment', 'milestone', 'link', 'activity'] as const)(
+  it.each(['comment', 'milestone', 'link', 'activity', 'history'] as const)(
     'refuses reset when a reserved %s UUID now belongs to foreign work, before any deletion',
     async (collision) => {
       const t = newAuthT()
@@ -1248,7 +1319,11 @@ describe('marketing demo rebuild ownership', () => {
             pair_key: [foreignTask.id, secondTask.id].sort().join(':'),
           })
         } else {
-          const id = await demoId(`activity:import:${MARKETING_DEMO.issues[0].key}`)
+          const id = await demoId(
+            collision === 'activity'
+              ? `activity:import:${MARKETING_DEMO.issues[0].key}`
+              : `activity:change:${MARKETING_DEMO.history[0].key}`,
+          )
           const row = await ctx.db
             .query('activity_events')
             .withIndex('by_uuid', (q) => q.eq('id', id))

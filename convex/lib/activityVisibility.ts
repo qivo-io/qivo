@@ -1,9 +1,11 @@
-/* Which task activity rows a member receives, the app's rule. The snapshot
- * (convex/snapshot.ts) applies it to the task rows of the organization feed,
- * and the task window, REST and MCP apply it to one task's history
- * (taskActivity below). Organization admins receive every task row;
+/* Which task activity rows a member receives, the app's rule. The task
+ * window (snapshot.ts commentThread), REST and MCP apply it to one task's
+ * history (taskActivity below). Organization admins receive every task row;
  * memberSeesActivity decides for everyone else. Rows about anything but a
- * task reach no client; admins read them in the organization export. */
+ * task reach no client; admins read them in the organization export.
+ * memberSeesActivity and withoutLegacySubtaskCount stay exported because
+ * scripts/benchmark-backend.mjs loads an earlier snapshot.ts against this
+ * module. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

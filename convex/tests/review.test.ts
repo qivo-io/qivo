@@ -7,6 +7,7 @@ import type { FunctionArgs } from 'convex/server'
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { byId } from '../lib/db'
 import {
   DEFAULT_REVIEW_HOURS,
   resolveReviewHours,
@@ -334,6 +335,194 @@ describe('the review hand-off stamp (review_at)', () => {
     })
     const row = await issueRow(t, mcp.id)
     expect(row.review_at).toBe(row.updated_at)
+  })
+})
+
+describe('the status stamp (status_at)', () => {
+  const restCreate = (t: T, f: OrgFixture, title: string) =>
+    t.mutation(internal.machine.rest.createIssue, {
+      callerId: f.admin.id,
+      access: 'write',
+      keyName: 'test',
+      body: JSON.stringify({ project: f.sub.id, title }),
+    })
+  const restUpdate = (t: T, f: OrgFixture, ref: string, body: Record<string, unknown>) =>
+    t.mutation(internal.machine.rest.updateIssue, {
+      callerId: f.admin.id,
+      access: 'write',
+      keyName: 'test',
+      ref,
+      body: JSON.stringify(body),
+    })
+  const move = (t: T, f: OrgFixture, id: string, project_id: string) =>
+    as(t, f.user).mutation(api.issues.move, { org_id: f.org.id, id, project_id })
+  /* A task of `f.sub` whose status `update` just changed, with the stamp
+     that change wrote, asserted first, so every keep or clear below starts
+     from a stamped row. */
+  const stamped = async (t: T, f: OrgFixture, extra: Partial<Doc<'issues'>> = {}) => {
+    const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, ...extra })
+    await tick()
+    const moved = await update(t, f, row.id, { status: 'progress' })
+    expect(moved.status_at).toBe(moved.updated_at)
+    return moved
+  }
+
+  it('every create stamps it at creation: the app, REST and MCP', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const app = await create(t, f)
+    expect(app.status_at).toBe(app.created_at)
+    const rest = await issueRow(t, (await restCreate(t, f, 'By REST')).id)
+    expect(rest.status_at).toBe(rest.created_at)
+    const mcp = await t.mutation(internal.machine.mcp.createIssue, {
+      callerId: f.admin.id,
+      access: 'write',
+      project: f.sub.id,
+      title: 'By MCP',
+    })
+    const mcpRow = await issueRow(t, (JSON.parse(mcp) as { id: string }).id)
+    expect(mcpRow.status_at).toBe(mcpRow.created_at)
+    // a new parent made for a task is created the same way
+    const child = await create(t, f)
+    const parentId = uuid()
+    await as(t, f.user).mutation(api.issues.createParent, {
+      org_id: f.org.id,
+      id: child.id,
+      parent_id: parentId,
+      title: 'New parent',
+    })
+    const parent = await issueRow(t, parentId)
+    expect(parent.status_at).toBe(parent.created_at)
+  })
+
+  it('every status change stamps it: the app, REST and MCP', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    await stamped(t, f)
+    const rest = await plantIssue(t, base)
+    const out = await restUpdate(t, f, rest.id, { status: 'done' })
+    expect((await issueRow(t, rest.id)).status_at).toBe(out.updated_at)
+    const mcp = await plantIssue(t, base)
+    await t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: f.admin.id,
+      access: 'write',
+      ref: mcp.id,
+      status: 'progress',
+    })
+    const row = await issueRow(t, mcp.id)
+    expect(row.status_at).toBe(row.updated_at)
+  })
+
+  it('keeps it through writes that leave the status as it was', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await stamped(t, f)
+    const keeps = async (patch: IssuePatch) => {
+      await tick()
+      const after = await update(t, f, task.id, patch)
+      expect(after.updated_at).not.toBe(task.updated_at)
+      expect(after.status_at).toBe(task.status_at)
+    }
+    // resending the current status is no change
+    await keeps({ status: 'progress' })
+    await keeps({ title: 'Renamed' })
+    await keeps({ assignee_id: f.user.id, remaining_hours: 3 })
+
+    // REST archive and restore of a Done task restarts done_at only
+    const done = await stamped(t, f)
+    const finished = await update(t, f, done.id, { status: 'done' })
+    expect(finished.status_at).toBe(finished.updated_at)
+    await tick()
+    await restUpdate(t, f, done.id, { archived: true })
+    await tick()
+    await restUpdate(t, f, done.id, { archived: false })
+    const back = await issueRow(t, done.id)
+    expect(back.done_at).not.toBe(finished.done_at)
+    expect(back.status_at).toBe(finished.status_at)
+  })
+
+  it('a move to another project clears it, on the task and every subtask it carries', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // between sub-projects of one top-level project
+    const near = await stamped(t, f)
+    expect('status_at' in (await move(t, f, near.id, f.sub2.id))).toBe(false)
+    // into a project the move does not change keeps it
+    const same = await stamped(t, f)
+    const kept = await move(t, f, same.id, f.sub.id)
+    expect(kept.status_at).toBe(same.status_at)
+
+    // to another top-level project, carrying subtasks at two depths
+    const far = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+    const top = await stamped(t, f)
+    const child = await stamped(t, f)
+    const grandchild = await stamped(t, f)
+    // a deeper tree than new writes allow, as legacy data may hold
+    const [childRow, grandchildRow] = [
+      await issueRow(t, child.id),
+      await issueRow(t, grandchild.id),
+    ]
+    await t.run(async (ctx) => {
+      await ctx.db.patch(childRow._id, { parent_id: top.id })
+      await ctx.db.patch(grandchildRow._id, { parent_id: child.id })
+    })
+    expect((await move(t, f, top.id, far.id)).project_id).toBe(far.id)
+    for (const id of [top.id, child.id, grandchild.id]) {
+      const row = await issueRow(t, id)
+      expect(row.project_id).toBe(far.id)
+      expect('status_at' in row).toBe(false)
+    }
+    // the next status change stamps it again
+    const again = await update(t, f, grandchild.id, { status: 'review' })
+    expect(again.status_at).toBe(again.updated_at)
+  })
+
+  it('a machine update that moves and changes the status ends stamped', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await stamped(t, f)
+    await tick()
+    const out = await restUpdate(t, f, task.id, {
+      project: f.meta.id,
+      sub_project: f.sub2.id,
+      status: 'review',
+    })
+    const row = await issueRow(t, task.id)
+    expect(row.project_id).toBe(f.sub2.id)
+    expect(row.status_at).toBe(out.updated_at)
+    expect(row.status_at).not.toBe(task.status_at)
+  })
+
+  it('keeps it when a leaf gains a subtask, which clears the hand-off', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const leaf = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'progress' })
+    const handed = await update(t, f, leaf.id, { status: 'review' })
+    expect(handed.status_at).toBe(handed.updated_at)
+    expect(handed.review_at).toBe(handed.updated_at)
+    await tick()
+    await create(t, f, {}).then((sub) => update(t, f, sub.id, { parent_id: leaf.id }))
+    const group = await issueRow(t, leaf.id)
+    expect('review_at' in group).toBe(false)
+    expect(group.status_at).toBe(handed.status_at)
+  })
+
+  it('keeps it through a delete and a restore from Deleted items', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await stamped(t, f)
+    await as(t, f.user).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: task.id })
+    expect(await t.run((ctx) => byId(ctx, 'issues', task.id))).toBeNull()
+    const item = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', task.id))
+        .unique(),
+    )
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item!.id] })
+    const back = await issueRow(t, task.id)
+    expect(back.status_at).toBe(task.status_at)
   })
 })
 

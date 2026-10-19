@@ -315,7 +315,8 @@ describe('teams.deleteDeep names its cascade — the Northstar Labs dataset', ()
       events: await count('activity_events'),
     }
     expect(before.teamGrants).toBe(6) // both teams hold a grant on each of the 3 metas
-    expect(before.events).toBe(90) // one import event per task
+    // one import event per task, and the short change history
+    expect(before.events).toBe(MARKETING_DEMO.issues.length + MARKETING_DEMO.history.length)
 
     const asNora = t.withIdentity({ subject: 'auth_nora' })
     await asNora.mutation(api.teams.deleteDeep, { org_id: org.id, id: hardware })

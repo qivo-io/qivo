@@ -125,7 +125,7 @@ export function TeamOpening({
   const ahead = milestonesAhead(P.milestones, metaIds, day.todayWeek)
   const busy = nearCapacity(humans, weekFigure)
   const unowned = needsOwner(P.issues, subIds, day)
-  const unreviewed = needsReviewer(rows, P.activity)
+  const unreviewed = needsReviewer(rows)
   return (
     <div data-sync-opening className="@container">
       <p data-sync-sentence className="m-0 mb-5 max-w-[64ch] text-md text-text-1">

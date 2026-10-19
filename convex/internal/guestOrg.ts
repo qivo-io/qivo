@@ -205,6 +205,7 @@ export const zzGuestOrg = internalMutation({
         /* 0072's insert trigger has no Convex successor: stamp by hand */
         remaining_set_at: load !== undefined ? now : undefined,
         paused: false,
+        status_at: now,
         created_at: now,
         updated_at: now,
       })

@@ -63,9 +63,8 @@ const change = (n: number): Row<'activity_events'> => ({
 })
 
 /* Loads the store with task-a. `unread` is the minute of an unread comment
-   message about it, and `snapshotChange` the minute of a change to it that
-   only the snapshot's activity holds. */
-async function load({ unread, snapshotChange }: { unread?: number; snapshotChange?: number } = {}) {
+   message about it. */
+async function load({ unread }: { unread?: number } = {}) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   me = snap.profiles[0].id
@@ -85,7 +84,6 @@ async function load({ unread, snapshotChange }: { unread?: number; snapshotChang
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  if (snapshotChange !== undefined) snap.activity.push(change(snapshotChange))
   if (unread !== undefined) {
     snap.messages.push({
       id: 'message-a',
@@ -338,15 +336,6 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 10')) + 1)
   })
 
-  it('with All, leaves out a change only the snapshot holds', async () => {
-    await load({ snapshotChange: 10 })
-    await open()
-    await deliver({ comments: range(1, 30), earlier: false })
-    await showAll()
-    expect(thread()).not.toContain('event')
-    expect(thread()).toHaveLength(29)
-  })
-
   it('points at All for a new change the thread delivered', async () => {
     await load({ unread: 20 })
     await open()
@@ -354,10 +343,10 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     expect(tailNote()).toBe('New activity on this task. See All.')
   })
 
-  it('does not point at All for a new change only the snapshot holds', async () => {
-    await load({ unread: 20, snapshotChange: 25 })
+  it('does not point at All when the thread holds no new change', async () => {
+    await load({ unread: 20 })
     await open()
-    await deliver({ comments: range(1, 10), earlier: false })
+    await deliver({ comments: range(1, 10), earlier: false, events: [change(15)] })
     expect(tailNote()).toBe('New activity on this task.')
   })
 

@@ -965,14 +965,21 @@ describe('which task rows a member receives, in the task window and over REST', 
   })
 })
 
-describe('Team Sync hand-off after a save that changes nothing', () => {
-  it("keeps a task's hand-off at its move into In Review when the app resends the reviewer", async () => {
+describe('a review whose subtask went', () => {
+  it('keeps its status stamp and no hand-off, and a resave writes nothing', async () => {
     vi.useFakeTimers()
     try {
       const t = newT()
       const f = await withOrg(t)
       const id = uuid()
       const user = as(t, f.user)
+      const row = () =>
+        t.run((ctx) =>
+          ctx.db
+            .query('issues')
+            .withIndex('by_uuid', (q) => q.eq('id', id))
+            .unique(),
+        )
       vi.setSystemTime(Date.parse('2026-05-04T09:00:00.000Z'))
       await user.mutation(api.issues.create, {
         org_id: f.org.id,
@@ -985,16 +992,32 @@ describe('Team Sync hand-off after a save that changes nothing', () => {
         id,
         patch: { reviewer_id: f.admin.id },
       })
-      vi.setSystemTime(Date.parse('2026-05-04T10:00:00.000Z'))
+      const ten = '2026-05-04T10:00:00.000Z'
+      vi.setSystemTime(Date.parse(ten))
       await user.mutation(api.issues.update, { org_id: f.org.id, id, patch: { status: 'review' } })
-      // a task handed over before review_at existed
-      await t.run(async (ctx) => {
-        const row = await ctx.db
-          .query('issues')
-          .withIndex('by_uuid', (q) => q.eq('id', id))
-          .unique()
-        if (row !== null) await ctx.db.patch(row._id, { review_at: undefined })
+      expect(await row()).toMatchObject({ status_at: ten, review_at: ten })
+      // a subtask makes it a group, which clears the hand-off
+      vi.setSystemTime(Date.parse('2026-05-04T11:00:00.000Z'))
+      const sub = uuid()
+      await user.mutation(api.issues.create, {
+        org_id: f.org.id,
+        id: sub,
+        project_id: f.sub.id,
+        title: 'Subtask',
+        parent_id: id,
       })
+      expect(await row()).not.toHaveProperty('review_at')
+      expect((await row())?.status_at).toBe(ten)
+      // the subtask goes: a leaf In Review with its reviewer and no hand-off
+      vi.setSystemTime(Date.parse('2026-05-04T11:30:00.000Z'))
+      await user.mutation(api.issues.update, {
+        org_id: f.org.id,
+        id: sub,
+        patch: { parent_id: null },
+      })
+      const leaf = await row()
+      expect(leaf).toMatchObject({ status: 'review', reviewer_id: f.admin.id, status_at: ten })
+      expect(leaf).not.toHaveProperty('review_at')
       const rows = (await activityFor(t, f.org.id)).length
       // a stale save resends the reviewer it already has
       vi.setSystemTime(Date.parse('2026-05-04T12:00:00.000Z'))
@@ -1004,15 +1027,8 @@ describe('Team Sync hand-off after a save that changes nothing', () => {
         patch: { reviewer_id: f.admin.id },
       })
       expect(await activityFor(t, f.org.id)).toHaveLength(rows)
-      // Team Sync's hand-off (src/lib/teamSync.ts handoffAt) is the latest
-      // move into In Review or a reviewer named after it, so the feed ends there
-      const snap = await as(t, f.guest).query(api.snapshot.forMe, {})
-      const feed = (snap?.activity ?? []).filter((e) => e.target_id === id)
-      expect(feed.map((e) => [e.ts, e.verb, e.detail])[0]).toEqual([
-        '2026-05-04T10:00:00.000Z',
-        'moved',
-        'from Backlog to In Review',
-      ])
+      expect(await row()).not.toHaveProperty('review_at')
+      expect((await row())?.status_at).toBe(ten)
     } finally {
       vi.useRealTimers()
     }

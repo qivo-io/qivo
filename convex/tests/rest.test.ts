@@ -938,6 +938,27 @@ describe('GET /v1/tasks/{ref}', () => {
     }
   })
 
+  it('never sends the status stamp in REST or MCP task JSON', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const row = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.mutation(internal.machine.rest.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      keyName: KEY,
+      ref: row.id,
+      body: JSON.stringify({ status: 'progress' }),
+    })
+    expect((await issueRow(t, row.id))?.status_at).toBeDefined()
+    const args = { today: TODAY, callerId: f.agent.id, access: 'read' as const, ref: row.id }
+    const rest = await t.query(internal.machine.rest.getIssue, args)
+    expect(rest.status).toBe('progress')
+    expect(rest).not.toHaveProperty('status_at')
+    const mcp = JSON.parse(await t.query(internal.machine.mcp.getIssue, args))
+    expect(mcp.status).toBe('progress')
+    expect(mcp).not.toHaveProperty('status_at')
+  })
+
   it('misses are clean 404s: unknown, out-of-int4, invisible, foreign-org, broken project', async () => {
     const t = newT()
     const f = await machineOrg(t)

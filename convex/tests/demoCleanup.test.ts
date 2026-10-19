@@ -267,6 +267,14 @@ describe('public Northstar provisioning and bounded deletion', () => {
     const emails = [...left.profiles, ...right.profiles].flatMap((p) => (p.email ? [p.email] : []))
     expect(new Set(emails).size).toBe(emails.length)
     expect(emails.every((e) => e.endsWith('.invalid'))).toBe(true)
+    // each copy holds its own import rows and change history
+    const events = await t.run((ctx) => ctx.db.query('activity_events').collect())
+    const eventsOf = (org: string) => events.filter((e) => e.org_id === org).map((e) => e.id)
+    const [leftEvents, rightEvents] = [eventsOf(a.org_id!), eventsOf(b.org_id!)]
+    for (const list of [leftEvents, rightEvents]) {
+      expect(list).toHaveLength(MARKETING_DEMO.issues.length + MARKETING_DEMO.history.length)
+    }
+    expect(leftEvents.some((id) => rightEvents.includes(id))).toBe(false)
     expect(a.anchor).toBe('2026-09-14')
     expect(demoMonday(Date.parse('2026-09-20T23:59:59Z'))).toBe(a.anchor)
     expect(demoMonday(Date.parse('2026-09-21T00:00:00Z'))).toBe('2026-09-21')
