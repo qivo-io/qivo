@@ -128,7 +128,8 @@ The Linux package command is intentionally build-only.
 The window loads the Qivo web app, which makes the same requests as it does
 in a browser. The shell itself contacts only the update feed, and only in a
 packaged build that has one. Local package builds and **Desktop test build**
-artifacts have no feed and never check.
+artifacts have no feed and never check, unless `QIVO_DESKTOP_UPDATE_URL` is
+set when the app starts.
 
 A packaged build checks at startup and then every 4 hours while it runs. A
 check is an HTTPS `GET` for `latest.yml` on Windows or `latest-linux.yml` on
