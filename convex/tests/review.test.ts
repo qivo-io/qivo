@@ -526,6 +526,73 @@ describe('the status stamp (status_at)', () => {
   })
 })
 
+describe('the hand-off and Done times across a move', () => {
+  const move = (t: T, f: OrgFixture, id: string, project_id: string) =>
+    as(t, f.user).mutation(api.issues.move, { org_id: f.org.id, id, project_id })
+  /* A task of `f.sub` handed to review or reviewed to Done at NOW, long
+     before any move below. */
+  const plant = (t: T, f: OrgFixture, status: 'review' | 'done') =>
+    plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status,
+      review_at: NOW,
+      ...(status === 'done' ? { done_at: NOW } : {}),
+    })
+
+  it('a move to another sub-project restarts them at the move; one to the same does not', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const review = await plant(t, f, 'review')
+    const moved = await move(t, f, review.id, f.sub2.id)
+    expect(moved.review_at).toBe(moved.updated_at)
+    expect(moved.review_at).not.toBe(NOW)
+    const done = await plant(t, f, 'done')
+    const finished = await move(t, f, done.id, f.sub2.id)
+    expect(finished.done_at).toBe(finished.updated_at)
+    expect(finished.review_at).toBe(finished.updated_at)
+    // naming the current sub-project changes nothing
+    const kept = await move(t, f, (await plant(t, f, 'done')).id, f.sub.id)
+    expect([kept.done_at, kept.review_at]).toEqual([NOW, NOW])
+    // a task that carries neither gains neither
+    const plain = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done' })
+    const bare = await move(t, f, plain.id, f.sub2.id)
+    expect('done_at' in bare || 'review_at' in bare).toBe(false)
+  })
+
+  it('every subtask the move carries restarts them too', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const far = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+    const top = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: top.id,
+      status: 'done',
+      done_at: NOW,
+    })
+    // a deeper tree than new writes allow, as legacy data may hold
+    const grandchild = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: child.id,
+      status: 'review',
+      review_at: NOW,
+    })
+    const moved = await move(t, f, top.id, far.id)
+    expect('review_at' in moved || 'done_at' in moved).toBe(false)
+    const [childRow, grandchildRow] = [
+      await issueRow(t, child.id),
+      await issueRow(t, grandchild.id),
+    ]
+    expect(childRow.project_id).toBe(far.id)
+    expect(childRow.done_at).toBe(moved.updated_at)
+    expect(grandchildRow.project_id).toBe(far.id)
+    expect(grandchildRow.review_at).toBe(moved.updated_at)
+  })
+})
+
 describe('every writer', () => {
   it('REST PATCH into Review gets the review time and narrates it', async () => {
     const t = newT()

@@ -777,7 +777,8 @@ export async function linkAccess(
 }
 
 /* --------------------------------------------------------- done stamp (0071)
- * done_at is fully derived, immune to direct writes; no public arg carries it. */
+ * done_at is fully derived, immune to direct writes; no public arg carries it.
+ * A move to another sub-project restarts it (movedStamps). */
 
 export function doneStampInsert(status: IssueStatus, now: string): string | undefined {
   return status === 'done' ? now : undefined
@@ -1762,7 +1763,7 @@ async function subtreeToCarry(
     topOf: (projectId: string) => Promise<string | null>
     liveAfter: Liveness
   },
-): Promise<{ row: Doc<'issues'>; clearReviewer: boolean }[]> {
+): Promise<{ row: Doc<'issues'>; clearReviewer: boolean; group: boolean }[]> {
   const below: Doc<'issues'>[] = []
   for await (const { row, level } of subtasksOf(ctx, a.root.id)) {
     if (level >= 20) throw rule('task hierarchy too deep to move')
@@ -1787,7 +1788,7 @@ async function subtreeToCarry(
     }
     return result
   }
-  const carried: { row: Doc<'issues'>; clearReviewer: boolean }[] = []
+  const carried: { row: Doc<'issues'>; clearReviewer: boolean; group: boolean }[] = []
   for (const c of below) {
     if ((await a.topOf(c.project_id)) === dst) continue
     const editable = await edits(c.project_id)
@@ -1803,9 +1804,25 @@ async function subtreeToCarry(
         clearReviewer = true
       }
     }
-    carried.push({ row: c, clearReviewer })
+    carried.push({ row: c, clearReviewer, group: c.archived_at === undefined && groups.has(c.id) })
   }
   return carried
+}
+
+/** The stamps a task writes as it moves to another sub-project. A time
+ * from the source project may predate the reader's access there, so the
+ * status stamp clears (ctx.db.patch unsets it), and a review hand-off
+ * (review_at) or a Done time (done_at) the task carries restarts at the
+ * move. A moved Done task therefore waits the full auto-archive threshold
+ * again (jobs.ts). A task that lands as a group keeps its hand-off for the
+ * write that clears it with its hours (clearParentRemaining), so the move
+ * does not restart it first. */
+function movedStamps(task: Doc<'issues'>, now: string, group = false) {
+  return {
+    status_at: undefined,
+    ...(task.review_at !== undefined && !group ? { review_at: now } : {}),
+    ...(task.done_at !== undefined ? { done_at: now } : {}),
+  }
 }
 
 export async function moveIssueCore(
@@ -1865,12 +1882,10 @@ export async function moveIssueCore(
   if (issue.assignee_id !== undefined && !replacedLater(issue, later, 'assignee_id')) {
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
-  // a status set in the source project may predate the reader's access, so a
-  // move clears the status stamp (ctx.db.patch unsets it)
   const w: Partial<WithoutSystemFields<Doc<'issues'>>> = {
     project_id,
     updated_at: now,
-    status_at: undefined,
+    ...movedStamps(issue, now),
   }
   if (detach) w.parent_id = undefined // ctx.db.patch unsets it
   const live = projectLiveness(ctx)
@@ -1921,13 +1936,13 @@ export async function moveIssueCore(
   const room = roomCheck(ctx)
   await moveAttachmentRows(ctx, issue.id, project_id, room)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
-  for (const { row, clearReviewer } of carried) {
+  for (const { row, clearReviewer, group } of carried) {
     await assertRoom(ctx)
-    // a carried subtask's status stamp goes too, as the task's above
+    // a carried subtask's stamps change as the task's above
     const patch: Partial<WithoutSystemFields<Doc<'issues'>>> = {
       project_id,
       updated_at: now,
-      status_at: undefined,
+      ...movedStamps(row, now, group),
     }
     if (clearReviewer) patch.reviewer_id = undefined
     await ctx.db.patch(row._id, patch)

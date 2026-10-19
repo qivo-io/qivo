@@ -157,7 +157,9 @@ const issuesTable = defineTable({
   done_at: v.optional(v.string()),
   // server-owned review hand-off (lib/review.ts reviewStamp): when the task
   // last entered In Review or went to a different reviewer there; kept into
-  // Done, cleared by any other move out, never on a group
+  // Done, cleared by any other move out, never on a group. A move to another
+  // sub-project restarts it, and done_at, at the move (model/issues.ts
+  // moveIssueCore).
   review_at: v.optional(v.string()),
   // server-owned: when the status was last set while the task was in its
   // current project. createIssueCore and updateIssueCore stamp it and

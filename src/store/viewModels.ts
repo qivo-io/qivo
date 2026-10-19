@@ -277,15 +277,17 @@ export const shapeIssue = (i: Row<'issues'>, ctx: IssueShapeCtx) => {
     // spread/projection anchor everywhere remaining is divided over weeks
     remainingSet: i.remaining_set_at != null ? tsToWeek(i.remaining_set_at) : null,
     // when it was last handed to review (server-owned review_at, ms): entering
-    // In Review or a new reviewer there; kept into Done, else cleared
+    // In Review or a new reviewer there; kept into Done, else cleared, and
+    // restarted by a move to another sub-project (model/issues.ts movedStamps)
     reviewAt: i.review_at ? new Date(i.review_at).getTime() : null,
     // when the status was last set in the task's current project (server-owned
     // status_at, ms). Creation sets it; null for a task created before Qivo
     // recorded it and not changed since, and after a move to another
     // sub-project
     statusAt: i.status_at ? new Date(i.status_at).getTime() : null,
-    // when it reached Done (server-derived, 0071; null while not Done) and
-    // when it was created, both ms
+    // when it reached Done (server-derived, 0071; null while not Done), or
+    // was moved to another sub-project while Done, and when it was created,
+    // both ms
     doneAt: i.done_at ? new Date(i.done_at).getTime() : null,
     createdAt: new Date(i.created_at).getTime(),
     paused: i.paused,

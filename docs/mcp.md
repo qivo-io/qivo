@@ -741,7 +741,9 @@ deleted task cannot be fetched while it is in Deleted items. After
 including server-maintained fields such as `remaining_set_at`. These names do
 not form an API write payload. Names can include `created_by`, `done_at`,
 `review_at`, `start_week`, `end_week` and `parent_id`. For example, the event
-reports `archived_at`, while a machine API write uses `archived`. Changes only
+reports `archived_at`, while a machine API write uses `archived`. A move to
+another sub-project lists `done_at` and `review_at` next to `project_id` for
+a task whose Done time or review hand-off the move restarts. Changes only
 to `updated_at` are excluded.
 
 An integration receives matching events from its own writes. Receivers that
@@ -1878,7 +1880,9 @@ default `list_tasks` result (`archived: true` with `project` pages them, see
 on the Archived tasks page. A nightly sweep archives tasks that have been `done`
 for 30 days, or for a legacy team archive setting's number of days where an
 older project kept one. Restoring a still-`done` task restarts its
-auto-archive clock (0071), so a restore holds for the full threshold.
+auto-archive clock (0071), so a restore holds for the full threshold. A move
+to another sub-project restarts it too, for the task and each subtask that
+moves with it.
 `create_task` rejects `archived` outright, because tasks are created
 active. The schema declares the key so that the refusal names the fix,
 rather than a bare unknown key.

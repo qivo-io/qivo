@@ -1274,7 +1274,8 @@ the Archived tasks page. A nightly sweep archives tasks that have been `done` fo
 30 days, or for a legacy team archive setting's number of days where an older
 project kept one. Restoring a still-`done` task **restarts its auto-archive
 clock** (0071), so a restore holds for the full threshold rather than being
-re-swept the next night. `archived` matching the current state is
+re-swept the next night. A move to another sub-project restarts it too, for
+the task and each subtask that moves with it. `archived` matching the current state is
 a no-op `200` returning the full task. Sending `archived` on POST is a `400` — tasks
 are created active. In the app, archiving unfinished work requires a written
 reason, which becomes a comment. The API does not require one, but

@@ -10,6 +10,7 @@ import {
   as,
   expectRefusal,
   flushWebhookEvents,
+  NOW,
   newT,
   plantIssue,
   plantProject,
@@ -175,6 +176,71 @@ describe('durable task events', () => {
     expect(carried.find(([id]) => id === f.issue.id)?.[1]).toContain('project_id')
     expect((await f.t.run((ctx) => byId(ctx, 'issues', f.issue.id)))?.status_at).toBeUndefined()
     expect(carried.flatMap(([, fields]) => fields)).not.toContain('status_at')
+    // a review hand-off or Done time the move restarts is news, as any
+    // other change to it
+    const done = await plantIssue(f.t, {
+      org_id,
+      project_id: f.fx.sub.id,
+      status: 'done',
+      done_at: NOW,
+      review_at: NOW,
+    })
+    expect(
+      await write(() =>
+        as(f.t, f.fx.user).mutation(api.issues.move, {
+          org_id,
+          id: done.id,
+          project_id: f.fx.sub2.id,
+        }),
+      ),
+    ).toEqual([[done.id, ['done_at', 'project_id', 'review_at']]])
+  })
+
+  it('a carried subtask that lands as a group loses its hand-off once, never restarted first', async () => {
+    const f = await fixture()
+    await f.subscribe('task.updated')
+    const org_id = f.fx.org.id
+    const far = await plantProject(f.t, { org_id, type: 'project', parent_id: f.fx.hidden.id })
+    const shelf = await plantProject(f.t, {
+      org_id,
+      type: 'project',
+      parent_id: f.fx.meta.id,
+      archived_at: NOW,
+    })
+    await f.t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.fx.hidden.id,
+        profile_id: f.fx.guest.id,
+        level: 'user',
+      }),
+    )
+    // a leaf in review whose only subtask is in an archived sub-project, so
+    // it becomes a group once the move carries that subtask out
+    const leaf = await plantIssue(f.t, {
+      org_id,
+      project_id: f.fx.sub.id,
+      parent_id: f.issue.id,
+      status: 'review',
+      review_at: NOW,
+      remaining_hours: 2,
+      remaining_set_at: NOW,
+    })
+    await plantIssue(f.t, { org_id, project_id: shelf.id, parent_id: leaf.id })
+    await as(f.t, f.fx.admin).mutation(api.issues.move, {
+      org_id,
+      id: f.issue.id,
+      project_id: far.id,
+    })
+    await flushWebhookEvents(f.t)
+    const fields = (await f.rows())
+      .map(
+        (row) => JSON.parse(row.payload) as { data: { task_id: string; changed_fields: string[] } },
+      )
+      .filter((p) => p.data.task_id === leaf.id)
+      .map((p) => p.data.changed_fields)
+    expect(fields).toEqual([['project_id'], ['remaining_hours', 'remaining_set_at', 'review_at']])
+    const landed = await f.t.run((ctx) => byId(ctx, 'issues', leaf.id))
+    expect(landed && 'review_at' in landed).toBe(false)
   })
 
   it('emits create, comment, delete and restore through the shared model hooks', async () => {
