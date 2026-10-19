@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-/* Explicit Northstar fixtures for isolated development and staging backends.
- * Passwords stay outside the checkout. Only password hashes reach Convex. */
+/* Explicit Northstar fixtures for isolated development and staging backends,
+ * and for a disposable local backend (--local). Passwords stay outside the
+ * checkout. Only password hashes reach Convex. */
 import { randomBytes, randomUUID } from 'node:crypto'
 import {
   closeSync,
@@ -59,6 +60,11 @@ const references = Object.fromEntries(
 const purgeTrash = makeFunctionReference('deletedItems:purgeOrg')
 // Calls of purgeTrash before the CLI gives up; each deletes up to 256 rows.
 const TRASH_BATCHES = 400
+// Calls of apply('wipe') before the CLI gives up; each deletes one bounded
+// batch of the demo's work.
+const WIPE_STEPS = 2000
+/** A loopback HTTP origin, the only kind a --local run talks to. */
+const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$/
 
 class DemoCliError extends Error {}
 
@@ -96,6 +102,8 @@ export function parseArgs(args, now = new Date()) {
       ![
         '--staging',
         '--dev',
+        '--local',
+        '--deployment',
         '--dry-run',
         '--anchor',
         '--confirm',
@@ -112,8 +120,9 @@ export function parseArgs(args, now = new Date()) {
     seen.add(arg)
     if (arg === '--help') options.help = true
     else if (arg === '--dry-run') options.dryRun = true
-    else if (arg === '--staging' || arg === '--dev') {
-      if (options.target) throw new DemoCliError('Choose either --staging or --dev, never both.')
+    else if (arg === '--staging' || arg === '--dev' || arg === '--local') {
+      if (options.target)
+        throw new DemoCliError('Choose one of --staging, --dev and --local, never more.')
       options.target = arg.slice(2)
     } else {
       const value = args[++index]
@@ -124,6 +133,7 @@ export function parseArgs(args, now = new Date()) {
         '--confirm': 'confirm',
         '--url': 'url',
         '--site-url': 'siteUrl',
+        '--deployment': 'deployment',
       }[arg]
       options[key] = value
     }
@@ -131,9 +141,11 @@ export function parseArgs(args, now = new Date()) {
   options.anchor = mondayAnchor(options.anchor, now)
   if (!options.help && options.command !== 'plan' && !options.target) {
     throw new DemoCliError(
-      'Explicitly select --dev or --staging before seeding, resetting, or wiping.',
+      'Explicitly select --dev, --staging or --local before seeding, resetting, or wiping.',
     )
   }
+  if (options.deployment !== undefined && options.target !== 'local')
+    throw new DemoCliError('--deployment names a --local backend only.')
   if (
     !options.help &&
     !options.dryRun &&
@@ -147,9 +159,48 @@ export function parseArgs(args, now = new Date()) {
   return options
 }
 
+/** Resolve a disposable local backend. It takes loopback HTTP origins only,
+ * for the backend and the site, and that backend's admin key, so neither the
+ * key nor a password hash can reach a hosted deployment. It refuses a
+ * deployment key and any environment named staging, production or demo, and
+ * needs QIVO_FIXTURE_LOCAL=true. Credentials are stored under the local
+ * instance name given with --deployment. */
+function resolveLocal(options, env, requireKey) {
+  if (requireKey) {
+    if (env.QIVO_FIXTURE_LOCAL !== 'true')
+      throw new DemoCliError('--local needs QIVO_FIXTURE_LOCAL=true in the environment.')
+    if (['staging', 'production', 'demo'].includes(env.QIVO_ENVIRONMENT) || env.APP_MODE === 'demo')
+      throw new DemoCliError('--local refuses a staging, production or demo environment.')
+    if (env.CONVEX_DEPLOY_KEY)
+      throw new DemoCliError(
+        '--local refuses CONVEX_DEPLOY_KEY. Unset it and set QIVO_LOCAL_ADMIN_KEY to the local backend admin key.',
+      )
+  }
+  const key = env.QIVO_LOCAL_ADMIN_KEY
+  if (!key && requireKey)
+    throw new DemoCliError(
+      'Set QIVO_LOCAL_ADMIN_KEY to the local backend admin key in the environment. Never pass it as a command argument.',
+    )
+  if (key !== undefined && (/^(prod|dev|preview|project):/.test(key) || !/^\S+$/.test(key)))
+    throw new DemoCliError('QIVO_LOCAL_ADMIN_KEY must be a local backend admin key.')
+  const deployment = options.deployment
+  if (!/^local-[a-z0-9-]*[0-9]+$/.test(deployment ?? ''))
+    throw new DemoCliError(
+      '--local needs --deployment local-<name>-<port>, the name its credentials are stored under.',
+    )
+  const urlValue = (options.url ?? env.VITE_CONVEX_URL ?? '').replace(/\/$/, '')
+  if (!LOOPBACK_ORIGIN.test(urlValue))
+    throw new DemoCliError('--local takes a loopback HTTP backend origin only (--url).')
+  const siteUrl = options.siteUrl ?? 'http://localhost:5199'
+  if (!LOOPBACK_ORIGIN.test(siteUrl))
+    throw new DemoCliError('--local takes a loopback HTTP site origin only (--site-url).')
+  return { target: 'local', deployment, url: new URL(urlValue).origin, siteUrl, key }
+}
+
 /** Resolve an isolated fixture backend without redirecting its deployment key. */
 export function resolveTarget(options, env, requireKey = true) {
   const target = options.target ?? 'dev'
+  if (target === 'local') return resolveLocal(options, env, requireKey)
   if (!['dev', 'staging'].includes(target))
     throw new DemoCliError('Production fixture commands are disabled.')
   const environment = target === 'dev' ? 'development' : 'staging'
@@ -511,6 +562,8 @@ export async function runMarketingDemo(args, dependencies = {}) {
 
   --staging              Explicitly target the isolated staging backend
   --dev                  Explicitly target the localhost development app
+  --local                Explicitly target a disposable local backend
+  --deployment NAME      The local backend's name for its credentials (local-<name>-<port>)
   --anchor YYYY-MM-DD     Monday around which demo dates are arranged (default: current UTC Monday)
   --confirm northstar-labs Required for reset and wipe
   --dry-run              Print the operation without network access or local writes
@@ -521,6 +574,9 @@ export async function runMarketingDemo(args, dependencies = {}) {
 Set QIVO_ENVIRONMENT to development or staging, matching the selected target.
 Load only that isolated backend's CONVEX_DEPLOY_KEY. Staging also requires its
 exact SITE_URL. Production fixture commands are disabled.
+--local takes loopback HTTP origins only (--url, default VITE_CONVEX_URL, and
+--site-url, default http://localhost:5199), QIVO_FIXTURE_LOCAL=true and the
+local backend admin key in QIVO_LOCAL_ADMIN_KEY, never CONVEX_DEPLOY_KEY.
 Set QIVO_FIXTURE_CREDENTIALS_DIR to a private directory outside this checkout.
 Credentials are stored under <directory>/<deployment>/credentials.json (0600).
 No secret command-line flags are supported. plan is fully offline.
@@ -629,15 +685,24 @@ Reset is a wipe followed by a seed; if the seed fails, re-run the same reset.`)
         'Deleted items in the demo organization are not empty yet. Re-run the same command to continue.',
       )
   }
+  // Each wipe call deletes one bounded batch and says whether work remains.
+  // A backend that predates the batches wipes in one call and says nothing.
+  const wipe = async () => {
+    for (let step = 0; step < WIPE_STEPS; step++)
+      if ((await apply('wipe'))?.wipe_done !== false) return
+    throw new DemoCliError('The demo work is not wiped yet. Re-run the same command to continue.')
+  }
   if (options.command === 'reset') {
-    // Two transactions, wipe then seed: as one they come too close to
-    // Convex's 1 s mutation limit. Repeating the reset is always safe.
-    await apply('wipe')
+    // A wipe, then a seed in its own transaction: together they come too
+    // close to Convex's 1 s mutation limit. Repeating the reset is always safe.
+    await wipe()
     await apply('seed').catch((error) => {
       throw new DemoCliError(
         `${error.message} The wipe step completed, so the demo may now be empty. Re-run the same reset command to seed it.`,
       )
     })
+  } else if (options.command === 'wipe') {
+    await wipe()
   } else {
     await apply(options.command)
   }

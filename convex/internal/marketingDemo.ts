@@ -13,8 +13,8 @@ import { byId } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { StoredTable } from '../lib/enums'
 import { badRequest, conflict, require, rule } from '../lib/functions'
-import { deleteProjectDeep } from '../model/cascade'
 import { SAMPLE_AVATARS, type SampleAvatar, writeNorthstarWork } from '../model/demoSeed'
+import { wipeWorkStep } from '../model/orgDeletion'
 import { assertSlugAvailable, insertOrgRows, newOrgDefaults, setCounters } from '../model/orgs'
 import {
   assertMarketingAnchor,
@@ -99,6 +99,9 @@ async function owned(ctx: QueryCtx) {
   }
   return { record, org, profiles }
 }
+
+/** What inspect answers about the owned demo. */
+type DemoState = Awaited<ReturnType<typeof inspectCore>>
 
 async function inspectCore(ctx: QueryCtx, expected: string) {
   site(expected)
@@ -300,81 +303,49 @@ export const provision = internalMutation({
   },
 })
 
-/* Clear only WORK, deliberately preserving login/profile UUIDs and portraits.
- * Manual demo tasks, files, comments, inbox entries and view preferences are
- * removed too. It runs inside the calling apply's one transaction; a reset is
- * two such transactions, a wipe and then a seed (see apply). */
-async function clearWork(ctx: MutationCtx, org: Doc<'organizations'>, profiles: Doc<'profiles'>[]) {
-  const actor = profiles.find((p) => p.org_role === 'admin')
-  require(actor !== undefined, rule('marketing demo: an admin is required'))
-  const now = new Date().toISOString()
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
-  // Existing model cascades include attachment bytes and relation edges.
-  for (const project of projects.filter((p) => p.type === 'meta'))
-    await deleteProjectDeep(ctx, { project, actor, now })
-  for (const table of ['activity_events', 'labels', 'teams'] as const) {
-    if (table === 'activity_events') {
-      for (const row of await ctx.db
-        .query(table)
-        .withIndex('by_org_ts', (q) => q.eq('org_id', org.id))
-        .collect())
-        await ctx.db.delete(row._id)
-    } else if (table === 'labels') {
-      for (const row of await ctx.db
-        .query(table)
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .collect())
-        await ctx.db.delete(row._id)
-    } else {
-      for (const row of await ctx.db
-        .query(table)
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .collect()) {
-        for (const member of await ctx.db
-          .query('team_members')
-          .withIndex('by_team', (q) => q.eq('team_id', row.id))
-          .collect())
-          await ctx.db.delete(member._id)
-        await ctx.db.delete(row._id)
-      }
-    }
+/* Clears one bounded batch of WORK (model/orgDeletion.ts wipeWorkStep),
+ * deliberately preserving login/profile UUIDs and portraits. Manual demo
+ * tasks, files, comments, inbox entries and view preferences are removed
+ * too. Once nothing is left it rewinds the counters, and it returns whether
+ * it got there. A Northstar copy grown by manual or contract-test work takes
+ * several calls, so apply's wipe says whether to call it again. */
+async function clearWork(
+  ctx: MutationCtx,
+  org: Doc<'organizations'>,
+  profiles: Doc<'profiles'>[],
+): Promise<boolean> {
+  const done = await wipeWorkStep(
+    ctx,
+    org.id,
+    profiles.map((p) => p.id),
+  )
+  if (done) {
+    await setCounters(ctx, org, { next_issue_num: 0, next_project_num: 0 })
+    await ctx.db.patch(org._id, { activity_count: undefined })
   }
-  for (const p of profiles) {
-    for (const row of await ctx.db
-      .query('user_prefs')
-      .withIndex('by_profile', (q) => q.eq('profile_id', p.id))
-      .collect())
-      await ctx.db.delete(row._id)
-    for (const row of await ctx.db
-      .query('messages')
-      .withIndex('by_recipient', (q) => q.eq('recipient_id', p.id))
-      .collect())
-      await ctx.db.delete(row._id)
-  }
-  await setCounters(ctx, org, { next_issue_num: 0, next_project_num: 0 })
-  await ctx.db.patch(org._id, { activity_count: undefined })
+  return done
 }
 
 /* Seeds or wipes the owned demo's work, each call one transaction. There is
  * deliberately no single-call reset: clearing and rebuilding together used
  * nearly all of Convex's 1 s mutation limit and could time out. Callers
  * reset by running 'wipe' and then 'seed' (scripts/marketing-demo.mjs,
- * the explicit fixture CLI). The demo is empty between the two calls, a failed
- * seed leaves it as the wipe left it, and repeating the reset is safe (a seed
- * alone refuses work added after a wipe, Deleted items included). A wipe
- * refuses while the organization holds Deleted items, which the CLI empties
- * first through deletedItems:purgeOrg. Refusals still say "reset" because
- * that is the CLI command an operator runs. */
+ * the explicit fixture CLI). A wipe call deletes one bounded batch, marks
+ * the demo empty and answers `wipe_done`, and the CLI calls it again until
+ * that is true. The demo is empty between the two steps, a failed seed
+ * leaves it as the wipe left it, and repeating the reset is safe (a seed
+ * alone refuses work added after a wipe, Deleted items included, and work a
+ * wipe left half done). A wipe refuses while the organization holds Deleted
+ * items, which the CLI empties first through deletedItems:purgeOrg.
+ * Refusals still say "reset" because that is the CLI command an operator
+ * runs. */
 export const apply = internalMutation({
   args: {
     ...expectedSite,
     anchor: v.string(),
     mode: v.union(v.literal('seed'), v.literal('wipe')),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<DemoState & { wipe_done?: boolean }> => {
     site(args.expected_site_url)
     try {
       assertMarketingAnchor(args.anchor)
@@ -508,13 +479,15 @@ export const apply = internalMutation({
     if (args.mode === 'wipe') require(!(await holdsTrash(ctx, org.id)), rule(TRASH_LEFT))
     // A seed reaches here only on an empty demo, and still clears: it sweeps
     // leftover activity, messages and view preferences and rewinds the task
-    // counters so the rebuilt task numbers match the dataset order.
-    await clearWork(ctx, org, profiles)
+    // counters so the rebuilt task numbers match the dataset order. More
+    // leftovers than one batch mean a wipe stopped halfway.
+    const cleared = await clearWork(ctx, org, profiles)
     const now = new Date().toISOString()
     if (args.mode === 'wipe') {
       await ctx.db.patch(record._id, { state: 'empty', anchor: undefined, updated_at: now })
-      return await inspectCore(ctx, args.expected_site_url)
+      return { ...(await inspectCore(ctx, args.expected_site_url)), wipe_done: cleared }
     }
+    require(cleared, rule('marketing demo: work was added after wipe; use reset to replace it'))
     await writeNorthstarWork(ctx, { org, profiles, namespace: KEY, anchor: args.anchor, now })
     await ctx.db.patch(record._id, {
       state: 'ready',

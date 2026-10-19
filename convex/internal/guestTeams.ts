@@ -19,7 +19,7 @@
  * the target's key, because without a key the CLI runs against the
  * deployment in .env.local. For example, to check staging:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
- *   "$H" staging npx convex run internal/guestTeams:check '{"cursor": null}'
+ *   "$H" staging npx convex run internal/guestTeams:check
  *
  * Where the check finds rows, and only with the user's approval, repair the
  * deployment once. On production, take and verify a backup first
@@ -37,7 +37,7 @@
  * action, needs deployment:functions:runInternalActions:
  *   T="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-temp-deploy-key"
  *   "$T" demo --allow deployment:functions:runInternalQueries --purpose guest-teams -- \
- *     npx convex run internal/guestTeams:check '{"cursor": null}'
+ *     npx convex run internal/guestTeams:check
  *   "$T" demo --allow deployment:functions:runInternalActions --purpose guest-teams -- \
  *     npx convex run internal/guestTeams:repair '{"dry_run": true}'
  *   "$T" demo --allow deployment:functions:runInternalActions --purpose guest-teams -- \
@@ -119,14 +119,15 @@ export const page = internalMutation({
 
 /** Counts, without writing, the team rows guests hold in one page of
  * team_members. Read-only by construction, so it can run with a key that
- * may only run internal queries. Call again with `cursor` until `done`.
+ * may only run internal queries. Leave out `cursor`, or pass null, for the
+ * first page, then call again with the returned `cursor` until `done`.
  * `limit` sets the page size, CHECK_PAGE rows by default and at most.
  * `guests` counts the distinct guests of this page only. */
 export const check = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()), limit: v.optional(v.number()) },
+  args: { cursor: v.optional(v.union(v.string(), v.null())), limit: v.optional(v.number()) },
   handler: async (ctx, { cursor, limit }) => {
     const numItems = Math.min(CHECK_PAGE, Math.max(1, Math.floor(limit ?? CHECK_PAGE)))
-    const found = await staleRows(ctx, cursor, numItems)
+    const found = await staleRows(ctx, cursor ?? null, numItems)
     return {
       memberships: found.memberships,
       leaderships: found.leaderships,

@@ -150,7 +150,14 @@ help, because the script handles `SIGHUP` itself.
 With `--staging` the script refuses any environment but staging,
 any app other than `preview.qivo.io` and any backend other than the one that
 app uses. `--local` runs it against a disposable local backend instead, with
-loopback addresses only. It prints status lines only, never a secret, and
+loopback addresses only, and before it sends any credential it checks that
+the app it signed in to syncs with the backend `--convex-url` names. Seed
+that backend's Northstar fixture first with
+`node scripts/marketing-demo.mjs seed --local --deployment local-<name>-<port>`,
+which takes loopback origins only (`--url` and `--site-url`),
+`QIVO_FIXTURE_LOCAL=true` and the backend's admin key in
+`QIVO_LOCAL_ADMIN_KEY`, and give the check the same `--deployment`. It
+prints status lines only, never a secret, and
 refuses to start while `DEBUG`, `PWDEBUG`, `DEBUG_FILE` or `NODE_DEBUG` is
 set, because Playwright's and Node's debug output would bypass that. If a
 run is killed before it cleans up, `--cleanup --run <hex>` with the six digits

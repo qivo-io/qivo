@@ -35,6 +35,13 @@ const STAGING_ENV = {
   CONVEX_DEPLOY_KEY: 'prod:happy-wolf-34|other-private-key',
   VITE_CONVEX_URL: 'https://tidy-otter-12.convex.cloud',
 }
+const LOCAL_ENV = {
+  QIVO_ENVIRONMENT: 'development',
+  QIVO_FIXTURE_LOCAL: 'true',
+  QIVO_LOCAL_ADMIN_KEY: 'anonymous-qivo|0111111111111111',
+  VITE_CONVEX_URL: 'http://127.0.0.1:3210',
+}
+const LOCAL = { target: 'local', deployment: 'local-qivo-3210' }
 const DEV_TARGET = resolveTarget({ target: 'dev' }, DEV_ENV)
 const PERSON_KEYS = ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben', 'atlas']
 
@@ -83,7 +90,7 @@ describe('date and command safety', () => {
     for (const date of ['2026-02-30', '2026-09-05', '2026-09-07T00:00:00Z', '09/07/2026']) {
       expect(() => mondayAnchor(date)).toThrow(/anchor/)
     }
-    expect(() => parseArgs(['seed', '--dev', '--staging'], NOW)).toThrow(/either/)
+    expect(() => parseArgs(['seed', '--dev', '--staging'], NOW)).toThrow(/never more/)
     expect(() => parseArgs(['seed', 'reset', '--dev'], NOW)).toThrow(/exactly one/)
     expect(() => parseArgs(['seed'], NOW)).toThrow(/Explicitly/)
     expect(() => parseArgs(['seed', '--dev', '--password', 'do-not-log'], NOW)).toThrow(
@@ -269,6 +276,69 @@ describe('target selection never redirects a deploy key', () => {
       }),
     ).rejects.toThrow(/canonical HTTPS/)
     expect(factory).not.toHaveBeenCalled()
+  })
+
+  it('takes a local backend only on loopback HTTP origins, with its admin key and the opt-in', async () => {
+    expect(resolveTarget(LOCAL, LOCAL_ENV)).toEqual({
+      target: 'local',
+      deployment: 'local-qivo-3210',
+      url: 'http://127.0.0.1:3210',
+      siteUrl: 'http://localhost:5199',
+      key: LOCAL_ENV.QIVO_LOCAL_ADMIN_KEY,
+    })
+    expect(
+      resolveTarget(
+        { ...LOCAL, url: 'http://localhost:3236/', siteUrl: 'http://127.0.0.1:5241' },
+        LOCAL_ENV,
+      ),
+    ).toMatchObject({ url: 'http://localhost:3236', siteUrl: 'http://127.0.0.1:5241' })
+    expect(parseArgs(['seed', '--local', '--deployment', 'local-qivo-3210'])).toMatchObject(LOCAL)
+    for (const [options, env, message] of [
+      [LOCAL, { ...LOCAL_ENV, QIVO_FIXTURE_LOCAL: undefined }, /QIVO_FIXTURE_LOCAL=true/],
+      [LOCAL, { ...LOCAL_ENV, QIVO_ENVIRONMENT: 'production' }, /refuses a staging/],
+      [LOCAL, { ...LOCAL_ENV, QIVO_ENVIRONMENT: 'staging' }, /refuses a staging/],
+      [LOCAL, { ...LOCAL_ENV, QIVO_ENVIRONMENT: 'demo' }, /refuses a staging/],
+      [LOCAL, { ...LOCAL_ENV, APP_MODE: 'demo' }, /refuses a staging/],
+      [LOCAL, { ...LOCAL_ENV, CONVEX_DEPLOY_KEY: DEV_ENV.CONVEX_DEPLOY_KEY }, /CONVEX_DEPLOY_KEY/],
+      [LOCAL, { ...LOCAL_ENV, QIVO_LOCAL_ADMIN_KEY: undefined }, /QIVO_LOCAL_ADMIN_KEY/],
+      [LOCAL, { ...LOCAL_ENV, QIVO_LOCAL_ADMIN_KEY: 'prod:happy-wolf-34|k' }, /local backend/],
+      [{ target: 'local' }, LOCAL_ENV, /--deployment/],
+      [{ ...LOCAL, deployment: 'happy-wolf-34' }, LOCAL_ENV, /--deployment/],
+      [{ ...LOCAL, url: 'https://happy-wolf-34.convex.cloud' }, LOCAL_ENV, /loopback HTTP backend/],
+      [{ ...LOCAL, url: 'http://10.0.0.5:3210' }, LOCAL_ENV, /loopback HTTP backend/],
+      [{ ...LOCAL, url: 'http://localhost.example.com:3210' }, LOCAL_ENV, /loopback HTTP backend/],
+      [{ ...LOCAL, url: 'http://127.0.0.1:3210/api' }, LOCAL_ENV, /loopback HTTP backend/],
+      [{ ...LOCAL, url: 'http://user@127.0.0.1:3210' }, LOCAL_ENV, /loopback HTTP backend/],
+      [LOCAL, { ...LOCAL_ENV, VITE_CONVEX_URL: 'https://happy-wolf-34.convex.cloud' }, /backend/],
+      [{ ...LOCAL, siteUrl: 'https://preview.qivo.io' }, LOCAL_ENV, /loopback HTTP site/],
+      [{ ...LOCAL, siteUrl: 'https://qivo.io' }, LOCAL_ENV, /loopback HTTP site/],
+    ])
+      expect(() => resolveTarget(options, env), JSON.stringify(options)).toThrow(message)
+    expect(() => parseArgs(['seed', '--dev', '--deployment', 'local-qivo-3210'])).toThrow(
+      /--local backend only/,
+    )
+    expect(() => parseArgs(['seed', '--dev', '--local'])).toThrow(/never more/)
+  })
+
+  it('sends a local run to its own backend with its admin key only', async () => {
+    const stop = new Error('client stopped before network')
+    const client = {
+      setAdminAuth: vi.fn(),
+      query: vi.fn(async () => {
+        throw stop
+      }),
+    }
+    const factory = vi.fn(() => client)
+    await expect(
+      runMarketingDemo(['seed', '--local', '--deployment', 'local-qivo-3210'], {
+        cwd: folder(),
+        env: LOCAL_ENV,
+        clientFactory: factory,
+      }),
+    ).rejects.toThrow(/raw server errors are withheld/)
+    expect(factory).toHaveBeenCalledWith('http://127.0.0.1:3210')
+    expect(client.setAdminAuth).toHaveBeenCalledWith(LOCAL_ENV.QIVO_LOCAL_ADMIN_KEY)
+    expect(client.query.mock.calls[0][1]).toEqual({ expected_site_url: 'http://localhost:5199' })
   })
 
   it('allows a fully offline plan without a deploy key and writes nothing', async () => {
@@ -557,6 +627,40 @@ describe('resumable seed execution', () => {
     const endless = await run(Number.POSITIVE_INFINITY)
     expect(endless.outcome.message).toContain('Re-run the same command')
     expect(endless.names).not.toContain('internal/marketingDemo:apply')
+  })
+
+  it('repeats the wipe until the backend says it is done, and stops after WIPE_STEPS', async () => {
+    const run = async (command, answers) => {
+      const client = {
+        setAdminAuth: vi.fn(),
+        query: vi.fn(async () => ({
+          state: 'ready',
+          org_id: 'northstar-org',
+          people: PERSON_KEYS.map((key) => ({ key, avatar_storage_id: 'existing-avatar' })),
+        })),
+        mutation: vi.fn(async (reference, args) => {
+          if (getFunctionName(reference) === 'deletedItems:purgeOrg') return { done: true }
+          return args.mode === 'wipe' ? answers(client.mutation.mock.calls.length) : null
+        }),
+      }
+      const outcome = await runMarketingDemo([command, '--dev', '--confirm', 'northstar-labs'], {
+        cwd: folder(),
+        env: DEV_ENV,
+        clientFactory: () => client,
+        log: vi.fn(),
+      }).catch((error) => error)
+      return { outcome, modes: client.mutation.mock.calls.slice(1).map(([, args]) => args.mode) }
+    }
+    // the third wipe call finishes; the purge was the first call
+    const batched = await run('reset', (n) => ({ state: 'empty', wipe_done: n >= 4 }))
+    expect(batched.outcome).toMatchObject({ kind: 'complete' })
+    expect(batched.modes).toEqual(['wipe', 'wipe', 'wipe', 'seed'])
+    // a backend that wipes in one call answers no wipe_done
+    expect((await run('wipe', () => ({ state: 'empty' }))).modes).toEqual(['wipe'])
+    const endless = await run('reset', () => ({ state: 'empty', wipe_done: false }))
+    expect(endless.outcome.message).toContain('not wiped yet. Re-run the same command')
+    expect(endless.modes).toHaveLength(2000)
+    expect(endless.modes).not.toContain('seed')
   })
 
   it('says the demo may be empty and to re-run reset only when the seed fails after the wipe', async () => {

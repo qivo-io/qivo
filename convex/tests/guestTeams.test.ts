@@ -133,12 +133,14 @@ describe('internal/guestTeams:check', () => {
 
     expect(walk.pages).toBeGreaterThan(100)
     expect(walk).toMatchObject({ memberships: dryRun.memberships, leaderships: dryRun.leaderships })
-    expect(await t.query(internal.internal.guestTeams.check, { cursor: null })).toMatchObject({
-      memberships: 4,
-      leaderships: 1,
-      guests: 3,
-      done: true,
-    })
+    // the first page with a null cursor or none at all
+    for (const args of [{ cursor: null }, {}])
+      expect(await t.query(internal.internal.guestTeams.check, args)).toMatchObject({
+        memberships: 4,
+        leaderships: 1,
+        guests: 3,
+        done: true,
+      })
     expect(await allMemberships(t)).toEqual(before)
   })
 
