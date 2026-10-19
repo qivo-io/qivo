@@ -1,5 +1,5 @@
 /* The project domain's public surface (phase 5): create / update /
- * removeAccess / archive / unarchive / deleteDeep / removalSummary /
+ * setAccess / removeAccess / archive / unarchive / deleteDeep / removalSummary /
  * inviteGuest, plus the milestones CRUD (there is no milestones.ts). Thin
  * wrappers over the shared cores REST and MCP use too (model/projects.ts,
  * model/projectAccess.ts, model/milestones.ts) and over lib/access,

@@ -422,8 +422,9 @@ export async function createProjectCore(
 /* --------------------------------------------------------------- update */
 
 /** A project field patch. A key's presence means "set this field"; null
- * clears. `access` and `team_access` replace the project's whole grant
- * lists, as the app's Project access editor sends them. */
+ * clears. `access` and `team_access` are whole grant lists from clients
+ * from before projects.setAccess, which give or change grants but may not
+ * leave one out (ACCESS_MAP_REMOVES). */
 export type ProjectPatch = {
   name?: string
   lead_id?: string | null

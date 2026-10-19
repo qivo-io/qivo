@@ -505,7 +505,7 @@ describe('the write conflict answer', () => {
       'the request conflicted with other changes made at the same time and changed nothing; send it again',
     )
     expect(WRITE_TIMEOUT_MESSAGE).toBe(
-      'the request took too long and changed nothing; send it again',
+      'the request took too long and changed nothing; send it again, or change less at once if it keeps happening',
     )
     expect(WRITE_CONFLICT_RETRY_AFTER).toBe(1)
     const docs = import.meta.glob(

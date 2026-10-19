@@ -457,6 +457,63 @@ describe('projects.update', () => {
     expect(row?.name).toBe('Renamed too')
   })
 
+  it('a team_access map changes shares but never leaves one out', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const crew = uuid()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: crew,
+        org_id: f.org.id,
+        name: 'Crew',
+        stale_days: 14,
+        archive_days: 30,
+        track_delay_default: false,
+        created_at: f.org.created_at,
+      })
+      for (const team_id of [f.team.id, crew])
+        await ctx.db.insert('project_team_access', {
+          project_id: f.meta.id,
+          team_id,
+          level: 'user',
+        })
+    })
+    const sharesOnMeta = () =>
+      t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('project_team_access')
+            .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
+            .collect()
+        )
+          .map((s) => [s.team_id, s.level])
+          .sort(),
+      )
+    const before = await sharesOnMeta()
+    // a map from before someone else shared the project with Crew
+    await expectRefusal(
+      as(t, f.admin).mutation(api.projects.update, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        patch: { team_access: { [f.team.id]: 'viewer' } },
+      }),
+      'rule',
+      /^an access map cannot remove access; remove it one person or team at a time$/,
+    )
+    expect(await sharesOnMeta()).toEqual(before)
+    await as(t, f.admin).mutation(api.projects.update, {
+      org_id: f.org.id,
+      id: f.meta.id,
+      patch: { team_access: { [f.team.id]: 'viewer', [crew]: 'user' } },
+    })
+    expect(await sharesOnMeta()).toEqual(
+      [
+        [f.team.id, 'viewer'],
+        [crew, 'user'],
+      ].sort(),
+    )
+  })
+
   it('grants on a sub-project are scoped there; viewer grantees stay capped', async () => {
     const t = newT()
     const f = await withOrg(t)

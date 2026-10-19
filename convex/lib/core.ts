@@ -967,8 +967,8 @@ export { BEFORE_NOT_A_COMMENT, COMMENT_PAGE_MAX } from '../model/comments'
  * newest `limit` comments (model/comments.ts newestComments), or with
  * `before`, a comment's id, the newest ones the thread holds before that
  * comment. Answers them oldest first in the thread's order, the order they
- * were posted, as the app's task window shows them. A caller reads further
- * back by passing the first comment's id as `before`, which is then the
+ * were posted, in which the app's task window pages them. A caller reads
+ * further back by passing the first comment's id as `before`, which is the
  * page's oldest, so no page repeats or skips a comment, and an empty page
  * means it reached the start. Comments imported with a created_at out of
  * that order stay in it. Refuses a `before` that is not a comment on this
