@@ -855,7 +855,14 @@ describe('writes that change which subtasks count', () => {
 
   it('a subtask carried out of an archived project makes the moved task a group in the same write', async () => {
     const fx = await setup()
-    const root = await task(fx, { title: 'Root', remaining_hours: 6, remaining_set_at: NOW })
+    // In Review with a hand-off, which a group cannot keep
+    const root = await task(fx, {
+      title: 'Root',
+      status: 'review',
+      review_at: NOW,
+      remaining_hours: 6,
+      remaining_set_at: NOW,
+    })
     const child = await task(fx, { project_id: fx.shelf.id, parent_id: root.id })
     await as(fx.t, fx.admin).mutation(api.issues.move, {
       org_id: fx.org.id,
@@ -866,6 +873,7 @@ describe('writes that change which subtasks count', () => {
     const after = await row(fx, root.id)
     expect(after).toMatchObject({ project_id: fx.away.id })
     expect(after?.remaining_hours).toBeUndefined()
+    expect(after && 'review_at' in after).toBe(false)
     expect((await restGet(fx, root.id, fx.admin.id)).is_group).toBe(true)
   })
 

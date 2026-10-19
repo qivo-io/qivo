@@ -289,7 +289,12 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
     expect(await runArchive(t)).toBe(1)
     expect((await issueRow(t, stayed.id))?.archived_at).toBeDefined()
-    expect((await issueRow(t, moved.id))?.archived_at).toBeUndefined()
+    const landed = await issueRow(t, moved.id)
+    expect(landed?.archived_at).toBeUndefined()
+    // and archives once the full threshold has passed since the move
+    const due = new Date(Date.parse(landed!.done_at!) + DEFAULT_ARCHIVE_DAYS * DAY).toISOString()
+    expect(await runArchive(t, due)).toBe(1)
+    expect((await issueRow(t, moved.id))?.archived_at).toBe(due)
   })
 
   it('single snapshot: a done parent whose done child is archived this run waits until the next', async () => {

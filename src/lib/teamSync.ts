@@ -300,8 +300,9 @@ export function waitingOnReview<I extends SyncIssue>(
     .sort((a, b) => byHandoff(a.since, b.since) || syncRowOrder(a.issue, b.issue))
 }
 
-/** "Done since": leaf tasks in scope that reached Done at or after `since`,
-    newest first. `done` when the person was the assignee; `reviewed` when
+/** "Done since": leaf tasks in scope that reached Done, or moved to another
+    sub-project while Done (`doneAt` restarts at the move), at or after
+    `since`, newest first. `done` when the person was the assignee; `reviewed` when
     they reviewed someone else's task to Done: its reviewer, with a review
     hand-off that the move into Done kept (`reviewAt`, which any other way
     into Done clears). */
@@ -354,7 +355,8 @@ export function blockersOf(
 export type SinceMark =
   /** In Progress with nothing since `since`; `at` is the last touch */
   | { kind: 'untouched'; at: number }
-  /** a review handed to the page owner after `since` */
+  /** a review handed to the page owner, or moved to another sub-project
+      (`reviewAt` restarts at the move), after `since` */
   | { kind: 'handed'; at: number }
   /** a review handed over before `since` with no edit or comment since the
       hand-off; `at` is the hand-off */

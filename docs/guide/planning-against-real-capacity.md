@@ -121,7 +121,7 @@ viewers see load from visible projects and tasks they own.
 The page has three columns, which stack on phones:
 
 - **Done since** lists tasks without subtasks completed since the person's last
-  sync, newest first. It includes their own tasks and tasks they reviewed
+  sync, or moved to another sub-project while Done since then, newest first. It includes their own tasks and tasks they reviewed
   from In Review to Done, marked **reviewed**. Being named reviewer without
   that status transition does not give review credit.
 - **On it** lists In Progress, then In Review. Reviews appear under the
@@ -150,9 +150,10 @@ edited or commented on since the hand-off. Entering In Review or changing the
 reviewer starts a hand-off; changing Remaining does not. Other rows can show
 the latest status change or comment. After a task moves to another
 sub-project, it shows no status change until its status changes again. Its
-hand-off and the time it became Done start again at the move, so a moved
-review counts as a new hand-off and a moved Done task appears in Done since
-again. The same holds for each subtask that moves with it.
+hand-off and the time it became Done start again at the move, for the task
+and each subtask that moves with it. In Team sync a moved review shows
+**handed to you** on the move day, although Qivo sends no new **Ready for
+your review** message, and a moved Done task appears in Done since again.
 
 A review has no recorded hand-off if it was handed over before Qivo recorded
 hand-offs, or if it has had subtasks since the hand-off. Such a review shows no
