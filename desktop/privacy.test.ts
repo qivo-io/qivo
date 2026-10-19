@@ -2,11 +2,13 @@ import fs from 'node:fs'
 import type { OutgoingHttpHeaders } from 'node:http'
 import path from 'node:path'
 import { NsisUpdater, Provider, type UpdateInfo } from 'electron-updater'
+// Provider's constructor is protected, so ConstructorParameters cannot read
+// its options type, and the package entry does not export it.
+import type { ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { disableStagingUserId, keepSpellcheckOffline, sharedStagingUserId } from './privacy'
 
 type AppAdapter = NonNullable<ConstructorParameters<typeof NsisUpdater>[1]>
-type ProviderRuntimeOptions = ConstructorParameters<typeof Provider>[0]
 
 let directory: string
 let sentHeaders: OutgoingHttpHeaders[]

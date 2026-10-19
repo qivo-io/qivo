@@ -154,6 +154,8 @@ once, and 0 holds back every install.
 
 When the feed lists a newer version, the app downloads the files named in
 that metadata, such as the installer and its blockmap, from the same feed.
+On Windows, a differential download also requests the installed version's
+blockmap unless it is cached, and that URL names the installed version.
 Those downloads carry no staging ID.
 
 Chromium's spellchecker normally downloads a Hunspell dictionary from a

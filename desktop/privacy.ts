@@ -46,7 +46,10 @@ export function keepSpellcheckOffline(session: SpellcheckSession, platform: Node
   }
   // An empty language list turns the spellchecker off before it can request
   // a dictionary. Linux therefore has no spellcheck. The data URL keeps any
-  // later language change from reaching the network as well.
+  // later language change from reaching the network as well. Electron saves
+  // the list and the disabled state in the session's Preferences file, so
+  // turning spellcheck back on needs an explicit setSpellCheckerLanguages call
+  // with a language, not just removing this one.
   session.setSpellCheckerDictionaryDownloadURL('data:,')
   session.setSpellCheckerLanguages([])
 }
