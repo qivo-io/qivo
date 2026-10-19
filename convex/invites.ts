@@ -1,8 +1,8 @@
 /* Invitation email for pending seats, shared by the operator console
  * (adminOrgs.ts) and the app's own invitations. The app sends one when an org
  * admin adds a person (profiles.create), corrects a pending person's address
- * or reactivates a pending person who was never emailed at that address
- * (profiles.update), or when an org admin or project lead invites a new
+ * or reactivates a pending person with no delivered invitation to that
+ * address in the audit log's 90 days (profiles.update), or when an org admin or project lead invites a new
  * project guest (projects.inviteGuest).
  *
  * Every letter says "{organization} has invited you to join their
@@ -139,8 +139,8 @@ export const targets = internalQuery({
       if (!operator) {
         if (invite.email !== undefined && invite.email !== email) continue
         if (invite.unless_sent) {
-          const ever = await recentSends(ctx, { profile_id: seat.id }, '')
-          if (ever.some((r) => r.detail.email === email && r.detail.sent === true)) continue
+          const retained = await recentSends(ctx, { profile_id: seat.id }, '')
+          if (retained.some((r) => r.detail.email === email && r.detail.sent === true)) continue
         }
       }
       const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {

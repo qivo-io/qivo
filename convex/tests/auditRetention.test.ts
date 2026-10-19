@@ -1,6 +1,7 @@
 /* The nightly audit log expiry (auditRetention.ts): rows from before the
  * 90-day cutoff go, newer rows stay, a backlog larger than one step is
- * deleted in chained steps, and each run writes one expire_audit_log row. */
+ * deleted in chained steps, a run that deleted anything writes one
+ * expire_audit_log row, and no cutoff can reach newer rows. */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -73,14 +74,26 @@ describe('audit log expiry', () => {
     expect(left.find((r) => r.action === 'expire_audit_log')?.detail).toMatchObject({ deleted: 5 })
   })
 
-  it('writes a row with zero deleted when nothing is old enough', async () => {
+  it('writes no row when nothing is old enough', async () => {
     const t = newT()
-    await plant(t, AUDIT_RETENTION_DAYS - 1)
+    const kept = await plant(t, AUDIT_RETENTION_DAYS - 1)
 
     await expire(t)
 
+    expect((await rows(t)).map((r) => r._id)).toEqual([kept])
+  })
+
+  it('ignores a cutoff later than the retention period', async () => {
+    const t = newT()
+    const kept = await plant(t, AUDIT_RETENTION_DAYS - 1)
+    await plant(t, AUDIT_RETENTION_DAYS + 1)
+
+    vi.useFakeTimers({ now: NOW })
+    await t.mutation(internal.auditRetention.expire, { cutoff: '9999' })
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+
     const left = await rows(t)
-    expect(left).toHaveLength(2)
-    expect(left.find((r) => r.action === 'expire_audit_log')?.detail).toMatchObject({ deleted: 0 })
+    expect(left.filter((r) => r.action !== 'expire_audit_log').map((r) => r._id)).toEqual([kept])
+    expect(left.find((r) => r.action === 'expire_audit_log')?.detail).toMatchObject({ deleted: 1 })
   })
 })

@@ -26,8 +26,8 @@
  * An invite IS a profile with an email and no accepted_at — the seat is the
  * invitation; claiming (identity.ts) stamps accepted_at/auth_user_id. A new
  * person's seat, a corrected address on a pending one and a reactivated
- * pending person never emailed at that address schedule the invitation email
- * (invites.ts).
+ * pending person with no delivered invitation to that address in the audit
+ * log's 90 days schedule the invitation email (invites.ts).
  *
  * message_retention_days is STAMPED on every create path (7 when no sibling
  * seat exists): in this schema ABSENT means "keep forever", the opposite of
@@ -396,7 +396,8 @@ async function updateProfile(
     )
   }
   // A corrected address on a pending seat gets the invitation the old one
-  // did. A reactivated pending person is emailed if that address never was.
+  // did. A reactivated pending person is emailed unless the audit log, which
+  // keeps 90 days, holds a delivered invitation to that address.
   if (upd.email !== undefined) {
     await ctx.scheduler.runAfter(0, internal.invites.sendFromApp, {
       invites: [{ profile_id: row.id, email: upd.email }],

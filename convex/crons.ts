@@ -132,7 +132,8 @@ crons.interval(
 
 // Deletes platform_audit_log rows older than 90 days, after the nightly jobs
 // have written theirs. The empty arguments start a run; each step schedules
-// the next, and the last writes the expire_audit_log row (auditRetention.ts).
+// the next, and the last writes an expire_audit_log row when it deleted any
+// (auditRetention.ts).
 crons.daily('expire-audit-log', { hourUTC: 4, minuteUTC: 45 }, internal.auditRetention.expire, {})
 
 export default crons

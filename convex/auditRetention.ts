@@ -6,9 +6,10 @@
  * The nightly cron (crons.ts) starts a run with empty arguments, which fixes
  * the run's cutoff. Each step deletes the oldest rows from before the cutoff,
  * at most AUDIT_EXPIRY.page of them, and schedules the next step while a full
- * page came back. The last step writes the run's one expire_audit_log row
- * with the number of rows deleted, as each nightly job writes one row
- * (jobs.ts). That row expires like the others. Convex drops the calls a
+ * page came back. When the run deleted anything, its last step writes one
+ * expire_audit_log row with the count, as the nightly jobs do (jobs.ts). A
+ * run with nothing to delete writes no row, so the Audit page's newest rows
+ * stay operator actions. That row expires like the others. Convex drops the calls a
  * failed step scheduled, so a failure ends the run without its row, and the
  * next night's run deletes what is left.
  *
@@ -38,7 +39,8 @@ export const AUDIT_EXPIRY = {
 const DAY_MS = 86_400_000
 
 const expireArgs = {
-  // rows with an earlier ts are deleted, an ISO timestamp fixed by the run's first step
+  // rows with an earlier ts are deleted, an ISO timestamp fixed by the run's
+  // first step. A later value is ignored, so no call deletes newer rows.
   cutoff: v.optional(v.string()),
   // rows the run's earlier steps deleted
   deleted: v.optional(v.number()),
@@ -53,7 +55,8 @@ const expireRef = makeFunctionReference<'mutation', ObjectType<typeof expireArgs
 export const expire = internalMutation({
   args: expireArgs,
   handler: async (ctx, a): Promise<null> => {
-    const cutoff = a.cutoff ?? new Date(Date.now() - AUDIT_RETENTION_DAYS * DAY_MS).toISOString()
+    const latest = new Date(Date.now() - AUDIT_RETENTION_DAYS * DAY_MS).toISOString()
+    const cutoff = a.cutoff !== undefined && a.cutoff < latest ? a.cutoff : latest
     const rows = await ctx.db
       .query('platform_audit_log')
       .withIndex('by_ts', (q) => q.lt('ts', cutoff))
@@ -64,6 +67,7 @@ export const expire = internalMutation({
       await ctx.scheduler.runAfter(0, expireRef, { cutoff, deleted })
       return null
     }
+    if (deleted === 0) return null
     await ctx.db.insert('platform_audit_log', {
       ts: new Date().toISOString(),
       actor_email: 'system',
