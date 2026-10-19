@@ -6396,7 +6396,11 @@ export const PLANNER = {
     return runSaved(write(api.labels.remove, { org_id: row.org_id, id }))
   },
 
-  toggleIssueLabel: (issueId: string, labelId: string) => {
+  /** Puts the label on the task or takes it off. `created` is the `saved`
+      answer of an addLabel this toggle follows: when the server refuses
+      that create, it refuses the toggle too, and only the create's refusal
+      is toasted. */
+  toggleIssueLabel: (issueId: string, labelId: string, created?: Promise<boolean>) => {
     const uuid = keyToUuid.get(issueId)
     const issue = uuid ? rows.issues.get(uuid) : null
     if (!uuid || !issue || !rows.labels.get(labelId) || refusePausedEdit()) return
@@ -6415,6 +6419,13 @@ export const PLANNER = {
         issue_id: uuid,
         label_id: labelId,
       }),
+      undefined,
+      undefined,
+      created &&
+        ((e) =>
+          void created.then((saved) => {
+            if (saved) toastWriteError(e)
+          })),
     )
   },
 

@@ -477,7 +477,7 @@ export function LabelPickerPopup({
     const name = q.trim()
     const made = P.addLabel({ name })
     if (!made) return
-    if (!(it.labels || []).includes(made.id)) P.toggleIssueLabel(it.id, made.id)
+    if (!(it.labels || []).includes(made.id)) P.toggleIssueLabel(it.id, made.id, made.saved)
     setQ('')
     void made.saved.then((saved) => {
       if (!saved) setQ((typed) => typed || name)
@@ -499,7 +499,10 @@ export function LabelPickerPopup({
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
-              if (matches.length === 1) {
+              // Only a typed search picks its one match: the empty field
+              // lists every label, so a second Enter after a create would
+              // take the organization's only label off again.
+              if (ql && matches.length === 1) {
                 P.toggleIssueLabel(it.id, matches[0].id)
                 setQ('')
               } else if (canCreate && matches.length === 0) create()
