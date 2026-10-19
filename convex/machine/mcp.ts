@@ -1733,8 +1733,8 @@ export const listIssues = internalQuery({
 
 /* get_task answers the single-task shape, the list row plus labels,
  * subtasks, links, a group's remaining hours, followers and attachments
- * (lib/core.ts taskOut). `now` is the HTTP action's clock, which the task's
- * delay is judged by. */
+ * (lib/core.ts taskOut). `today` is the HTTP action's UTC day, which the
+ * task's delay is judged by. */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, today: v.string(), ref: v.string() },
   handler: async (ctx, { callerId, access, today, ref }) => {
