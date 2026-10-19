@@ -133,9 +133,10 @@ function LabelRow({
           }
           onClick={() =>
             onPress(() => {
-              if (P.refusePausedEdit()) return
-              P.removeLabel(label.id)
-              window.showToast?.(`Label “${label.name}” deleted`)
+              const name = label.name
+              void P.removeLabel(label.id).then((saved) => {
+                if (saved) window.showToast?.(`Label “${name}” deleted`)
+              })
             })
           }
         >
@@ -154,17 +155,25 @@ export function OrgLabelsPage() {
   const labels = P.orgLabels()
   const canEdit = P.isAdmin()
   const [newLabel, setNewLabel] = useStateS('')
+  // a create in flight: Add waits for the server's answer
+  const [adding, setAdding] = useStateS(false)
   useUpdateBlocker(!!newLabel)
   const confirm = useConfirmArm<string>()
   const dup = labels.some((l) => l.name.toLowerCase() === newLabel.trim().toLowerCase())
   const addLabel = () => {
     const v = newLabel.trim()
-    if (!v || dup) return
-    // a paused create keeps the typed name
-    if (P.refusePausedEdit()) return
-    P.addLabel({ name: v })
-    window.showToast?.(`Label “${v}” created`)
-    setNewLabel('')
+    if (!v || dup || adding) return
+    // The typed name stays until the server creates the label, and after a
+    // refusal, so a paused or refused create can be sent again.
+    const made = P.addLabel({ name: v })
+    if (!made) return
+    setAdding(true)
+    void made.saved.then((saved) => {
+      setAdding(false)
+      if (!saved) return
+      window.showToast?.(`Label “${v}” created`)
+      setNewLabel((typed) => (typed.trim() === v ? '' : typed))
+    })
   }
   return (
     <>
@@ -201,8 +210,8 @@ export function OrgLabelsPage() {
               />
               <Button
                 type="button"
-                disabled={!newLabel.trim() || dup}
-                title={dup ? 'A label with that name already exists' : 'Add label'}
+                disabled={!newLabel.trim() || dup || adding}
+                title={dup && !adding ? 'A label with that name already exists' : 'Add label'}
                 onClick={addLabel}
               >
                 <Icon name="plus" size={16} />

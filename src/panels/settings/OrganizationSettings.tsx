@@ -153,9 +153,9 @@ function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) 
         <Seg
           value={setting}
           onChange={(next) => {
-            if (P.refusePausedEdit()) return
-            P.setOrg({ projectCreators: next })
-            window.showToast?.(CREATOR_SETTINGS[next].toast)
+            void P.setOrg({ projectCreators: next }).then((saved) => {
+              if (saved) window.showToast?.(CREATOR_SETTINGS[next].toast)
+            })
           }}
           options={Object.entries(CREATOR_SETTINGS).map(([value, { label }]) => ({
             value,
@@ -179,7 +179,10 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
           maxLength={P.NAME_MAX}
           probe="data-org-name"
           onCommit={(v) => {
-            if (P.setOrg({ name: v })) window.showToast?.('Organization renamed')
+            // the toast waits for the server, so a refusal never reads as done
+            void P.setOrg({ name: v }).then((saved) => {
+              if (saved) window.showToast?.('Organization renamed')
+            })
           }}
         />
         <OrgAddressField />
@@ -220,9 +223,9 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
                 const mib = Math.max(1, Math.min(20, Math.round(value)))
                 e.currentTarget.value = String(mib)
                 if (mib === current) return
-                if (P.refusePausedEdit()) return
-                P.setOrg({ maxAttachmentMb: mib })
-                window.showToast?.(`Attachment limit set to ${mib} MiB`)
+                void P.setOrg({ maxAttachmentMb: mib }).then((saved) => {
+                  if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
+                })
               }}
               className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
             />
@@ -235,9 +238,10 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
           <NativeSelect
             value={P.org.dateFormat || 'YYYY-MM-DD'}
             onChange={(e) => {
-              if (P.refusePausedEdit()) return
-              P.setOrg({ dateFormat: e.target.value as OrgPatch['dateFormat'] })
-              window.showToast?.(`Date format set to ${e.target.value}`)
+              const format = e.target.value as OrgPatch['dateFormat']
+              void P.setOrg({ dateFormat: format }).then((saved) => {
+                if (saved) window.showToast?.(`Date format set to ${format}`)
+              })
             }}
             className="h-control w-60 bg-surface-1 font-sans text-base"
           >
@@ -255,9 +259,9 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             data-week-start
             onChange={(e) => {
               const d = Number(e.target.value)
-              if (P.refusePausedEdit()) return
-              P.setOrg({ weekStart: d })
-              window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
+              void P.setOrg({ weekStart: d }).then((saved) => {
+                if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
+              })
             }}
             className="h-control w-60 bg-surface-1 font-sans text-base"
           >
@@ -274,9 +278,10 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             aria-label="Week 1 of the year"
             data-week-one
             onChange={(e) => {
-              if (P.refusePausedEdit()) return
-              P.setOrg({ weekOneRule: e.target.value as OrgPatch['weekOneRule'] })
-              window.showToast?.('Week numbering updated')
+              const rule = e.target.value as OrgPatch['weekOneRule']
+              void P.setOrg({ weekOneRule: rule }).then((saved) => {
+                if (saved) window.showToast?.('Week numbering updated')
+              })
             }}
             className="h-control w-60 bg-surface-1 font-sans text-base"
           >
@@ -312,9 +317,9 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
                 const h = Math.max(1, Math.min(168, Math.round(Number(raw))))
                 e.target.value = String(h)
                 if (h === cur) return
-                if (P.refusePausedEdit()) return
-                P.setOrg({ defaultPlannableHours: h })
-                window.showToast?.(`New users start on ${h} h per week`)
+                void P.setOrg({ defaultPlannableHours: h }).then((saved) => {
+                  if (saved) window.showToast?.(`New users start on ${h} h per week`)
+                })
               }}
               className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
             />

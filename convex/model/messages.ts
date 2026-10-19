@@ -1457,10 +1457,13 @@ export async function notifyIssueUpdate(
         parentProject !== null &&
         (await recipientCanSee(ctx, recipient, parentProject, visibility))
       // Keep the hidden parent anonymous while using the same task wording
-      // as the inbox and the machine surfaces.
+      // as the inbox and the machine surfaces. A subtask shares its parent's
+      // top-level project (model/issues.ts sameTopLevel), so a parent the
+      // reader cannot see is in a sub-project they cannot see. Messages
+      // stored before that rule keep "a task in another project".
       mine = mine.map((x) =>
         x === ATTACH_SLOT
-          ? `Attached under ${canSee ? parentKey : 'a task in another project'}`
+          ? `Attached under ${canSee ? parentKey : 'a task in another sub-project'}`
           : x,
       )
     } else {

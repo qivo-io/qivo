@@ -33,9 +33,10 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal } from '../lib/functions'
+import { REASSIGN_MAX } from '../lib/projectGrants'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { loadNotifyPreload } from '../model/messages'
-import { REASSIGN_MAX, reassignTooLarge } from '../model/projectAccess'
+import { reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -468,7 +469,9 @@ describe('a bulk update', () => {
     expect(messages.some((m) => m.includes('Nora') || m.includes('Pia'))).toBe(false)
     // each branch the preload answers ran: the attach line with and without
     // the parent's key, and the mention of someone who sees the task
-    expect(messages).toContain('4 Olga: Assigned to Leo. Attached under a task in another project')
+    expect(messages).toContain(
+      '4 Olga: Assigned to Leo. Attached under a task in another sub-project',
+    )
     expect(messages).toContain('4 p13: Assigned to Leo. Attached under QN-900')
     expect(messages).toContain('2 p50: Mentioned you in the description')
     expect(follows).toContain('2 p50')

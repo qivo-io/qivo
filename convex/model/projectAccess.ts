@@ -39,6 +39,7 @@ import { byId, usedMoreThan } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { liveIn } from '../lib/liveTasks'
+import { REASSIGN_MAX } from '../lib/projectGrants'
 import { logActivity, signedDetail } from './activity'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
 import { loadNotifyPreload } from './messages'
@@ -232,15 +233,6 @@ export async function reachedProjects(
 /* One person's role on an open task a removal takes out of their sight, with
  * the task's project. */
 type Lost = Holding & { project: Doc<'projects'> }
-
-/** The most tasks one access removal reassigns. Each task's reassignment
- * runs every rule of a task update and notifies its followers inside the
- * removal's one transaction, so a larger handover would pass Convex's limits
- * for one transaction. Set at about 60% of the largest count that passed the
- * measurement behind tests/bulkReassign.test.ts (196 tasks with four
- * followers each, in an organization of 100 people), taken when each
- * follower's sight was still checked on its own. */
-export const REASSIGN_MAX = 120
 
 /** The share of each of Convex's limits for one transaction that a removal
  * may have used before it reassigns another task or notifies another

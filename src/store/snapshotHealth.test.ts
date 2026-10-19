@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Id } from '../../convex/_generated/dataModel'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* Snapshot trouble is the live snapshot query failing after the first
@@ -192,6 +193,58 @@ describe('snapshot trouble', () => {
     expect(P.project(project)?.name).toBe('Task creation fixture')
     // one action can reach several mutators, so the pause toasts once
     expect(showToast.mock.calls.filter(([text]) => text === store.PAUSED_TEXT)).toHaveLength(1)
+  })
+
+  it('refuses a paused label create even when the name is taken', async () => {
+    snapshot.labels.push({
+      id: 'label-a',
+      org_id: snapshot.orgs[0].id,
+      name: 'Firmware',
+      name_lower: 'firmware',
+      color: '#335577',
+      created_at: '2026-09-14T08:00:00.000Z',
+    })
+    await boot()
+    live().fail(new Error(QUERY_FAILURE))
+    expect(store.P.addLabel({ name: 'firmware' })).toBeNull()
+    expect(showToast).toHaveBeenLastCalledWith(store.PAUSED_TEXT, 'error')
+  })
+
+  it('deletes a discarded draft upload quietly once edits resume, unless a description took it', async () => {
+    snapshot.attachments.push(
+      ...['file-a', 'file-b', 'file-c'].map((id) => ({
+        id,
+        issue_id: 'task-a',
+        name: `${id}.png`,
+        mime: 'image/png',
+        size_bytes: 1024,
+        storage_id: `storage-${id}` as Id<'_storage'>,
+        inline: true,
+        created_at: '2026-09-14T08:00:00.000Z',
+      })),
+    )
+    await boot()
+    const { P } = store
+    live().fail(new Error(QUERY_FAILURE))
+    P.removeAttachment('file-a', { deferWhilePaused: true })
+    P.removeAttachment('file-b', { deferWhilePaused: true })
+    expect(showToast).not.toHaveBeenCalled()
+    expect(sentNames()).toEqual([])
+    // file-b reached a saved description meanwhile, so it stays
+    const next = structuredClone(snapshot)
+    next.issues[0].description = '![Plot](att:file-b)'
+    next.delivered_at = '2026-09-15T09:00:00.000Z'
+    live().deliver(next)
+    expect(sentNames()).toEqual(['files:removeAttachment'])
+    const removed = network.mutation.mock.calls
+      .filter(([ref]) => getFunctionName(ref) === 'files:removeAttachment')
+      .map(([, args]) => args.id)
+    expect(removed).toEqual(['file-a'])
+    // a delete that is not a draft upload still says the edit is paused
+    live().fail(new Error(QUERY_FAILURE))
+    P.removeAttachment('file-c')
+    expect(showToast).toHaveBeenLastCalledWith(store.PAUSED_TEXT, 'error')
+    expect(sentNames()).toEqual(['files:removeAttachment'])
   })
 
   it('pauses Deleted items restores and deletes, and says so on the page', async () => {
@@ -442,9 +495,62 @@ describe('snapshot trouble', () => {
     live().deliver(structuredClone(snapshot))
     const again = P.unarchiveProject(snapshot.projects[0].id)
     await settle()
-    sent[sent.length - 1].reject(lost)
+    sent[sent.length - 1].reject(
+      new ConvexError({ code: 'forbidden', message: 'no permission on this project' }),
+    )
     expect(await again).toBe(false)
     expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+  })
+
+  it('words a refusal for a lost seat like the access notice before the snapshot says so', async () => {
+    await boot()
+    const { P } = store
+    const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
+    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    const restored = P.restoreDeletedItems(items)
+    P.addProject({ type: 'meta', key: 'NEW', name: 'New' })
+    await settle()
+    // the refusals arrive while the last delivery still holds the seat
+    const lost = new ConvexError({ code: 'forbidden', message: 'no profile in this organization' })
+    for (const request of sent) request.reject(lost)
+    expect(await restore).toBe(false)
+    expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+    expect(await restored).toMatchObject({ failed: ['item-a'], error: store.NO_ACCESS_TEXT })
+    await settle()
+    expect(sentNames()).toContain('projects:create')
+    expect(showToast.mock.calls.map(([text]) => text)).not.toContainEqual(
+      expect.stringMatching(/permission|no profile/i),
+    )
+  })
+
+  it('words a lost seat as a permission refusal while another organization remains', async () => {
+    const guest = crypto.randomUUID()
+    snapshot.orgs.push({ ...snapshot.orgs[0], id: guest, name: 'Partner Co', slug: 'partner' })
+    const seat = { ...snapshot.profiles[0], id: crypto.randomUUID(), org_id: guest }
+    snapshot.profiles.push({ ...seat, org_role: 'guest' })
+    snapshot.myProfileIds.push(seat.id)
+    await boot()
+    const { P } = store
+    const restore = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    sent[0].reject(
+      new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
+    )
+    expect(await restore).toBe(false)
+    expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+    // the same when the delivery that drops the seat arrives first
+    const again = P.unarchiveProject(snapshot.projects[0].id)
+    await settle()
+    const left = structuredClone(snapshot)
+    left.myProfileIds = [seat.id]
+    left.delivered_at = '2026-09-15T09:00:00.000Z'
+    live().deliver(left)
+    sent[sent.length - 1].reject(
+      new ConvexError({ code: 'forbidden', message: 'no profile in this organization' }),
+    )
+    expect(await again).toBe(false)
+    expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+    expect(showToast).not.toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
   })
 
   it('deletes a connected app the server no longer has, with no error toast', async () => {
