@@ -41,6 +41,9 @@ function statusExplanation(billing: BillingSummary): string {
     return 'Your organization has free access without a payment card.'
   if (billing.cancel_at_period_end && billing.writable)
     return `Your subscription is cancelled and ends on ${billingDate(billing.current_period_end)}. The organization then stays read-only for 30 days and is deleted unless someone subscribes again. To keep the subscription, choose Uncancel in Manage billing before then.`
+  // Between the period end and Polar's confirmation that the subscription ended
+  if (billing.cancel_at_period_end && billing.status !== 'past_due')
+    return 'Your cancelled subscription has ended, and Qivo is waiting for Polar to confirm it. The organization then stays read-only for 30 days and is deleted unless someone subscribes again.'
   if (billing.status === 'past_due')
     return 'Update your payment method in the customer portal. Polar retries failed payments automatically.'
   if (!billing.writable && billing.checkout_due_at)
@@ -286,7 +289,7 @@ function CancelSubscription({
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
           <AlertDialogDescription>
-            {endsAt
+            {endsAt && Date.parse(endsAt) > Date.now()
               ? `The subscription stays active until ${billingDate(endsAt)} and does not renew.`
               : 'The subscription stays active until the paid period ends and does not renew.'}{' '}
             Nothing is refunded. The organization then becomes read-only for 30 days so admins can

@@ -126,7 +126,7 @@ attachment should not produce a storage charge while the rest of the
 organization stores nothing.</p>
 <p style="color:var(--text-3);font-size:14.5px;max-width:680px">API calls accumulate
 over your billing period. Storage is sampled at the start of the period;
-extra usage charges are added to the following renewal invoice. Your Billing
+extra usage charges are added to the invoice at the end of the period. Your Billing
 page shows the recorded charges and usage by account or project.</p>
 </div>
 </section>

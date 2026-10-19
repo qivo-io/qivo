@@ -363,6 +363,34 @@ describe('cancelling a subscription', () => {
     )
     expect(fetchMock.mock.calls.map(([, init]) => init?.method ?? 'GET')).toEqual(['GET'])
     expect(await summary(t, f)).toMatchObject({ writable: true, cancel_at_period_end: false })
+
+    // one already set to end, in Polar's portal, is recorded, and editing
+    // pauses at once, as the guide says
+    polar({
+      list: () => [
+        remote(f.org.id, { status: 'past_due', cancel_at_period_end: true, modified_at: at(0.01) }),
+      ],
+    })
+    const result = await as(t, f.admin).action(api.billingActions.cancelSubscription, {
+      org_id: f.org.id,
+    })
+    expect(result.ends_at).toBe(END)
+    expect(await summary(t, f)).toMatchObject({
+      status: 'past_due',
+      cancel_at_period_end: true,
+      writable: false,
+    })
+  })
+
+  it('says so when Polar cannot end the subscription at period end', async () => {
+    const { t, f } = await billed()
+    await applied(t, remote(f.org.id))
+    polar({ list: () => [remote(f.org.id, { status: 'unpaid' })] })
+    await expectRefusal(
+      as(t, f.admin).action(api.billingActions.cancelSubscription, { org_id: f.org.id }),
+      'rule',
+      /cannot be cancelled here/,
+    )
   })
 
   it('refuses non-admins, a Polar failure and organizations without a subscription', async () => {

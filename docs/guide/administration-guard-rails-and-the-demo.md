@@ -215,7 +215,8 @@ Polar retries failed payments. Qivo allows seven days from the recorded
 past-due state before pausing editing, and a 24-hour grace period for delayed
 renewal confirmation on an otherwise active subscription. API calls made
 while a renewal awaits confirmation are counted but not charged. A cancelled
-subscription keeps access through the paid period, without a refund
+subscription keeps access through the paid period, without a refund, unless a
+payment is overdue
 ([Deleting an organization](./organization-and-team-settings.md#deleting-an-organization)).
 Restoring payment restores editing.
 

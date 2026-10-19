@@ -93,7 +93,9 @@ An organization's service ends in one of these ways:
   cancels in **Manage billing**. The subscription stops renewing and ends with
   the period already paid for. The organization keeps full access until then,
   and nothing is refunded. Before that date, **Uncancel** in **Manage
-  billing** keeps the subscription.
+  billing** keeps the subscription. While a payment is overdue, **Billing**
+  asks for the payment first, and cancelling in **Manage billing** pauses
+  editing at once.
 - **Deleting.** An admin chooses **Delete organization** under **Settings →
   Organization → General** and types the organization address. Any paid
   subscription ends at once, and nothing is refunded.

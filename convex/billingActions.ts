@@ -306,22 +306,30 @@ const applyRef = makeFunctionReference<'mutation', { payload: string }, null>('b
  * that already ends counts as cancelled. One whose payment Polar reports
  * overdue is refused before anything changes, even when Qivo has not heard
  * yet, because billing pauses editing at once for a past-due subscription
- * set to end (subscriptionWritable); Polar's portal can still cancel it.
- * Answers when access ends. */
+ * set to end (subscriptionWritable). Polar cannot end an unpaid or paused
+ * subscription at period end, so the refusal points elsewhere. Answers when
+ * access ends. */
 export const cancelSubscription = orgAction({
   args: {},
   handler: async (ctx): Promise<{ ends_at: string }> => {
     require(billingEnabled() && polarConfigured(), rule('Billing is not available yet.'))
     let endsAt = 0
+    let uncancelable = false
     try {
-      const subscriptions = (await listPolarSubscriptions(ctx.orgId)).filter(
-        (s) => CANCELABLE_POLAR_STATUSES.includes(s.status) && s.endedAt === undefined,
+      const live = (await listPolarSubscriptions(ctx.orgId)).filter(
+        (s) => LIVE_POLAR_STATUSES.includes(s.status) && s.endedAt === undefined,
       )
-      require(!subscriptions.some((s) => s.status === 'past_due' && !s.cancelAtPeriodEnd), rule(
-        'A payment is overdue. Update the payment method or cancel in Manage billing.',
+      require(!live.some((s) => s.status === 'past_due' && !s.cancelAtPeriodEnd), rule(
+        'A payment is overdue. Update the payment method in Manage billing, then cancel.',
       ))
-      for (const live of subscriptions) {
-        const canceled = live.cancelAtPeriodEnd ? live : await cancelPolarSubscription(live.id)
+      for (const subscription of live) {
+        if (!CANCELABLE_POLAR_STATUSES.includes(subscription.status)) {
+          uncancelable = true
+          continue
+        }
+        const canceled = subscription.cancelAtPeriodEnd
+          ? subscription
+          : await cancelPolarSubscription(subscription.id)
         await ctx.runMutation(applyRef, { payload: subscriptionPayload(canceled) })
         endsAt = Math.max(endsAt, canceled.currentPeriodEnd)
       }
@@ -330,7 +338,11 @@ export const cancelSubscription = orgAction({
         throw rule('Polar could not cancel the subscription. Try again later.')
       throw error
     }
-    require(endsAt > 0, rule('This organization has no subscription to cancel.'))
+    require(endsAt > 0, rule(
+      uncancelable
+        ? 'This subscription cannot be cancelled here. Use Manage billing, or delete the organization.'
+        : 'This organization has no subscription to cancel.',
+    ))
     return { ends_at: new Date(endsAt).toISOString() }
   },
 })

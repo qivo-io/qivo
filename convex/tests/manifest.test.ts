@@ -583,8 +583,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   billingActions: {
     checkout: 'orgAction',
     portal: 'orgAction',
-    // An admin ends the paid subscription at once; the action's internal
-    // query repeats the admin check, as for checkout and the portal.
+    // An admin stops renewal, so the subscription ends with its paid period;
+    // the action's internal query repeats the admin check, as for checkout
+    // and the portal.
     cancelSubscription: 'orgAction',
     createPlan: 'platformAction',
     connectPlan: 'platformAction',
