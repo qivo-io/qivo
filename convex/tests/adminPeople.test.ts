@@ -1,19 +1,19 @@
 /* The operator console's Users page and organization page (adminPeople.ts).
- * Both actions refuse every caller but an operator, and refuse a demo
- * deployment. The suite checks listUsers against the fields Users.tsx
- * destructures, including the banned_until mapping from Better Auth's
+ * Every action refuses every caller but an operator, and refuses a demo
+ * deployment. The suite checks the Users page rows (userPage, and listUsers
+ * for older console builds) against the fields Users.tsx destructures,
+ * including the banned_until mapping from Better Auth's
  * { banned, banExpires } and the newest-session last_sign_in_at, through the
  * real local component. It writes out orgDetail on a small fixture, and
  * checks both answers again at the smallest page sizes. It also covers a
  * pending seat whose invitation is older than a page of its audit rows, a
- * team counted on its own, and a deployment too large for the old single
- * query. */
+ * team counted on its own, a login with many sessions, and a deployment too
+ * large for the old single query. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, components } from '../_generated/api'
 import * as peopleModule from '../adminPeople'
-import { PEOPLE_PAGE } from '../adminPeople'
-import { STATS_PAGE } from '../adminStats'
+import { type AdminUserPage, PEOPLE_PAGE } from '../adminPeople'
 import {
   as,
   expectRefusal,
@@ -27,18 +27,17 @@ import {
 } from './helpers.setup'
 
 const DEFAULT_PEOPLE = { ...PEOPLE_PAGE }
-const DEFAULT_STATS = { ...STATS_PAGE }
 const DAY = 86_400_000
 
 afterEach(() => {
   Object.assign(PEOPLE_PAGE, DEFAULT_PEOPLE)
-  Object.assign(STATS_PAGE, DEFAULT_STATS)
   vi.unstubAllEnvs()
 })
 
 /* The smallest page of every kind. */
 const ONE = {
   profiles: 1,
+  users: 1,
   members: 1,
   invites: 0,
   audit: 1,
@@ -141,8 +140,9 @@ async function peopleFixture(t: T) {
   return { f, pending, empty, banExpires, sessionCreated }
 }
 
-type PublicName = 'listUsers' | 'orgDetail'
+type PublicName = 'userPage' | 'listUsers' | 'orgDetail'
 const CALLS: Record<PublicName, (caller: Pick<T, 'action'>, f: OrgFixture) => Promise<unknown>> = {
+  userPage: (caller) => caller.action(api.adminPeople.userPage, { search: '', cursor: null }),
   listUsers: (caller) => caller.action(api.adminPeople.listUsers, { search: '' }),
   orgDetail: (caller, f) => caller.action(api.adminPeople.orgDetail, { org_id: f.org.id }),
 }
@@ -176,15 +176,36 @@ describe('fail-closed: every action refuses everyone but an operator', () => {
   }
 })
 
-/* -------------------------------------------------------------------- listUsers */
+/* -------------------------------------------------------------------- the Users page */
 
-describe('listUsers', () => {
+type Operator = Awaited<ReturnType<typeof operator>>
+
+/** Every userPage page for `search`, in order. */
+async function userPages(asOp: Operator, search: string) {
+  const pages: AdminUserPage[] = []
+  let cursor: string | null = null
+  do {
+    const page: AdminUserPage = await asOp.action(api.adminPeople.userPage, { search, cursor })
+    pages.push(page)
+    cursor = page.next
+  } while (cursor !== null)
+  return pages
+}
+
+/** The Users page rows for `search`, ordered as listUsers orders them. */
+async function allUsers(asOp: Operator, search: string) {
+  const rows = (await userPages(asOp, search)).flatMap((page) => page.rows)
+  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+  return rows.sort((a, b) => cmp(a.org_name, b.org_name) || cmp(a.name, b.name))
+}
+
+describe('the Users page', () => {
   it('returns every profile with the Users.tsx fields, maps the auth columns, and narrows on search', async () => {
     const t = newT()
     const { f, pending, banExpires, sessionCreated } = await peopleFixture(t)
     const asOp = await operator(t)
 
-    const rows = await asOp.action(api.adminPeople.listUsers, { search: '' })
+    const rows = await allUsers(asOp, '')
     // withOrg's admin, user, viewer, guest and agent, the pending seat, and
     // Other's admin. The operator holds no profile.
     expect(rows).toHaveLength(7)
@@ -219,7 +240,7 @@ describe('listUsers', () => {
       })
     }
 
-    const narrowed = await asOp.action(api.adminPeople.listUsers, { search: 'viewer' })
+    const narrowed = await allUsers(asOp, 'viewer')
     expect(narrowed.map((r) => r.profile_id)).toEqual([f.viewer.id])
     // Fragments can appear in reverse order, and across name, email and
     // organization name.
@@ -228,9 +249,66 @@ describe('listUsers', () => {
       ['  lay\ttestbed ', [f.agent.id]],
       ['testbed missing', []],
     ] as const) {
-      const matches = await asOp.action(api.adminPeople.listUsers, { search })
+      const matches = await allUsers(asOp, search)
       expect(matches.map((r) => r.profile_id)).toEqual(ids)
     }
+  })
+
+  it('answers older console builds through listUsers with the same rows, ordered', async () => {
+    const t = newT()
+    await peopleFixture(t)
+    const asOp = await operator(t)
+    for (const search of ['', 'testbed view'])
+      expect(await asOp.action(api.adminPeople.listUsers, { search })).toEqual(
+        await allUsers(asOp, search),
+      )
+  })
+
+  it('returns at most PEOPLE_PAGE.users rows a page, and every row once', async () => {
+    const t = newT()
+    await peopleFixture(t)
+    const asOp = await operator(t)
+    const expected = await allUsers(asOp, '')
+    expect((await userPages(asOp, '')).map((page) => page.rows.length)).toEqual([7])
+
+    Object.assign(PEOPLE_PAGE, { users: 2 })
+    const pages = await userPages(asOp, '')
+    expect(pages.map((page) => page.rows.length)).toEqual([2, 2, 2, 1])
+    expect(await allUsers(asOp, '')).toEqual(expected)
+    // a narrow search reads past the profiles it leaves out
+    const narrowed = await userPages(asOp, 'labs')
+    expect(narrowed.flatMap((page) => page.rows).map((r) => r.org_name)).toEqual(
+      Array(6).fill('Testbed Labs'),
+    )
+    expect(narrowed.every((page) => page.rows.length <= 2)).toBe(true)
+  })
+
+  it('reads one session of a login that holds many, the newest', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 1500 } })
+    const { f } = await peopleFixture(t)
+    const asOp = await operator(t)
+    const now = Date.now()
+    for (let batch = 0; batch < 2; batch++) {
+      for (let i = 0; i < 800; i++) {
+        const createdAt = now - 10 * DAY + batch * 800 + i
+        await t.mutation(components.betterAuth.adapter.create, {
+          input: {
+            model: 'session',
+            data: {
+              token: uuid(),
+              userId: f.user.auth_user_id!,
+              expiresAt: now + DAY,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          },
+        })
+      }
+    }
+    const rows = await allUsers(asOp, '')
+    expect(rows.find((r) => r.profile_id === f.user.id)?.last_sign_in_at).toBe(
+      new Date(now - 10 * DAY + 1599).toISOString(),
+    )
   })
 
   it('leaves out a profile whose organization is gone', async () => {
@@ -240,23 +318,23 @@ describe('listUsers', () => {
     await t.run(async (ctx) => {
       await ctx.db.delete(f.otherOrg._id)
     })
-    const rows = await asOp.action(api.adminPeople.listUsers, { search: '' })
+    const rows = await allUsers(asOp, '')
     expect(rows.map((r) => r.profile_id)).not.toContain(f.otherAdmin.id)
     expect(rows).toHaveLength(5)
+    expect(await asOp.action(api.adminPeople.listUsers, { search: '' })).toEqual(rows)
   })
 
   it('gives the same rows when every page holds one row or one byte', async () => {
     const t = newT()
     await peopleFixture(t)
     const asOp = await operator(t)
-    const expected = await asOp.action(api.adminPeople.listUsers, { search: '' })
+    const expected = await allUsers(asOp, '')
 
     Object.assign(PEOPLE_PAGE, ONE)
-    Object.assign(STATS_PAGE, { orgs: 1 })
+    expect(await allUsers(asOp, '')).toEqual(expected)
     expect(await asOp.action(api.adminPeople.listUsers, { search: '' })).toEqual(expected)
     Object.assign(PEOPLE_PAGE, { ...DEFAULT_PEOPLE, bytes: 1 })
-    Object.assign(STATS_PAGE, { bytes: 1 })
-    expect(await asOp.action(api.adminPeople.listUsers, { search: '' })).toEqual(expected)
+    expect(await allUsers(asOp, '')).toEqual(expected)
   })
 
   it('lists 3,000 profiles under 1,500 documents a read', async () => {
@@ -282,14 +360,15 @@ describe('listUsers', () => {
     }
     Object.assign(PEOPLE_PAGE, { profiles: 1000 })
 
-    expect(await asOp.action(api.adminPeople.listUsers, { search: '' })).toHaveLength(3006)
+    const pages = await userPages(asOp, '')
+    expect(pages.map((page) => page.rows.length)).toEqual([1000, 1000, 1000, 6])
 
     // One page for the whole deployment reads every profile, as the old
     // single query did, and fails under the same limit.
-    Object.assign(PEOPLE_PAGE, { profiles: 4000 })
-    await expect(asOp.action(api.adminPeople.listUsers, { search: '' })).rejects.toThrow(
-      /Scanned too many documents/,
-    )
+    Object.assign(PEOPLE_PAGE, { profiles: 4000, users: 4000 })
+    await expect(
+      asOp.action(api.adminPeople.userPage, { search: '', cursor: null }),
+    ).rejects.toThrow(/Scanned too many documents/)
   })
 })
 
@@ -336,19 +415,6 @@ describe('orgDetail', () => {
       { id: empty, name: 'Analog', member_count: 0, project_count: 0 },
       { id: f.team.id, name: 'Hardware', member_count: 2, project_count: 1 },
     ])
-  })
-
-  it('answers as the earlier single-query reads do, which older console builds still call', async () => {
-    const t = newT()
-    const { f } = await peopleFixture(t)
-    const asOp = await operator(t)
-    expect(await asOp.action(api.adminPeople.orgDetail, { org_id: f.org.id })).toEqual(
-      await asOp.query(api.admin.orgDetail, { org_id: f.org.id }),
-    )
-    for (const search of ['', 'testbed view'])
-      expect(await asOp.action(api.adminPeople.listUsers, { search })).toEqual(
-        await asOp.query(api.admin.listUsers, { search }),
-      )
   })
 
   it('refuses an organization that does not exist', async () => {

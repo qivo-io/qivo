@@ -13,16 +13,16 @@
  * page and not yet in another. The console loads on demand, so that is
  * accepted.
  *
- * Two costs still grow. The action holds and returns one row per matching
- * profile, so the Users page with an empty search returns every profile in
- * the deployment, and Convex's limits on an action's memory and result size
- * bound it. A login's sessions are all read for its newest sign-in, inside
- * a loginPage query with PEOPLE_PAGE.logins logins.
+ * The Users page reads its rows a page at a time too (userPage), at most
+ * PEOPLE_PAGE.users rows an action, and the console asks for the pages one
+ * after another. An organization's page still returns all its members and
+ * teams in one action result.
  *
  * Two auth.users columns the SQL joined have no Better Auth twin:
- * - last_sign_in_at is about the newest session.createdAt for the login.
- *   Expired sessions vanish from the component, so a long-absent member
- *   reads "—". That is a stated approximation, not a bug.
+ * - last_sign_in_at is the createdAt of the login's newest session, the one
+ *   the component stored last, so one session is read per login. Expired
+ *   sessions vanish from the component, so a long-absent member reads "—".
+ *   That is a stated approximation, not a bug.
  * - banned_until keeps its wire name (isBanned() and both views read it) but
  *   is mapped from Better Auth's { banned, banExpires }. Not banned is null,
  *   banned with banExpires is its ISO time, and banned forever is a
@@ -37,7 +37,7 @@ import { components, internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { internalQuery } from './_generated/server'
-import { allOrgs, inParallel, nextOf, type Runner } from './adminStats'
+import { inParallel, nextOf, type Runner } from './adminStats'
 import { subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
@@ -47,8 +47,11 @@ import { allWordsMatcher } from './lib/search'
 /** Rows per internal page, and the bytes one page's range may read. Tests
  * lower them. */
 export const PEOPLE_PAGE = {
-  /** Profiles per page of the Users page. They read nothing per row. */
+  /** Profiles per page of the Users page. Each reads its organization's
+   * name once per page. */
   profiles: 2000,
+  /** Rows of the Users page one userPage action returns. */
+  users: 1000,
   /** An organization's profiles per page. Each pending seat on it reads up
    * to `invites` + 1 audit rows. */
   members: 500,
@@ -95,23 +98,18 @@ export async function authColumnsFor(ctx: QueryCtx, authUserId: string): Promise
       where: [{ field: '_id', value: authUserId }],
     })) as { banned?: boolean | null; banExpires?: number | null } | null
     if (user === null) return NO_AUTH_COLUMNS
-    let newestSession = 0
-    let cursor: string | null = null
-    for (;;) {
-      const page = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
-        model: 'session',
-        where: [{ field: 'userId', value: authUserId }],
-        paginationOpts: { numItems: 200, cursor },
-      })) as { page: Array<{ createdAt?: number }>; isDone: boolean; continueCursor: string }
-      for (const s of page.page) {
-        if (typeof s.createdAt === 'number' && s.createdAt > newestSession)
-          newestSession = s.createdAt
-      }
-      if (page.isDone) break
-      cursor = page.continueCursor
-    }
+    // The adapter sorts by createdAt through the userId index's creation
+    // order, so this reads one session however many the login holds.
+    const newest = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
+      model: 'session',
+      where: [{ field: 'userId', value: authUserId }],
+      sortBy: { field: 'createdAt', direction: 'desc' },
+      paginationOpts: { numItems: 1, cursor: null },
+    })) as { page: Array<{ createdAt?: number }> }
+    const signedIn = newest.page[0]?.createdAt
     return {
-      last_sign_in_at: newestSession > 0 ? new Date(newestSession).toISOString() : null,
+      last_sign_in_at:
+        typeof signedIn === 'number' && signedIn > 0 ? new Date(signedIn).toISOString() : null,
       banned_until:
         user.banned !== true
           ? null
@@ -195,63 +193,112 @@ const personFields = (p: Doc<'profiles'>): PersonFields => ({
   created_at: p.created_at,
 })
 
-type ProfilePage = { profiles: PersonFields[]; next: string | null }
+/** A profile on the Users page, with its organization's name. */
+type ListedPerson = PersonFields & { org_name: string }
 
-/** One page of every organization's profiles. */
+type ProfilePage = { profiles: ListedPerson[]; next: string | null }
+
+/** One page of every organization's profiles, at most `size` of them, each
+ * with its organization's name. A profile whose organization row is gone is
+ * left out, as the SQL's inner join on organizations did. */
 export const profilePage = internalQuery({
-  args: { cursor: vCursor },
-  handler: async (ctx, { cursor }): Promise<ProfilePage> => {
+  args: { cursor: vCursor, size: v.optional(v.number()) },
+  handler: async (ctx, { cursor, size }): Promise<ProfilePage> => {
     const page = await ctx.db.query('profiles').paginate({
       cursor,
-      numItems: PEOPLE_PAGE.profiles,
+      numItems: Math.max(1, Math.min(size ?? PEOPLE_PAGE.profiles, PEOPLE_PAGE.profiles)),
       maximumBytesRead: PEOPLE_PAGE.bytes,
     })
-    return { profiles: page.page.map(personFields), next: nextOf(page) }
+    const names = new Map<string, string | null>()
+    const profiles: ListedPerson[] = []
+    for (const p of page.page) {
+      let name = names.get(p.org_id)
+      if (name === undefined) {
+        name = (await byId(ctx, 'organizations', p.org_id))?.name ?? null
+        names.set(p.org_id, name)
+      }
+      if (name !== null) profiles.push({ ...personFields(p), org_name: name })
+    }
+    return { profiles, next: nextOf(page) }
   },
 })
 
-/* admin_list_users. Cross-organization. An empty search lists everyone, and
- * otherwise every case-insensitive fragment must match the profile name,
- * email or organization name. Ordered by organization name, then profile
- * name. A profile whose organization row is gone drops out, as the SQL's
- * inner join on organizations did. */
+/** A Users page row with the auth columns of its login. */
+const userRow = (p: ListedPerson, auth: Map<string, AuthColumns>): AdminUserRow => {
+  const cols = p.auth_user_id !== undefined ? auth.get(p.auth_user_id) : undefined
+  return {
+    profile_id: p.id,
+    name: p.name,
+    email: p.email ?? null,
+    org_id: p.org_id,
+    org_name: p.org_name,
+    org_role: p.org_role,
+    has_login: p.auth_user_id !== undefined,
+    last_sign_in_at: cols?.last_sign_in_at ?? null,
+    banned_until: cols?.banned_until ?? null,
+    created_at: p.created_at,
+  }
+}
+
+/** Whether a Users page search matches a profile. */
+const matcher = (search: string) => {
+  const matches = allWordsMatcher(search)
+  return (p: ListedPerson) => matches(`${p.name}\n${p.email ?? ''}\n${p.org_name}`)
+}
+
+export type AdminUserPage = { rows: AdminUserRow[]; next: string | null }
+
+/* One page of admin_list_users, the Users page's rows. Cross-organization.
+ * An empty search lists everyone, and otherwise every case-insensitive
+ * fragment must match the profile name, email or organization name. A page
+ * holds at most PEOPLE_PAGE.users rows, in the order profiles were stored,
+ * and `next` is the cursor of the page after it, or null after the last
+ * one. The console reads every page and orders the rows itself. A profile
+ * whose organization row is gone drops out. */
+export const userPage = platformAction({
+  args: { search: v.string(), cursor: vCursor },
+  handler: async (ctx, { search, cursor }): Promise<AdminUserPage> => {
+    const matches = matcher(search)
+    const matched: ListedPerson[] = []
+    let next: string | null = cursor
+    do {
+      const page: ProfilePage = await ctx.runQuery(internal.adminPeople.profilePage, {
+        cursor: next,
+        size: PEOPLE_PAGE.users - matched.length,
+      })
+      matched.push(...page.profiles.filter(matches))
+      next = page.next
+    } while (next !== null && matched.length < PEOPLE_PAGE.users)
+    const auth = await authColumns(
+      ctx,
+      matched.map((p) => p.auth_user_id),
+    )
+    return { rows: matched.map((p) => userRow(p, auth)), next }
+  },
+})
+
+/* Every row of the Users page in one answer, ordered by organization name,
+ * then profile name. The console before userPage calls it, so tabs opened
+ * before that release keep working (docs/deployment.md, Recovery and
+ * compatibility). Its answer grows with the deployment. Remove it once no
+ * served console build calls it. */
 export const listUsers = platformAction({
   args: { search: v.string() },
   handler: async (ctx, { search }): Promise<AdminUserRow[]> => {
-    const orgNames = new Map((await allOrgs(ctx)).map((o) => [o.id, o.name]))
-    const matches = allWordsMatcher(search)
-    const matched: Array<{ p: PersonFields; org_name: string }> = []
+    const matches = matcher(search)
+    const matched: ListedPerson[] = []
     let cursor: string | null = null
     do {
       const page: ProfilePage = await ctx.runQuery(internal.adminPeople.profilePage, { cursor })
-      for (const p of page.profiles) {
-        const org_name = orgNames.get(p.org_id)
-        if (org_name !== undefined && matches(`${p.name}\n${p.email ?? ''}\n${org_name}`))
-          matched.push({ p, org_name })
-      }
+      matched.push(...page.profiles.filter(matches))
       cursor = page.next
     } while (cursor !== null)
-    matched.sort((a, b) => cmp(a.org_name, b.org_name) || cmp(a.p.name, b.p.name))
-
+    matched.sort((a, b) => cmp(a.org_name, b.org_name) || cmp(a.name, b.name))
     const auth = await authColumns(
       ctx,
-      matched.map(({ p }) => p.auth_user_id),
+      matched.map((p) => p.auth_user_id),
     )
-    return matched.map(({ p, org_name }): AdminUserRow => {
-      const cols = p.auth_user_id !== undefined ? auth.get(p.auth_user_id) : undefined
-      return {
-        profile_id: p.id,
-        name: p.name,
-        email: p.email ?? null,
-        org_id: p.org_id,
-        org_name,
-        org_role: p.org_role,
-        has_login: p.auth_user_id !== undefined,
-        last_sign_in_at: cols?.last_sign_in_at ?? null,
-        banned_until: cols?.banned_until ?? null,
-        created_at: p.created_at,
-      }
-    })
+    return matched.map((p) => userRow(p, auth))
   },
 })
 

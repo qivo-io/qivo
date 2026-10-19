@@ -12,7 +12,7 @@ import { convex } from '../lib/convex'
 // Admin responses normalize absent optional fields to null on the wire.
 export type OrgRow = FunctionReturnType<typeof api.adminStats.listOrgs>[number]
 
-export type UserRow = FunctionReturnType<typeof api.adminPeople.listUsers>[number]
+export type UserRow = FunctionReturnType<typeof api.adminPeople.userPage>['rows'][number]
 
 export type AuditRow = {
   id: string
@@ -55,8 +55,18 @@ export const listOrgs = (): Promise<OrgRow[]> =>
   convex.action(api.adminStats.listOrgs, {}).catch(mapError)
 /* Every organization's id and name, without the counts listOrgs reads. */
 export const listOrgNames = () => convex.action(api.adminStats.orgNames, {}).catch(mapError)
-export const listUsers = (search: string): Promise<UserRow[]> =>
-  convex.action(api.adminPeople.listUsers, { search }).catch(mapError)
+/* Every Users page row matching `search`, read one bounded page after
+   another (adminPeople.ts userPage). The view orders them. */
+export async function listUsers(search: string): Promise<UserRow[]> {
+  const rows: UserRow[] = []
+  let cursor: string | null = null
+  do {
+    const page = await convex.action(api.adminPeople.userPage, { search, cursor }).catch(mapError)
+    rows.push(...page.rows)
+    cursor = page.next
+  } while (cursor !== null)
+  return rows
+}
 export const auditLog = (limit = 200): Promise<AuditRow[]> =>
   convex.query(api.admin.auditLog, { limit }).catch(mapError)
 export const orgDetail = (orgId: string): Promise<OrgDetail> =>
