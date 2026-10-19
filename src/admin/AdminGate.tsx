@@ -16,6 +16,9 @@ import { armConvexAuth, authClient, signOut } from './auth'
 
 type Phase = 'loading' | 'signedOut' | 'denied' | 'ready'
 
+/** The sign-in form's note when a session exists but Convex gets no token. */
+const NOT_ARMED = "Couldn't confirm your sign-in. Check your connection and sign in again."
+
 export function AdminGate() {
   const [phase, setPhase] = useState<Phase>('loading')
   const [email, setEmail] = useState('')
@@ -25,15 +28,23 @@ export function AdminGate() {
   useUpdateBlocker(phase === 'loading' || busy || (phase === 'signedOut' && !!(email || password)))
 
   /* Arm the Convex socket with the fresh session BEFORE the probe, or
-     isOperator lands on an anonymous connection (lib/authSession.ts). Any
-     throw reads as denied — the gate never surfaces a console error. A
-     sign-in Convex drops later is armed again while the session lasts, since
-     a token refresh that failed on the network drops it too. Otherwise the
-     gate returns to an empty sign-in form, since every operator query and
-     change would be refused from then on. */
+     isOperator lands on an anonymous connection (lib/authSession.ts). A
+     session that gets no Convex token, because it ended on the server or
+     the token request failed, is no answer about access, so the gate shows
+     the sign-in form and says so. Any throw reads as denied — the gate
+     never surfaces a console error. A sign-in Convex drops later is armed
+     again while the session lasts, since a token refresh that failed on the
+     network drops it too. Otherwise the gate returns to an empty sign-in
+     form, since every operator query and change would be refused from then
+     on. */
   async function gate() {
     try {
-      await armConvexAuth(lost)
+      if (!(await armConvexAuth(lost))) {
+        setPassword('')
+        setError(NOT_ARMED)
+        setPhase('signedOut')
+        return
+      }
       const ok = await convex.query(api.admin.isOperator, {})
       setPhase(ok === true ? 'ready' : 'denied')
     } catch {
