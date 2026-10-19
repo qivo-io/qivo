@@ -5,7 +5,8 @@
    Every non-null snapshot updates serverSnap. A later null (no seat left)
    keeps the last one as the rollback anchor. During optimistic writes, run()
    holds their paint until the last write settles; refusal restores server
-   truth.
+   truth, with the personal writes, archives and deletes accepted since that
+   snapshot painted again.
    Comments and Team sync have separate subscriptions and update channels.
    Preferences load once and save through their own debounced lifecycle.
    Uploads remain awaited; signed file URLs are minted with one-shot queries. */
@@ -536,6 +537,28 @@ const pendingArchiveIssueIds = new Map<string, { keepSubtasks: boolean }>()
    delete removed, by root, and the projects a project delete removed. */
 const pendingTaskDeletes = new Map<string, Set<string>>()
 const pendingProjectDeletes = new Set<string>()
+/* The optimistic paints of writes the server accepted since the newest good
+   snapshot delivery, in the order it accepted them. While the snapshot is in
+   trouble serverSnap stays at the last good delivery, so a rollback that
+   re-adopts it would take these saved changes off the screen. Each paint
+   runs again on rows that may already hold it, so it is safe to repeat and
+   skips rows that are gone. The next good delivery holds them all. */
+let acceptedPaints: (() => void)[] = []
+/* Whether the newest snapshot result was a good delivery. Convex hands the
+   query results that hold a write to their callbacks before the write's
+   promise resolves, so a write accepted while this holds is already in
+   serverSnap. Painting it again over that delivery could undo a newer
+   change made elsewhere, such as a message reopened on another device. */
+let snapshotCurrent = false
+
+/** Keeps `paint`, the optimistic paint of a write the server accepted, for
+    rollbacks until the next good delivery (acceptedPaints), unless the
+    newest delivery already holds the write. Answers whether it was kept. */
+function keepAcceptedPaint(paint: () => void): boolean {
+  if (snapshotCurrent) return false
+  acceptedPaints.push(paint)
+  return true
+}
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused). The pause would refuse their
    delete, so it waits for the snapshot to recover (reapPausedUploads). A
@@ -687,6 +710,13 @@ function pruneAcceptedRemovals(snap: Snapshot) {
   for (const id of pendingProjectDeletes) {
     if (!projectIds.has(id)) pendingProjectDeletes.delete(id)
   }
+}
+
+/* Applies every accepted write again after a rollback to a server snapshot
+   that predates it: the kept paints, then archives and deletes. */
+function reapplyAcceptedWrites() {
+  for (const paint of acceptedPaints) paint()
+  reapplyAcceptedRemovals()
 }
 
 /* Applies every accepted archive and delete again after a rollback to a
@@ -867,12 +897,17 @@ function messagesByOrg(ids: string[]): Map<string, string[]> {
 }
 
 /* Mirror the server prune after a read. A task retains its newest message
-   plus any unread arrivals that were not part of this action. */
+   plus any unread arrivals that were not part of this action. Skips rows
+   that are gone or already read, so a kept paint can run again. */
 function markLoadedMessagesRead(ids: string[], at: string) {
-  ids.forEach((id) => {
+  const hit = ids.filter((id) => {
+    const row = rows.messages.get(id)
+    return row && !row.read_at
+  })
+  hit.forEach((id) => {
     rows.messages.get(id)!.read_at = at
   })
-  const issues = new Set(ids.map((id) => rows.messages.get(id)!.issue_id))
+  const issues = new Set(hit.map((id) => rows.messages.get(id)!.issue_id))
   issues.forEach((issue) => {
     const mine = [...rows.messages.values()].filter((row) => row.issue_id === issue)
     const newest = mine.reduce((x, y) => (isNewer(x.created_at, x.id, y.created_at, y.id) ? y : x))
@@ -925,9 +960,15 @@ export const TEXT_TOO_LONG = {
    / commentsSnap; a later null snapshot keeps the last serverSnap) but defer
    adopt/rebuild/emit while inFlight > 0; the last settle flushes the newest
    held delivery. Convergence is guaranteed — Convex redelivers snapshots
-   that include our own completed mutations — and rollback stays trivially
-   correct: a failed write's effects never existed server-side, so
-   re-adopting the newest serverSnap is the truth. */
+   that include our own completed mutations. A rollback re-adopts the newest
+   serverSnap, because a failed write's effects never existed server-side,
+   and then paints again the personal writes, archives and deletes the
+   server accepted after that delivery (reapplyAcceptedWrites). While the
+   snapshot is in trouble no delivery holds the personal writes that still
+   go out, so without that a refused write would take saved read marks,
+   snoozes and follows off the screen. Shared writes keep no paint: they
+   pause during trouble, and one sent before the trouble began and accepted
+   during it can still vanish until the next good delivery. */
 let inFlight = 0
 let storeEpoch = 0
 let demoDisposed = false
@@ -1057,14 +1098,16 @@ const asSentence = (m: string) =>
    The last good snapshot stays on screen and the snapshot notice says so.
    While it is stale, edits to shared data pause. An edit made from stale
    data can overwrite newer work, and run()'s rollback would re-adopt the
-   stale snapshot over edits that did save, read marks included. So every
-   optimistic mutator of shared data calls refusePausedEdit() before its
-   paint, and the refusal never reaches that rollback. write() refuses any
-   other shared write before it is sent, the backstop for a mutator that
-   does not check first. Personal state (read marks, preferences,
-   appearance, following) still saves, and so do the writes that only take
-   access away (UNPAUSED_WRITES). Without a seat most of those need one too,
-   so only the login's appearance and connected apps still save. Panels that
+   stale snapshot over edits that did save. So every optimistic mutator of
+   shared data calls refusePausedEdit() before its paint, and the refusal
+   never reaches that rollback. write() refuses any other shared write
+   before it is sent, the backstop for a mutator that does not check first.
+   Personal state (read marks, preferences, appearance, following) still
+   saves, and so do the writes that only take access away (UNPAUSED_WRITES).
+   Their mutators keep each accepted paint (keepAcceptedPaint), so a refused
+   write's rollback paints them again over the stale snapshot. Without a
+   seat most of those need one too, so only the login's appearance and
+   connected apps still save. Panels that
    call Convex directly (organization deletion and its export record,
    billing) act on their own live queries, not on the snapshot, so they do
    not pause. Convex reruns a failed query when the data it read changes, so
@@ -1479,13 +1522,16 @@ function run<T>(
         console.error('[qivo] write failed:', e)
         onError(e)
         // rollback = re-adopt the newest server truth; a delivery held by the
-        // gate IS that truth, so the flags clear here
-        snapDirty = false
+        // gate IS that truth, so the flags clear here. Writes still in flight
+        // lose their paint with it, so the last settle paints the server
+        // truth again, with the paints they keep once accepted.
+        snapDirty = inFlight > 1
         commentsDirty = false
         if (serverSnap) adopt(serverSnap)
-        /* A successful archive or delete may still be awaiting its reactive
-           delivery; preserve that boundary if another write refuses first. */
-        reapplyAcceptedRemovals()
+        /* Writes the server accepted after that delivery, such as read marks
+           saved while the snapshot is in trouble, or an archive or delete
+           still awaiting its delivery, stay on screen. */
+        reapplyAcceptedWrites()
         adoptComments()
         rebuild()
         emit()
@@ -1535,8 +1581,8 @@ function flushHeldPaint() {
   if (!snapHeld && !comHeld) return
   if (snapHeld && serverSnap) {
     adopt(serverSnap)
-    // the held delivery can predate an archive or delete accepted meanwhile
-    reapplyAcceptedRemovals()
+    // the held delivery can predate a write accepted meanwhile
+    reapplyAcceptedWrites()
   }
   if (comHeld) adoptComments()
   if (snapHeld) rebuild()
@@ -4933,7 +4979,9 @@ export const PLANNER = {
     rebuild()
     emit()
     byOrg.forEach((list, org) => {
-      run(write(api.messages.markRead, { org_id: org, ids: list }))
+      run(write(api.messages.markRead, { org_id: org, ids: list }), () =>
+        keepAcceptedPaint(() => markLoadedMessagesRead(list, at)),
+      )
     })
   },
   /* Mark every current notification read, including messages hidden by the
@@ -4946,7 +4994,8 @@ export const PLANNER = {
     const ids = PLANNER.messages
       .filter((message) => !message.read && message.snoozedUntil === null)
       .map((message) => message.id)
-    markLoadedMessagesRead(ids, new Date().toISOString())
+    const at = new Date().toISOString()
+    markLoadedMessagesRead(ids, at)
     unexaminedUnread = false
     rebuild()
     emit()
@@ -4954,13 +5003,25 @@ export const PLANNER = {
       let before: number | undefined
       while (epoch === storeEpoch) {
         const operation = write(api.messages.markAllRead, { org_id: org, before })
-        run(operation)
+        // each batch names the rows it marked, so the kept paint is exact
+        run(operation, (result) => keepAcceptedPaint(() => markLoadedMessagesRead(result.ids, at)))
         const result = await operation
-        if (!result.hasMore) return
+        if (!result.hasMore) return true
         before = result.before
       }
+      return false
     })
-    await Promise.allSettled(operations)
+    const done = await Promise.allSettled(operations)
+    const noUnreadLeft = () => {
+      unexaminedUnread = false
+    }
+    // after the last batch, so a rollback in between may have undone it
+    if (done.every((outcome) => outcome.status === 'fulfilled' && outcome.value))
+      if (keepAcceptedPaint(noUnreadLeft)) {
+        noUnreadLeft()
+        rebuild()
+        emit()
+      }
   },
   /* Back to unread — the same column, the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
@@ -4972,13 +5033,18 @@ export const PLANNER = {
     })
     if (!hit.length) return
     const byOrg = messagesByOrg(hit)
-    hit.forEach((id) => {
-      rows.messages.get(id)!.read_at = undefined
-    })
+    const markUnread = (list: string[]) =>
+      list.forEach((id) => {
+        const row = rows.messages.get(id)
+        if (row) row.read_at = undefined
+      })
+    markUnread(hit)
     rebuild()
     emit()
     byOrg.forEach((list, org) => {
-      run(write(api.messages.markUnread, { org_id: org, ids: list }))
+      run(write(api.messages.markUnread, { org_id: org, ids: list }), () =>
+        keepAcceptedPaint(() => markUnread(list)),
+      )
     })
   },
   /* Removing an item removes every message in it — the caller passes the
@@ -4987,13 +5053,17 @@ export const PLANNER = {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length) return
     const byOrg = messagesByOrg(hit)
-    hit.forEach((id) => {
-      rows.messages.delete(id)
-    })
+    const remove = (list: string[]) =>
+      list.forEach((id) => {
+        rows.messages.delete(id)
+      })
+    remove(hit)
     rebuild()
     emit()
     byOrg.forEach((list, org) => {
-      run(write(api.messages.remove, { org_id: org, ids: list }))
+      run(write(api.messages.remove, { org_id: org, ids: list }), () =>
+        keepAcceptedPaint(() => remove(list)),
+      )
     })
   },
   /* Inbox cleanup spans every seat and the full server inbox, beyond the
@@ -5007,9 +5077,11 @@ export const PLANNER = {
     const ids = PLANNER.messages
       .filter((message) => message.read && message.snoozedUntil === null)
       .map((message) => message.id)
-    ids.forEach((id) => {
-      rows.messages.delete(id)
-    })
+    const remove = (list: string[]) =>
+      list.forEach((id) => {
+        rows.messages.delete(id)
+      })
+    remove(ids)
     hiddenReadMessages = 0
     unexaminedRead = false
     rebuild()
@@ -5017,12 +5089,25 @@ export const PLANNER = {
     const operations = orgs.map(async (org) => {
       while (epoch === storeEpoch) {
         const operation = write(api.messages.removeRead, { org_id: org })
-        run(operation)
+        // each batch names the rows it deleted, as markAllMessagesRead's do
+        run(operation, (result) => keepAcceptedPaint(() => remove(result.ids)))
         const result = await operation
-        if (!result.hasMore) return
+        if (!result.hasMore) return true
       }
+      return false
     })
-    await Promise.allSettled(operations)
+    const done = await Promise.allSettled(operations)
+    const noReadLeft = () => {
+      hiddenReadMessages = 0
+      unexaminedRead = false
+    }
+    // as markAllMessagesRead does
+    if (done.every((outcome) => outcome.status === 'fulfilled' && outcome.value))
+      if (keepAcceptedPaint(noReadLeft)) {
+        noReadLeft()
+        rebuild()
+        emit()
+      }
   },
   markMessageRead: (id: string) => {
     PLANNER.markMessagesRead([id])
@@ -5040,28 +5125,31 @@ export const PLANNER = {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length) return
     const byOrg = messagesByOrg(hit)
-    const pairs = new Set(
-      hit.map((id) => {
-        const r = rows.messages.get(id)!
-        return `${r.recipient_id}\n${r.issue_id}`
-      }),
-    )
-    rows.messages.forEach((r) => {
-      if (!pairs.has(`${r.recipient_id}\n${r.issue_id}`)) return
-      if (until === null) {
-        if (r.snoozed_until === undefined) return
-        r.snoozed_until = undefined
-        r.read_at = undefined
-      } else {
-        r.snoozed_until = until
-        r.read_at = undefined
-        r.woke_at = undefined
-      }
-    })
+    const pairOf = (r: Row<'messages'>) => `${r.recipient_id}\n${r.issue_id}`
+    const pairsOf = (list: string[]) =>
+      new Set(list.flatMap((id) => (rows.messages.has(id) ? [pairOf(rows.messages.get(id)!)] : [])))
+    const snooze = (pairs: Set<string>) =>
+      rows.messages.forEach((r) => {
+        if (!pairs.has(pairOf(r))) return
+        if (until === null) {
+          if (r.snoozed_until === undefined) return
+          r.snoozed_until = undefined
+          r.read_at = undefined
+        } else {
+          r.snoozed_until = until
+          r.read_at = undefined
+          r.woke_at = undefined
+        }
+      })
+    // the items, named before the paint, which a kept paint covers again
+    const pairsByOrg = new Map([...byOrg].map(([org, list]) => [org, pairsOf(list)]))
+    snooze(pairsOf(hit))
     rebuild()
     emit()
     byOrg.forEach((list, org) => {
-      run(write(api.messages.snooze, { org_id: org, ids: list, until }))
+      run(write(api.messages.snooze, { org_id: org, ids: list, until }), () =>
+        keepAcceptedPaint(() => snooze(pairsByOrg.get(org)!)),
+      )
     })
   },
 
@@ -5073,14 +5161,16 @@ export const PLANNER = {
   setMessageRetention: (days: number | null): boolean => {
     const me = rows.profiles.get(CURRENT_USER)
     if (!me || refusePausedWrite(api.profiles.setMessageRetention)) return false
-    ;[...rows.profiles.values()]
-      .filter((p) => p.auth_user_id && p.auth_user_id === me.auth_user_id)
-      .forEach((p) => {
-        p.message_retention_days = days == null ? undefined : days
+    const account = me.auth_user_id
+    const paint = () =>
+      rows.profiles.forEach((p) => {
+        if (p.auth_user_id && p.auth_user_id === account)
+          p.message_retention_days = days == null ? undefined : days
       })
+    paint()
     rebuild()
     emit()
-    run(write(api.profiles.setMessageRetention, { days }))
+    run(write(api.profiles.setMessageRetention, { days }), () => keepAcceptedPaint(paint))
     return true
   },
 
@@ -6031,7 +6121,12 @@ export const PLANNER = {
     // goes through update.
     const deactivateOnly = wire.active === false && Object.keys(wire).length === 1
     if (deactivateOnly) {
-      run(write(api.profiles.deactivate, { org_id: row.org_id, id }))
+      run(write(api.profiles.deactivate, { org_id: row.org_id, id }), () =>
+        keepAcceptedPaint(() => {
+          const live = rows.profiles.get(id)
+          if (live) Object.assign(live, db)
+        }),
+      )
     } else if (Object.keys(wire).length) {
       run(write(api.profiles.update, { org_id: row.org_id, id, patch: wire }))
     }
@@ -6148,30 +6243,34 @@ export const PLANNER = {
     // removal only takes access away, so it goes on while edits are paused,
     // unless every seat is gone
     if (refusePausedWrite(api.profiles.remove)) return false
-    ;[...rows.issues.values()].forEach((i) => {
-      if (
-        i.assignee_id !== id &&
-        i.reviewer_id !== id &&
-        i.reporter_id !== id &&
-        i.created_by !== id
-      )
-        return
-      if (i.assignee_id === id) i.assignee_id = undefined
-      if (i.reviewer_id === id) i.reviewer_id = undefined
-      if (i.reporter_id === id) i.reporter_id = undefined
-      if (i.created_by === id) i.created_by = undefined
-      i.updated_at = new Date().toISOString()
-    })
-    rows.teamMembers = rows.teamMembers.filter((m) => m.profile_id !== id)
-    rows.access = rows.access.filter((a) => a.profile_id !== id)
-    ;[...rows.projects.values()].forEach((p) => {
-      if (p.lead_id === id) p.lead_id = undefined
-    })
-    for (const e of rows.threadEvents) if (e.actor_id === id) e.actor_id = undefined
-    rows.profiles.delete(id)
+    const at = new Date().toISOString()
+    const paint = () => {
+      rows.issues.forEach((i) => {
+        if (
+          i.assignee_id !== id &&
+          i.reviewer_id !== id &&
+          i.reporter_id !== id &&
+          i.created_by !== id
+        )
+          return
+        if (i.assignee_id === id) i.assignee_id = undefined
+        if (i.reviewer_id === id) i.reviewer_id = undefined
+        if (i.reporter_id === id) i.reporter_id = undefined
+        if (i.created_by === id) i.created_by = undefined
+        i.updated_at = at
+      })
+      rows.teamMembers = rows.teamMembers.filter((m) => m.profile_id !== id)
+      rows.access = rows.access.filter((a) => a.profile_id !== id)
+      rows.projects.forEach((p) => {
+        if (p.lead_id === id) p.lead_id = undefined
+      })
+      for (const e of rows.threadEvents) if (e.actor_id === id) e.actor_id = undefined
+      rows.profiles.delete(id)
+    }
+    paint()
     rebuild()
     emit()
-    run(write(api.profiles.remove, { org_id: target.org_id, id }))
+    run(write(api.profiles.remove, { org_id: target.org_id, id }), () => keepAcceptedPaint(paint))
     return true
   },
 
@@ -6499,12 +6598,16 @@ export const PLANNER = {
     // following a task in a guest org must write that seat's id
     const me = profileIn(row.org_id)
     if (!me) return
-    const has = rows.issueSubs.some((s) => s.issue_id === uuid && s.profile_id === me)
-    if (has === on) return // already in the asked-for state
-    if (on)
-      rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: new Date().toISOString() })
-    else
-      rows.issueSubs = rows.issueSubs.filter((s) => !(s.issue_id === uuid && s.profile_id === me))
+    const has = () => rows.issueSubs.some((s) => s.issue_id === uuid && s.profile_id === me)
+    if (has() === on) return // already in the asked-for state
+    const at = new Date().toISOString()
+    const paint = () => {
+      if (has() === on || !rows.issues.has(uuid)) return
+      if (on) rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: at })
+      else
+        rows.issueSubs = rows.issueSubs.filter((s) => !(s.issue_id === uuid && s.profile_id === me))
+    }
+    paint()
     rebuild()
     emit()
     run(
@@ -6512,6 +6615,7 @@ export const PLANNER = {
         org_id: row.org_id,
         issue_id: uuid,
       }),
+      () => keepAcceptedPaint(paint),
     )
   },
 
@@ -6539,8 +6643,8 @@ export const PLANNER = {
    later snapshot arrives and reaches the screen. */
 
 /* The last snapshot the server delivered, never a later null. It is run()'s
-   rollback anchor (rollback = re-adopt serverSnap + rebuild + emit; no
-   refetch, no reload). */
+   rollback anchor (rollback = re-adopt serverSnap, paint the writes accepted
+   since again, rebuild + emit; no refetch, no reload). */
 let serverSnap: Snapshot | null = null
 let snapUnsub: (() => void) | null = null
 let cancelDemoBoot: (() => void) | null = null
@@ -6630,6 +6734,8 @@ function subscribeSnapshot(
       if (!settled) {
         settled = true
         serverSnap = snap
+        acceptedPaints = []
+        snapshotCurrent = snap !== null
         if (snap) pruneAcceptedRemovals(snap)
         first?.resolve(snap)
         return
@@ -6639,6 +6745,7 @@ function subscribeSnapshot(
       // refused edit still reverts, and the notice says access ended. A held
       // recovering delivery is gone with it, so it ends no trouble.
       if (snap === null) {
+        snapshotCurrent = false
         if (DEMO_MODE) {
           recoveryHeld = false
           notifyDemoEnded()
@@ -6646,6 +6753,9 @@ function subscribeSnapshot(
         return
       }
       serverSnap = snap
+      // a good delivery holds every write accepted before it
+      acceptedPaints = []
+      snapshotCurrent = true
       pruneAcceptedRemovals(snap)
       // Gate the paint, never the data. While our own writes are in flight
       // the optimistic patches own the screen. serverSnap is recorded above,
@@ -6675,6 +6785,7 @@ function subscribeSnapshot(
       // reruns the query when the data it read changes, and a later result
       // ends the trouble. The demo's own ending is handled above.
       console.error('[qivo] snapshot query failed:', err)
+      snapshotCurrent = false
       if (!demoEnded) snapshotFailed(err)
     },
   )
@@ -6696,6 +6807,8 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   const epoch = storeEpoch
   snapUnsub?.()
+  // the new subscription has delivered nothing yet
+  snapshotCurrent = false
   snapUnsub = subscribeSnapshot(() => epoch === storeEpoch && !demoDisposed)
 }
 
@@ -6760,6 +6873,8 @@ export function disposeDemoStore() {
   pendingArchiveIssueIds.clear()
   pendingTaskDeletes.clear()
   pendingProjectDeletes.clear()
+  acceptedPaints = []
+  snapshotCurrent = false
   reapAfterPause.clear()
   roadmapVisit = null
   roadmapBatch = null
