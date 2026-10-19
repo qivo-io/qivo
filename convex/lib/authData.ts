@@ -7,7 +7,7 @@
  *
  * Nothing Qivo enables reads them. The client IP address and User-Agent are
  * copied onto every session by Better Auth's createSession. The admin console
- * shows a login's newest session time only (admin.ts authColumnsFor), and the
+ * shows a login's newest session time only (adminPeople.ts authColumnsFor), and the
  * demo's visitor categories come from the sign-in request itself (http.ts).
  * A social login's provider tokens let Better Auth call the provider again
  * after sign-in, which Qivo never does, and the provider picture in

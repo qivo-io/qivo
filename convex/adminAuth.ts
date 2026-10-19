@@ -322,20 +322,15 @@ export const insertBreakGlass = internalMutation({
 /* Adapter-level removal of a Better Auth user and every row keyed by its id
  * (auth.api.removeUser needs an admin session; internal mutations have
  * none). That covers its accounts and the MCP OAuth provider's consents in
- * the same transaction, and its sessions and OAuth access and refresh tokens
- * in bounded steps (purgeLoginTokens). The app side loses the login's
- * appearance settings, custom backgrounds and roadmap undo receipts, which
+ * the same transaction, and its sessions, OAuth access and refresh tokens
+ * and roadmap undo receipts in bounded steps (purgeLoginTokens). The app side
+ * also loses the login's appearance settings and custom backgrounds, which
  * only that login could use. Verification rows are keyed by identifier, not
  * userId, and expire on their own, as removeUser leaves them too. An OAuth
  * client registered while the login was signed in keeps its row, because
  * other logins may hold grants through the same client. */
 async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<void> {
   await ctx.runMutation(internal.appearance.clearForDeletedLogin, { auth_user_id: userId })
-  for (const row of await ctx.db
-    .query('roadmap_history')
-    .withIndex('by_owner_session', (q) => q.eq('auth_user_id', userId))
-    .collect())
-    await ctx.db.delete(row._id)
   for (const model of ['oauthConsent', 'account'] as const) {
     let cursor: string | null = null
     for (;;) {
@@ -355,7 +350,8 @@ async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<voi
 
 /* Rows a login piles up without bound. Better Auth keeps an expired session
  * until someone presents it, and every MCP token refresh adds an access
- * token and a refresh token, keeping the used refresh token as revoked. */
+ * token and a refresh token, keeping the used refresh token as revoked.
+ * Roadmap undo receipts expire within a day but allow 1,000 per session key. */
 const LOGIN_TOKEN_MODELS = ['session', 'oauthAccessToken', 'oauthRefreshToken'] as const
 
 /** Size of one token purge step. Tests lower it. */
@@ -368,16 +364,17 @@ const purgeLoginTokensRef = makeFunctionReference<'mutation', { auth_user_id: st
   'adminAuth:purgeLoginTokens',
 )
 
-/* Deletes up to LOGIN_PURGE.rows of a deleted login's sessions and tokens,
- * and schedules the next step while any remain. They grant nothing once the
- * user row is gone: Better Auth answers no session for a missing user, and
- * oauthConnections.lookupAccess requires the user. */
+/* Deletes up to LOGIN_PURGE.rows of a deleted login's sessions, tokens and
+ * roadmap undo receipts, and schedules the next step while any remain. They
+ * grant nothing once the user row is gone: Better Auth answers no session for
+ * a missing user, and oauthConnections.lookupAccess requires the user. */
 async function purgeTokenRows(ctx: MutationCtx, userId: string): Promise<void> {
   let left = LOGIN_PURGE.rows
+  const more = () => ctx.scheduler.runAfter(0, purgeLoginTokensRef, { auth_user_id: userId })
   for (const model of LOGIN_TOKEN_MODELS) {
     for (;;) {
       if (left <= 0) {
-        await ctx.scheduler.runAfter(0, purgeLoginTokensRef, { auth_user_id: userId })
+        await more()
         return
       }
       const res = (await ctx.runMutation(components.betterAuth.adapter.deleteMany, {
@@ -385,18 +382,36 @@ async function purgeTokenRows(ctx: MutationCtx, userId: string): Promise<void> {
         paginationOpts: { numItems: left, cursor: null },
       })) as { count: number; isDone: boolean }
       // never let an adapter change turn a bounded step into an endless one
-      require(Number.isSafeInteger(res.count) && res.count >= 0, rule('Invalid token purge result'))
+      require(Number.isSafeInteger(res.count) &&
+        res.count >= 0 &&
+        (res.isDone || res.count > 0), rule('Invalid token purge result'))
       left -= res.count
       if (res.isDone) break
     }
   }
+  if (left <= 0) {
+    await more()
+    return
+  }
+  const receipts = await ctx.db
+    .query('roadmap_history')
+    .withIndex('by_owner_session', (q) => q.eq('auth_user_id', userId))
+    .take(left + 1)
+  for (const row of receipts.slice(0, left)) await ctx.db.delete(row._id)
+  if (receipts.length > left) await more()
 }
 
 /** One step of a deleted login's token purge (removeAuthUserRows). Safe to
- * run twice or for a login whose rows are already gone. */
+ * run twice or for a login whose rows are already gone. Refuses a login that
+ * still exists, so a mistaken run cannot sign anyone out. */
 export const purgeLoginTokens = internalMutation({
   args: { auth_user_id: v.string() },
   handler: async (ctx, { auth_user_id }) => {
+    const user = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: 'user',
+      where: [{ field: '_id', value: auth_user_id }],
+    })
+    require(user === null, rule('That login still exists; delete it with deleteOrphanLogin'))
     await purgeTokenRows(ctx, auth_user_id)
     return null
   },

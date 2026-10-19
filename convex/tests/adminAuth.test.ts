@@ -395,31 +395,64 @@ describe('deleteOrphanLogin', () => {
           await ctx.db.insert('oauthRefreshToken', { ...grant, createdAt: at, token: `r${n}` })
         }
       })
-      const tokensLeft = () =>
-        runInAuth(t, async (ctx) => {
-          let n = 0
+      // and a busy roadmap session's undo receipts
+      await t.run(async (ctx) => {
+        for (let n = 0; n < 4; n++)
+          await ctx.db.insert('roadmap_history', {
+            auth_user_id: orphan._id,
+            session_key: 'roadmap-session',
+            position: n,
+            expires_at: Date.now() + 60_000,
+            changes: '[]',
+          })
+      })
+      const tokensLeft = async () => {
+        let n = await runInAuth(t, async (ctx) => {
+          let rows = 0
           for (const table of ['session', 'oauthAccessToken', 'oauthRefreshToken'] as const)
-            n += (
+            rows += (
               await ctx.db
                 .query(table)
                 .withIndex('userId', (q) => q.eq('userId', orphan._id))
                 .collect()
             ).length
-          return n
+          return rows
         })
-      expect(await tokensLeft()).toBe(9)
+        n += await t.run(
+          async (ctx) =>
+            (
+              await ctx.db
+                .query('roadmap_history')
+                .withIndex('by_owner_session', (q) => q.eq('auth_user_id', orphan._id))
+                .collect()
+            ).length,
+        )
+        return n
+      }
+      expect(await tokensLeft()).toBe(13)
       await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'leftover@test.local' })
       // the login, its account and the audit row go in the first transaction
       expect(await componentRow(t, 'user', '_id', orphan._id)).toBeNull()
       expect(await componentRow(t, 'account', 'userId', orphan._id)).toBeNull()
       expect((await auditRows(t)).map((r) => r.action)).toEqual(['delete_orphan'])
-      expect(await tokensLeft()).toBe(6)
+      expect(await tokensLeft()).toBe(10)
       await t.finishAllScheduledFunctions(() => vi.runAllTimers())
       expect(await tokensLeft()).toBe(0)
     } finally {
       LOGIN_PURGE.rows = rows
       vi.useRealTimers()
     }
+  })
+
+  it('refuses to purge the sessions of a login that still exists', async () => {
+    const t = newAuthT()
+    const login = await plantLogin(t, 'still-here@test.local', { session: true })
+    await expectRefusal(
+      t.mutation(internal.adminAuth.purgeLoginTokens, { auth_user_id: login._id }),
+      'rule',
+      /still exists/,
+    )
+    expect(await componentRow(t, 'session', 'userId', login._id)).not.toBeNull()
   })
 
   it("refuses a platform operator's login and removes nothing", async () => {

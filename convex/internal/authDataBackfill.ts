@@ -33,9 +33,9 @@
  *
  * The other targets are staging and production. The demo backend needs no
  * run, because its sessions were already stored without these fields and its
- * anonymous logins have no provider account or picture. The command returns
- * once the first step is scheduled. The audit row appears in Admin › Audit
- * when the run ends. */
+ * anonymous logins have no provider account or picture. The command runs
+ * the first step and returns once it has scheduled the next. The audit row
+ * appears in Admin › Audit when the run ends. */
 
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, type ObjectType, v } from 'convex/values'
