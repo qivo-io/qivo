@@ -628,9 +628,12 @@ function ProjectSettingsFields({
                 title={proj.trackDelay ? 'Delay tracking is on' : 'Delay tracking is off'}
                 onClick={() => {
                   const v = !proj.trackDelay
-                  if (P.refusePausedEdit()) return
-                  P.updateProject(proj.id, { trackDelay: v })
-                  window.showToast?.(v ? 'Projected delays are highlighted' : 'Tasks stay neutral')
+                  void P.updateProject(proj.id, { trackDelay: v }).then((saved) => {
+                    if (saved)
+                      window.showToast?.(
+                        v ? 'Projected delays are highlighted' : 'Tasks stay neutral',
+                      )
+                  })
                 }}
               />
             </span>
@@ -678,17 +681,19 @@ function ProjectSettingsFields({
                   return
                 }
                 if (!raw) {
-                  if (own !== null && !P.refusePausedEdit()) {
-                    P.updateProject(proj.id, { reviewHours: null })
-                    window.showToast?.(`Review time set to ${inheritedReview} h`)
+                  if (own !== null) {
+                    void P.updateProject(proj.id, { reviewHours: null }).then((saved) => {
+                      if (saved) window.showToast?.(`Review time set to ${inheritedReview} h`)
+                    })
                   }
                   return
                 }
                 const h = roundReviewHours(Math.min(REVIEW_HOURS_MAX, Math.max(0, n)))
                 el.value = String(h)
-                if (h === own || P.refusePausedEdit()) return
-                P.updateProject(proj.id, { reviewHours: h })
-                window.showToast?.(`Review time set to ${h} h`)
+                if (h === own) return
+                void P.updateProject(proj.id, { reviewHours: h }).then((saved) => {
+                  if (saved) window.showToast?.(`Review time set to ${h} h`)
+                })
               }}
               className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
             />

@@ -31,6 +31,7 @@ let pages: {
   teams: typeof import('./TeamSettings')
   labels: typeof import('./LabelsSettings')
   general: typeof import('./OrganizationSettings')
+  project: typeof import('./ProjectSettings')
   modals: typeof import('../Modals')
   version: typeof import('../../store/usePlannerVersion')
 }
@@ -88,6 +89,7 @@ async function load() {
     teams: await import('./TeamSettings'),
     labels: await import('./LabelsSettings'),
     general: await import('./OrganizationSettings'),
+    project: await import('./ProjectSettings'),
     modals: await import('../Modals'),
     version: await import('../../store/usePlannerVersion'),
   }
@@ -253,6 +255,18 @@ describe('rename toasts', () => {
     await answer('orgs:update', 'refuse')
     expect(toasts()).toEqual(['The server said no. Change reverted.'])
     expect(field?.value).toBe('Testbed Labs')
+  })
+
+  it('says a project setting changed only once the server saved it', async () => {
+    await render(() => <pages.project.ProjectPage projectId="sensor" setPage={vi.fn()} />)
+    const field = input('[data-project-review-hours]')
+    await act(async () => field?.focus())
+    await type(field, '3')
+    await act(async () => field?.blur())
+    expect(requests.map((r) => r.name)).toEqual(['projects:update'])
+    expect(toasts()).toEqual([])
+    await answer('projects:update', 'accept')
+    expect(toasts()).toEqual(['Review time set to 3 h'])
   })
 
   it('keeps a milestone editor open until the server saved the rename', async () => {
